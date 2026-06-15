@@ -72,6 +72,7 @@ fn injection_script_exposes_image_overlay_config() {
     let script = assets::injection_script_with_settings(57321, &settings);
 
     assert!(script.contains("window.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__"));
+    assert!(script.contains("window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__"));
     assert!(script.contains("\"enabled\":true"));
     assert!(script.contains("\"opacity\":0.42"));
     assert!(script.contains("\"dataUrl\":\"data:image/png;base64,"));

@@ -57,6 +57,7 @@
   const codexServiceTierBadgeVersion = "3";
   let codexPlusVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
   const codexPlusBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
+  const codexPlusSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
   const codexPlusSettingsKey = "codexPlusSettings";
   const codexThreadScrollKey = "codexThreadScroll";
   const codexThreadServiceTierKey = "codexThreadServiceTierOverrides";
@@ -847,6 +848,12 @@
       .claude-codex-pro-ad-highlights span { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(255,255,255,.08); color: #f3f4f6; font-size: 12px; padding: 4px 8px; }
       .claude-codex-pro-ad-link { display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: #2563eb; color: #ffffff; font-size: 13px; font-weight: 650; text-decoration: none; padding: 8px 12px; }
       .claude-codex-pro-ad-empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; color: #9ca3af; font-size: 13px; padding: 12px; text-align: center; }
+      .claude-codex-pro-support-panel { display: grid; gap: 14px; justify-items: center; padding: 8px 0 4px; text-align: center; }
+      .claude-codex-pro-support-title { margin: 0; color: #f8fafc; font-size: 18px; line-height: 1.35; }
+      .claude-codex-pro-support-text { margin: 0; max-width: 520px; color: #cbd5e1; font-size: 13px; line-height: 1.55; }
+      .claude-codex-pro-support-qr-wrap { display: grid; gap: 10px; justify-items: center; width: min(360px, 100%); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(255,255,255,.05); padding: 14px; box-sizing: border-box; }
+      .claude-codex-pro-support-qr { display: block; width: min(320px, 100%); aspect-ratio: 1 / 1; border-radius: 8px; background: #ffffff; object-fit: contain; }
+      .claude-codex-pro-support-empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; color: #9ca3af; font-size: 13px; padding: 12px; text-align: center; }
       .${timelineClass} {
         position: fixed;
         top: calc(72px + 12px);
@@ -2119,6 +2126,7 @@
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="home" data-active="true">主页</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="userScripts" data-active="false">用户脚本</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
+          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">支持</button>
         </div>
         <div class="claude-codex-pro-modal-body">
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
@@ -2259,6 +2267,15 @@
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="recommendations" hidden>
             <div class="claude-codex-pro-ad-remote">
               ${renderCodexPlusAds()}
+            </div>
+          </div>
+          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="support" hidden>
+            <div class="claude-codex-pro-support-panel">
+              <h3 class="claude-codex-pro-support-title">支持项目</h3>
+              <p class="claude-codex-pro-support-text">如果这个工具帮到了你，可以通过下面的支付二维码支持后续维护。</p>
+              ${codexPlusSupportPaymentQr
+                ? `<div class="claude-codex-pro-support-qr-wrap"><img class="claude-codex-pro-support-qr" src="${escapeHtml(codexPlusSupportPaymentQr)}" alt="支付二维码"></div>`
+                : `<div class="claude-codex-pro-support-empty">支付二维码未加载。</div>`}
             </div>
           </div>
         </div>
