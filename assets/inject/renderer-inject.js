@@ -835,7 +835,6 @@
       .claude-codex-pro-user-script-error { margin-top: 2px; color: #f87171; font-size: 11px; word-break: break-all; }
       .claude-codex-pro-user-script-actions { display: grid; justify-items: end; gap: 8px; min-width: 120px; }
       .claude-codex-pro-user-script-reload { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
-      .claude-codex-pro-sponsor-text { color: #d1d5db; font-size: 13px; line-height: 1.55; margin: 4px 0 12px; }
       .claude-codex-pro-ad-section { display: grid; gap: 10px; margin-top: 12px; }
       .claude-codex-pro-ad-section:first-of-type { margin-top: 0; }
       .claude-codex-pro-ad-section-title { color: #f8fafc; font-size: 15px; margin: 0; }
@@ -848,10 +847,6 @@
       .claude-codex-pro-ad-highlights span { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(255,255,255,.08); color: #f3f4f6; font-size: 12px; padding: 4px 8px; }
       .claude-codex-pro-ad-link { display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: #2563eb; color: #ffffff; font-size: 13px; font-weight: 650; text-decoration: none; padding: 8px 12px; }
       .claude-codex-pro-ad-empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; color: #9ca3af; font-size: 13px; padding: 12px; text-align: center; }
-      .claude-codex-pro-sponsor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-      .claude-codex-pro-sponsor-card { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 10px; background: rgba(255,255,255,.04); text-align: center; }
-      .claude-codex-pro-sponsor-card-title { color: #f3f4f6; font-size: 13px; margin-bottom: 8px; }
-      .claude-codex-pro-sponsor-qr { display: block; width: 100%; max-width: 340px; border-radius: 8px; margin: 0 auto; background: white; }
       .${timelineClass} {
         position: fixed;
         top: calc(72px + 12px);
@@ -2014,7 +2009,7 @@
   function normalizeCodexPlusAds(payload) {
     if (!payload || !Array.isArray(payload.ads)) return [];
     return payload.ads.filter((ad) => {
-      return ad && ["sponsor", "normal"].includes(ad.type) && ad.title && ad.description && ad.url && !isCodexPlusAdExpired(ad);
+      return ad && ad.type === "normal" && ad.title && ad.description && ad.url && !isCodexPlusAdExpired(ad);
     }).map((ad) => ({
       id: String(ad.id || ad.title),
       type: ad.type,
@@ -2044,28 +2039,24 @@
   }
 
   function renderCodexPlusAds() {
-    if (!codexPlusAdsLoaded) return `<div class="claude-codex-pro-ad-empty">推荐内容加载中…</div>`;
-    if (!codexPlusAds.length) return `<div class="claude-codex-pro-ad-empty">暂无推荐内容。</div>`;
+    if (!codexPlusAdsLoaded) return `<div class="claude-codex-pro-ad-empty">Recommendations loading...</div>`;
+    const normalAds = codexPlusAds.filter((ad) => ad.type === "normal");
+    if (!normalAds.length) return `<div class="claude-codex-pro-ad-empty">No recommendations.</div>`;
     return `
       <section class="claude-codex-pro-ad-section">
-        <h3 class="claude-codex-pro-ad-section-title">赞助商推荐</h3>
-        <div class="claude-codex-pro-ad-list">${renderCodexPlusAdGroup("sponsor", "暂无赞助商推荐。")}</div>
-      </section>
-      <section class="claude-codex-pro-ad-section">
-        <h3 class="claude-codex-pro-ad-section-title">普通推荐</h3>
-        <div class="claude-codex-pro-ad-list">${renderCodexPlusAdGroup("normal", "暂无普通推荐。")}</div>
+        <h3 class="claude-codex-pro-ad-section-title">Recommendations</h3>
+        <div class="claude-codex-pro-ad-list">${renderCodexPlusAdGroup("normal", "No recommendations.")}</div>
       </section>
     `;
   }
-
   function cacheBustCodexPlusAdUrl(url, version) {
     return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
   }
 
   async function directFetchCodexPlusAds() {
     const urls = [
-      "https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json",
-      "https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json",
+      "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json",
+      "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
     ];
     let lastError = null;
     const cacheBust = Date.now();
@@ -2095,7 +2086,7 @@
       codexPlusAds = [];
     } finally {
       codexPlusAdsLoaded = true;
-      const panel = document.querySelector('[data-claude-codex-pro-panel="sponsor"] .claude-codex-pro-ad-remote');
+      const panel = document.querySelector('[data-claude-codex-pro-panel="recommendations"] .claude-codex-pro-ad-remote');
       if (panel) panel.innerHTML = renderCodexPlusAds();
     }
   }
@@ -2127,8 +2118,7 @@
         <div class="claude-codex-pro-tabs" role="tablist" aria-label="Codex++">
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="home" data-active="true">主页</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="userScripts" data-active="false">用户脚本</button>
-          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="sponsor" data-active="false">推荐内容</button>
-          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">请作者喝咖啡</button>
+          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
         </div>
         <div class="claude-codex-pro-modal-body">
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
@@ -2236,7 +2226,7 @@
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">关于 Codex++</div><div class="claude-codex-pro-about">Codex++ 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/BigPizzaV3/CodexPlusPlus" target="_blank" rel="noreferrer">https://github.com/BigPizzaV3/CodexPlusPlus</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a><br>Telegram: <a href="https://t.me/CodexPlusPlus" target="_blank" rel="noreferrer">https://t.me/CodexPlusPlus</a></div></div>
+              <div><div class="claude-codex-pro-row-title">关于 Codex++</div><div class="claude-codex-pro-about">Codex++ 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a><br>Telegram: <a href="https://t.me/CodexPlusPlus" target="_blank" rel="noreferrer">https://t.me/CodexPlusPlus</a></div></div>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Discord 社区</div><div class="claude-codex-pro-row-description">加入 Discord 获取更新消息、反馈问题或交流使用体验。</div></div>
@@ -2266,23 +2256,9 @@
               </div>
             </div>
           </div>
-          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="sponsor" hidden>
-            <div class="claude-codex-pro-sponsor-text">推荐内容分为赞助商推荐和普通推荐。赞助商推荐来自支持 Codex++ 继续维护的合作方；普通推荐用于展示适合 Codex 用户的服务与信息。</div>
+          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="recommendations" hidden>
             <div class="claude-codex-pro-ad-remote">
               ${renderCodexPlusAds()}
-            </div>
-          </div>
-          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="support" hidden>
-            <div class="claude-codex-pro-sponsor-text">如果 Codex++ 帮到了你，可以请我喝杯咖啡，或者随手赞赏支持一下继续维护。</div>
-            <div class="claude-codex-pro-sponsor-grid">
-              <div class="claude-codex-pro-sponsor-card">
-                <div class="claude-codex-pro-sponsor-card-title">支付宝</div>
-                <img class="claude-codex-pro-sponsor-qr" src="${window.__CLAUDE_CODEX_PRO_SPONSOR_IMAGES__?.alipay || `${helperBase}/assets/sponsor-alipay.jpg`}" alt="支付宝赞赏码">
-              </div>
-              <div class="claude-codex-pro-sponsor-card">
-                <div class="claude-codex-pro-sponsor-card-title">微信</div>
-                <img class="claude-codex-pro-sponsor-qr" src="${window.__CLAUDE_CODEX_PRO_SPONSOR_IMAGES__?.wechat || `${helperBase}/assets/sponsor-wechat.jpg`}" alt="微信赞赏码">
-              </div>
             </div>
           </div>
         </div>
@@ -2341,7 +2317,7 @@
       }
       const issueButton = target?.closest("[data-claude-codex-pro-issue]");
       if (issueButton) {
-        const issueUrl = "https://github.com/BigPizzaV3/CodexPlusPlus/issues";
+        const issueUrl = "https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues";
         window.open(issueUrl, "_blank");
         return;
       }

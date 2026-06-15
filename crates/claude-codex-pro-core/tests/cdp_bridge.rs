@@ -41,12 +41,11 @@ fn bridge_script_defines_expected_globals_and_binding() {
 }
 
 #[test]
-fn injection_script_prefixes_helper_url_and_sponsor_images() {
+fn injection_script_prefixes_helper_url() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("window.__CODEX_SESSION_DELETE_HELPER__"));
     assert!(script.contains("http://127.0.0.1:57321"));
-    assert!(script.contains("window.__CLAUDE_CODEX_PRO_SPONSOR_IMAGES__"));
     assert!(script.contains("window.__CLAUDE_CODEX_PRO_VERSION__"));
     assert!(script.contains(claude_codex_pro_core::version::VERSION));
     assert!(script.contains("https://discord.gg/y96kX7A76v"));
@@ -105,7 +104,7 @@ fn injection_script_fetches_ads_without_bridge() {
     assert!(script.contains("directFetchCodexPlusAds"));
     assert!(script.contains("cacheBustCodexPlusAdUrl"));
     assert!(script.contains("Date.now()"));
-    assert!(script.contains("BigPizzaV3/Ad-List"));
+    assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool-Ad-List"));
     assert!(
         !script.contains("codexPlusAds = normalizeCodexPlusAds(await postJson(\"/ads\", {}));")
     );

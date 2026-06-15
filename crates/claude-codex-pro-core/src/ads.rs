@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_AD_LIST_URLS: [&str; 2] = [
-    "https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json",
-    "https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json",
+    "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json",
+    "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
 ];
 
 pub fn normalize_ad_payload(payload: Value) -> Value {
@@ -18,7 +18,7 @@ pub fn normalize_ad_payload(payload: Value) -> Value {
             let title = ad.get("title").and_then(Value::as_str);
             let description = ad.get("description").and_then(Value::as_str);
             let url = ad.get("url").and_then(Value::as_str);
-            matches!(ad_type, Some("sponsor" | "normal"))
+            matches!(ad_type, Some("normal"))
                 && title.is_some_and(|value| !value.trim().is_empty())
                 && description.is_some_and(|value| !value.trim().is_empty())
                 && url.is_some_and(|value| !value.trim().is_empty())

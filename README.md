@@ -1,250 +1,63 @@
 # Codex++
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro-plus.png" alt="Codex++ 图标" width="160">
+  <img src="docs/images/claude-codex-pro-plus.png" alt="Codex++ 鍥炬爣" width="160">
 </p>
 
 <p align="center">
-  中文 | <a href="README_EN.md">English</a>
+  涓枃 | <a href="README_EN.md">English</a>
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/github/v/release/BigPizzaV3/CodexPlusPlus">
-  <img alt="Stars" src="https://img.shields.io/github/stars/BigPizzaV3/CodexPlusPlus">
-  <img alt="License" src="https://img.shields.io/github/license/BigPizzaV3/CodexPlusPlus">
+  <img alt="Release" src="https://img.shields.io/github/v/release/DamonZS/Claude-Codex-Pro-Tool">
+  <img alt="Stars" src="https://img.shields.io/github/stars/DamonZS/Claude-Codex-Pro-Tool">
+  <img alt="License" src="https://img.shields.io/github/license/DamonZS/Claude-Codex-Pro-Tool">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Codex++ 是面向 Codex App 的外部增强启动器和管理工具。它不修改 Codex App 原始安装文件，而是通过外部 launcher 启动 Codex，并使用 Chromium DevTools Protocol 注入增强脚本。
+Codex++ 鏄潰鍚?Codex App 鐨勫閮ㄥ寮哄惎鍔ㄥ櫒鍜岀鐞嗗伐鍏枫€傚畠涓嶄慨鏀?Codex App 鍘熷瀹夎鏂囦欢锛岃€屾槸閫氳繃澶栭儴 launcher 鍚姩 Codex锛屽苟浣跨敤 Chromium DevTools Protocol 娉ㄥ叆澧炲己鑴氭湰銆?
+## 蹇€熶娇鐢?
+浠?[GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 涓嬭浇鏈€鏂扮増瀹夎鍖咃細
 
-## 快速使用
+- Windows锛歚CodexPlusPlus-*-windows-x64-setup.exe`
+- macOS Intel锛歚CodexPlusPlus-*-macos-x64.dmg`
+- macOS Apple Silicon锛歚CodexPlusPlus-*-macos-arm64.dmg`
 
-从 [GitHub Releases](https://github.com/BigPizzaV3/CodexPlusPlus/releases) 下载最新版安装包：
+瀹夎鍚庝細鏈変袱涓叆鍙ｏ細
 
-- Windows：`CodexPlusPlus-*-windows-x64-setup.exe`
-- macOS Intel：`CodexPlusPlus-*-macos-x64.dmg`
-- macOS Apple Silicon：`CodexPlusPlus-*-macos-arm64.dmg`
+- `Codex++`锛氶潤榛樺惎鍔ㄥ叆鍙ｏ紝涓嶆樉绀虹鐞嗙晫闈紝鍙礋璐ｅ惎鍔?Codex 骞舵敞鍏ュ寮哄姛鑳姐€?- `Codex++ 绠＄悊宸ュ叿`锛歍auri 鎺у埗闈㈡澘锛岀敤浜庡惎鍔ㄣ€佹鏌ャ€佷慨澶嶃€佹洿鏂般€侀厤缃腑杞敞鍏ャ€佺鐞嗗寮哄姛鑳藉拰鐢ㄦ埛鑴氭湰銆?
+Windows 瀹夎鍖呬細鍒涘缓妗岄潰鍜屽紑濮嬭彍鍗曞揩鎹锋柟寮忋€俶acOS DMG 浼氬畨瑁?`/Applications/Codex++.app` 鍜?`/Applications/Codex++ 绠＄悊宸ュ叿.app`銆?
+## 涓昏鍔熻兘
 
-安装后会有两个入口：
+- Rust 鍚庣鍜岄潤榛?launcher锛屽惎鍔ㄦ椂涓嶄緷璧栭澶栬繍琛屾椂銆?- Tauri + React 绠＄悊宸ュ叿锛屾敮鎸佹繁鑹?娴呰壊鍒囨崲銆?- 澶栭儴 CDP 娉ㄥ叆锛屼笉鏀?`app.asar`锛屼笉鍚?Codex 瀹夎鐩綍鍐欏叆 DLL銆?- 涓浆娉ㄥ叆妯″紡锛氭敮鎸佸涓腑杞厤缃紝鍐欏叆 `CodexPlusPlus` provider锛屽苟鍙垏鍥炲畼鏂?ChatGPT 鐧诲綍鎬併€?- 浼犵粺澧炲己妯″紡锛氭彃浠跺叆鍙ｈВ閿併€佺壒娈婃彃浠跺己鍒跺畨瑁呫€佷細璇濆垹闄ゃ€丮arkdown 瀵煎嚭銆侀」鐩Щ鍔ㄣ€乀imeline 绛夈€?- 鐢ㄦ埛鑴氭湰鐙珛绠＄悊锛屽彲鍦ㄥ惎鍔ㄦ椂娉ㄥ叆鑷畾涔夎剼鏈€?- Provider 鍚屾锛氬惎鍔ㄥ墠鍚屾鏈湴浼氳瘽 metadata锛屽垏鎹緵搴斿晢鍚庢棫浼氳瘽浠嶅彲瑙併€?- Zed 鎵撳紑鍏ュ彛锛氳瘑鍒繙绋?SSH 涓婁笅鏂囧悗锛屽彲浠?Codex 鐩存帴鎵撳紑瀵瑰簲鏂囦欢鍒?Zed Remote Development銆?- Upstream worktree 鍒涘缓锛氬彲浠?`upstream/<base-branch>` 鍒涘缓鏂?worktree锛屽垱寤哄墠鑷姩 fetch 杩滅鍒嗘敮锛岄檷浣庝粠闄堟棫鏈湴 HEAD 娲剧敓瀵艰嚧鐨勫啿绐侀闄┿€?- GitHub Release 鑷姩鏇存柊锛岀鐞嗗伐鍏峰拰闈欓粯鍚姩鍣ㄩ兘浼氭娴嬪彲鐢ㄦ洿鏂般€?- Windows 鍗曞疄渚嬨€佹棤榛戞鍚姩銆佺鐞嗗憳鏉冮檺娓呭崟銆佺郴缁熸闈㈣矾寰勮瘑鍒€?- macOS x64/arm64 鍒嗘灦鏋?DMG锛岄潤榛樺叆鍙ｉ殣钘?Dock 鍥炬爣銆?
+## 鐥涚偣涓庤В鍐?
+API Key 鐧诲綍妯″紡涓嬶紝Codex 鍘熺敓鎻掍欢鍏ュ彛浼氭彁绀洪渶瑕佺櫥褰?ChatGPT锛屽鑷存彃浠跺姛鑳芥棤娉曟甯镐娇鐢細
 
-- `Codex++`：静默启动入口，不显示管理界面，只负责启动 Codex 并注入增强功能。
-- `Codex++ 管理工具`：Tauri 控制面板，用于启动、检查、修复、更新、配置中转注入、管理增强功能和用户脚本。
+![API Key 妯″紡涓嬫彃浠跺叆鍙ｄ笉鍙敤](docs/images/pain-plugin-disabled.png)
 
-Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会安装 `/Applications/Codex++.app` 和 `/Applications/Codex++ 管理工具.app`。
+Codex 鍘熺敓浼氳瘽鍒楄〃鍙湁褰掓。鍏ュ彛锛屾病鏈夌湡姝ｇ殑鍒犻櫎鎸夐挳锛?
+![鍘熺敓浼氳瘽鍒楄〃缂哄皯鍒犻櫎鑳藉姏](docs/images/pain-no-delete-button.png)
 
-## 赞助商
+Codex++ 鍚姩鍚庝細瑙ｉ攣鎻掍欢鍏ュ彛锛屽苟鍦ㄤ細璇濆垪琛ㄦ偓鍋滄椂鏄剧ず鍒犻櫎鎸夐挳锛?
+![Codex++ 瑙ｉ攣鎻掍欢鍏ュ彛骞舵坊鍔犲垹闄ゆ寜閽甝(docs/images/solution-plugin-and-delete.png)
 
-<p align="center">
-  <a href="https://jojocode.com/">
-    <img src="docs/images/sponsor-jojocode.svg" alt="JOJO Code" height="110">
-  </a>
-</p>
-<p align="center">
-  <a href="https://jojocode.com/"><strong>JOJO Code｜Codex++ 官方中转站</strong></a><br>
-  Codex++ 官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力，适合日常开发、团队协作和长期项目工作流。
-</p>
+椤堕儴鑿滃崟鏍忎細鍑虹幇 `Codex++`锛屽彲浠ユ煡鐪嬪悗绔姸鎬佸苟鎵撳紑璁剧疆闈㈡澘锛?
+![Codex++ 鍚庣鐘舵€佹寚绀虹伅](docs/images/backend-status-indicator.png)
+![Codex++ 璁剧疆闈㈡澘](docs/images/settings-panel.png)
 
-<a href="mailto:1727532@qq.com">想显示在下方？</a>
-<p align="center">
-</p>
-<table>
-  <tr>
-    <th width="180">🏆 赞助商 🏆</th>
-    <th>介绍</th>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://jojocode.com/">
-        <img src="docs/images/sponsor-jojocode.svg" alt="JOJO Code" height="80">
-      </a>
-    </td>
-    <td><a href="https://jojocode.com/"><strong>JOJO Code｜Codex++ 官方中转站</strong></a><br>感谢 JOJO Code 赞助本项目。JOJO Code 是 Codex++ 官方中转站，提供价格划算、稳定易接入的 Codex API 中转服务，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力，适合日常开发、快速配置、团队协作和长期使用。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://aigocode.com/invite/CodexPlusPlus">
-        <img src="docs/images/sponsor-aigocode.png" alt="AIGoCode" height="80">
-      </a>
-    </td>
-    <td><a href="https://aigocode.com/invite/CodexPlusPlus"><strong>AIGoCode</strong></a><br>感谢 AIGoCode 赞助了本项目！AIGoCode 是一个集成了 Claude Code、Codex 以及 Gemini 最新模型的一站式平台，为你提供稳定、高效且高性价比的AI编程服务。本站提供灵活的订阅计划，支持多风险，国内直连，无需魔法，极速响应。AIGoCode 为 CodexPlusPlus 的用户提供了特别福利，通过<a href="https://aigocode.com/invite/CodexPlusPlus">此链接注册</a>的用户首次充值可以获得额外10%奖励额度！</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://www.packyapi.com/">
-        <img src="docs/images/sponsor-packycode.png" alt="PackyCode" height="80">
-      </a>
-    </td>
-    <td><a href="https://www.packyapi.com/"><strong>PackyCode</strong></a><br>感谢 PackyCode 赞助了本项目！PackyCode 是一家稳定、高效的API中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。PackyCode 为本软件的用户提供了特别优惠，使用此链接注册并在充值时填写"CodexPlusPlus"优惠码，首次充值可以享受9折优惠！</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://apikey.fun/register?aff=CODEX">
-        <img src="docs/images/sponsor-apikey-fun.png" alt="APIKEY.FUN" height="80">
-      </a>
-    </td>
-    <td><a href="https://apikey.fun/register?aff=CODEX"><strong>APIKEY.FUN</strong></a><br>感谢 APIKEY.FUN 赞助了本项目！APIKEY.FUN 是一家致力于提供开放、稳定、高性价比的全球主流大模型的 AI 中转站。平台支持 Claude、OpenAI、Gemini 等热门模型的 API 中转服务，价格低至官方原价的 7%。通过专属链接<a href="https://apikey.fun/register?aff=CODEX">注册 APIKEY</a>，可享受最高充值永久 95 折优惠。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://runapi.co/register?aff=AWJq">
-        <img src="docs/images/sponsor-runapi.png" alt="RunAPI" height="80">
-      </a>
-    </td>
-    <td><a href="https://runapi.co/register?aff=AWJq"><strong>RunAPI</strong></a><br>感谢 RunAPI 赞助了本项目！RunAPI 是高效稳定的 API OpenRouter 平替平台，一个 API Key 即可访问 OpenAI、Claude、Gemini、DeepSeek、Grok 等 150+ 主流模型，低至 1 折，极其稳定，可以无缝兼容 Claude Code、OpenClaw 等工具。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://www.0029.org/?promo=AFF11F">
-        <img src="docs/images/sponsor-0029.svg" alt="0029 云桥" height="80">
-      </a>
-    </td>
-    <td><a href="https://www.0029.org/?promo=AFF11F"><strong>0029云桥｜codex api中转站(gpt5.5 gpt-image-2)</strong></a><br>支持个人和企业接入。包月套餐/按量计费，Pro/Plus 号池，全站接口稳定可用，7×24 小时技术支持！</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://rawchat.cn">
-        <img src="docs/images/sponsor-rawchat.svg" alt="RawChat" height="80">
-      </a>
-    </td>
-    <td><a href="https://rawchat.cn"><strong>RawChat｜Codex 中转站</strong></a><br>老牌中转站，支持包月套餐。低倍率调用，高缓存命中，Pro/Plus 号池，全天专人维护。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" height="80">
-      </a>
-    </td>
-    <td><a href="https://coder.visioncoder.cn"><strong>VisionCoder 开发平台</strong></a><br>感谢 VisionCoder 对本项目的支持。VisionCoder 开发平台是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。VisionCoder 还为我们的用户提供 <a href="https://coder.visioncoder.cn">Token Plan</a> 限时活动：购买 1 个月，赠送 1 个月。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://aihub2api.cloud/register?promo=CODEXPLUSPLUS">
-        <img src="docs/images/sponsor-aihub2api.png" alt="AIHub2API" height="80">
-      </a>
-    </td>
-    <td><a href="https://aihub2api.cloud/register?promo=CODEXPLUSPLUS"><strong>AIHub2API</strong></a><br>感谢 AIHub2API 赞助了本项目！AIHub2API 是一家稳定、高效的 API 中转服务商，专注 Codex 中转业务，提供高缓存命中、低倍率的中转服务，网络链路优化无需使用魔法，极速响应，价格低至官方原价的 1%。通过<a href="https://aihub2api.cloud/register?promo=CODEXPLUSPLUS">专属链接注册 AIHub2API</a>，赠送 10 美金体验额度。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://www.compshare.cn/?ytag=GPU_YY_git_codex++">
-        <img src="docs/images/sponsor-ucloud-compshare.png" alt="优云智算" height="80">
-      </a>
-    </td>
-    <td><a href="https://www.compshare.cn/?ytag=GPU_YY_git_codex++"><strong>优云智算</strong></a><br>感谢优云智算赞助了本项目！优云智算是 UCloud 旗下 AI 云平台，主打包月、按次的高性价比国模 Agent Plan 套餐，低至 49 元/月起。同时提供官转稳定海外模型，支持接入 Claude Code、Codex 及 API 调用，支持企业高并发、7×24 技术支持、自助开票。通过此链接注册的用户，可得免费 5 元平台体验金！</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://cubence.com?source=codexplusplus">
-        <img src="docs/images/sponsor-cubence.png" alt="Cubence" height="80">
-      </a>
-    </td>
-    <td><a href="https://cubence.com?source=codexplusplus"><strong>Cubence</strong></a><br>感谢 Cubence 对本项目的支持。Cubence 是一家致力为客户提供稳定、高效的 API 中转服务商。从 25 年 9 月运营至今，提供了 Claude Code、Codex、Gemini 等多种模型支持。Cubence 为本开源项目多用户提供了特别的专属优惠 <code>CODEXPLUSPLUS</code>，在首次购买时享受 8.8 折优惠！</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://maolaoapi.com">
-        <img src="docs/images/sponsor-maolao-api.jpg" alt="MaoLao API" height="80">
-      </a>
-    </td>
-    <td><a href="https://maolaoapi.com"><strong>MaoLao API</strong></a><br>MaoLao API 是一家专注 VibeCoding 主流模型的 API 中转站，有自己的纯 Pro20X/Plus 号池，所以在低倍率的情况下还能做到低价套餐，套餐所有模型以及分组无限制！猫佬API：maolaoapi.com</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://unity2.ai/register?source=codexplusplus">
-        <img src="docs/images/sponsor-unity2.png" alt="Unity2.ai" height="80">
-      </a>
-    </td>
-    <td><a href="https://unity2.ai/register?source=codexplusplus"><strong>Unity2.ai</strong></a><br>感谢 Unity2.ai 赞助了本项目！Unity2.ai 是面向个人开发者、团队和企业的高性能 AI 模型 API 中转平台，长期服务国内头部企业，日均承载超 300 亿 token 调用，支持 5000 RPM 级高并发。支持余额计费、首充赠额、组合订阅、企业开票和专属对接。通过<a href="https://unity2.ai/register?source=codexplusplus">此链接注册</a>可领取 $2 余额，加入官方群再送 $10 余额，最高可领 $12 免费额度。</td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://api.icreat.ai">
-        <img src="docs/images/sponsor-icreat-api.jpg" alt="iCreat API" height="80">
-      </a>
-    </td>
-    <td><a href="https://api.icreat.ai"><strong>iCreat API</strong></a><br>感谢 iCreat API 赞助了本项目！iCreat API 是面向个人开发者、团队和企业的高性能 AI 模型 API 中转平台，稳定接入官方渠道，覆盖谷歌、火山、昆仑万维、腾讯云等开白名单资源。平台集成 Anthropic、ByteDance、OpenAI、DeepSeek、Google、Minimax、Kwai 等主流供应商，提供超 60 款模型调用，并通过统一控制台支持多维度模型筛选、计费类型管理和分组权限控制。支持 Pay as you go 与余额计费，企业用户可正常开票并获得专属对接服务。</td>
-  </tr>
-</table>
+## 涓浆娉ㄥ叆
 
-## 交流与支持
+涓浆娉ㄥ叆閫傚悎宸茬粡鍦?Codex/ChatGPT 涓畬鎴愬畼鏂硅处鍙风櫥褰曪紝鍚屾椂甯屾湜鎶婃ā鍨嬭姹傝浆鍒拌嚜瀹氫箟鍏煎 API 鐨勫満鏅€?
+杩欑娣峰悎妯″紡鐨勮竟鐣屾槸锛?
+- 瀹樻柟 ChatGPT/Codex 鐧诲綍鎬佺户缁礋璐?Codex App 鐨勮处鍙疯兘鍔涘拰鎻掍欢鍏ュ彛銆?- 涓浆閰嶇疆鍙帴绠℃ā鍨嬭姹備娇鐢ㄧ殑 Base URL銆並ey 鍜屾ā鍨嬪悕绉般€?- 鍏煎 API 渚涘簲鍟嗕笉闇€瑕佸浐瀹氫负鏌愪竴瀹讹紱鍙涓婃父鍗忚鍜?Codex 閰嶇疆鍖归厤鍗冲彲銆?- 娓呴櫎 API 妯″紡鍚庡簲鑳藉洖鍒板畼鏂圭櫥褰曟€侊紝缁х画浣跨敤瀹樻柟璐﹀彿鍜屾彃浠躲€?
+搴旂敤涓浆娉ㄥ叆鍓嶅缓璁厛鍋氫竴娆℃渶灏忔鏌ワ細
 
-欢迎加入 Codex++ 交流群（QQ群：1103050832），反馈问题、交流使用体验或提出新功能建议。
+1. 鍏堢‘璁?Codex 宸叉娴嬪埌 ChatGPT 鐧诲綍鐘舵€侊紝鎻掍欢鍏ュ彛鍙敤銆?2. 纭鑷畾涔?Base URL 鍙闂紝骞朵笖鏀寔鎵€閫変笂娓稿崗璁紙渚嬪 Responses 鍏煎鎺ュ彛锛夈€?3. 鐢ㄧ洰鏍?Key 鍋氫竴娆℃渶灏忚璇佹祴璇曪紝渚嬪妯″瀷鍒楄〃鎴栧緢鐭殑娑堟伅璇锋眰銆?4. 鍙褰?Key 鏄惁瀛樺湪鍜岃璇佺粨鏋滐紝涓嶈鎶婄湡瀹?Key 鍐欏叆鏃ュ織銆佹埅鍥炬垨 issue銆?5. 纭 `~/.codex/config.toml` 宸叉湁澶囦唤锛屼究浜庢竻闄?API 妯″紡鍚庡洖婊氥€?
+鍦ㄧ鐞嗗伐鍏风殑鈥滀腑杞敞鍏モ€濋〉闈細
 
-微信群：<a href="https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#">点击这里获取最新微信群二维码</a>。
-
-<img src="docs/images/discussion-group-qr.jpg" alt="Codex++ 微信群二维码" width="260">
-
-Telegram 频道：<https://t.me/CodexPlusPlus>
-
-如果 Codex++ 帮到了你，可以请我喝杯咖啡，或者随手赞赏支持一下继续维护。
-
-<p align="center">
-  <img src="docs/images/sponsor-alipay.jpg" alt="支付宝赞赏码" width="220">
-  <img src="docs/images/sponsor-wechat.jpg" alt="微信赞赏码" width="220">
-</p>
-
-## 主要功能
-
-- Rust 后端和静默 launcher，启动时不依赖额外运行时。
-- Tauri + React 管理工具，支持深色/浅色切换。
-- 外部 CDP 注入，不改 `app.asar`，不向 Codex 安装目录写入 DLL。
-- 中转注入模式：支持多个中转配置，写入 `CodexPlusPlus` provider，并可切回官方 ChatGPT 登录态。
-- 传统增强模式：插件入口解锁、特殊插件强制安装、会话删除、Markdown 导出、项目移动、Timeline 等。
-- 用户脚本独立管理，可在启动时注入自定义脚本。
-- Provider 同步：启动前同步本地会话 metadata，切换供应商后旧会话仍可见。
-- Zed 打开入口：识别远程 SSH 上下文后，可从 Codex 直接打开对应文件到 Zed Remote Development。
-- Upstream worktree 创建：可从 `upstream/<base-branch>` 创建新 worktree，创建前自动 fetch 远端分支，降低从陈旧本地 HEAD 派生导致的冲突风险。
-- GitHub Release 自动更新，管理工具和静默启动器都会检测可用更新。
-- Windows 单实例、无黑框启动、管理员权限清单、系统桌面路径识别。
-- macOS x64/arm64 分架构 DMG，静默入口隐藏 Dock 图标。
-
-## 痛点与解决
-
-API Key 登录模式下，Codex 原生插件入口会提示需要登录 ChatGPT，导致插件功能无法正常使用：
-
-![API Key 模式下插件入口不可用](docs/images/pain-plugin-disabled.png)
-
-Codex 原生会话列表只有归档入口，没有真正的删除按钮：
-
-![原生会话列表缺少删除能力](docs/images/pain-no-delete-button.png)
-
-Codex++ 启动后会解锁插件入口，并在会话列表悬停时显示删除按钮：
-
-![Codex++ 解锁插件入口并添加删除按钮](docs/images/solution-plugin-and-delete.png)
-
-顶部菜单栏会出现 `Codex++`，可以查看后端状态并打开设置面板：
-
-![Codex++ 后端状态指示灯](docs/images/backend-status-indicator.png)
-![Codex++ 设置面板](docs/images/settings-panel.png)
-
-## 中转注入
-
-中转注入适合已经在 Codex/ChatGPT 中完成官方账号登录，同时希望把模型请求转到自定义兼容 API 的场景。
-
-这种混合模式的边界是：
-
-- 官方 ChatGPT/Codex 登录态继续负责 Codex App 的账号能力和插件入口。
-- 中转配置只接管模型请求使用的 Base URL、Key 和模型名称。
-- 兼容 API 供应商不需要固定为某一家；只要上游协议和 Codex 配置匹配即可。
-- 清除 API 模式后应能回到官方登录态，继续使用官方账号和插件。
-
-应用中转注入前建议先做一次最小检查：
-
-1. 先确认 Codex 已检测到 ChatGPT 登录状态，插件入口可用。
-2. 确认自定义 Base URL 可访问，并且支持所选上游协议（例如 Responses 兼容接口）。
-3. 用目标 Key 做一次最小认证测试，例如模型列表或很短的消息请求。
-4. 只记录 Key 是否存在和认证结果，不要把真实 Key 写入日志、截图或 issue。
-5. 确认 `~/.codex/config.toml` 已有备份，便于清除 API 模式后回滚。
-
-在管理工具的“中转注入”页面：
-
-1. 确认已经检测到 ChatGPT 登录状态。
-2. 添加一个或多个中转配置，填写 Base URL 和 Key。
-3. 选择当前配置并应用中转注入。
-4. 启动 `Codex++`。
-
-Codex++ 会在 `~/.codex/config.toml` 中写入类似配置：
+1. 纭宸茬粡妫€娴嬪埌 ChatGPT 鐧诲綍鐘舵€併€?2. 娣诲姞涓€涓垨澶氫釜涓浆閰嶇疆锛屽～鍐?Base URL 鍜?Key銆?3. 閫夋嫨褰撳墠閰嶇疆骞跺簲鐢ㄤ腑杞敞鍏ャ€?4. 鍚姩 `Codex++`銆?
+Codex++ 浼氬湪 `~/.codex/config.toml` 涓啓鍏ョ被浼奸厤缃細
 
 ```toml
 model_provider = "CodexPlusPlus"
@@ -257,120 +70,99 @@ base_url = "https://example.com/v1"
 experimental_bearer_token = "sk-..."
 ```
 
-如果需要回到官方登录态，在“中转注入”页面点击清除 API 模式即可移除 `OPENAI_API_KEY` 相关配置并切回官方 ChatGPT 登录模式。
+濡傛灉闇€瑕佸洖鍒板畼鏂圭櫥褰曟€侊紝鍦ㄢ€滀腑杞敞鍏モ€濋〉闈㈢偣鍑绘竻闄?API 妯″紡鍗冲彲绉婚櫎 `OPENAI_API_KEY` 鐩稿叧閰嶇疆骞跺垏鍥炲畼鏂?ChatGPT 鐧诲綍妯″紡銆?
+## 澧炲己鍔熻兘
 
-## 增强功能
+澧炲己鍔熻兘鍦ㄧ鐞嗗伐鍏蜂腑缁熶竴寮€鍏炽€傞粯璁ゅ紑鍚寮烘敞鍏ワ紱鍏抽棴鍚庝笉浼氭敞鍏?Codex++ 鑿滃崟鍜岃剼鏈€?
+濡傛灉鍚敤涓浆娉ㄥ叆妯″紡锛屾彃浠跺叆鍙ｈВ閿佸拰寮哄埗瀹夎涓嶅啀闇€瑕侊紝鐣岄潰浼氭彁绀衡€滀腑杞敞鍏ユā寮忎笅鏃犻渶寮€鍚€濄€備細璇濆垹闄ゃ€佸鍑恒€佺Щ鍔ㄣ€乀imeline銆佹櫘閫氭帹鑽愬拰鐢ㄦ埛鑴氭湰绛夊寮轰粛鍙户缁娇鐢ㄣ€?
+## 鎺ㄨ崘鍐呭
 
-增强功能在管理工具中统一开关。默认开启增强注入；关闭后不会注入 Codex++ 菜单和脚本。
-
-如果启用中转注入模式，插件入口解锁和强制安装不再需要，界面会提示“中转注入模式下无需开启”。会话删除、导出、移动、Timeline、推荐内容和用户脚本等增强仍可继续使用。
-
-## 推荐内容
-
-推荐内容来自远程广告列表：
+鎺ㄨ崘鍐呭鏉ヨ嚜杩滅▼鏅€氭帹鑽愬垪琛細
 
 ```text
-https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json
-https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json
+https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json
+https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json
 ```
 
-请求时会自动追加 `?v=时间戳` 绕开 CDN 旧缓存。推荐内容加载慢不会影响后端连接状态。
+璇锋眰鏃朵細鑷姩杩藉姞 `?v=鏃堕棿鎴砢 缁曞紑 CDN 鏃х紦瀛樸€傛櫘閫氭帹鑽愬姞杞芥參涓嶄細褰卞搷鍚庣杩炴帴鐘舵€併€?
+## 鑷姩鏇存柊涓庡畨瑁呭寘
 
-## 自动更新与安装包
+Codex++ 閫氳繃 GitHub Release 鍙戝竷瀹夎鍖呫€俉indows 浼氱敓鎴?NSIS 瀹夎绋嬪簭锛宮acOS 浼氱敓鎴?Intel x64 鍜?Apple Silicon arm64 涓や釜 DMG銆?
+绠＄悊宸ュ叿鐨勨€滃叧浜庘€濋〉鍙互妫€鏌ュ苟鍚姩鏇存柊銆傞潤榛樺惎鍔ㄥ櫒鍙戠幇鏂扮増鏈椂浼氭媺璧风鐞嗗伐鍏峰苟杩涘叆鏇存柊鎻愮ず銆?
+## 鏁版嵁浣嶇疆
 
-Codex++ 通过 GitHub Release 发布安装包。Windows 会生成 NSIS 安装程序，macOS 会生成 Intel x64 和 Apple Silicon arm64 两个 DMG。
+- Codex 閰嶇疆锛歚~/.codex/config.toml`
+- Codex 鐧诲綍鐘舵€侊細`~/.codex/auth.json`
+- Codex 鏈湴鏁版嵁搴擄細浼樺厛璇诲彇 `~/.codex/sqlite/*.db`锛屾棫鐗堝洖閫€鍒?`~/.codex/state_5.sqlite`
+- Codex++ 鐘舵€佷笌鏃ュ織锛歚~/.codex-session-delete/`
+- Provider 鍚屾澶囦唤锛歚~/.codex/backups_state/provider-sync`
 
-管理工具的“关于”页可以检查并启动更新。静默启动器发现新版本时会拉起管理工具并进入更新提示。
+## 甯歌闂
 
-## 数据位置
+### Codex++ 鑿滃崟娌″嚭鐜?
+纭鏄粠 `Codex++` 鍏ュ彛鍚姩锛岃€屼笉鏄師鐗?Codex銆備篃鍙互鎵撳紑绠＄悊宸ュ叿鐨勨€滆瘖鏂€濆拰鈥滄棩蹇椻€濋〉闈㈡煡鐪嬫敞鍏ョ姸鎬併€?
+### 鎻掍欢鍐呮樉绀哄悗绔繛涓嶄笂
 
-- Codex 配置：`~/.codex/config.toml`
-- Codex 登录状态：`~/.codex/auth.json`
-- Codex 本地数据库：优先读取 `~/.codex/sqlite/*.db`，旧版回退到 `~/.codex/state_5.sqlite`
-- Codex++ 状态与日志：`~/.codex-session-delete/`
-- Provider 同步备份：`~/.codex/backups_state/provider-sync`
-
-## 常见问题
-
-### Codex++ 菜单没出现
-
-确认是从 `Codex++` 入口启动，而不是原版 Codex。也可以打开管理工具的“诊断”和“日志”页面查看注入状态。
-
-### 插件内显示后端连不上
-
-先在浏览器或 PowerShell 里测试：
+鍏堝湪娴忚鍣ㄦ垨 PowerShell 閲屾祴璇曪細
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:57321/backend/status -Body "{}" -ContentType "application/json"
 ```
 
-如果接口正常，但插件仍显示超时，通常是 Codex 页面里的 CDP bridge 或脚本缓存问题。重启 Codex++，或在管理工具里查看日志中的 `renderer.script_loaded`、`bridge.request`、`bridge.response`。
-
-### Upstream worktree 和 Codex 原生创建有什么区别
-
-Codex++ 的 Upstream worktree 功能等价于先更新远端分支，再执行：
-
+濡傛灉鎺ュ彛姝ｅ父锛屼絾鎻掍欢浠嶆樉绀鸿秴鏃讹紝閫氬父鏄?Codex 椤甸潰閲岀殑 CDP bridge 鎴栬剼鏈紦瀛橀棶棰樸€傞噸鍚?Codex++锛屾垨鍦ㄧ鐞嗗伐鍏烽噷鏌ョ湅鏃ュ織涓殑 `renderer.script_loaded`銆乣bridge.request`銆乣bridge.response`銆?
+### Upstream worktree 鍜?Codex 鍘熺敓鍒涘缓鏈変粈涔堝尯鍒?
+Codex++ 鐨?Upstream worktree 鍔熻兘绛変环浜庡厛鏇存柊杩滅鍒嗘敮锛屽啀鎵ц锛?
 ```bash
 git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
 ```
 
-这样新 worktree 从最新的远端跟踪分支开始，而不是从当前会话所在的本地 HEAD 开始。如果 Codex++ 无法安全识别当前 Codex 版本的原生 worktree 创建表单，请从 Codex++ 菜单中手动填写仓库路径、分支名、worktree 路径、remote 和 base branch。
+杩欐牱鏂?worktree 浠庢渶鏂扮殑杩滅璺熻釜鍒嗘敮寮€濮嬶紝鑰屼笉鏄粠褰撳墠浼氳瘽鎵€鍦ㄧ殑鏈湴 HEAD 寮€濮嬨€傚鏋?Codex++ 鏃犳硶瀹夊叏璇嗗埆褰撳墠 Codex 鐗堟湰鐨勫師鐢?worktree 鍒涘缓琛ㄥ崟锛岃浠?Codex++ 鑿滃崟涓墜鍔ㄥ～鍐欎粨搴撹矾寰勩€佸垎鏀悕銆亀orktree 璺緞銆乺emote 鍜?base branch銆?
+### macOS 鎻愮ず鏃犳硶鎵撳紑鎴栧凡鎹熷潖
 
-### macOS 提示无法打开或已损坏
+褰撳墠瀹夎鍖呮湭绛惧悕/鏈叕璇佹椂锛宮acOS Gatekeeper 鍙兘鎷︽埅锛屽嚭鐜扳€滃凡鎹熷潖锛屾棤娉曟墦寮€鈥濈殑鎻愮ず锛?
+![macOS 鎻愮ず Codex++ 绠＄悊宸ュ叿宸叉崯鍧廬(docs/images/macos-damaged-warning.png)
 
-当前安装包未签名/未公证时，macOS Gatekeeper 可能拦截，出现“已损坏，无法打开”的提示：
-
-![macOS 提示 Codex++ 管理工具已损坏](docs/images/macos-damaged-warning.png)
-
-如果遇到该提示，可以在终端执行下面两条命令，解除苹果系统的安全隔离限制：
+濡傛灉閬囧埌璇ユ彁绀猴紝鍙互鍦ㄧ粓绔墽琛屼笅闈袱鏉″懡浠わ紝瑙ｉ櫎鑻规灉绯荤粺鐨勫畨鍏ㄩ殧绂婚檺鍒讹細
 
 ```bash
-sudo xattr -rd com.apple.quarantine /Applications/Codex++\ 管理工具.app
+sudo xattr -rd com.apple.quarantine /Applications/Codex++\ 绠＄悊宸ュ叿.app
 sudo xattr -rd com.apple.quarantine /Applications/Codex++.app
 ```
 
-执行后重新打开 `Codex++` 或 `Codex++ 管理工具` 即可。
-
-### macOS Intel 能用吗
-
-可以。Release 会分别提供 `macos-x64.dmg` 和 `macos-arm64.dmg`。Intel Mac 下载 x64 包，Apple Silicon 下载 arm64 包。
-
-## 开发
-
+鎵ц鍚庨噸鏂版墦寮€ `Codex++` 鎴?`Codex++ 绠＄悊宸ュ叿` 鍗冲彲銆?
+### macOS Intel 鑳界敤鍚?
+鍙互銆俁elease 浼氬垎鍒彁渚?`macos-x64.dmg` 鍜?`macos-arm64.dmg`銆侷ntel Mac 涓嬭浇 x64 鍖咃紝Apple Silicon 涓嬭浇 arm64 鍖呫€?
+## 寮€鍙?
 ```bash
-# 前端检查
-cd apps/claude-codex-pro-manager
+# 鍓嶇妫€鏌?cd apps/claude-codex-pro-manager
 npm install
 npm run check
 npm run vite:build
 
-# Rust 检查
-cd ../..
+# Rust 妫€鏌?cd ../..
 cargo fmt --check
 cargo test
 cargo build --release
 ```
 
-主要结构：
-
+涓昏缁撴瀯锛?
 ```text
 apps/
-  claude-codex-pro-launcher/          静默启动入口
-  claude-codex-pro-manager/           Tauri 管理工具
+  claude-codex-pro-launcher/          闈欓粯鍚姩鍏ュ彛
+  claude-codex-pro-manager/           Tauri 绠＄悊宸ュ叿
 assets/inject/
-  renderer-inject.js            注入到 Codex 渲染端的增强脚本
+  renderer-inject.js            娉ㄥ叆鍒?Codex 娓叉煋绔殑澧炲己鑴氭湰
 crates/
-  claude-codex-pro-core/              启动、注入、配置、更新、安装、桥接等核心逻辑
-  claude-codex-pro-data/              会话数据、导出、Provider 同步
+  claude-codex-pro-core/              鍚姩銆佹敞鍏ャ€侀厤缃€佹洿鏂般€佸畨瑁呫€佹ˉ鎺ョ瓑鏍稿績閫昏緫
+  claude-codex-pro-data/              浼氳瘽鏁版嵁銆佸鍑恒€丳rovider 鍚屾
 scripts/installer/
-  windows/CodexPlusPlus.nsi     Windows NSIS 安装包
-  macos/package-dmg.sh          macOS DMG 打包
+  windows/CodexPlusPlus.nsi     Windows NSIS 瀹夎鍖?  macos/package-dmg.sh          macOS DMG 鎵撳寘
 ```
 
-## 友情链接
+## 鍙嬫儏閾炬帴
 
 - [LINUX DO](https://linux.do)
 
-## 说明
+## 璇存槑
 
-Codex++ 是外部增强工具，不修改 Codex App 原始文件。Codex App 更新后，如果页面结构变化，可能需要更新注入脚本。
+Codex++ 鏄閮ㄥ寮哄伐鍏凤紝涓嶄慨鏀?Codex App 鍘熷鏂囦欢銆侰odex App 鏇存柊鍚庯紝濡傛灉椤甸潰缁撴瀯鍙樺寲锛屽彲鑳介渶瑕佹洿鏂版敞鍏ヨ剼鏈€?

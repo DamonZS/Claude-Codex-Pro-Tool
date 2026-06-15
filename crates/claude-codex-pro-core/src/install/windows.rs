@@ -122,7 +122,7 @@ fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<
     for (name, value) in [
         ("DisplayName", "Codex++".to_string()),
         ("DisplayVersion", crate::version::VERSION.to_string()),
-        ("Publisher", "BigPizzaV3".to_string()),
+        ("Publisher", "DamonZS".to_string()),
         ("DisplayIcon", plan.manager_icon_path.clone()),
         ("InstallLocation", install_location),
         ("UninstallString", uninstall_command.clone()),
