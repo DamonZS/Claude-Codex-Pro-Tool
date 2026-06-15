@@ -123,8 +123,11 @@ fn github_release_workflow_builds_separate_macos_x64_and_arm64_dmgs() {
     assert!(workflow.contains("x86_64-apple-darwin"));
     assert!(workflow.contains("macos-14"));
     assert!(workflow.contains("aarch64-apple-darwin"));
+    assert!(workflow.contains("working-directory: apps/claude-codex-pro-manager"));
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
     assert!(workflow.contains("target/${{ matrix.target }}/release"));
+    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-plus.exe"));
+    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-plus-manager.exe"));
 }
 
 #[test]
