@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    InstallOptions, MANAGER_BINARY, MANAGER_NAME, SILENT_BINARY, SILENT_NAME,
+    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_NAME,
+    SILENT_BINARY, SILENT_NAME,
     install_root_or_default, option_or_current_exe,
 };
 
@@ -31,11 +32,11 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
     let icon_path = default_icon_path();
     WindowsEntrypointPlan {
         silent_shortcut: install_root
-            .join("Codex++.lnk")
+            .join(format!("{SILENT_NAME}.lnk"))
             .to_string_lossy()
             .to_string(),
         manager_shortcut: install_root
-            .join("Codex++ 管理工具.lnk")
+            .join(format!("{MANAGER_NAME}.lnk"))
             .to_string_lossy()
             .to_string(),
         install_root: install_root.to_string_lossy().to_string(),
@@ -55,16 +56,18 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
     let install_root = PathBuf::from(&plan.install_root);
     std::fs::create_dir_all(&install_root)?;
+    let _ = std::fs::remove_file(install_root.join(format!("{LEGACY_SILENT_NAME}.lnk")));
+    let _ = std::fs::remove_file(install_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
     create_entrypoint_shortcut(
         PathBuf::from(&plan.silent_shortcut),
         PathBuf::from(&plan.launcher_path),
-        "Launch Codex++ silently",
+        "Launch Claude Codex Pro silently",
         PathBuf::from(&plan.silent_icon_path),
     )?;
     create_entrypoint_shortcut(
         PathBuf::from(&plan.manager_shortcut),
         PathBuf::from(&plan.manager_path),
-        "Open Codex++ management tool",
+        "Open Claude Codex Pro management tool",
         PathBuf::from(&plan.manager_icon_path),
     )?;
     write_uninstall_registration(&plan)?;
@@ -76,6 +79,9 @@ pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
     let _ = std::fs::remove_file(&plan.silent_shortcut);
     let _ = std::fs::remove_file(&plan.manager_shortcut);
+    let legacy_root = PathBuf::from(&plan.install_root);
+    let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_SILENT_NAME}.lnk")));
+    let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
     let _ = crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY);
     let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
     Ok(())
@@ -120,7 +126,7 @@ fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<
         .to_string_lossy()
         .to_string();
     for (name, value) in [
-        ("DisplayName", "Codex++".to_string()),
+        ("DisplayName", SILENT_NAME.to_string()),
         ("DisplayVersion", crate::version::VERSION.to_string()),
         ("Publisher", "DamonZS".to_string()),
         ("DisplayIcon", plan.manager_icon_path.clone()),

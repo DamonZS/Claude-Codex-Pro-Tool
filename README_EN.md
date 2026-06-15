@@ -1,7 +1,7 @@
-# Codex++
+# Claude Codex Pro
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro-plus.png" alt="Codex++ icon" width="160">
+  <img src="docs/images/claude-codex-pro-plus.png" alt="Claude Codex Pro icon" width="160">
 </p>
 
 <p align="center">
@@ -16,22 +16,22 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Codex++ is an external enhancement launcher and manager for the Codex App. It does not modify the original Codex installation. Instead, it starts Codex externally and injects enhancements through the Chromium DevTools Protocol.
+Claude Codex Pro is an external enhancement launcher and manager for the Codex App. It does not modify the original Codex installation. Instead, it starts Codex externally and injects enhancements through the Chromium DevTools Protocol.
 
 ## Quick Start
 
 Download the latest installer from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):
 
-- Windows: `CodexPlusPlus-*-windows-x64-setup.exe`
-- macOS Intel: `CodexPlusPlus-*-macos-x64.dmg`
-- macOS Apple Silicon: `CodexPlusPlus-*-macos-arm64.dmg`
+- Windows: `claude-codex-pro-plus-*-windows-x64-setup.exe`
+- macOS Intel: `claude-codex-pro-plus-*-macos-x64.dmg`
+- macOS Apple Silicon: `claude-codex-pro-plus-*-macos-arm64.dmg`
 
 After installation, two entry points are available:
 
-- `Codex++`: a silent launcher. It does not show the manager UI and only starts Codex with Codex++ injection.
-- `Codex++ Manager`: a Tauri control panel for launch, diagnostics, repair, updates, relay injection, enhancements, and user scripts.
+- `Claude Codex Pro`: a silent launcher. It does not show the manager UI and only starts Codex with Claude Codex Pro injection.
+- `Claude Codex Pro Manager`: a Tauri control panel for launch, diagnostics, repair, updates, relay injection, enhancements, and user scripts.
 
-The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Codex++.app` and `/Applications/Codex++ 管理工具.app`.
+The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Claude Codex Pro.app` and `/Applications/Claude Codex Pro 管理工具.app`.
 
 ## Highlights
 
@@ -72,9 +72,9 @@ In the manager's Relay Injection page:
 1. Make sure ChatGPT login status is detected.
 2. Add one or more relay profiles with Base URL and Key.
 3. Select the active profile and apply relay injection.
-4. Launch `Codex++`.
+4. Launch `Claude Codex Pro`.
 
-Codex++ writes configuration similar to this into `~/.codex/config.toml`:
+Claude Codex Pro writes configuration similar to this into `~/.codex/config.toml`:
 
 ```toml
 model_provider = "CodexPlusPlus"
@@ -91,7 +91,7 @@ To return to the official login mode, use the clear API mode button in the Relay
 
 ## Enhancements
 
-Enhancements are controlled in the manager. Enhancement injection is enabled by default. When disabled, Codex++ will not inject its menu or scripts.
+Enhancements are controlled in the manager. Enhancement injection is enabled by default. When disabled, Claude Codex Pro will not inject its menu or scripts.
 
 When relay injection mode is active, plugin entry unlock and forced plugin install are unnecessary, and the UI will say so. Other enhancements, including session delete, export, move, Timeline, recommendations, and user scripts, can still be used.
 
@@ -108,7 +108,7 @@ Requests automatically append a `?v=timestamp` cache buster to avoid stale CDN c
 
 ## Updates and Packages
 
-Codex++ publishes installers through GitHub Releases. Windows builds an NSIS installer, while macOS builds separate Intel x64 and Apple Silicon arm64 DMGs.
+Claude Codex Pro publishes installers through GitHub Releases. Windows builds an NSIS installer, while macOS builds separate Intel x64 and Apple Silicon arm64 DMGs.
 
 The manager's About page can check and start updates. When the silent launcher finds a new version, it opens the manager directly on the update prompt.
 
@@ -117,14 +117,14 @@ The manager's About page can check and start updates. When the silent launcher f
 - Codex config: `~/.codex/config.toml`
 - Codex auth state: `~/.codex/auth.json`
 - Codex local database: prefers `~/.codex/sqlite/*.db`, falls back to legacy `~/.codex/state_5.sqlite`
-- Codex++ state and logs: `~/.codex-session-delete/`
+- Claude Codex Pro state and logs: `~/.codex-session-delete/`
 - Provider Sync backups: `~/.codex/backups_state/provider-sync`
 
 ## FAQ
 
-### The Codex++ menu does not appear
+### The Claude Codex Pro menu does not appear
 
-Make sure Codex was launched from the `Codex++` entry instead of the original Codex entry. You can also inspect the Diagnostics and Logs pages in the manager.
+Make sure Codex was launched from the `Claude Codex Pro` entry instead of the original Codex entry. You can also inspect the Diagnostics and Logs pages in the manager.
 
 ### The plugin says the backend is disconnected
 
@@ -134,17 +134,17 @@ First test the helper endpoint:
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:57321/backend/status -Body "{}" -ContentType "application/json"
 ```
 
-If the endpoint works but the plugin still times out, it is usually a Codex page CDP bridge or script cache issue. Restart Codex++, or check manager logs for `renderer.script_loaded`, `bridge.request`, and `bridge.response`.
+If the endpoint works but the plugin still times out, it is usually a Codex page CDP bridge or script cache issue. Restart Claude Codex Pro, or check manager logs for `renderer.script_loaded`, `bridge.request`, and `bridge.response`.
 
 ### How is Upstream worktree different from Codex native creation?
 
-Codex++ updates the remote branch first, then creates the worktree as if you ran:
+Claude Codex Pro updates the remote branch first, then creates the worktree as if you ran:
 
 ```bash
 git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
 ```
 
-The new worktree starts from the fresh remote tracking branch instead of the local HEAD used by the current session. If Codex++ cannot safely recognize the current Codex version's native worktree form, use the Codex++ menu entry and enter the repository path, branch name, worktree path, remote, and base branch manually.
+The new worktree starts from the fresh remote tracking branch instead of the local HEAD used by the current session. If Claude Codex Pro cannot safely recognize the current Codex version's native worktree form, use the Claude Codex Pro menu entry and enter the repository path, branch name, worktree path, remote, and base branch manually.
 
 ### macOS says the app cannot be opened or is damaged
 
@@ -188,11 +188,11 @@ scripts/installer/
 
 ## Community and Support
 
-Join the Codex++ discussion group to report issues, share usage notes, or suggest features:
+Join the Claude Codex Pro discussion group to report issues, share usage notes, or suggest features:
 
 WeChat group: [get the latest QR code](https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#).
 
-If Codex++ has helped you, you can use the support QR code to support continued maintenance.
+If Claude Codex Pro has helped you, you can use the support QR code to support continued maintenance.
 
 <p align="center">
   <img src="docs/images/support-payment-qr.png" alt="Support payment QR code" width="240">
@@ -204,4 +204,4 @@ If Codex++ has helped you, you can use the support QR code to support continued 
 
 ## Notes
 
-Codex++ is an external enhancement tool and does not modify original Codex App files. If a future Codex App update changes page structure, the injection script may need updates.
+Claude Codex Pro is an external enhancement tool and does not modify original Codex App files. If a future Codex App update changes page structure, the injection script may need updates.

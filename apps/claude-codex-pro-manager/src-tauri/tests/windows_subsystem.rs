@@ -99,12 +99,12 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
     assert!(script.contains("<key>LSUIElement</key>"));
     assert!(script.contains("ARCH=\"${2:-$(uname -m)}\""));
     assert!(script.contains("BINARY_DIR=\"${BINARY_DIR:-$ROOT/target/release}\""));
-    assert!(script.contains("CodexPlusPlus-${VERSION}-macos-${ARCH}.dmg"));
+    assert!(script.contains("claude-codex-pro-plus-${VERSION}-macos-${ARCH}.dmg"));
     assert!(script.contains(
-        "create_app \"Codex++\" \"CodexPlusPlus\" \"$BINARY_DIR/claude-codex-pro-plus\" \"com.bigpizzav3.codexplusplus\" \"true\""
+        "create_app \"Claude Codex Pro\" \"CodexPlusPlus\" \"$BINARY_DIR/claude-codex-pro-plus\" \"com.bigpizzav3.codexplusplus\" \"true\""
     ));
     assert!(script.contains(
-        "create_app \"Codex++ 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/claude-codex-pro-plus-manager\" \"com.bigpizzav3.codexplusplus.manager\" \"false\""
+        "create_app \"Claude Codex Pro 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/claude-codex-pro-plus-manager\" \"com.bigpizzav3.codexplusplus.manager\" \"false\""
     ));
 }
 

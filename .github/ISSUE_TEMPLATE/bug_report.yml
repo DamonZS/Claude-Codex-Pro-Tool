@@ -11,7 +11,7 @@ body:
     attributes:
       label: 影响范围
       options:
-        - 启动 / 重启 Codex++
+        - 启动 / 重启 Claude Codex Pro
         - 供应商切换 / 配置写入
         - 协议转换 / 代理
         - MCP / skills / plugins
@@ -26,7 +26,7 @@ body:
     attributes:
       label: 当前行为
       description: 实际发生了什么？如果有报错，请贴完整错误文本。
-      placeholder: 点击重启 Codex++ 后没有启动，latest-status.json 显示...
+      placeholder: 点击重启 Claude Codex Pro 后没有启动，latest-status.json 显示...
     validations:
       required: true
   - type: textarea
@@ -56,7 +56,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Codex++ 版本
+      label: Claude Codex Pro 版本
       placeholder: 例如 1.1.8
     validations:
       required: true
@@ -80,4 +80,3 @@ body:
           required: true
         - label: 我已经确认这是当前最新版仍然存在的问题。
           required: false
-

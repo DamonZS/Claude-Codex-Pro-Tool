@@ -57,8 +57,8 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
         "body": "静态更新描述",
         "assets": [
             {"name": "source.zip", "url": "https://example.test/source.zip"},
-            {"name": "CodexPlusPlus-1.1.6-windows-x64-setup.exe", "url": "https://example.test/setup.exe"},
-            {"name": "CodexPlusPlus-1.1.6-macos-x64.dmg", "url": "https://example.test/app.dmg"}
+            {"name": "claude-codex-pro-plus-1.1.6-windows-x64-setup.exe", "url": "https://example.test/setup.exe"},
+            {"name": "claude-codex-pro-plus-1.1.6-macos-x64.dmg", "url": "https://example.test/app.dmg"}
         ]
     }))
     .unwrap();
@@ -68,12 +68,12 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
     if cfg!(windows) {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("CodexPlusPlus-1.1.6-windows-x64-setup.exe")
+            Some("claude-codex-pro-plus-1.1.6-windows-x64-setup.exe")
         );
     } else if cfg!(target_os = "macos") {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("CodexPlusPlus-1.1.6-macos-x64.dmg")
+            Some("claude-codex-pro-plus-1.1.6-macos-x64.dmg")
         );
     } else {
         assert_eq!(release.asset_name.as_deref(), None);

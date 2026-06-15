@@ -112,7 +112,7 @@ jobs:
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
-          for app in "dist/macos/stage/Codex++.app" "dist/macos/stage/Codex++ 管理工具.app"; do
+          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro 管理工具.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"

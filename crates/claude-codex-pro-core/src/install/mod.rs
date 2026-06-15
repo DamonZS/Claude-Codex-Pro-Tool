@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 pub mod macos;
 pub mod windows;
 
-pub const SILENT_NAME: &str = "Codex++";
-pub const MANAGER_NAME: &str = "Codex++ 管理工具";
+pub const SILENT_NAME: &str = "Claude Codex Pro";
+pub const MANAGER_NAME: &str = "Claude Codex Pro 管理工具";
+pub const LEGACY_SILENT_NAME: &str = "Codex++";
+pub const LEGACY_MANAGER_NAME: &str = "Codex++ 管理工具";
 pub const SILENT_BINARY: &str = "claude-codex-pro-plus";
 pub const MANAGER_BINARY: &str = "claude-codex-pro-plus-manager";
 
@@ -72,11 +74,17 @@ impl ShortcutState {
 }
 
 pub fn shortcut_names() -> (&'static str, &'static str) {
-    ("Codex++.lnk", "Codex++ 管理工具.lnk")
+    (
+        "Claude Codex Pro.lnk",
+        "Claude Codex Pro 管理工具.lnk",
+    )
 }
 
 pub fn app_bundle_names() -> (&'static str, &'static str) {
-    ("Codex++.app", "Codex++ 管理工具.app")
+    (
+        "Claude Codex Pro.app",
+        "Claude Codex Pro 管理工具.app",
+    )
 }
 
 pub fn inspect_entrypoints() -> EntryPointState {
@@ -164,7 +172,7 @@ fn platform_install(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持安装 Codex++ 入口")
+        anyhow::bail!("当前平台暂不支持安装 Claude Codex Pro 入口")
     }
 }
 
@@ -182,7 +190,7 @@ fn platform_uninstall(options: &InstallOptions) -> anyhow::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = options;
-        anyhow::bail!("当前平台暂不支持卸载 Codex++ 入口")
+        anyhow::bail!("当前平台暂不支持卸载 Claude Codex Pro 入口")
     }
 }
 
@@ -208,13 +216,26 @@ fn entrypoint_candidates(root: &Option<PathBuf>, manager: bool) -> Vec<PathBuf> 
     let Some(root) = root else {
         return Vec::new();
     };
-    let name = if manager { MANAGER_NAME } else { SILENT_NAME };
-    if cfg!(windows) {
-        vec![root.join(format!("{name}.lnk"))]
-    } else if cfg!(target_os = "macos") {
-        vec![root.join(format!("{name}.app"))]
+    let names = if manager {
+        [MANAGER_NAME, LEGACY_MANAGER_NAME]
     } else {
-        vec![root.join(format!("{name}.desktop"))]
+        [SILENT_NAME, LEGACY_SILENT_NAME]
+    };
+    if cfg!(windows) {
+        names
+            .into_iter()
+            .map(|name| root.join(format!("{name}.lnk")))
+            .collect()
+    } else if cfg!(target_os = "macos") {
+        names
+            .into_iter()
+            .map(|name| root.join(format!("{name}.app")))
+            .collect()
+    } else {
+        names
+            .into_iter()
+            .map(|name| root.join(format!("{name}.desktop")))
+            .collect()
     }
 }
 
@@ -247,13 +268,26 @@ pub fn companion_binary_path_from_exe(exe: &Path, binary: &str) -> PathBuf {
 }
 
 fn macos_silent_app_binary_from_exe(exe: &Path) -> Option<PathBuf> {
-    macos_applications_dir_from_exe(exe).map(|applications_dir| {
-        applications_dir
-            .join(format!("{SILENT_NAME}.app"))
-            .join("Contents")
-            .join("MacOS")
-            .join("CodexPlusPlus")
-    })
+    let applications_dir = macos_applications_dir_from_exe(exe)?;
+    [SILENT_NAME, LEGACY_SILENT_NAME]
+        .into_iter()
+        .map(|name| {
+            applications_dir
+                .join(format!("{name}.app"))
+                .join("Contents")
+                .join("MacOS")
+                .join("CodexPlusPlus")
+        })
+        .find(|path| path.exists())
+        .or_else(|| {
+            Some(
+                applications_dir
+                    .join(format!("{SILENT_NAME}.app"))
+                    .join("Contents")
+                    .join("MacOS")
+                    .join("CodexPlusPlus"),
+            )
+        })
 }
 
 fn macos_applications_dir_from_exe(exe: &Path) -> Option<PathBuf> {

@@ -1,5 +1,5 @@
 /**
- * Codex++ 供应商预设
+ * Claude Codex Pro 供应商预设
  * 基于 cc-switch (MIT) 的 codexProviderPresets.ts，作者 Jason Young
  * https://github.com/farion1231/cc-switch
  *

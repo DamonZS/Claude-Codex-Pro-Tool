@@ -15,8 +15,8 @@ fn windows_entrypoint_plan_contains_silent_and_manager_entrypoints() {
 
     let plan = build_windows_entrypoint_plan(&options);
 
-    assert!(plan.silent_shortcut.ends_with("Codex++.lnk"));
-    assert!(plan.manager_shortcut.ends_with("Codex++ 管理工具.lnk"));
+    assert!(plan.silent_shortcut.ends_with("Claude Codex Pro.lnk"));
+    assert!(plan.manager_shortcut.ends_with("Claude Codex Pro 管理工具.lnk"));
     assert_eq!(plan.launcher_path, "C:/Tools/claude-codex-pro-plus.exe");
     assert_eq!(plan.manager_path, "C:/Tools/claude-codex-pro-plus-manager.exe");
     assert_eq!(plan.silent_icon_path, "C:/Tools/claude-codex-pro-plus.exe");
@@ -39,8 +39,8 @@ fn windows_entrypoint_plan_can_request_owned_data_removal_without_shell_script()
 
     let plan = build_windows_entrypoint_plan(&options);
 
-    assert!(plan.silent_shortcut.ends_with("Codex++.lnk"));
-    assert!(plan.manager_shortcut.ends_with("Codex++ 管理工具.lnk"));
+    assert!(plan.silent_shortcut.ends_with("Claude Codex Pro.lnk"));
+    assert!(plan.manager_shortcut.ends_with("Claude Codex Pro 管理工具.lnk"));
     assert!(plan.remove_owned_data);
 }
 
@@ -48,21 +48,21 @@ fn windows_entrypoint_plan_can_request_owned_data_removal_without_shell_script()
 fn macos_bundle_metadata_contains_silent_and_manager_apps() {
     let options = InstallOptions {
         install_root: Some("/Applications".into()),
-        launcher_path: Some("/opt/Codex++/claude-codex-pro-plus".into()),
-        manager_path: Some("/opt/Codex++/claude-codex-pro-plus-manager".into()),
+        launcher_path: Some("/opt/Claude Codex Pro/claude-codex-pro-plus".into()),
+        manager_path: Some("/opt/Claude Codex Pro/claude-codex-pro-plus-manager".into()),
         remove_owned_data: false,
     };
 
     let silent = build_macos_app_bundle(&options, false);
     let manager = build_macos_app_bundle(&options, true);
 
-    assert!(silent.app_path.ends_with("Codex++.app"));
-    assert!(manager.app_path.ends_with("Codex++ 管理工具.app"));
-    assert!(silent.info_plist.contains("<string>Codex++</string>"));
+    assert!(silent.app_path.ends_with("Claude Codex Pro.app"));
+    assert!(manager.app_path.ends_with("Claude Codex Pro 管理工具.app"));
+    assert!(silent.info_plist.contains("<string>Claude Codex Pro</string>"));
     assert!(
         manager
             .info_plist
-            .contains("<string>Codex++ 管理工具</string>")
+            .contains("<string>Claude Codex Pro 管理工具</string>")
     );
     assert!(silent.launch_script.contains("claude-codex-pro-plus"));
     assert!(manager.launch_script.contains("claude-codex-pro-plus-manager"));
@@ -70,26 +70,32 @@ fn macos_bundle_metadata_contains_silent_and_manager_apps() {
 
 #[test]
 fn installer_exports_expected_two_entrypoint_names() {
-    assert_eq!(shortcut_names(), ("Codex++.lnk", "Codex++ 管理工具.lnk"));
-    assert_eq!(app_bundle_names(), ("Codex++.app", "Codex++ 管理工具.app"));
+    assert_eq!(
+        shortcut_names(),
+        ("Claude Codex Pro.lnk", "Claude Codex Pro 管理工具.lnk")
+    );
+    assert_eq!(
+        app_bundle_names(),
+        ("Claude Codex Pro.app", "Claude Codex Pro 管理工具.app")
+    );
 }
 
 #[test]
 fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
     let manager_exe = std::path::Path::new(
-        "/Applications/Codex++ 管理工具.app/Contents/MacOS/CodexPlusPlusManager",
+        "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/CodexPlusPlusManager",
     );
 
     let companion = companion_binary_path_from_exe(manager_exe, SILENT_BINARY);
 
     assert_eq!(
         companion,
-        std::path::PathBuf::from("/Applications/Codex++.app/Contents/MacOS/CodexPlusPlus")
+        std::path::PathBuf::from("/Applications/Claude Codex Pro.app/Contents/MacOS/CodexPlusPlus")
     );
     assert_ne!(
         companion,
         std::path::PathBuf::from(
-            "/Applications/Codex++ 管理工具.app/Contents/MacOS/claude-codex-pro-plus"
+            "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/claude-codex-pro-plus"
         )
     );
 }
@@ -98,9 +104,9 @@ fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
 fn macos_bundle_does_not_wrap_the_bundle_executable_in_itself() {
     let options = InstallOptions {
         install_root: Some("/Applications".into()),
-        launcher_path: Some("/Applications/Codex++.app/Contents/MacOS/CodexPlusPlus".into()),
+        launcher_path: Some("/Applications/Claude Codex Pro.app/Contents/MacOS/CodexPlusPlus".into()),
         manager_path: Some(
-            "/Applications/Codex++ 管理工具.app/Contents/MacOS/CodexPlusPlusManager".into(),
+            "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/CodexPlusPlusManager".into(),
         ),
         remove_owned_data: false,
     };
