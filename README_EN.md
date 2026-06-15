@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">涓枃</a> | English
+  <a href="README.md">中文</a> | English
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@ After installation, two entry points are available:
 - `Codex++`: a silent launcher. It does not show the manager UI and only starts Codex with Codex++ injection.
 - `Codex++ Manager`: a Tauri control panel for launch, diagnostics, repair, updates, relay injection, enhancements, and user scripts.
 
-The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Codex++.app` and `/Applications/Codex++ 绠＄悊宸ュ叿.app`.
+The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Codex++.app` and `/Applications/Codex++ 管理工具.app`.
 
 ## Highlights
 
@@ -192,9 +192,10 @@ Join the Codex++ discussion group to report issues, share usage notes, or sugges
 
 WeChat group: [get the latest QR code](https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#).
 
-If Codex++ has helped you, you can buy me a coffee or send a small tip to support continued maintenance.
+If Codex++ has helped you, you can use the support QR code to support continued maintenance.
 
 <p align="center">
+  <img src="docs/images/support-payment-qr.png" alt="Support payment QR code" width="240">
 </p>
 
 ## Friendly Links
