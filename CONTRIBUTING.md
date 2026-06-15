@@ -1,86 +1,106 @@
-# Contributing to CodexPlusPlus
+# Contributing to Claude Codex Pro Tool
 
-Thank you for your interest in contributing to CodexPlusPlus!
+Thank you for your interest in contributing to Claude Codex Pro Tool.
 
 ## Development Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/DamonZS/Claude-Codex-Pro-Tool.git
-   cd CodexPlusPlus
-   ```
+1. Clone the repository
 
-2. **Install Rust toolchain**
-   Ensure you have Rust 1.70+ installed:
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   rustc --version  # Should be 1.70+
-   ```
+```bash
+git clone https://github.com/DamonZS/Claude-Codex-Pro-Tool.git
+cd Claude-Codex-Pro-Tool
+```
 
-3. **Build the project**
-   ```bash
-   cargo build --release
-   ```
+2. Install the Rust toolchain
 
-4. **Run tests**
-   ```bash
-   cargo test
-   ```
+Make sure Rust 1.85 or newer is installed.
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustc --version
+```
+
+3. Install frontend dependencies
+
+```bash
+cd apps/claude-codex-pro-manager
+npm install
+cd ../..
+```
+
+4. Build the project
+
+```bash
+cargo build --release
+```
+
+5. Run tests
+
+```bash
+cargo test --workspace
+cd apps/claude-codex-pro-manager
+npm run check
+```
 
 ## Project Structure
 
-```
-CodexPlusPlus/
-├── crates/
-│   ├── claude-codex-pro-data/    # Data handling and provider sync
-│   └── claude-codex-pro-core/    # Core Codex++ logic
-└── README.md               # Project documentation
+```text
+Claude-Codex-Pro-Tool/
+  apps/
+    claude-codex-pro-launcher/
+    claude-codex-pro-manager/
+  crates/
+    claude-codex-pro-core/
+    claude-codex-pro-data/
+  scripts/
+  docs/
+  README.md
+  README_EN.md
 ```
 
 ## Making Changes
 
-1. **Create a feature branch**
-   ```bash
-   git checkout -b feat/your-feature-name
-   ```
+1. Create a feature branch
 
-2. **Make your changes**
-   - Write idiomatic Rust code
-   - Add tests for new functionality
-   - Update documentation as needed
+```bash
+git checkout -b feat/your-feature-name
+```
 
-3. **Run the test suite**
-   ```bash
-   cargo test --all-features
-   cargo clippy  # Linting
-   ```
+2. Make your changes
 
-4. **Commit your changes**
-   ```bash
-   git commit -m "feat: add your feature description"
-   ```
+- Keep changes focused.
+- Add or update tests when behavior changes.
+- Update documentation when user-facing behavior changes.
+
+3. Run validation
+
+```bash
+cargo test --workspace
+cd apps/claude-codex-pro-manager
+npm run check
+npm run vite:build
+```
 
 ## Code Style
 
-- Follow Rust standard formatting (`cargo fmt`)
-- Use `clippy` for linting recommendations
-- Write self-documenting code with clear variable/function names
-- Add doc comments (`///`) for public APIs
+- Format Rust with `cargo fmt`.
+- Prefer clear names and direct control flow.
+- Add comments only when they carry real context.
 
-## Pull Request Process
+## Pull Requests
 
-1. Fork the repository
-2. Create your feature branch
-3. Make your changes with adequate tests
-4. Ensure all tests pass and clippy is clean
-5. Submit a pull request with a clear description
+1. Fork the repository.
+2. Create a branch from the latest `main`.
+3. Keep the diff scoped to one problem or feature.
+4. Include validation details in the PR description.
+5. Link related issues when relevant.
 
 ## Reporting Issues
 
-- Use GitHub Issues for bug reports and feature requests
-- Include Rust version (`rustc --version`) and OS information
-- For bugs, provide minimal reproduction steps
+- Use GitHub Issues for bugs and feature requests.
+- Include OS, Codex version, and reproduction steps.
+- When the issue involves relay injection or provider switching, include the minimum config needed to reproduce without exposing secrets.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the project license.
+By contributing, you agree that your contributions are licensed under the repository license.

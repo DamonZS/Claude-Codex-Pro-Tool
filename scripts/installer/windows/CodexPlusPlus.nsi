@@ -36,8 +36,8 @@ Section "Install"
   File "${ROOT}\dist\windows\app\claude-codex-pro-plus.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-plus-manager.exe"
 
-  Delete "$DESKTOP\Codex++ 绠＄悊宸ュ叿.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++ 绠＄悊宸ュ叿.lnk"
+  Delete "$DESKTOP\Codex++ 管理工具.lnk"
+  Delete "$SMPROGRAMS\Codex++\Codex++ 管理工具.lnk"
 
   CreateShortcut "$DESKTOP\Codex++.lnk" "$INSTDIR\claude-codex-pro-plus.exe" "" "$INSTDIR\claude-codex-pro-plus.exe"
   CreateShortcut "$DESKTOP\Codex++ 管理工具.lnk" "$INSTDIR\claude-codex-pro-plus-manager.exe" "" "$INSTDIR\claude-codex-pro-plus-manager.exe"
@@ -64,10 +64,8 @@ Section "Uninstall"
 
   Delete "$DESKTOP\Codex++.lnk"
   Delete "$DESKTOP\Codex++ 管理工具.lnk"
-  Delete "$DESKTOP\Codex++ 绠＄悊宸ュ叿.lnk"
   Delete "$SMPROGRAMS\Codex++\Codex++.lnk"
   Delete "$SMPROGRAMS\Codex++\Codex++ 管理工具.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++ 绠＄悊宸ュ叿.lnk"
   Delete "$SMPROGRAMS\Codex++\卸载 Codex++.lnk"
   RMDir "$SMPROGRAMS\Codex++"
 
