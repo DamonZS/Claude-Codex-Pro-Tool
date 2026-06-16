@@ -8,6 +8,8 @@ use super::{
     InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
     install_root_or_default, option_or_current_exe,
 };
+#[cfg(target_os = "macos")]
+use super::{LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME};
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
     let install_root = install_root_or_default(options);

@@ -92,6 +92,7 @@
   window.__codexThreadScrollRestoreRevision = (window.__codexThreadScrollRestoreRevision || 0) + 1;
 
   function installCodexPlusImageOverlay() {
+    if (!document?.getElementById || !document?.createElement || !document?.documentElement?.appendChild) return;
     const config = window.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ || {};
     const existing = document.getElementById(codexPlusImageOverlayId);
     const source = config.dataUrl || "";

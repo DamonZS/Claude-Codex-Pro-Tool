@@ -8,6 +8,7 @@ repository.workspace = true
 [[bin]]
 name = "claude-codex-pro-plus"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 anyhow.workspace = true

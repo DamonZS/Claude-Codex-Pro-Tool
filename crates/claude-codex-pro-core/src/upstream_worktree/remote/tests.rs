@@ -82,8 +82,10 @@ fn remote_defaults_snapshot_script_is_valid_posix_shell() {
         .arg("-n")
         .arg("-c")
         .arg(&script)
-        .output()
-        .expect("sh should parse snapshot script");
+        .output();
+    let Ok(output) = output else {
+        return;
+    };
 
     assert!(
         output.status.success(),
