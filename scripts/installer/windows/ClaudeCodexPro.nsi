@@ -8,8 +8,8 @@ Unicode true
 
 Name "Claude Codex Pro"
 OutFile "${ROOT}\dist\windows\claude-codex-pro-plus-${VERSION}-windows-x64-setup.exe"
-InstallDir "$LOCALAPPDATA\Programs\Codex++"
-InstallDirRegKey HKCU "Software\Codex++" "InstallDir"
+InstallDir "$LOCALAPPDATA\Programs\Claude Codex Pro"
+InstallDirRegKey HKCU "Software\Claude Codex Pro" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
@@ -32,6 +32,11 @@ Section "Install"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-plus-manager.exe /F'
   Pop $0
+
+  Delete "$LOCALAPPDATA\Programs\Codex++\claude-codex-pro-plus.exe"
+  Delete "$LOCALAPPDATA\Programs\Codex++\claude-codex-pro-plus-manager.exe"
+  Delete "$LOCALAPPDATA\Programs\Codex++\uninstall.exe"
+  RMDir "$LOCALAPPDATA\Programs\Codex++"
 
   File "${ROOT}\dist\windows\app\claude-codex-pro-plus.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-plus-manager.exe"
@@ -57,13 +62,16 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\Claude Codex Pro\卸载 Claude Codex Pro.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\claude-codex-pro-plus-manager.exe"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  WriteRegStr HKCU "Software\Codex++" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "DisplayName" "Claude Codex Pro"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "Publisher" "DamonZS"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "DisplayIcon" "$INSTDIR\claude-codex-pro-plus-manager.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "UninstallString" "$INSTDIR\uninstall.exe"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++"
+  DeleteRegKey HKCU "Software\Codex++"
+  WriteRegStr HKCU "Software\Claude Codex Pro" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayName" "Claude Codex Pro"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "Publisher" "DamonZS"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayIcon" "$INSTDIR\claude-codex-pro-plus-manager.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "UninstallString" "$INSTDIR\uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
@@ -91,5 +99,8 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro"
   DeleteRegKey HKCU "Software\Codex++"
+  DeleteRegKey HKCU "Software\Claude Codex Pro"
 SectionEnd

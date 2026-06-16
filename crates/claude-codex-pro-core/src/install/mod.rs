@@ -276,7 +276,7 @@ fn macos_silent_app_binary_from_exe(exe: &Path) -> Option<PathBuf> {
                 .join(format!("{name}.app"))
                 .join("Contents")
                 .join("MacOS")
-                .join("CodexPlusPlus")
+                .join("ClaudeCodexPro")
         })
         .find(|path| path.exists())
         .or_else(|| {
@@ -285,7 +285,7 @@ fn macos_silent_app_binary_from_exe(exe: &Path) -> Option<PathBuf> {
                     .join(format!("{SILENT_NAME}.app"))
                     .join("Contents")
                     .join("MacOS")
-                    .join("CodexPlusPlus"),
+                    .join("ClaudeCodexPro"),
             )
         })
 }

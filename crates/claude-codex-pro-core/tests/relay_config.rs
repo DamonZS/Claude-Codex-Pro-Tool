@@ -1253,7 +1253,7 @@ fn apply_relay_config_file_switches_config_without_touching_auth_json() {
     let home = temp.path();
     std::fs::write(
         home.join("config.toml"),
-        "model_provider = \"CodexPlusPlus\"\nbase_url = \"old\"\n",
+        "model_provider = \"custom\"\nbase_url = \"old\"\n",
     )
     .unwrap();
     std::fs::write(home.join("auth.json"), "{\"auth_mode\":\"chatgpt\"}\n").unwrap();

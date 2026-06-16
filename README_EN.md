@@ -38,7 +38,7 @@ The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG in
 - Rust backend and silent launcher with no extra runtime requirement.
 - Tauri + React manager with dark/light theme support.
 - External CDP injection. No `app.asar` patching and no DLL writes into the Codex installation.
-- Relay injection mode with multiple relay profiles, `CodexPlusPlus` provider configuration, and a one-click switch back to official ChatGPT login mode.
+- Relay injection mode with multiple relay profiles, `custom` provider configuration, and a one-click switch back to official ChatGPT login mode.
 - Traditional enhancement mode with plugin entry unlock, forced plugin install, session delete, Markdown export, project move, Timeline, and more.
 - Independent user script management with startup injection.
 - Provider Sync to keep historical sessions visible after switching providers.
@@ -77,10 +77,10 @@ In the manager's Relay Injection page:
 Claude Codex Pro writes configuration similar to this into `~/.codex/config.toml`:
 
 ```toml
-model_provider = "CodexPlusPlus"
+model_provider = "custom"
 
-[model_providers.CodexPlusPlus]
-name = "CodexPlusPlus"
+[model_providers.custom]
+name = "custom"
 wire_api = "responses"
 requires_openai_auth = true
 base_url = "https://example.com/v1"
@@ -117,7 +117,7 @@ The manager's About page can check and start updates. When the silent launcher f
 - Codex config: `~/.codex/config.toml`
 - Codex auth state: `~/.codex/auth.json`
 - Codex local database: prefers `~/.codex/sqlite/*.db`, falls back to legacy `~/.codex/state_5.sqlite`
-- Claude Codex Pro state and logs: `~/.codex-session-delete/`
+- Claude Codex Pro state and logs: `~/.claude-codex-pro/`
 - Provider Sync backups: `~/.codex/backups_state/provider-sync`
 
 ## FAQ
@@ -182,7 +182,7 @@ crates/
   claude-codex-pro-core/              Launch, injection, config, update, install, bridge
   claude-codex-pro-data/              Session data, export, Provider Sync
 scripts/installer/
-  windows/CodexPlusPlus.nsi     Windows NSIS installer
+  windows/ClaudeCodexPro.nsi    Windows NSIS installer
   macos/package-dmg.sh          macOS DMG packager
 ```
 

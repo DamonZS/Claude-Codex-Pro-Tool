@@ -46,12 +46,12 @@ fn watcher_enable_and_disable_toggle_flag() {
 fn watcher_install_plan_registers_rust_launcher_at_logon() {
     let plan = build_watcher_install_plan("C:/Tools/claude-codex-pro-plus.exe".into(), 9333);
 
-    assert_eq!(plan.run_value_name, "CodexPlusPlusWatcher");
+    assert_eq!(plan.run_value_name, "ClaudeCodexProWatcher");
     assert_eq!(
         plan.run_value,
         "\"C:/Tools/claude-codex-pro-plus.exe\" --debug-port 9333"
     );
-    assert_eq!(plan.shortcut_name, "CodexPlusPlusWatcher.lnk");
+    assert_eq!(plan.shortcut_name, "ClaudeCodexProWatcher.lnk");
     assert_eq!(plan.shortcut_target, "C:/Tools/claude-codex-pro-plus.exe");
     assert_eq!(plan.shortcut_arguments, "--debug-port 9333");
 }

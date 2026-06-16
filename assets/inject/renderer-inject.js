@@ -2234,15 +2234,11 @@
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a><br>Telegram: <a href="https://t.me/CodexPlusPlus" target="_blank" rel="noreferrer">https://t.me/CodexPlusPlus</a></div></div>
+              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a></div></div>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Discord 社区</div><div class="claude-codex-pro-row-description">加入 Discord 获取更新消息、反馈问题或交流使用体验。</div></div>
               <button type="button" class="claude-codex-pro-action-button" data-claude-codex-pro-discord="true">打开 Discord</button>
-            </div>
-            <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">Telegram 频道</div><div class="claude-codex-pro-row-description">加入 Telegram 获取更新消息和交流使用体验。</div></div>
-              <button type="button" class="claude-codex-pro-action-button" data-claude-codex-pro-telegram="true">打开 Telegram</button>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">提出问题</div><div class="claude-codex-pro-row-description">打开 GitHub Issues 反馈问题或建议。</div></div>
@@ -2322,10 +2318,6 @@
       }
       if (target?.closest("[data-claude-codex-pro-discord]")) {
         window.open("https://discord.gg/y96kX7A76v", "_blank");
-        return;
-      }
-      if (target?.closest("[data-claude-codex-pro-telegram]")) {
-        window.open("https://t.me/CodexPlusPlus", "_blank");
         return;
       }
       if (target?.closest("[data-codex-backend-repair]")) {

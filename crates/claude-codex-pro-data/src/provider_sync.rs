@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_PROVIDER: &str = "openai";
 const SESSION_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
 const BACKUP_KEEP_COUNT: usize = 5;
+const PROVIDER_SYNC_MANAGED_BY: &str = "Claude Codex Pro provider sync";
+const LEGACY_PROVIDER_SYNC_MANAGED_BY: &str = "Codex++ provider sync";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -750,7 +752,7 @@ fn create_backup(
             "createdAt": chrono::Utc::now().to_rfc3339(),
             "dbFiles": db_files,
             "changedSessionFiles": changes.len(),
-            "managedBy": "Codex++ provider sync"
+            "managedBy": PROVIDER_SYNC_MANAGED_BY
         }))?,
     )?;
     Ok(backup_dir)
@@ -1100,7 +1102,10 @@ fn prune_backups(home: &Path) -> anyhow::Result<()> {
         let Ok(value) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        if value.get("managedBy").and_then(Value::as_str) == Some("Codex++ provider sync") {
+        let managed_by = value.get("managedBy").and_then(Value::as_str);
+        if managed_by == Some(PROVIDER_SYNC_MANAGED_BY)
+            || managed_by == Some(LEGACY_PROVIDER_SYNC_MANAGED_BY)
+        {
             managed.push(path);
         }
     }

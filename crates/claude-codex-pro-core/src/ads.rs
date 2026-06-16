@@ -41,7 +41,7 @@ pub async fn fetch_ad_list_from_urls<S>(urls: &[S]) -> anyhow::Result<Value>
 where
     S: AsRef<str>,
 {
-    let client = crate::http_client::proxied_client("CodexPlusPlus")?;
+    let client = crate::http_client::proxied_client("ClaudeCodexPro")?;
     let cache_bust = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())

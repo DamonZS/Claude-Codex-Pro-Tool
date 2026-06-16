@@ -13,9 +13,9 @@ pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBund
     let install_root = install_root_or_default(options);
     let display_name = if manager { MANAGER_NAME } else { SILENT_NAME };
     let executable_name = if manager {
-        "CodexPlusPlusManager"
+        "ClaudeCodexProManager"
     } else {
-        "CodexPlusPlus"
+        "ClaudeCodexPro"
     };
     let binary = if manager {
         MANAGER_BINARY
@@ -153,7 +153,7 @@ fn executable_name_from_plist(plist: &str) -> String {
         .nth(1)
         .and_then(|tail| tail.split("<string>").nth(1))
         .and_then(|tail| tail.split("</string>").next())
-        .unwrap_or("CodexPlusPlus")
+        .unwrap_or("ClaudeCodexPro")
         .to_string()
 }
 
@@ -169,7 +169,7 @@ fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str
   <key>CFBundleDisplayName</key>
   <string>{display_name}</string>
   <key>CFBundleIdentifier</key>
-  <string>com.bigpizzav3.codexplusplus{identifier_suffix}</string>
+  <string>com.damonzs.claudecodexpro{identifier_suffix}</string>
   <key>CFBundleVersion</key>
   <string>{version}</string>
   <key>CFBundleShortVersionString</key>

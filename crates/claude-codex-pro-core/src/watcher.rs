@@ -8,9 +8,11 @@ use std::time::Duration;
 pub const WATCHER_INTERVAL_SECONDS: f64 = 3.0;
 pub const CDP_PROBE_TIMEOUT_SECONDS: f64 = 0.5;
 pub const TAKEOVER_FAILURE_BACKOFF_SECONDS: f64 = 30.0;
-pub const WATCHER_RUN_NAME: &str = "CodexPlusPlusWatcher";
+pub const WATCHER_RUN_NAME: &str = "ClaudeCodexProWatcher";
+const LEGACY_WATCHER_RUN_NAME: &str = "CodexPlusPlusWatcher";
 pub const WATCHER_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-pub const WATCHER_STARTUP_SHORTCUT_NAME: &str = "CodexPlusPlusWatcher.lnk";
+pub const WATCHER_STARTUP_SHORTCUT_NAME: &str = "ClaudeCodexProWatcher.lnk";
+const LEGACY_WATCHER_STARTUP_SHORTCUT_NAME: &str = "CodexPlusPlusWatcher.lnk";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatcherInstallPlan {
@@ -124,6 +126,10 @@ pub fn should_recover_stale_launcher(has_codex_process: bool, cdp_listening: boo
 #[cfg(windows)]
 pub fn install_watcher(launcher_path: &Path, debug_port: u16) -> anyhow::Result<()> {
     let plan = build_watcher_install_plan(launcher_path.to_path_buf(), debug_port);
+    let _ = crate::windows_integration::delete_current_user_value(
+        WATCHER_RUN_KEY,
+        LEGACY_WATCHER_RUN_NAME,
+    );
     crate::windows_integration::set_current_user_string_value(
         WATCHER_RUN_KEY,
         &plan.run_value_name,
@@ -143,8 +149,15 @@ pub fn install_watcher(_launcher_path: &Path, _debug_port: u16) -> anyhow::Resul
 pub fn uninstall_watcher() -> anyhow::Result<()> {
     let _ =
         crate::windows_integration::delete_current_user_value(WATCHER_RUN_KEY, WATCHER_RUN_NAME);
+    let _ = crate::windows_integration::delete_current_user_value(
+        WATCHER_RUN_KEY,
+        LEGACY_WATCHER_RUN_NAME,
+    );
     if let Some(shortcut) = startup_shortcut_path() {
         let _ = std::fs::remove_file(shortcut);
+    }
+    if let Some(legacy_shortcut) = legacy_startup_shortcut_path() {
+        let _ = std::fs::remove_file(legacy_shortcut);
     }
     stop_launcher_processes();
     Ok(())
@@ -243,6 +256,16 @@ fn spawn_launcher(launcher_path: &Path, debug_port: u16) {
 
 #[cfg(windows)]
 fn startup_shortcut_path() -> Option<PathBuf> {
+    startup_shortcut_path_for(WATCHER_STARTUP_SHORTCUT_NAME)
+}
+
+#[cfg(windows)]
+fn legacy_startup_shortcut_path() -> Option<PathBuf> {
+    startup_shortcut_path_for(LEGACY_WATCHER_STARTUP_SHORTCUT_NAME)
+}
+
+#[cfg(windows)]
+fn startup_shortcut_path_for(shortcut_name: &str) -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|appdata| {
         PathBuf::from(appdata)
             .join("Microsoft")
@@ -250,6 +273,6 @@ fn startup_shortcut_path() -> Option<PathBuf> {
             .join("Start Menu")
             .join("Programs")
             .join("Startup")
-            .join(WATCHER_STARTUP_SHORTCUT_NAME)
+            .join(shortcut_name)
     })
 }

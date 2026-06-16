@@ -6,8 +6,12 @@ use super::{
     install_root_or_default, option_or_current_exe,
 };
 
-const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus";
-const LEGACY_UNINSTALL_SUBKEY: &str =
+const INSTALL_SUBKEY: &str = r"Software\Claude Codex Pro";
+const LEGACY_INSTALL_SUBKEY: &str = r"Software\Codex++";
+const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro";
+const LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus";
+const LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +25,6 @@ pub struct WindowsEntrypointPlan {
     pub silent_icon_path: String,
     pub manager_icon_path: String,
     pub uninstall_key: String,
-    pub legacy_uninstall_key: String,
     pub remove_owned_data: bool,
 }
 
@@ -45,8 +48,7 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
         icon_path: icon_path.to_string_lossy().to_string(),
         silent_icon_path: launcher_path.to_string_lossy().to_string(),
         manager_icon_path: manager_path.to_string_lossy().to_string(),
-        uninstall_key: "CodexPlusPlus".to_string(),
-        legacy_uninstall_key: "Codex++".to_string(),
+        uninstall_key: "ClaudeCodexPro".to_string(),
         remove_owned_data: options.remove_owned_data,
     }
 }
@@ -82,8 +84,14 @@ pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let legacy_root = PathBuf::from(&plan.install_root);
     let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_SILENT_NAME}.lnk")));
     let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
-    let _ = crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY);
+    let _ = crate::windows_integration::delete_current_user_key(LEGACY_INSTALL_SUBKEY);
+    let _ =
+        crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS);
+    let _ = crate::windows_integration::delete_current_user_key(
+        LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL,
+    );
     let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
+    let _ = crate::windows_integration::delete_current_user_key(INSTALL_SUBKEY);
     Ok(())
 }
 
@@ -117,7 +125,12 @@ fn create_entrypoint_shortcut(
 
 #[cfg(windows)]
 fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<()> {
-    let _ = crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY);
+    let _ = crate::windows_integration::delete_current_user_key(LEGACY_INSTALL_SUBKEY);
+    let _ =
+        crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS);
+    let _ = crate::windows_integration::delete_current_user_key(
+        LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL,
+    );
     let uninstall_command = format!("\"{}\"", plan.manager_path);
     let install_location = Path::new(&plan.manager_path)
         .parent()
@@ -136,6 +149,11 @@ fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<
     ] {
         crate::windows_integration::set_current_user_string_value(UNINSTALL_SUBKEY, name, &value)?;
     }
+    crate::windows_integration::set_current_user_string_value(
+        INSTALL_SUBKEY,
+        "InstallDir",
+        &install_location,
+    )?;
     Ok(())
 }
 

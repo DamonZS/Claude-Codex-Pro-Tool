@@ -807,17 +807,37 @@ fn default_user_script_manager() -> UserScriptManager {
 fn default_user_scripts_config_dir() -> PathBuf {
     if cfg!(windows) {
         if let Some(roaming) = std::env::var_os("APPDATA") {
-            return PathBuf::from(roaming).join("Codex++");
+            return migrate_user_scripts_config_dir(
+                PathBuf::from(&roaming).join("Claude Codex Pro"),
+                PathBuf::from(roaming).join("Codex++"),
+            );
         }
         if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
-            return home.join("AppData").join("Roaming").join("Codex++");
+            let roaming = home.join("AppData").join("Roaming");
+            return migrate_user_scripts_config_dir(
+                roaming.join("Claude Codex Pro"),
+                roaming.join("Codex++"),
+            );
         }
     }
-    std::env::var_os("XDG_CONFIG_HOME")
+    let config_root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("Codex++")
+        .unwrap_or_else(|| PathBuf::from(".config"));
+    migrate_user_scripts_config_dir(
+        config_root.join("claude-codex-pro"),
+        config_root.join("Codex++"),
+    )
+}
+
+fn migrate_user_scripts_config_dir(current: PathBuf, legacy: PathBuf) -> PathBuf {
+    if !current.exists() && legacy.exists() {
+        if let Some(parent) = current.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::rename(&legacy, &current);
+    }
+    current
 }
 
 #[cfg(test)]

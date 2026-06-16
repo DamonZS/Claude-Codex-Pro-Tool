@@ -76,17 +76,17 @@ fn resolves_packaged_resources_when_user_runtime_is_missing() {
 }
 
 #[test]
-fn wrapper_dir_uses_roaming_claude_codex_pro_plus() {
+fn wrapper_dir_uses_roaming_claude_codex_pro_config_dir() {
     assert_eq!(
         wrapper_dir_from_roaming(&PathBuf::from(r"C:\Users\me\AppData\Roaming")),
-        PathBuf::from(r"C:\Users\me\AppData\Roaming\Codex++")
+        PathBuf::from(r"C:\Users\me\AppData\Roaming\Claude Codex Pro")
     );
 }
 
 #[test]
 fn repair_refreshes_when_wrapper_already_exists_even_if_setting_is_disabled() {
     let temp = tempfile::tempdir().unwrap();
-    let wrapper_dir = temp.path().join("Codex++");
+    let wrapper_dir = temp.path().join("Claude Codex Pro").join("cli-wrapper");
     std::fs::create_dir_all(&wrapper_dir).unwrap();
     std::fs::write(wrapper_dir.join("codex-wrapper.exe"), "").unwrap();
 
@@ -109,7 +109,7 @@ fn repair_skips_when_wrapper_is_disabled_and_absent() {
 #[test]
 fn repair_preserves_existing_wrapper_api_settings_when_global_setting_is_disabled() {
     let temp = tempfile::tempdir().unwrap();
-    let wrapper_dir = temp.path().join("Codex++");
+    let wrapper_dir = temp.path().join("Claude Codex Pro").join("cli-wrapper");
     std::fs::create_dir_all(&wrapper_dir).unwrap();
     std::fs::write(
         wrapper_dir.join("codex-wrapper.cs"),

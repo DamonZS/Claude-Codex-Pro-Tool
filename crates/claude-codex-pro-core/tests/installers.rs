@@ -24,8 +24,7 @@ fn windows_entrypoint_plan_contains_silent_and_manager_entrypoints() {
         plan.manager_icon_path,
         "C:/Tools/claude-codex-pro-plus-manager.exe"
     );
-    assert_eq!(plan.uninstall_key, "CodexPlusPlus");
-    assert_eq!(plan.legacy_uninstall_key, "Codex++");
+    assert_eq!(plan.uninstall_key, "ClaudeCodexPro");
 }
 
 #[test]
@@ -83,14 +82,14 @@ fn installer_exports_expected_two_entrypoint_names() {
 #[test]
 fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
     let manager_exe = std::path::Path::new(
-        "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/CodexPlusPlusManager",
+        "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/ClaudeCodexProManager",
     );
 
     let companion = companion_binary_path_from_exe(manager_exe, SILENT_BINARY);
 
     assert_eq!(
         companion,
-        std::path::PathBuf::from("/Applications/Claude Codex Pro.app/Contents/MacOS/CodexPlusPlus")
+        std::path::PathBuf::from("/Applications/Claude Codex Pro.app/Contents/MacOS/ClaudeCodexPro")
     );
     assert_ne!(
         companion,
@@ -104,9 +103,10 @@ fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
 fn macos_bundle_does_not_wrap_the_bundle_executable_in_itself() {
     let options = InstallOptions {
         install_root: Some("/Applications".into()),
-        launcher_path: Some("/Applications/Claude Codex Pro.app/Contents/MacOS/CodexPlusPlus".into()),
+        launcher_path: Some("/Applications/Claude Codex Pro.app/Contents/MacOS/ClaudeCodexPro".into()),
         manager_path: Some(
-            "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/CodexPlusPlusManager".into(),
+            "/Applications/Claude Codex Pro 管理工具.app/Contents/MacOS/ClaudeCodexProManager"
+                .into(),
         ),
         remove_owned_data: false,
     };
@@ -114,8 +114,8 @@ fn macos_bundle_does_not_wrap_the_bundle_executable_in_itself() {
     let silent = build_macos_app_bundle(&options, false);
     let manager = build_macos_app_bundle(&options, true);
 
-    assert!(!silent.launch_script.contains("CodexPlusPlus\""));
-    assert!(!manager.launch_script.contains("CodexPlusPlusManager\""));
+    assert!(!silent.launch_script.contains("ClaudeCodexPro\""));
+    assert!(!manager.launch_script.contains("ClaudeCodexProManager\""));
     assert!(silent.launch_script.contains("claude-codex-pro-plus"));
     assert!(manager.launch_script.contains("claude-codex-pro-plus-manager"));
 }

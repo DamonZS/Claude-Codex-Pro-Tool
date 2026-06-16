@@ -43,7 +43,7 @@ pub async fn read_codex_model_catalog() -> Value {
         }
     }
     let env = std::env::vars().collect::<HashMap<_, _>>();
-    let client = match crate::http_client::proxied_client("CodexPlusPlus/1.0") {
+    let client = match crate::http_client::proxied_client("ClaudeCodexPro/1.0") {
         Ok(client) => client,
         Err(error) => {
             return json!({

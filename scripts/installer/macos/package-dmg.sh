@@ -118,8 +118,8 @@ verify_app() {
 }
 
 prepare_icon
-create_app "Claude Codex Pro" "CodexPlusPlus" "$BINARY_DIR/claude-codex-pro-plus" "com.bigpizzav3.codexplusplus" "true"
-create_app "Claude Codex Pro 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/claude-codex-pro-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false"
+create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro-plus" "com.damonzs.claudecodexpro" "true"
+create_app "Claude Codex Pro 管理工具" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-plus-manager" "com.damonzs.claudecodexpro.manager" "false"
 ln -s /Applications "$STAGE/Applications"
 
 sign_app "$STAGE/Claude Codex Pro.app"

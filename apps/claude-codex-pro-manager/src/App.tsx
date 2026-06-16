@@ -2496,10 +2496,6 @@ function AboutScreen({
               <MessageCircle className="h-4 w-4" />
               Discord
             </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://t.me/CodexPlusPlus")} variant="secondary">
-              <MessageCircle className="h-4 w-4" />
-              Telegram
-            </Button>
           </Toolbar>
         </CardContent>
       </Panel>
