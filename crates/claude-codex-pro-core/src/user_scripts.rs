@@ -296,16 +296,16 @@ fn wrap_script(script: &UserScriptFile, source: &str) -> String {
     format!(
         r#"
 (() => {{
-  window.__codexPlusUserScripts = window.__codexPlusUserScripts || {{ scripts: {{}} }};
+  window.__claudeCodexProUserScripts = window.__claudeCodexProUserScripts || {{ scripts: {{}} }};
   const key = {key};
-  window.__codexPlusUserScripts.scripts[key] = {{ key, name: {name}, source: {source_name}, status: "loading", error: "", loadedAt: new Date().toISOString() }};
+  window.__claudeCodexProUserScripts.scripts[key] = {{ key, name: {name}, source: {source_name}, status: "loading", error: "", loadedAt: new Date().toISOString() }};
   try {{
 {source}
-    window.__codexPlusUserScripts.scripts[key].status = "loaded";
-    window.__codexPlusUserScripts.scripts[key].loadedAt = new Date().toISOString();
+    window.__claudeCodexProUserScripts.scripts[key].status = "loaded";
+    window.__claudeCodexProUserScripts.scripts[key].loadedAt = new Date().toISOString();
   }} catch (error) {{
-    window.__codexPlusUserScripts.scripts[key].status = "failed";
-    window.__codexPlusUserScripts.scripts[key].error = String(error && (error.stack || error.message) || error);
+    window.__claudeCodexProUserScripts.scripts[key].status = "failed";
+    window.__claudeCodexProUserScripts.scripts[key].error = String(error && (error.stack || error.message) || error);
   }}
 }})();
 "#,

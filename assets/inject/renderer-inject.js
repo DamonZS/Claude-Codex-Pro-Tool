@@ -17,7 +17,7 @@
   const conversationViewMinWidth = 320;
   const conversationViewMaxAllowedWidth = 4000;
   const conversationViewDefaultWidth = 900;
-  const conversationViewLegacyWidthKey = "codexPlus.threadCenter.maxWidth";
+  const conversationViewLegacyWidthKey = "claudeCodexPro.threadCenter.maxWidth";
   const zedRemoteButtonClass = "codex-zed-remote-button";
   const zedRemoteOpenInMenuItemClass = "codex-zed-open-in-menu-item";
   const zedRemoteToastClass = "codex-zed-remote-toast";
@@ -41,8 +41,8 @@
   const chatsSortDbRefreshIntervalMs = 5000;
   const styleId = "codex-delete-style";
   const codexDeleteStyleVersion = "13";
-  const codexPlusMenuId = "claude-codex-pro-menu";
-  const codexPlusMenuFloatingClass = "claude-codex-pro-menu-floating";
+  const claudeCodexProMenuId = "claude-codex-pro-menu";
+  const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
@@ -55,10 +55,10 @@
   const codexThreadServiceTierVersion = "1";
   const codexServiceTierBadgeClass = "codex-service-tier-badge";
   const codexServiceTierBadgeVersion = "3";
-  let codexPlusVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
-  const codexPlusBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
-  const codexPlusSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
-  const codexPlusSettingsKey = "codexPlusSettings";
+  let claudeCodexProVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
+  const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
+  const claudeCodexProSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
+  const claudeCodexProSettingsKey = "claudeCodexProSettings";
   const codexThreadScrollKey = "codexThreadScroll";
   const codexThreadServiceTierKey = "codexThreadServiceTierOverrides";
   const codexThreadServiceTierMaxEntries = 120;
@@ -76,7 +76,7 @@
   const codexThreadScrollListenerVersion = "4";
   const codexThreadScrollUserIntentVersion = "dispatcher:2";
   const codexForcePluginInstallRefreshIntervalMs = 1000;
-  const codexPlusImageOverlayId = "claude-codex-pro-image-overlay";
+  const claudeCodexProImageOverlayId = "claude-codex-pro-image-overlay";
   window.__codexProjectMoveRuntimeId = (window.__codexProjectMoveRuntimeId || 0) + 1;
   const codexProjectMoveRuntimeId = window.__codexProjectMoveRuntimeId;
   clearTimeout(window.__codexProjectMoveProjectionTimer);
@@ -91,22 +91,22 @@
   window.__codexThreadScrollSyncTimers = [];
   window.__codexThreadScrollRestoreRevision = (window.__codexThreadScrollRestoreRevision || 0) + 1;
 
-  function installCodexPlusImageOverlay() {
+  function installClaudeCodexProImageOverlay() {
     if (!document?.getElementById || !document?.createElement || !document?.documentElement?.appendChild) return;
     const config = window.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ || {};
-    const existing = document.getElementById(codexPlusImageOverlayId);
+    const existing = document.getElementById(claudeCodexProImageOverlayId);
     const source = config.dataUrl || "";
     if (!config.enabled || !source) {
-      if (window.__codexPlusImageOverlayBlobUrl) {
-        URL.revokeObjectURL(window.__codexPlusImageOverlayBlobUrl);
-        window.__codexPlusImageOverlayBlobUrl = "";
+      if (window.__claudeCodexProImageOverlayBlobUrl) {
+        URL.revokeObjectURL(window.__claudeCodexProImageOverlayBlobUrl);
+        window.__claudeCodexProImageOverlayBlobUrl = "";
       }
       if (existing) existing.remove();
       return;
     }
     const opacity = Math.min(1, Math.max(0.01, Number(config.opacity) || 0.35));
     const image = existing || document.createElement("img");
-    image.id = codexPlusImageOverlayId;
+    image.id = claudeCodexProImageOverlayId;
     image.src = source;
     image.alt = "";
     image.setAttribute("aria-hidden", "true");
@@ -123,22 +123,22 @@
       userSelect: "none",
     });
     if (!existing) document.documentElement.appendChild(image);
-    sendCodexPlusDiagnostic("image_overlay_installed", {
+    sendClaudeCodexProDiagnostic("image_overlay_installed", {
       opacity,
       sourceKind: source.startsWith("data:") ? "data-uri" : "unknown",
     });
   }
 
-  function scheduleCodexPlusImageOverlay() {
+  function scheduleClaudeCodexProImageOverlay() {
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", installCodexPlusImageOverlay, { once: true });
+      document.addEventListener("DOMContentLoaded", installClaudeCodexProImageOverlay, { once: true });
       return;
     }
-    installCodexPlusImageOverlay();
-    setTimeout(installCodexPlusImageOverlay, 250);
+    installClaudeCodexProImageOverlay();
+    setTimeout(installClaudeCodexProImageOverlay, 250);
   }
 
-  scheduleCodexPlusImageOverlay();
+  scheduleClaudeCodexProImageOverlay();
   window.__codexThreadScrollSyncRevision = (window.__codexThreadScrollSyncRevision || 0) + 1;
   window.__codexConversationTimelineNodeCounter = window.__codexConversationTimelineNodeCounter || 0;
   let upstreamBranchDefaultsCache = new Map();
@@ -147,15 +147,15 @@
   let upstreamBranchDefaultsInflight = new Map();
   const upstreamProjectContextTtlMs = 10 * 60 * 1000;
   const branchWorktreePathAttribute = "data-codex-branch-worktree-path";
-  ["__codexPlusHtmlCenteredThreadWidth", "__codexPlusViewportCenteredThreadWidth", "__codexPlusBoundedThreadCenter"].forEach((key) => {
+  ["__claudeCodexProHtmlCenteredThreadWidth", "__claudeCodexProViewportCenteredThreadWidth", "__claudeCodexProBoundedThreadCenter"].forEach((key) => {
     try {
       window[key]?.cleanup?.();
     } catch (_) {}
   });
   try {
-    window.__codexPlusConversationViewCleanup?.();
+    window.__claudeCodexProConversationViewCleanup?.();
   } catch (_) {}
-  window.__codexPlusConversationViewCleanup = null;
+  window.__claudeCodexProConversationViewCleanup = null;
   const selectors = {
     sidebarThread: "[data-app-action-sidebar-thread-id]",
     threadTitle: "[data-thread-title]",
@@ -588,7 +588,7 @@
           color: #9ca3af;
         }
       }
-      #${codexPlusMenuId}.${codexPlusMenuFloatingClass} {
+      #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass} {
         position: fixed;
         top: var(--claude-codex-pro-menu-top, 0);
         right: var(--claude-codex-pro-menu-right, 140px);
@@ -604,7 +604,7 @@
         pointer-events: auto;
         -webkit-app-region: no-drag;
       }
-      #${codexPlusMenuId} {
+      #${claudeCodexProMenuId} {
         display: inline-flex;
         align-items: center;
         height: 100%;
@@ -933,11 +933,11 @@
     document.documentElement.appendChild(style);
   }
 
-  function defaultCodexPlusSettings() {
+  function defaultClaudeCodexProSettings() {
     return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
   }
 
-  const codexPlusBackendSettingMap = {
+  const claudeCodexProBackendSettingMap = {
     pluginEntryUnlock: "codexAppPluginEntryUnlock",
     pluginMarketplaceUnlock: "codexAppPluginMarketplaceUnlock",
     forcePluginInstall: "codexAppForcePluginInstall",
@@ -954,19 +954,19 @@
     serviceTierControls: "codexAppServiceTierControls",
   };
 
-  function backendCodexPlusSettings() {
+  function backendClaudeCodexProSettings() {
     const settings = {};
-    Object.entries(codexPlusBackendSettingMap).forEach(([localKey, backendKey]) => {
-      if (typeof codexPlusBackendSettings[backendKey] === "boolean") {
-        settings[localKey] = codexPlusBackendSettings[backendKey];
+    Object.entries(claudeCodexProBackendSettingMap).forEach(([localKey, backendKey]) => {
+      if (typeof claudeCodexProBackendSettings[backendKey] === "boolean") {
+        settings[localKey] = claudeCodexProBackendSettings[backendKey];
       }
     });
     return settings;
   }
 
-  function codexPlusSettings() {
-    const relayPatchDisabled = codexPlusBackendSettings.launchMode === "relay";
-    if (codexPlusBackendSettings.enhancementsEnabled === false) {
+  function claudeCodexProSettings() {
+    const relayPatchDisabled = claudeCodexProBackendSettings.launchMode === "relay";
+    if (claudeCodexProBackendSettings.enhancementsEnabled === false) {
       return {
         pluginEntryUnlock: false,
         pluginMarketplaceUnlock: false,
@@ -986,7 +986,7 @@
       };
     }
     try {
-      const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}"), ...backendCodexPlusSettings() };
+      const settings = { ...defaultClaudeCodexProSettings(), ...JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}"), ...backendClaudeCodexProSettings() };
       if (relayPatchDisabled) {
         settings.pluginEntryUnlock = false;
         settings.pluginMarketplaceUnlock = false;
@@ -994,7 +994,7 @@
       }
       return settings;
     } catch {
-      const settings = { ...defaultCodexPlusSettings(), ...backendCodexPlusSettings() };
+      const settings = { ...defaultClaudeCodexProSettings(), ...backendClaudeCodexProSettings() };
       if (relayPatchDisabled) {
         settings.pluginEntryUnlock = false;
         settings.pluginMarketplaceUnlock = false;
@@ -1004,20 +1004,20 @@
     }
   }
 
-  function setCodexPlusSetting(key, value) {
-    const backendKey = codexPlusBackendSettingMap[key];
+  function setClaudeCodexProSetting(key, value) {
+    const backendKey = claudeCodexProBackendSettingMap[key];
     if (backendKey) {
       setBackendSetting(backendKey, value);
       return;
     }
     let stored = {};
     try {
-      stored = JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}");
+      stored = JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}");
     } catch {
       stored = {};
     }
     const next = { ...stored, [key]: value };
-    localStorage.setItem(codexPlusSettingsKey, JSON.stringify(next));
+    localStorage.setItem(claudeCodexProSettingsKey, JSON.stringify(next));
     if (key === "threadScrollRestore" && !value) {
       clearTimeout(window.__codexThreadScrollSaveTimer);
       window.__codexThreadScrollSaveTimer = null;
@@ -1037,7 +1037,7 @@
         refreshCodexServiceTierControls();
       }
     }
-    renderCodexPlusMenu();
+    renderClaudeCodexProMenu();
     scan();
   }
 
@@ -1049,14 +1049,14 @@
   }
 
   function conversationViewWidth() {
-    const settingsWidth = normalizeConversationViewWidth(codexPlusSettings().conversationViewMaxWidth);
+    const settingsWidth = normalizeConversationViewWidth(claudeCodexProSettings().conversationViewMaxWidth);
     if (settingsWidth) return settingsWidth;
     const legacyWidth = normalizeConversationViewWidth(localStorage.getItem(conversationViewLegacyWidthKey));
     return legacyWidth || conversationViewDefaultWidth;
   }
 
   function refreshConversationViewControls() {
-    const enabled = !!codexPlusSettings().conversationView;
+    const enabled = !!claudeCodexProSettings().conversationView;
     const width = conversationViewWidth();
     document.querySelectorAll("[data-claude-codex-pro-conversation-view-width]").forEach((input) => {
       input.value = String(width);
@@ -1067,19 +1067,19 @@
   function setConversationViewWidth(value) {
     const width = normalizeConversationViewWidth(value);
     if (!width) return;
-    setCodexPlusSetting("conversationViewMaxWidth", width);
+    setClaudeCodexProSetting("conversationViewMaxWidth", width);
   }
 
-  function renderCodexPlusMenu() {
+  function renderClaudeCodexProMenu() {
     document.querySelectorAll(".claude-codex-pro-toggle[data-claude-codex-pro-setting]").forEach((button) => {
       const key = button.getAttribute("data-claude-codex-pro-setting");
-      button.dataset.enabled = String(!!codexPlusSettings()[key]);
+      button.dataset.enabled = String(!!claudeCodexProSettings()[key]);
     });
     refreshConversationViewControls();
     refreshCodexServiceTierControls();
   }
 
-  let codexPlusBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
+  let claudeCodexProBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
   const codexPluginLegacyEntryUnlockBeforeVersion = "26.601.2237";
 
   function parseCodexVersionParts(version) {
@@ -1106,25 +1106,25 @@
   }
 
   function codexPluginUnlockStrategy() {
-    const version = String(codexPlusBackendSettings.codexAppVersion || "").trim();
+    const version = String(claudeCodexProBackendSettings.codexAppVersion || "").trim();
     const comparison = compareCodexVersions(version, codexPluginLegacyEntryUnlockBeforeVersion);
     if (comparison == null) return "unknown";
     return comparison < 0 ? "legacy" : "modern";
   }
 
   function logCodexPluginUnlockStrategy(strategy) {
-    const codexAppVersion = String(codexPlusBackendSettings.codexAppVersion || "").trim();
+    const codexAppVersion = String(claudeCodexProBackendSettings.codexAppVersion || "").trim();
     const signature = `${strategy}:${codexAppVersion || "unknown"}`;
     if (window.__codexPluginUnlockStrategyLogged === signature) return;
     window.__codexPluginUnlockStrategyLogged = signature;
-    sendCodexPlusDiagnostic("plugin_unlock_strategy_selected", {
+    sendClaudeCodexProDiagnostic("plugin_unlock_strategy_selected", {
       strategy,
       codexAppVersion,
       cutoff: codexPluginLegacyEntryUnlockBeforeVersion,
     });
   }
 
-  let codexPlusBackendSettingsLoaded = false;
+  let claudeCodexProBackendSettingsLoaded = false;
   let codexServiceTierState = {
     status: "loading",
     serviceTier: null,
@@ -1440,7 +1440,7 @@
   }
 
   function setCodexServiceTierControlMode(mode) {
-    if (codexPlusBackendStatus.status !== "ok") {
+    if (claudeCodexProBackendStatus.status !== "ok") {
       showToast("后端未连接，无法切换服务模式", null);
       refreshCodexServiceTierControls();
       return;
@@ -1476,7 +1476,7 @@
   }
 
   function syncCodexServiceTierEffectiveState() {
-    if (!codexPlusSettings().serviceTierControls) {
+    if (!claudeCodexProSettings().serviceTierControls) {
       codexServiceTierState = {
         ...codexServiceTierState,
         activeThreadId: "",
@@ -1515,8 +1515,8 @@
   }
 
   function codexServiceTierBadgeState() {
-    if (codexPlusBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查后端连接" };
-    if (codexPlusBackendStatus.status && codexPlusBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：后端未连接，无法切换" };
+    if (claudeCodexProBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查后端连接" };
+    if (claudeCodexProBackendStatus.status && claudeCodexProBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：后端未连接，无法切换" };
     if (codexServiceTierState.status === "loading") return { tier: "loading", label: "...", title: "服务模式：正在读取" };
     if (codexServiceTierState.status === "failed") return { tier: "failed", label: "?", title: "服务模式：读取失败" };
     const fastAvailability = codexServiceTierFastAvailability();
@@ -1549,9 +1549,9 @@
 
   function refreshCodexServiceTierControls() {
     syncCodexServiceTierEffectiveState();
-    const featureEnabled = !!codexPlusSettings().serviceTierControls;
-    const backendConnected = codexPlusBackendStatus.status === "ok";
-    const backendChecking = codexPlusBackendStatus.status === "checking";
+    const featureEnabled = !!claudeCodexProSettings().serviceTierControls;
+    const backendConnected = claudeCodexProBackendStatus.status === "ok";
+    const backendChecking = claudeCodexProBackendStatus.status === "checking";
     if (featureEnabled && backendConnected) codexServiceTierMaybeLoadModelCatalog();
     const fastAvailability = codexServiceTierFastAvailability();
     const fastDisabled = !featureEnabled || !backendConnected || codexServiceTierState.status === "loading" || !fastAvailability.supported;
@@ -1603,7 +1603,7 @@
   }
 
   async function loadCodexServiceTierState() {
-    if (!codexPlusSettings().serviceTierControls) {
+    if (!claudeCodexProSettings().serviceTierControls) {
       codexServiceTierState = { ...codexServiceTierState, status: "idle", message: "未启用" };
       refreshCodexServiceTierControls();
       return;
@@ -1624,7 +1624,7 @@
         status: "failed",
         message: "读取失败",
       };
-      sendCodexPlusDiagnostic("service_tier_read_failed", {
+      sendClaudeCodexProDiagnostic("service_tier_read_failed", {
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
       });
@@ -1634,7 +1634,7 @@
   }
 
   function setCodexThreadServiceTierMode(mode) {
-    if (codexPlusBackendStatus.status !== "ok") {
+    if (claudeCodexProBackendStatus.status !== "ok") {
       showToast("后端未连接，无法切换服务模式", null);
       refreshCodexServiceTierControls();
       return;
@@ -1657,7 +1657,7 @@
   }
 
   function toggleCodexServiceTierFromBadge() {
-    if (codexPlusBackendStatus.status !== "ok") {
+    if (claudeCodexProBackendStatus.status !== "ok") {
       showToast("后端未连接，无法切换服务模式", null);
       refreshCodexServiceTierControls();
       return;
@@ -1702,7 +1702,7 @@
   }
 
   function codexServiceTierOverrideForRequest(method, params, threadIdHint = "") {
-    if (!codexPlusSettings().serviceTierControls) return null;
+    if (!claudeCodexProSettings().serviceTierControls) return null;
     if (!codexServiceTierRequestMethods().has(method) || !params || typeof params !== "object") return null;
     const state = readThreadServiceTierState();
     const controlMode = normalizeCodexServiceTierControlMode(state.mode);
@@ -1743,7 +1743,7 @@
     if (Object.prototype.hasOwnProperty.call(nextParams, "service_tier") || override.fastBlocked) {
       nextParams.service_tier = override.serviceTier;
     }
-    sendCodexPlusDiagnostic("service_tier_request_override_applied", {
+    sendClaudeCodexProDiagnostic("service_tier_request_override_applied", {
       method,
       threadId: override.threadId || "",
       mode: override.mode,
@@ -1756,7 +1756,7 @@
   }
 
   function codexServiceTierRequestOverride(message) {
-    if (!codexPlusSettings().serviceTierControls) return message;
+    if (!claudeCodexProSettings().serviceTierControls) return message;
     if (!message || typeof message !== "object") return message;
     if (message.type === "send-cli-request-for-host") {
       const method = String(message.method || "");
@@ -1819,9 +1819,9 @@
           return dispatcher.__codexServiceTierOriginalDispatchMessage(nextType, nextPayload);
         };
         window.__codexServiceTierRequestOverrideInstalled = codexServiceTierRequestOverrideVersion;
-        sendCodexPlusDiagnostic("service_tier_dispatcher_patch_installed", {});
+        sendClaudeCodexProDiagnostic("service_tier_dispatcher_patch_installed", {});
       } catch (error) {
-        sendCodexPlusDiagnostic("service_tier_dispatcher_patch_failed", {
+        sendClaudeCodexProDiagnostic("service_tier_dispatcher_patch_failed", {
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
         });
@@ -1836,12 +1836,12 @@
       if (!settings || typeof settings !== "object" || (!("launchMode" in settings) && !("enhancementsEnabled" in settings) && !("providerSyncEnabled" in settings))) {
         throw new Error("invalid backend settings response");
       }
-      codexPlusBackendSettings = { ...codexPlusBackendSettings, ...settings };
-      codexPlusBackendSettingsLoaded = true;
-      refreshCodexPlusBackendToggles();
+      claudeCodexProBackendSettings = { ...claudeCodexProBackendSettings, ...settings };
+      claudeCodexProBackendSettingsLoaded = true;
+      refreshClaudeCodexProBackendToggles();
       return true;
     } catch (_) {
-      refreshCodexPlusBackendToggles();
+      refreshClaudeCodexProBackendToggles();
       return false;
     }
   }
@@ -1859,41 +1859,41 @@
   }
 
   async function setBackendSetting(key, value) {
-    codexPlusBackendSettings = { ...codexPlusBackendSettings, [key]: value };
-    refreshCodexPlusBackendToggles();
+    claudeCodexProBackendSettings = { ...claudeCodexProBackendSettings, [key]: value };
+    refreshClaudeCodexProBackendToggles();
     try {
       const settings = await postJson("/settings/set", { [key]: value });
-      codexPlusBackendSettings = { ...codexPlusBackendSettings, ...settings };
+      claudeCodexProBackendSettings = { ...claudeCodexProBackendSettings, ...settings };
     } finally {
-      refreshCodexPlusBackendToggles();
+      refreshClaudeCodexProBackendToggles();
     }
   }
 
-  function refreshCodexPlusBackendToggles() {
+  function refreshClaudeCodexProBackendToggles() {
     document.querySelectorAll(".claude-codex-pro-toggle[data-codex-backend-setting]").forEach((button) => {
       const key = button.getAttribute("data-codex-backend-setting");
-      button.dataset.enabled = String(!!codexPlusBackendSettings[key]);
+      button.dataset.enabled = String(!!claudeCodexProBackendSettings[key]);
     });
-    renderCodexPlusMenu();
+    renderClaudeCodexProMenu();
     scan();
   }
 
-  let codexPlusUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
-  let codexPlusBackendStatus = { status: "checking", message: "正在检查后端…" };
-  let codexPlusBackendCheckSeq = 0;
+  let claudeCodexProUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
+  let claudeCodexProBackendStatus = { status: "checking", message: "正在检查后端…" };
+  let claudeCodexProBackendCheckSeq = 0;
 
-  function setCodexPlusTriggerLabel(trigger) {
+  function setClaudeCodexProTriggerLabel(trigger) {
     if (!trigger) return;
     let label = trigger.querySelector("[data-claude-codex-pro-trigger-label]");
     if (!label) {
       label = document.createElement("span");
-      label.dataset.codexPlusTriggerLabel = "true";
+      label.dataset.claudeCodexProTriggerLabel = "true";
       trigger.appendChild(label);
     }
-    label.textContent = `Claude Codex Pro ${codexPlusVersion}`;
+    label.textContent = `Claude Codex Pro ${claudeCodexProVersion}`;
   }
 
-  function ensureCodexPlusTriggerIndicator(trigger) {
+  function ensureClaudeCodexProTriggerIndicator(trigger) {
     if (!trigger) return null;
     let indicator = trigger.querySelector("[data-codex-backend-indicator]");
     if (!indicator) {
@@ -1906,11 +1906,11 @@
   }
 
   function renderBackendStatus() {
-    const status = codexPlusBackendStatus.status || "failed";
+    const status = claudeCodexProBackendStatus.status || "failed";
     const label = document.querySelector("[data-codex-backend-status]");
     if (label) {
       label.dataset.status = status;
-      label.textContent = codexPlusBackendStatus.message || (status === "ok" ? "后端已连接" : "未连接");
+      label.textContent = claudeCodexProBackendStatus.message || (status === "ok" ? "后端已连接" : "未连接");
     }
     document.querySelectorAll("[data-codex-backend-indicator]").forEach((indicator) => {
       indicator.dataset.status = status;
@@ -1929,12 +1929,12 @@
   }
 
   async function checkBackendStatus() {
-    const seq = ++codexPlusBackendCheckSeq;
+    const seq = ++claudeCodexProBackendCheckSeq;
     const nextStatus = await withBackendTimeout(postJson("/backend/status", {}));
-    if (seq !== codexPlusBackendCheckSeq) return;
-    codexPlusBackendStatus = nextStatus;
+    if (seq !== claudeCodexProBackendCheckSeq) return;
+    claudeCodexProBackendStatus = nextStatus;
     if (nextStatus?.status !== "ok") {
-      sendCodexPlusDiagnostic("backend_check_failed", {
+      sendClaudeCodexProDiagnostic("backend_check_failed", {
         status: nextStatus?.status || "unknown",
         message: nextStatus?.message || "",
         timeout: !!nextStatus?.timeout,
@@ -1944,12 +1944,12 @@
   }
 
   async function repairBackend() {
-    codexPlusBackendStatus = { status: "checking", message: "正在修复后端…" };
+    claudeCodexProBackendStatus = { status: "checking", message: "正在修复后端…" };
     renderBackendStatus();
     try {
-      codexPlusBackendStatus = await postJson("/backend/repair", {});
+      claudeCodexProBackendStatus = await postJson("/backend/repair", {});
     } catch (error) {
-      codexPlusBackendStatus = { status: "failed", message: "后端修复失败" };
+      claudeCodexProBackendStatus = { status: "failed", message: "后端修复失败" };
     }
     renderBackendStatus();
   }
@@ -1964,8 +1964,8 @@
   }
 
   function scheduleBackendHeartbeat() {
-    if (window.__codexPlusBackendHeartbeat) return;
-    window.__codexPlusBackendHeartbeat = setInterval(checkBackendStatus, 5000);
+    if (window.__claudeCodexProBackendHeartbeat) return;
+    window.__claudeCodexProBackendHeartbeat = setInterval(checkBackendStatus, 5000);
     checkBackendStatus();
   }
 
@@ -1975,16 +1975,16 @@
 
   function renderUserScripts() {
     const enabledToggle = document.querySelector("[data-codex-user-scripts-enabled]");
-    if (enabledToggle) enabledToggle.dataset.enabled = String(!!codexPlusUserScripts.enabled);
+    if (enabledToggle) enabledToggle.dataset.enabled = String(!!claudeCodexProUserScripts.enabled);
     const dirs = document.querySelector("[data-codex-user-script-dirs]");
-    if (dirs) dirs.textContent = `内置：${codexPlusUserScripts.builtin_dir || "未找到"}  用户：${codexPlusUserScripts.user_dir || "未找到"}`;
+    if (dirs) dirs.textContent = `内置：${claudeCodexProUserScripts.builtin_dir || "未找到"}  用户：${claudeCodexProUserScripts.user_dir || "未找到"}`;
     const list = document.querySelector("[data-codex-user-script-list]");
     if (!list) return;
-    if (!codexPlusUserScripts.scripts?.length) {
+    if (!claudeCodexProUserScripts.scripts?.length) {
       list.textContent = "未发现用户脚本。";
       return;
     }
-    list.innerHTML = codexPlusUserScripts.scripts.map((script) => `
+    list.innerHTML = claudeCodexProUserScripts.scripts.map((script) => `
       <div class="claude-codex-pro-user-script-item">
         <div>
           <div class="claude-codex-pro-user-script-name">${escapeHtml(script.name || script.key)}</div>
@@ -1999,25 +1999,25 @@
   async function loadUserScripts(path = "/user-scripts/list", payload = {}) {
     const result = await postJson(path, payload);
     if (result?.scripts) {
-      codexPlusUserScripts = result;
+      claudeCodexProUserScripts = result;
       renderUserScripts();
     }
   }
 
-  const codexPlusAdsUrl = "/ads";
-  let codexPlusAds = [];
-  let codexPlusAdsLoaded = false;
+  const claudeCodexProAdsUrl = "/ads";
+  let claudeCodexProAds = [];
+  let claudeCodexProAdsLoaded = false;
 
-  function isCodexPlusAdExpired(ad) {
+  function isClaudeCodexProAdExpired(ad) {
     if (!ad.expires_at) return false;
     const expiresAt = Date.parse(ad.expires_at);
     return Number.isFinite(expiresAt) && expiresAt < Date.now();
   }
 
-  function normalizeCodexPlusAds(payload) {
+  function normalizeClaudeCodexProAds(payload) {
     if (!payload || !Array.isArray(payload.ads)) return [];
     return payload.ads.filter((ad) => {
-      return ad && ad.type === "normal" && ad.title && ad.description && ad.url && !isCodexPlusAdExpired(ad);
+      return ad && ad.type === "normal" && ad.title && ad.description && ad.url && !isClaudeCodexProAdExpired(ad);
     }).map((ad) => ({
       id: String(ad.id || ad.title),
       type: ad.type,
@@ -2029,8 +2029,8 @@
     }));
   }
 
-  function renderCodexPlusAdGroup(type, emptyText) {
-    const ads = codexPlusAds.filter((ad) => ad.type === type);
+  function renderClaudeCodexProAdGroup(type, emptyText) {
+    const ads = claudeCodexProAds.filter((ad) => ad.type === type);
     if (!ads.length) return `<div class="claude-codex-pro-ad-empty">${escapeHtml(emptyText)}</div>`;
     return ads.map((ad) => `
       <article class="claude-codex-pro-ad-card">
@@ -2046,22 +2046,22 @@
     `).join("");
   }
 
-  function renderCodexPlusAds() {
-    if (!codexPlusAdsLoaded) return `<div class="claude-codex-pro-ad-empty">Recommendations loading...</div>`;
-    const normalAds = codexPlusAds.filter((ad) => ad.type === "normal");
+  function renderClaudeCodexProAds() {
+    if (!claudeCodexProAdsLoaded) return `<div class="claude-codex-pro-ad-empty">Recommendations loading...</div>`;
+    const normalAds = claudeCodexProAds.filter((ad) => ad.type === "normal");
     if (!normalAds.length) return `<div class="claude-codex-pro-ad-empty">No recommendations.</div>`;
     return `
       <section class="claude-codex-pro-ad-section">
         <h3 class="claude-codex-pro-ad-section-title">Recommendations</h3>
-        <div class="claude-codex-pro-ad-list">${renderCodexPlusAdGroup("normal", "No recommendations.")}</div>
+        <div class="claude-codex-pro-ad-list">${renderClaudeCodexProAdGroup("normal", "No recommendations.")}</div>
       </section>
     `;
   }
-  function cacheBustCodexPlusAdUrl(url, version) {
+  function cacheBustClaudeCodexProAdUrl(url, version) {
     return `${url}${url.includes("?") ? "&" : "?"}v=${version}`;
   }
 
-  async function directFetchCodexPlusAds() {
+  async function directFetchClaudeCodexProAds() {
     const urls = [
       "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json",
       "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
@@ -2070,7 +2070,7 @@
     const cacheBust = Date.now();
     for (const url of urls) {
       try {
-        const response = await fetch(cacheBustCodexPlusAdUrl(url, cacheBust), {
+        const response = await fetch(cacheBustClaudeCodexProAdUrl(url, cacheBust), {
           headers: { "Accept": "application/json" },
           cache: "no-store",
         });
@@ -2083,25 +2083,25 @@
     throw lastError || new Error("ad list unavailable");
   }
 
-  async function fetchCodexPlusAds() {
+  async function fetchClaudeCodexProAds() {
     try {
-      codexPlusAds = normalizeCodexPlusAds(await directFetchCodexPlusAds());
+      claudeCodexProAds = normalizeClaudeCodexProAds(await directFetchClaudeCodexProAds());
     } catch (error) {
-      sendCodexPlusDiagnostic("ads_fetch_failed", {
+      sendClaudeCodexProDiagnostic("ads_fetch_failed", {
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
       });
-      codexPlusAds = [];
+      claudeCodexProAds = [];
     } finally {
-      codexPlusAdsLoaded = true;
+      claudeCodexProAdsLoaded = true;
       const panel = document.querySelector('[data-claude-codex-pro-panel="recommendations"] .claude-codex-pro-ad-remote');
-      if (panel) panel.innerHTML = renderCodexPlusAds();
+      if (panel) panel.innerHTML = renderClaudeCodexProAds();
     }
   }
 
-  function selectCodexPlusTab(tab) {
+  function selectClaudeCodexProTab(tab) {
     document.querySelectorAll(".claude-codex-pro-modal-content").forEach((modal) => {
-      modal.dataset.codexPlusActiveTab = tab;
+      modal.dataset.claudeCodexProActiveTab = tab;
     });
     document.querySelectorAll("[data-claude-codex-pro-tab]").forEach((button) => {
       button.dataset.active = String(button.getAttribute("data-claude-codex-pro-tab") === tab);
@@ -2112,7 +2112,7 @@
     if (tab === "userScripts") loadUserScripts();
   }
 
-  function openCodexPlusModal() {
+  function openClaudeCodexProModal() {
     document.querySelectorAll(".claude-codex-pro-modal-overlay").forEach((node) => node.remove());
     document.querySelectorAll('[data-claude-codex-pro-dialog="true"]').forEach((node) => node.remove());
     const overlay = document.createElement("div");
@@ -2120,7 +2120,7 @@
     overlay.innerHTML = `
       <div class="claude-codex-pro-modal-content" role="dialog" aria-modal="true" aria-label="Claude Codex Pro">
         <div class="claude-codex-pro-modal-header">
-          <div class="claude-codex-pro-modal-title"><span class="claude-codex-pro-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-claude-codex-pro-version="true">Claude Codex Pro ${codexPlusVersion}</span></div>
+          <div class="claude-codex-pro-modal-title"><span class="claude-codex-pro-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-claude-codex-pro-version="true">Claude Codex Pro ${claudeCodexProVersion}</span></div>
           <button type="button" class="claude-codex-pro-modal-close" aria-label="关闭">×</button>
         </div>
         <div class="claude-codex-pro-tabs" role="tablist" aria-label="Claude Codex Pro">
@@ -2143,16 +2143,16 @@
               <button type="button" class="claude-codex-pro-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">插件市场解锁</div><div class="claude-codex-pro-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；ChatGPT 登录态会保留官方插件市场。" : "API Key 模式下扩展插件市场请求，尽量显示完整插件列表。"}</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="pluginMarketplaceUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="claude-codex-pro-row-title">插件市场解锁</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；ChatGPT 登录态会保留官方插件市场。" : "API Key 模式下扩展插件市场请求，尽量显示完整插件列表。"}</div></div>
+              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="pluginMarketplaceUnlock" ${claudeCodexProBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">强制解锁入口</div><div class="claude-codex-pro-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；官方登录态会保留插件入口。" : "恢复 1.1.9 的入口解锁方式，强制显示并启用插件入口。"}</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="pluginEntryUnlock" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="claude-codex-pro-row-title">强制解锁入口</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；官方登录态会保留插件入口。" : "恢复 1.1.9 的入口解锁方式，强制显示并启用插件入口。"}</div></div>
+              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="pluginEntryUnlock" ${claudeCodexProBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">特殊插件强制安装</div><div class="claude-codex-pro-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；不会改插件安装入口。" : "解除 App unavailable / 应用不可用导致的前端安装禁用。"}</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="forcePluginInstall" ${codexPlusBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
+              <div><div class="claude-codex-pro-row-title">特殊插件强制安装</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强模式下无需开启；不会改插件安装入口。" : "解除 App unavailable / 应用不可用导致的前端安装禁用。"}</div></div>
+              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="forcePluginInstall" ${claudeCodexProBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">模型白名单解锁</div><div class="claude-codex-pro-row-description">从环境变量和 Codex config.toml 中的中转站 /v1/models 拉取模型，并补进模型选择列表。</div></div>
@@ -2223,7 +2223,7 @@
               <button type="button" class="claude-codex-pro-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${codexPlusBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动、Timeline 和用户脚本，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动、Timeline 和用户脚本，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-manager="true">打开管理工具</button>
             </div>
             <div class="claude-codex-pro-row">
@@ -2235,7 +2235,7 @@
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a></div></div>
+              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${claudeCodexProBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a></div></div>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Discord 社区</div><div class="claude-codex-pro-row-description">加入 Discord 获取更新消息、反馈问题或交流使用体验。</div></div>
@@ -2263,15 +2263,15 @@
           </div>
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="recommendations" hidden>
             <div class="claude-codex-pro-ad-remote">
-              ${renderCodexPlusAds()}
+              ${renderClaudeCodexProAds()}
             </div>
           </div>
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="support" hidden>
             <div class="claude-codex-pro-support-panel">
               <h3 class="claude-codex-pro-support-title">支持项目</h3>
               <p class="claude-codex-pro-support-text">如果这个工具帮到了你，可以通过下面的支付二维码支持后续维护。</p>
-              ${codexPlusSupportPaymentQr
-                ? `<div class="claude-codex-pro-support-qr-wrap"><img class="claude-codex-pro-support-qr" src="${escapeHtml(codexPlusSupportPaymentQr)}" alt="支付二维码"></div>`
+              ${claudeCodexProSupportPaymentQr
+                ? `<div class="claude-codex-pro-support-qr-wrap"><img class="claude-codex-pro-support-qr" src="${escapeHtml(claudeCodexProSupportPaymentQr)}" alt="支付二维码"></div>`
                 : `<div class="claude-codex-pro-support-empty">支付二维码未加载。</div>`}
             </div>
           </div>
@@ -2306,7 +2306,7 @@
       }
       const tabButton = target?.closest("[data-claude-codex-pro-tab]");
       if (tabButton) {
-        selectCodexPlusTab(tabButton.getAttribute("data-claude-codex-pro-tab"));
+        selectClaudeCodexProTab(tabButton.getAttribute("data-claude-codex-pro-tab"));
         return;
       }
       if (target?.closest("[data-codex-open-devtools]")) {
@@ -2374,7 +2374,7 @@
         return;
       }
       if (target?.closest("[data-codex-upstream-worktree-open]")) {
-        if (!codexPlusSettings().upstreamWorktreeCreate) {
+        if (!claudeCodexProSettings().upstreamWorktreeCreate) {
           showToast("Upstream worktree enhancement is disabled", null);
           return;
         }
@@ -2385,55 +2385,55 @@
       if (toggle) {
         if (toggle.disabled) return;
         const key = toggle.getAttribute("data-claude-codex-pro-setting");
-        setCodexPlusSetting(key, !codexPlusSettings()[key]);
+        setClaudeCodexProSetting(key, !claudeCodexProSettings()[key]);
         return;
       }
       const backendToggle = target?.closest("[data-codex-backend-setting]");
       if (backendToggle) {
         const key = backendToggle.getAttribute("data-codex-backend-setting");
-        setBackendSetting(key, !codexPlusBackendSettings[key]);
+        setBackendSetting(key, !claudeCodexProBackendSettings[key]);
         return;
       }
     }, true);
     document.body.appendChild(overlay);
-    if (!codexPlusAdsLoaded) fetchCodexPlusAds();
-    selectCodexPlusTab("home");
-    renderCodexPlusMenu();
-    refreshCodexPlusBackendToggles();
+    if (!claudeCodexProAdsLoaded) fetchClaudeCodexProAds();
+    selectClaudeCodexProTab("home");
+    renderClaudeCodexProMenu();
+    refreshClaudeCodexProBackendToggles();
     renderBackendStatus();
     void loadCodexServiceTierState();
     loadUserScripts();
   }
 
   function findNativeMenuInsertionPoint() {
-    if (!codexPlusSettings().nativeMenuPlacement) return null;
+    if (!claudeCodexProSettings().nativeMenuPlacement) return null;
     const header = document.querySelector(selectors.appHeader);
     const menuBar = header?.querySelector(selectors.nativeMenuBar);
     if (menuBar) {
-      const buttons = Array.from(menuBar.querySelectorAll("button")).filter((button) => !button.closest(`#${codexPlusMenuId}`));
+      const buttons = Array.from(menuBar.querySelectorAll("button")).filter((button) => !button.closest(`#${claudeCodexProMenuId}`));
       return { parent: menuBar, before: buttons[buttons.length - 1]?.nextSibling || null, nativeButtonClass: buttons[buttons.length - 1]?.className || "" };
     }
     const contextSurface = header?.querySelector(selectors.headerContextMenuSurface);
     const buttons = Array.from(contextSurface?.querySelectorAll?.("button") || [])
-      .filter((button) => !button.closest(`#${codexPlusMenuId}`) && button.getBoundingClientRect().width > 0 && button.getBoundingClientRect().height > 0);
+      .filter((button) => !button.closest(`#${claudeCodexProMenuId}`) && button.getBoundingClientRect().width > 0 && button.getBoundingClientRect().height > 0);
     const nativeButton = buttons.find((button) => !button.parentElement?.classList?.contains("inline-flex")) || buttons[0];
     const parent = nativeButton?.parentElement;
     if (!parent) return null;
     return { parent, before: nativeButton, nativeButtonClass: nativeButton.className || "" };
   }
 
-  function removeDuplicateCodexPlusMenus(keep) {
-    document.querySelectorAll(`#${codexPlusMenuId}, [data-claude-codex-pro-menu="true"]`).forEach((node) => {
+  function removeDuplicateClaudeCodexProMenus(keep) {
+    document.querySelectorAll(`#${claudeCodexProMenuId}, [data-claude-codex-pro-menu="true"]`).forEach((node) => {
       if (node !== keep) node.remove();
     });
     Array.from(document.querySelectorAll("button")).forEach((button) => {
-      if ((button.textContent || "").trim() === `Claude Codex Pro ${codexPlusVersion}` && !button.closest(`#${codexPlusMenuId}`)) {
+      if ((button.textContent || "").trim() === `Claude Codex Pro ${claudeCodexProVersion}` && !button.closest(`#${claudeCodexProMenuId}`)) {
         button.remove();
       }
     });
   }
 
-  function normalizeCodexPlusTriggerClassName(className) {
+  function normalizeClaudeCodexProTriggerClassName(className) {
     const classes = String(className || "").split(/\s+/).filter(Boolean);
     const incompatibleNativeGroupClasses = new Set(["gap-0", "rounded-l-none", "border-l-0", "pl-0.5", "pr-1.5"]);
     const hasIncompatibleNativeGroupClass = classes.some((name) => incompatibleNativeGroupClasses.has(name));
@@ -2446,15 +2446,15 @@
     return normalized.join(" ");
   }
 
-  function configureCodexPlusTrigger(menu, trigger, nativeButtonClass) {
+  function configureClaudeCodexProTrigger(menu, trigger, nativeButtonClass) {
     if (!trigger) return;
-    if (nativeButtonClass) trigger.className = normalizeCodexPlusTriggerClassName(nativeButtonClass);
-    if (trigger.dataset.codexPlusTriggerInstalled === "5") return;
-    trigger.dataset.codexPlusTriggerInstalled = "5";
+    if (nativeButtonClass) trigger.className = normalizeClaudeCodexProTriggerClassName(nativeButtonClass);
+    if (trigger.dataset.claudeCodexProTriggerInstalled === "5") return;
+    trigger.dataset.claudeCodexProTriggerInstalled = "5";
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      openCodexPlusModal();
+      openClaudeCodexProModal();
     }, true);
   }
 
@@ -2479,7 +2479,7 @@
   }
 
   function isHeaderToolbarButton(button, header, rect) {
-    if (!button || button.closest?.(`#${codexPlusMenuId}`)) return false;
+    if (!button || button.closest?.(`#${claudeCodexProMenuId}`)) return false;
     if (!(rect.width > 0 && rect.height > 0 && rect.left > window.innerWidth / 2)) return false;
     const buttonCluster = button.closest(".ms-auto.flex.shrink-0.items-center");
     if (buttonCluster && header?.contains(buttonCluster)) return true;
@@ -2488,8 +2488,8 @@
     return !!button.closest?.('[class*="ms-auto"][class*="shrink-0"][class*="items-center"]');
   }
 
-  function updateFloatingCodexPlusMenuPosition(menu) {
-    if (!menu?.classList?.contains(codexPlusMenuFloatingClass)) return;
+  function updateFloatingClaudeCodexProMenuPosition(menu) {
+    if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
     if (!header) return;
     const toolbarButtons = Array.from(header.querySelectorAll("button"))
@@ -2515,47 +2515,47 @@
     menu.style.removeProperty("--claude-codex-pro-menu-right");
   }
 
-  function installCodexPlusMenu() {
-    const existing = document.getElementById(codexPlusMenuId);
-    removeDuplicateCodexPlusMenus(existing);
+  function installClaudeCodexProMenu() {
+    const existing = document.getElementById(claudeCodexProMenuId);
+    removeDuplicateClaudeCodexProMenus(existing);
     let insertionPoint = findNativeMenuInsertionPoint();
-    if (existing && existing.dataset.codexPlusMenuVersion !== "6") {
+    if (existing && existing.dataset.claudeCodexProMenuVersion !== "6") {
       existing.remove();
       insertionPoint = findNativeMenuInsertionPoint();
     } else if (existing && insertionPoint && existing.parentElement === insertionPoint.parent) {
-      configureCodexPlusTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
-      removeDuplicateCodexPlusMenus(existing);
+      configureClaudeCodexProTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
+      removeDuplicateClaudeCodexProMenus(existing);
       return;
     } else if (existing && insertionPoint) {
-      configureCodexPlusTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
+      configureClaudeCodexProTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
       existing.className = "";
       const safeBefore = insertionPoint.before?.parentElement === insertionPoint.parent ? insertionPoint.before : null;
       insertionPoint.parent.insertBefore(existing, safeBefore);
-      removeDuplicateCodexPlusMenus(existing);
+      removeDuplicateClaudeCodexProMenus(existing);
       return;
     }
     const menu = document.createElement("div");
-    menu.id = codexPlusMenuId;
-    menu.dataset.codexPlusMenu = "true";
-    menu.dataset.codexPlusMenuVersion = "6";
+    menu.id = claudeCodexProMenuId;
+    menu.dataset.claudeCodexProMenu = "true";
+    menu.dataset.claudeCodexProMenuVersion = "6";
     const trigger = document.createElement("button");
     trigger.type = "button";
-    const indicator = ensureCodexPlusTriggerIndicator(trigger);
-    if (indicator) indicator.dataset.status = codexPlusBackendStatus.status || "checking";
-    setCodexPlusTriggerLabel(trigger);
+    const indicator = ensureClaudeCodexProTriggerIndicator(trigger);
+    if (indicator) indicator.dataset.status = claudeCodexProBackendStatus.status || "checking";
+    setClaudeCodexProTriggerLabel(trigger);
     const nativeButtonClass = insertionPoint?.nativeButtonClass || "claude-codex-pro-trigger";
-    configureCodexPlusTrigger(menu, trigger, nativeButtonClass);
+    configureClaudeCodexProTrigger(menu, trigger, nativeButtonClass);
     menu.appendChild(trigger);
     if (insertionPoint) {
       menu.className = "";
       const safeBefore = insertionPoint.before?.parentElement === insertionPoint.parent ? insertionPoint.before : null;
       insertionPoint.parent.insertBefore(menu, safeBefore);
     } else {
-      menu.className = codexPlusMenuFloatingClass;
+      menu.className = claudeCodexProMenuFloatingClass;
       document.documentElement.appendChild(menu);
-      updateFloatingCodexPlusMenuPosition(menu);
+      updateFloatingClaudeCodexProMenuPosition(menu);
     }
-    removeDuplicateCodexPlusMenus(menu);
+    removeDuplicateClaudeCodexProMenus(menu);
   }
 
   function patchPluginMarketplaceRequestParams(method, params) {
@@ -2567,7 +2567,7 @@
     const next = { ...params };
     const hadMarketplaceKinds = Object.prototype.hasOwnProperty.call(next, "marketplaceKinds");
     if (hadMarketplaceKinds) delete next.marketplaceKinds;
-    sendCodexPlusDiagnostic("plugin_marketplace_request_expanded", {
+    sendClaudeCodexProDiagnostic("plugin_marketplace_request_expanded", {
       hadMarketplaceKinds,
       cwdCount: Array.isArray(next.cwds) ? next.cwds.length : 0,
     });
@@ -2589,7 +2589,7 @@
   }
 
   function patchPluginMarketplaceObject(marketplace) {
-    if (!marketplace || typeof marketplace !== "object" || marketplace.__codexPlusMarketplaceUnlockPatched) return false;
+    if (!marketplace || typeof marketplace !== "object" || marketplace.__claudeCodexProMarketplaceUnlockPatched) return false;
     const alias = pluginMarketplaceAliasForName(marketplace.name);
     if (alias) marketplace.name = alias;
     const displayName = displayNameForPluginMarketplaceName(marketplace.name, marketplace.displayName || marketplace.title || marketplace.label || marketplace.name);
@@ -2608,7 +2608,7 @@
     } else {
       marketplace.interface = { displayName, name: displayName, title: displayName, label: displayName };
     }
-    marketplace.__codexPlusMarketplaceUnlockPatched = true;
+    marketplace.__claudeCodexProMarketplaceUnlockPatched = true;
     return true;
   }
 
@@ -2653,7 +2653,7 @@
   function installPluginBuildFlavorFilterPatch() {
     if (window.__codexPluginBuildFlavorFilterPatch === codexPluginMarketplaceUnlockVersion) return;
     if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
+    if (!claudeCodexProSettings().pluginMarketplaceUnlock) return;
     const originalFilter = Array.prototype.__codexPluginBuildFlavorOriginalFilter || Array.prototype.filter;
     if (!Array.prototype.__codexPluginBuildFlavorOriginalFilter) {
       Object.defineProperty(Array.prototype, "__codexPluginBuildFlavorOriginalFilter", {
@@ -2668,11 +2668,11 @@
     }
     const patchedFilter = function codexPluginBuildFlavorFilterPatch(callback, thisArg) {
       if (isCodexPluginBuildFlavorFilter(callback, this)) {
-        sendCodexPlusDiagnostic("plugin_build_flavor_filter_bypassed", { pluginCount: this.length });
+        sendClaudeCodexProDiagnostic("plugin_build_flavor_filter_bypassed", { pluginCount: this.length });
         return Array.from(this);
       }
       if (isCodexPluginMarketplaceHiddenFilter(callback, this)) {
-        sendCodexPlusDiagnostic("plugin_marketplace_hidden_filter_bypassed", { marketplaceCount: this.length });
+        sendClaudeCodexProDiagnostic("plugin_marketplace_hidden_filter_bypassed", { marketplaceCount: this.length });
         return Array.from(this);
       }
       return originalFilter.call(this, callback, thisArg);
@@ -2680,7 +2680,7 @@
     patchedFilter.__codexPluginBuildFlavorPatched = codexPluginMarketplaceUnlockVersion;
     Array.prototype.filter = patchedFilter;
     window.__codexPluginBuildFlavorFilterPatch = codexPluginMarketplaceUnlockVersion;
-    sendCodexPlusDiagnostic("plugin_build_flavor_filter_patch_installed", {});
+    sendClaudeCodexProDiagnostic("plugin_build_flavor_filter_patch_installed", {});
   }
 
   function restorePluginMarketplaceRequestParams(params, method = "") {
@@ -2720,7 +2720,7 @@
           }
           if (patchPluginMarketplaceObject(marketplace)) patchedCount += 1;
         });
-        sendCodexPlusDiagnostic("plugin_marketplace_response_debug", {
+        sendClaudeCodexProDiagnostic("plugin_marketplace_response_debug", {
           marketplaces: result.marketplaces.map((marketplace) => ({
             name: marketplace?.name || "",
             path: marketplace?.path || null,
@@ -2732,10 +2732,10 @@
         });
       }
       if (patchedCount > 0) {
-        sendCodexPlusDiagnostic("plugin_marketplace_response_expanded", { patchedCount });
+        sendClaudeCodexProDiagnostic("plugin_marketplace_response_expanded", { patchedCount });
       }
     } catch (error) {
-      sendCodexPlusDiagnostic("plugin_marketplace_response_patch_failed", {
+      sendClaudeCodexProDiagnostic("plugin_marketplace_response_patch_failed", {
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
       });
@@ -2752,7 +2752,7 @@
       const requestMethod = appServerModelRequestMethod(String(method || ""), params);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restorePluginMarketplaceRequestParams(params, requestMethod));
       if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
+        sendClaudeCodexProDiagnostic("plugin_install_request_debug", {
           method: String(method || ""),
           requestMethod,
           originalMarketplacePath: params?.marketplacePath || null,
@@ -2768,7 +2768,7 @@
         return patchPluginMarketplaceResult(requestMethod, result);
       } catch (error) {
         if (requestMethod === "install-plugin") {
-          sendCodexPlusDiagnostic("plugin_install_request_failed", {
+          sendClaudeCodexProDiagnostic("plugin_install_request_failed", {
             method: String(method || ""),
             requestMethod,
             requestMarketplacePath: requestParams?.marketplacePath || null,
@@ -2788,7 +2788,7 @@
   function installPluginMarketplaceRequestPatch() {
     if (window.__codexPluginMarketplaceUnlockInstalled === codexPluginMarketplaceUnlockVersion) return;
     if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginMarketplaceUnlock) return;
+    if (!claudeCodexProSettings().pluginMarketplaceUnlock) return;
     const patch = async () => {
       try {
         const module = await loadCodexAppModule("app-server-manager-signals-");
@@ -2805,18 +2805,18 @@
         }
         if (patchedCount > 0) {
           window.__codexPluginMarketplaceUnlockInstalled = codexPluginMarketplaceUnlockVersion;
-          sendCodexPlusDiagnostic("plugin_marketplace_request_patch_installed", {
+          sendClaudeCodexProDiagnostic("plugin_marketplace_request_patch_installed", {
             candidateCount: candidates.length,
             patchedCount,
           });
         } else {
-          sendCodexPlusDiagnostic("plugin_marketplace_request_patch_not_found", {
+          sendClaudeCodexProDiagnostic("plugin_marketplace_request_patch_not_found", {
             exportCount: Object.keys(module || {}).length,
             candidateCount: candidates.length,
           });
         }
       } catch (error) {
-        sendCodexPlusDiagnostic("plugin_marketplace_request_patch_failed", {
+        sendClaudeCodexProDiagnostic("plugin_marketplace_request_patch_failed", {
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
         });
@@ -2874,7 +2874,7 @@
 
   function enablePluginEntry() {
     if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().pluginEntryUnlock) return;
+    if (!claudeCodexProSettings().pluginEntryUnlock) return;
     const pluginButton = pluginEntryButton();
     if (!pluginButton) return;
     const spoofed = spoofChatGPTAuthMethod(pluginButton);
@@ -2895,11 +2895,11 @@
         spoofChatGPTAuthMethod(pluginButton);
       }, true);
     }
-    sendCodexPlusDiagnostic("plugin_entry_unlock_applied", { spoofed });
+    sendClaudeCodexProDiagnostic("plugin_entry_unlock_applied", { spoofed });
   }
 
   function pluginPatchDisabledInRelayMode() {
-    return !codexPlusBackendSettingsLoaded || codexPlusBackendSettings.launchMode === "relay";
+    return !claudeCodexProBackendSettingsLoaded || claudeCodexProBackendSettings.launchMode === "relay";
   }
 
   function pluginInstallCandidates() {
@@ -3005,7 +3005,7 @@
 
   function unblockPluginInstallButtons() {
     if (pluginPatchDisabledInRelayMode()) return;
-    if (!codexPlusSettings().forcePluginInstall) return;
+    if (!claudeCodexProSettings().forcePluginInstall) return;
     pluginInstallCandidates().forEach((button) => {
       const text = installButtonLabel(button);
       if (!isInstallButtonLabel(text)) return;
@@ -3015,7 +3015,7 @@
   }
 
   function refreshForcePluginInstallUnlockLoop() {
-    const shouldRun = !pluginPatchDisabledInRelayMode() && codexPlusSettings().forcePluginInstall;
+    const shouldRun = !pluginPatchDisabledInRelayMode() && claudeCodexProSettings().forcePluginInstall;
     if (!shouldRun) {
       clearInterval(window.__codexForcePluginInstallRefreshTimer);
       window.__codexForcePluginInstallRefreshTimer = null;
@@ -3023,7 +3023,7 @@
     }
     if (window.__codexForcePluginInstallRefreshTimer) return;
     window.__codexForcePluginInstallRefreshTimer = setInterval(() => {
-      if (!codexPlusSettings().forcePluginInstall || pluginPatchDisabledInRelayMode()) {
+      if (!claudeCodexProSettings().forcePluginInstall || pluginPatchDisabledInRelayMode()) {
         clearInterval(window.__codexForcePluginInstallRefreshTimer);
         window.__codexForcePluginInstallRefreshTimer = null;
         return;
@@ -3098,7 +3098,7 @@
     return { session_id: sessionId, title };
   }
 
-  function codexPlusDiagnosticPayload(event, detail) {
+  function claudeCodexProDiagnosticPayload(event, detail) {
     return {
       event,
       detail: detail || {},
@@ -3110,11 +3110,11 @@
     };
   }
 
-  function sendCodexPlusDiagnostic(event, detail) {
-    const payload = codexPlusDiagnosticPayload(event, detail);
+  function sendClaudeCodexProDiagnostic(event, detail) {
+    const payload = claudeCodexProDiagnosticPayload(event, detail);
     if (window.__CLAUDE_CODEX_PRO_TEST_SERVICE_TIER__) {
-      window.__codexPlusServiceTierTestDiagnostics = window.__codexPlusServiceTierTestDiagnostics || [];
-      window.__codexPlusServiceTierTestDiagnostics.push(payload);
+      window.__claudeCodexProServiceTierTestDiagnostics = window.__claudeCodexProServiceTierTestDiagnostics || [];
+      window.__claudeCodexProServiceTierTestDiagnostics.push(payload);
       return;
     }
     if (window.__codexSessionDeleteBridge) {
@@ -3135,9 +3135,9 @@
     }).catch(() => {});
   }
 
-  sendCodexPlusDiagnostic("script_loaded", {
-    version: codexPlusVersion,
-    build: codexPlusBuild,
+  sendClaudeCodexProDiagnostic("script_loaded", {
+    version: claudeCodexProVersion,
+    build: claudeCodexProBuild,
   });
 
   function locationThreadId() {
@@ -3356,7 +3356,7 @@
   function shouldBlockThreadScrollAutobottom(scroller, top) {
     const runtime = threadScrollRuntime();
     const lock = currentThreadScrollRestoreLock();
-    if (!lock || !codexPlusSettings().threadScrollRestore) return false;
+    if (!lock || !claudeCodexProSettings().threadScrollRestore) return false;
     const guardScroller = threadScrollGuardScroller(scroller);
     if (runtime.applyingRestore || !guardScroller) return false;
     const targetTop = threadScrollTargetTop(guardScroller, lock.targetTop);
@@ -3482,13 +3482,13 @@
     }
     runtime.activeScroller = scroller;
     runtime.scrollListenerUsesWindow = nextUsesWindow;
-    if (!scroller || !codexPlusSettings().threadScrollRestore) return;
+    if (!scroller || !claudeCodexProSettings().threadScrollRestore) return;
     const target = nextUsesWindow ? window : scroller;
     target.addEventListener("scroll", runtime.scrollListener, true);
   }
 
   function saveThreadScrollPositionNow(sessionId = threadScrollRuntime().activeSessionId, scroller = threadScrollRuntime().activeScroller) {
-    if (!codexPlusSettings().threadScrollRestore) return;
+    if (!claudeCodexProSettings().threadScrollRestore) return;
     const runtime = threadScrollRuntime();
     const key = validThreadScrollSessionKey(sessionId);
     if (!key || !scroller) return;
@@ -3509,7 +3509,7 @@
   }
 
   function scheduleThreadScrollSave() {
-    if (!codexPlusSettings().threadScrollRestore || window.__codexThreadScrollSaveTimer) return;
+    if (!claudeCodexProSettings().threadScrollRestore || window.__codexThreadScrollSaveTimer) return;
     window.__codexThreadScrollSaveTimer = setTimeout(() => {
       window.__codexThreadScrollSaveTimer = null;
       saveThreadScrollPositionNow();
@@ -3519,7 +3519,7 @@
   function restoreThreadScrollPosition(sessionId) {
     const runtime = threadScrollRuntime();
     const key = validThreadScrollSessionKey(sessionId);
-    if (!codexPlusSettings().threadScrollRestore || !key || runtime.activeSessionId !== key || userScrollIntentActive() || threadScrollRestoreCancelledForSession(key)) return;
+    if (!claudeCodexProSettings().threadScrollRestore || !key || runtime.activeSessionId !== key || userScrollIntentActive() || threadScrollRestoreCancelledForSession(key)) return;
     const lock = activeThreadScrollRestoreLock(key);
     const entry = lock || readThreadScrollEntries()[key];
     if (!entry) return;
@@ -3546,7 +3546,7 @@
   function scheduleThreadScrollRestore(sessionId) {
     clearThreadScrollRestoreTimers();
     const key = validThreadScrollSessionKey(sessionId);
-    if (!codexPlusSettings().threadScrollRestore || !key || userScrollIntentActive() || threadScrollRestoreCancelledForSession(key)) return;
+    if (!claudeCodexProSettings().threadScrollRestore || !key || userScrollIntentActive() || threadScrollRestoreCancelledForSession(key)) return;
     const entry = readThreadScrollEntries()[key];
     if (!entry) {
       clearThreadScrollRestoreLock();
@@ -3566,7 +3566,7 @@
     const currentRef = currentSessionRef();
     const nextSessionId = validThreadScrollSessionKey(currentRef.session_id);
     if (!nextSessionId) return;
-    if (!codexPlusSettings().threadScrollRestore) {
+    if (!claudeCodexProSettings().threadScrollRestore) {
       bindThreadScrollListener(null);
       clearThreadScrollRestoreTimers();
       clearThreadScrollRestoreLock();
@@ -3605,7 +3605,7 @@
   }
 
   function captureThreadScrollNavigation(targetSessionId) {
-    if (!codexPlusSettings().threadScrollRestore) return;
+    if (!claudeCodexProSettings().threadScrollRestore) return;
     const runtime = threadScrollRuntime();
     const targetKey = validThreadScrollSessionKey(targetSessionId);
     const sessionChanged = !!targetKey && targetKey !== runtime.activeSessionId;
@@ -3637,7 +3637,7 @@
   }
 
   function markThreadScrollUserIntent(event) {
-    if (!codexPlusSettings().threadScrollRestore || !eventTargetsActiveThreadScroller(event)) return;
+    if (!claudeCodexProSettings().threadScrollRestore || !eventTargetsActiveThreadScroller(event)) return;
     cancelThreadScrollRestoreForUserIntent();
   }
 
@@ -3688,19 +3688,19 @@
     document.removeEventListener("click", window.__codexThreadScrollClickNavigationHandler, true);
     document.removeEventListener("keydown", window.__codexThreadScrollKeyboardHandler, true);
     const navigationHandler = (event) => {
-      if (!codexPlusSettings().threadScrollRestore) return;
+      if (!claudeCodexProSettings().threadScrollRestore) return;
       const row = event.target?.closest?.(selectors.sidebarThread);
       if (!row) return;
       window.__codexThreadScrollHandlers?.captureNavigation?.(sessionRefFromRow(row).session_id);
     };
     const clickHandler = (event) => {
-      if (!codexPlusSettings().threadScrollRestore) return;
+      if (!claudeCodexProSettings().threadScrollRestore) return;
       const row = event.target?.closest?.(selectors.sidebarThread);
       if (!row) return;
       window.__codexThreadScrollHandlers?.captureNavigation?.(sessionRefFromRow(row).session_id);
     };
     const keyboardHandler = (event) => {
-      if (!codexPlusSettings().threadScrollRestore) return;
+      if (!claudeCodexProSettings().threadScrollRestore) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       const row = event.target?.closest?.(selectors.sidebarThread);
       if (!row) return;
@@ -3773,7 +3773,7 @@
           return { status: "failed", message: "未连接" };
         }
       }
-      sendCodexPlusDiagnostic("bridge_missing_for_route", { path });
+      sendClaudeCodexProDiagnostic("bridge_missing_for_route", { path });
       return { status: "failed", message: "桥接不可用，请重启启动器" };
     }
     function bridgeWithBackendTimeout(path, payload) {
@@ -3798,17 +3798,17 @@
       if (path === "/backend/status" || path === "/backend/repair") {
         const result = await bridgeWithBackendTimeout(path, payload);
         if (result?.status === "ok") return result;
-        if (result?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
+        if (result?.timeout) sendClaudeCodexProDiagnostic("backend_bridge_timeout", { path });
         const fallback = await fetchBackendStatusFromHelper(path, payload);
         if (fallback?.status === "ok") {
-          sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
+          sendClaudeCodexProDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
             path,
             httpStatus: 200,
             responseStatus: fallback.status || "",
           });
           return fallback;
         }
-        sendCodexPlusDiagnostic("backend_status_bridge_and_http_failed", {
+        sendClaudeCodexProDiagnostic("backend_status_bridge_and_http_failed", {
           path,
           errorName: "",
           errorMessage: "",
@@ -3817,7 +3817,7 @@
       }
       return await window.__codexSessionDeleteBridge(path, payload);
     } catch (error) {
-      sendCodexPlusDiagnostic("bridge_call_failed", {
+      sendClaudeCodexProDiagnostic("bridge_call_failed", {
         path,
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
@@ -3825,14 +3825,14 @@
       if (path === "/backend/status" || path === "/backend/repair") {
         const fallback = await fetchBackendStatusFromHelper(path, payload);
         if (fallback?.status === "ok") {
-          sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
+          sendClaudeCodexProDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
             path,
             httpStatus: 200,
             responseStatus: fallback.status || "",
           });
           return fallback;
         }
-        sendCodexPlusDiagnostic("backend_status_bridge_and_http_failed", {
+        sendClaudeCodexProDiagnostic("backend_status_bridge_and_http_failed", {
           path,
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
@@ -3895,13 +3895,13 @@
   let codexModelCatalog = { status: "loading", model: "", default_model: "", model_provider: "", provider_name: "", models: [], sources: [], responses_api: { status: "unknown", message: "" } };
   let codexModelCatalogLoadedAt = 0;
   let codexModelCatalogPromise = null;
-  const codexPlusModelListRequestIds = new Set();
+  const claudeCodexProModelListRequestIds = new Set();
 
   if (window.__CLAUDE_CODEX_PRO_TEST_SERVICE_TIER__) {
-    window.__codexPlusServiceTierTest = {
+    window.__claudeCodexProServiceTierTest = {
       applyServiceTierOverride: (method, params, threadIdHint = "") => applyCodexServiceTierRequestOverride(method, params, threadIdHint),
       requestOverride: (message) => codexServiceTierRequestOverride(message),
-      diagnostics: () => [...(window.__codexPlusServiceTierTestDiagnostics || [])],
+      diagnostics: () => [...(window.__claudeCodexProServiceTierTestDiagnostics || [])],
       setModelCatalog: (catalog = {}) => {
         codexModelCatalog = {
           status: "ok",
@@ -3933,11 +3933,11 @@
     return;
   }
 
-  function codexPlusModelUnlockEnabled() {
-    return !!codexPlusSettings().modelWhitelistUnlock;
+  function claudeCodexProModelUnlockEnabled() {
+    return !!claudeCodexProSettings().modelWhitelistUnlock;
   }
 
-  function codexPlusModelNames() {
+  function claudeCodexProModelNames() {
     return uniqueValues([
       codexModelCatalog.default_model,
       codexModelCatalog.model,
@@ -3952,7 +3952,7 @@
       .then((result) => {
         codexModelCatalog = result && typeof result === "object" ? result : { status: "failed", model: "", default_model: "", model_provider: "", provider_name: "", models: [], sources: [], responses_api: { status: "unknown", message: "" } };
         codexModelCatalogLoadedAt = Date.now();
-        renderCodexPlusMenu();
+        renderClaudeCodexProMenu();
         patchCodexModelWhitelist();
         return codexModelCatalog;
       })
@@ -3971,7 +3971,7 @@
     return ["minimal", "low", "medium", "high", "xhigh"].map((reasoningEffort) => ({ reasoningEffort, description: `${reasoningEffort} effort` }));
   }
 
-  function codexPlusModelDescriptor(modelName) {
+  function claudeCodexProModelDescriptor(modelName) {
     return {
       model: modelName,
       id: modelName,
@@ -3998,7 +3998,7 @@
 
   function patchModelNameArray(models) {
     if (!stringArrayLooksPatchable(models)) return false;
-    const customModels = codexPlusModelNames();
+    const customModels = claudeCodexProModelNames();
     if (!customModels.length) return false;
     let changed = false;
     customModels.forEach((modelName) => {
@@ -4012,7 +4012,7 @@
 
   function patchModelArray(models, allowEmpty = false) {
     if (!modelArrayLooksPatchable(models, allowEmpty)) return false;
-    const customModels = codexPlusModelNames();
+    const customModels = claudeCodexProModelNames();
     if (!customModels.length) return false;
     let changed = false;
     const existing = new Map(models.map((item) => [item.model, item]));
@@ -4024,7 +4024,7 @@
     });
     customModels.forEach((modelName) => {
       if (!existing.has(modelName)) {
-        models.push(codexPlusModelDescriptor(modelName));
+        models.push(claudeCodexProModelDescriptor(modelName));
         changed = true;
       }
     });
@@ -4043,7 +4043,7 @@
     if (patchModelArray(value.result?.models)) changed = true;
     if (patchModelArray(value.message?.result?.data)) changed = true;
     if (patchModelArray(value.message?.result?.models)) changed = true;
-    const names = codexPlusModelNames();
+    const names = claudeCodexProModelNames();
     if (value.availableModels instanceof Set) {
       names.forEach((name) => {
         if (!value.availableModels.has(name)) {
@@ -4087,7 +4087,7 @@
       if (value.hidden_models.length !== before) changed = true;
     }
     if (value.defaultModel == null && names.length > 0) {
-      value.defaultModel = codexPlusModelDescriptor(names[0]);
+      value.defaultModel = claudeCodexProModelDescriptor(names[0]);
       changed = true;
     } else if (typeof value.defaultModel === "string" && names.includes(value.defaultModel) && value.model == null) {
       value.model = value.defaultModel;
@@ -4097,34 +4097,34 @@
   }
 
   async function patchModelJsonResponse(payload) {
-    if (!codexPlusModelUnlockEnabled()) return payload;
-    if (!codexPlusModelNames().length) await loadCodexModelCatalog();
+    if (!claudeCodexProModelUnlockEnabled()) return payload;
+    if (!claudeCodexProModelNames().length) await loadCodexModelCatalog();
     if (!payload || typeof payload !== "object") return payload;
     try {
       patchModelContainer(payload);
       patchObjectGraphForModels(payload, new WeakSet(), 0);
     } catch (error) {
-      window.__codexPlusModelPatchFailures = window.__codexPlusModelPatchFailures || [];
-      window.__codexPlusModelPatchFailures.push(String(error?.stack || error));
+      window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
+      window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
     }
     return payload;
   }
 
   function installModelJsonResponsePatch() {
-    if (window.__codexPlusModelJsonResponsePatchInstalled === "1") return;
-    window.__codexPlusModelJsonResponsePatchInstalled = "1";
-    window.__codexPlusModelJsonResponseOriginals = window.__codexPlusModelJsonResponseOriginals || {};
-    const originals = window.__codexPlusModelJsonResponseOriginals;
+    if (window.__claudeCodexProModelJsonResponsePatchInstalled === "1") return;
+    window.__claudeCodexProModelJsonResponsePatchInstalled = "1";
+    window.__claudeCodexProModelJsonResponseOriginals = window.__claudeCodexProModelJsonResponseOriginals || {};
+    const originals = window.__claudeCodexProModelJsonResponseOriginals;
     originals.responseJson = originals.responseJson || Response.prototype.json;
     if (typeof originals.responseJson !== "function") return;
-    Response.prototype.json = async function codexPlusPatchedResponseJson(...args) {
+    Response.prototype.json = async function claudeCodexProPatchedResponseJson(...args) {
       const payload = await originals.responseJson.apply(this, args);
       return await patchModelJsonResponse(payload);
     };
   }
 
   function patchStatsigModelDynamicConfig(config) {
-    const names = codexPlusModelNames();
+    const names = claudeCodexProModelNames();
     const value = config?.value;
     if (!names.length || !value || typeof value !== "object") return config;
     const availableModels = Array.isArray(value.available_models) ? [...value.available_models] : [];
@@ -4160,13 +4160,13 @@
   function patchStatsigModelWhitelist() {
     statsigClients().forEach((client) => {
       if (typeof client.getDynamicConfig !== "function") return;
-      if (!client.__codexPlusModelWhitelistPatched) {
+      if (!client.__claudeCodexProModelWhitelistPatched) {
         const originalGetDynamicConfig = client.getDynamicConfig.bind(client);
         client.getDynamicConfig = (name, options) => {
           const result = originalGetDynamicConfig(name, options);
           return patchStatsigModelDynamicConfig(result);
         };
-        client.__codexPlusModelWhitelistPatched = true;
+        client.__claudeCodexProModelWhitelistPatched = true;
       }
       try {
         patchStatsigModelDynamicConfig(client.getDynamicConfig("107580212", { disableExposureLog: true }));
@@ -4210,21 +4210,21 @@
   }
 
   function patchAppServerModelMessages() {
-    if (window.__codexPlusModelMessagePatchInstalled) return;
-    window.__codexPlusModelMessagePatchInstalled = true;
+    if (window.__claudeCodexProModelMessagePatchInstalled) return;
+    window.__claudeCodexProModelMessagePatchInstalled = true;
     const originalDispatchEvent = window.dispatchEvent;
-    window.dispatchEvent = function patchedCodexPlusDispatchEvent(event) {
+    window.dispatchEvent = function patchedClaudeCodexProDispatchEvent(event) {
       try {
         const detail = event?.detail;
         const request = detail?.request;
         if (event?.type === "codex-message-from-view" && detail?.type === "mcp-request" && request?.method === "model/list") {
           request.params = { ...(request.params || {}), includeHidden: true };
-          if (request.id != null) codexPlusModelListRequestIds.add(String(request.id));
+          if (request.id != null) claudeCodexProModelListRequestIds.add(String(request.id));
         }
         if (event?.type === "message") patchMcpModelResponseData(event.data);
       } catch (error) {
-        window.__codexPlusModelPatchFailures = window.__codexPlusModelPatchFailures || [];
-        window.__codexPlusModelPatchFailures.push(String(error?.stack || error));
+        window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
+        window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
       }
       return originalDispatchEvent.call(this, event);
     };
@@ -4233,8 +4233,8 @@
       try {
         patchMcpModelResponseData(event?.data);
       } catch (error) {
-        window.__codexPlusModelPatchFailures = window.__codexPlusModelPatchFailures || [];
-        window.__codexPlusModelPatchFailures.push(String(error?.stack || error));
+        window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
+        window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
       }
     }, true);
   }
@@ -4243,8 +4243,8 @@
     if (data?.type !== "mcp-response") return false;
     const message = data.message || data.response;
     const requestId = message?.id != null ? String(message.id) : "";
-    if (codexPlusModelListRequestIds.size > 0 && !codexPlusModelListRequestIds.has(requestId)) return false;
-    codexPlusModelListRequestIds.delete(requestId);
+    if (claudeCodexProModelListRequestIds.size > 0 && !claudeCodexProModelListRequestIds.has(requestId)) return false;
+    claudeCodexProModelListRequestIds.delete(requestId);
     return patchModelContainer(data) || patchModelContainer(message) || patchModelContainer(message?.result) || patchModelContainer(message?.result?.data);
   }
 
@@ -4261,34 +4261,34 @@
       if (Array.isArray(result?.models)) patchModelArray(result.models, true);
       patchModelContainer(result);
       patchObjectGraphForModels(result, new WeakSet(), 0);
-      sendCodexPlusDiagnostic("model_app_server_result_patched", {
+      sendClaudeCodexProDiagnostic("model_app_server_result_patched", {
         method,
         modelCount: Array.isArray(result?.data) ? result.data.length : Array.isArray(result?.models) ? result.models.length : Array.isArray(result) ? result.length : null,
       });
     } catch (error) {
-      window.__codexPlusModelPatchFailures = window.__codexPlusModelPatchFailures || [];
-      window.__codexPlusModelPatchFailures.push(String(error?.stack || error));
+      window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
+      window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
     }
     return result;
   }
 
   function patchAppServerModelRequestClient(client) {
     if (!client || typeof client.sendRequest !== "function") return false;
-    if (client.__codexPlusModelRequestPatch === codexAppServerModelRequestPatchVersion) return true;
-    const originalSendRequest = client.__codexPlusModelOriginalSendRequest || client.sendRequest.bind(client);
-    client.__codexPlusModelOriginalSendRequest = originalSendRequest;
-    client.sendRequest = async function codexPlusModelPatchedSendRequest(method, params, options) {
+    if (client.__claudeCodexProModelRequestPatch === codexAppServerModelRequestPatchVersion) return true;
+    const originalSendRequest = client.__claudeCodexProModelOriginalSendRequest || client.sendRequest.bind(client);
+    client.__claudeCodexProModelOriginalSendRequest = originalSendRequest;
+    client.sendRequest = async function claudeCodexProModelPatchedSendRequest(method, params, options) {
       const result = await originalSendRequest(method, params, options);
-      if (!codexPlusModelUnlockEnabled()) return result;
-      if (!codexPlusModelNames().length) await loadCodexModelCatalog();
+      if (!claudeCodexProModelUnlockEnabled()) return result;
+      if (!claudeCodexProModelNames().length) await loadCodexModelCatalog();
       return patchAppServerModelResult(appServerModelRequestMethod(String(method || ""), params), result);
     };
-    client.__codexPlusModelRequestPatch = codexAppServerModelRequestPatchVersion;
+    client.__claudeCodexProModelRequestPatch = codexAppServerModelRequestPatchVersion;
     return true;
   }
 
   function installAppServerModelRequestPatch() {
-    if (window.__codexPlusAppServerModelRequestPatchInstalled === codexAppServerModelRequestPatchVersion) return;
+    if (window.__claudeCodexProAppServerModelRequestPatchInstalled === codexAppServerModelRequestPatchVersion) return;
     const patch = async () => {
       try {
         const module = await loadCodexAppModule("app-server-manager-signals-");
@@ -4304,19 +4304,19 @@
           }
         }
         if (patchedCount > 0) {
-          window.__codexPlusAppServerModelRequestPatchInstalled = codexAppServerModelRequestPatchVersion;
-          sendCodexPlusDiagnostic("model_app_server_request_patch_installed", {
+          window.__claudeCodexProAppServerModelRequestPatchInstalled = codexAppServerModelRequestPatchVersion;
+          sendClaudeCodexProDiagnostic("model_app_server_request_patch_installed", {
             candidateCount: candidates.length,
             patchedCount,
           });
         } else {
-          sendCodexPlusDiagnostic("model_app_server_request_patch_not_found", {
+          sendClaudeCodexProDiagnostic("model_app_server_request_patch_not_found", {
             exportCount: Object.keys(module || {}).length,
             candidateCount: candidates.length,
           });
         }
       } catch (error) {
-        sendCodexPlusDiagnostic("model_app_server_request_patch_failed", {
+        sendClaudeCodexProDiagnostic("model_app_server_request_patch_failed", {
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
         });
@@ -4326,11 +4326,11 @@
   }
 
   function patchCodexModelWhitelist() {
-    if (!codexPlusModelUnlockEnabled()) return;
+    if (!claudeCodexProModelUnlockEnabled()) return;
     installModelJsonResponsePatch();
     patchAppServerModelMessages();
     installAppServerModelRequestPatch();
-    if (!codexPlusModelNames().length) {
+    if (!claudeCodexProModelNames().length) {
       loadCodexModelCatalog();
       return;
     }
@@ -4895,7 +4895,7 @@
   }
 
   function applyProjectMoveProjection() {
-    if (!codexPlusSettings().projectMove) return;
+    if (!claudeCodexProSettings().projectMove) return;
     const projection = readProjectMoveProjection();
     const targetRowsById = new Map();
     const settledRefs = [];
@@ -4950,7 +4950,7 @@
   }
 
   function scheduleProjectMoveProjection() {
-    if (!codexPlusSettings().projectMove || window.__codexProjectMoveProjectionTimer) return;
+    if (!claudeCodexProSettings().projectMove || window.__codexProjectMoveProjectionTimer) return;
     window.__codexProjectMoveProjectionTimer = setTimeout(() => {
       if (window.__codexProjectMoveRuntimeId !== codexProjectMoveRuntimeId) return;
       window.__codexProjectMoveProjectionTimer = null;
@@ -5029,7 +5029,7 @@
   }
 
   async function applyChatsSortCorrection() {
-    if (!codexPlusSettings().projectMove || chatsSortInFlight) return;
+    if (!claudeCodexProSettings().projectMove || chatsSortInFlight) return;
     const rows = visibleChatsRows();
     if (rows.length < 2) return;
     const refs = rows.map(sessionRefFromRow).filter((ref) => ref.session_id);
@@ -5067,7 +5067,7 @@
   }
 
   function scheduleChatsSortCorrection(delay = chatsSortRefreshIntervalMs) {
-    if (!codexPlusSettings().projectMove || window.__codexProjectMoveChatsSortTimer) return;
+    if (!claudeCodexProSettings().projectMove || window.__codexProjectMoveChatsSortTimer) return;
     window.__codexProjectMoveChatsSortTimer = setTimeout(() => {
       if (window.__codexProjectMoveRuntimeId !== codexProjectMoveRuntimeId) return;
       window.__codexProjectMoveChatsSortTimer = null;
@@ -5075,7 +5075,7 @@
         window.__codexProjectMoveSortFailures = window.__codexProjectMoveSortFailures || [];
         window.__codexProjectMoveSortFailures.push(String(error?.stack || error));
       }).finally(() => {
-        if (codexPlusSettings().projectMove) scheduleChatsSortCorrection();
+        if (claudeCodexProSettings().projectMove) scheduleChatsSortCorrection();
       });
     }, delay);
   }
@@ -5663,7 +5663,7 @@
   }
 
   async function injectUpstreamBranchOptions() {
-    if (!codexPlusSettings().upstreamWorktreeCreate) {
+    if (!claudeCodexProSettings().upstreamWorktreeCreate) {
       removeUpstreamBranchOptions();
       return;
     }
@@ -5769,7 +5769,7 @@
       if (result?.status !== "ok") throw new Error(result?.message || "prepare failed");
       writePreparedUpstreamBranchSelection(selection, result);
     }).catch((error) => {
-      sendCodexPlusDiagnostic("upstream_branch_prepare_failed", {
+      sendClaudeCodexProDiagnostic("upstream_branch_prepare_failed", {
         label: selection.label || "",
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
@@ -5808,7 +5808,7 @@
     const selection = readUpstreamBranchSelection();
     const request = payload?.request;
     const sourceRef = upstreamQualifiedSourceRef(selection);
-    if (!codexPlusSettings().upstreamWorktreeCreate || !sourceRef) return payload;
+    if (!claudeCodexProSettings().upstreamWorktreeCreate || !sourceRef) return payload;
     if (!pendingWorktreeRequestMatchesSelection(request, selection)) return payload;
     if (request?.startingState?.type !== "branch") return payload;
     if (request.startingState.branchName === sourceRef) return payload;
@@ -5817,7 +5817,7 @@
       startingState: { ...request.startingState, branchName: sourceRef },
     };
     prepareUpstreamBranchSelection(selection);
-    sendCodexPlusDiagnostic("upstream_pending_worktree_override_applied", {
+    sendClaudeCodexProDiagnostic("upstream_pending_worktree_override_applied", {
       label: selection.label || "",
       sourceRef,
       sourceWorkspaceRoot: request.sourceWorkspaceRoot || "",
@@ -5845,7 +5845,7 @@
         }
         window.__codexUpstreamPendingWorktreeDispatcherPatch = patchVersion;
       } catch (error) {
-        sendCodexPlusDiagnostic("upstream_pending_worktree_patch_failed", {
+        sendClaudeCodexProDiagnostic("upstream_pending_worktree_patch_failed", {
           errorName: error?.name || "",
           errorMessage: error?.message || String(error),
         });
@@ -5898,7 +5898,7 @@
   }
 
   async function handleUpstreamWorktreeNativeCreate(event) {
-    if (!codexPlusSettings().upstreamWorktreeCreate) return false;
+    if (!claudeCodexProSettings().upstreamWorktreeCreate) return false;
     const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     const trigger = target?.closest?.("[data-codex-worktree-create], [data-worktree-create]");
     if (!trigger) return false;
@@ -6479,7 +6479,7 @@
   }
 
   function attachButton(row) {
-    const settings = codexPlusSettings();
+    const settings = claudeCodexProSettings();
     if (!settings.sessionDelete && !settings.markdownExport && !settings.projectMove) {
       removeActionGroups(row);
       row.dataset.codexDeleteRow = "false";
@@ -6643,7 +6643,7 @@
   }
 
   function attachArchivedPageDeleteButton(row) {
-    const settings = codexPlusSettings();
+    const settings = claudeCodexProSettings();
     row.querySelectorAll("[data-codex-archive-row-action]").forEach((button) => button.remove());
     row.dataset.codexArchiveDeleteRow = "false";
     if (!settings.sessionDelete && !settings.markdownExport) return;
@@ -6869,7 +6869,7 @@
   }
 
   function refreshConversationTimeline() {
-    if (!codexPlusSettings().conversationTimeline) {
+    if (!claudeCodexProSettings().conversationTimeline) {
       removeConversationTimeline();
       return;
     }
@@ -7117,7 +7117,7 @@
   }
 
   function installCodexServiceTierBadge() {
-    if (!codexPlusSettings().serviceTierControls) {
+    if (!claudeCodexProSettings().serviceTierControls) {
       removeCodexServiceTierBadges();
       return;
     }
@@ -7163,51 +7163,51 @@
       transform: el.style.transform || "",
       boxSizing: el.style.boxSizing || "",
     };
-    if (!("codexPlusConversationViewOriginalWidth" in el.dataset)) el.dataset.codexPlusConversationViewOriginalWidth = original.width;
-    if (!("codexPlusConversationViewOriginalMaxWidth" in el.dataset)) el.dataset.codexPlusConversationViewOriginalMaxWidth = original.maxWidth;
-    if (!("codexPlusConversationViewOriginalMarginLeft" in el.dataset)) el.dataset.codexPlusConversationViewOriginalMarginLeft = original.marginLeft;
-    if (!("codexPlusConversationViewOriginalMarginRight" in el.dataset)) el.dataset.codexPlusConversationViewOriginalMarginRight = original.marginRight;
-    if (!("codexPlusConversationViewOriginalLeft" in el.dataset)) el.dataset.codexPlusConversationViewOriginalLeft = original.left;
-    if (!("codexPlusConversationViewOriginalTransform" in el.dataset)) el.dataset.codexPlusConversationViewOriginalTransform = original.transform;
-    if (!("codexPlusConversationViewOriginalBoxSizing" in el.dataset)) el.dataset.codexPlusConversationViewOriginalBoxSizing = original.boxSizing;
+    if (!("claudeCodexProConversationViewOriginalWidth" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalWidth = original.width;
+    if (!("claudeCodexProConversationViewOriginalMaxWidth" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalMaxWidth = original.maxWidth;
+    if (!("claudeCodexProConversationViewOriginalMarginLeft" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalMarginLeft = original.marginLeft;
+    if (!("claudeCodexProConversationViewOriginalMarginRight" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalMarginRight = original.marginRight;
+    if (!("claudeCodexProConversationViewOriginalLeft" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalLeft = original.left;
+    if (!("claudeCodexProConversationViewOriginalTransform" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalTransform = original.transform;
+    if (!("claudeCodexProConversationViewOriginalBoxSizing" in el.dataset)) el.dataset.claudeCodexProConversationViewOriginalBoxSizing = original.boxSizing;
   }
 
   function conversationViewRestoreElement(el) {
     if (!el) return;
-    if ("codexPlusConversationViewOriginalWidth" in el.dataset) {
-      el.style.width = el.dataset.codexPlusConversationViewOriginalWidth;
-      delete el.dataset.codexPlusConversationViewOriginalWidth;
+    if ("claudeCodexProConversationViewOriginalWidth" in el.dataset) {
+      el.style.width = el.dataset.claudeCodexProConversationViewOriginalWidth;
+      delete el.dataset.claudeCodexProConversationViewOriginalWidth;
     }
-    if ("codexPlusConversationViewOriginalMaxWidth" in el.dataset) {
-      el.style.maxWidth = el.dataset.codexPlusConversationViewOriginalMaxWidth;
-      delete el.dataset.codexPlusConversationViewOriginalMaxWidth;
+    if ("claudeCodexProConversationViewOriginalMaxWidth" in el.dataset) {
+      el.style.maxWidth = el.dataset.claudeCodexProConversationViewOriginalMaxWidth;
+      delete el.dataset.claudeCodexProConversationViewOriginalMaxWidth;
     }
-    if ("codexPlusConversationViewOriginalMarginLeft" in el.dataset) {
-      el.style.marginLeft = el.dataset.codexPlusConversationViewOriginalMarginLeft;
-      delete el.dataset.codexPlusConversationViewOriginalMarginLeft;
+    if ("claudeCodexProConversationViewOriginalMarginLeft" in el.dataset) {
+      el.style.marginLeft = el.dataset.claudeCodexProConversationViewOriginalMarginLeft;
+      delete el.dataset.claudeCodexProConversationViewOriginalMarginLeft;
     }
-    if ("codexPlusConversationViewOriginalMarginRight" in el.dataset) {
-      el.style.marginRight = el.dataset.codexPlusConversationViewOriginalMarginRight;
-      delete el.dataset.codexPlusConversationViewOriginalMarginRight;
+    if ("claudeCodexProConversationViewOriginalMarginRight" in el.dataset) {
+      el.style.marginRight = el.dataset.claudeCodexProConversationViewOriginalMarginRight;
+      delete el.dataset.claudeCodexProConversationViewOriginalMarginRight;
     }
-    if ("codexPlusConversationViewOriginalLeft" in el.dataset) {
-      el.style.left = el.dataset.codexPlusConversationViewOriginalLeft;
-      delete el.dataset.codexPlusConversationViewOriginalLeft;
+    if ("claudeCodexProConversationViewOriginalLeft" in el.dataset) {
+      el.style.left = el.dataset.claudeCodexProConversationViewOriginalLeft;
+      delete el.dataset.claudeCodexProConversationViewOriginalLeft;
     }
-    if ("codexPlusConversationViewOriginalTransform" in el.dataset) {
-      el.style.transform = el.dataset.codexPlusConversationViewOriginalTransform;
-      delete el.dataset.codexPlusConversationViewOriginalTransform;
+    if ("claudeCodexProConversationViewOriginalTransform" in el.dataset) {
+      el.style.transform = el.dataset.claudeCodexProConversationViewOriginalTransform;
+      delete el.dataset.claudeCodexProConversationViewOriginalTransform;
     }
-    if ("codexPlusConversationViewOriginalBoxSizing" in el.dataset) {
-      el.style.boxSizing = el.dataset.codexPlusConversationViewOriginalBoxSizing;
-      delete el.dataset.codexPlusConversationViewOriginalBoxSizing;
+    if ("claudeCodexProConversationViewOriginalBoxSizing" in el.dataset) {
+      el.style.boxSizing = el.dataset.claudeCodexProConversationViewOriginalBoxSizing;
+      delete el.dataset.claudeCodexProConversationViewOriginalBoxSizing;
     }
   }
 
   function conversationViewResetOwnOffset(el) {
     if (!el) return;
-    const originalTransform = el.dataset.codexPlusConversationViewOriginalTransform || "";
-    const originalLeft = el.dataset.codexPlusConversationViewOriginalLeft || "";
+    const originalTransform = el.dataset.claudeCodexProConversationViewOriginalTransform || "";
+    const originalLeft = el.dataset.claudeCodexProConversationViewOriginalLeft || "";
     if (el.style.left !== originalLeft) el.style.left = originalLeft;
     if (el.style.transform !== originalTransform) el.style.transform = originalTransform;
     const transform = String(el.style.transform || "").trim();
@@ -7279,7 +7279,7 @@
   }
 
   function conversationViewAlignNow() {
-    if (!codexPlusSettings().conversationView) return;
+    if (!claudeCodexProSettings().conversationView) return;
     conversationViewResolveTargets();
     conversationViewAlignElement(conversationViewState.contentEl);
     conversationViewAlignElement(conversationViewState.composerEl);
@@ -7316,7 +7316,7 @@
     conversationViewState.composerEl = null;
   }
 
-  window.__codexPlusConversationViewCleanup = cleanupConversationView;
+  window.__claudeCodexProConversationViewCleanup = cleanupConversationView;
 
   function ensureConversationViewRuntime() {
     if (conversationViewState.ro && conversationViewState.mo && conversationViewState.pollId) return;
@@ -7335,7 +7335,7 @@
   }
 
   function refreshConversationView() {
-    if (!codexPlusSettings().conversationView) {
+    if (!claudeCodexProSettings().conversationView) {
       cleanupConversationView();
       return;
     }
@@ -7346,7 +7346,7 @@
   function scanLightweight() {
     installStyle();
     installCodexServiceTierDispatcherPatch();
-    installCodexPlusMenu();
+    installClaudeCodexProMenu();
     scheduleBackendHeartbeat();
     installDeleteButtonEventDelegation();
     updateThreadScrollHandlers();
@@ -7458,7 +7458,7 @@
   }
 
   function zedRemoteOpenStrategy() {
-    const strategy = zedRemoteString(codexPlusBackendSettings.zedRemoteOpenStrategy);
+    const strategy = zedRemoteString(claudeCodexProBackendSettings.zedRemoteOpenStrategy);
     return ["addToFocusedWorkspace", "reuseWindow", "newWindow", "default"].includes(strategy)
       ? strategy
       : "addToFocusedWorkspace";
@@ -7660,7 +7660,7 @@
   }
 
   function zedRemoteContext(scope = document) {
-    const settings = codexPlusSettings();
+    const settings = claudeCodexProSettings();
     if (!settings.zedRemoteOpen) return null;
     const now = Date.now();
     if (zedRemoteContextCache.scope === scope && now - zedRemoteContextCache.at < zedRemoteContextCacheTtlMs) {
@@ -7760,7 +7760,7 @@
     nextRequest = {
       ...nextRequest,
       strategy: nextRequest.strategy || zedRemoteOpenStrategy(),
-      remember: codexPlusBackendSettings.zedRemoteProjectRegistryEnabled !== false,
+      remember: claudeCodexProBackendSettings.zedRemoteProjectRegistryEnabled !== false,
     };
     try {
       const result = await postJson("/zed-remote/open", nextRequest);
@@ -7835,7 +7835,7 @@
   }
 
   async function activateZedRemoteOpenInMenuItem(event) {
-    if (!codexPlusSettings().zedRemoteOpen) return;
+    if (!claudeCodexProSettings().zedRemoteOpen) return;
     if (event?.type === "keydown" && !["Enter", " "].includes(event.key)) return;
     const scope = event?.currentTarget?.closest?.('[role="menu"], [data-radix-popper-content-wrapper]') || event?.currentTarget || document;
     event.preventDefault();
@@ -7876,7 +7876,7 @@
 
   function refreshZedRemoteOpenInMenus(scope = document) {
     removeZedRemoteOpenInMenuItems(scope);
-    if (!codexPlusSettings().zedRemoteOpen) return;
+    if (!claudeCodexProSettings().zedRemoteOpen) return;
     const fallbackPayload = zedRemoteCurrentFallbackPayload();
     zedRemoteOpenInMenuScopes(scope).forEach((menu) => {
       if (!(menu instanceof HTMLElement) || isExtensionUiNode(menu)) return;
@@ -7896,7 +7896,7 @@
   }
 
   async function refreshZedRemoteOpenControls(scope = document) {
-    if (!codexPlusSettings().zedRemoteOpen) {
+    if (!claudeCodexProSettings().zedRemoteOpen) {
       removeZedRemoteButtons();
       removeZedRemoteOpenInMenuItems();
       return;
@@ -7926,7 +7926,7 @@
   }
 
   function shouldRefreshZedRemoteMenus(mutations) {
-    if (!codexPlusSettings().zedRemoteOpen) return false;
+    if (!claudeCodexProSettings().zedRemoteOpen) return false;
     if (!mutations) return true;
     return mutations.some((mutation) => {
       const target = mutation.target;
@@ -7952,7 +7952,7 @@
       refreshForcePluginInstallUnlockLoop();
     } else {
       const pluginUnlockStrategy = codexPluginUnlockStrategy();
-      const settings = codexPlusSettings();
+      const settings = claudeCodexProSettings();
       logCodexPluginUnlockStrategy(pluginUnlockStrategy);
       if ((pluginUnlockStrategy === "legacy" || pluginUnlockStrategy === "unknown") && settings.pluginEntryUnlock) {
         enablePluginEntry();
@@ -8075,17 +8075,17 @@
   window.__codexProjectMoveReadProjection = readProjectMoveProjection;
   window.__codexProjectMoveTargets = projectMoveTargets;
   window.__codexProjectMoveSortChats = applyChatsSortCorrection;
-  window.removeEventListener("resize", window.__codexPlusResizeHandler);
-  let codexPlusResizeRafId = 0;
-  window.__codexPlusResizeHandler = () => {
-    cancelAnimationFrame(codexPlusResizeRafId);
-    codexPlusResizeRafId = requestAnimationFrame(() => {
-      updateFloatingCodexPlusMenuPosition(document.getElementById(codexPlusMenuId));
+  window.removeEventListener("resize", window.__claudeCodexProResizeHandler);
+  let claudeCodexProResizeRafId = 0;
+  window.__claudeCodexProResizeHandler = () => {
+    cancelAnimationFrame(claudeCodexProResizeRafId);
+    claudeCodexProResizeRafId = requestAnimationFrame(() => {
+      updateFloatingClaudeCodexProMenuPosition(document.getElementById(claudeCodexProMenuId));
       runScanStep(refreshConversationTimeline);
       runScanStep(refreshConversationView);
     });
   };
-  window.addEventListener("resize", window.__codexPlusResizeHandler);
+  window.addEventListener("resize", window.__claudeCodexProResizeHandler);
   window.__codexSessionDeleteObserver?.disconnect();
   window.__codexSessionDeleteObserver = new MutationObserver(scheduleScan);
   window.__codexSessionDeleteObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });

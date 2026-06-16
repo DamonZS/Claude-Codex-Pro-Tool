@@ -102,12 +102,12 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 fn injection_script_fetches_ads_without_bridge() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("directFetchCodexPlusAds"));
-    assert!(script.contains("cacheBustCodexPlusAdUrl"));
+    assert!(script.contains("directFetchClaudeCodexProAds"));
+    assert!(script.contains("cacheBustClaudeCodexProAdUrl"));
     assert!(script.contains("Date.now()"));
     assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool-Ad-List"));
     assert!(
-        !script.contains("codexPlusAds = normalizeCodexPlusAds(await postJson(\"/ads\", {}));")
+        !script.contains("claudeCodexProAds = normalizeClaudeCodexProAds(await postJson(\"/ads\", {}));")
     );
 }
 
@@ -147,7 +147,7 @@ fn injection_script_skips_plugin_patch_work_in_relay_mode() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("function pluginPatchDisabledInRelayMode()"));
-    assert!(script.contains("!codexPlusBackendSettingsLoaded"));
+    assert!(script.contains("!claudeCodexProBackendSettingsLoaded"));
     assert!(script.contains("if (pluginPatchDisabledInRelayMode()) return"));
     assert!(script.contains("clearPluginPatchArtifacts()"));
 }
@@ -187,7 +187,7 @@ fn injection_script_restores_legacy_plugin_sidebar_entry_unlock() {
     assert!(script.contains("auth.setAuthMethod(\"chatgpt\")"));
     assert!(script.contains("function pluginEntryButton()"));
     assert!(script.contains("function enablePluginEntry()"));
-    assert!(script.contains("if (!codexPlusSettings().pluginEntryUnlock) return"));
+    assert!(script.contains("if (!claudeCodexProSettings().pluginEntryUnlock) return"));
     assert!(script.contains("pluginButton.addEventListener(\"click\", () => {"));
     assert!(script.contains("spoofChatGPTAuthMethod(pluginButton);"));
     assert!(script.contains("插件 - 已解锁"));
@@ -200,7 +200,7 @@ fn injection_script_keeps_plugin_marketplace_unlock_separate_from_entry_unlock()
 
     assert!(script.contains("pluginMarketplaceUnlock: true"));
     assert!(script.contains("pluginMarketplaceUnlock: \"codexAppPluginMarketplaceUnlock\""));
-    assert!(script.contains("if (!codexPlusSettings().pluginMarketplaceUnlock) return"));
+    assert!(script.contains("if (!claudeCodexProSettings().pluginMarketplaceUnlock) return"));
     assert!(script.contains("installPluginBuildFlavorFilterPatch"));
     assert!(script.contains("installPluginMarketplaceRequestPatch"));
 }
@@ -535,7 +535,7 @@ fn run_service_tier_contract_harness() -> serde_json::Value {
         r#"
 const scriptPath = {script_path};
 const store = new Map();
-store.set("codexPlusSettings", JSON.stringify({{ serviceTierControls: true }}));
+store.set("claudeCodexProSettings", JSON.stringify({{ serviceTierControls: true }}));
 function node() {{
   return {{
     appendChild() {{}},
@@ -578,7 +578,7 @@ window.location = globalThis.location;
 globalThis.navigator = {{ userAgent: "node-test" }};
 globalThis.performance = {{ getEntriesByType: () => [] }};
 require(scriptPath);
-const api = window.__codexPlusServiceTierTest;
+const api = window.__claudeCodexProServiceTierTest;
 api.setServiceTierState({{ serviceTier: "priority", fastTierValue: "priority" }});
 api.setModelCatalog({{ status: "ok", model: "gpt-5.4", default_model: "gpt-5.4", models: ["gpt-5.4", "gpt-5.5"] }});
 
