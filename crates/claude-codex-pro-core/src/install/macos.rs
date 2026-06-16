@@ -5,8 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use super::{
-    InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_NAME,
-    MacosAppBundle, SILENT_BINARY, SILENT_NAME, install_root_or_default, option_or_current_exe,
+    InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
+    install_root_or_default, option_or_current_exe,
 };
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {

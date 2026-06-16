@@ -143,7 +143,7 @@ fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<
         ("DisplayVersion", crate::version::VERSION.to_string()),
         ("Publisher", "DamonZS".to_string()),
         ("DisplayIcon", plan.manager_icon_path.clone()),
-        ("InstallLocation", install_location),
+        ("InstallLocation", install_location.clone()),
         ("UninstallString", uninstall_command.clone()),
         ("QuietUninstallString", uninstall_command),
     ] {
