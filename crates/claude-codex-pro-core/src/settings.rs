@@ -193,6 +193,8 @@ pub struct BackendSettings {
     pub codex_app_upstream_worktree_create: bool,
     #[serde(rename = "codexAppNativeMenuPlacement", default = "default_true")]
     pub codex_app_native_menu_placement: bool,
+    #[serde(rename = "claudeAppChineseOverlayEnabled", default)]
+    pub claude_app_chinese_overlay_enabled: bool,
     #[serde(rename = "codexAppServiceTierControls", default)]
     pub codex_app_service_tier_controls: bool,
     #[serde(rename = "codexAppImageOverlayEnabled", default)]
@@ -265,6 +267,7 @@ impl Default for BackendSettings {
             zed_remote_sync_to_zed_settings: false,
             codex_app_upstream_worktree_create: true,
             codex_app_native_menu_placement: true,
+            claude_app_chinese_overlay_enabled: false,
             codex_app_service_tier_controls: false,
             codex_app_image_overlay_enabled: false,
             codex_app_image_overlay_path: String::new(),
@@ -573,6 +576,7 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "zedRemoteSyncToZedSettings");
     merge_bool_setting(target, source, "codexAppUpstreamWorktreeCreate");
     merge_bool_setting(target, source, "codexAppNativeMenuPlacement");
+    merge_bool_setting(target, source, "claudeAppChineseOverlayEnabled");
     merge_bool_setting(target, source, "codexAppServiceTierControls");
     merge_bool_setting(target, source, "codexAppImageOverlayEnabled");
     if let Some(value) = source
@@ -725,7 +729,8 @@ fn preserve_official_mix_bearer_tokens(
 
 fn set_or_replace_experimental_bearer_token(contents: &str, token: &str) -> String {
     let mut doc = parse_toml_document(contents).unwrap_or_else(|_| DocumentMut::new());
-    let provider_id = active_provider_id(&doc).unwrap_or_else(|| "claude-codex-pro-relay".to_string());
+    let provider_id =
+        active_provider_id(&doc).unwrap_or_else(|| "claude-codex-pro-relay".to_string());
     doc["model_provider"] = toml_edit::value(provider_id.as_str());
     doc["model_providers"][provider_id.as_str()]["experimental_bearer_token"] =
         toml_edit::value(token.trim());
@@ -1101,7 +1106,11 @@ base_url = "http://127.0.0.1:57321/v1"
         assert_eq!(active.base_url, "https://api.deepseek.com");
         assert_eq!(active.upstream_base_url, "https://api.deepseek.com");
         assert_eq!(active.api_key, "sk-test");
-        assert!(!active.config_contents.contains("claude_codex_pro_chat_base_url"));
+        assert!(
+            !active
+                .config_contents
+                .contains("claude_codex_pro_chat_base_url")
+        );
 
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())

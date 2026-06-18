@@ -257,6 +257,10 @@ where
         if settings.computer_use_guard_enabled {
             hooks.ensure_computer_use_config(&settings).await?;
         }
+        // Apply active relay profile to ~/.codex/config.toml and auth.json
+        // before launching Codex so that custom providers (dev mode, third-party APIs)
+        // take effect on startup.
+        hooks.apply_active_relay_profile(&settings).await?;
         let protocol_proxy_enabled = relay_protocol_proxy_enabled(&settings);
         if protocol_proxy_enabled {
             helper_port = crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT;
@@ -403,7 +407,9 @@ impl LaunchHooks for DefaultLaunchHooks {
     }
 
     async fn run_provider_sync(&self) -> anyhow::Result<()> {
-        anyhow::bail!("provider sync requires launcher hooks with claude-codex-pro-data integration")
+        anyhow::bail!(
+            "provider sync requires launcher hooks with claude-codex-pro-data integration"
+        )
     }
 
     async fn apply_active_relay_profile(&self, settings: &BackendSettings) -> anyhow::Result<()> {

@@ -10,7 +10,7 @@ name = "claude_codex_pro_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "claude-codex-pro-plus-manager"
+name = "claude-codex-pro-manager"
 path = "src/main.rs"
 test = false
 
@@ -22,7 +22,7 @@ claude-codex-pro-data = { path = "../../../crates/claude-codex-pro-data" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tauri = { version = "2", features = ["custom-protocol"] }
+tauri = { version = "2", features = ["custom-protocol", "tray-icon"] }
 tauri-plugin-dialog = "2"
 
 [build-dependencies]

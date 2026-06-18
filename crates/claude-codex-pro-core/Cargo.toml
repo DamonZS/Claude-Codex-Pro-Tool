@@ -16,6 +16,7 @@ reqwest.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tokio-tungstenite.workspace = true
@@ -27,9 +28,12 @@ windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
+  "Win32_System_DataExchange",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Memory",
   "Win32_System_Registry",
   "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_Shell_Common",
   "Win32_UI_WindowsAndMessaging",

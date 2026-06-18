@@ -144,7 +144,7 @@ fn acquire_resilient_loopback_port_guard_with(
     port: u16,
     state_dir: &Path,
     bind: impl Fn(u16) -> std::io::Result<TcpListener>,
-    can_connect: impl Fn(u16) -> bool,
+    _can_connect: impl Fn(u16) -> bool,
 ) -> std::io::Result<LoopbackPortGuard> {
     if port == 0 {
         return bind(port).map(LoopbackPortGuard::listener);
@@ -153,9 +153,6 @@ fn acquire_resilient_loopback_port_guard_with(
     let (file, path) = acquire_lock_guard(port, state_dir)?;
     match bind(port) {
         Ok(listener) => Ok(LoopbackPortGuard::locked_listener(file, path, listener)),
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && can_connect(port) => {
-            Err(error)
-        }
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             Ok(LoopbackPortGuard::fallback_lock(file, path))
         }
@@ -215,9 +212,9 @@ mod tests {
     }
 
     #[test]
-    fn resilient_guard_reports_conflict_when_requested_port_is_connectable() {
+    fn resilient_guard_uses_lock_fallback_when_requested_port_is_connectable_but_lock_is_free() {
         let temp = tempfile::tempdir().unwrap();
-        let error = acquire_resilient_loopback_port_guard_with(
+        let guard = acquire_resilient_loopback_port_guard_with(
             57319,
             temp.path(),
             |_| {
@@ -228,9 +225,10 @@ mod tests {
             },
             |_| true,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        assert!(guard._listener.is_none());
+        assert!(guard.fallback_path().is_some());
     }
 
     #[test]

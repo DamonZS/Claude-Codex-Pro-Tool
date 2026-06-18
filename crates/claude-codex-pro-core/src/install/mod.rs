@@ -9,8 +9,8 @@ pub const SILENT_NAME: &str = "Claude Codex Pro";
 pub const MANAGER_NAME: &str = "Claude Codex Pro 管理工具";
 pub const LEGACY_SILENT_NAME: &str = "Codex++";
 pub const LEGACY_MANAGER_NAME: &str = "Codex++ 管理工具";
-pub const SILENT_BINARY: &str = "claude-codex-pro-plus";
-pub const MANAGER_BINARY: &str = "claude-codex-pro-plus-manager";
+pub const SILENT_BINARY: &str = "claude-codex-pro";
+pub const MANAGER_BINARY: &str = "claude-codex-pro-manager";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -74,17 +74,11 @@ impl ShortcutState {
 }
 
 pub fn shortcut_names() -> (&'static str, &'static str) {
-    (
-        "Claude Codex Pro.lnk",
-        "Claude Codex Pro 管理工具.lnk",
-    )
+    ("Claude Codex Pro.lnk", "Claude Codex Pro 管理工具.lnk")
 }
 
 pub fn app_bundle_names() -> (&'static str, &'static str) {
-    (
-        "Claude Codex Pro.app",
-        "Claude Codex Pro 管理工具.app",
-    )
+    ("Claude Codex Pro.app", "Claude Codex Pro 管理工具.app")
 }
 
 pub fn inspect_entrypoints() -> EntryPointState {

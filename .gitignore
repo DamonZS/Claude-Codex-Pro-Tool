@@ -6,6 +6,7 @@ venv/
 build/
 dist/
 target/
+target-next/
 node_modules/
 apps/claude-codex-pro-manager/src-tauri/gen/
 
@@ -14,7 +15,16 @@ apps/claude-codex-pro-manager/src-tauri/gen/
 .superpowers/
 .claude/
 docs/superpowers/
+.workbuddy/
 
 *.log
 .DS_Store
 Thumbs.db
+
+# Local scratch docs and standalone launcher experiments
+/CLAUDE_LAUNCHER_README.md
+/QUICKSTART.md
+/claude-dev-launcher.py
+/claude-dev-launcher.sh
+/claude-dev-launcher.bat
+/package.json

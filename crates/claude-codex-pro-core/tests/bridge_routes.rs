@@ -1,10 +1,14 @@
+#![recursion_limit = "256"]
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use claude_codex_pro_core::launcher::{
     CodexLaunch, LaunchHooks, LaunchOptions, ProcessWaitStrategy, launch_and_inject_with_hooks,
 };
-use claude_codex_pro_core::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
+use claude_codex_pro_core::models::{
+    DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef,
+};
 use claude_codex_pro_core::routes::{
     BridgeContext, BridgeDataService, BridgeRuntimeService, BridgeSettingsService,
     CoreRuntimeService, handle_bridge_request,
@@ -33,6 +37,17 @@ async fn bridge_routes_cover_all_current_paths() {
         ("/manager/open", json!({})),
         ("/backend/status", json!({})),
         ("/backend/repair", json!({})),
+        ("/claude-desktop/status", json!({})),
+        ("/claude-desktop/integrity", json!({})),
+        ("/claude-desktop/focus", json!({})),
+        ("/claude-desktop/verify", json!({})),
+        ("/claude-desktop/open", json!({})),
+        ("/claude-desktop/new-chat", json!({})),
+        (
+            "/claude-desktop/paste-draft",
+            json!({"text": "hello Claude"}),
+        ),
+        ("/claude-desktop/submit", json!({"text": "hello Claude"})),
         ("/codex-model-catalog", json!({})),
         ("/codex-config-model", json!({})),
         ("/ads", json!({})),
@@ -301,6 +316,201 @@ async fn runtime_status_devtools_repair_and_ads_routes_are_dispatched() {
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/backend/repair", json!({})).await,
         json!({"status": "ok", "message": "后端已修复", "version": claude_codex_pro_core::version::VERSION})
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/status", json!({})).await,
+        json!({
+            "status": "ok",
+            "processCount": 1,
+            "installKind": "msix",
+            "cdpStatus": "blocked",
+            "cdpBlocker": "CLAUDE_CDP_AUTH required",
+            "supportedIntegration": "external_automation",
+            "integrityStatus": "ok",
+            "integrityMessage": "Audited 1 Claude Desktop executable path without modifying app files.",
+            "executableAudits": [{
+                "path": "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe",
+                "exists": true,
+                "fileSizeBytes": 1024,
+                "modifiedUnixMs": 123456,
+                "sha256": "abc123",
+                "peFormat": "pe32_plus",
+                "peMachine": "x64",
+                "peSubsystem": "windows_gui",
+                "peTimestampUnix": 1700000000,
+                "peEntryPointRva": 4096,
+                "peImageBase": 5368709120_u64,
+                "peSectionCount": 1,
+                "peCertificateTableBytes": 512,
+                "peSections": [{
+                    "name": ".text",
+                    "virtualAddress": 4096,
+                    "virtualSize": 8192,
+                    "rawSize": 4096,
+                    "rawSha256": "section123",
+                    "characteristics": "0x60000020"
+                }],
+                "signatureStatus": "Valid",
+                "signatureMessage": "Signature verified",
+                "signerSubject": "CN=Anthropic",
+                "signerIssuer": "CN=Trusted Root",
+                "signerThumbprint": "thumbprint123",
+                "signerSerialNumber": "serial123",
+                "signerNotBefore": "2026-01-01T00:00:00.0000000Z",
+                "signerNotAfter": "2027-01-01T00:00:00.0000000Z",
+                "signerChainStatus": "",
+                "productName": "Claude",
+                "fileDescription": "Claude",
+                "fileVersion": "1.12603.1.0",
+                "originalFilename": "Claude.exe",
+                "installKind": "msix",
+                "trustBasis": "msix_protected_install_location_and_valid_authenticode",
+                "integrityLevel": "executable_hash_authenticode_pe_header_section_audit",
+                "riskLevel": "controlled",
+                "verificationScope": "sha256_file_hash_authenticode_certificate_window_version_resource_pe_header_section_hashes_install_path",
+                "mutationPolicy": "blocked_no_executable_asar_signature_or_integrity_metadata_changes",
+                "patchEligible": false,
+                "notes": ["Read-only audit only"]
+            }]
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/integrity", json!({})).await,
+        json!({
+            "status": "ok",
+            "message": "Audited 1 Claude Desktop executable path without modifying app files.",
+            "policy": "read_only_audit_no_executable_or_asar_patch",
+            "executableAudits": [{
+                "path": "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe",
+                "exists": true,
+                "fileSizeBytes": 1024,
+                "modifiedUnixMs": 123456,
+                "sha256": "abc123",
+                "peFormat": "pe32_plus",
+                "peMachine": "x64",
+                "peSubsystem": "windows_gui",
+                "peTimestampUnix": 1700000000,
+                "peEntryPointRva": 4096,
+                "peImageBase": 5368709120_u64,
+                "peSectionCount": 1,
+                "peCertificateTableBytes": 512,
+                "peSections": [{
+                    "name": ".text",
+                    "virtualAddress": 4096,
+                    "virtualSize": 8192,
+                    "rawSize": 4096,
+                    "rawSha256": "section123",
+                    "characteristics": "0x60000020"
+                }],
+                "signatureStatus": "Valid",
+                "signatureMessage": "Signature verified",
+                "signerSubject": "CN=Anthropic",
+                "signerIssuer": "CN=Trusted Root",
+                "signerThumbprint": "thumbprint123",
+                "signerSerialNumber": "serial123",
+                "signerNotBefore": "2026-01-01T00:00:00.0000000Z",
+                "signerNotAfter": "2027-01-01T00:00:00.0000000Z",
+                "signerChainStatus": "",
+                "productName": "Claude",
+                "fileDescription": "Claude",
+                "fileVersion": "1.12603.1.0",
+                "originalFilename": "Claude.exe",
+                "installKind": "msix",
+                "trustBasis": "msix_protected_install_location_and_valid_authenticode",
+                "integrityLevel": "executable_hash_authenticode_pe_header_section_audit",
+                "riskLevel": "controlled",
+                "verificationScope": "sha256_file_hash_authenticode_certificate_window_version_resource_pe_header_section_hashes_install_path",
+                "mutationPolicy": "blocked_no_executable_asar_signature_or_integrity_metadata_changes",
+                "patchEligible": false,
+                "notes": ["Read-only audit only"]
+            }]
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/focus", json!({})).await,
+        json!({
+            "status": "ok",
+            "message": "focused",
+            "processId": 1234,
+            "action": "focus",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/verify", json!({})).await,
+        json!({
+            "status": "ok",
+            "message": "verified",
+            "processId": 1234,
+            "action": "verify_target",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/open", json!({})).await,
+        json!({
+            "status": "accepted",
+            "message": "launch requested",
+            "processId": null,
+            "action": "open",
+            "foregroundVerified": false,
+            "foregroundProcessId": null,
+            "foregroundTitle": null
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/claude-desktop/new-chat", json!({})).await,
+        json!({
+            "status": "ok",
+            "message": "new chat",
+            "processId": 1234,
+            "action": "new_chat",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(
+            ctx.clone(),
+            "/claude-desktop/paste-draft",
+            json!({"text": "hello Claude"}),
+        )
+        .await,
+        json!({
+            "status": "ok",
+            "message": "draft pasted",
+            "processId": 1234,
+            "action": "paste_draft",
+            "inputChars": 12,
+            "autoSubmitted": false,
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        })
+    );
+    assert_eq!(
+        handle_bridge_request(
+            ctx.clone(),
+            "/claude-desktop/submit",
+            json!({"text": "hello Claude"}),
+        )
+        .await,
+        json!({
+            "status": "ok",
+            "message": "submitted",
+            "processId": 1234,
+            "action": "paste_and_submit",
+            "inputChars": 12,
+            "autoSubmitted": true,
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        })
     );
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/ads", json!({})).await,
@@ -698,7 +908,9 @@ async fn core_runtime_manager_route_attempts_to_open_manager_binary() {
 async fn bridge_backend_status_writes_diagnostic_log() {
     let temp = tempfile::tempdir().unwrap();
     let log_path = temp.path().join("claude-codex-pro.log");
-    claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(Some(log_path.clone()));
+    claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(Some(
+        log_path.clone(),
+    ));
     let ctx = BridgeContext::core(Arc::new(CoreRuntimeService::new(
         9229,
         StatusStore::default(),
@@ -1062,6 +1274,193 @@ impl BridgeRuntimeService for FakeRuntime {
         Ok(
             json!({"status": "ok", "message": "后端已修复", "version": claude_codex_pro_core::version::VERSION}),
         )
+    }
+
+    async fn claude_desktop_status(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "processCount": 1,
+            "installKind": "msix",
+            "cdpStatus": "blocked",
+            "cdpBlocker": "CLAUDE_CDP_AUTH required",
+            "supportedIntegration": "external_automation",
+            "integrityStatus": "ok",
+            "integrityMessage": "Audited 1 Claude Desktop executable path without modifying app files.",
+            "executableAudits": [{
+                "path": "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe",
+                "exists": true,
+                "fileSizeBytes": 1024,
+                "modifiedUnixMs": 123456,
+                "sha256": "abc123",
+                "peFormat": "pe32_plus",
+                "peMachine": "x64",
+                "peSubsystem": "windows_gui",
+                "peTimestampUnix": 1700000000,
+                "peEntryPointRva": 4096,
+                "peImageBase": 5368709120_u64,
+                "peSectionCount": 1,
+                "peCertificateTableBytes": 512,
+                "peSections": [{
+                    "name": ".text",
+                    "virtualAddress": 4096,
+                    "virtualSize": 8192,
+                    "rawSize": 4096,
+                    "rawSha256": "section123",
+                    "characteristics": "0x60000020"
+                }],
+                "signatureStatus": "Valid",
+                "signatureMessage": "Signature verified",
+                "signerSubject": "CN=Anthropic",
+                "signerIssuer": "CN=Trusted Root",
+                "signerThumbprint": "thumbprint123",
+                "signerSerialNumber": "serial123",
+                "signerNotBefore": "2026-01-01T00:00:00.0000000Z",
+                "signerNotAfter": "2027-01-01T00:00:00.0000000Z",
+                "signerChainStatus": "",
+                "productName": "Claude",
+                "fileDescription": "Claude",
+                "fileVersion": "1.12603.1.0",
+                "originalFilename": "Claude.exe",
+                "installKind": "msix",
+                "trustBasis": "msix_protected_install_location_and_valid_authenticode",
+                "integrityLevel": "executable_hash_authenticode_pe_header_section_audit",
+                "riskLevel": "controlled",
+                "verificationScope": "sha256_file_hash_authenticode_certificate_window_version_resource_pe_header_section_hashes_install_path",
+                "mutationPolicy": "blocked_no_executable_asar_signature_or_integrity_metadata_changes",
+                "patchEligible": false,
+                "notes": ["Read-only audit only"]
+            }]
+        }))
+    }
+
+    async fn claude_desktop_integrity(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "message": "Audited 1 Claude Desktop executable path without modifying app files.",
+            "policy": "read_only_audit_no_executable_or_asar_patch",
+            "executableAudits": [{
+                "path": "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe",
+                "exists": true,
+                "fileSizeBytes": 1024,
+                "modifiedUnixMs": 123456,
+                "sha256": "abc123",
+                "peFormat": "pe32_plus",
+                "peMachine": "x64",
+                "peSubsystem": "windows_gui",
+                "peTimestampUnix": 1700000000,
+                "peEntryPointRva": 4096,
+                "peImageBase": 5368709120_u64,
+                "peSectionCount": 1,
+                "peCertificateTableBytes": 512,
+                "peSections": [{
+                    "name": ".text",
+                    "virtualAddress": 4096,
+                    "virtualSize": 8192,
+                    "rawSize": 4096,
+                    "rawSha256": "section123",
+                    "characteristics": "0x60000020"
+                }],
+                "signatureStatus": "Valid",
+                "signatureMessage": "Signature verified",
+                "signerSubject": "CN=Anthropic",
+                "signerIssuer": "CN=Trusted Root",
+                "signerThumbprint": "thumbprint123",
+                "signerSerialNumber": "serial123",
+                "signerNotBefore": "2026-01-01T00:00:00.0000000Z",
+                "signerNotAfter": "2027-01-01T00:00:00.0000000Z",
+                "signerChainStatus": "",
+                "productName": "Claude",
+                "fileDescription": "Claude",
+                "fileVersion": "1.12603.1.0",
+                "originalFilename": "Claude.exe",
+                "installKind": "msix",
+                "trustBasis": "msix_protected_install_location_and_valid_authenticode",
+                "integrityLevel": "executable_hash_authenticode_pe_header_section_audit",
+                "riskLevel": "controlled",
+                "verificationScope": "sha256_file_hash_authenticode_certificate_window_version_resource_pe_header_section_hashes_install_path",
+                "mutationPolicy": "blocked_no_executable_asar_signature_or_integrity_metadata_changes",
+                "patchEligible": false,
+                "notes": ["Read-only audit only"]
+            }]
+        }))
+    }
+
+    async fn claude_desktop_focus(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "message": "focused",
+            "processId": 1234,
+            "action": "focus",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        }))
+    }
+
+    async fn claude_desktop_verify(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "message": "verified",
+            "processId": 1234,
+            "action": "verify_target",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        }))
+    }
+
+    async fn claude_desktop_open(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "accepted",
+            "message": "launch requested",
+            "processId": null,
+            "action": "open",
+            "foregroundVerified": false,
+            "foregroundProcessId": null,
+            "foregroundTitle": null
+        }))
+    }
+
+    async fn claude_desktop_new_chat(&self) -> anyhow::Result<Value> {
+        Ok(json!({
+            "status": "ok",
+            "message": "new chat",
+            "processId": 1234,
+            "action": "new_chat",
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        }))
+    }
+
+    async fn claude_desktop_paste_draft(&self, payload: Value) -> anyhow::Result<Value> {
+        assert_eq!(payload["text"], json!("hello Claude"));
+        Ok(json!({
+            "status": "ok",
+            "message": "draft pasted",
+            "processId": 1234,
+            "action": "paste_draft",
+            "inputChars": 12,
+            "autoSubmitted": false,
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        }))
+    }
+
+    async fn claude_desktop_submit(&self, payload: Value) -> anyhow::Result<Value> {
+        assert_eq!(payload["text"], json!("hello Claude"));
+        Ok(json!({
+            "status": "ok",
+            "message": "submitted",
+            "processId": 1234,
+            "action": "paste_and_submit",
+            "inputChars": 12,
+            "autoSubmitted": true,
+            "foregroundVerified": true,
+            "foregroundProcessId": 1234,
+            "foregroundTitle": "Claude"
+        }))
     }
 
     async fn codex_model_catalog(&self) -> anyhow::Result<Value> {

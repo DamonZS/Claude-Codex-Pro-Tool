@@ -13,7 +13,9 @@ use claude_codex_pro_core::relay_config::{
     set_codex_goals_feature_in_home, strip_common_config_from_config,
     sync_live_config_context_entries, upsert_context_entry_in_common_config,
 };
-use claude_codex_pro_core::settings::{RelayContextSelection, RelayMode, RelayProfile, RelayProtocol};
+use claude_codex_pro_core::settings::{
+    RelayContextSelection, RelayMode, RelayProfile, RelayProtocol,
+};
 
 #[test]
 fn codex_session_db_path_prefers_new_sqlite_directory_threads_db() {
@@ -293,7 +295,11 @@ base_url = "http://127.0.0.1:57321/v1"
 
     assert_eq!(profile.upstream_base_url, "https://api.deepseek.com");
     assert_eq!(profile.base_url, "https://api.deepseek.com");
-    assert!(!profile.config_contents.contains("claude_codex_pro_chat_base_url"));
+    assert!(
+        !profile
+            .config_contents
+            .contains("claude_codex_pro_chat_base_url")
+    );
     assert!(
         profile
             .config_contents
@@ -334,6 +340,27 @@ fn official_mix_api_profile_does_not_generate_auth_api_key() {
             .config_contents
             .contains(r#"experimental_bearer_token = "sk-mix""#)
     );
+}
+
+#[test]
+fn normalize_relay_profile_preserves_invalid_config_without_failing_storage() {
+    let mut profile = RelayProfile {
+        relay_mode: RelayMode::PureApi,
+        model: "gpt-5".to_string(),
+        base_url: "https://relay.example/v1".to_string(),
+        api_key: "sk-test".to_string(),
+        config_contents: "model = [\n".to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    assert_eq!(profile.config_contents, "model = [\n");
+    assert_eq!(profile.model, "gpt-5");
+    assert_eq!(profile.base_url, "https://relay.example/v1");
+    assert_eq!(profile.upstream_base_url, "https://relay.example/v1");
+    assert_eq!(profile.api_key, "sk-test");
+    assert!(profile.auth_contents.contains("sk-test"));
 }
 
 #[test]

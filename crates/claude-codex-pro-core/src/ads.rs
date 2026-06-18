@@ -6,25 +6,46 @@ pub const DEFAULT_AD_LIST_URLS: [&str; 2] = [
     "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
 ];
 
+pub const OFFICIAL_TOPOREDUCE_AD_ID: &str = "official-toporeduce-api";
+pub const OFFICIAL_TOPOREDUCE_AD_URL: &str = "https://api.toporeduce.cn";
+
+pub fn official_toporeduce_ad() -> Value {
+    json!({
+        "id": OFFICIAL_TOPOREDUCE_AD_ID,
+        "type": "normal",
+        "title": "官方中转站",
+        "description": "拓扑熵减API｜ClaudeCodexPro官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。",
+        "url": OFFICIAL_TOPOREDUCE_AD_URL,
+        "highlights": ["拓扑熵减API", "稳定接入", "划算价格", "GPT-5.5", "Claude Opus 4.8", "gpt-image-2"]
+    })
+}
+
 pub fn normalize_ad_payload(payload: Value) -> Value {
     let version = payload.get("version").and_then(Value::as_u64).unwrap_or(1);
-    let ads = payload
-        .get("ads")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|ad| {
-            let ad_type = ad.get("type").and_then(Value::as_str);
-            let title = ad.get("title").and_then(Value::as_str);
-            let description = ad.get("description").and_then(Value::as_str);
-            let url = ad.get("url").and_then(Value::as_str);
-            matches!(ad_type, Some("normal"))
-                && title.is_some_and(|value| !value.trim().is_empty())
-                && description.is_some_and(|value| !value.trim().is_empty())
-                && url.is_some_and(|value| !value.trim().is_empty())
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut ads = vec![official_toporeduce_ad()];
+    ads.extend(
+        payload
+            .get("ads")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|ad| {
+                let ad_type = ad.get("type").and_then(Value::as_str);
+                let title = ad.get("title").and_then(Value::as_str);
+                let description = ad.get("description").and_then(Value::as_str);
+                let url = ad.get("url").and_then(Value::as_str);
+                matches!(ad_type, Some("normal"))
+                    && title.is_some_and(|value| !value.trim().is_empty())
+                    && description.is_some_and(|value| !value.trim().is_empty())
+                    && url.is_some_and(|value| !value.trim().is_empty())
+            })
+            .filter(|ad| {
+                let id = ad.get("id").and_then(Value::as_str).unwrap_or_default();
+                let url = ad.get("url").and_then(Value::as_str).unwrap_or_default();
+                id != OFFICIAL_TOPOREDUCE_AD_ID && url != OFFICIAL_TOPOREDUCE_AD_URL
+            })
+            .cloned(),
+    );
     json!({ "version": version, "ads": ads })
 }
 
@@ -46,7 +67,6 @@ where
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
-    let mut last_error = None;
     for url in urls {
         let url = cache_busted_ad_url(url.as_ref(), cache_bust);
         let result = async {
@@ -57,8 +77,8 @@ where
         .await;
         match result {
             Ok(payload) => return Ok(payload),
-            Err(error) => last_error = Some(error),
+            Err(_) => continue,
         }
     }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("ad list unavailable")))
+    Ok(json!({ "version": 1, "ads": [official_toporeduce_ad()] }))
 }

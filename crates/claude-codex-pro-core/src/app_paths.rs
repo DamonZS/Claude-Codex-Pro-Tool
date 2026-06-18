@@ -151,6 +151,22 @@ pub fn resolve_codex_app_dir_with_saved(
     resolve_codex_app_dir(None)
 }
 
+#[cfg(windows)]
+pub fn find_running_codex_app_dir() -> Option<PathBuf> {
+    let processes = crate::windows_integration::enumerate_processes();
+    processes
+        .iter()
+        .filter(|process| process.exe_file.eq_ignore_ascii_case("codex.exe"))
+        .filter_map(|process| process.executable_path.as_deref())
+        .filter_map(normalize_codex_app_path)
+        .find(|path| codex_app_version(path).is_some())
+}
+
+#[cfg(not(windows))]
+pub fn find_running_codex_app_dir() -> Option<PathBuf> {
+    None
+}
+
 pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;

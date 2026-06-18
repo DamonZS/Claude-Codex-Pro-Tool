@@ -4,15 +4,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use claude_codex_pro_core::install::SILENT_BINARY;
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
+use claude_codex_pro_core::plugin_hub::{
+    self, PluginHubCatalog, PluginInstallOutcome, PluginInstallPreview,
+};
 use claude_codex_pro_core::script_market::{self, MarketScript, ScriptMarketManifest};
 use claude_codex_pro_core::settings::{BackendSettings, RelayProfile, SettingsStore};
 use claude_codex_pro_core::status::{LaunchStatus, StatusStore};
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tauri::Manager;
 
 use crate::install::{self, InstallActionResult, InstallOptions};
 
@@ -49,6 +54,90 @@ pub struct OverviewPayload {
     pub update_status: String,
     pub settings_path: String,
     pub logs_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopPayload {
+    pub process_count: usize,
+    pub executable_paths: Vec<String>,
+    pub install_kind: String,
+    pub cdp_status: String,
+    pub cdp_blocker: String,
+    pub debug_flags_present: bool,
+    pub debug_ports: Vec<u16>,
+    pub listening_ports: Vec<u16>,
+    pub debug_evidence: Vec<String>,
+    pub supported_integration: String,
+    pub integrity_status: String,
+    pub integrity_message: String,
+    pub executable_audits: Vec<claude_codex_pro_core::claude_desktop::ClaudeDesktopExecutableAudit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopActionPayload {
+    pub process_id: Option<u32>,
+    pub action: String,
+    pub foreground_verified: bool,
+    pub foreground_process_id: Option<u32>,
+    pub foreground_title: Option<String>,
+    pub observed_window_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopDraftRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopDraftPayload {
+    pub process_id: Option<u32>,
+    pub action: String,
+    pub input_chars: usize,
+    pub auto_submitted: bool,
+    pub foreground_verified: bool,
+    pub foreground_process_id: Option<u32>,
+    pub foreground_title: Option<String>,
+    pub observed_window_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopIntegrityPayload {
+    pub executable_audits: Vec<claude_codex_pro_core::claude_desktop::ClaudeDesktopExecutableAudit>,
+    pub policy: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeChineseWindowPayload {
+    pub open: bool,
+    pub label: String,
+    pub default_url: String,
+    pub injection_mode: String,
+    pub cdp_status: String,
+    pub cdp_blocker: String,
+    pub official_install_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHubWindowPayload {
+    pub open: bool,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptOptimizerWindowPayload {
+    pub open: bool,
+    pub label: String,
+    pub default_url: String,
+    pub integration_mode: String,
+    pub license: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,6 +343,18 @@ pub struct ScriptMarketPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginHubPayload {
+    pub catalog: PluginHubCatalog,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHubItemRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartupPayload {
     pub show_update: bool,
 }
@@ -281,7 +382,9 @@ pub fn startup_options() -> CommandResult<StartupPayload> {
 pub fn startup_should_show_update() -> bool {
     should_show_update(
         std::env::args(),
-        std::env::var("CLAUDE_CODEX_PRO_SHOW_UPDATE").ok().as_deref(),
+        std::env::var("CLAUDE_CODEX_PRO_SHOW_UPDATE")
+            .ok()
+            .as_deref(),
     )
 }
 
@@ -339,6 +442,349 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
 }
 
 #[tauri::command]
+pub fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload> {
+    let status = claude_codex_pro_core::claude_desktop::detect_status();
+    let message = status.message.clone();
+    let result = CommandResult {
+        status: status.status.clone(),
+        message,
+        payload: ClaudeDesktopPayload {
+            process_count: status.process_count,
+            executable_paths: status.executable_paths,
+            install_kind: status.install_kind,
+            cdp_status: status.cdp_status,
+            cdp_blocker: status.cdp_blocker,
+            debug_flags_present: status.debug_flags_present,
+            debug_ports: status.debug_ports,
+            listening_ports: status.listening_ports,
+            debug_evidence: status.debug_evidence,
+            supported_integration: status.supported_integration,
+            integrity_status: status.integrity_status,
+            integrity_message: status.integrity_message,
+            executable_audits: status.executable_audits,
+        },
+    };
+    log_claude_desktop_command("status", &result);
+    result
+}
+
+#[tauri::command]
+pub fn load_claude_desktop_integrity() -> CommandResult<ClaudeDesktopIntegrityPayload> {
+    let result = claude_codex_pro_core::claude_desktop::detect_integrity_status();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopIntegrityPayload {
+            executable_audits: result.executable_audits,
+            policy: result.policy,
+        },
+    };
+    log_claude_desktop_command("integrity", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn focus_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
+    let result = claude_codex_pro_core::claude_desktop::focus_claude_window();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopActionPayload {
+            process_id: result.process_id,
+            action: result.action,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("focus", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn verify_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
+    let result = claude_codex_pro_core::claude_desktop::verify_claude_target();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopActionPayload {
+            process_id: result.process_id,
+            action: result.action,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("verify", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn open_claude_desktop_devtools() -> CommandResult<ClaudeDesktopActionPayload> {
+    let result = claude_codex_pro_core::claude_desktop::open_claude_devtools();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopActionPayload {
+            process_id: result.process_id,
+            action: result.action,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("open_devtools", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
+    let result = claude_codex_pro_core::claude_desktop::open_claude_desktop();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopActionPayload {
+            process_id: result.process_id,
+            action: result.action,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("open", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub async fn open_claude_chinese_window(
+    app: tauri::AppHandle,
+) -> CommandResult<ClaudeChineseWindowPayload> {
+    let status = claude_codex_pro_core::claude_desktop::detect_status();
+    let label = "claude-chinese";
+    let default_url = "https://claude.ai/new";
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        if let Ok(script) = claude_chinese_injection_script() {
+            let _ = window.eval(script);
+        }
+        return ok(
+            "Claude 中文窗口已聚焦。",
+            claude_chinese_window_payload(&app, &status),
+        );
+    }
+
+    let script = match claude_chinese_injection_script() {
+        Ok(script) => script,
+        Err(error) => {
+            return failed(
+                &format!("Claude 中文注入脚本读取失败：{error}"),
+                claude_chinese_window_payload(&app, &status),
+            );
+        }
+    };
+    let url = match tauri::Url::parse(default_url) {
+        Ok(url) => url,
+        Err(error) => {
+            return failed(
+                &format!("Claude 中文窗口 URL 无效：{error}"),
+                claude_chinese_window_payload(&app, &status),
+            );
+        }
+    };
+    let handle = app.clone();
+    let nav_handle = app.clone();
+    let build_result = tauri::async_runtime::spawn_blocking(move || {
+        tauri::WebviewWindowBuilder::new(&handle, label, tauri::WebviewUrl::External(url))
+            .title("Claude 中文窗口")
+            .inner_size(1220.0, 860.0)
+            .min_inner_size(980.0, 720.0)
+            .initialization_script(script)
+            .on_navigation(move |url| {
+                if url.scheme() == "claude-codex-pro" && url.host_str() == Some("plugin-hub") {
+                    let app = nav_handle.clone();
+                    let route_app = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let _ = route_main_window_to_plugin_hub(&route_app);
+                    });
+                    return false;
+                }
+                true
+            })
+            .build()
+    })
+    .await;
+    match build_result {
+        Ok(Ok(window)) => {
+            let _ = window.set_focus();
+            if let Ok(script) = claude_chinese_injection_script() {
+                let _ = window.eval(script);
+            }
+            ok(
+                "Claude 中文窗口已打开。",
+                claude_chinese_window_payload(&app, &status),
+            )
+        }
+        Ok(Err(error)) => failed(
+            &format!("Claude 中文窗口打开失败：{error}"),
+            claude_chinese_window_payload(&app, &status),
+        ),
+        Err(error) => failed(
+            &format!("Claude 中文窗口后台任务失败：{error}"),
+            claude_chinese_window_payload(&app, &status),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn open_plugin_hub_window(app: tauri::AppHandle) -> CommandResult<PluginHubWindowPayload> {
+    match route_main_window_to_plugin_hub(&app) {
+        Ok(()) => ok(
+            "插件中心已在管理工具内打开。",
+            PluginHubWindowPayload {
+                open: true,
+                label: "main".to_string(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("插件中心无法在管理工具内打开：{error}"),
+            PluginHubWindowPayload {
+                open: false,
+                label: "main".to_string(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn open_prompt_optimizer_window(
+    app: tauri::AppHandle,
+) -> CommandResult<PromptOptimizerWindowPayload> {
+    let label = "prompt-optimizer";
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        return ok(
+            "提示词优化器窗口已聚焦。",
+            prompt_optimizer_window_payload(true),
+        );
+    }
+
+    let handle = app.clone();
+    let build_result = tauri::async_runtime::spawn_blocking(move || {
+        prompt_optimizer_window_background_task(handle, label)
+    })
+    .await;
+
+    match build_result {
+        Ok(Ok(window)) => {
+            let _ = window.set_focus();
+            ok("提示词优化器窗口已打开。", prompt_optimizer_window_payload(true))
+        }
+        Ok(Err(error)) => failed(
+            &format!("提示词优化器窗口打开失败：{error}"),
+            prompt_optimizer_window_payload(false),
+        ),
+        Err(error) => failed(
+            &format!("提示词优化器窗口后台任务失败：{error}"),
+            prompt_optimizer_window_payload(false),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn load_claude_chinese_window_status(
+    app: tauri::AppHandle,
+) -> CommandResult<ClaudeChineseWindowPayload> {
+    let status = claude_codex_pro_core::claude_desktop::detect_status();
+    ok(
+        "Claude 中文窗口状态已读取。",
+        claude_chinese_window_payload(&app, &status),
+    )
+}
+
+#[tauri::command]
+pub fn new_claude_desktop_chat() -> CommandResult<ClaudeDesktopActionPayload> {
+    let result = claude_codex_pro_core::claude_desktop::new_claude_chat();
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopActionPayload {
+            process_id: result.process_id,
+            action: result.action,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("new_chat", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn paste_claude_desktop_draft(
+    request: ClaudeDesktopDraftRequest,
+) -> CommandResult<ClaudeDesktopDraftPayload> {
+    let result = claude_codex_pro_core::claude_desktop::paste_draft_to_claude(&request.text);
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopDraftPayload {
+            process_id: result.process_id,
+            action: result.action,
+            input_chars: result.input_chars,
+            auto_submitted: result.auto_submitted,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("paste_draft", &command_result);
+    command_result
+}
+
+#[tauri::command]
+pub fn submit_claude_desktop_text(
+    request: ClaudeDesktopDraftRequest,
+) -> CommandResult<ClaudeDesktopDraftPayload> {
+    let result = claude_codex_pro_core::claude_desktop::submit_text_to_claude(&request.text);
+    let command_result = CommandResult {
+        status: result.status,
+        message: result.message,
+        payload: ClaudeDesktopDraftPayload {
+            process_id: result.process_id,
+            action: result.action,
+            input_chars: result.input_chars,
+            auto_submitted: result.auto_submitted,
+            foreground_verified: result.foreground_verified,
+            foreground_process_id: result.foreground_process_id,
+            foreground_title: result.foreground_title,
+            observed_window_titles: result.observed_window_titles,
+        },
+    };
+    log_claude_desktop_command("submit", &command_result);
+    command_result
+}
+
+fn log_claude_desktop_command<T>(operation: &str, result: &CommandResult<T>)
+where
+    T: Serialize,
+{
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        &format!("manager.claude_desktop.{operation}"),
+        result,
+    );
+}
+
+#[tauri::command]
 pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
     spawn_claude_codex_pro_launch(request, "启动任务已在后台开始，可稍后查看概览状态。")
 }
@@ -350,7 +796,10 @@ pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> 
     spawn_claude_codex_pro_launch(request, "Codex 已请求重启，启动任务正在后台运行。")
 }
 
-fn spawn_claude_codex_pro_launch(request: LaunchRequest, accepted_message: &str) -> CommandResult<Value> {
+fn spawn_claude_codex_pro_launch(
+    request: LaunchRequest,
+    accepted_message: &str,
+) -> CommandResult<Value> {
     let debug_port = request.debug_port;
     let helper_port = request.helper_port;
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
@@ -641,9 +1090,9 @@ fn local_session_adapter(db_path: &Path) -> claude_codex_pro_data::SQLiteStorage
 }
 
 fn normalize_settings_before_save(mut settings: BackendSettings) -> BackendSettings {
-    if let Some(path) =
-        claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(&settings.codex_app_path))
-    {
+    if let Some(path) = claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(
+        &settings.codex_app_path,
+    )) {
         settings.codex_app_path = path.to_string_lossy().to_string();
     }
     settings.relay_common_config_contents =
@@ -855,10 +1304,11 @@ fn ensure_text_newline(value: &str) -> String {
 #[tauri::command]
 pub async fn load_provider_sync_targets() -> CommandResult<Value> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    let result =
-        tauri::async_runtime::spawn_blocking(|| claude_codex_pro_data::load_provider_sync_targets(None))
-            .await
-            .map_err(|error| anyhow::anyhow!("provider target discovery task failed: {error}"));
+    let result = tauri::async_runtime::spawn_blocking(|| {
+        claude_codex_pro_data::load_provider_sync_targets(None)
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!("provider target discovery task failed: {error}"));
     match result {
         Ok(mut targets) => {
             let manual = settings
@@ -1066,6 +1516,72 @@ pub async fn install_market_script(id: String) -> CommandResult<ScriptMarketPayl
 }
 
 #[tauri::command]
+pub async fn refresh_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
+    let catalog = plugin_hub::fetch_catalog().await;
+    ok("插件中心目录已刷新。", PluginHubPayload { catalog })
+}
+
+#[tauri::command]
+pub async fn get_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
+    let catalog = plugin_hub::fetch_catalog().await;
+    ok("插件中心目录已读取。", PluginHubPayload { catalog })
+}
+
+#[tauri::command]
+pub async fn preview_plugin_hub_install(
+    request: PluginHubItemRequest,
+) -> CommandResult<PluginInstallPreview> {
+    match plugin_hub::preview_install(request.id.trim()).await {
+        Ok(preview) => ok("安装预览已生成。", preview),
+        Err(error) => failed(
+            &format!("安装预览失败：{error}"),
+            empty_plugin_install_preview(request.id),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn install_plugin_hub_item(
+    request: PluginHubItemRequest,
+) -> CommandResult<PluginInstallOutcome> {
+    match plugin_hub::install_item(request.id.trim()).await {
+        Ok(outcome) => {
+            let status = if outcome.installed { "ok" } else { "failed" };
+            CommandResult {
+                status: status.to_string(),
+                message: outcome.message.clone(),
+                payload: outcome,
+            }
+        }
+        Err(error) => {
+            let message = format!("插件安装失败：{error}");
+            CommandResult {
+                status: "failed".to_string(),
+                message: message.clone(),
+                payload: empty_plugin_install_outcome_with_message(request.id, message),
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn uninstall_plugin_hub_item(request: PluginHubItemRequest) -> CommandResult<PluginHubPayload> {
+    match plugin_hub::uninstall_item(request.id.trim()) {
+        Ok(_) => {
+            let catalog = plugin_hub::fetch_catalog().await;
+            ok("插件中心安装记录已移除。", PluginHubPayload { catalog })
+        }
+        Err(error) => {
+            let catalog = plugin_hub::fetch_catalog().await;
+            failed(
+                &format!("插件中心卸载失败：{error}"),
+                PluginHubPayload { catalog },
+            )
+        }
+    }
+}
+
+#[tauri::command]
 pub fn set_user_script_enabled(key: String, enabled: bool) -> CommandResult<SettingsPayload> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
@@ -1153,7 +1669,9 @@ pub fn repair_backend() -> CommandResult<SettingsPayload> {
 
 #[tauri::command]
 pub async fn check_update() -> CommandResult<Value> {
-    match claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION).await {
+    match claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION)
+        .await
+    {
         Ok(update) => {
             let status = if update.update_available {
                 "ok"
@@ -1238,8 +1756,9 @@ pub fn load_watcher_state() -> CommandResult<WatcherPayload> {
 
 #[tauri::command]
 pub fn install_watcher() -> CommandResult<WatcherPayload> {
-    let launcher_path =
-        claude_codex_pro_core::install::companion_binary_path(claude_codex_pro_core::install::SILENT_BINARY);
+    let launcher_path = claude_codex_pro_core::install::companion_binary_path(
+        claude_codex_pro_core::install::SILENT_BINARY,
+    );
     match claude_codex_pro_core::watcher::install_watcher(&launcher_path, default_debug_port()) {
         Ok(()) => ok("watcher 已安装。", watcher_payload()),
         Err(error) => failed(&format!("安装 watcher 失败：{error}"), watcher_payload()),
@@ -1654,7 +2173,9 @@ pub fn sync_live_context_entries(
             },
         );
     }
-    match claude_codex_pro_core::relay_config::list_context_entries_from_common_config(&updated_config) {
+    match claude_codex_pro_core::relay_config::list_context_entries_from_common_config(
+        &updated_config,
+    ) {
         Ok(entries) => ok(
             "live 工具与插件已同步。",
             LiveContextEntriesPayload { entries },
@@ -1694,18 +2215,20 @@ pub fn delete_context_entry(request: ContextDeleteRequest) -> CommandResult<Cont
 pub fn extract_relay_common_config(
     request: ExtractRelayCommonConfigRequest,
 ) -> CommandResult<ExtractRelayCommonConfigPayload> {
-    match claude_codex_pro_core::relay_config::extract_common_config_from_config(&request.config_contents)
-        .and_then(|common_config_contents| {
-            let profile_config_contents =
-                claude_codex_pro_core::relay_config::strip_common_config_from_config(
-                    &request.config_contents,
-                    &common_config_contents,
-                )?;
-            Ok(ExtractRelayCommonConfigPayload {
-                common_config_contents,
-                profile_config_contents,
-            })
-        }) {
+    match claude_codex_pro_core::relay_config::extract_common_config_from_config(
+        &request.config_contents,
+    )
+    .and_then(|common_config_contents| {
+        let profile_config_contents =
+            claude_codex_pro_core::relay_config::strip_common_config_from_config(
+                &request.config_contents,
+                &common_config_contents,
+            )?;
+        Ok(ExtractRelayCommonConfigPayload {
+            common_config_contents,
+            profile_config_contents,
+        })
+    }) {
         Ok(payload) => ok("通用配置已按兼容切换规则提取。", payload),
         Err(error) => failed(
             &format!("提取通用配置失败：{error}"),
@@ -2015,8 +2538,10 @@ pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
         && !relay.official_mix_api_key
         && !relay.auth_contents.trim().is_empty())
     .then_some(relay.auth_contents.as_str());
-    match claude_codex_pro_core::relay_config::clear_relay_config_to_home_with_auth(&home, auth_contents)
-    {
+    match claude_codex_pro_core::relay_config::clear_relay_config_to_home_with_auth(
+        &home,
+        auth_contents,
+    ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
             log_manager_event(
@@ -2375,6 +2900,140 @@ fn market_script_payload(script: &MarketScript, installed: &BTreeMap<String, Str
     })
 }
 
+fn claude_chinese_injection_script() -> anyhow::Result<String> {
+    let mut candidates = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("assets").join("inject").join("claude-chinese-inject.js"));
+            candidates.push(dir.join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
+            candidates.push(dir.join("..").join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
+        }
+    }
+    if let Ok(dir) = std::env::current_dir() {
+        candidates.push(dir.join("assets").join("inject").join("claude-chinese-inject.js"));
+        candidates.push(
+            dir.join("..")
+                .join("..")
+                .join("assets")
+                .join("inject")
+                .join("claude-chinese-inject.js"),
+        );
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
+    let candidate = candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("assets/inject/claude-chinese-inject.js"));
+    std::fs::read_to_string(&candidate)
+        .with_context(|| format!("读取 {} 失败", candidate.display()))
+}
+
+fn claude_chinese_window_payload(
+    app: &tauri::AppHandle,
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> ClaudeChineseWindowPayload {
+    ClaudeChineseWindowPayload {
+        open: app.get_webview_window("claude-chinese").is_some(),
+        label: "claude-chinese".to_string(),
+        default_url: "https://claude.ai/new".to_string(),
+        injection_mode: "wrapped_webview".to_string(),
+        cdp_status: status.cdp_status.clone(),
+        cdp_blocker: status.cdp_blocker.clone(),
+        official_install_kind: status.install_kind.clone(),
+    }
+}
+
+fn prompt_optimizer_window_payload(open: bool) -> PromptOptimizerWindowPayload {
+    PromptOptimizerWindowPayload {
+        open,
+        label: "prompt-optimizer".to_string(),
+        default_url: "https://prompt.always200.com".to_string(),
+        integration_mode: "internal_launcher_external_browser".to_string(),
+        license: "AGPL-3.0-only".to_string(),
+    }
+}
+
+fn prompt_optimizer_window_background_task(
+    app: tauri::AppHandle,
+    label: &str,
+) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("/".into()))
+        .title("提示词优化器")
+        .inner_size(1120.0, 760.0)
+        .min_inner_size(900.0, 640.0)
+        .initialization_script(ops_console_initial_route_script("promptOptimizer"))
+        .build()
+}
+
+fn route_main_window_to_plugin_hub(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err(tauri::Error::WindowNotFound);
+    };
+    window.show()?;
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    window.eval(main_window_route_script("pluginHub"))?;
+    Ok(())
+}
+
+fn main_window_route_script(route: &str) -> String {
+    let route = serde_json::to_string(route).unwrap_or_else(|_| "\"overview\"".to_string());
+    format!(
+        "window.dispatchEvent(new CustomEvent('claude-codex-pro-navigate', {{ detail: {{ route: {route} }} }}));"
+    )
+}
+
+fn ops_console_initial_route_script(route: &str) -> String {
+    let route = serde_json::to_string(route).unwrap_or_else(|_| "\"overview\"".to_string());
+    format!("window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE = {route};")
+}
+
+fn empty_plugin_item(id: String) -> claude_codex_pro_core::plugin_hub::PluginCatalogItem {
+    claude_codex_pro_core::plugin_hub::PluginCatalogItem {
+        id,
+        name: String::new(),
+        description: String::new(),
+        source_id: String::new(),
+        source_label: String::new(),
+        source_url: String::new(),
+        category: String::new(),
+        author: String::new(),
+        homepage: String::new(),
+        license: String::new(),
+        tags: Vec::new(),
+        install_kind: claude_codex_pro_core::plugin_hub::InstallKind::ResourceLink,
+        install_status: claude_codex_pro_core::plugin_hub::InstallStatus::Unsupported,
+        install_command: Vec::new(),
+        config_preview: String::new(),
+        risk: String::new(),
+        requirements: Vec::new(),
+    }
+}
+
+fn empty_plugin_install_preview(id: String) -> PluginInstallPreview {
+    PluginInstallPreview {
+        item: empty_plugin_item(id),
+        can_install: false,
+        action: "failed".to_string(),
+        command: Vec::new(),
+        config_diff: String::new(),
+        message: String::new(),
+    }
+}
+
+fn empty_plugin_install_outcome_with_message(id: String, message: String) -> PluginInstallOutcome {
+    let preview = empty_plugin_install_preview(id);
+    PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: false,
+        message,
+        stdout: String::new(),
+        stderr: String::new(),
+        backup_path: None,
+    }
+}
+
 fn default_user_script_manager() -> UserScriptManager {
     let config_dir = user_scripts_config_dir();
     UserScriptManager::new(
@@ -2475,7 +3134,8 @@ fn load_overview_payload() -> (
         claude_codex_pro_core::app_paths::resolve_codex_app_dir_with_saved(
             None,
             Some(settings.codex_app_path.as_str()),
-        ),
+        )
+        .or_else(claude_codex_pro_core::app_paths::find_running_codex_app_dir),
         install::inspect_entrypoints(),
         StatusStore::default().load_latest().unwrap_or(None),
     )
@@ -2596,9 +3256,30 @@ mod tests {
     #[test]
     fn startup_options_honors_show_update_argument() {
         assert!(should_show_update(
-            ["claude-codex-pro-plus-manager.exe", "--show-update"],
+            ["claude-codex-pro-manager.exe", "--show-update"],
             None
         ));
+    }
+
+    #[test]
+    fn plugin_install_failure_serializes_non_empty_top_level_message() {
+        let result = failed(
+            "插件安装失败：请先登录 Claude Code CLI。",
+            empty_plugin_install_outcome_with_message(
+                "official:test".to_string(),
+                "请先登录 Claude Code CLI。".to_string(),
+            ),
+        );
+        let serialized = serde_json::to_value(&result).unwrap();
+
+        assert_eq!(
+            serialized["message"],
+            serde_json::json!("插件安装失败：请先登录 Claude Code CLI。")
+        );
+        assert_eq!(
+            serialized["installMessage"],
+            serde_json::json!("请先登录 Claude Code CLI。")
+        );
     }
 
     #[test]
@@ -2639,6 +3320,142 @@ mod tests {
 
         assert_eq!(result.status, "ok");
         assert!(result.payload.disabled_flag.contains("watcher.disabled"));
+    }
+
+    #[test]
+    fn claude_desktop_status_preserves_read_only_audit_contract() {
+        let result = load_claude_desktop_status();
+
+        assert!(matches!(result.status.as_str(), "ok" | "not_running"));
+        assert_eq!(result.payload.supported_integration, "external_automation");
+        assert_eq!(result.payload.cdp_status, "blocked");
+
+        for audit in &result.payload.executable_audits {
+            assert!(!audit.patch_eligible);
+            assert_eq!(
+                audit.mutation_policy,
+                "blocked_no_executable_asar_signature_or_integrity_metadata_changes"
+            );
+            assert!(
+                audit
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("Read-only audit"))
+            );
+        }
+    }
+
+    #[test]
+    fn claude_desktop_integrity_returns_policy_and_audit_shape() {
+        let result = load_claude_desktop_integrity();
+
+        assert!(matches!(
+            result.status.as_str(),
+            "ok" | "warning" | "not_checked"
+        ));
+        assert_eq!(
+            result.payload.policy,
+            "read_only_audit_no_executable_or_asar_patch"
+        );
+        for audit in &result.payload.executable_audits {
+            assert!(!audit.patch_eligible);
+            assert!(!audit.integrity_level.is_empty());
+            assert!(!audit.verification_scope.is_empty());
+        }
+    }
+
+    #[test]
+    fn paste_claude_desktop_draft_rejects_empty_text_without_submit() {
+        let result = paste_claude_desktop_draft(ClaudeDesktopDraftRequest {
+            text: "   ".to_string(),
+        });
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.payload.action, "paste_draft");
+        assert_eq!(result.payload.input_chars, 0);
+        assert!(!result.payload.auto_submitted);
+    }
+
+    #[test]
+    fn submit_claude_desktop_text_rejects_empty_text_without_submit() {
+        let result = submit_claude_desktop_text(ClaudeDesktopDraftRequest {
+            text: "   ".to_string(),
+        });
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.payload.action, "paste_and_submit");
+        assert_eq!(result.payload.input_chars, 0);
+        assert!(!result.payload.auto_submitted);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a running local Claude Desktop process"]
+    fn verify_claude_desktop_command_verifies_foreground_without_input() {
+        let result = verify_claude_desktop();
+
+        if result.status == "failed" && result.message.contains("not running") {
+            eprintln!("Claude Desktop is not running; live verify skipped.");
+            return;
+        }
+
+        eprintln!(
+            "verify result: status={}, action={}, foreground_verified={}, pid={:?}, title={:?}",
+            result.status,
+            result.payload.action,
+            result.payload.foreground_verified,
+            result.payload.foreground_process_id,
+            result.payload.foreground_title
+        );
+        assert_eq!(result.payload.action, "verify_target");
+        assert_eq!(result.status, "ok");
+        assert!(result.payload.foreground_verified);
+        assert!(result.payload.foreground_process_id.is_some());
+        assert!(result.payload.foreground_title.is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a running local Claude Desktop process"]
+    fn open_claude_desktop_devtools_command_sends_shortcut() {
+        let result = open_claude_desktop_devtools();
+
+        if result.status == "failed" && result.message.contains("not running") {
+            eprintln!("Claude Desktop is not running; live devtools command skipped.");
+            return;
+        }
+
+        eprintln!(
+            "devtools command: status={}, action={}, foreground_verified={}, pid={:?}, title={:?}",
+            result.status,
+            result.payload.action,
+            result.payload.foreground_verified,
+            result.payload.foreground_process_id,
+            result.payload.foreground_title
+        );
+        assert_eq!(result.payload.action, "open_devtools");
+        assert_eq!(result.status, "ok");
+        assert!(result.payload.foreground_verified);
+        assert!(result.payload.foreground_process_id.is_some());
+        assert!(result.payload.foreground_title.is_some());
+    }
+
+    #[test]
+    fn claude_desktop_verify_command_writes_diagnostic_log_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let log_path = temp.path().join("claude-codex-pro.log");
+        claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(Some(
+            log_path.clone(),
+        ));
+
+        let result = verify_claude_desktop();
+        let contents = std::fs::read_to_string(&log_path).unwrap();
+        claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(None);
+
+        assert!(matches!(result.status.as_str(), "ok" | "failed"));
+        assert!(contents.contains("\"event\":\"manager.claude_desktop.verify\""));
+        assert!(contents.contains("\"status\":"));
+        assert!(contents.contains("\"message\":"));
     }
 
     #[test]
@@ -2930,7 +3747,8 @@ mod tests {
     fn reset_image_overlay_settings_preserves_supplier_settings() {
         let temp = tempfile::tempdir().unwrap();
         let settings_path = temp.path().join("settings.json");
-        let previous = claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
+        let previous =
+            claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
 
         let settings = BackendSettings {
             codex_app_image_overlay_enabled: true,

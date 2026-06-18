@@ -2,13 +2,13 @@ use std::path::{Path, PathBuf};
 
 use super::{
     InstallOptions, LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME, MANAGER_BINARY, MANAGER_NAME,
-    SILENT_BINARY, SILENT_NAME,
-    install_root_or_default, option_or_current_exe,
+    SILENT_BINARY, SILENT_NAME, install_root_or_default, option_or_current_exe,
 };
 
 const INSTALL_SUBKEY: &str = r"Software\Claude Codex Pro";
 const LEGACY_INSTALL_SUBKEY: &str = r"Software\Codex++";
-const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro";
+const UNINSTALL_SUBKEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro";
 const LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus";
 const LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL: &str =
@@ -58,8 +58,7 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
     let install_root = PathBuf::from(&plan.install_root);
     std::fs::create_dir_all(&install_root)?;
-    let _ = std::fs::remove_file(install_root.join(format!("{LEGACY_SILENT_NAME}.lnk")));
-    let _ = std::fs::remove_file(install_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
+    remove_legacy_shortcuts(&install_root);
     create_entrypoint_shortcut(
         PathBuf::from(&plan.silent_shortcut),
         PathBuf::from(&plan.launcher_path),
@@ -82,17 +81,49 @@ pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&plan.silent_shortcut);
     let _ = std::fs::remove_file(&plan.manager_shortcut);
     let legacy_root = PathBuf::from(&plan.install_root);
-    let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_SILENT_NAME}.lnk")));
-    let _ = std::fs::remove_file(legacy_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
+    remove_legacy_shortcuts(&legacy_root);
     let _ = crate::windows_integration::delete_current_user_key(LEGACY_INSTALL_SUBKEY);
-    let _ =
-        crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS);
+    let _ = crate::windows_integration::delete_current_user_key(
+        LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS,
+    );
     let _ = crate::windows_integration::delete_current_user_key(
         LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL,
     );
     let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
     let _ = crate::windows_integration::delete_current_user_key(INSTALL_SUBKEY);
     Ok(())
+}
+
+#[cfg(windows)]
+fn remove_legacy_shortcuts(install_root: &Path) {
+    for path in legacy_shortcut_files(install_root, default_start_menu_programs_dir().as_deref()) {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(start_menu) = default_start_menu_programs_dir() {
+        let _ = std::fs::remove_dir(start_menu.join(LEGACY_SILENT_NAME));
+    }
+}
+
+pub fn legacy_shortcut_files(install_root: &Path, start_menu: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = vec![
+        install_root.join(format!("{LEGACY_SILENT_NAME}.lnk")),
+        install_root.join(format!("{LEGACY_MANAGER_NAME}.lnk")),
+    ];
+    if let Some(start_menu) = start_menu {
+        paths.push(start_menu.join(format!("{LEGACY_SILENT_NAME}.lnk")));
+        let legacy_group = start_menu.join(LEGACY_SILENT_NAME);
+        paths.push(legacy_group.join(format!("{LEGACY_SILENT_NAME}.lnk")));
+        paths.push(legacy_group.join(format!("{LEGACY_MANAGER_NAME}.lnk")));
+        paths.push(legacy_group.join(format!("卸载 {LEGACY_SILENT_NAME}.lnk")));
+    }
+    paths
+}
+
+fn default_start_menu_programs_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|dirs| {
+        dirs.data_dir()
+            .join(r"Microsoft\Windows\Start Menu\Programs")
+    })
 }
 
 #[cfg(not(windows))]
@@ -126,8 +157,9 @@ fn create_entrypoint_shortcut(
 #[cfg(windows)]
 fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<()> {
     let _ = crate::windows_integration::delete_current_user_key(LEGACY_INSTALL_SUBKEY);
-    let _ =
-        crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS);
+    let _ = crate::windows_integration::delete_current_user_key(
+        LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS,
+    );
     let _ = crate::windows_integration::delete_current_user_key(
         LEGACY_UNINSTALL_SUBKEY_CODEX_PLUS_PLUS_SYMBOL,
     );
@@ -161,8 +193,8 @@ fn default_icon_path() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf))
-        .map(|path| path.join("claude-codex-pro-plus.ico"))
-        .unwrap_or_else(|| PathBuf::from("claude-codex-pro-plus.ico"))
+        .map(|path| path.join("claude-codex-pro.ico"))
+        .unwrap_or_else(|| PathBuf::from("claude-codex-pro.ico"))
 }
 
 #[allow(dead_code)]

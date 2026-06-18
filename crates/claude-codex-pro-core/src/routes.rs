@@ -78,6 +78,33 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn open_manager(&self) -> anyhow::Result<Value>;
     async fn backend_status(&self) -> anyhow::Result<Value>;
     async fn repair_backend(&self) -> anyhow::Result<Value>;
+    async fn claude_desktop_status(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::status_response())
+    }
+    async fn claude_desktop_integrity(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::integrity_response())
+    }
+    async fn claude_desktop_focus(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::focus_response())
+    }
+    async fn claude_desktop_verify(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::verify_response())
+    }
+    async fn claude_desktop_open_devtools(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::open_devtools_response())
+    }
+    async fn claude_desktop_open(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::open_response())
+    }
+    async fn claude_desktop_new_chat(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::new_chat_response())
+    }
+    async fn claude_desktop_paste_draft(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::draft_response(&payload))
+    }
+    async fn claude_desktop_submit(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::submit_response(&payload))
+    }
     async fn codex_model_catalog(&self) -> anyhow::Result<Value>;
     async fn ads(&self) -> anyhow::Result<Value>;
     async fn zed_remote_status(&self) -> anyhow::Result<Value>;
@@ -166,6 +193,19 @@ pub async fn handle_bridge_request(
         "/manager/open" => ctx.runtime.open_manager().await,
         "/backend/status" => ctx.runtime.backend_status().await,
         "/backend/repair" => ctx.runtime.repair_backend().await,
+        "/claude-desktop/status" => ctx.runtime.claude_desktop_status().await,
+        "/claude-desktop/integrity" => ctx.runtime.claude_desktop_integrity().await,
+        "/claude-desktop/focus" => ctx.runtime.claude_desktop_focus().await,
+        "/claude-desktop/verify" => ctx.runtime.claude_desktop_verify().await,
+        "/claude-desktop/open-devtools" => ctx.runtime.claude_desktop_open_devtools().await,
+        "/claude-desktop/open" => ctx.runtime.claude_desktop_open().await,
+        "/claude-desktop/new-chat" => ctx.runtime.claude_desktop_new_chat().await,
+        "/claude-desktop/paste-draft" => {
+            ctx.runtime
+                .claude_desktop_paste_draft(payload.clone())
+                .await
+        }
+        "/claude-desktop/submit" => ctx.runtime.claude_desktop_submit(payload.clone()).await,
         "/codex-model-catalog" | "/codex-config-model" => ctx.runtime.codex_model_catalog().await,
         "/diagnostics/log" => diagnostic_log_value(payload.clone()),
         "/ads" => ctx.runtime.ads().await,
@@ -460,6 +500,42 @@ impl BridgeRuntimeService for CoreRuntimeService {
 
     async fn repair_backend(&self) -> anyhow::Result<Value> {
         self.backend_status().await
+    }
+
+    async fn claude_desktop_status(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::status_response())
+    }
+
+    async fn claude_desktop_integrity(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::integrity_response())
+    }
+
+    async fn claude_desktop_focus(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::focus_response())
+    }
+
+    async fn claude_desktop_verify(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::verify_response())
+    }
+
+    async fn claude_desktop_open_devtools(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::open_devtools_response())
+    }
+
+    async fn claude_desktop_open(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::open_response())
+    }
+
+    async fn claude_desktop_new_chat(&self) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::new_chat_response())
+    }
+
+    async fn claude_desktop_paste_draft(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::draft_response(&payload))
+    }
+
+    async fn claude_desktop_submit(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(crate::claude_desktop::submit_response(&payload))
     }
 
     async fn codex_model_catalog(&self) -> anyhow::Result<Value> {

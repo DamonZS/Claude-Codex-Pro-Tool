@@ -3,7 +3,8 @@ use std::net::TcpListener;
 use std::thread;
 
 use claude_codex_pro_core::ads::{
-    DEFAULT_AD_LIST_URLS, cache_busted_ad_url, fetch_ad_list_from_urls, normalize_ad_payload,
+    DEFAULT_AD_LIST_URLS, OFFICIAL_TOPOREDUCE_AD_ID, cache_busted_ad_url, fetch_ad_list_from_urls,
+    normalize_ad_payload,
 };
 use serde_json::json;
 
@@ -65,8 +66,38 @@ fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
     }));
 
     assert_eq!(payload["version"], json!(1));
-    assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["ads"].as_array().unwrap().len(), 2);
     assert_eq!(payload["ads"][0]["type"], json!("normal"));
+    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+    assert_eq!(payload["ads"][0]["title"], json!("官方中转站"));
+    assert_eq!(payload["ads"][0]["url"], json!("https://api.toporeduce.cn"));
+    assert_eq!(payload["ads"][1]["id"], json!("normal"));
+}
+
+#[test]
+fn normalizes_remote_ads_without_duplicating_official_recommendation() {
+    let payload = normalize_ad_payload(json!({
+        "version": 1,
+        "ads": [
+            {
+                "id": OFFICIAL_TOPOREDUCE_AD_ID,
+                "type": "normal",
+                "title": "远端重复",
+                "description": "重复内容",
+                "url": "https://example.test"
+            },
+            {
+                "id": "duplicate-url",
+                "type": "normal",
+                "title": "远端重复 URL",
+                "description": "重复内容",
+                "url": "https://api.toporeduce.cn"
+            }
+        ]
+    }));
+
+    assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
 }
 
 #[tokio::test]
@@ -115,5 +146,30 @@ async fn fetch_ad_list_tries_backup_url_when_primary_fails() {
     .unwrap();
     thread.join().unwrap();
 
-    assert_eq!(payload["ads"][0]["id"], json!("backup-ad"));
+    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+    assert_eq!(payload["ads"][1]["id"], json!("backup-ad"));
+}
+
+#[tokio::test]
+async fn fetch_ad_list_falls_back_to_official_recommendation_when_all_urls_fail() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let thread = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0; 1024];
+        let read = stream.read(&mut buffer).unwrap();
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        assert!(request.starts_with("GET /unavailable.json?"), "{request}");
+        stream
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+
+    let payload = fetch_ad_list_from_urls(&[format!("http://127.0.0.1:{port}/unavailable.json")])
+        .await
+        .unwrap();
+    thread.join().unwrap();
+
+    assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
 }

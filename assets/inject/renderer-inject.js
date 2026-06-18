@@ -591,13 +591,14 @@
       #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass} {
         position: fixed;
         top: var(--claude-codex-pro-menu-top, 0);
-        right: var(--claude-codex-pro-menu-right, 140px);
-        left: auto;
+        left: 50%;
+        right: auto;
+        transform: translateX(-50%);
         z-index: 2147483645;
         height: var(--claude-codex-pro-menu-height, 30px);
         color: #d1d5db;
         font: 13px system-ui, sans-serif;
-        text-align: right;
+        text-align: center;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -822,7 +823,7 @@
       .claude-codex-pro-form-message[data-status="ok"] { color: #34d399; }
       .claude-codex-pro-form-message[data-status="failed"] { color: #f87171; }
       .claude-codex-pro-form-message[data-status="loading"] { color: #fbbf24; }
-      .claude-codex-pro-backend-status { display: grid; gap: 4px; min-width: 132px; justify-items: end; }
+      .claude-codex-pro-backend-status { display: grid; gap: 4px; min-width: 132px; justify-items: center; }
       .claude-codex-pro-backend-label { color: #a1a1aa; font-size: 12px; }
       .claude-codex-pro-backend-label[data-status="ok"] { color: #34d399; }
       .claude-codex-pro-backend-label[data-status="failed"] { color: #f87171; }
@@ -934,7 +935,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -951,6 +952,7 @@
     zedRemoteOpen: "codexAppZedRemoteOpen",
     upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
+    chineseOverlayEnabled: "claudeAppChineseOverlayEnabled",
     serviceTierControls: "codexAppServiceTierControls",
   };
 
@@ -982,6 +984,7 @@
         zedRemoteOpen: false,
         upstreamWorktreeCreate: false,
         nativeMenuPlacement: false,
+        chineseOverlayEnabled: false,
         serviceTierControls: false,
       };
     }
@@ -1036,6 +1039,11 @@
         removeCodexServiceTierBadges();
         refreshCodexServiceTierControls();
       }
+    }
+    if (key === "chineseOverlayEnabled") {
+      claudeChineseOverlayFullRefreshDone = false;
+      claudeChineseOverlayQueue.length = 0;
+      refreshClaudeChineseOverlay();
     }
     renderClaudeCodexProMenu();
     scan();
@@ -1881,6 +1889,469 @@
   let claudeCodexProUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
   let claudeCodexProBackendStatus = { status: "checking", message: "正在检查后端…" };
   let claudeCodexProBackendCheckSeq = 0;
+  let claudeChineseOverlayObserver = null;
+  let claudeChineseOverlayScheduled = false;
+  let claudeChineseOverlayFullRefreshDone = false;
+  let claudeChineseOverlaySortedMap = null;
+  const claudeChineseOverlayQueue = [];
+  const claudeChineseOverlayQueued = new Set();
+  const claudeChineseOverlayBatchSize = 80;
+
+  const claudeChineseOverlayMap = [
+    ["Settings", "设置"],
+    ["General settings", "通用设置"],
+    ["Account settings", "账户设置"],
+    ["App settings", "应用设置"],
+    ["Language", "语言"],
+    ["Display language", "显示语言"],
+    ["Progress", "进度"],
+    ["Working folder", "工作目录"],
+    ["Working directory", "工作目录"],
+    ["Current folder", "当前目录"],
+    ["Context", "上下文"],
+    ["Context window", "上下文窗口"],
+    ["Context left", "剩余上下文"],
+    ["New task", "新建任务"],
+    ["New chat", "新建聊天"],
+    ["New conversation", "新建对话"],
+    ["Start new chat", "开始新聊天"],
+    ["Start a new chat", "开始新聊天"],
+    ["Projects", "项目"],
+    ["Project", "项目"],
+    ["Create project", "创建项目"],
+    ["New project", "新建项目"],
+    ["Project knowledge", "项目知识"],
+    ["Project instructions", "项目指令"],
+    ["Gateway", "网关"],
+    ["Configure third-party inference", "配置第三方推理"],
+    ["Inference configuration", "推理配置"],
+    ["Third-party inference", "第三方推理"],
+    ["Connection", "连接"],
+    ["Choose where Claude Desktop sends inference requests.", "选择 Claude Desktop 将推理请求发送到哪里。"],
+    ["Workspace restrictions", "工作区限制"],
+    ["Allowed surfaces", "允许的界面"],
+    ["Cowork", "协作"],
+    ["Code", "代码"],
+    ["General restrictions", "通用限制"],
+    ["Allowed egress hosts", "允许出站主机"],
+    ["Hostnames the agent's tools may reach from the Cowork and Code tabs.", "代理工具可从协作和代码页访问的主机名。"],
+    ["Also surfaced under Egress Requirements.", "也会显示在出站要求中。"],
+    ["Allowed workspace folders", "允许的工作区文件夹"],
+    ["Folders users may attach as a workspace. Leave unset for unrestricted access.", "用户可附加为工作区的文件夹。留空则表示不限制访问。"],
+    ["Disabled built-in tools", "已禁用内置工具"],
+    ["Built-in tools removed from Cowork.", "从协作中移除的内置工具。"],
+    ["Built-in tool policy", "内置工具策略"],
+    ["Per-tool approval policy", "按工具审批策略"],
+    ["ask\" requires user approval before each call; \"allow\" is", "“ask” 每次调用前都需要用户批准；“allow” 则会"],
+    ["Add policy", "添加策略"],
+    ["Connectors & extensions", "连接器与扩展"],
+    ["MCP SERVERS", "MCP 服务器"],
+    ["Managed MCP servers", "受管理的 MCP 服务器"],
+    ["Org-pushed MCP servers: remote (HTTP/SSE) or local (stdio command). May embed bearer tokens.", "组织推送的 MCP 服务器：远程（HTTP/SSE）或本地（stdio 命令）。可能会嵌入 Bearer 令牌。"],
+    ["Add server", "添加服务器"],
+    ["Allow user-added MCP servers", "允许用户添加的 MCP 服务器"],
+    ["Local stdio servers added via the Developer settings. Remote servers come from the managed list above, or plugins mounted to a user's computer by an organization admin.", "通过开发者设置添加的本地 stdio 服务器。远程服务器来自上方的受管列表，或者由组织管理员挂载到用户电脑上的插件。"],
+    ["EXTENSIONS", "扩展"],
+    ["Allow desktop extensions", "允许桌面扩展"],
+    [".dxt and .mcpb installs.", ".dxt 和 .mcpb 安装。"],
+    ["Require signed extensions", "要求已签名扩展"],
+    ["Reject desktop extensions that are not signed by a trusted publisher.", "拒绝未由可信发布者签名的桌面扩展。"],
+    ["Telemetry & updates", "遥测与更新"],
+    ["ANTHROPIC TELEMETRY", "Anthropic 遥测"],
+    ["Organization UUID", "组织 UUID"],
+    ["Tags telemetry events with your organization's UUID so Anthropic support can find them. Not used for auth.", "使用组织的 UUID 标记遥测事件，以便 Anthropic 支持查找。不用于认证。"],
+    ["Block essential telemetry", "屏蔽必要遥测"],
+    ["Crash and performance reports to Anthropic.", "发送给 Anthropic 的崩溃和性能报告。"],
+    ["Block nonessential telemetry", "屏蔽非必要遥测"],
+    ["Product-usage analytics and diagnostic-report uploads. No message content.", "产品使用分析和诊断报告上传。不包含消息内容。"],
+    ["Block nonessential services", "屏蔽非必要服务"],
+    ["Favicon fetch and the artifact-preview iframe origin. Artifacts will not render.", "图标获取和产物预览 iframe 源。产物将不会渲染。"],
+    ["Usage limits", "使用限制"],
+    ["Max tokens per window", "每窗口最大 tokens"],
+    ["Per-user soft cap, counted client-side over the duration below. Not a server-enforced quota.", "按用户计算的软上限，在下方周期内由客户端统计。不属于服务器强制配额。"],
+    ["Plugins & skills", "插件与技能"],
+    ["Organization plugins", "组织插件"],
+    ["No organization plugins found", "未找到组织插件"],
+    ["Mount plugin bundles to this folder using your device-management tool and Cowork will load them at launch. The folder is read-only; tool policies you set below are saved in this configuration.", "使用设备管理工具将插件包挂载到此文件夹，协作将在启动时加载它们。该文件夹为只读；你在下方设置的工具策略会保存在此配置中。"],
+    ["Copy", "复制"],
+    ["Add server policy", "添加服务器策略"],
+    ["Egress Requirements", "出站要求"],
+    ["FIREWALL ALLOWLIST", "防火墙允许列表"],
+    ["Test connectivity", "测试连通性"],
+    ["Copy hostnames", "复制主机名"],
+    ["Download .txt", "下载 .txt"],
+    ["CORE (VM BUNDLE + CLAUDE CLI BINARY)", "核心（VM 包 + Claude CLI 二进制）"],
+    ["AUTO-UPDATES", "自动更新"],
+    ["ESSENTIAL TELEMETRY", "必要遥测"],
+    ["NONESSENTIAL TELEMETRY", "非必要遥测"],
+    ["NONESSENTIAL SERVICES", "非必要服务"],
+    ["Source", "来源"],
+    ["BOOTSTRAP CONFIG URL", "启动配置 URL"],
+    ["Bootstrap config URL", "启动配置 URL"],
+    ["HTTPS endpoint that returns a per-user JSON config overlay. Values from the response override local settings and become read-only.", "返回每个用户 JSON 配置覆盖的 HTTPS 端点。响应中的值会覆盖本地设置并变为只读。"],
+    ["Search settings", "搜索设置"],
+    ["GATEWAY CREDENTIALS", "网关凭据"],
+    ["Credential kind", "凭据类型"],
+    ["Selects the credential source. When set, only that source is used (no fallback).", "选择凭据来源。设置后只使用该来源（无回退）。"],
+    ["Static API key", "静态 API Key"],
+    ["Gateway base URL", "网关基础 URL"],
+    ["Full URL of the inference gateway endpoint.", "推理网关端点的完整 URL。"],
+    ["Gateway API key", "网关 API Key"],
+    ["Gateway auth scheme", "网关认证方案"],
+    ["How the gateway credential is sent on the wire", "网关凭据在请求中的发送方式"],
+    ["Authorization: Bearer vs x-api-key header", "Authorization: Bearer 与 x-api-key 请求头"],
+    ["Custom inference headers", "自定义推理请求头"],
+    ["Extra HTTP headers sent on every inference request to the configured provider.", "每个推理请求都会发送到已配置提供商的额外 HTTP 请求头。"],
+    ["For tenant routing, org IDs, Bedrock Guardrails, etc.", "用于租户路由、组织 ID、Bedrock Guardrails 等。"],
+    ["Add header", "添加请求头"],
+    ["Test connection", "测试连接"],
+    ["Apply Changes", "应用更改"],
+    ["Export", "导出"],
+    ["Learn more", "了解更多"],
+    ["Sign out", "退出登录"],
+    ["Sign in", "登录"],
+    ["Log in", "登录"],
+    ["Log out", "退出登录"],
+    ["Account", "账户"],
+    ["Profile", "个人资料"],
+    ["Email", "邮箱"],
+    ["Name", "名称"],
+    ["Model", "模型"],
+    ["Models", "模型"],
+    ["Select a model", "选择模型"],
+    ["Choose a model", "选择模型"],
+    ["Switch model", "切换模型"],
+    ["Default model", "默认模型"],
+    ["Search", "搜索"],
+    ["Search chats", "搜索会话"],
+    ["Search conversations", "搜索对话"],
+    ["Search projects", "搜索项目"],
+    ["Chats", "会话"],
+    ["Chat", "会话"],
+    ["Conversation", "对话"],
+    ["Conversations", "对话"],
+    ["Messages", "消息"],
+    ["Message", "消息"],
+    ["Folders", "文件夹"],
+    ["Folder", "文件夹"],
+    ["Archived conversations", "已归档对话"],
+    ["Archived chats", "已归档会话"],
+    ["Archive", "归档"],
+    ["Archived", "已归档"],
+    ["Unarchive", "取消归档"],
+    ["Pin", "置顶"],
+    ["Pinned conversations", "置顶对话"],
+    ["Pinned chats", "置顶会话"],
+    ["Pinned", "置顶"],
+    ["Unpin", "取消置顶"],
+    ["Preferences", "偏好设置"],
+    ["Appearance", "外观"],
+    ["Interface", "界面"],
+    ["Accessibility", "辅助功能"],
+    ["Language and region", "语言和地区"],
+    ["Theme", "主题"],
+    ["Light", "浅色"],
+    ["Dark", "深色"],
+    ["System", "跟随系统"],
+    ["System theme", "系统主题"],
+    ["Light theme", "浅色主题"],
+    ["Dark theme", "深色主题"],
+    ["Color scheme", "配色方案"],
+    ["Notifications", "通知"],
+    ["Notification", "通知"],
+    ["Desktop notifications", "桌面通知"],
+    ["Email notifications", "邮件通知"],
+    ["Sound", "声音"],
+    ["Mute", "静音"],
+    ["Data controls", "数据控制"],
+    ["Data settings", "数据设置"],
+    ["Conversation history", "会话历史"],
+    ["Chat history", "聊天历史"],
+    ["Usage data", "使用数据"],
+    ["Auto save", "自动保存"],
+    ["Auto-update", "自动更新"],
+    ["Privacy", "隐私"],
+    ["Privacy settings", "隐私设置"],
+    ["Personalization", "个性化"],
+    ["Security", "安全"],
+    ["Security settings", "安全设置"],
+    ["Billing", "账单"],
+    ["Payment", "支付"],
+    ["Payments", "支付"],
+    ["Plan", "套餐"],
+    ["Plans", "套餐"],
+    ["Subscription", "订阅"],
+    ["Manage subscription", "管理订阅"],
+    ["Usage limit", "使用限制"],
+    ["Usage limits", "使用限制"],
+    ["Account settings", "账户设置"],
+    ["Account plan", "账户套餐"],
+    ["Profile settings", "个人资料设置"],
+    ["Connected apps", "已连接应用"],
+    ["Connected apps and integrations", "已连接应用与集成"],
+    ["Experimental features", "实验功能"],
+    ["Experimental", "实验性"],
+    ["Feature preview", "功能预览"],
+    ["Preview", "预览"],
+    ["Activity", "活动"],
+    ["Usage", "用量"],
+    ["Tasks", "任务"],
+    ["Task", "任务"],
+    ["Artifacts", "产物"],
+    ["Artifact", "产物"],
+    ["Live artifacts", "实时产物"],
+    ["Connectors", "连接器"],
+    ["Connector", "连接器"],
+    ["Integrations", "集成"],
+    ["Integration", "集成"],
+    ["MCP servers", "MCP 服务器"],
+    ["MCP server", "MCP 服务器"],
+    ["Tools", "工具"],
+    ["Tool", "工具"],
+    ["Customize", "自定义"],
+    ["Custom instructions", "自定义指令"],
+    ["Instructions", "指令"],
+    ["Cancel", "取消"],
+    ["Close", "关闭"],
+    ["Save", "保存"],
+    ["Save changes", "保存更改"],
+    ["Saving", "保存中"],
+    ["Saved", "已保存"],
+    ["Confirm", "确认"],
+    ["Done", "完成"],
+    ["Apply", "应用"],
+    ["Continue", "继续"],
+    ["Back", "返回"],
+    ["Next", "下一步"],
+    ["Previous", "上一步"],
+    ["Copy", "复制"],
+    ["Copied", "已复制"],
+    ["Copy link", "复制链接"],
+    ["Paste", "粘贴"],
+    ["Delete", "删除"],
+    ["Delete chat", "删除会话"],
+    ["Delete conversation", "删除对话"],
+    ["Delete project", "删除项目"],
+    ["Remove", "移除"],
+    ["Edit", "编辑"],
+    ["Rename", "重命名"],
+    ["Duplicate", "复制一份"],
+    ["Share", "分享"],
+    ["Share chat", "分享会话"],
+    ["Export", "导出"],
+    ["Import", "导入"],
+    ["Download", "下载"],
+    ["Upload", "上传"],
+    ["Submit", "提交"],
+    ["Send", "发送"],
+    ["Stop", "停止"],
+    ["Stop response", "停止回复"],
+    ["Regenerate", "重新生成"],
+    ["Regenerate response", "重新生成回复"],
+    ["Retry", "重试"],
+    ["Retrying", "重试中"],
+    ["Thinking", "思考中"],
+    ["Thinking...", "思考中..."],
+    ["Thinking…", "思考中…"],
+    ["Generating", "生成中"],
+    ["Generating...", "生成中..."],
+    ["Generating…", "生成中…"],
+    ["Loading", "加载中"],
+    ["Loading...", "加载中..."],
+    ["Loading…", "加载中…"],
+    ["Please wait", "请稍候"],
+    ["Try again", "请重试"],
+    ["Something went wrong", "出了点问题"],
+    ["Unable to load", "无法加载"],
+    ["Connection lost", "连接已断开"],
+    ["Reconnect", "重新连接"],
+    ["No results", "没有结果"],
+    ["No conversations", "没有会话"],
+    ["No chats", "没有会话"],
+    ["No projects", "没有项目"],
+    ["No items", "没有项目"],
+    ["Empty", "为空"],
+    ["Write a message...", "输入消息..."],
+    ["Type a message...", "输入消息..."],
+    ["Message Claude", "给 Claude 发消息"],
+    ["Ask anything", "请输入内容"],
+    ["How can I help you today?", "今天我能帮你什么？"],
+    ["What can I help you with?", "我能帮你什么？"],
+    ["What are you working on?", "你正在做什么？"],
+    ["Send a message", "发送消息"],
+    ["Upload files", "上传文件"],
+    ["Attach files", "附加文件"],
+    ["Add files", "添加文件"],
+    ["Drag and drop files", "拖放文件"],
+    ["File upload", "文件上传"],
+    ["View", "视图"],
+    ["Help", "帮助"],
+    ["Support", "支持"],
+    ["Keyboard shortcuts", "键盘快捷键"],
+    ["Shortcut keys", "快捷键"],
+    ["Hotkeys", "热键"],
+    ["About", "关于"],
+    ["More", "更多"],
+    ["More options", "更多操作"],
+    ["Advanced", "高级"],
+    ["Advanced settings", "高级设置"],
+    ["General", "通用"],
+    ["General preferences", "通用偏好设置"],
+    ["General settings", "通用设置"],
+    ["Labs", "实验功能"],
+    ["Beta", "测试版"],
+    ["File", "文件"],
+    ["Edit", "编辑"],
+    ["View", "视图"],
+    ["Help", "帮助"],
+    ["Open Documentation", "打开文档"],
+    ["Check for Updates...", "检查更新..."],
+    ["Troubleshooting", "故障排查"],
+    ["Show Logs in Explorer", "在资源管理器中显示日志"],
+    ["Show Cowork Session Data in Explorer", "在资源管理器中显示协作会话数据"],
+    ["Copy Installation ID", "复制安装 ID"],
+    ["Generate Diagnostic Report", "生成诊断报告"],
+    ["Record Net Log (30s)", "录制网络日志（30 秒）"],
+    ["Enable Developer Mode", "启用开发者模式"],
+    ["Disable Hardware Acceleration", "禁用硬件加速"],
+    ["Enable Cowork VM Debug Logging", "启用协作 VM 调试日志"],
+    ["Enable Cowork SDK Debugging", "启用协作 SDK 调试"],
+    ["Free Up Cowork Disk Space...", "释放协作磁盘空间..."],
+    ["Delete Cowork VM Bundle and Restart...", "删除协作 VM 包并重启..."],
+    ["Delete Cowork VM Sessions and Restart...", "删除协作 VM 会话并重启..."],
+    ["Clear Cache and Restart", "清除缓存并重启"],
+    ["Reset App Data...", "重置应用数据..."],
+    ["Overview", "概览"],
+    ["History", "历史"],
+    ["All", "全部"],
+    ["Recent", "最近"],
+    ["Recents", "最近"],
+    ["Today", "今天"],
+    ["Yesterday", "昨天"],
+    ["Last 7 days", "最近 7 天"],
+    ["Last 30 days", "最近 30 天"],
+    ["Draft", "草稿"],
+    ["Drafts", "草稿"],
+    ["Error", "错误"],
+    ["Failed", "失败"],
+    ["Success", "成功"],
+    ["Ready", "就绪"],
+    ["Running", "运行中"],
+    ["Stopped", "已停止"],
+    ["Offline", "离线"],
+    ["Online", "在线"],
+    ["Open", "打开"],
+    ["Open in new window", "在新窗口打开"],
+    ["Read only", "只读"],
+    ["Developer mode", "开发者模式"],
+    ["Release notes", "更新日志"],
+    ["What's new", "新功能"],
+    ["Feedback", "反馈"],
+    ["Report a bug", "报告问题"],
+    ["Terms of service", "服务条款"],
+    ["Privacy policy", "隐私政策"],
+  ];
+
+  function refreshClaudeChineseOverlay() {
+    if (!claudeCodexProSettings().chineseOverlayEnabled) return;
+    if (claudeChineseOverlayFullRefreshDone) return;
+    claudeChineseOverlayFullRefreshDone = true;
+    const roots = [document.body, document.querySelector("main"), document.querySelector("aside")].filter(Boolean);
+    roots.forEach(queueClaudeChineseOverlaySubtree);
+    scheduleClaudeChineseOverlayRefresh();
+  }
+
+  function scheduleClaudeChineseOverlayRefresh() {
+    if (claudeChineseOverlayScheduled) return;
+    claudeChineseOverlayScheduled = true;
+    requestAnimationFrame(() => {
+      claudeChineseOverlayScheduled = false;
+      flushClaudeChineseOverlayQueue();
+    });
+  }
+
+  function ensureClaudeChineseOverlayObserver() {
+    if (claudeChineseOverlayObserver || !window.MutationObserver || !document.documentElement) return;
+    claudeChineseOverlayObserver = new MutationObserver((mutations) => {
+      if (!claudeCodexProSettings().chineseOverlayEnabled) return;
+      mutations.forEach(queueClaudeChineseOverlayMutation);
+      scheduleClaudeChineseOverlayRefresh();
+    });
+    claudeChineseOverlayObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["title", "aria-label", "placeholder", "alt", "data-placeholder"],
+    });
+  }
+
+  function translateClaudeChineseText(value) {
+    let next = String(value || "");
+    const map = claudeChineseOverlaySortedMap || (claudeChineseOverlaySortedMap = [...claudeChineseOverlayMap].sort((a, b) => b[0].length - a[0].length));
+    map.forEach(([source, target]) => {
+      next = next.replaceAll(source, target);
+    });
+    return next;
+  }
+
+  function queueClaudeChineseOverlayNode(node) {
+    if (!node || claudeChineseOverlayQueued.has(node)) return;
+    if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.TEXT_NODE) return;
+    if (node.nodeType === Node.ELEMENT_NODE && isExtensionUiNode(node)) return;
+    claudeChineseOverlayQueued.add(node);
+    claudeChineseOverlayQueue.push(node);
+  }
+
+  function queueClaudeChineseOverlaySubtree(root) {
+    queueClaudeChineseOverlayNode(root);
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) queueClaudeChineseOverlayNode(node);
+  }
+
+  function queueClaudeChineseOverlayMutation(mutation) {
+    queueClaudeChineseOverlayNode(mutation.target);
+    mutation.addedNodes.forEach(queueClaudeChineseOverlaySubtree);
+  }
+
+  function flushClaudeChineseOverlayQueue() {
+    if (!claudeCodexProSettings().chineseOverlayEnabled) {
+      claudeChineseOverlayQueue.length = 0;
+      return;
+    }
+    let remaining = claudeChineseOverlayBatchSize;
+    while (remaining > 0 && claudeChineseOverlayQueue.length) {
+      const node = claudeChineseOverlayQueue.shift();
+      claudeChineseOverlayQueued.delete(node);
+      translateClaudeChineseOverlayNode(node);
+      remaining -= 1;
+    }
+    if (claudeChineseOverlayQueue.length) scheduleClaudeChineseOverlayRefresh();
+  }
+
+  function translateClaudeChineseOverlayNode(current) {
+    if (!current) return;
+    if (current.nodeType === Node.TEXT_NODE) {
+      const original = current.nodeValue || "";
+      const next = translateClaudeChineseText(original);
+      if (next !== original) current.nodeValue = next;
+      return;
+    }
+    if (!(current instanceof Element) || isExtensionUiNode(current)) return;
+    if (current.childNodes.length === 1 && current.firstChild?.nodeType === Node.TEXT_NODE) {
+      const original = current.textContent || "";
+      const next = translateClaudeChineseText(original);
+      if (next !== original) current.textContent = next;
+    }
+    ["title", "aria-label", "placeholder", "data-placeholder", "alt"].forEach((attr) => {
+      const value = current.getAttribute(attr);
+      if (!value) return;
+      const nextValue = translateClaudeChineseText(value);
+      if (nextValue !== value) current.setAttribute(attr, nextValue);
+    });
+  }
 
   function setClaudeCodexProTriggerLabel(trigger) {
     if (!trigger) return;
@@ -2014,9 +2485,21 @@
     return Number.isFinite(expiresAt) && expiresAt < Date.now();
   }
 
+  function defaultClaudeCodexProAds() {
+    return [{
+      id: "official-toporeduce-api",
+      type: "normal",
+      title: "官方中转站",
+      description: "拓扑熵减API｜ClaudeCodexPro官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。",
+      url: "https://api.toporeduce.cn",
+      highlights: ["拓扑熵减API", "稳定接入", "划算价格", "GPT-5.5", "Claude Opus 4.8", "gpt-image-2"],
+    }];
+  }
+
   function normalizeClaudeCodexProAds(payload) {
-    if (!payload || !Array.isArray(payload.ads)) return [];
-    return payload.ads.filter((ad) => {
+    const remoteAds = payload && Array.isArray(payload.ads) ? payload.ads : [];
+    const seen = new Set();
+    return defaultClaudeCodexProAds().concat(remoteAds).filter((ad) => {
       return ad && ad.type === "normal" && ad.title && ad.description && ad.url && !isClaudeCodexProAdExpired(ad);
     }).map((ad) => ({
       id: String(ad.id || ad.title),
@@ -2026,7 +2509,14 @@
       url: String(ad.url),
       expires_at: ad.expires_at ? String(ad.expires_at) : "",
       highlights: Array.isArray(ad.highlights) ? ad.highlights.map((item) => String(item)).filter(Boolean) : [],
-    }));
+    })).filter((ad) => {
+      const key = `${ad.id}\n${ad.url}`;
+      if (seen.has(ad.id) || seen.has(ad.url) || seen.has(key)) return false;
+      seen.add(ad.id);
+      seen.add(ad.url);
+      seen.add(key);
+      return true;
+    });
   }
 
   function renderClaudeCodexProAdGroup(type, emptyText) {
@@ -2091,7 +2581,7 @@
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
       });
-      claudeCodexProAds = [];
+      claudeCodexProAds = normalizeClaudeCodexProAds({ ads: [] });
     } finally {
       claudeCodexProAdsLoaded = true;
       const panel = document.querySelector('[data-claude-codex-pro-panel="recommendations"] .claude-codex-pro-ad-remote');
@@ -2492,27 +2982,11 @@
     if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
     if (!header) return;
-    const toolbarButtons = Array.from(header.querySelectorAll("button"))
-      .map((button) => ({ button, rect: button.getBoundingClientRect() }))
-      .filter(({ button, rect }) => isHeaderToolbarButton(button, header, rect))
-      .sort((left, right) => left.rect.left - right.rect.left);
-    const anchor = toolbarButtons[0];
-    if (anchor) {
-      const measuredGap = toolbarButtons[1] ? toolbarButtons[1].rect.left - toolbarButtons[0].rect.right : 0;
-      const styles = anchor.button.parentElement ? getComputedStyle(anchor.button.parentElement) : null;
-      const gap = Math.max(numericCssValue(styles?.columnGap || styles?.gap), measuredGap, 0);
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${anchor.rect.top}px`);
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${anchor.rect.height}px`);
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-right", `${Math.max(0, window.innerWidth - anchor.rect.left + gap)}px`);
-      return;
-    }
-
     const headerRect = header.getBoundingClientRect();
     if (headerRect.height) {
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${headerRect.top}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${headerRect.height}px`);
     }
-    menu.style.removeProperty("--claude-codex-pro-menu-right");
   }
 
   function installClaudeCodexProMenu() {
@@ -2525,12 +2999,14 @@
     } else if (existing && insertionPoint && existing.parentElement === insertionPoint.parent) {
       configureClaudeCodexProTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
       removeDuplicateClaudeCodexProMenus(existing);
+      existing.className = claudeCodexProMenuFloatingClass;
+      updateFloatingClaudeCodexProMenuPosition(existing);
       return;
     } else if (existing && insertionPoint) {
       configureClaudeCodexProTrigger(existing, existing.querySelector("button"), insertionPoint.nativeButtonClass);
-      existing.className = "";
-      const safeBefore = insertionPoint.before?.parentElement === insertionPoint.parent ? insertionPoint.before : null;
-      insertionPoint.parent.insertBefore(existing, safeBefore);
+      existing.className = claudeCodexProMenuFloatingClass;
+      document.documentElement.appendChild(existing);
+      updateFloatingClaudeCodexProMenuPosition(existing);
       removeDuplicateClaudeCodexProMenus(existing);
       return;
     }
@@ -2546,15 +3022,9 @@
     const nativeButtonClass = insertionPoint?.nativeButtonClass || "claude-codex-pro-trigger";
     configureClaudeCodexProTrigger(menu, trigger, nativeButtonClass);
     menu.appendChild(trigger);
-    if (insertionPoint) {
-      menu.className = "";
-      const safeBefore = insertionPoint.before?.parentElement === insertionPoint.parent ? insertionPoint.before : null;
-      insertionPoint.parent.insertBefore(menu, safeBefore);
-    } else {
-      menu.className = claudeCodexProMenuFloatingClass;
-      document.documentElement.appendChild(menu);
-      updateFloatingClaudeCodexProMenuPosition(menu);
-    }
+    menu.className = claudeCodexProMenuFloatingClass;
+    document.documentElement.appendChild(menu);
+    updateFloatingClaudeCodexProMenuPosition(menu);
     removeDuplicateClaudeCodexProMenus(menu);
   }
 
@@ -7988,6 +8458,8 @@
 
   function scan() {
     runScanStep(scanLightweight);
+    ensureClaudeChineseOverlayObserver();
+    runScanStep(refreshClaudeChineseOverlay);
     requestAnimationFrame(() => runScanStep(scanDeferred));
   }
 

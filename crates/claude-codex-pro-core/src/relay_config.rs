@@ -1849,11 +1849,13 @@ pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow
     }
     let source_base_url = relay_profile_base_url(profile);
     let source_api_key = relay_profile_api_key(profile);
-    if !profile.config_contents.trim().is_empty()
+    let config_can_be_completed = !profile.config_contents.trim().is_empty()
         || profile.relay_mode == crate::settings::RelayMode::PureApi
-        || profile.official_mix_api_key
-    {
-        profile.config_contents = complete_relay_profile_config(profile)?;
+        || profile.official_mix_api_key;
+    if config_can_be_completed {
+        if let Ok(config_contents) = complete_relay_profile_config(profile) {
+            profile.config_contents = config_contents;
+        }
     }
     if profile.relay_mode == crate::settings::RelayMode::PureApi
         && profile.auth_contents.trim().is_empty()
@@ -1866,10 +1868,25 @@ pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow
     if profile.relay_mode == crate::settings::RelayMode::Official {
         profile.auth_contents = remove_openai_api_key_from_auth_contents(&profile.auth_contents)?;
     }
-    profile.model = relay_profile_model(profile);
-    profile.upstream_base_url = source_base_url.clone();
-    profile.base_url = source_base_url;
-    profile.api_key = relay_profile_api_key(profile);
+    if parse_toml_document(&profile.config_contents).is_ok() {
+        profile.model = relay_profile_model(profile);
+        profile.upstream_base_url = source_base_url.clone();
+        profile.base_url = source_base_url;
+        profile.api_key = relay_profile_api_key(profile);
+    } else {
+        if profile.model.trim().is_empty() {
+            profile.model = profile.model.trim().to_string();
+        }
+        if profile.upstream_base_url.trim().is_empty() {
+            profile.upstream_base_url = source_base_url.clone();
+        }
+        if profile.base_url.trim().is_empty() {
+            profile.base_url = source_base_url;
+        }
+        if profile.api_key.trim().is_empty() {
+            profile.api_key = source_api_key;
+        }
+    }
     Ok(())
 }
 

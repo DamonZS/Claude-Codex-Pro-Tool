@@ -1,6 +1,14 @@
 pub mod commands;
 pub mod install;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
+
+static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
+
 pub fn run() {
     install_panic_logger();
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
@@ -26,12 +34,42 @@ pub fn run() {
                 .inner_size(1180.0, 820.0)
                 .min_inner_size(960.0, 720.0)
                 .build()?;
+            match setup_tray(app) {
+                Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
+                Err(error) => {
+                    TRAY_AVAILABLE.store(false, Ordering::Relaxed);
+                    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                        "manager.tray_failed",
+                        serde_json::json!({
+                            "error": error.to_string()
+                        }),
+                    );
+                }
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::backend_version,
             commands::startup_options,
             commands::load_overview,
+            commands::load_claude_desktop_status,
+            commands::load_claude_desktop_integrity,
+            commands::focus_claude_desktop,
+            commands::verify_claude_desktop,
+            commands::open_claude_desktop_devtools,
+            commands::open_claude_desktop,
+            commands::open_claude_chinese_window,
+            commands::load_claude_chinese_window_status,
+            commands::open_plugin_hub_window,
+            commands::open_prompt_optimizer_window,
+            commands::new_claude_desktop_chat,
+            commands::paste_claude_desktop_draft,
+            commands::submit_claude_desktop_text,
             commands::launch_claude_codex_pro,
             commands::restart_claude_codex_pro,
             commands::load_settings,
@@ -46,6 +84,11 @@ pub fn run() {
             commands::load_ads,
             commands::refresh_script_market,
             commands::install_market_script,
+            commands::refresh_plugin_hub_catalog,
+            commands::get_plugin_hub_catalog,
+            commands::preview_plugin_hub_install,
+            commands::install_plugin_hub_item,
+            commands::uninstall_plugin_hub_item,
             commands::set_user_script_enabled,
             commands::delete_user_script,
             commands::open_external_url,
@@ -93,6 +136,44 @@ pub fn run() {
     }
 }
 
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示管理工具", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut builder = TrayIconBuilder::with_id("main")
+        .tooltip("Claude Codex Pro 管理工具")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 fn install_panic_logger() {
     std::panic::set_hook(Box::new(|panic_info| {
         let payload = panic_info
@@ -119,6 +200,19 @@ fn install_panic_logger() {
 }
 
 fn acquire_single_instance_guard() -> Option<claude_codex_pro_core::ports::LoopbackPortGuard> {
+    if std::env::var("CCP_MANAGER_ALLOW_PARALLEL")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+    {
+        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            "manager.parallel_instance_allowed",
+            serde_json::json!({
+                "reason": "CCP_MANAGER_ALLOW_PARALLEL"
+            }),
+        );
+        return fallback_single_instance_guard();
+    }
+
     match claude_codex_pro_core::ports::acquire_resilient_loopback_port_guard(
         claude_codex_pro_core::ports::MANAGER_GUARD_PORT,
     ) {
@@ -136,21 +230,25 @@ fn acquire_single_instance_guard() -> Option<claude_codex_pro_core::ports::Loopb
         }
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-                "manager.already_running",
+                "manager.guard_conflict_parallel_fallback",
                 serde_json::json!({
-                    "guard_port": claude_codex_pro_core::ports::MANAGER_GUARD_PORT
+                    "guard_port": claude_codex_pro_core::ports::MANAGER_GUARD_PORT,
+                    "error": error.to_string(),
+                    "reason": "existing instance may be hidden or elevated"
                 }),
             );
-            None
+            fallback_single_instance_guard()
         }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
             let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-                "manager.already_running",
+                "manager.guard_conflict_parallel_fallback",
                 serde_json::json!({
-                    "guard_port": claude_codex_pro_core::ports::MANAGER_GUARD_PORT
+                    "guard_port": claude_codex_pro_core::ports::MANAGER_GUARD_PORT,
+                    "error": error.to_string(),
+                    "reason": "existing instance may be hidden or elevated"
                 }),
             );
-            None
+            fallback_single_instance_guard()
         }
         Err(error) => {
             let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
@@ -160,20 +258,24 @@ fn acquire_single_instance_guard() -> Option<claude_codex_pro_core::ports::Loopb
                     "error": error.to_string()
                 }),
             );
-            match std::net::TcpListener::bind(("127.0.0.1", 0)) {
-                Ok(listener) => Some(claude_codex_pro_core::ports::LoopbackPortGuard::listener(
-                    listener,
-                )),
-                Err(fallback_error) => {
-                    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-                        "manager.guard_fallback_failed",
-                        serde_json::json!({
-                            "error": fallback_error.to_string()
-                        }),
-                    );
-                    None
-                }
-            }
+            fallback_single_instance_guard()
+        }
+    }
+}
+
+fn fallback_single_instance_guard() -> Option<claude_codex_pro_core::ports::LoopbackPortGuard> {
+    match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => Some(claude_codex_pro_core::ports::LoopbackPortGuard::listener(
+            listener,
+        )),
+        Err(fallback_error) => {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "manager.guard_fallback_failed",
+                serde_json::json!({
+                    "error": fallback_error.to_string()
+                }),
+            );
+            None
         }
     }
 }

@@ -26,9 +26,9 @@ fn github_payload_selects_platform_installer() {
         "body": "fixes",
         "assets": [
             {"name": "source.zip", "browser_download_url": "https://example.test/source.zip"},
-            {"name": "claude-codex-pro-plus-manager.exe", "browser_download_url": "https://example.test/manager.exe"},
-            {"name": "claude-codex-pro-plus-1.0.9-windows-x64-setup.exe", "browser_download_url": "https://example.test/setup.exe"},
-            {"name": "claude-codex-pro-plus-1.0.9-macos-x64.dmg", "browser_download_url": "https://example.test/app.dmg"}
+            {"name": "claude-codex-pro-manager.exe", "browser_download_url": "https://example.test/manager.exe"},
+            {"name": "claude-codex-pro-1.0.9-windows-x64-setup.exe", "browser_download_url": "https://example.test/setup.exe"},
+            {"name": "claude-codex-pro-1.0.9-macos-x64.dmg", "browser_download_url": "https://example.test/app.dmg"}
         ]
     }))
     .unwrap();
@@ -37,12 +37,12 @@ fn github_payload_selects_platform_installer() {
     if cfg!(windows) {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("claude-codex-pro-plus-1.0.9-windows-x64-setup.exe")
+            Some("claude-codex-pro-1.0.9-windows-x64-setup.exe")
         );
     } else if cfg!(target_os = "macos") {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("claude-codex-pro-plus-1.0.9-macos-x64.dmg")
+            Some("claude-codex-pro-1.0.9-macos-x64.dmg")
         );
     } else {
         assert_eq!(release.asset_name.as_deref(), None);
@@ -57,8 +57,8 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
         "body": "静态更新描述",
         "assets": [
             {"name": "source.zip", "url": "https://example.test/source.zip"},
-            {"name": "claude-codex-pro-plus-1.1.6-windows-x64-setup.exe", "url": "https://example.test/setup.exe"},
-            {"name": "claude-codex-pro-plus-1.1.6-macos-x64.dmg", "url": "https://example.test/app.dmg"}
+            {"name": "claude-codex-pro-1.1.6-windows-x64-setup.exe", "url": "https://example.test/setup.exe"},
+            {"name": "claude-codex-pro-1.1.6-macos-x64.dmg", "url": "https://example.test/app.dmg"}
         ]
     }))
     .unwrap();
@@ -68,12 +68,12 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
     if cfg!(windows) {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("claude-codex-pro-plus-1.1.6-windows-x64-setup.exe")
+            Some("claude-codex-pro-1.1.6-windows-x64-setup.exe")
         );
     } else if cfg!(target_os = "macos") {
         assert_eq!(
             release.asset_name.as_deref(),
-            Some("claude-codex-pro-plus-1.1.6-macos-x64.dmg")
+            Some("claude-codex-pro-1.1.6-macos-x64.dmg")
         );
     } else {
         assert_eq!(release.asset_name.as_deref(), None);
@@ -84,19 +84,19 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
 fn asset_selection_prefers_current_platform_artifacts() {
     let assets = vec![
         (
-            "claude-codex-pro-plus.zip".to_string(),
+            "claude-codex-pro.zip".to_string(),
             "https://example.test/source.zip".to_string(),
         ),
         (
-            "claude-codex-pro-plus-manager.exe".to_string(),
+            "claude-codex-pro-manager.exe".to_string(),
             "https://example.test/manager.exe".to_string(),
         ),
         (
-            "claude-codex-pro-plus-1.0.9-windows-x64-setup.exe".to_string(),
+            "claude-codex-pro-1.0.9-windows-x64-setup.exe".to_string(),
             "https://example.test/setup.exe".to_string(),
         ),
         (
-            "claude-codex-pro-plus-1.0.9-macos-x64.dmg".to_string(),
+            "claude-codex-pro-1.0.9-macos-x64.dmg".to_string(),
             "https://example.test/app.dmg".to_string(),
         ),
     ];
@@ -105,14 +105,11 @@ fn asset_selection_prefers_current_platform_artifacts() {
         let selected = select_update_asset(&assets).unwrap();
         assert_eq!(
             selected.name,
-            "claude-codex-pro-plus-1.0.9-windows-x64-setup.exe"
+            "claude-codex-pro-1.0.9-windows-x64-setup.exe"
         );
     } else if cfg!(target_os = "macos") {
         let selected = select_update_asset(&assets).unwrap();
-        assert_eq!(
-            selected.name,
-            "claude-codex-pro-plus-1.0.9-macos-x64.dmg"
-        );
+        assert_eq!(selected.name, "claude-codex-pro-1.0.9-macos-x64.dmg");
     } else {
         assert!(select_update_asset(&assets).is_none());
     }

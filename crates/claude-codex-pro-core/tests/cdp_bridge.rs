@@ -107,7 +107,9 @@ fn injection_script_fetches_ads_without_bridge() {
     assert!(script.contains("Date.now()"));
     assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool-Ad-List"));
     assert!(
-        !script.contains("claudeCodexProAds = normalizeClaudeCodexProAds(await postJson(\"/ads\", {}));")
+        !script.contains(
+            "claudeCodexProAds = normalizeClaudeCodexProAds(await postJson(\"/ads\", {}));"
+        )
     );
 }
 
@@ -225,7 +227,9 @@ fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
     assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"10\""));
     assert!(script.contains("if (name === \"openai-bundled\") return \"\""));
     assert!(
-        !script.contains("if (name === \"openai-bundled\") return \"claude-codex-pro-openai-bundled\"")
+        !script.contains(
+            "if (name === \"openai-bundled\") return \"claude-codex-pro-openai-bundled\""
+        )
     );
     assert!(script.contains("if (name === \"openai-bundled\" || name === \"claude-codex-pro-openai-bundled\") return \"OpenAI插件1(Claude Codex Pro)\""));
 }
@@ -271,7 +275,9 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     ));
     assert!(script.contains("if (name === \"openai-bundled\") return \"\""));
     assert!(
-        script.contains("if (name === \"openai-curated\") return \"claude-codex-pro-openai-curated\"")
+        script.contains(
+            "if (name === \"openai-curated\") return \"claude-codex-pro-openai-curated\""
+        )
     );
     assert!(script.contains(
         "if (name === \"openai-primary-runtime\") return \"claude-codex-pro-openai-primary-runtime\""
@@ -743,9 +749,11 @@ fn manager_ui_exposes_pure_api_relay_mode_button() {
         .parent()
         .and_then(std::path::Path::parent)
         .expect("core crate should live under crates/claude-codex-pro-core");
-    let source = std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src/App.tsx")).unwrap();
+    let source =
+        std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src/App.tsx")).unwrap();
     let commands =
-        std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src-tauri/src/lib.rs")).unwrap();
+        std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src-tauri/src/lib.rs"))
+            .unwrap();
 
     assert!(source.contains("官方混入 API Key"));
     assert!(source.contains("纯 API"));
@@ -987,7 +995,9 @@ async fn list_targets_can_query_ipv6_loopback_cdp_endpoint() {
 async fn install_bridge_routes_binding_while_waiting_for_command_response() {
     let temp = tempfile::tempdir().unwrap();
     let log_path = temp.path().join("claude-codex-pro.log");
-    claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(Some(log_path.clone()));
+    claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_for_tests(Some(
+        log_path.clone(),
+    ));
     let (url, request_rx) = spawn_cdp_server(|mut socket| async move {
         for expected_id in 1..=4 {
             let command = recv_json(&mut socket).await;

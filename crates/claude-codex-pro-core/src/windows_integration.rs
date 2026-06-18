@@ -17,9 +17,15 @@ use windows::Win32::System::Com::{
     CoTaskMemFree, CoUninitialize, IPersistFile,
 };
 #[cfg(windows)]
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
+#[cfg(windows)]
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
+#[cfg(windows)]
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 #[cfg(windows)]
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteKeyW,
@@ -27,8 +33,13 @@ use windows::Win32::System::Registry::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-    TerminateProcess,
+    AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
+};
+#[cfg(windows)]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
+    VK_CONTROL, VK_F12, VK_I, VK_N, VK_RETURN, VK_SHIFT, VK_V,
 };
 #[cfg(windows)]
 use windows::Win32::UI::Shell::{
@@ -38,14 +49,17 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE,
-    SetForegroundWindow, ShowWindow,
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE, SetForegroundWindow,
+    ShowWindow,
 };
 #[cfg(windows)]
 use windows::core::{Interface, PCWSTR, PWSTR};
 
 #[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
+const CF_UNICODETEXT_FORMAT: u32 = 13;
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +68,20 @@ pub struct WindowsProcessInfo {
     pub parent_process_id: u32,
     pub exe_file: String,
     pub executable_path: Option<PathBuf>,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForegroundWindowInfo {
+    pub process_id: u32,
+    pub title: Option<String>,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessWindowInfo {
+    pub process_id: u32,
+    pub title: Option<String>,
 }
 
 #[cfg(windows)]
@@ -282,8 +310,170 @@ pub fn activate_process_window(process_id: u32) -> bool {
         if IsIconic(state.hwnd).as_bool() {
             let _ = ShowWindow(state.hwnd, SW_RESTORE);
         }
-        SetForegroundWindow(state.hwnd).as_bool()
+        if SetForegroundWindow(state.hwnd).as_bool() {
+            return true;
+        }
     }
+    force_foreground_window(state.hwnd)
+}
+
+#[cfg(windows)]
+fn force_foreground_window(hwnd: HWND) -> bool {
+    unsafe {
+        let current_thread = GetCurrentThreadId();
+        let foreground_hwnd = GetForegroundWindow();
+        let foreground_thread = if foreground_hwnd.is_invalid() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground_hwnd, None)
+        };
+        let target_thread = GetWindowThreadProcessId(hwnd, None);
+        if target_thread == 0 {
+            return false;
+        }
+
+        let attached_current = target_thread != current_thread
+            && AttachThreadInput(current_thread, target_thread, true).as_bool();
+        let attached_foreground = foreground_thread != 0
+            && foreground_thread != target_thread
+            && AttachThreadInput(foreground_thread, target_thread, true).as_bool();
+
+        let _ = BringWindowToTop(hwnd);
+        let focused = SetForegroundWindow(hwnd).as_bool();
+
+        if attached_foreground {
+            let _ = AttachThreadInput(foreground_thread, target_thread, false);
+        }
+        if attached_current {
+            let _ = AttachThreadInput(current_thread, target_thread, false);
+        }
+
+        focused
+    }
+}
+
+#[cfg(windows)]
+pub fn foreground_window_info() -> Option<ForegroundWindowInfo> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_invalid() {
+        return None;
+    }
+    let mut process_id = 0;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+    }
+    if process_id == 0 {
+        return None;
+    }
+    Some(ForegroundWindowInfo {
+        process_id,
+        title: window_title(hwnd),
+    })
+}
+
+#[cfg(windows)]
+pub fn visible_window_infos_for_process(process_id: u32) -> Vec<ProcessWindowInfo> {
+    let mut state = CollectWindowState {
+        process_id,
+        windows: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(collect_process_windows_proc),
+            LPARAM((&mut state as *mut CollectWindowState) as isize),
+        );
+    }
+    state.windows
+}
+
+#[cfg(windows)]
+fn window_title(hwnd: HWND) -> Option<String> {
+    let len = unsafe { GetWindowTextLengthW(hwnd) };
+    if len <= 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; len as usize + 1];
+    let copied = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+    if copied <= 0 {
+        return None;
+    }
+    Some(
+        OsString::from_wide(&buffer[..copied as usize])
+            .to_string_lossy()
+            .trim()
+            .to_string(),
+    )
+    .filter(|title| !title.is_empty())
+}
+
+#[cfg(windows)]
+pub fn set_clipboard_text(text: &str) -> anyhow::Result<()> {
+    let clipboard = ClipboardGuard::open()?;
+    unsafe {
+        EmptyClipboard().ok().context("clear clipboard failed")?;
+    }
+    let wide = wide_null(text);
+    let byte_len = wide.len() * std::mem::size_of::<u16>();
+    let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) }
+        .context("allocate clipboard buffer failed")?;
+    if handle.is_invalid() {
+        anyhow::bail!("allocate clipboard buffer failed");
+    }
+    let lock = unsafe { GlobalLock(handle) };
+    if lock.is_null() {
+        anyhow::bail!("lock clipboard buffer failed");
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), lock.cast::<u8>(), byte_len);
+        let _ = GlobalUnlock(handle);
+        SetClipboardData(CF_UNICODETEXT_FORMAT, HANDLE(handle.0))
+            .ok()
+            .context("set clipboard text failed")?;
+    }
+    drop(clipboard);
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn send_ctrl_v() -> bool {
+    send_key_sequence(&[
+        key_input(VK_CONTROL, false),
+        key_input(VK_V, false),
+        key_input(VK_V, true),
+        key_input(VK_CONTROL, true),
+    ])
+}
+
+#[cfg(windows)]
+pub fn send_ctrl_n() -> bool {
+    send_key_sequence(&[
+        key_input(VK_CONTROL, false),
+        key_input(VK_N, false),
+        key_input(VK_N, true),
+        key_input(VK_CONTROL, true),
+    ])
+}
+
+#[cfg(windows)]
+pub fn send_ctrl_shift_i() -> bool {
+    send_key_sequence(&[
+        key_input(VK_CONTROL, false),
+        key_input(VK_SHIFT, false),
+        key_input(VK_I, false),
+        key_input(VK_I, true),
+        key_input(VK_SHIFT, true),
+        key_input(VK_CONTROL, true),
+    ])
+}
+
+#[cfg(windows)]
+pub fn send_f12() -> bool {
+    send_key_sequence(&[key_input(VK_F12, false), key_input(VK_F12, true)])
+}
+
+#[cfg(windows)]
+pub fn send_enter() -> bool {
+    send_key_sequence(&[key_input(VK_RETURN, false), key_input(VK_RETURN, true)])
 }
 
 #[cfg(windows)]
@@ -308,9 +498,65 @@ fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
+fn send_key_sequence(inputs: &[INPUT]) -> bool {
+    let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+    sent == inputs.len() as u32
+}
+
+#[cfg(windows)]
+fn key_input(key: VIRTUAL_KEY, key_up: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: if key_up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    Default::default()
+                },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+#[cfg(windows)]
+struct ClipboardGuard;
+
+#[cfg(windows)]
+impl ClipboardGuard {
+    fn open() -> anyhow::Result<Self> {
+        unsafe {
+            OpenClipboard(HWND::default())
+                .ok()
+                .context("open clipboard failed")?;
+        }
+        Ok(Self)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseClipboard();
+        }
+    }
+}
+
+#[cfg(windows)]
 struct ActivateWindowState {
     process_id: u32,
     hwnd: HWND,
+}
+
+#[cfg(windows)]
+struct CollectWindowState {
+    process_id: u32,
+    windows: Vec<ProcessWindowInfo>,
 }
 
 #[cfg(windows)]
@@ -327,6 +573,24 @@ unsafe extern "system" fn find_process_window_proc(hwnd: HWND, lparam: LPARAM) -
         state.hwnd = hwnd;
         return BOOL(0);
     }
+    BOOL(1)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn collect_process_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let state = unsafe { &mut *(lparam.0 as *mut CollectWindowState) };
+    if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return BOOL(1);
+    }
+    let mut process_id = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+    if process_id != state.process_id {
+        return BOOL(1);
+    }
+    state.windows.push(ProcessWindowInfo {
+        process_id,
+        title: window_title(hwnd),
+    });
     BOOL(1)
 }
 

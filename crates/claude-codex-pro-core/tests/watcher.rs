@@ -44,23 +44,23 @@ fn watcher_enable_and_disable_toggle_flag() {
 
 #[test]
 fn watcher_install_plan_registers_rust_launcher_at_logon() {
-    let plan = build_watcher_install_plan("C:/Tools/claude-codex-pro-plus.exe".into(), 9333);
+    let plan = build_watcher_install_plan("C:/Tools/claude-codex-pro.exe".into(), 9333);
 
     assert_eq!(plan.run_value_name, "ClaudeCodexProWatcher");
     assert_eq!(
         plan.run_value,
-        "\"C:/Tools/claude-codex-pro-plus.exe\" --debug-port 9333"
+        "\"C:/Tools/claude-codex-pro.exe\" --debug-port 9333"
     );
     assert_eq!(plan.shortcut_name, "ClaudeCodexProWatcher.lnk");
-    assert_eq!(plan.shortcut_target, "C:/Tools/claude-codex-pro-plus.exe");
+    assert_eq!(plan.shortcut_target, "C:/Tools/claude-codex-pro.exe");
     assert_eq!(plan.shortcut_arguments, "--debug-port 9333");
 }
 
 #[test]
 fn spawn_launcher_command_points_to_silent_binary_only() {
-    let command = build_spawn_launcher_command("C:/Tools/claude-codex-pro-plus.exe", 9444);
+    let command = build_spawn_launcher_command("C:/Tools/claude-codex-pro.exe", 9444);
 
-    assert_eq!(command[0], "C:/Tools/claude-codex-pro-plus.exe");
+    assert_eq!(command[0], "C:/Tools/claude-codex-pro.exe");
     assert!(command.contains(&"--debug-port".to_string()));
     assert!(command.contains(&"9444".to_string()));
     assert!(!command.iter().any(|part| part.contains("manager")));
@@ -86,11 +86,11 @@ fn codex_process_filter_keeps_only_windowsapps_codex_processes() {
 #[test]
 fn launcher_process_filter_protects_current_process_ancestry() {
     let processes = [
-        (10, 0, "claude-codex-pro-plus.exe"),
-        (20, 10, "claude-codex-pro-plus.exe"),
-        (30, 20, "claude-codex-pro-plus.exe"),
-        (40, 10, "claude-codex-pro-plus.exe"),
-        (50, 10, "claude-codex-pro-plus-manager.exe"),
+        (10, 0, "claude-codex-pro.exe"),
+        (20, 10, "claude-codex-pro.exe"),
+        (30, 20, "claude-codex-pro.exe"),
+        (40, 10, "claude-codex-pro.exe"),
+        (50, 10, "claude-codex-pro-manager.exe"),
     ];
 
     assert_eq!(filter_killable_launcher_processes(processes, 30), vec![40]);

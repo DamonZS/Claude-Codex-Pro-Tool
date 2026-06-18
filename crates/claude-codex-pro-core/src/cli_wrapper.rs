@@ -7,7 +7,7 @@ use crate::settings::BackendSettings;
 
 pub const WRAPPER_EXE: &str = "codex-wrapper.exe";
 pub const WRAPPER_SOURCE: &str = "codex-wrapper.cs";
-const CLI_HOME_DIR: &str = ".claude-codex-pro-plus-cli";
+const CLI_HOME_DIR: &str = ".claude-codex-pro-cli";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WrapperInstall {
@@ -73,8 +73,12 @@ pub fn install_cli_wrapper_to(
 ) -> anyhow::Result<WrapperInstall> {
     std::fs::create_dir_all(wrapper_dir)
         .with_context(|| format!("failed to create wrapper dir {}", wrapper_dir.display()))?;
-    std::fs::create_dir_all(codex_home)
-        .with_context(|| format!("failed to create Claude Codex Pro CLI home {}", codex_home.display()))?;
+    std::fs::create_dir_all(codex_home).with_context(|| {
+        format!(
+            "failed to create Claude Codex Pro CLI home {}",
+            codex_home.display()
+        )
+    })?;
 
     let source_path = wrapper_dir.join(WRAPPER_SOURCE);
     let wrapper_path = wrapper_dir.join(WRAPPER_EXE);
@@ -260,8 +264,8 @@ class CodexWrapper
 }
 
 fn compile_wrapper(source_path: &Path, wrapper_path: &Path) -> anyhow::Result<()> {
-    let csc =
-        find_csc().ok_or_else(|| anyhow::anyhow!("未找到 csc.exe，无法编译 Claude Codex Pro wrapper"))?;
+    let csc = find_csc()
+        .ok_or_else(|| anyhow::anyhow!("未找到 csc.exe，无法编译 Claude Codex Pro wrapper"))?;
     let output_arg = format!("/out:{}", wrapper_path.display());
     let mut command = Command::new(&csc);
     command

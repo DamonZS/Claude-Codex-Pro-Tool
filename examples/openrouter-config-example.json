@@ -1,0 +1,12 @@
+{
+  "provider": "OpenRouter",
+  "api_key": "sk-or-your-key-here",
+  "api_base_url": "https://openrouter.ai/api/v1",
+  "header_key": "Authorization",
+  "header_value_prefix": "Bearer ",
+  "api_version": "2023-06-01",
+  "model": "anthropic/claude-3-opus",
+  "max_tokens": 4096,
+  "skip_login": true,
+  "dev_mode": true
+}

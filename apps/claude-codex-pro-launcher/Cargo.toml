@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "claude-codex-pro-plus"
+name = "claude-codex-pro"
 path = "src/main.rs"
 test = false
 

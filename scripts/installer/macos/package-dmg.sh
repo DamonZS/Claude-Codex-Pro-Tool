@@ -7,16 +7,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
-DMG="$DIST/claude-codex-pro-plus-${VERSION}-macos-${ARCH}.dmg"
+DMG="$DIST/claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/claude-codex-pro-manager/src-tauri/icons/icon.png"
-ICON_NAME="claude-codex-pro-plus.icns"
+ICON_NAME="claude-codex-pro.icns"
 ICON_ICNS="$DIST/$ICON_NAME"
 
 rm -rf "$DIST"
 mkdir -p "$STAGE"
 
 prepare_icon() {
-  local iconset="$DIST/claude-codex-pro-plus.iconset"
+  local iconset="$DIST/claude-codex-pro.iconset"
   rm -rf "$iconset"
   mkdir -p "$iconset"
 
@@ -118,8 +118,8 @@ verify_app() {
 }
 
 prepare_icon
-create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro-plus" "com.damonzs.claudecodexpro" "true"
-create_app "Claude Codex Pro 管理工具" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-plus-manager" "com.damonzs.claudecodexpro.manager" "false"
+create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "true"
+create_app "Claude Codex Pro 管理工具" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-manager" "com.damonzs.claudecodexpro.manager" "false"
 ln -s /Applications "$STAGE/Applications"
 
 sign_app "$STAGE/Claude Codex Pro.app"
