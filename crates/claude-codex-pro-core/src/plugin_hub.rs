@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::Command;
-
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub const OFFICIAL_MARKETPLACE_URL: &str =
     "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json";
@@ -58,6 +58,7 @@ pub struct PluginCatalogItem {
 #[serde(rename_all = "snake_case")]
 pub enum InstallKind {
     ClaudePluginMarketplace,
+    ClaudeDesktopMcp,
     McpServer,
     SkillBundle,
     ResourceLink,
@@ -131,6 +132,15 @@ pub async fn fetch_catalog() -> PluginHubCatalog {
         )),
     }
 
+    let mut desktop_items = builtin_claude_desktop_items(&installed);
+    sources.push(ok_source(
+        "desktop",
+        "Claude Desktop MCP",
+        "file://claude_desktop_config.json",
+        desktop_items.len(),
+    ));
+    items.append(&mut desktop_items);
+
     match fetch_awesome_items(&installed).await {
         Ok(mut source_items) => {
             sources.push(ok_source(
@@ -190,8 +200,12 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
     }
 
     match preview.item.install_kind {
-        InstallKind::ClaudePluginMarketplace => install_official_plugin(preview),
-        InstallKind::McpServer => install_mcp_preview(preview),
+        InstallKind::ClaudeDesktopMcp | InstallKind::McpServer => {
+            install_claude_desktop_mcp(preview)
+        }
+        InstallKind::ClaudePluginMarketplace => {
+            anyhow::bail!("该条目属于 Claude Code 插件市场，不能直接安装到 Claude Desktop。请使用 Claude Desktop MCP 或桌面端 Extensions。")
+        }
         InstallKind::SkillBundle | InstallKind::ResourceLink => {
             anyhow::bail!("该社区资源需要人工审查后安装")
         }
@@ -364,6 +378,35 @@ fn parse_awesome_csv(
         .collect()
 }
 
+fn builtin_claude_desktop_items(
+    installed: &BTreeMap<String, PluginHubInstallRecord>,
+) -> Vec<PluginCatalogItem> {
+    let id = "desktop:claude-codex-pro-codex";
+    vec![PluginCatalogItem {
+        id: id.to_string(),
+        name: "Claude Code / Codex MCP".to_string(),
+        description: "将 Claude Codex Pro 的 Codex 能力注册到 Claude Desktop 的 MCP 服务器列表。安装后重启 Claude Desktop，在桌面端工具/插件里使用。".to_string(),
+        source_id: "desktop".to_string(),
+        source_label: "Claude Desktop MCP".to_string(),
+        source_url: "file://claude_desktop_config.json".to_string(),
+        category: "codex".to_string(),
+        author: "Claude Codex Pro".to_string(),
+        homepage: "https://github.com/DamonZS/Claude-Codex-Pro-Tool".to_string(),
+        license: "MIT".to_string(),
+        tags: vec!["codex".to_string(), "mcp".to_string(), "claude-desktop".to_string()],
+        install_kind: InstallKind::ClaudeDesktopMcp,
+        install_status: status_for(id, installed, InstallStatus::NotInstalled),
+        install_command: desktop_mcp_command(),
+        config_preview: claude_desktop_mcp_config_preview(&desktop_mcp_server_name(), &desktop_mcp_command()),
+        risk: "写入 Claude Desktop 的 MCP 配置文件；安装前会备份原 claude_desktop_config.json，安装后需要重启 Claude Desktop。".to_string(),
+        requirements: vec![
+            "Claude Desktop".to_string(),
+            "本机 MCP sidecar".to_string(),
+            "重启 Claude Desktop".to_string(),
+        ],
+    }]
+}
+
 fn github_mcp_registry_items(
     installed: &BTreeMap<String, PluginHubInstallRecord>,
 ) -> Vec<PluginCatalogItem> {
@@ -407,16 +450,30 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
         InstallKind::ClaudePluginMarketplace => PluginInstallPreview {
             command: official_install_command(&item),
             config_diff: String::new(),
-            can_install: true,
+            can_install: false,
             action: "claude_plugin_cli".to_string(),
             message: "将调用 Claude Code CLI 安装官方插件；执行前可检查命令。".to_string(),
             item,
         },
+        InstallKind::ClaudeDesktopMcp => PluginInstallPreview {
+            command: desktop_mcp_command(),
+            config_diff: claude_desktop_mcp_config_preview(
+                &desktop_mcp_server_name(),
+                &desktop_mcp_command(),
+            ),
+            can_install: true,
+            action: "claude_desktop_mcp_config".to_string(),
+            message: "将写入 Claude Desktop 的 claude_desktop_config.json；重启 Claude Desktop 后生效。".to_string(),
+            item,
+        },
         InstallKind::McpServer => PluginInstallPreview {
             command: Vec::new(),
-            config_diff: mcp_config_preview(&item),
+            config_diff: claude_desktop_mcp_config_preview(
+                &safe_id(&item.name),
+                &["npx".to_string(), "-y".to_string(), "<package-or-command>".to_string()],
+            ),
             can_install: item.source_id == "awesome" && item.homepage.contains("github.com"),
-            action: "mcp_config_preview".to_string(),
+            action: "claude_desktop_mcp_config".to_string(),
             message: if item.source_id == "awesome" {
                 "已生成 MCP 配置草案；社区条目需要确认 command/args 后再启用。".to_string()
             } else {
@@ -443,6 +500,7 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
     }
 }
 
+#[cfg(test)]
 fn install_official_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
     let command = official_install_command(&preview.item);
     ensure_claude_marketplace_added();
@@ -471,6 +529,7 @@ fn install_official_plugin(preview: PluginInstallPreview) -> anyhow::Result<Plug
     })
 }
 
+#[cfg(test)]
 fn install_mcp_preview(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
     let backup_path = Some(write_plugin_hub_note(&preview)?);
     record_install(&preview.item, Vec::new(), backup_path.clone())?;
@@ -485,6 +544,7 @@ fn install_mcp_preview(preview: PluginInstallPreview) -> anyhow::Result<PluginIn
     })
 }
 
+#[cfg(test)]
 fn ensure_claude_marketplace_added() {
     let _ = Command::new("claude")
         .args([
@@ -496,6 +556,7 @@ fn ensure_claude_marketplace_added() {
         .output();
 }
 
+#[cfg(test)]
 fn official_install_failure_message(command: &[String], stdout: &str, stderr: &str) -> String {
     let combined = format!("{}\n{}", stdout, stderr);
     let command_text = command.join(" ");
@@ -532,11 +593,106 @@ fn official_install_command(item: &PluginCatalogItem) -> Vec<String> {
     ]
 }
 
+#[cfg(test)]
 fn mcp_config_preview(item: &PluginCatalogItem) -> String {
     let id = safe_id(&item.name);
     format!(
         "[mcp_servers.{id}]\n# 来源：{}\n# 主页：{}\n# 社区条目需要确认实际启动命令后删除下面两行注释。\ncommand = \"npx\"\nargs = [\"-y\", \"<package-or-command>\"]\nenabled = false\n",
         item.source_label, item.homepage
+    )
+}
+
+fn install_claude_desktop_mcp(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
+    let config_path = claude_desktop_config_path();
+    let backup_path = backup_claude_desktop_config(&config_path)?;
+    let server_name = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
+        desktop_mcp_server_name()
+    } else {
+        safe_id(&preview.item.name)
+    };
+    let command = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
+        desktop_mcp_command()
+    } else {
+        vec!["npx".to_string(), "-y".to_string(), "<package-or-command>".to_string()]
+    };
+    let server_config = json!({
+        "command": command.first().cloned().unwrap_or_default(),
+        "args": command.iter().skip(1).cloned().collect::<Vec<_>>(),
+        "env": {},
+    });
+    upsert_claude_desktop_mcp_server(&config_path, &server_name, server_config)?;
+    record_install(&preview.item, command, backup_path.clone())?;
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: true,
+        message: "已写入 Claude Desktop MCP 配置；请重启 Claude Desktop 以生效。".to_string(),
+        stdout: String::new(),
+        stderr: String::new(),
+        backup_path,
+    })
+}
+
+fn desktop_mcp_server_name() -> String {
+    "claude-codex-pro-codex".to_string()
+}
+
+fn desktop_mcp_command() -> Vec<String> {
+    vec!["claude".to_string(), "mcp".to_string(), "serve".to_string()]
+}
+
+fn claude_desktop_config_path() -> PathBuf {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Claude")
+        .join("claude_desktop_config.json")
+}
+
+fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let backup_path = path.with_extension("json.bak");
+    std::fs::copy(path, &backup_path)?;
+    Ok(Some(backup_path.to_string_lossy().to_string()))
+}
+
+fn upsert_claude_desktop_mcp_server(
+    config_path: &PathBuf,
+    server_name: &str,
+    server_config: serde_json::Value,
+) -> anyhow::Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut config = if config_path.exists() {
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_path)?)
+            .unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
+    let mcp_servers = root.entry("mcpServers").or_insert_with(|| json!({}));
+    let servers = mcp_servers
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop mcpServers must be a JSON object"))?;
+    servers.insert(server_name.to_string(), server_config);
+    crate::settings::atomic_write(config_path, serde_json::to_string_pretty(&config)?.as_bytes())?;
+    Ok(())
+}
+
+fn claude_desktop_mcp_config_preview(server_name: &str, command: &[String]) -> String {
+    let command_name = command
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "claude".to_string());
+    let args = serde_json::to_string(&command.iter().skip(1).collect::<Vec<_>>())
+        .unwrap_or_else(|_| "[]".to_string());
+    format!(
+        "{{\n  \"mcpServers\": {{\n    \"{server_name}\": {{\n      \"command\": \"{command_name}\",\n      \"args\": {args}\n    }}\n  }}\n}}"
     )
 }
 
@@ -570,6 +726,7 @@ fn save_installed_records(records: &BTreeMap<String, PluginHubInstallRecord>) ->
     crate::settings::atomic_write(&path, serde_json::to_string_pretty(&values)?.as_bytes())
 }
 
+#[cfg(test)]
 fn write_plugin_hub_note(preview: &PluginInstallPreview) -> anyhow::Result<String> {
     let dir = plugin_hub_dir().join("pending");
     std::fs::create_dir_all(&dir)?;
@@ -762,6 +919,60 @@ mod tests {
         assert_eq!(
             classify_awesome_item("x", "Agent Skills", "https://github.com/a/b", ""),
             InstallKind::SkillBundle
+        );
+    }
+
+    #[test]
+    fn builtin_catalog_exposes_codex_desktop_mcp_item() {
+        let items = builtin_claude_desktop_items(&BTreeMap::new());
+        let item = items
+            .iter()
+            .find(|item| item.id == "desktop:claude-codex-pro-codex")
+            .expect("codex desktop MCP item");
+
+        assert_eq!(item.install_kind, InstallKind::ClaudeDesktopMcp);
+        assert_eq!(item.install_command, vec!["claude", "mcp", "serve"]);
+        assert!(item.tags.contains(&"codex".to_string()));
+    }
+
+    #[test]
+    fn codex_desktop_mcp_preview_targets_claude_desktop_config() {
+        let item = builtin_claude_desktop_items(&BTreeMap::new()).remove(0);
+        let preview = preview_for_item(item);
+
+        assert!(preview.can_install);
+        assert_eq!(preview.action, "claude_desktop_mcp_config");
+        assert!(preview.config_diff.contains("\"mcpServers\""));
+        assert!(preview.config_diff.contains("\"claude-codex-pro-codex\""));
+        assert!(preview.config_diff.contains("\"claude\""));
+        assert!(preview.config_diff.contains("\"mcp\""));
+        assert!(preview.config_diff.contains("\"serve\""));
+    }
+
+    #[test]
+    fn claude_desktop_config_upsert_preserves_existing_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude_desktop_config.json");
+        std::fs::write(
+            &path,
+            r#"{"windowBounds":{"width":1200},"mcpServers":{"existing":{"command":"node","args":["server.js"]}}}"#,
+        )
+        .unwrap();
+
+        upsert_claude_desktop_mcp_server(
+            &path,
+            "claude-codex-pro-codex",
+            json!({"command": "claude", "args": ["mcp", "serve"], "env": {}}),
+        )
+        .unwrap();
+
+        let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(parsed["windowBounds"]["width"], 1200);
+        assert_eq!(parsed["mcpServers"]["existing"]["command"], "node");
+        assert_eq!(parsed["mcpServers"]["claude-codex-pro-codex"]["command"], "claude");
+        assert_eq!(
+            parsed["mcpServers"]["claude-codex-pro-codex"]["args"],
+            json!(["mcp", "serve"])
         );
     }
 

@@ -3681,6 +3681,10 @@ body {
   gap: 8px;
 }
 
+.desktop-install-label + * {
+  display: none;
+}
+
 .filter-row button {
   min-height: 32px;
   border: 1px solid #cfd8e6;

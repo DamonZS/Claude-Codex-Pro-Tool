@@ -1,7 +1,7 @@
 # Claude Codex Pro Tool
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro-plus.png" alt="Claude Codex Pro Tool 图标" width="160">
+  <img src="docs/images/claude-codex-pro.png" alt="Claude Codex Pro Tool 图标" width="160">
 </p>
 
 <p align="center">
@@ -16,28 +16,30 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Claude Codex Pro Tool 是面向 Codex App 的外部增强启动器和管理工具。它不修改 Codex App 原始安装文件，而是通过外部 launcher 启动 Codex，并使用 Chromium DevTools Protocol 注入增强脚本。
+Claude Codex Pro Tool 是面向 Codex App 和 Claude Desktop 的本地运维控制台。它包含 Codex 外部增强启动器、Claude 中文包装窗口、Claude Desktop MCP 插件中心、供应商/中转配置、会话与维护工具，不修改 Codex 或 Claude 官方安装文件。
 
 ## 快速开始
 
 从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载最新安装包：
 
-- Windows：`claude-codex-pro-plus-*-windows-x64-setup.exe`
-- macOS Intel：`claude-codex-pro-plus-*-macos-x64.dmg`
-- macOS Apple Silicon：`claude-codex-pro-plus-*-macos-arm64.dmg`
+- Windows：`claude-codex-pro-*-windows-x64-setup.exe`
+- macOS Intel：`claude-codex-pro-*-macos-x64.dmg`
+- macOS Apple Silicon：`claude-codex-pro-*-macos-arm64.dmg`
 
 安装后会有两个入口：
 
-- `Claude Codex Pro`：静默启动入口，只负责启动 Codex 并注入增强功能。
-- `Claude Codex Pro 管理工具`：Tauri 控制面板，用于启动、诊断、修复、更新、配置中转注入、管理增强功能和用户脚本。
+- `Claude Codex Pro`：静默启动入口，负责启动 Codex 并注入增强功能。
+- `Claude Codex Pro 管理工具`：Tauri 运维控制台，用于启动 Codex/Claude、打开 Claude 中文窗口、配置中转、安装 Claude Desktop MCP、诊断、修复、更新和维护增强功能。
 
 Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会安装 `/Applications/Claude Codex Pro.app` 和 `/Applications/Claude Codex Pro 管理工具.app`。
 
 ## 主要功能
 
 - Rust 后端和静默 launcher，启动时不依赖额外运行时。
-- Tauri + React 管理工具，支持深色和浅色主题。
-- 外部 CDP 注入，不修改 `app.asar`，不向 Codex 安装目录写入 DLL。
+- Tauri + React 运维控制台，提供 Codex、Claude Desktop、插件中心、提示词优化和安装维护入口。
+- Codex 使用外部 CDP 注入，不修改 `app.asar`，不向 Codex 安装目录写入 DLL。
+- Claude 中文化使用独立 WebView 包装窗口加载 `https://claude.ai/new`，在窗口创建阶段注入中文覆盖和顶部状态标识，不修改 Claude Desktop MSIX、`app.asar` 或签名文件。
+- 插件中心支持发现官方 Claude 插件、GitHub MCP、Awesome Claude Code 资源，并可将 `Claude Code / Codex MCP` 写入 Claude Desktop 的 `claude_desktop_config.json`。
 - 中转注入模式，支持多个中转配置，写入 `custom` provider，并可切回官方 ChatGPT 登录状态。
 - 增强模式，包含插件入口解锁、特殊插件强制安装、会话删除、Markdown 导出、项目移动、Timeline 等能力。
 - 独立用户脚本管理，可在启动时注入自定义脚本。
@@ -58,14 +60,26 @@ Codex 原生会话列表只有归档入口，没有真正的删除按钮：
 
 ![Codex 原生会话列表缺少删除按钮](docs/images/pain-no-delete-button.png)
 
-Claude Codex Pro Tool 启动后会解锁插件入口，并在会话列表悬停时显示删除按钮：
+Claude Codex Pro Tool 启动后可解锁插件入口，并在会话列表悬停时显示删除按钮。当前 README 不再展示旧版界面截图，避免把废弃品牌混入文档；新版运维控制台和状态标识请以当前安装包实际界面为准。
 
-![解锁插件入口并添加删除按钮](docs/images/solution-plugin-and-delete.png)
+## Claude Desktop 集成
 
-顶部菜单栏会出现 `Claude Codex Pro`，可查看后端状态并打开设置面板：
+管理工具把 Claude Desktop 和 Codex 明确分开：
 
-![后端状态指示灯](docs/images/backend-status-indicator.png)
-![设置面板](docs/images/settings-panel.png)
+- `启动 Claude`：启动官方 Claude Desktop，不修改官方安装目录。
+- `打开 Claude 中文窗口`：打开独立 WebView 包装窗口，加载 Claude 网页并注入中文覆盖、顶部后端状态标识和插件中心入口。
+- `重启 Codex`：只控制 Codex 外部增强启动器。
+- `插件中心`：展示官方 Claude 插件、MCP、Skills 和社区资源，安装前先展示命令或配置 diff。
+
+安装 Codex MCP 到 Claude Desktop：
+
+1. 打开 `Claude Codex Pro 管理工具`。
+2. 进入 `插件中心`，选择 `Claude Desktop MCP` 来源。
+3. 选择 `Claude Code / Codex MCP`。
+4. 点击预览，确认将写入 `%APPDATA%\Claude\claude_desktop_config.json`。
+5. 安装后重启 Claude Desktop。
+
+该安装会保留已有 `claude_desktop_config.json` 内容，并在写入前创建备份。官方 Claude Code 插件市场条目依赖本机 `claude` CLI；社区 MCP/Skill 默认只拉取元数据，未识别结构前不会自动执行脚本。
 
 ## 中转注入
 

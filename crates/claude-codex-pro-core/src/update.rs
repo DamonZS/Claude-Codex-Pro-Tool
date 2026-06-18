@@ -260,8 +260,7 @@ fn platform_asset_rank(name: &str) -> u8 {
 }
 
 fn is_windows_installer_asset(name: &str) -> bool {
-    name.contains("codex")
-        && name.contains("plus")
+    is_project_release_asset(name)
         && (name.ends_with(".msi")
             || name.ends_with("-setup.exe")
             || name.ends_with("_setup.exe")
@@ -270,7 +269,13 @@ fn is_windows_installer_asset(name: &str) -> bool {
 }
 
 fn is_macos_installer_asset(name: &str) -> bool {
-    name.contains("codex") && name.contains("plus") && name.ends_with(".dmg")
+    is_project_release_asset(name) && name.ends_with(".dmg")
+}
+
+fn is_project_release_asset(name: &str) -> bool {
+    name.contains("claude-codex-pro")
+        || name.contains("claude-codex-pro-plus")
+        || (name.contains("codex") && name.contains("plus"))
 }
 
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {

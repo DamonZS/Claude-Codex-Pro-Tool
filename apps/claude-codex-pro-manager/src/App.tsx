@@ -210,7 +210,7 @@ type ScriptMarketResult = CommandResult<{
   user_scripts: UserScriptInventory;
 }>;
 
-type PluginInstallKind = "claude_plugin_marketplace" | "mcp_server" | "skill_bundle" | "resource_link";
+type PluginInstallKind = "claude_plugin_marketplace" | "claude_desktop_mcp" | "mcp_server" | "skill_bundle" | "resource_link";
 type PluginInstallStatus = "notInstalled" | "installed" | "needsReview" | "unsupported";
 
 type PluginCatalogItem = {
@@ -546,6 +546,30 @@ export function App() {
     }
   };
 
+  const applyRelayMode = async () => {
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_relay_injection"), "官方混入 API Key");
+    if (result) {
+      notifyIfNeedsAttention({ title: "官方混入 API Key", message: result.message, status: result.status });
+      await refreshSettings(true);
+    }
+  };
+
+  const applyPureApiMode = async () => {
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_pure_api_injection"), "纯 API");
+    if (result) {
+      notifyIfNeedsAttention({ title: "纯 API", message: result.message, status: result.status });
+      await refreshSettings(true);
+    }
+  };
+
+  const clearRelayMode = async () => {
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("clear_relay_injection"), "清除 API 模式");
+    if (result) {
+      notifyIfNeedsAttention({ title: "清除 API 模式", message: result.message, status: result.status });
+      await refreshSettings(true);
+    }
+  };
+
   const saveSettings = async (next: BackendSettings) => {
     const result = await run(() => call<SettingsResult>("save_settings", { settings: next }), "保存设置");
     if (result) {
@@ -676,6 +700,9 @@ export function App() {
       refreshScripts,
       repairEntrypoints,
       repairBackend,
+      applyRelayMode,
+      applyPureApiMode,
+      clearRelayMode,
       saveSettings,
       installEntrypoints,
       uninstallEntrypoints,
@@ -749,7 +776,7 @@ export function App() {
         </header>
         <section className="ops-screen">
           {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} overview={overview} pluginHub={pluginHub} /> : null}
-          {route === "relay" ? <RelayScreen settings={settings} /> : null}
+          {route === "relay" ? <RelayScreen actions={actions} settings={settings} /> : null}
           {route === "context" ? <ContextScreen settings={settings} /> : null}
           {route === "pluginHub" ? <PluginHubScreen actions={actions} hub={pluginHub} preview={pluginPreview} /> : null}
           {route === "promptOptimizer" ? <PromptOptimizerScreen actions={actions} /> : null}
@@ -827,19 +854,66 @@ function OverviewScreen({
   );
 }
 
-function RelayScreen({ settings }: { settings: SettingsResult | null }) {
+function RelayScreen({ actions, settings }: { actions: ReturnType<typeof createActionsShape>; settings: SettingsResult | null }) {
   const profiles = settings?.settings.relayProfiles ?? [];
   const active = profiles.find((profile) => profile.id === settings?.settings.activeRelayId) ?? profiles[0];
   return (
-    <Panel title="供应商配置" detail="第一版控制台保留配置摘要；详细编辑继续由后端配置文件和后续页面扩展承接。">
-      <div className="info-grid">
-        <InfoRow label="当前供应商" value={active?.name || active?.id || "未配置"} />
-        <InfoRow label="模式" value={active?.relayMode || "official"} />
-        <InfoRow label="模型" value={active?.model || settings?.settings.relayTestModel || "默认"} />
-        <InfoRow label="Base URL" value={active?.baseUrl || settings?.settings.relayBaseUrl || "官方登录"} />
-        <InfoRow label="配置路径" value={settings?.settings_path ?? "未加载"} />
+    <div className="ops-two-column">
+      <div className="ops-wide-column">
+        <Panel title="供应商配置" detail="选择写入方式后会更新 Codex 配置；真实 Key 不会写入日志或提示。">
+          <div className="info-grid">
+            <InfoRow label="当前供应商" value={active?.name || active?.id || "未配置"} />
+            <InfoRow label="模式" value={active?.relayMode || "official"} />
+            <InfoRow label="模型" value={active?.model || settings?.settings.relayTestModel || "默认"} />
+            <InfoRow label="Base URL" value={active?.baseUrl || settings?.settings.relayBaseUrl || "官方登录"} />
+            <InfoRow label="配置路径" value={settings?.settings_path ?? "未加载"} />
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.applyRelayMode()}>
+              <KeyRound className="h-4 w-4" />
+              官方混入 API Key
+            </Button>
+            <Button onClick={() => void actions.applyPureApiMode()} variant="outline">
+              <Network className="h-4 w-4" />
+              纯 API
+            </Button>
+            <Button onClick={() => void actions.clearRelayMode()} variant="outline">
+              <Trash2 className="h-4 w-4" />
+              清除 API 模式
+            </Button>
+          </div>
+        </Panel>
+        <Panel title="供应商列表" detail={`${profiles.length} 个配置；当前页面保留关键操作，复杂编辑在设置文件中维护。`}>
+          <div className="ops-status-list">
+            {profiles.length ? profiles.map((profile) => (
+              <StatusRow
+                key={profile.id}
+                label={profile.name || profile.id}
+                status={profile.id === settings?.settings.activeRelayId ? "running" : "not_checked"}
+                value={`${profile.relayMode || "official"} · ${profile.model || profile.testModel || "默认模型"}`}
+              />
+            )) : <Empty text="暂无供应商配置。" />}
+          </div>
+        </Panel>
       </div>
-    </Panel>
+      <div className="stack">
+        <Panel title="写入模式" detail="按使用场景选择，不混淆 Claude Desktop 插件安装。">
+          <div className="ops-status-list">
+            <StatusRow label="官方混入 API Key" status={active?.officialMixApiKey ? "running" : "not_checked"} value="保留官方账号能力，把模型请求转到自定义兼容 API。" />
+            <StatusRow label="纯 API" status={active?.relayMode === "pure_api" ? "running" : "not_checked"} value="写入 custom provider，并将 auth 状态切换到当前供应商。" />
+            <StatusRow label="清除 API 模式" status="not_checked" value="移除中转 API 配置，回到官方 ChatGPT 登录态。" />
+          </div>
+        </Panel>
+        <Panel title="当前配置摘录" detail="只展示路径和非敏感字段。">
+          <div className="info-grid compact">
+            <InfoRow label="Provider Sync" value={settings?.settings.providerSyncEnabled ? "开启" : "关闭"} />
+            <InfoRow label="供应商开关" value={settings?.settings.relayProfilesEnabled ? "开启" : "关闭"} />
+            <InfoRow label="协议" value={active?.protocol || "responses"} />
+            <InfoRow label="测试模型" value={active?.testModel || settings?.settings.relayTestModel || "默认"} />
+          </div>
+        </Panel>
+      </div>
+    </div>
   );
 }
 
@@ -870,7 +944,7 @@ function PluginHubScreen({
   const items = hub?.catalog.items ?? [];
   const visible = items.filter((item) => {
     if (filter === "official") return item.sourceId === "official";
-    if (filter === "mcp") return item.installKind === "mcp_server";
+    if (filter === "mcp") return item.installKind === "mcp_server" || item.installKind === "claude_desktop_mcp";
     if (filter === "skill") return item.installKind === "skill_bundle";
     if (filter === "installed") return item.installStatus === "installed";
     if (filter === "review") return item.installStatus === "needsReview";
@@ -878,6 +952,9 @@ function PluginHubScreen({
   });
   const selected = items.find((item) => item.id === selectedId) ?? visible[0] ?? null;
   const selectedPreview = preview?.item.id === selected?.id ? preview : null;
+  const installButtonLabel = selected?.installKind === "claude_desktop_mcp" || selected?.installKind === "mcp_server"
+    ? "安装到 Claude Desktop"
+    : "安装";
   return (
     <div className="plugin-layout">
       <Panel title="Claude 插件中心" detail="官方插件、MCP Registry 与 awesome-claude-code 社区资源。">
@@ -956,7 +1033,7 @@ function PluginHubScreen({
               ) : (
                 <Button disabled={selected.installStatus === "unsupported"} onClick={() => void actions.installPlugin(selected.id)}>
                   <Download className="h-4 w-4" />
-                  安装
+                  <span className="desktop-install-label">{installButtonLabel}</span>
                 </Button>
               )}
               {selected.homepage ? (
@@ -1462,7 +1539,9 @@ function Notice({ notice, onClose }: { notice: { title: string; message: string;
 }
 
 function pluginKindLabel(kind: PluginInstallKind) {
-  const labels: Record<PluginInstallKind, string> = {
+  if (kind === "claude_desktop_mcp") return "Claude Desktop MCP";
+  if (kind === "claude_plugin_marketplace") return "Claude Code 插件";
+  const labels: Partial<Record<PluginInstallKind, string>> = {
     claude_plugin_marketplace: "Claude 插件",
     mcp_server: "MCP 服务器",
     skill_bundle: "Skill Bundle",
@@ -1542,6 +1621,9 @@ function createActionsShape() {
     refreshScripts: async () => null as ScriptMarketResult | null,
     repairEntrypoints: async () => {},
     repairBackend: async () => {},
+    applyRelayMode: async () => {},
+    applyPureApiMode: async () => {},
+    clearRelayMode: async () => {},
     saveSettings: async (_settings: BackendSettings) => null as SettingsResult | null,
     installEntrypoints: async () => {},
     uninstallEntrypoints: async () => {},

@@ -87,6 +87,9 @@ async function mockInvoke(command: string, args?: Record<string, unknown>) {
     case "open_claude_desktop":
     case "restart_claude_codex_pro":
     case "launch_claude_codex_pro":
+    case "apply_relay_injection":
+    case "apply_pure_api_injection":
+    case "clear_relay_injection":
     case "repair_shortcuts":
     case "repair_backend":
     case "install_market_script":
@@ -105,11 +108,13 @@ function mockPluginHub() {
     catalog: {
       updatedAt: String(Math.floor(Date.now() / 1000)),
       sources: [
+        { id: "desktop", label: "Claude Desktop MCP", url: "file://claude_desktop_config.json", status: "ok", message: "已加载", itemCount: 1 },
         { id: "official", label: "Claude 官方插件市场", url: "https://github.com/anthropics/claude-plugins-official", status: "ok", message: "已加载", itemCount: 2 },
         { id: "awesome", label: "Awesome Claude Code", url: "https://github.com/hesreallyhim/awesome-claude-code", status: "ok", message: "已加载", itemCount: 2 },
         { id: "github-mcp", label: "GitHub MCP Registry", url: "https://github.com/mcp", status: "ok", message: "已加载", itemCount: 1 },
       ],
       items: [
+        pluginItem("desktop:claude-codex-pro-codex", "Claude Code / Codex MCP", "将 Claude Code 的 MCP 服务器注册到 Claude Desktop。", "desktop", "Claude Desktop MCP", "claude_desktop_mcp", "notInstalled", "codex"),
         pluginItem("official:agent-sdk-dev", "agent-sdk-dev", "Development kit for working with the Claude Agent SDK.", "official", "Claude 官方插件市场", "claude_plugin_marketplace", "notInstalled", "development"),
         pluginItem("official:typescript-lsp", "typescript-lsp", "TypeScript/JavaScript language server for enhanced code intelligence.", "official", "Claude 官方插件市场", "claude_plugin_marketplace", "notInstalled", "development"),
         pluginItem("awesome:skill-ca8cbc21", "AgentSys", "Workflow automation system for Claude with plugins, agents, and skills.", "awesome", "Awesome Claude Code", "skill_bundle", "needsReview", "Agent Skills"),
@@ -144,12 +149,13 @@ function pluginItem(id: string, name: string, description: string, sourceId: str
 
 function mockPreview(id: string) {
   const item = mockPluginHub().catalog.items.find((entry) => entry.id === id) ?? mockPluginHub().catalog.items[0];
+  const isDesktopMcp = item.installKind === "claude_desktop_mcp";
   return {
     item,
     canInstall: item.installStatus !== "unsupported",
-    action: item.installKind === "mcp_server" ? "mcp_config_preview" : "claude_plugin_cli",
-    command: item.installCommand,
-    configDiff: item.installKind === "mcp_server" ? "[mcp_servers.demo]\ncommand = \"npx\"\nargs = [\"-y\", \"<package-or-command>\"]\nenabled = false\n" : "",
+    action: isDesktopMcp || item.installKind === "mcp_server" ? "claude_desktop_mcp_config" : "claude_plugin_cli",
+    command: isDesktopMcp ? ["claude", "mcp", "serve"] : item.installCommand,
+    configDiff: isDesktopMcp ? "{\n  \"mcpServers\": {\n    \"claude-codex-pro-codex\": {\n      \"command\": \"claude\",\n      \"args\": [\"mcp\", \"serve\"]\n    }\n  }\n}" : item.installKind === "mcp_server" ? "[mcp_servers.demo]\ncommand = \"npx\"\nargs = [\"-y\", \"<package-or-command>\"]\nenabled = false\n" : "",
     message: "预览模式展示命令或配置 diff，不会执行写入。",
   };
 }

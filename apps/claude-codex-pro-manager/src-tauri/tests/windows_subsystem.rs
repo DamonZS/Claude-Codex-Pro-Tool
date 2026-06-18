@@ -192,6 +192,9 @@ fn plugin_hub_is_first_class_ops_console_route() {
     assert!(app_tsx.contains("preview_plugin_hub_install"));
     assert!(app_tsx.contains("install_plugin_hub_item"));
     assert!(app_tsx.contains("uninstall_plugin_hub_item"));
+    assert!(app_tsx.contains("claude_desktop_mcp"));
+    assert!(app_tsx.contains("Claude Desktop MCP"));
+    assert!(app_tsx.contains("Claude Code 插件"));
     assert!(app_tsx.contains("官方插件、MCP Registry 与 awesome-claude-code 社区资源。"));
     assert!(styles.contains(".plugin-layout"));
     assert!(styles.contains(".plugin-list"));

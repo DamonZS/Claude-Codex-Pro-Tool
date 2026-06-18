@@ -1,7 +1,7 @@
 # Claude Codex Pro
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro-plus.png" alt="Claude Codex Pro icon" width="160">
+  <img src="docs/images/claude-codex-pro.png" alt="Claude Codex Pro icon" width="160">
 </p>
 
 <p align="center">
@@ -16,28 +16,30 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Claude Codex Pro is an external enhancement launcher and manager for the Codex App. It does not modify the original Codex installation. Instead, it starts Codex externally and injects enhancements through the Chromium DevTools Protocol.
+Claude Codex Pro is a local operations console for Codex App and Claude Desktop. It combines the Codex enhancement launcher, a Chinese Claude wrapper window, Claude Desktop MCP/plugin management, relay/provider configuration, session tools, and maintenance utilities without modifying official Codex or Claude installation files.
 
 ## Quick Start
 
 Download the latest installer from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):
 
-- Windows: `claude-codex-pro-plus-*-windows-x64-setup.exe`
-- macOS Intel: `claude-codex-pro-plus-*-macos-x64.dmg`
-- macOS Apple Silicon: `claude-codex-pro-plus-*-macos-arm64.dmg`
+- Windows: `claude-codex-pro-*-windows-x64-setup.exe`
+- macOS Intel: `claude-codex-pro-*-macos-x64.dmg`
+- macOS Apple Silicon: `claude-codex-pro-*-macos-arm64.dmg`
 
 After installation, two entry points are available:
 
-- `Claude Codex Pro`: a silent launcher. It does not show the manager UI and only starts Codex with Claude Codex Pro injection.
-- `Claude Codex Pro Manager`: a Tauri control panel for launch, diagnostics, repair, updates, relay injection, enhancements, and user scripts.
+- `Claude Codex Pro`: a silent launcher that starts Codex with Claude Codex Pro injection.
+- `Claude Codex Pro Manager`: a Tauri operations console for Codex/Claude launch, the Claude Chinese wrapper window, relay configuration, Claude Desktop MCP installation, diagnostics, repair, updates, and enhancement maintenance.
 
 The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Claude Codex Pro.app` and `/Applications/Claude Codex Pro 管理工具.app`.
 
 ## Highlights
 
 - Rust backend and silent launcher with no extra runtime requirement.
-- Tauri + React manager with dark/light theme support.
-- External CDP injection. No `app.asar` patching and no DLL writes into the Codex installation.
+- Tauri + React operations console with Codex, Claude Desktop, Plugin Hub, prompt optimizer, and maintenance entry points.
+- Codex enhancement through external CDP injection. No `app.asar` patching and no DLL writes into the Codex installation.
+- Claude Chinese mode opens an independent WebView wrapper at `https://claude.ai/new` and injects Chinese text coverage plus a top status badge during window creation. It does not modify Claude Desktop MSIX, `app.asar`, signatures, or integrity files.
+- Plugin Hub discovers official Claude plugins, GitHub MCP resources, and Awesome Claude Code entries, and can register `Claude Code / Codex MCP` into Claude Desktop's `claude_desktop_config.json`.
 - Relay injection mode with multiple relay profiles, `custom` provider configuration, and a one-click switch back to official ChatGPT login mode.
 - Traditional enhancement mode with plugin entry unlock, forced plugin install, session delete, Markdown export, project move, Timeline, and more.
 - Independent user script management with startup injection.
@@ -47,6 +49,25 @@ The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG in
 - GitHub Release updates. Both the manager and silent launcher can detect available updates.
 - Windows single instance, no console window, administrator manifest, and system Desktop path detection.
 - Separate macOS x64 and arm64 DMGs. The silent launcher hides its Dock icon.
+
+## Claude Desktop Integration
+
+The manager keeps Claude Desktop and Codex actions separate:
+
+- `Launch Claude`: starts the official Claude Desktop app without modifying its installation directory.
+- `Open Claude Chinese Window`: opens the independent WebView wrapper, loads Claude Web, and injects Chinese coverage, a top backend status badge, and a Plugin Hub entry.
+- `Restart Codex`: only controls the Codex enhancement launcher.
+- `Plugin Hub`: lists official Claude plugins, MCP servers, Skills, and community resources. Installs always show the command or config diff first.
+
+Install Codex MCP into Claude Desktop:
+
+1. Open `Claude Codex Pro Manager`.
+2. Go to `Plugin Hub` and select the `Claude Desktop MCP` source.
+3. Select `Claude Code / Codex MCP`.
+4. Preview the install and confirm the write to `%APPDATA%\Claude\claude_desktop_config.json`.
+5. Restart Claude Desktop after installation.
+
+The installer preserves existing `claude_desktop_config.json` content and creates a backup before writing. Official Claude Code marketplace entries require the local `claude` CLI. Community MCP and Skill entries only fetch metadata by default and will not execute scripts until their structure is reviewed.
 
 ## Relay Injection
 

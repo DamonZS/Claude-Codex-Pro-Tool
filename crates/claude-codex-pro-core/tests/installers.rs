@@ -1,4 +1,3 @@
-use claude_codex_pro_core::install::windows::legacy_shortcut_files;
 use claude_codex_pro_core::install::{
     InstallOptions, SILENT_BINARY, app_bundle_names, build_macos_app_bundle,
     build_windows_entrypoint_plan, companion_binary_path_from_exe, default_install_root_strategy,
@@ -92,7 +91,7 @@ fn installer_exports_expected_two_entrypoint_names() {
 
 #[test]
 fn windows_legacy_shortcut_cleanup_covers_desktop_and_start_menu_entries() {
-    let files = legacy_shortcut_files(
+    let files = claude_codex_pro_core::install::windows::legacy_shortcut_files(
         std::path::Path::new("C:/Users/A/Desktop"),
         Some(std::path::Path::new(
             "C:/Users/A/AppData/Roaming/Microsoft/Windows/Start Menu/Programs",
