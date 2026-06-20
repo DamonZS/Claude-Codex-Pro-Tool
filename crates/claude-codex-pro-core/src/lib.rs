@@ -4,6 +4,7 @@ pub mod assets;
 pub mod bridge;
 pub mod cdp;
 pub mod claude_desktop;
+pub mod claude_zh_patch;
 pub mod cli_wrapper;
 pub mod codex_sqlite;
 mod computer_use_guard;

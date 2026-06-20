@@ -1,16 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-#[cfg(test)]
-use std::process::Command;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::process::Command;
 
-pub const OFFICIAL_MARKETPLACE_URL: &str =
-    "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json";
-pub const AWESOME_CLAUDE_CODE_CSV_URL: &str =
-    "https://raw.githubusercontent.com/hesreallyhim/awesome-claude-code/main/THE_RESOURCES_TABLE.csv";
+pub const OFFICIAL_MARKETPLACE_URL: &str = "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json";
+pub const AWESOME_CLAUDE_CODE_CSV_URL: &str = "https://raw.githubusercontent.com/hesreallyhim/awesome-claude-code/main/THE_RESOURCES_TABLE.csv";
 pub const GITHUB_MCP_REGISTRY_URL: &str = "https://github.com/mcp";
+pub const CODEX_PLUGIN_REPOSITORY_URL: &str = "https://github.com/openai/plugins";
+pub const CODEX_PLUGIN_DOCUMENTATION_URL: &str = "https://developers.openai.com/codex/plugins";
 const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +140,15 @@ pub async fn fetch_catalog() -> PluginHubCatalog {
     ));
     items.append(&mut desktop_items);
 
+    let mut codex_plugin_items = codex_plugin_repository_items(&installed);
+    sources.push(ok_source(
+        "codex-plugins",
+        "OpenAI Codex Plugins",
+        CODEX_PLUGIN_REPOSITORY_URL,
+        codex_plugin_items.len(),
+    ));
+    items.append(&mut codex_plugin_items);
+
     match fetch_awesome_items(&installed).await {
         Ok(mut source_items) => {
             sources.push(ok_source(
@@ -200,12 +208,11 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
     }
 
     match preview.item.install_kind {
-        InstallKind::ClaudeDesktopMcp | InstallKind::McpServer => {
-            install_claude_desktop_mcp(preview)
+        InstallKind::ClaudeDesktopMcp => install_claude_desktop_mcp(preview),
+        InstallKind::McpServer => {
+            anyhow::bail!("Community MCP items require confirmed command/args before writing Claude Desktop config")
         }
-        InstallKind::ClaudePluginMarketplace => {
-            anyhow::bail!("该条目属于 Claude Code 插件市场，不能直接安装到 Claude Desktop。请使用 Claude Desktop MCP 或桌面端 Extensions。")
-        }
+        InstallKind::ClaudePluginMarketplace => install_official_claude_plugin(preview),
         InstallKind::SkillBundle | InstallKind::ResourceLink => {
             anyhow::bail!("该社区资源需要人工审查后安装")
         }
@@ -224,7 +231,10 @@ pub fn load_installed_records() -> anyhow::Result<BTreeMap<String, PluginHubInst
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(error).with_context(|| format!("读取插件中心安装记录失败：{}", path.display())),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("读取插件中心安装记录失败：{}", path.display()));
+        }
     };
     let records = serde_json::from_str::<Vec<PluginHubInstallRecord>>(&text)
         .with_context(|| format!("解析插件中心安装记录失败：{}", path.display()))?;
@@ -349,9 +359,11 @@ fn parse_awesome_csv(
             let source_id = "awesome".to_string();
             let install_kind = classify_awesome_item(&id, &category, &link, &description);
             let install_status = match install_kind {
-                InstallKind::SkillBundle | InstallKind::McpServer => {
-                    status_for(&format!("awesome:{id}"), installed, InstallStatus::NeedsReview)
-                }
+                InstallKind::SkillBundle | InstallKind::McpServer => status_for(
+                    &format!("awesome:{id}"),
+                    installed,
+                    InstallStatus::NeedsReview,
+                ),
                 _ => InstallStatus::Unsupported,
             };
             Some(PluginCatalogItem {
@@ -432,6 +444,40 @@ fn github_mcp_registry_items(
     }]
 }
 
+fn codex_plugin_repository_items(
+    installed: &BTreeMap<String, PluginHubInstallRecord>,
+) -> Vec<PluginCatalogItem> {
+    let id = "codex-plugins:openai";
+    vec![PluginCatalogItem {
+        id: id.to_string(),
+        name: "OpenAI Codex Plugins".to_string(),
+        description: "OpenAI 维护的 Codex 插件示例仓库，包含可把 skills、MCP servers、hooks、commands、apps 等能力打包为 Codex plugin 的目录结构。".to_string(),
+        source_id: "codex-plugins".to_string(),
+        source_label: "OpenAI Codex Plugins".to_string(),
+        source_url: CODEX_PLUGIN_REPOSITORY_URL.to_string(),
+        category: "codex-plugin".to_string(),
+        author: "OpenAI".to_string(),
+        homepage: CODEX_PLUGIN_REPOSITORY_URL.to_string(),
+        license: String::new(),
+        tags: vec![
+            "codex".to_string(),
+            "plugin".to_string(),
+            "skills".to_string(),
+            "mcp".to_string(),
+        ],
+        install_kind: InstallKind::ResourceLink,
+        install_status: status_for(id, installed, InstallStatus::Unsupported),
+        install_command: Vec::new(),
+        config_preview: String::new(),
+        risk: "Codex 插件仓库作为资源入口展示；安装前需要人工审查 plugin.json、skills、commands、MCP 和 hooks。".to_string(),
+        requirements: vec![
+            "人工审查".to_string(),
+            "Codex CLI / Codex App".to_string(),
+            CODEX_PLUGIN_DOCUMENTATION_URL.to_string(),
+        ],
+    }]
+}
+
 fn classify_awesome_item(id: &str, category: &str, link: &str, description: &str) -> InstallKind {
     let haystack = format!("{id} {category} {link} {description}").to_lowercase();
     if haystack.contains("mcp") {
@@ -450,9 +496,9 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
         InstallKind::ClaudePluginMarketplace => PluginInstallPreview {
             command: official_install_command(&item),
             config_diff: String::new(),
-            can_install: false,
+            can_install: true,
             action: "claude_plugin_cli".to_string(),
-            message: "将调用 Claude Code CLI 安装官方插件；执行前可检查命令。".to_string(),
+            message: "Install through Claude Code CLI after previewing the command.".to_string(),
             item,
         },
         InstallKind::ClaudeDesktopMcp => PluginInstallPreview {
@@ -463,16 +509,22 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
             ),
             can_install: true,
             action: "claude_desktop_mcp_config".to_string(),
-            message: "将写入 Claude Desktop 的 claude_desktop_config.json；重启 Claude Desktop 后生效。".to_string(),
+            message:
+                "将写入 Claude Desktop 的 claude_desktop_config.json；重启 Claude Desktop 后生效。"
+                    .to_string(),
             item,
         },
         InstallKind::McpServer => PluginInstallPreview {
             command: Vec::new(),
             config_diff: claude_desktop_mcp_config_preview(
                 &safe_id(&item.name),
-                &["npx".to_string(), "-y".to_string(), "<package-or-command>".to_string()],
+                &[
+                    "npx".to_string(),
+                    "-y".to_string(),
+                    "<package-or-command>".to_string(),
+                ],
             ),
-            can_install: item.source_id == "awesome" && item.homepage.contains("github.com"),
+            can_install: false,
             action: "claude_desktop_mcp_config".to_string(),
             message: if item.source_id == "awesome" {
                 "已生成 MCP 配置草案；社区条目需要确认 command/args 后再启用。".to_string()
@@ -500,63 +552,6 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
     }
 }
 
-#[cfg(test)]
-fn install_official_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
-    let command = official_install_command(&preview.item);
-    ensure_claude_marketplace_added();
-    let output = Command::new(&command[0])
-        .args(&command[1..])
-        .output()
-        .with_context(|| "无法启动 claude CLI，请先安装 Claude Code CLI 或手动执行预览命令")?;
-    let installed = output.status.success();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if installed {
-        record_install(&preview.item, command.clone(), None)?;
-    }
-    Ok(PluginInstallOutcome {
-        item: preview.item.clone(),
-        preview,
-        installed,
-        message: if installed {
-            "官方 Claude 插件已通过 claude CLI 安装。".to_string()
-        } else {
-            official_install_failure_message(&command, &stdout, &stderr)
-        },
-        stdout,
-        stderr,
-        backup_path: None,
-    })
-}
-
-#[cfg(test)]
-fn install_mcp_preview(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
-    let backup_path = Some(write_plugin_hub_note(&preview)?);
-    record_install(&preview.item, Vec::new(), backup_path.clone())?;
-    Ok(PluginInstallOutcome {
-        item: preview.item.clone(),
-        preview,
-        installed: true,
-        message: "已保存 MCP 配置草案。社区 MCP 需要在工具与插件页确认 command/args 后启用。".to_string(),
-        stdout: String::new(),
-        stderr: String::new(),
-        backup_path,
-    })
-}
-
-#[cfg(test)]
-fn ensure_claude_marketplace_added() {
-    let _ = Command::new("claude")
-        .args([
-            "plugin",
-            "marketplace",
-            "add",
-            "anthropics/claude-plugins-official",
-        ])
-        .output();
-}
-
-#[cfg(test)]
 fn official_install_failure_message(command: &[String], stdout: &str, stderr: &str) -> String {
     let combined = format!("{}\n{}", stdout, stderr);
     let command_text = command.join(" ");
@@ -593,16 +588,44 @@ fn official_install_command(item: &PluginCatalogItem) -> Vec<String> {
     ]
 }
 
-#[cfg(test)]
-fn mcp_config_preview(item: &PluginCatalogItem) -> String {
-    let id = safe_id(&item.name);
-    format!(
-        "[mcp_servers.{id}]\n# 来源：{}\n# 主页：{}\n# 社区条目需要确认实际启动命令后删除下面两行注释。\ncommand = \"npx\"\nargs = [\"-y\", \"<package-or-command>\"]\nenabled = false\n",
-        item.source_label, item.homepage
-    )
+
+fn install_official_claude_plugin(
+    preview: PluginInstallPreview,
+) -> anyhow::Result<PluginInstallOutcome> {
+    let command = official_install_command(&preview.item);
+    let executable = command
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("Claude plugin install command is empty"))?;
+    let args = command.iter().skip(1).collect::<Vec<_>>();
+    let output = Command::new(executable).args(args).output().with_context(|| {
+        format!(
+            "Claude Code CLI unavailable; cannot run plugin install command: {}",
+            command.join(" ")
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        anyhow::bail!(
+            "{}",
+            official_install_failure_message(&command, &stdout, &stderr)
+        );
+    }
+    record_install(&preview.item, command, None)?;
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: true,
+        message: "Installed official Claude plugin through Claude Code CLI.".to_string(),
+        stdout,
+        stderr,
+        backup_path: None,
+    })
 }
 
-fn install_claude_desktop_mcp(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
+fn install_claude_desktop_mcp(
+    preview: PluginInstallPreview,
+) -> anyhow::Result<PluginInstallOutcome> {
     let config_path = claude_desktop_config_path();
     let backup_path = backup_claude_desktop_config(&config_path)?;
     let server_name = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
@@ -613,7 +636,11 @@ fn install_claude_desktop_mcp(preview: PluginInstallPreview) -> anyhow::Result<P
     let command = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
         desktop_mcp_command()
     } else {
-        vec!["npx".to_string(), "-y".to_string(), "<package-or-command>".to_string()]
+        vec![
+            "npx".to_string(),
+            "-y".to_string(),
+            "<package-or-command>".to_string(),
+        ]
     };
     let server_config = json!({
         "command": command.first().cloned().unwrap_or_default(),
@@ -680,7 +707,10 @@ fn upsert_claude_desktop_mcp_server(
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop mcpServers must be a JSON object"))?;
     servers.insert(server_name.to_string(), server_config);
-    crate::settings::atomic_write(config_path, serde_json::to_string_pretty(&config)?.as_bytes())?;
+    crate::settings::atomic_write(
+        config_path,
+        serde_json::to_string_pretty(&config)?.as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -717,7 +747,9 @@ fn record_install(
     save_installed_records(&records)
 }
 
-fn save_installed_records(records: &BTreeMap<String, PluginHubInstallRecord>) -> anyhow::Result<()> {
+fn save_installed_records(
+    records: &BTreeMap<String, PluginHubInstallRecord>,
+) -> anyhow::Result<()> {
     let path = installed_records_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -726,14 +758,6 @@ fn save_installed_records(records: &BTreeMap<String, PluginHubInstallRecord>) ->
     crate::settings::atomic_write(&path, serde_json::to_string_pretty(&values)?.as_bytes())
 }
 
-#[cfg(test)]
-fn write_plugin_hub_note(preview: &PluginInstallPreview) -> anyhow::Result<String> {
-    let dir = plugin_hub_dir().join("pending");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}.toml", safe_id(&preview.item.name)));
-    crate::settings::atomic_write(&path, preview.config_diff.as_bytes())?;
-    Ok(path.to_string_lossy().to_string())
-}
 
 fn status_for(
     id: &str,
@@ -887,7 +911,8 @@ mod tests {
 
     #[test]
     fn csv_parser_handles_quotes() {
-        let rows = parse_csv_records("ID,Name,Description\none,\"Two, too\",\"hello \"\"world\"\"\"\n");
+        let rows =
+            parse_csv_records("ID,Name,Description\none,\"Two, too\",\"hello \"\"world\"\"\"\n");
         assert_eq!(rows[1][1], "Two, too");
         assert_eq!(rows[1][2], "hello \"world\"");
     }
@@ -913,7 +938,12 @@ mod tests {
     #[test]
     fn awesome_classifier_detects_mcp_and_skills() {
         assert_eq!(
-            classify_awesome_item("x", "Project Scaffolding & MCP", "https://github.com/a/b", ""),
+            classify_awesome_item(
+                "x",
+                "Project Scaffolding & MCP",
+                "https://github.com/a/b",
+                ""
+            ),
             InstallKind::McpServer
         );
         assert_eq!(
@@ -936,6 +966,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_plugin_repository_item_is_exposed_as_reviewable_resource() {
+        let items = codex_plugin_repository_items(&BTreeMap::new());
+        let item = items
+            .iter()
+            .find(|item| item.id == "codex-plugins:openai")
+            .expect("codex plugin repository item");
+
+        assert_eq!(item.name, "OpenAI Codex Plugins");
+        assert_eq!(item.homepage, "https://github.com/openai/plugins");
+        assert_eq!(item.install_kind, InstallKind::ResourceLink);
+        assert_eq!(item.install_status, InstallStatus::Unsupported);
+        assert!(item.tags.contains(&"codex".to_string()));
+        assert!(item.description.contains("Codex"));
+    }
+
+    #[test]
     fn codex_desktop_mcp_preview_targets_claude_desktop_config() {
         let item = builtin_claude_desktop_items(&BTreeMap::new()).remove(0);
         let preview = preview_for_item(item);
@@ -947,6 +993,73 @@ mod tests {
         assert!(preview.config_diff.contains("\"claude\""));
         assert!(preview.config_diff.contains("\"mcp\""));
         assert!(preview.config_diff.contains("\"serve\""));
+    }
+
+    #[test]
+    fn official_plugin_preview_is_installable_through_claude_cli() {
+        let item = PluginCatalogItem {
+            id: "official:demo".to_string(),
+            name: "demo".to_string(),
+            description: String::new(),
+            source_id: "official".to_string(),
+            source_label: "Claude official plugins".to_string(),
+            source_url: OFFICIAL_MARKETPLACE_URL.to_string(),
+            category: "claude-plugin".to_string(),
+            author: "Anthropic".to_string(),
+            homepage: String::new(),
+            license: String::new(),
+            tags: Vec::new(),
+            install_kind: InstallKind::ClaudePluginMarketplace,
+            install_status: InstallStatus::NotInstalled,
+            install_command: vec![
+                "claude".to_string(),
+                "plugin".to_string(),
+                "install".to_string(),
+                "demo@claude-plugins-official".to_string(),
+            ],
+            config_preview: String::new(),
+            risk: String::new(),
+            requirements: vec!["claude CLI".to_string()],
+        };
+
+        let preview = preview_for_item(item);
+
+        assert!(preview.can_install);
+        assert_eq!(preview.action, "claude_plugin_cli");
+        assert_eq!(
+            preview.command,
+            vec!["claude", "plugin", "install", "demo@claude-plugins-official"]
+        );
+    }
+
+    #[test]
+    fn community_mcp_preview_does_not_allow_placeholder_install() {
+        let item = PluginCatalogItem {
+            id: "awesome:demo-mcp".to_string(),
+            name: "Demo MCP".to_string(),
+            description: "Community MCP".to_string(),
+            source_id: "awesome".to_string(),
+            source_label: "Awesome Claude Code".to_string(),
+            source_url: AWESOME_CLAUDE_CODE_CSV_URL.to_string(),
+            category: "MCP".to_string(),
+            author: "Community".to_string(),
+            homepage: "https://github.com/example/demo-mcp".to_string(),
+            license: String::new(),
+            tags: vec!["mcp".to_string()],
+            install_kind: InstallKind::McpServer,
+            install_status: InstallStatus::NeedsReview,
+            install_command: Vec::new(),
+            config_preview: String::new(),
+            risk: String::new(),
+            requirements: Vec::new(),
+        };
+
+        let preview = preview_for_item(item);
+
+        assert!(!preview.can_install);
+        assert_eq!(preview.action, "claude_desktop_mcp_config");
+        assert!(preview.config_diff.contains("<package-or-command>"));
+        assert!(preview.message.contains("command/args"));
     }
 
     #[test]
@@ -969,7 +1082,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(parsed["windowBounds"]["width"], 1200);
         assert_eq!(parsed["mcpServers"]["existing"]["command"], "node");
-        assert_eq!(parsed["mcpServers"]["claude-codex-pro-codex"]["command"], "claude");
+        assert_eq!(
+            parsed["mcpServers"]["claude-codex-pro-codex"]["command"],
+            "claude"
+        );
         assert_eq!(
             parsed["mcpServers"]["claude-codex-pro-codex"]["args"],
             json!(["mcp", "serve"])
@@ -979,7 +1095,12 @@ mod tests {
     #[test]
     fn cli_failure_message_detects_missing_login_prompt() {
         let message = official_install_failure_message(
-            &["claude".to_string(), "plugin".to_string(), "install".to_string(), "demo".to_string()],
+            &[
+                "claude".to_string(),
+                "plugin".to_string(),
+                "install".to_string(),
+                "demo".to_string(),
+            ],
             "未找到有效的登录配置，请先登录\n请选择登录方式:",
             "",
         );

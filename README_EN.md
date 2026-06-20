@@ -1,7 +1,7 @@
-# Claude Codex Pro
+# Claude Codex Pro Tool
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro.png" alt="Claude Codex Pro icon" width="160">
+  <img src="docs/images/claude-codex-pro.png" alt="Claude Codex Pro Tool icon" width="160">
 </p>
 
 <p align="center">
@@ -16,11 +16,13 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Claude Codex Pro is a local operations console for Codex App and Claude Desktop. It combines the Codex enhancement launcher, a Chinese Claude wrapper window, Claude Desktop MCP/plugin management, relay/provider configuration, session tools, and maintenance utilities without modifying official Codex or Claude installation files.
+Claude Codex Pro Tool is a local operations console for Codex App and Claude Desktop. It provides Codex launch enhancements, a Chinese Claude wrapper window, Claude Desktop MCP installation, Plugin Hub, provider configuration, session maintenance, script management, prompt optimization, diagnostics, and updates.
 
-## Quick Start
+The safety boundary is intentional: the tool does not modify official Codex or Claude installation directories, does not patch `app.asar`, and does not change signatures or integrity files. Enhancements are applied through an external launcher, local user configuration, a WebView wrapper window, or reviewable config writes.
 
-Download the latest installer from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):
+## Download and Entry Points
+
+Download the latest package from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):
 
 - Windows: `claude-codex-pro-*-windows-x64-setup.exe`
 - macOS Intel: `claude-codex-pro-*-macos-x64.dmg`
@@ -28,74 +30,59 @@ Download the latest installer from [GitHub Releases](https://github.com/DamonZS/
 
 After installation, two entry points are available:
 
-- `Claude Codex Pro`: a silent launcher that starts Codex with Claude Codex Pro injection.
-- `Claude Codex Pro Manager`: a Tauri operations console for Codex/Claude launch, the Claude Chinese wrapper window, relay configuration, Claude Desktop MCP installation, diagnostics, repair, updates, and enhancement maintenance.
+- `Claude Codex Pro`: a silent launcher that starts Codex and loads this tool's enhancement layer.
+- `Claude Codex Pro Manager`: a Tauri operations console for Codex, Claude, providers, plugins, scripts, logs, installation maintenance, and updates.
 
-The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `/Applications/Claude Codex Pro.app` and `/Applications/Claude Codex Pro 管理工具.app`.
+The Windows installer creates desktop and Start Menu shortcuts. The macOS DMG installs `Claude Codex Pro.app` and `Claude Codex Pro Manager.app`.
 
-## Highlights
+## Core Features
 
-- Rust backend and silent launcher with no extra runtime requirement.
-- Tauri + React operations console with Codex, Claude Desktop, Plugin Hub, prompt optimizer, and maintenance entry points.
-- Codex enhancement through external CDP injection. No `app.asar` patching and no DLL writes into the Codex installation.
-- Claude Chinese mode opens an independent WebView wrapper at `https://claude.ai/new` and injects Chinese text coverage plus a top status badge during window creation. It does not modify Claude Desktop MSIX, `app.asar`, signatures, or integrity files.
-- Plugin Hub discovers official Claude plugins, GitHub MCP resources, and Awesome Claude Code entries, and can register `Claude Code / Codex MCP` into Claude Desktop's `claude_desktop_config.json`.
-- Relay injection mode with multiple relay profiles, `custom` provider configuration, and a one-click switch back to official ChatGPT login mode.
-- Traditional enhancement mode with plugin entry unlock, forced plugin install, session delete, Markdown export, project move, Timeline, and more.
-- Independent user script management with startup injection.
-- Provider Sync to keep historical sessions visible after switching providers.
-- Zed open entry detects remote SSH context and opens the matching remote file in Zed Remote Development from Codex.
-- Upstream worktree creation: create new worktrees from `upstream/<base-branch>` after fetching the remote branch, reducing conflicts caused by stale local HEAD state.
-- GitHub Release updates. Both the manager and silent launcher can detect available updates.
-- Windows single instance, no console window, administrator manifest, and system Desktop path detection.
-- Separate macOS x64 and arm64 DMGs. The silent launcher hides its Dock icon.
+- Codex enhancements: inject status badges, quick actions, session tools, user scripts, and enhancement entry points through CDP and a local helper.
+- Claude Chinese window: open `https://claude.ai/new` in an independent WebView and inject Chinese text coverage plus a top status badge when the window is created.
+- Claude Desktop integration: launch the official Claude Desktop app and write MCP configuration to the Claude Desktop user config file.
+- Plugin Hub: browse official Claude plugins, GitHub MCP resources, Claude Code resources, Skills, and community resources; preview commands or config diffs before installation.
+- Provider configuration: manage compatible APIs, relay profiles, models, context selection, and Codex provider writes.
+- Session maintenance: delete, restore, export Markdown, move projects, inspect timelines, and diagnose local data.
+- Script market: manage built-in scripts, local user scripts, and remote script catalogs.
+- Prompt optimization: integrate the `linshenkx/prompt-optimizer` workflow.
+- Provider Sync: keep historical sessions visible after switching providers.
+- Zed Remote: detect SSH contexts and open matching remote files from Codex in Zed.
+- Upstream worktree: create worktrees from fresh remote tracking branches instead of stale local HEAD state.
+- Maintenance: logs, diagnostics, repairs, version checks, and GitHub Release updates.
 
-## Claude Desktop Integration
+## Claude Desktop
 
-The manager keeps Claude Desktop and Codex actions separate:
+The manager keeps Claude and Codex actions separate:
 
-- `Launch Claude`: starts the official Claude Desktop app without modifying its installation directory.
-- `Open Claude Chinese Window`: opens the independent WebView wrapper, loads Claude Web, and injects Chinese coverage, a top backend status badge, and a Plugin Hub entry.
-- `Restart Codex`: only controls the Codex enhancement launcher.
-- `Plugin Hub`: lists official Claude plugins, MCP servers, Skills, and community resources. Installs always show the command or config diff first.
+- `Launch Claude`: launches the official Claude Desktop app without modifying its installation files.
+- `Open Claude Chinese Window`: opens the independent WebView wrapper, loads Claude Web, and applies Chinese coverage.
+- `Restart Codex`: controls only the Codex enhancement launcher.
+- `Plugin Hub`: routes inside the manager instead of opening duplicate control windows.
 
-Install Codex MCP into Claude Desktop:
+The Claude Chinese window is not DOM injection into the official Claude Desktop window. The official desktop app's MSIX package, signatures, and integrity checks block that high-risk path, so this project uses a safe wrapper window. Users log in to Claude Web inside the wrapper, and the Chinese coverage script only affects that wrapper window.
 
-1. Open `Claude Codex Pro Manager`.
-2. Go to `Plugin Hub` and select the `Claude Desktop MCP` source.
-3. Select `Claude Code / Codex MCP`.
-4. Preview the install and confirm the write to `%APPDATA%\Claude\claude_desktop_config.json`.
-5. Restart Claude Desktop after installation.
+## Plugin Hub
 
-The installer preserves existing `claude_desktop_config.json` content and creates a backup before writing. Official Claude Code marketplace entries require the local `claude` CLI. Community MCP and Skill entries only fetch metadata by default and will not execute scripts until their structure is reviewed.
+Plugin Hub presents multiple resource types in one place:
 
-## Relay Injection
+- Official Claude plugin marketplace entries.
+- GitHub MCP and community MCP resources.
+- Awesome Claude Code resources.
+- Skill bundles with recognizable structure.
+- Claude Desktop MCP entries, including Codex-related MCP.
 
-Relay injection is for users who are already logged in with an official ChatGPT account in Codex/ChatGPT and want model requests to go through a custom compatible API.
+The install flow is review-first:
 
-The boundary of this hybrid mode is:
+1. Refresh the catalog and inspect source, type, license, risk notes, and install status.
+2. Preview the command or config diff.
+3. Confirm installation; config writes create backups when possible.
+4. Restart Claude Desktop when the installed MCP must be loaded by the desktop app.
 
-- The official ChatGPT/Codex login state still owns Codex App account features and the plugin entry.
-- The relay profile only controls the Base URL, key, and model names used for model requests.
-- The compatible API provider is not tied to any specific vendor; it only needs to match the selected upstream protocol and Codex configuration.
-- Clearing API mode should return Codex to the official login mode so the official account and plugins keep working.
+Official Claude plugins usually require the local `claude` CLI. Community MCP and Skill entries only fetch metadata by default and expose install actions only when the structure and install method are recognized.
 
-Before applying relay injection, run a minimal preflight:
+## Codex Providers and Relay
 
-1. Make sure Codex has detected the ChatGPT login state and the plugin entry is available.
-2. Confirm the custom Base URL is reachable and supports the selected upstream protocol, such as a Responses-compatible endpoint.
-3. Test the target key with the smallest useful auth probe, such as a model-list request or a short message request.
-4. Only record whether the key exists and whether auth passed. Do not paste real keys into logs, screenshots, or issues.
-5. Make sure `~/.codex/config.toml` has a backup so clearing API mode can safely roll back.
-
-In the manager's Relay Injection page:
-
-1. Make sure ChatGPT login status is detected.
-2. Add one or more relay profiles with Base URL and Key.
-3. Select the active profile and apply relay injection.
-4. Launch `Claude Codex Pro`.
-
-Claude Codex Pro writes configuration similar to this into `~/.codex/config.toml`:
+Provider configuration is for compatible APIs or relay services. The manager writes Codex provider configuration similar to:
 
 ```toml
 model_provider = "custom"
@@ -108,68 +95,58 @@ base_url = "https://example.com/v1"
 experimental_bearer_token = "sk-..."
 ```
 
-To return to the official login mode, use the clear API mode button in the Relay Injection page. This removes `OPENAI_API_KEY` related configuration and switches Codex back to official ChatGPT authentication.
+Recommended workflow:
 
-## Enhancements
+1. Confirm that the Base URL is reachable and supports the selected protocol.
+2. Test the key with a minimal request.
+3. Never put real keys in logs, screenshots, or issues.
+4. Confirm that `~/.codex/config.toml` is backed up before writing.
+5. Use the manager to clear API mode when returning to official login mode.
 
-Enhancements are controlled in the manager. Enhancement injection is enabled by default. When disabled, Claude Codex Pro will not inject its menu or scripts.
+## Safety
 
-When relay injection mode is active, plugin entry unlock and forced plugin install are unnecessary, and the UI will say so. Other enhancements, including session delete, export, move, Timeline, recommendations, and user scripts, can still be used.
-
-## Recommendations
-
-Recommended content is loaded from:
-
-```text
-https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json
-https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json
-```
-
-Requests automatically append a `?v=timestamp` cache buster to avoid stale CDN content. Slow recommendation loading does not mark the backend connection as failed.
-
-## Updates and Packages
-
-Claude Codex Pro publishes installers through GitHub Releases. Windows builds an NSIS installer, while macOS builds separate Intel x64 and Apple Silicon arm64 DMGs.
-
-The manager's About page can check and start updates. When the silent launcher finds a new version, it opens the manager directly on the update prompt.
+- No modification of official Codex App, Claude Desktop, MSIX packages, `app.asar`, signatures, or integrity files.
+- API keys, Bearer tokens, and full auth configs are not written to normal logs.
+- Third-party GitHub content is metadata-only by default and does not run scripts automatically.
+- Plugins, MCP entries, and Skills show commands or config diffs before installation.
+- Older entry points, shortcuts, and data locations are migrated or cleaned by installer and maintenance flows; public entry points use the current names.
 
 ## Data Locations
 
 - Codex config: `~/.codex/config.toml`
 - Codex auth state: `~/.codex/auth.json`
-- Codex local database: prefers `~/.codex/sqlite/*.db`, falls back to legacy `~/.codex/state_5.sqlite`
+- Codex local database: prefers `~/.codex/sqlite/*.db`, falls back to older `~/.codex/state_5.sqlite`
+- Claude Desktop MCP config: on Windows, usually `%APPDATA%\Claude\claude_desktop_config.json`
 - Claude Codex Pro state and logs: `~/.claude-codex-pro/`
 - Provider Sync backups: `~/.codex/backups_state/provider-sync`
 
 ## FAQ
 
-### The Claude Codex Pro menu does not appear
+### The Codex enhancement badge does not appear
 
-Make sure Codex was launched from the `Claude Codex Pro` entry instead of the original Codex entry. You can also inspect the Diagnostics and Logs pages in the manager.
+Make sure Codex was launched through `Claude Codex Pro`, not the original Codex entry. If it still does not appear, open Diagnostics and Logs in the manager and check the helper port, CDP connection, and `renderer.script_loaded` records.
 
-### The plugin says the backend is disconnected
+### Claude is not shown in Chinese
 
-First test the helper endpoint:
+Chinese coverage targets the independent WebView created by `Open Claude Chinese Window`. The official Claude Desktop window is not forcibly modified. If the wrapper window also does not show Chinese coverage, inspect the Claude Chinese window status and injection script errors in the manager logs.
 
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:57321/backend/status -Body "{}" -ContentType "application/json"
-```
+### Plugin installation failed
 
-If the endpoint works but the plugin still times out, it is usually a Codex page CDP bridge or script cache issue. Restart Claude Codex Pro, or check manager logs for `renderer.script_loaded`, `bridge.request`, and `bridge.response`.
+Open the install preview first and confirm the install type:
 
-### How is Upstream worktree different from Codex native creation?
-
-Claude Codex Pro updates the remote branch first, then creates the worktree as if you ran:
-
-```bash
-git worktree add -b <new-branch> <worktree-path> upstream/<base-branch>
-```
-
-The new worktree starts from the fresh remote tracking branch instead of the local HEAD used by the current session. If Claude Codex Pro cannot safely recognize the current Codex version's native worktree form, use the Claude Codex Pro menu entry and enter the repository path, branch name, worktree path, remote, and base branch manually.
+- Official Claude plugins require the local `claude` CLI.
+- Claude Desktop MCP requires a writable `claude_desktop_config.json`.
+- Community MCP and Skill entries require recognizable structure.
+- Claude Desktop must be restarted after installing MCP entries that should be loaded by the desktop app.
 
 ### macOS says the app cannot be opened or is damaged
 
-Unsigned and unnotarized builds may be blocked by Gatekeeper. Allow the app in System Settings -> Privacy & Security. For formal distribution, configure Apple Developer ID signing and notarization.
+Unsigned or unnotarized builds may be blocked by Gatekeeper. Allow the app in System Settings -> Privacy & Security. If macOS still reports that the app is damaged, run:
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro.app
+sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ Manager.app
+```
 
 ### Does it support Intel Macs?
 
@@ -198,31 +175,21 @@ apps/
   claude-codex-pro-launcher/          Silent launcher
   claude-codex-pro-manager/           Tauri manager
 assets/inject/
-  renderer-inject.js            Enhancement script injected into Codex
+  renderer-inject.js                  Codex enhancement script
+  claude-chinese-inject.js            Claude Chinese wrapper script
 crates/
-  claude-codex-pro-core/              Launch, injection, config, update, install, bridge
+  claude-codex-pro-core/              Launch, injection, config, plugins, updates, install, bridge
   claude-codex-pro-data/              Session data, export, Provider Sync
 scripts/installer/
-  windows/ClaudeCodexPro.nsi    Windows NSIS installer
-  macos/package-dmg.sh          macOS DMG packager
+  windows/ClaudeCodexPro.nsi          Windows NSIS installer
+  macos/package-dmg.sh                macOS DMG packager
 ```
 
-## Community and Support
+## Feedback
 
-Join the Claude Codex Pro discussion group to report issues, share usage notes, or suggest features:
-
-WeChat group: [get the latest QR code](https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#).
-
-If Claude Codex Pro has helped you, you can use the support QR code to support continued maintenance.
-
-<p align="center">
-  <img src="docs/images/support-payment-qr.png" alt="Support payment QR code" width="240">
-</p>
-
-## Friendly Links
-
-- [LINUX DO](https://linux.do)
+- Issues: <https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues>
+- Discussion group QR code: <https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#>
 
 ## Notes
 
-Claude Codex Pro is an external enhancement tool and does not modify original Codex App files. If a future Codex App update changes page structure, the injection script may need updates.
+Claude Codex Pro Tool is an external enhancement tool. It is not an official OpenAI, Anthropic, Claude, or Codex project. If official apps change page structure, protocols, or config formats, this project's injection scripts and adapters may need updates.

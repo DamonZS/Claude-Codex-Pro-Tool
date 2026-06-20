@@ -183,11 +183,13 @@ fn plugin_hub_is_first_class_ops_console_route() {
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
-    assert!(app_tsx.contains("id: \"pluginHub\""));
+    assert!(app_tsx.contains("id: \"tools\""));
+    assert!(app_tsx.contains("label: \"工具与插件\""));
     assert!(app_tsx.contains("function PluginHubScreen"));
+    assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("claude-codex-pro-navigate"));
     assert!(commands_rs.contains("route_main_window_to_plugin_hub"));
-    assert!(commands_rs.contains("main_window_route_script(\"pluginHub\")"));
+    assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
     assert!(app_tsx.contains("refresh_plugin_hub_catalog"));
     assert!(app_tsx.contains("preview_plugin_hub_install"));
     assert!(app_tsx.contains("install_plugin_hub_item"));
@@ -195,13 +197,41 @@ fn plugin_hub_is_first_class_ops_console_route() {
     assert!(app_tsx.contains("claude_desktop_mcp"));
     assert!(app_tsx.contains("Claude Desktop MCP"));
     assert!(app_tsx.contains("Claude Code 插件"));
-    assert!(app_tsx.contains("官方插件、MCP Registry 与 awesome-claude-code 社区资源。"));
+    assert!(
+        app_tsx.contains(
+            "Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。"
+        )
+    );
     assert!(styles.contains(".plugin-layout"));
     assert!(styles.contains(".plugin-list"));
     assert!(styles.contains(".preview-box"));
     assert!(styles.contains(".risk-box"));
     assert!(!commands_rs.contains("WebviewWindowBuilder::new(&app, \"plugin-hub\""));
     assert!(!commands_rs.contains("WebviewWindowBuilder::new(&handle, \"plugin-hub\""));
+}
+
+#[test]
+fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    assert!(!app_tsx.contains("id: \"context\""));
+    assert!(!app_tsx.contains("id: \"pluginHub\""));
+    assert!(!app_tsx.contains("id: \"maintenance\""));
+    assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
+    assert!(app_tsx.contains("Codex 插件仓库"));
+    assert!(app_tsx.contains("https://github.com/openai/plugins"));
+    assert!(app_tsx.contains("Codex 会话管理"));
+    assert!(app_tsx.contains("Claude 会话诊断"));
+    assert!(app_tsx.contains("历史会话修复"));
+    assert!(app_tsx.contains("list_local_sessions"));
+    assert!(app_tsx.contains("delete_local_session"));
+    assert!(app_tsx.contains("sync_providers_now"));
+    assert!(commands_rs.contains("list_local_sessions"));
+    assert!(commands_rs.contains("sync_providers_now"));
 }
 
 #[test]
@@ -227,7 +257,9 @@ fn prompt_optimizer_is_integrated_as_internal_launcher() {
     assert!(app_tsx.contains("prompt-optimizer-window-shell"));
     assert!(app_tsx.contains("if (isPromptOptimizerStandaloneWindow)"));
     assert!(app_tsx.contains("goPromptOptimizer"));
-    assert!(!app_tsx.contains("call<PromptOptimizerWindowResult>(\"open_prompt_optimizer_window\")"));
+    assert!(
+        !app_tsx.contains("call<PromptOptimizerWindowResult>(\"open_prompt_optimizer_window\")")
+    );
     assert!(app_tsx.contains("浏览器打开在线版"));
     assert!(!prompt_screen.contains("打开控制窗口"));
     assert!(!prompt_screen.contains("openPromptOptimizerWindow"));
@@ -243,7 +275,9 @@ fn prompt_optimizer_is_integrated_as_internal_launcher() {
     assert!(commands_rs.contains("prompt_optimizer_window_background_task"));
     assert!(commands_rs.contains("tauri::WebviewUrl::App(\"/\".into())"));
     assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
-    assert!(!commands_rs.contains("tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))"));
+    assert!(!commands_rs.contains(
+        "tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))"
+    ));
     assert!(commands_rs.contains("PromptOptimizerWindowPayload"));
 }
 
@@ -290,19 +324,22 @@ fn manager_window_and_ops_console_layout_stay_usable() {
 }
 
 #[test]
-fn settings_and_maintenance_routes_keep_full_ops_controls() {
+fn settings_and_tools_route_keep_full_ops_controls() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
 
-    assert!(app_tsx.contains("function MaintenanceScreen"));
+    assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
+    assert!(app_tsx.contains("function MaintenanceToolsPanel"));
+    assert!(app_tsx.contains("label: \"工具与插件\""));
     assert!(app_tsx.contains("安装入口"));
-    assert!(app_tsx.contains("卸载入口"));
+    assert!(app_tsx.contains("修复入口"));
+    assert!(app_tsx.contains("修复后端"));
     assert!(app_tsx.contains("Watcher 自动接管"));
     assert!(app_tsx.contains("启动 Claude"));
-    assert!(app_tsx.contains("打开 Claude 中文窗口"));
+    assert!(app_tsx.contains("Claude 中文窗口"));
     assert!(app_tsx.contains("重启 Codex"));
     assert!(app_tsx.contains("load_watcher_state"));
     assert!(app_tsx.contains("install_entrypoints"));

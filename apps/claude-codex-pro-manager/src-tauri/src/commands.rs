@@ -125,6 +125,14 @@ pub struct ClaudeChineseWindowPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClaudeZhPatchPayload {
+    pub status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
+    pub changed_files: Vec<String>,
+    pub backup_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginHubWindowPayload {
     pub open: bool,
     pub label: String,
@@ -642,7 +650,9 @@ pub async fn open_claude_chinese_window(
 }
 
 #[tauri::command]
-pub async fn open_plugin_hub_window(app: tauri::AppHandle) -> CommandResult<PluginHubWindowPayload> {
+pub async fn open_plugin_hub_window(
+    app: tauri::AppHandle,
+) -> CommandResult<PluginHubWindowPayload> {
     match route_main_window_to_plugin_hub(&app) {
         Ok(()) => ok(
             "插件中心已在管理工具内打开。",
@@ -685,7 +695,10 @@ pub async fn open_prompt_optimizer_window(
     match build_result {
         Ok(Ok(window)) => {
             let _ = window.set_focus();
-            ok("提示词优化器窗口已打开。", prompt_optimizer_window_payload(true))
+            ok(
+                "提示词优化器窗口已打开。",
+                prompt_optimizer_window_payload(true),
+            )
         }
         Ok(Err(error)) => failed(
             &format!("提示词优化器窗口打开失败：{error}"),
@@ -707,6 +720,69 @@ pub fn load_claude_chinese_window_status(
         "Claude 中文窗口状态已读取。",
         claude_chinese_window_payload(&app, &status),
     )
+}
+
+#[tauri::command]
+pub fn load_claude_zh_patch_status() -> CommandResult<ClaudeZhPatchPayload> {
+    let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+    ok(
+        &status.message.clone(),
+        ClaudeZhPatchPayload {
+            backup_dir: status.backup_dir.clone(),
+            status,
+            changed_files: Vec::new(),
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+    match claude_codex_pro_core::claude_zh_patch::install_patch_with_remote_resources().await {
+        Ok(outcome) => ok(
+            &outcome.status.message.clone(),
+            ClaudeZhPatchPayload {
+                backup_dir: outcome.backup_dir,
+                status: outcome.status,
+                changed_files: outcome.changed_files,
+            },
+        ),
+        Err(error) => {
+            let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+            failed(
+                &format!("Claude 本机汉化失败：{error}"),
+                ClaudeZhPatchPayload {
+                    backup_dir: status.backup_dir.clone(),
+                    status,
+                    changed_files: Vec::new(),
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub fn restore_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+    match claude_codex_pro_core::claude_zh_patch::restore_patch() {
+        Ok(outcome) => ok(
+            "Claude 官方文件已从备份恢复。",
+            ClaudeZhPatchPayload {
+                backup_dir: outcome.backup_dir,
+                status: outcome.status,
+                changed_files: outcome.changed_files,
+            },
+        ),
+        Err(error) => {
+            let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+            failed(
+                &format!("Claude 汉化恢复失败：{error}"),
+                ClaudeZhPatchPayload {
+                    backup_dir: status.backup_dir.clone(),
+                    status,
+                    changed_files: Vec::new(),
+                },
+            )
+        }
+    }
 }
 
 #[tauri::command]
@@ -1565,7 +1641,9 @@ pub async fn install_plugin_hub_item(
 }
 
 #[tauri::command]
-pub async fn uninstall_plugin_hub_item(request: PluginHubItemRequest) -> CommandResult<PluginHubPayload> {
+pub async fn uninstall_plugin_hub_item(
+    request: PluginHubItemRequest,
+) -> CommandResult<PluginHubPayload> {
     match plugin_hub::uninstall_item(request.id.trim()) {
         Ok(_) => {
             let catalog = plugin_hub::fetch_catalog().await;
@@ -2904,13 +2982,32 @@ fn claude_chinese_injection_script() -> anyhow::Result<String> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("assets").join("inject").join("claude-chinese-inject.js"));
-            candidates.push(dir.join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
-            candidates.push(dir.join("..").join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
+            candidates.push(
+                dir.join("assets")
+                    .join("inject")
+                    .join("claude-chinese-inject.js"),
+            );
+            candidates.push(
+                dir.join("..")
+                    .join("assets")
+                    .join("inject")
+                    .join("claude-chinese-inject.js"),
+            );
+            candidates.push(
+                dir.join("..")
+                    .join("..")
+                    .join("assets")
+                    .join("inject")
+                    .join("claude-chinese-inject.js"),
+            );
         }
     }
     if let Ok(dir) = std::env::current_dir() {
-        candidates.push(dir.join("assets").join("inject").join("claude-chinese-inject.js"));
+        candidates.push(
+            dir.join("assets")
+                .join("inject")
+                .join("claude-chinese-inject.js"),
+        );
         candidates.push(
             dir.join("..")
                 .join("..")
@@ -2919,7 +3016,15 @@ fn claude_chinese_injection_script() -> anyhow::Result<String> {
                 .join("claude-chinese-inject.js"),
         );
     }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..").join("assets").join("inject").join("claude-chinese-inject.js"));
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("assets")
+            .join("inject")
+            .join("claude-chinese-inject.js"),
+    );
     let candidate = candidates
         .into_iter()
         .find(|path| path.exists())
@@ -2972,7 +3077,7 @@ fn route_main_window_to_plugin_hub(app: &tauri::AppHandle) -> tauri::Result<()> 
     window.show()?;
     let _ = window.unminimize();
     let _ = window.set_focus();
-    window.eval(main_window_route_script("pluginHub"))?;
+    window.eval(main_window_route_script("tools"))?;
     Ok(())
 }
 

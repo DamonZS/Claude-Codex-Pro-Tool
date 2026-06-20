@@ -89,6 +89,29 @@ type ClaudeChineseWindowResult = CommandResult<{
   officialInstallKind: string;
 }>;
 
+type ClaudeZhPatchStatus = {
+  status: string;
+  message: string;
+  installRoot: string | null;
+  appRoot: string | null;
+  installKind: string;
+  localeConfigPath: string;
+  backupDir: string;
+  resourcesPresent: boolean;
+  frontendI18nPresent: boolean;
+  statsigI18nPresent: boolean;
+  chunkPatchPresent: boolean;
+  languageWhitelistPatched: boolean;
+  localeConfigured: boolean;
+  writable: boolean;
+};
+
+type ClaudeZhPatchResult = CommandResult<{
+  status: ClaudeZhPatchStatus;
+  changedFiles: string[];
+  backupDir: string;
+}>;
+
 type BackendSettings = {
   codexAppPath: string;
   codexExtraArgs: string[];
@@ -210,6 +233,47 @@ type ScriptMarketResult = CommandResult<{
   user_scripts: UserScriptInventory;
 }>;
 
+type LocalSession = {
+  id: string;
+  title: string;
+  cwd: string;
+  modelProvider: string;
+  archived: boolean;
+  updatedAtMs: number | null;
+  rolloutPath: string;
+  dbPath: string;
+};
+
+type LocalSessionsResult = CommandResult<{
+  dbPath: string;
+  dbPaths: string[];
+  sessions: LocalSession[];
+}>;
+
+type ProviderSyncResult = CommandResult<{
+  syncStatus?: string;
+  targetProvider?: string;
+  changedSessionFiles?: number;
+  skippedLockedRolloutFiles?: string[];
+  sqliteRowsUpdated?: number;
+  sqliteProviderRowsUpdated?: number;
+  sqliteUserEventRowsUpdated?: number;
+  sqliteCwdRowsUpdated?: number;
+  updatedWorkspaceRoots?: string[];
+  encryptedContentWarning?: string;
+  backupDir?: string;
+  syncMessage?: string;
+}>;
+
+type DeleteLocalSessionResult = CommandResult<{
+  session_id?: string;
+  sessionId?: string;
+  undo_token?: string | null;
+  undoToken?: string | null;
+  backup_path?: string | null;
+  backupPath?: string | null;
+}>;
+
 type PluginInstallKind = "claude_plugin_marketplace" | "claude_desktop_mcp" | "mcp_server" | "skill_bundle" | "resource_link";
 type PluginInstallStatus = "notInstalled" | "installed" | "needsReview" | "unsupported";
 
@@ -296,11 +360,9 @@ type InstallEntrypointsResult = CommandResult<{
 type Route =
   | "overview"
   | "relay"
-  | "context"
-  | "pluginHub"
+  | "tools"
   | "promptOptimizer"
   | "scripts"
-  | "maintenance"
   | "logs"
   | "settings";
 type Theme = "light" | "dark";
@@ -315,11 +377,9 @@ declare global {
 const routes: Array<{ id: Route; label: string; icon: LucideIcon }> = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "relay", label: "供应商", icon: KeyRound },
-  { id: "context", label: "工具", icon: Network },
-  { id: "pluginHub", label: "插件", icon: PackageSearch },
+  { id: "tools", label: "工具与插件", icon: PackageSearch },
   { id: "promptOptimizer", label: "提示词", icon: PencilRuler },
   { id: "scripts", label: "脚本", icon: FileCode2 },
-  { id: "maintenance", label: "维护", icon: Wrench },
   { id: "logs", label: "日志", icon: Info },
   { id: "settings", label: "设置", icon: Settings },
 ];
@@ -342,15 +402,19 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(OPS_THEME_STORAGE_KEY) === "dark" ? "dark" : "light"));
   const [route, setRoute] = useState<Route>(() => initialRoute());
   const [notice, setNotice] = useState<{ title: string; message: string; status?: Status } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyCount, setBusyCount] = useState(0);
+  const busy = busyCount > 0;
   const [overview, setOverview] = useState<OverviewResult | null>(null);
   const [claudeDesktop, setClaudeDesktop] = useState<ClaudeDesktopResult | null>(null);
   const [claudeChinese, setClaudeChinese] = useState<ClaudeChineseWindowResult | null>(null);
+  const [claudeZhPatch, setClaudeZhPatch] = useState<ClaudeZhPatchResult | null>(null);
   const [settings, setSettings] = useState<SettingsResult | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<BackendSettings | null>(null);
   const [pluginHub, setPluginHub] = useState<PluginHubResult | null>(null);
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
+  const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
+  const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
   const isPromptOptimizerStandaloneWindow = window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE === "promptOptimizer";
@@ -361,14 +425,14 @@ export function App() {
   };
 
   const run = async <T,>(task: () => Promise<T>, title?: string): Promise<T | null> => {
-    setBusy(true);
+    setBusyCount((count) => count + 1);
     try {
       return await task();
     } catch (error) {
       setNotice({ title: title || "调用失败", message: stringifyError(error), status: "failed" });
       return null;
     } finally {
-      setBusy(false);
+      setBusyCount((count) => Math.max(0, count - 1));
     }
   };
 
@@ -388,11 +452,15 @@ export function App() {
   };
 
   const refreshClaude = async (silent = false) => {
-    const desktop = await run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude 状态");
+    const [desktop, wrapped, zhPatch] = await Promise.all([
+      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude status"),
+      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude Chinese window"),
+      run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude zh-CN patch"),
+    ]);
     if (desktop) setClaudeDesktop(desktop);
-    const wrapped = await run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 中文窗口");
     if (wrapped) setClaudeChinese(wrapped);
-    if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude 状态", message: desktop.message, status: desktop.status });
+    if (zhPatch) setClaudeZhPatch(zhPatch);
+    if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude status", message: desktop.message, status: desktop.status });
   };
 
   const refreshSettings = async (silent = false) => {
@@ -423,6 +491,15 @@ export function App() {
     return result;
   };
 
+  const refreshLocalSessions = async (silent = false) => {
+    const result = await run(() => call<LocalSessionsResult>("list_local_sessions"), "Codex 会话管理");
+    if (result) {
+      setLocalSessions(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Codex 会话管理", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
   const refreshLogs = async (silent = false) => {
     const result = await run(() => call<LogsResult>("read_latest_logs", { request: { lines: 240 } }), "日志");
     if (result) {
@@ -446,6 +523,25 @@ export function App() {
     if (result) {
       setClaudeChinese(result);
       notifyIfNeedsAttention({ title: "Claude 中文窗口", message: result.message, status: result.status });
+      await refreshClaude(true);
+    }
+  };
+
+  const installClaudeZhPatch = async () => {
+    const result = await run(() => call<ClaudeZhPatchResult>("install_claude_zh_patch"), "Claude 本机汉化");
+    if (result) {
+      setClaudeZhPatch(result);
+      notifyIfNeedsAttention({ title: "Claude 本机汉化", message: result.message, status: result.status });
+      await refreshClaude(true);
+    }
+  };
+
+  const restoreClaudeZhPatch = async () => {
+    if (!window.confirm("确认恢复 Claude 官方文件？这会用汉化前的备份覆盖已修改文件。")) return;
+    const result = await run(() => call<ClaudeZhPatchResult>("restore_claude_zh_patch"), "恢复 Claude 官方文件");
+    if (result) {
+      setClaudeZhPatch(result);
+      notifyIfNeedsAttention({ title: "恢复 Claude 官方文件", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -522,8 +618,8 @@ export function App() {
   };
 
   const goPluginHub = async () => {
-    setRoute("pluginHub");
-    await refreshPluginHub(true);
+    setRoute("tools");
+    await refreshRoute("tools");
   };
 
   const goPromptOptimizer = async () => {
@@ -543,6 +639,29 @@ export function App() {
       setSettings(result);
       setSettingsDraft(result.settings);
       notifyIfNeedsAttention({ title: "修复后端", message: result.message, status: result.status });
+    }
+  };
+
+  const repairHistorySessions = async () => {
+    const result = await run(() => call<ProviderSyncResult>("sync_providers_now"), "历史会话修复");
+    if (result) {
+      setProviderSync(result);
+      notifyIfNeedsAttention({ title: "历史会话修复", message: result.message, status: result.status });
+      await refreshLocalSessions(true);
+      await refreshSettings(true);
+    }
+  };
+
+  const deleteLocalSession = async (session: LocalSession) => {
+    const title = session.title || session.id;
+    if (!window.confirm(`确认删除 Codex 本地会话？\n\n${title}\n${session.id}`)) return;
+    const result = await run(
+      () => call<DeleteLocalSessionResult>("delete_local_session", { request: { sessionId: session.id, title: session.title, dbPath: session.dbPath } }),
+      "删除 Codex 会话",
+    );
+    if (result) {
+      notifyIfNeedsAttention({ title: "删除 Codex 会话", message: result.message, status: result.status });
+      await refreshLocalSessions(true);
     }
   };
 
@@ -631,29 +750,30 @@ export function App() {
 
   const refreshRoute = async (target = route) => {
     if (target === "overview") {
-      await refreshOverview(true);
-      await refreshClaude(true);
-    } else if (target === "relay" || target === "context" || target === "settings") {
+      await Promise.all([refreshOverview(true), refreshClaude(true)]);
+    } else if (target === "relay" || target === "settings") {
       await refreshSettings(true);
-    } else if (target === "pluginHub") {
-      await refreshPluginHub(true);
+    } else if (target === "tools") {
+      await Promise.all([
+        refreshPluginHub(true),
+        refreshSettings(true),
+        refreshOverview(true),
+        refreshClaude(true),
+        refreshWatcher(true),
+        refreshLocalSessions(true),
+      ]);
     } else if (target === "promptOptimizer") {
       await refreshSettings(true);
     } else if (target === "scripts") {
-      await refreshSettings(true);
-      await refreshScripts(true);
+      await Promise.all([refreshSettings(true), refreshScripts(true)]);
     } else if (target === "logs") {
       await refreshLogs(true);
-    } else if (target === "maintenance") {
-      await refreshOverview(true);
-      await refreshSettings(true);
-      await refreshWatcher(true);
     }
   };
 
   useEffect(() => {
     const navigate = (event: Event) => {
-      const route = (event as CustomEvent<{ route?: unknown }>).detail?.route;
+      const route = normalizeRoute((event as CustomEvent<{ route?: unknown }>).detail?.route);
       if (!isRoute(route)) return;
       setRoute(route);
       void refreshRoute(route);
@@ -664,11 +784,14 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      await refreshOverview(true);
-      await refreshClaude(true);
-      await refreshSettings(true);
-      await refreshPluginHub(true);
-      await refreshWatcher(true);
+      await Promise.all([
+        refreshOverview(true),
+        refreshClaude(true),
+        refreshSettings(true),
+        refreshPluginHub(true),
+        refreshWatcher(true),
+        refreshLocalSessions(true),
+      ]);
     })();
   }, []);
 
@@ -686,6 +809,8 @@ export function App() {
     () => ({
       refreshRoute,
       openClaudeChinese,
+      installClaudeZhPatch,
+      restoreClaudeZhPatch,
       launchClaudeDesktop,
       launchCodex,
       restartCodex,
@@ -700,6 +825,9 @@ export function App() {
       refreshScripts,
       repairEntrypoints,
       repairBackend,
+      repairHistorySessions,
+      refreshLocalSessions,
+      deleteLocalSession,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode,
@@ -777,13 +905,24 @@ export function App() {
         <section className="ops-screen">
           {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} overview={overview} pluginHub={pluginHub} /> : null}
           {route === "relay" ? <RelayScreen actions={actions} settings={settings} /> : null}
-          {route === "context" ? <ContextScreen settings={settings} /> : null}
-          {route === "pluginHub" ? <PluginHubScreen actions={actions} hub={pluginHub} preview={pluginPreview} /> : null}
+          {route === "tools" ? (
+            <ToolsAndPluginsScreen
+              actions={actions}
+              claudeChinese={claudeChinese}
+              claudeDesktop={claudeDesktop}
+              hub={pluginHub}
+              localSessions={localSessions}
+              overview={overview}
+              preview={pluginPreview}
+              providerSync={providerSync}
+              settings={settings}
+              watcher={watcher}
+            />
+          ) : null}
           {route === "promptOptimizer" ? <PromptOptimizerScreen actions={actions} /> : null}
           {route === "scripts" ? <ScriptsScreen actions={actions} market={scriptMarket} settings={settings} /> : null}
-          {route === "maintenance" ? <MaintenanceScreen actions={actions} overview={overview} settings={settings} watcher={watcher} /> : null}
           {route === "logs" ? <LogsScreen actions={actions} logs={logs} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} draft={settingsDraft} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
         </section>
       </main>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
@@ -917,16 +1056,136 @@ function RelayScreen({ actions, settings }: { actions: ReturnType<typeof createA
   );
 }
 
-function ContextScreen({ settings }: { settings: SettingsResult | null }) {
+function ToolsAndPluginsScreen({
+  actions,
+  claudeChinese,
+  claudeDesktop,
+  hub,
+  localSessions,
+  overview,
+  preview,
+  providerSync,
+  settings,
+  watcher,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  claudeChinese: ClaudeChineseWindowResult | null;
+  claudeDesktop: ClaudeDesktopResult | null;
+  hub: PluginHubResult | null;
+  localSessions: LocalSessionsResult | null;
+  overview: OverviewResult | null;
+  preview: PluginInstallPreviewResult | null;
+  providerSync: ProviderSyncResult | null;
+  settings: SettingsResult | null;
+  watcher: WatcherResult | null;
+}) {
   const common = settings?.settings.relayContextConfigContents || settings?.settings.relayCommonConfigContents || "";
+  const sessions = localSessions?.sessions ?? [];
+  const latestSessions = sessions.slice(0, 8);
+  const codexPluginSource = hub?.catalog.sources.find((source) => source.id === "codex-plugins");
+  const syncSummary = providerSync
+    ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
+    : "尚未执行";
   return (
-    <Panel title="工具与插件配置" detail="MCP、Skills、Plugins 仍保存在统一 TOML 配置中。">
-      <div className="ops-note">
-        <ShieldCheck className="h-4 w-4" />
-        <span>插件中心安装社区 MCP 时只保存配置草案，不会静默执行第三方脚本。</span>
+    <div className="stack">
+      <div className="ops-tools-hero">
+        <Panel title="工具与插件" detail="插件目录、MCP 配置、Codex 会话管理、Claude 会话诊断和历史会话修复集中在这里。">
+          <div className="ops-note">
+            <ShieldCheck className="h-4 w-4" />
+            <span>第三方插件和 MCP 安装前仍先展示命令或配置 diff；社区资源不会静默执行脚本。</span>
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.refreshRoute("tools")}>
+              <RefreshCw className="h-4 w-4" />
+              刷新工具与插件
+            </Button>
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/openai/plugins")} variant="outline">
+              <ExternalLink className="h-4 w-4" />
+              Codex 插件仓库
+            </Button>
+            <Button onClick={() => void actions.openExternalUrl("https://developers.openai.com/codex/plugins")} variant="outline">
+              <ExternalLink className="h-4 w-4" />
+              Codex 插件文档
+            </Button>
+          </div>
+        </Panel>
+        <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
+          <div className="ops-status-list">
+            <StatusRow label="Provider Sync" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
+            <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
+            <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.repairHistorySessions()}>
+              <Wrench className="h-4 w-4" />
+              修复历史会话
+            </Button>
+            <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
+              <RefreshCw className="h-4 w-4" />
+              刷新会话
+            </Button>
+          </div>
+          {providerSync?.encryptedContentWarning ? (
+            <div className="ops-danger-zone">
+              <AlertTriangle className="h-4 w-4" />
+              <span>{providerSync.encryptedContentWarning}</span>
+            </div>
+          ) : null}
+        </Panel>
       </div>
-      <pre className="ops-code">{common.trim() || "暂无通用 MCP / Skills / Plugins 配置。"}</pre>
-    </Panel>
+      <div className="ops-two-column">
+        <div className="ops-wide-column">
+          <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
+            <div className="ops-status-list">
+              <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
+              <StatusRow label="候选库" status={(localSessions?.dbPaths.length ?? 0) > 0 ? "found" : "not_checked"} value={`${localSessions?.dbPaths.length ?? 0} 个`} />
+              <StatusRow label="会话数" status={sessions.length ? "ok" : "not_checked"} value={`${sessions.length} 个`} />
+            </div>
+            <div className="session-list">
+              {latestSessions.length ? latestSessions.map((session) => (
+                <div className="session-row" key={`${session.dbPath}:${session.id}`}>
+                  <div>
+                    <strong>{session.title || "未命名会话"}</strong>
+                    <span>{session.modelProvider || "unknown"} · {compactPath(session.cwd || session.rolloutPath || session.id)}</span>
+                  </div>
+                  <Button onClick={() => void actions.deleteLocalSession(session)} size="sm" variant="outline">
+                    <Trash2 className="h-4 w-4" />
+                    删除
+                  </Button>
+                </div>
+              )) : <Empty text="暂未读取到 Codex 本地会话。" />}
+            </div>
+          </Panel>
+          <PluginHubScreen actions={actions} hub={hub} preview={preview} />
+        </div>
+        <div className="stack">
+          <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
+            <div className="ops-status-list">
+              <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
+              <StatusRow label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
+              <StatusRow label="安全边界" status="ok" value="不修改官方 MSIX / app.asar" />
+            </div>
+            <div className="action-row">
+              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动 Claude</Button>
+              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 中文窗口</Button>
+            </div>
+          </Panel>
+          <Panel title="工具与插件配置" detail="MCP、Skills、Plugins 仍保存在统一 TOML 配置中。">
+            <pre className="ops-code">{common.trim() || "暂无通用 MCP / Skills / Plugins 配置。"}</pre>
+          </Panel>
+          <Panel title="Codex 插件仓库" detail={codexPluginSource?.message ?? "OpenAI curated Codex plugin examples。"}>
+            <InfoRow label="来源" value={codexPluginSource?.label ?? "OpenAI Codex Plugins"} />
+            <InfoRow label="状态" value={codexPluginSource?.status ?? "未加载"} />
+            <InfoRow label="条目" value={`${codexPluginSource?.itemCount ?? 0} 个`} />
+            <div className="action-row">
+              <Button onClick={() => void actions.openExternalUrl("https://github.com/openai/plugins")} size="sm" variant="outline">打开仓库</Button>
+              <Button onClick={() => void actions.openExternalUrl("https://developers.openai.com/codex/plugins")} size="sm" variant="outline">查看文档</Button>
+            </div>
+          </Panel>
+          <MaintenanceToolsPanel actions={actions} overview={overview} settings={settings} watcher={watcher} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -939,11 +1198,12 @@ function PluginHubScreen({
   hub: PluginHubResult | null;
   preview: PluginInstallPreviewResult | null;
 }) {
-  const [filter, setFilter] = useState<"all" | "official" | "mcp" | "skill" | "installed" | "review">("all");
+  const [filter, setFilter] = useState<"all" | "official" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
   const [selectedId, setSelectedId] = useState("");
   const items = hub?.catalog.items ?? [];
   const visible = items.filter((item) => {
     if (filter === "official") return item.sourceId === "official";
+    if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex";
     if (filter === "mcp") return item.installKind === "mcp_server" || item.installKind === "claude_desktop_mcp";
     if (filter === "skill") return item.installKind === "skill_bundle";
     if (filter === "installed") return item.installStatus === "installed";
@@ -952,16 +1212,19 @@ function PluginHubScreen({
   });
   const selected = items.find((item) => item.id === selectedId) ?? visible[0] ?? null;
   const selectedPreview = preview?.item.id === selected?.id ? preview : null;
-  const installButtonLabel = selected?.installKind === "claude_desktop_mcp" || selected?.installKind === "mcp_server"
-    ? "安装到 Claude Desktop"
-    : "安装";
-  return (
+  const selectedCanInstall = selected?.installKind === "claude_desktop_mcp" || selected?.installKind === "claude_plugin_marketplace";
+  const installButtonLabel = selected?.installKind === "claude_desktop_mcp"
+    ? "Install to Claude Desktop"
+    : selected?.installKind === "claude_plugin_marketplace"
+      ? "Install with Claude CLI"
+      : "Install";  return (
     <div className="plugin-layout">
-      <Panel title="Claude 插件中心" detail="官方插件、MCP Registry 与 awesome-claude-code 社区资源。">
+      <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
         <div className="filter-row">
           {[
             ["all", "全部"],
             ["official", "官方插件"],
+            ["codex", "Codex 插件"],
             ["mcp", "MCP"],
             ["skill", "Skills"],
             ["installed", "已安装"],
@@ -1030,10 +1293,15 @@ function PluginHubScreen({
                   <Trash2 className="h-4 w-4" />
                   移除记录
                 </Button>
-              ) : (
-                <Button disabled={selected.installStatus === "unsupported"} onClick={() => void actions.installPlugin(selected.id)}>
+              ) : selectedCanInstall ? (
+                <Button onClick={() => void actions.installPlugin(selected.id)}>
                   <Download className="h-4 w-4" />
                   <span className="desktop-install-label">{installButtonLabel}</span>
+                </Button>
+              ) : (
+                <Button disabled variant="outline">
+                  <ShieldCheck className="h-4 w-4" />
+                  Review required
                 </Button>
               )}
               {selected.homepage ? (
@@ -1128,7 +1396,7 @@ function ScriptsScreen({ actions, market, settings }: { actions: ReturnType<type
   );
 }
 
-function MaintenanceScreen({
+function MaintenanceToolsPanel({
   actions,
   overview,
   settings,
@@ -1140,109 +1408,33 @@ function MaintenanceScreen({
   watcher: WatcherResult | null;
 }) {
   return (
-    <div className="ops-two-column">
-      <div className="ops-wide-column">
-        <Panel title="入口维护" detail="修复快捷方式、后端入口和启动状态。">
-          <div className="ops-status-list">
-            <StatusRow label="Codex 应用" status={overview?.codex_app.status ?? "not_checked"} value={compactPath(overview?.codex_app.path)} />
-            <StatusRow label="静默启动入口" status={overview?.silent_shortcut.status ?? "not_checked"} value={compactPath(overview?.silent_shortcut.path)} />
-            <StatusRow label="管理工具入口" status={overview?.management_shortcut.status ?? "not_checked"} value={compactPath(overview?.management_shortcut.path)} />
-            <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.disabled_flag ? compactPath(watcher.disabled_flag) : "未加载"} />
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.repairEntrypoints()}>
-              <Wrench className="h-4 w-4" />
-              修复入口
-            </Button>
-            <Button onClick={() => void actions.repairBackend()} variant="outline">
-              <ShieldCheck className="h-4 w-4" />
-              修复后端
-            </Button>
-            <Button onClick={() => void actions.refreshRoute("maintenance")} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              重新检查
-            </Button>
-          </div>
-        </Panel>
-        <Panel title="启动控制" detail="Codex 与 Claude 的启动入口分开，避免误操作。">
-          <div className="card-grid">
-            <div className="ops-setting-card">
-              <Rocket className="h-5 w-5" />
-              <strong>Codex</strong>
-              <p>启动或重启 Claude Codex Pro 接管的 Codex。</p>
-              <div className="action-row">
-                <Button onClick={() => void actions.launchCodex()} size="sm">启动 Codex</Button>
-                <Button onClick={() => void actions.restartCodex()} size="sm" variant="outline">重启 Codex</Button>
-              </div>
-            </div>
-            <div className="ops-setting-card">
-              <MessageCircle className="h-5 w-5" />
-              <strong>Claude</strong>
-              <p>启动官方 Claude 桌面端，不承诺注入官方 MSIX 窗口。</p>
-              <Button onClick={() => void actions.launchClaudeDesktop()} size="sm" variant="outline">启动 Claude</Button>
-            </div>
-            <div className="ops-setting-card">
-              <Languages className="h-5 w-5" />
-              <strong>Claude 中文窗口</strong>
-              <p>打开包装 WebView，加载 Claude 网页并注入中文覆盖。</p>
-              <Button onClick={() => void actions.openClaudeChinese()} size="sm" variant="outline">打开 Claude 中文窗口</Button>
-            </div>
-          </div>
-        </Panel>
-        <Panel title="入口安装" detail="安装入口、卸载入口和修复快捷方式都在这里。">
-          <div className="action-row">
-            <Button onClick={() => void actions.installEntrypoints()}>
-              <Download className="h-4 w-4" />
-              安装入口
-            </Button>
-            <Button onClick={() => void actions.repairShortcuts()} variant="outline">
-              <Wrench className="h-4 w-4" />
-              修复快捷方式
-            </Button>
-            <Button onClick={() => void actions.uninstallEntrypoints()} variant="outline">
-              <Trash2 className="h-4 w-4" />
-              卸载入口
-            </Button>
-          </div>
-        </Panel>
+    <Panel title="入口与修复" detail="会话工具旁保留启动、快捷方式、后端和 Watcher 修复入口。">
+      <div className="ops-status-list">
+        <StatusRow label="Codex 应用" status={overview?.codex_app.status ?? "not_checked"} value={compactPath(overview?.codex_app.path)} />
+        <StatusRow label="静默启动入口" status={overview?.silent_shortcut.status ?? "not_checked"} value={compactPath(overview?.silent_shortcut.path)} />
+        <StatusRow label="管理工具入口" status={overview?.management_shortcut.status ?? "not_checked"} value={compactPath(overview?.management_shortcut.path)} />
+        <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "已启用" : "未启用"} />
       </div>
-      <div className="stack">
-        <Panel title="Watcher 自动接管" detail="用于保持静默启动入口和接管状态。">
-          <div className="ops-status-list">
-            <StatusRow label="状态" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "已启用" : "未启用"} />
-            <StatusRow label="禁用标记" status={watcher?.disabled_flag ? "found" : "not_checked"} value={watcher?.disabled_flag ? compactPath(watcher.disabled_flag) : "未加载"} />
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.installWatcher()} size="sm" variant="outline">安装 Watcher</Button>
-            <Button onClick={() => void actions.enableWatcher()} size="sm" variant="outline">启用</Button>
-            <Button onClick={() => void actions.disableWatcher()} size="sm" variant="outline">禁用</Button>
-            <Button onClick={() => void actions.uninstallWatcher()} size="sm" variant="outline">移除</Button>
-          </div>
-        </Panel>
-        <Panel title="关键路径" detail="维护排障时优先看这些路径。">
-          <div className="info-grid compact">
-            <InfoRow label="Codex App" value={compactPath(overview?.codex_app.path)} />
-            <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
-            <InfoRow label="日志文件" value={compactPath(overview?.logs_path)} />
-            <InfoRow label="当前版本" value={overview?.current_version ?? "未加载"} />
-          </div>
-        </Panel>
-        <Panel title="最近启动" detail={overview?.latest_launch?.message ?? "暂无启动记录。"}>
-          <div className="info-grid compact">
-            <InfoRow label="状态" value={overview?.latest_launch?.status ?? "无记录"} />
-            <InfoRow label="Debug 端口" value={String(overview?.latest_launch?.debug_port ?? "-")} />
-            <InfoRow label="Helper 端口" value={String(overview?.latest_launch?.helper_port ?? "-")} />
-            <InfoRow label="Codex App" value={compactPath(overview?.latest_launch?.codex_app)} />
-          </div>
-        </Panel>
-        <Panel title="安全边界" detail="维护操作不会静默改写官方 Claude 安装包。">
-          <div className="ops-danger-zone">
-            <AlertTriangle className="h-4 w-4" />
-            <span>卸载入口只移除本工具创建的入口；修复后端只更新本工具管理的命令包装和配置。</span>
-          </div>
-        </Panel>
+      <div className="action-row">
+        <Button onClick={() => void actions.launchCodex()} size="sm">启动 Codex</Button>
+        <Button onClick={() => void actions.restartCodex()} size="sm" variant="outline">重启 Codex</Button>
+        <Button onClick={() => void actions.repairEntrypoints()} size="sm" variant="outline">修复入口</Button>
+        <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
+        <Button onClick={() => void actions.installEntrypoints()} size="sm" variant="outline">安装入口</Button>
+        <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复快捷方式</Button>
       </div>
-    </div>
+      <div className="action-row">
+        <Button onClick={() => void actions.installWatcher()} size="sm" variant="outline">安装 Watcher</Button>
+        <Button onClick={() => void actions.enableWatcher()} size="sm" variant="outline">启用 Watcher</Button>
+        <Button onClick={() => void actions.disableWatcher()} size="sm" variant="outline">禁用 Watcher</Button>
+        <Button onClick={() => void actions.uninstallWatcher()} size="sm" variant="outline">移除 Watcher</Button>
+      </div>
+      <div className="info-grid compact">
+        <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
+        <InfoRow label="日志文件" value={compactPath(overview?.logs_path)} />
+        <InfoRow label="当前版本" value={overview?.current_version ?? "未加载"} />
+      </div>
+    </Panel>
   );
 }
 
@@ -1263,6 +1455,7 @@ function LogsScreen({ actions, logs }: { actions: ReturnType<typeof createAction
 function SettingsScreen({
   actions,
   claudeChinese,
+  claudeZhPatch,
   draft,
   onDraftChange,
   overview,
@@ -1271,6 +1464,7 @@ function SettingsScreen({
 }: {
   actions: ReturnType<typeof createActionsShape>;
   claudeChinese: ClaudeChineseWindowResult | null;
+  claudeZhPatch: ClaudeZhPatchResult | null;
   draft: BackendSettings | null;
   onDraftChange: (settings: BackendSettings) => void;
   overview: OverviewResult | null;
@@ -1375,11 +1569,26 @@ function SettingsScreen({
             <InfoRow label="注入模式" value={claudeChinese?.injectionMode ?? "wrapped_webview"} />
             <InfoRow label="官方 Claude" value={claudeChinese?.officialInstallKind ?? "未检测"} />
             <InfoRow label="CDP 状态" value={claudeChinese?.cdpStatus ?? "未检测"} />
+            <InfoRow label="本机汉化" value={claudeZhPatch?.status.status ?? "not_checked"} />
+            <InfoRow label="补丁目标" value={compactPath(claudeZhPatch?.status.appRoot)} />
+            <InfoRow label="备份目录" value={compactPath(claudeZhPatch?.backupDir)} />
+            <InfoRow label="资源文件" value={claudeZhPatch?.status.frontendI18nPresent ? "已写入" : "未写入"} />
+            <InfoRow label="Locale" value={claudeZhPatch?.status.localeConfigured ? "zh-CN" : "未设置"} />
+            <InfoRow label="语言白名单" value={claudeZhPatch?.status.languageWhitelistPatched ? "已激活" : "未激活"} />
+            <InfoRow label="Chunk 注入" value={claudeZhPatch?.status.chunkPatchPresent ? "已注入" : "未注入"} />
           </div>
           <div className="action-row">
             <Button onClick={() => void actions.openClaudeChinese()}>
               <Languages className="h-4 w-4" />
               打开 Claude 中文窗口
+            </Button>
+            <Button onClick={() => void actions.installClaudeZhPatch()}>
+              <Languages className="h-4 w-4" />
+              一键汉化 Claude
+            </Button>
+            <Button onClick={() => void actions.restoreClaudeZhPatch()} variant="outline">
+              <RefreshCw className="h-4 w-4" />
+              恢复官方 Claude
             </Button>
             <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">
               <MessageCircle className="h-4 w-4" />
@@ -1404,6 +1613,10 @@ function SettingsScreen({
             <span>API Key</span>
             <input disabled={!s} onChange={(event) => updateDraft("cliWrapperApiKey", event.currentTarget.value)} placeholder={s?.cliWrapperApiKey ? "已配置，输入新值覆盖" : "未设置"} type="password" value={s?.cliWrapperApiKey ?? ""} />
           </label>
+          <div className="info-grid compact">
+            <InfoRow label="生效方式" value="保存后重建 Codex CLI Wrapper" />
+            <InfoRow label="依赖" value="需要本机可执行 Codex CLI" />
+          </div>
           <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI Wrapper</Button>
         </Panel>
         <Panel title="图片覆盖" detail="应用 Logo / 背景覆盖相关设置，保存后下次注入生效。">
@@ -1419,6 +1632,10 @@ function SettingsScreen({
             <span>透明度：{s?.codexAppImageOverlayOpacity ?? 0}%</span>
             <input disabled={!s} max={100} min={0} onChange={(event) => updateDraft("codexAppImageOverlayOpacity", Number(event.currentTarget.value))} type="range" value={s?.codexAppImageOverlayOpacity ?? 0} />
           </label>
+          <div className="info-grid compact">
+            <InfoRow label="生效方式" value="保存后下次 Codex 注入生效" />
+            <InfoRow label="启用条件" value={s?.codexAppImageOverlayPath?.trim() ? "已设置图片路径" : "路径为空，不会注入"} />
+          </div>
           <div className="action-row">
             <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存图片覆盖</Button>
             <Button onClick={() => void actions.resetImageOverlaySettings()} variant="outline">
@@ -1565,10 +1782,10 @@ function routeLabel(route: Route) {
 }
 
 function initialRoute(): Route {
-  const injectedRoute = window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE;
+  const injectedRoute = normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE);
   if (routes.some((item) => item.id === injectedRoute)) return injectedRoute as Route;
   try {
-    const view = new URLSearchParams(window.location.search).get("view");
+    const view = normalizeRoute(new URLSearchParams(window.location.search).get("view"));
     if (routes.some((item) => item.id === view)) return view as Route;
   } catch {
     // Fall back to overview when running outside a normal browser URL.
@@ -1576,15 +1793,18 @@ function initialRoute(): Route {
   return "overview";
 }
 
+function normalizeRoute(value: unknown): unknown {
+  if (value === "pluginHub" || value === "context" || value === "maintenance") return "tools";
+  return value;
+}
+
 function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "运行状态、启动动作和 Claude 中文窗口诊断。",
     relay: "供应商与模型接入摘要。",
-    context: "MCP、Skills、Plugins 的配置入口。",
-    pluginHub: "开源插件、MCP 与技能目录。",
+    tools: "插件目录、MCP 配置、会话管理和历史修复。",
     promptOptimizer: "提示词优化、测试和 MCP 接入。",
     scripts: "Codex 前端用户脚本市场。",
-    maintenance: "快捷方式、后端入口和启动修复。",
     logs: "诊断日志与运行信息。",
     settings: "全局开关和配置摘要。",
   };
@@ -1593,7 +1813,7 @@ function routeSubtitle(route: Route) {
 
 function routeDocumentTitle(route: Route) {
   if (window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE === "promptOptimizer") return "提示词优化器";
-  if (window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE === "pluginHub") return "Claude 插件中心";
+  if (normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE) === "tools") return "工具与插件";
   return route === "overview" ? "Claude Codex Pro 管理工具" : `${routeLabel(route)} - Claude Codex Pro 管理工具`;
 }
 
@@ -1607,6 +1827,8 @@ function createActionsShape() {
   return {
     refreshRoute: async (_route?: Route) => {},
     openClaudeChinese: async () => {},
+    installClaudeZhPatch: async () => {},
+    restoreClaudeZhPatch: async () => {},
     launchClaudeDesktop: async () => {},
     launchCodex: async () => {},
     restartCodex: async () => {},
@@ -1621,6 +1843,9 @@ function createActionsShape() {
     refreshScripts: async () => null as ScriptMarketResult | null,
     repairEntrypoints: async () => {},
     repairBackend: async () => {},
+    repairHistorySessions: async () => {},
+    refreshLocalSessions: async () => null as LocalSessionsResult | null,
+    deleteLocalSession: async (_session: LocalSession) => {},
     applyRelayMode: async () => {},
     applyPureApiMode: async () => {},
     clearRelayMode: async () => {},
