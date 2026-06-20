@@ -25,7 +25,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { invokeCommand } from "@/tauriBridge";
@@ -682,43 +682,40 @@ export function App() {
     document.title = routeDocumentTitle(route);
   }, [route]);
 
-  const actions = useMemo(
-    () => ({
-      refreshRoute,
-      openClaudeChinese,
-      launchClaudeDesktop,
-      launchCodex,
-      restartCodex,
-      openExternalUrl,
-      goPluginHub,
-      goPromptOptimizer,
-      previewPlugin,
-      installPlugin,
-      uninstallPlugin,
-      installMarketScript,
-      refreshPluginHub,
-      refreshScripts,
-      repairEntrypoints,
-      repairBackend,
-      applyRelayMode,
-      applyPureApiMode,
-      clearRelayMode,
-      saveSettings,
-      installEntrypoints,
-      uninstallEntrypoints,
-      repairShortcuts,
-      installWatcher: () => watcherAction("install_watcher", "安装 Watcher"),
-      uninstallWatcher: () => watcherAction("uninstall_watcher", "移除 Watcher"),
-      enableWatcher: () => watcherAction("enable_watcher", "启用 Watcher"),
-      disableWatcher: () => watcherAction("disable_watcher", "禁用 Watcher"),
-      resetSettings,
-      resetImageOverlaySettings,
-      refreshLogs,
-      refreshWatcher,
-      setTheme,
-    }),
-    [route, pluginPreview],
-  );
+  const actions = {
+    refreshRoute,
+    openClaudeChinese,
+    launchClaudeDesktop,
+    launchCodex,
+    restartCodex,
+    openExternalUrl,
+    goPluginHub,
+    goPromptOptimizer,
+    previewPlugin,
+    installPlugin,
+    uninstallPlugin,
+    installMarketScript,
+    refreshPluginHub,
+    refreshScripts,
+    repairEntrypoints,
+    repairBackend,
+    applyRelayMode,
+    applyPureApiMode,
+    clearRelayMode,
+    saveSettings,
+    installEntrypoints,
+    uninstallEntrypoints,
+    repairShortcuts,
+    installWatcher: () => watcherAction("install_watcher", "安装 Watcher"),
+    uninstallWatcher: () => watcherAction("uninstall_watcher", "移除 Watcher"),
+    enableWatcher: () => watcherAction("enable_watcher", "启用 Watcher"),
+    disableWatcher: () => watcherAction("disable_watcher", "禁用 Watcher"),
+    resetSettings,
+    resetImageOverlaySettings,
+    refreshLogs,
+    refreshWatcher,
+    setTheme,
+  };
 
   if (isPromptOptimizerStandaloneWindow) {
     return (

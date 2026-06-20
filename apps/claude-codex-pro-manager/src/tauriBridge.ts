@@ -9,9 +9,18 @@ type CommandResult<T extends Record<string, unknown>> = T & {
 
 const hasTauriInternals = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+const IPC_TIMEOUT_MS = 30_000;
+
 export function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
-  if (hasTauriInternals()) return tauriInvoke<T>(command, args);
-  return mockInvoke(command, args) as Promise<T>;
+  const invoke = hasTauriInternals()
+    ? tauriInvoke<T>(command, args)
+    : (mockInvoke(command, args) as Promise<T>);
+  return Promise.race([
+    invoke,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`IPC 调用超时 (${IPC_TIMEOUT_MS}ms): ${command}`)), IPC_TIMEOUT_MS),
+    ),
+  ]);
 }
 
 async function mockInvoke(command: string, args?: Record<string, unknown>) {

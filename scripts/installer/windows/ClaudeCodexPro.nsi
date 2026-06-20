@@ -10,7 +10,7 @@ Name "Claude Codex Pro"
 OutFile "${ROOT}\dist\windows\claude-codex-pro-${VERSION}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Claude Codex Pro"
 InstallDirRegKey HKCU "Software\Claude Codex Pro" "InstallDir"
-RequestExecutionLevel admin
+RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 !define MUI_ICON "${ROOT}\apps\claude-codex-pro-manager\src-tauri\icons\icon.ico"

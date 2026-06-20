@@ -24,12 +24,15 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Install NSIS
-        run: choco install nsis -y
+        run: choco install nsis --version=3.10 -y
 
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
@@ -71,7 +74,7 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-15-intel
+            runner: macos-13
             target: x86_64-apple-darwin
           - arch: arm64
             runner: macos-14
@@ -92,9 +95,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager

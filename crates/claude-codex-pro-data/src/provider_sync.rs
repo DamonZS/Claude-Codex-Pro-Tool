@@ -225,7 +225,11 @@ pub fn run_provider_sync_with_target(
         let (sqlite_updates, updated_workspace_roots) = match apply_result {
             Ok(counts) => counts,
             Err(err) => {
-                let _ = restore_session_changes(&applied.changes);
+                if let Err(restore_err) = restore_session_changes(&applied.changes) {
+                    eprintln!(
+                        "provider sync: failed to restore session changes after error: {restore_err}"
+                    );
+                }
                 return Err(err);
             }
         };
@@ -250,7 +254,9 @@ pub fn run_provider_sync_with_target(
         synced.encrypted_content_warning = encrypted_content_warning;
         Ok(synced)
     })();
-    let _ = release_lock(&lock_dir);
+    if let Err(err) = release_lock(&lock_dir) {
+        eprintln!("provider sync: failed to release lock: {err}");
+    }
     sync_result.unwrap_or_else(|err| {
         result(
             ProviderSyncStatus::Skipped,

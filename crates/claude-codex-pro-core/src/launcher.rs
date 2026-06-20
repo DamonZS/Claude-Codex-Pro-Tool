@@ -338,7 +338,12 @@ where
             }
             let message = error.to_string();
             let failure = launch_status("failed", &message, debug_port, helper_port, &app_dir);
-            let _ = status_store.save_latest(&failure);
+            if let Err(save_err) = status_store.save_latest(&failure) {
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "launcher",
+                    format!("failed to persist launch failure status: {save_err}"),
+                );
+            }
             hooks.write_status("failed").await;
             Err(error)
         }

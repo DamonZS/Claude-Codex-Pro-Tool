@@ -60,7 +60,7 @@ impl UserScriptManager {
     }
 
     pub fn load_config(&self) -> UserScriptConfig {
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         self.load_config_unlocked()
     }
 
@@ -75,7 +75,7 @@ impl UserScriptManager {
     }
 
     pub fn save_config(&self, config: &UserScriptConfig) -> anyhow::Result<()> {
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         self.save_config_unlocked(config)
     }
 
@@ -95,7 +95,7 @@ impl UserScriptManager {
     }
 
     pub fn set_global_enabled(&self, enabled: bool) -> anyhow::Result<UserScriptConfig> {
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = self.load_config_unlocked();
         config.enabled = enabled;
         self.save_config_unlocked(&config)?;
@@ -103,7 +103,7 @@ impl UserScriptManager {
     }
 
     pub fn set_script_enabled(&self, key: &str, enabled: bool) -> anyhow::Result<UserScriptConfig> {
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = self.load_config_unlocked();
         config.scripts.insert(key.to_string(), enabled);
         self.save_config_unlocked(&config)?;
@@ -143,7 +143,7 @@ impl UserScriptManager {
             })?;
         }
 
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = self.load_config_unlocked();
         config.scripts.remove(key);
         config.market.remove(key);
@@ -156,7 +156,7 @@ impl UserScriptManager {
     }
 
     pub fn record_market_install(&self, script: &MarketScript) -> anyhow::Result<UserScriptConfig> {
-        let _guard = self.config_lock.lock().unwrap();
+        let _guard = self.config_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = self.load_config_unlocked();
         let key = format!("user:{}", market_script_filename(&script.id));
         config.scripts.entry(key.clone()).or_insert(true);
