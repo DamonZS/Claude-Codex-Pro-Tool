@@ -322,24 +322,44 @@ dist/macos/claude-codex-pro-1.2.9-macos-x64.dmg
 
 ### GitHub Actions 构建
 
-仓库包含两个主要工作流：
+仓库包含三条主要工作流：
 
-- `.github/workflows/pr-build.yml`：在 PR、`main` push、手动触发时构建 Windows artifacts 和 macOS DMG artifacts。
-- `.github/workflows/release-assets.yml`：发布 GitHub Release 后自动构建并上传 Windows 安装包、macOS x64/arm64 DMG 和 `latest.json`。
+- `.github/workflows/pr-build.yml`：在 PR、`main` push、手动触发时构建 Windows artifacts 和 macOS DMG artifacts，用于日常验证。
+- `.github/workflows/auto-release-installers.yml`：在 `main` push 或手动触发时自动计算下一版 `V0.01` 系列 tag，创建 GitHub Release，构建 Windows 安装包、macOS x64/arm64 DMG，上传 `latest.json` 后发布 Release。
+- `.github/workflows/release-assets.yml`：保留给手动 GitHub Release 使用。手动发布 tag 后，它会从 release tag 构建并上传安装包和 `latest.json`。自动发布流程生成的 Release 带有内部标记，旧流程会自动跳过，避免重复构建和重复上传。
 
-发版流程：
+自动发版流程：
+
+1. 合并或推送代码到 `main`，或者在 Actions 页面手动运行 `Auto release installers`。
+2. workflow 使用 `scripts/release/next-release-tag.js` 读取现有 tag。
+3. 如果没有 `V数字.两位数字` 格式的 tag，第一版为 `V0.01`。
+4. 后续版本按 `V0.01 -> V0.02 -> ... -> V0.99 -> V1.00` 递增。
+5. workflow 创建 tag 和 draft Release，分别在 Windows、macOS Intel、macOS Apple Silicon runner 上构建安装包。
+6. 所有安装包和 `latest.json` 上传成功后，Release 自动发布并标记为 latest。
+
+自动发版产物示例：
+
+```text
+claude-codex-pro-0.01-windows-x64-setup.exe
+claude-codex-pro-0.01-macos-x64.dmg
+claude-codex-pro-0.01-macos-arm64.dmg
+latest.json
+```
+
+手动发版流程仍然可用：
 
 1. 确认本地验证通过。
-2. 推送代码到 `main`。
-3. 创建并发布 tag，例如 `v1.2.9`。
-4. GitHub Release 发布后，`release-assets.yml` 会从 release tag 构建安装包并上传到该 Release。
+2. 推送代码和 tag，例如 `v1.2.9` 或 `V0.10`。
+3. 在 GitHub 上创建并发布 Release。
+4. `release-assets.yml` 会从 release tag 构建安装包并上传到该 Release。
 
 版本号来源：
 
-- Rust workspace 版本在根目录 `Cargo.toml` 的 `[workspace.package] version`。
-- 管理工具前端版本在 `apps/claude-codex-pro-manager/package.json`。
-- Tauri 配置版本在 `apps/claude-codex-pro-manager/src-tauri/tauri.conf.json`。
-- NSIS / DMG 输出文件名使用传入脚本的 `$version` 或 GitHub tag 去掉开头的 `v`。
+- Rust workspace 开发版本在根目录 `Cargo.toml` 的 `[workspace.package] version`。
+- 管理工具前端开发版本在 `apps/claude-codex-pro-manager/package.json`。
+- Tauri 开发版本在 `apps/claude-codex-pro-manager/src-tauri/tauri.conf.json`。
+- 自动发版安装包的运行时版本由 workflow 注入 `CLAUDE_CODEX_PRO_RELEASE_VERSION`，值为 GitHub tag，例如 `V0.01`。
+- NSIS / DMG 输出文件名使用传入脚本的 `$version`，即 GitHub tag 去掉开头的 `v` 或 `V`。
 
 项目结构：
 

@@ -59,12 +59,36 @@ pub fn parse_version_tag(value: &str) -> anyhow::Result<Vec<u64>> {
 }
 
 pub fn is_newer_version(candidate: &str, current: &str) -> anyhow::Result<bool> {
+    let candidate_auto_release = parse_auto_release_counter(candidate);
+    let current_auto_release = parse_auto_release_counter(current);
+    match (candidate_auto_release, current_auto_release) {
+        (Some(candidate), Some(current)) => return Ok(candidate > current),
+        (Some(_), None) => return Ok(true),
+        (None, Some(_)) => return Ok(false),
+        (None, None) => {}
+    }
+
     let mut left = parse_version_tag(candidate)?;
     let mut right = parse_version_tag(current)?;
     let len = left.len().max(right.len());
     left.resize(len, 0);
     right.resize(len, 0);
     Ok(left > right)
+}
+
+fn parse_auto_release_counter(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let release = value
+        .strip_prefix('V')
+        .or_else(|| value.strip_prefix('v'))?;
+    let (major, minor) = release.split_once('.')?;
+    if minor.len() != 2 || !major.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    if !minor.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(major.parse::<u64>().ok()? * 100 + minor.parse::<u64>().ok()?)
 }
 
 pub fn release_from_github_payload(payload: &Value) -> anyhow::Result<Release> {

@@ -150,6 +150,61 @@ fn github_release_workflow_uploads_static_latest_json() {
 }
 
 #[test]
+fn github_auto_release_workflow_builds_installers_with_v0_tags() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let workflow =
+        std::fs::read_to_string(repo_root.join(".github/workflows/auto-release-installers.yml"))
+            .expect("read auto release workflow");
+    let release_assets =
+        std::fs::read_to_string(repo_root.join(".github/workflows/release-assets.yml"))
+            .expect("read release assets workflow");
+    let version_script =
+        std::fs::read_to_string(repo_root.join("scripts/release/next-release-tag.js"))
+            .expect("read release tag script");
+    let version_rs =
+        std::fs::read_to_string(repo_root.join("crates/claude-codex-pro-core/src/version.rs"))
+            .expect("read version module");
+
+    assert!(workflow.contains("branches: [main]"));
+    assert!(workflow.contains("workflow_dispatch:"));
+    assert!(workflow.contains("node scripts/release/next-release-tag.js"));
+    assert!(workflow.contains("git tag -a \"$TAG\" -m \"Release $TAG\""));
+    assert!(workflow.contains("gh release create \"$TAG\""));
+    assert!(workflow.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
+    assert!(workflow.contains("npm run check"));
+    assert!(workflow.contains("cargo test --workspace"));
+    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
+    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
+    assert!(workflow.contains("macos-15-intel"));
+    assert!(workflow.contains("x86_64-apple-darwin"));
+    assert!(workflow.contains("macos-14"));
+    assert!(workflow.contains("aarch64-apple-darwin"));
+    assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
+    assert!(workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg --clobber"));
+    assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
+    assert!(workflow.contains("gh api --method PATCH \"repos/$REPO/releases/$release_id\""));
+    assert!(workflow.contains("-F draft=false"));
+    assert!(workflow.contains("-f make_latest=true"));
+    assert!(workflow.contains("version: tag"));
+
+    assert!(release_assets.contains("auto-release-installers-managed"));
+    assert!(release_assets.contains("if: ${{ !contains(github.event.release.body"));
+    assert!(release_assets.contains("version: tag"));
+
+    assert!(version_script.contains("RELEASE_TAG_PATTERN = /^[vV](\\d+)\\.(\\d{2})$/"));
+    assert!(version_script.contains("assert.equal(nextReleaseTag([]), \"V0.01\")"));
+    assert!(version_script.contains("assert.equal(nextReleaseTag([\"V0.99\"]), \"V1.00\")"));
+
+    assert!(version_rs.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
+    assert!(version_rs.contains("env!(\"CARGO_PKG_VERSION\")"));
+}
+
+#[test]
 fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");

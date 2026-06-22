@@ -19,6 +19,15 @@ fn version_comparison_uses_numeric_segments() {
 }
 
 #[test]
+fn v0_auto_release_tags_are_newer_than_legacy_semver_releases() {
+    assert!(is_newer_version("V0.01", "1.2.9").unwrap());
+    assert!(is_newer_version("V0.02", "V0.01").unwrap());
+    assert!(is_newer_version("V1.00", "V0.99").unwrap());
+    assert!(!is_newer_version("V0.01", "V0.02").unwrap());
+    assert!(!is_newer_version("v1.2.9", "V0.01").unwrap());
+}
+
+#[test]
 fn github_payload_selects_platform_installer() {
     let release = release_from_github_payload(&json!({
         "tag_name": "v1.0.9",

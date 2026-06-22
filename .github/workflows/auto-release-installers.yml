@@ -1,0 +1,312 @@
+name: Auto release installers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-release-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    name: Prepare V0.01 release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing_tag="$(git tag --points-at HEAD | grep -E '^[vV][0-9]+\.[0-9]{2}$' | sort -V | tail -n 1 || true)"
+          if [ -n "$existing_tag" ]; then
+            tag="$existing_tag"
+          else
+            tag="$(GITHUB_OUTPUT= node scripts/release/next-release-tag.js)"
+          fi
+          version="${tag#v}"
+          version="${version#V}"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Using release tag: $tag"
+
+      - name: Create tag if needed
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; reusing it."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; assets will be replaced."
+            exit 0
+          fi
+          cat > release-notes.md <<NOTES
+          <!-- auto-release-installers-managed -->
+
+          自动构建版本 $TAG
+
+          - Windows x64 安装包
+          - macOS Intel DMG
+          - macOS Apple Silicon DMG
+          - latest.json 自动更新清单
+
+          Source commit: $SHA
+          NOTES
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --title "Claude Codex Pro $TAG" \
+            --notes-file release-notes.md \
+            --draft
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    needs: prepare-release
+    env:
+      CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ needs.prepare-release.outputs.tag }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NSIS
+        run: choco install nsis -y
+
+      - name: Install frontend dependencies
+        working-directory: apps/claude-codex-pro-manager
+        run: npm install --package-lock=false
+
+      - name: TypeScript check
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run check
+
+      - name: Build frontend
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run vite:build
+
+      - name: Rust tests
+        shell: pwsh
+        run: |
+          cargo test --workspace *>&1 | Tee-Object cargo-test.log
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content cargo-test.log -Tail 80) -join "`n"
+            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows Rust tests failed::$escaped"
+            exit $LASTEXITCODE
+          }
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Stage Windows app files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/windows/app | Out-Null
+          Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
+          Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare-release.outputs.version }}"
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $makensis = "makensis"
+          }
+          Push-Location scripts/installer/windows
+          & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
+          Pop-Location
+
+      - name: Upload Windows installer to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $asset = Get-ChildItem dist/windows -Filter *.exe | Select-Object -First 1
+          if (-not $asset) {
+            throw "Windows installer was not generated."
+          }
+          gh release upload $env:TAG $asset.FullName --clobber --repo $env:REPO
+
+  macos-dmg:
+    name: macOS DMG (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare-release
+    env:
+      CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ needs.prepare-release.outputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-release.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        working-directory: apps/claude-codex-pro-manager
+        run: npm install --package-lock=false
+
+      - name: Build frontend
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run vite:build
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set +e
+          cargo build --release --target "${{ matrix.target }}" 2>&1 | tee cargo-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            summary="$(tail -n 80 cargo-build.log | perl -0777 -pe 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            echo "::error title=macOS cargo build failed (${{ matrix.target }})::$summary"
+            exit "$status"
+          fi
+
+      - name: Build macOS DMG
+        run: |
+          VERSION="${{ needs.prepare-release.outputs.version }}"
+          BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
+
+      - name: Verify macOS bundle structure
+        run: |
+          set -euo pipefail
+          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro 管理工具.app"; do
+            test -f "$app/Contents/Info.plist"
+            test -f "$app/Contents/PkgInfo"
+            test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            plutil -lint "$app/Contents/Info.plist" >/dev/null
+            codesign -dv "$app" >/dev/null 2>&1
+            echo "verified: $app"
+          done
+
+      - name: Upload macOS DMG to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: gh release upload "$TAG" dist/macos/*.dmg --clobber --repo "$REPO"
+
+  publish-release:
+    name: Publish release and latest.json
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - windows-installer
+      - macos-dmg
+    steps:
+      - name: Generate latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,url > release.json
+          node <<'NODE'
+          const fs = require("fs");
+          const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
+          const repo = process.env.REPO;
+          const tag = release.tagName || process.env.TAG;
+          const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
+          const assets = (release.assets || [])
+            .map((asset) => asset.name)
+            .filter((name) => name !== "latest.json")
+            .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
+          const payload = {
+            version: tag,
+            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
+            body: release.body || "",
+            assets
+          };
+          fs.writeFileSync("latest.json", `${JSON.stringify(payload, null, 2)}\n`);
+          NODE
+          cat latest.json
+
+      - name: Upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.id')"
+          gh api --method PATCH "repos/$REPO/releases/$release_id" \
+            -F draft=false \
+            -f make_latest=true >/dev/null
