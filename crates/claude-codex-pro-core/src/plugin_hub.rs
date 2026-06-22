@@ -2,7 +2,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const OFFICIAL_MARKETPLACE_URL: &str = "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json";
@@ -10,7 +10,10 @@ pub const AWESOME_CLAUDE_CODE_CSV_URL: &str = "https://raw.githubusercontent.com
 pub const GITHUB_MCP_REGISTRY_URL: &str = "https://github.com/mcp";
 pub const CODEX_PLUGIN_REPOSITORY_URL: &str = "https://github.com/openai/plugins";
 pub const CODEX_PLUGIN_DOCUMENTATION_URL: &str = "https://developers.openai.com/codex/plugins";
+pub const PONYTAIL_REPOSITORY_URL: &str = "https://github.com/DietrichGebert/ponytail";
 const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
+const PONYTAIL_MARKETPLACE: &str = "DietrichGebert/ponytail";
+const PONYTAIL_PLUGIN_REF: &str = "ponytail@ponytail";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +61,10 @@ pub struct PluginCatalogItem {
 pub enum InstallKind {
     ClaudePluginMarketplace,
     ClaudeDesktopMcp,
+    ClaudeCodePlugin,
+    CodexPlugin,
+    CopilotPlugin,
+    ManagedSkillBundle,
     McpServer,
     SkillBundle,
     ResourceLink,
@@ -149,6 +156,15 @@ pub async fn fetch_catalog() -> PluginHubCatalog {
     ));
     items.append(&mut codex_plugin_items);
 
+    let mut ponytail_items = ponytail_catalog_items(&installed);
+    sources.push(ok_source(
+        "ponytail",
+        "Ponytail 多工具插件",
+        PONYTAIL_REPOSITORY_URL,
+        ponytail_items.len(),
+    ));
+    items.append(&mut ponytail_items);
+
     match fetch_awesome_items(&installed).await {
         Ok(mut source_items) => {
             sources.push(ok_source(
@@ -209,8 +225,14 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
 
     match preview.item.install_kind {
         InstallKind::ClaudeDesktopMcp => install_claude_desktop_mcp(preview),
+        InstallKind::ClaudeCodePlugin | InstallKind::CodexPlugin | InstallKind::CopilotPlugin => {
+            install_cli_plugin(preview)
+        }
+        InstallKind::ManagedSkillBundle => install_managed_skill_bundle(preview),
         InstallKind::McpServer => {
-            anyhow::bail!("Community MCP items require confirmed command/args before writing Claude Desktop config")
+            anyhow::bail!(
+                "Community MCP items require confirmed command/args before writing Claude Desktop config"
+            )
         }
         InstallKind::ClaudePluginMarketplace => install_official_claude_plugin(preview),
         InstallKind::SkillBundle | InstallKind::ResourceLink => {
@@ -478,6 +500,191 @@ fn codex_plugin_repository_items(
     }]
 }
 
+fn ponytail_catalog_items(
+    installed: &BTreeMap<String, PluginHubInstallRecord>,
+) -> Vec<PluginCatalogItem> {
+    let source_id = "ponytail";
+    let source_label = "Ponytail 多工具插件";
+    let base_description = "Ponytail lazy senior dev 模式：优先 YAGNI、标准库、平台原生能力和最小正确实现，同时保留安全、校验和可访问性边界。";
+    let base_tags = || {
+        vec![
+            "ponytail".to_string(),
+            "yagni".to_string(),
+            "skills".to_string(),
+            "hooks".to_string(),
+        ]
+    };
+
+    vec![
+        PluginCatalogItem {
+            id: "ponytail:claude-code-plugin".to_string(),
+            name: "Ponytail for Claude Code".to_string(),
+            description: format!("{base_description} 安装到 Claude Code 插件市场。"),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "claude-code-plugin".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("claude-code".to_string());
+                tags
+            },
+            install_kind: InstallKind::ClaudeCodePlugin,
+            install_status: status_for(
+                "ponytail:claude-code-plugin",
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: ponytail_claude_code_install_command(),
+            config_preview: ponytail_cli_plan_text("Claude Code"),
+            risk: "会调用 Claude Code CLI 添加 Ponytail marketplace 并安装插件；插件包含 lifecycle hooks，安装后请在 Claude Code 中审查并信任 hooks。".to_string(),
+            requirements: vec![
+                "claude CLI".to_string(),
+                "Node.js on PATH".to_string(),
+                "网络访问 GitHub".to_string(),
+            ],
+        },
+        PluginCatalogItem {
+            id: "ponytail:codex-plugin".to_string(),
+            name: "Ponytail for Codex".to_string(),
+            description: format!("{base_description} 添加到 Codex 插件 marketplace，之后在 Codex 的 /plugins 中安装并信任 hooks。"),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "codex-plugin".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("codex".to_string());
+                tags.push("plugin".to_string());
+                tags
+            },
+            install_kind: InstallKind::CodexPlugin,
+            install_status: status_for(
+                "ponytail:codex-plugin",
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: ponytail_codex_install_command(),
+            config_preview: "codex plugin marketplace add DietrichGebert/ponytail\n\n然后打开 Codex，进入 /plugins 选择 Ponytail marketplace 安装，并在 /hooks 中审查和信任 hooks。".to_string(),
+            risk: "Codex CLI 目前只保证添加 marketplace；具体插件安装与 hooks 信任仍在 Codex 交互界面完成，避免后台静默信任第三方 hooks。".to_string(),
+            requirements: vec![
+                "codex CLI".to_string(),
+                "Node.js on PATH".to_string(),
+                "Codex /plugins 手动确认".to_string(),
+            ],
+        },
+        PluginCatalogItem {
+            id: "ponytail:copilot-plugin".to_string(),
+            name: "Ponytail for GitHub Copilot CLI".to_string(),
+            description: format!("{base_description} 安装到 GitHub Copilot CLI 插件系统。"),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "copilot-plugin".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("copilot".to_string());
+                tags
+            },
+            install_kind: InstallKind::CopilotPlugin,
+            install_status: status_for(
+                "ponytail:copilot-plugin",
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: ponytail_copilot_install_command(),
+            config_preview: ponytail_copilot_plan_text(),
+            risk: "会调用 GitHub Copilot CLI 添加 marketplace 并安装插件；如 CLI 未登录或未安装，会返回可读错误。".to_string(),
+            requirements: vec![
+                "copilot CLI".to_string(),
+                "Node.js on PATH".to_string(),
+                "网络访问 GitHub".to_string(),
+            ],
+        },
+        PluginCatalogItem {
+            id: "ponytail:claude-desktop-mcp".to_string(),
+            name: "Ponytail MCP for Claude Desktop".to_string(),
+            description: format!("{base_description} 将 Ponytail MCP server 写入 Claude Desktop 的 mcpServers 配置。"),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "claude-desktop-mcp".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("mcp".to_string());
+                tags.push("claude-desktop".to_string());
+                tags
+            },
+            install_kind: InstallKind::ClaudeDesktopMcp,
+            install_status: status_for(
+                "ponytail:claude-desktop-mcp",
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: ponytail_mcp_command_for_preview(),
+            config_preview: claude_desktop_mcp_config_preview(
+                &ponytail_mcp_server_name(),
+                &ponytail_mcp_command_for_preview(),
+            ),
+            risk: "安装前会克隆/更新 Ponytail 到本地托管缓存，并备份 claude_desktop_config.json 后写入 MCP 配置；需要重启 Claude Desktop。".to_string(),
+            requirements: vec![
+                "Git".to_string(),
+                "Node.js".to_string(),
+                "Claude Desktop".to_string(),
+                "npm install 会在托管缓存中安装 MCP 依赖".to_string(),
+            ],
+        },
+        PluginCatalogItem {
+            id: "ponytail:codex-skills".to_string(),
+            name: "Ponytail Skills for Codex".to_string(),
+            description: format!("{base_description} 将 Ponytail 的 skills 复制到当前 Codex 技能目录。"),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "codex-skills".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("codex".to_string());
+                tags.push("skill-bundle".to_string());
+                tags
+            },
+            install_kind: InstallKind::ManagedSkillBundle,
+            install_status: status_for(
+                "ponytail:codex-skills",
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: Vec::new(),
+            config_preview: format!(
+                "源：{}\\skills\\*\n目标：{}\\skills\\*",
+                ponytail_repo_dir().display(),
+                codex_home_dir().display()
+            ),
+            risk: "会复制 Ponytail skills 到 Codex 用户技能目录；若同名技能已存在，会先备份到 plugin-hub/backups 后覆盖。不会自动信任 hooks。".to_string(),
+            requirements: vec![
+                "Git".to_string(),
+                "Codex skills 目录".to_string(),
+                "人工选择技能使用".to_string(),
+            ],
+        },
+    ]
+}
+
 fn classify_awesome_item(id: &str, category: &str, link: &str, description: &str) -> InstallKind {
     let haystack = format!("{id} {category} {link} {description}").to_lowercase();
     if haystack.contains("mcp") {
@@ -502,16 +709,34 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
             item,
         },
         InstallKind::ClaudeDesktopMcp => PluginInstallPreview {
-            command: desktop_mcp_command(),
+            command: claude_desktop_command_for_item(&item),
             config_diff: claude_desktop_mcp_config_preview(
-                &desktop_mcp_server_name(),
-                &desktop_mcp_command(),
+                &claude_desktop_server_name_for_item(&item),
+                &claude_desktop_command_for_item(&item),
             ),
             can_install: true,
             action: "claude_desktop_mcp_config".to_string(),
             message:
                 "将写入 Claude Desktop 的 claude_desktop_config.json；重启 Claude Desktop 后生效。"
                     .to_string(),
+            item,
+        },
+        InstallKind::ClaudeCodePlugin | InstallKind::CodexPlugin | InstallKind::CopilotPlugin => {
+            PluginInstallPreview {
+                command: item.install_command.clone(),
+                config_diff: item.config_preview.clone(),
+                can_install: true,
+                action: "external_cli_plugin".to_string(),
+                message: "Run the previewed CLI install steps. If the target CLI is missing or not logged in, the error output is returned.".to_string(),
+                item,
+            }
+        }
+        InstallKind::ManagedSkillBundle => PluginInstallPreview {
+            command: Vec::new(),
+            config_diff: item.config_preview.clone(),
+            can_install: true,
+            action: "managed_skill_bundle".to_string(),
+            message: "Clone or update Ponytail, then copy verified SKILL.md directories into Codex skills.".to_string(),
             item,
         },
         InstallKind::McpServer => PluginInstallPreview {
@@ -588,6 +813,118 @@ fn official_install_command(item: &PluginCatalogItem) -> Vec<String> {
     ]
 }
 
+fn ponytail_claude_code_install_command() -> Vec<String> {
+    vec![
+        "claude".to_string(),
+        "plugin".to_string(),
+        "marketplace".to_string(),
+        "add".to_string(),
+        PONYTAIL_MARKETPLACE.to_string(),
+    ]
+}
+
+fn ponytail_codex_install_command() -> Vec<String> {
+    vec![
+        "codex".to_string(),
+        "plugin".to_string(),
+        "marketplace".to_string(),
+        "add".to_string(),
+        PONYTAIL_MARKETPLACE.to_string(),
+    ]
+}
+
+fn ponytail_copilot_install_command() -> Vec<String> {
+    vec![
+        "copilot".to_string(),
+        "plugin".to_string(),
+        "marketplace".to_string(),
+        "add".to_string(),
+        PONYTAIL_MARKETPLACE.to_string(),
+    ]
+}
+
+fn ponytail_cli_plan_text(tool: &str) -> String {
+    format!(
+        "{tool}:\n/plugin marketplace add {PONYTAIL_MARKETPLACE}\n/plugin install {PONYTAIL_PLUGIN_REF}\n\nThe backend runs marketplace add and plugin install where the CLI supports it. Review Ponytail hooks inside the target tool after install."
+    )
+}
+
+fn ponytail_copilot_plan_text() -> String {
+    format!(
+        "copilot plugin marketplace add {PONYTAIL_MARKETPLACE}\ncopilot plugin install {PONYTAIL_PLUGIN_REF}"
+    )
+}
+
+fn cli_plugin_install_plan(kind: InstallKind) -> anyhow::Result<Vec<Vec<String>>> {
+    match kind {
+        InstallKind::ClaudeCodePlugin => Ok(vec![
+            ponytail_claude_code_install_command(),
+            vec![
+                "claude".to_string(),
+                "plugin".to_string(),
+                "install".to_string(),
+                PONYTAIL_PLUGIN_REF.to_string(),
+            ],
+        ]),
+        InstallKind::CodexPlugin => Ok(vec![ponytail_codex_install_command()]),
+        InstallKind::CopilotPlugin => Ok(vec![
+            ponytail_copilot_install_command(),
+            vec![
+                "copilot".to_string(),
+                "plugin".to_string(),
+                "install".to_string(),
+                PONYTAIL_PLUGIN_REF.to_string(),
+            ],
+        ]),
+        _ => anyhow::bail!("unsupported CLI plugin install kind"),
+    }
+}
+
+fn run_command(command: &[String]) -> anyhow::Result<(String, String)> {
+    let executable = command
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("plugin install command is empty"))?;
+    let output = Command::new(executable)
+        .args(command.iter().skip(1))
+        .output()
+        .with_context(|| format!("cannot run command: {}", command.join(" ")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        let combined = format!("{}\n{}", stdout, stderr);
+        anyhow::bail!("command failed: {}\n{}", command.join(" "), combined.trim());
+    }
+    Ok((stdout, stderr))
+}
+
+fn install_cli_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
+    let plan = cli_plugin_install_plan(preview.item.install_kind)?;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut recorded_command = preview.command.clone();
+    for command in plan {
+        if recorded_command.is_empty() {
+            recorded_command = command.clone();
+        }
+        let (out, err) = run_command(&command)?;
+        if !out.is_empty() {
+            stdout.push_str(&out);
+        }
+        if !err.is_empty() {
+            stderr.push_str(&err);
+        }
+    }
+    record_install(&preview.item, recorded_command, None)?;
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: true,
+        message: "Ponytail install command completed. Review and trust hooks in the target tool when prompted.".to_string(),
+        stdout,
+        stderr,
+        backup_path: None,
+    })
+}
 
 fn install_official_claude_plugin(
     preview: PluginInstallPreview,
@@ -597,12 +934,15 @@ fn install_official_claude_plugin(
         .first()
         .ok_or_else(|| anyhow::anyhow!("Claude plugin install command is empty"))?;
     let args = command.iter().skip(1).collect::<Vec<_>>();
-    let output = Command::new(executable).args(args).output().with_context(|| {
-        format!(
-            "Claude Code CLI unavailable; cannot run plugin install command: {}",
-            command.join(" ")
-        )
-    })?;
+    let output = Command::new(executable)
+        .args(args)
+        .output()
+        .with_context(|| {
+            format!(
+                "Claude Code CLI unavailable; cannot run plugin install command: {}",
+                command.join(" ")
+            )
+        })?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if !output.status.success() {
@@ -628,19 +968,11 @@ fn install_claude_desktop_mcp(
 ) -> anyhow::Result<PluginInstallOutcome> {
     let config_path = claude_desktop_config_path();
     let backup_path = backup_claude_desktop_config(&config_path)?;
-    let server_name = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
-        desktop_mcp_server_name()
+    let server_name = claude_desktop_server_name_for_item(&preview.item);
+    let command = if preview.item.id == "ponytail:claude-desktop-mcp" {
+        ensure_ponytail_mcp_ready()?
     } else {
-        safe_id(&preview.item.name)
-    };
-    let command = if matches!(preview.item.install_kind, InstallKind::ClaudeDesktopMcp) {
-        desktop_mcp_command()
-    } else {
-        vec![
-            "npx".to_string(),
-            "-y".to_string(),
-            "<package-or-command>".to_string(),
-        ]
+        claude_desktop_command_for_item(&preview.item)
     };
     let server_config = json!({
         "command": command.first().cloned().unwrap_or_default(),
@@ -660,12 +992,207 @@ fn install_claude_desktop_mcp(
     })
 }
 
+fn claude_desktop_server_name_for_item(item: &PluginCatalogItem) -> String {
+    if item.id == "ponytail:claude-desktop-mcp" {
+        ponytail_mcp_server_name()
+    } else if matches!(item.install_kind, InstallKind::ClaudeDesktopMcp) {
+        desktop_mcp_server_name()
+    } else {
+        safe_id(&item.name)
+    }
+}
+
+fn claude_desktop_command_for_item(item: &PluginCatalogItem) -> Vec<String> {
+    if item.id == "ponytail:claude-desktop-mcp" {
+        ponytail_mcp_command_for_preview()
+    } else if matches!(item.install_kind, InstallKind::ClaudeDesktopMcp) {
+        desktop_mcp_command()
+    } else {
+        vec![
+            "npx".to_string(),
+            "-y".to_string(),
+            "<package-or-command>".to_string(),
+        ]
+    }
+}
+
 fn desktop_mcp_server_name() -> String {
     "claude-codex-pro-codex".to_string()
 }
 
 fn desktop_mcp_command() -> Vec<String> {
     vec!["claude".to_string(), "mcp".to_string(), "serve".to_string()]
+}
+
+fn ponytail_mcp_server_name() -> String {
+    "ponytail".to_string()
+}
+
+fn ponytail_mcp_command_for_preview() -> Vec<String> {
+    vec![
+        "node".to_string(),
+        ponytail_repo_dir()
+            .join("ponytail-mcp")
+            .join("index.js")
+            .to_string_lossy()
+            .to_string(),
+    ]
+}
+
+fn ponytail_repo_dir() -> PathBuf {
+    plugin_hub_dir().join("repos").join("ponytail")
+}
+
+fn ensure_ponytail_repo() -> anyhow::Result<PathBuf> {
+    let repo_dir = ponytail_repo_dir();
+    if repo_dir.join(".git").is_dir() {
+        run_command(&[
+            "git".to_string(),
+            "-C".to_string(),
+            repo_dir.to_string_lossy().to_string(),
+            "pull".to_string(),
+            "--ff-only".to_string(),
+        ])?;
+    } else {
+        if repo_dir.exists() {
+            anyhow::bail!(
+                "Ponytail managed directory exists but is not a Git repository: {}",
+                repo_dir.display()
+            );
+        }
+        if let Some(parent) = repo_dir.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        run_command(&[
+            "git".to_string(),
+            "clone".to_string(),
+            "--depth".to_string(),
+            "1".to_string(),
+            PONYTAIL_REPOSITORY_URL.to_string(),
+            repo_dir.to_string_lossy().to_string(),
+        ])?;
+    }
+    Ok(repo_dir)
+}
+
+fn ensure_ponytail_mcp_ready() -> anyhow::Result<Vec<String>> {
+    let repo_dir = ensure_ponytail_repo()?;
+    let mcp_dir = repo_dir.join("ponytail-mcp");
+    let index = mcp_dir.join("index.js");
+    if !index.is_file() {
+        anyhow::bail!("Ponytail MCP entry not found: {}", index.display());
+    }
+    if !mcp_dir.join("node_modules").is_dir() {
+        run_command(&[
+            "npm".to_string(),
+            "install".to_string(),
+            "--omit=dev".to_string(),
+            "--prefix".to_string(),
+            mcp_dir.to_string_lossy().to_string(),
+        ])?;
+    }
+    Ok(vec![
+        "node".to_string(),
+        index.to_string_lossy().to_string(),
+    ])
+}
+
+fn codex_home_dir() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex")))
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+}
+
+fn plugin_hub_backup_dir() -> PathBuf {
+    plugin_hub_dir()
+        .join("backups")
+        .join(current_unix_timestamp_string())
+}
+
+fn install_managed_skill_bundle(
+    preview: PluginInstallPreview,
+) -> anyhow::Result<PluginInstallOutcome> {
+    let repo_dir = ensure_ponytail_repo()?;
+    let source_skills = repo_dir.join("skills");
+    if !source_skills.is_dir() {
+        anyhow::bail!(
+            "Ponytail skills directory not found: {}",
+            source_skills.display()
+        );
+    }
+    let codex_skills = codex_home_dir().join("skills");
+    std::fs::create_dir_all(&codex_skills)?;
+    let backup_root = plugin_hub_backup_dir().join("codex-skills");
+    let mut copied = Vec::new();
+    let mut backed_up = Vec::new();
+    for entry in std::fs::read_dir(&source_skills)? {
+        let entry = entry?;
+        let source = entry.path();
+        if !source.is_dir() || !source.join("SKILL.md").is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let destination = codex_skills.join(&name);
+        if destination.exists() {
+            std::fs::create_dir_all(&backup_root)?;
+            let backup = backup_root.join(&name);
+            copy_dir_recursive(&destination, &backup)?;
+            backed_up.push(backup.to_string_lossy().to_string());
+            if destination.is_dir() {
+                std::fs::remove_dir_all(&destination)?;
+            } else {
+                std::fs::remove_file(&destination)?;
+            }
+        }
+        copy_dir_recursive(&source, &destination)?;
+        copied.push(destination.to_string_lossy().to_string());
+    }
+    if copied.is_empty() {
+        anyhow::bail!("No Ponytail skill directories with SKILL.md were found");
+    }
+    let backup_path = if backed_up.is_empty() {
+        None
+    } else {
+        Some(backup_root.to_string_lossy().to_string())
+    };
+    record_install(&preview.item, Vec::new(), backup_path.clone())?;
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: true,
+        message: format!(
+            "Installed {} Ponytail skills into Codex skills.",
+            copied.len()
+        ),
+        stdout: copied.join("\n"),
+        stderr: String::new(),
+        backup_path,
+    })
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            if let Some(parent) = destination_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source_path, &destination_path).with_context(|| {
+                format!(
+                    "copy {} to {}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn claude_desktop_config_path() -> PathBuf {
@@ -757,7 +1284,6 @@ fn save_installed_records(
     let values = records.values().cloned().collect::<Vec<_>>();
     crate::settings::atomic_write(&path, serde_json::to_string_pretty(&values)?.as_bytes())
 }
-
 
 fn status_for(
     id: &str,
@@ -982,6 +1508,70 @@ mod tests {
     }
 
     #[test]
+    fn ponytail_catalog_exposes_installable_targets() {
+        let items = ponytail_catalog_items(&BTreeMap::new());
+        let ids = items
+            .iter()
+            .map(|item| (item.id.as_str(), item.install_kind))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(items.len(), 5);
+        assert_eq!(
+            ids["ponytail:claude-code-plugin"],
+            InstallKind::ClaudeCodePlugin
+        );
+        assert_eq!(ids["ponytail:codex-plugin"], InstallKind::CodexPlugin);
+        assert_eq!(ids["ponytail:copilot-plugin"], InstallKind::CopilotPlugin);
+        assert_eq!(
+            ids["ponytail:claude-desktop-mcp"],
+            InstallKind::ClaudeDesktopMcp
+        );
+        assert_eq!(
+            ids["ponytail:codex-skills"],
+            InstallKind::ManagedSkillBundle
+        );
+        assert!(items.iter().all(|item| item.source_id == "ponytail"));
+    }
+
+    #[test]
+    fn ponytail_codex_preview_adds_marketplace_without_trusting_hooks() {
+        let item = ponytail_catalog_items(&BTreeMap::new())
+            .into_iter()
+            .find(|item| item.id == "ponytail:codex-plugin")
+            .expect("ponytail codex plugin item");
+        let preview = preview_for_item(item);
+
+        assert!(preview.can_install);
+        assert_eq!(preview.action, "external_cli_plugin");
+        assert_eq!(
+            preview.command,
+            vec![
+                "codex",
+                "plugin",
+                "marketplace",
+                "add",
+                "DietrichGebert/ponytail"
+            ]
+        );
+        assert!(preview.config_diff.contains("/hooks"));
+    }
+
+    #[test]
+    fn ponytail_desktop_mcp_preview_targets_ponytail_server() {
+        let item = ponytail_catalog_items(&BTreeMap::new())
+            .into_iter()
+            .find(|item| item.id == "ponytail:claude-desktop-mcp")
+            .expect("ponytail mcp item");
+        let preview = preview_for_item(item);
+
+        assert!(preview.can_install);
+        assert_eq!(preview.action, "claude_desktop_mcp_config");
+        assert!(preview.config_diff.contains("\"ponytail\""));
+        assert!(preview.config_diff.contains("ponytail-mcp"));
+        assert!(preview.config_diff.contains("index.js"));
+    }
+
+    #[test]
     fn codex_desktop_mcp_preview_targets_claude_desktop_config() {
         let item = builtin_claude_desktop_items(&BTreeMap::new()).remove(0);
         let preview = preview_for_item(item);
@@ -1028,7 +1618,12 @@ mod tests {
         assert_eq!(preview.action, "claude_plugin_cli");
         assert_eq!(
             preview.command,
-            vec!["claude", "plugin", "install", "demo@claude-plugins-official"]
+            vec![
+                "claude",
+                "plugin",
+                "install",
+                "demo@claude-plugins-official"
+            ]
         );
     }
 

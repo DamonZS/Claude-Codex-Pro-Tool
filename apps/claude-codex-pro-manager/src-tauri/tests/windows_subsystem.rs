@@ -250,6 +250,9 @@ fn plugin_hub_is_first_class_ops_console_route() {
     assert!(app_tsx.contains("install_plugin_hub_item"));
     assert!(app_tsx.contains("uninstall_plugin_hub_item"));
     assert!(app_tsx.contains("claude_desktop_mcp"));
+    assert!(app_tsx.contains("ponytail"));
+    assert!(app_tsx.contains("codex_plugin"));
+    assert!(app_tsx.contains("managed_skill_bundle"));
     assert!(app_tsx.contains("Claude Desktop MCP"));
     assert!(app_tsx.contains("Claude Code 插件"));
     assert!(
@@ -354,7 +357,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("relay-banner"));
     assert!(app_tsx.contains("ops-primary-command"));
     assert!(styles.contains(".ops-shell"));
-    assert!(styles.contains("grid-template-columns: 78px minmax(0, 1fr)"));
+    assert!(styles.contains("grid-template-columns: 92px minmax(0, 1fr)"));
     assert!(styles.contains("height: 100vh;"));
     assert!(styles.contains(".ops-workspace"));
     assert!(styles.contains("min-height: 0;"));
@@ -437,6 +440,6 @@ fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
         .expect("read manager App.tsx");
 
     assert!(vite_config.contains("base: \"./\""));
-    assert!(app_tsx.contains("OPS_THEME_STORAGE_KEY"));
-    assert!(app_tsx.contains("claude-codex-pro-ops-theme"));
+    assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
+    assert!(app_tsx.contains("window.location.search"));
 }

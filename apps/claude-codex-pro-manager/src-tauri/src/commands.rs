@@ -3778,6 +3778,12 @@ fn default_log_lines() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn backend_version_returns_structured_payload() {
@@ -4302,6 +4308,7 @@ mod tests {
 
     #[test]
     fn reset_image_overlay_settings_preserves_supplier_settings() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
         let settings_path = temp.path().join("settings.json");
         let previous =
@@ -4338,12 +4345,16 @@ mod tests {
 
     #[test]
     fn memory_assist_commands_respect_disabled_settings_before_writing() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
         let settings_path = temp.path().join("settings.json");
         let memory_path = temp.path().join("memory.sqlite");
         let previous_settings =
             claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
-        let previous_memory = claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(memory_path));
+        let previous_memory =
+            claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(
+                memory_path,
+            ));
 
         let settings = BackendSettings {
             memory_assist_enabled: false,
@@ -4387,12 +4398,16 @@ mod tests {
 
     #[test]
     fn memory_assist_candidate_command_respects_auto_suggest_disabled() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
         let settings_path = temp.path().join("settings.json");
         let memory_path = temp.path().join("memory.sqlite");
         let previous_settings =
             claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
-        let previous_memory = claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(memory_path));
+        let previous_memory =
+            claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(
+                memory_path,
+            ));
 
         let settings = BackendSettings {
             memory_assist_enabled: true,

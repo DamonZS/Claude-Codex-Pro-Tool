@@ -403,7 +403,7 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
     }
 
     std::thread::sleep(std::time::Duration::from_millis(300));
-    if crate::windows_integration::send_f12() {
+    if send_f12_devtools_shortcut() {
         let second = observe_devtools_window(process_id);
         if second.matched {
             let status = detect_status();
@@ -743,7 +743,6 @@ fn open_devtools_in_foreground_window(process_id: Option<u32>) -> anyhow::Result
     Ok(())
 }
 
-#[cfg(windows)]
 struct DevtoolsWindowObservation {
     matched: bool,
     titles: Vec<String>,
@@ -779,6 +778,16 @@ fn observe_devtools_window(_process_id: u32) -> DevtoolsWindowObservation {
         matched: false,
         titles: Vec::new(),
     }
+}
+
+#[cfg(windows)]
+fn send_f12_devtools_shortcut() -> bool {
+    crate::windows_integration::send_f12()
+}
+
+#[cfg(not(windows))]
+fn send_f12_devtools_shortcut() -> bool {
+    false
 }
 
 #[cfg(windows)]

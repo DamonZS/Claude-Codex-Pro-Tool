@@ -349,7 +349,16 @@ type DeleteLocalSessionResult = CommandResult<{
   backupPath?: string | null;
 }>;
 
-type PluginInstallKind = "claude_plugin_marketplace" | "claude_desktop_mcp" | "mcp_server" | "skill_bundle" | "resource_link";
+type PluginInstallKind =
+  | "claude_plugin_marketplace"
+  | "claude_desktop_mcp"
+  | "claude_code_plugin"
+  | "codex_plugin"
+  | "copilot_plugin"
+  | "managed_skill_bundle"
+  | "mcp_server"
+  | "skill_bundle"
+  | "resource_link";
 type PluginInstallStatus = "notInstalled" | "installed" | "needsReview" | "unsupported";
 
 type PluginCatalogItem = {
@@ -1604,26 +1613,23 @@ function PluginHubScreen({
   hub: PluginHubResult | null;
   preview: PluginInstallPreviewResult | null;
 }) {
-  const [filter, setFilter] = useState<"all" | "official" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
+  const [filter, setFilter] = useState<"all" | "official" | "ponytail" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
   const [selectedId, setSelectedId] = useState("");
   const items = hub?.catalog?.items ?? [];
   const visible = items.filter((item) => {
     if (filter === "official") return item.sourceId === "official";
-    if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex";
+    if (filter === "ponytail") return item.sourceId === "ponytail" || item.tags.includes("ponytail");
+    if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex" || item.installKind === "codex_plugin" || item.tags.includes("codex");
     if (filter === "mcp") return item.installKind === "mcp_server" || item.installKind === "claude_desktop_mcp";
-    if (filter === "skill") return item.installKind === "skill_bundle";
+    if (filter === "skill") return item.installKind === "skill_bundle" || item.installKind === "managed_skill_bundle";
     if (filter === "installed") return item.installStatus === "installed";
     if (filter === "review") return item.installStatus === "needsReview";
     return true;
   });
   const selected = items.find((item) => item.id === selectedId) ?? visible[0] ?? null;
   const selectedPreview = preview?.item.id === selected?.id ? preview : null;
-  const selectedCanInstall = selected?.installKind === "claude_desktop_mcp" || selected?.installKind === "claude_plugin_marketplace";
-  const installButtonLabel = selected?.installKind === "claude_desktop_mcp"
-    ? "Install to Claude Desktop"
-    : selected?.installKind === "claude_plugin_marketplace"
-      ? "Install with Claude CLI"
-      : "Install";
+  const selectedCanInstall = selected ? pluginCanInstall(selected.installKind) : false;
+  const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "Install";
   return (
     <div className="plugin-layout">
       <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
@@ -1641,6 +1647,9 @@ function PluginHubScreen({
               {label}
             </button>
           ))}
+          <button className={filter === "ponytail" ? "active" : ""} onClick={() => setFilter("ponytail")} type="button">
+            Ponytail
+          </button>
           <Button onClick={() => void actions.refreshPluginHub()} size="sm" variant="outline">
             <RefreshCw className="h-4 w-4" />
             刷新
@@ -2190,6 +2199,10 @@ function Notice({ notice, onClose }: { notice: { title: string; message: string;
 
 function pluginKindLabel(kind: PluginInstallKind) {
   if (kind === "claude_desktop_mcp") return "Claude Desktop MCP";
+  if (kind === "claude_code_plugin") return "Claude Code 插件";
+  if (kind === "codex_plugin") return "Codex 插件";
+  if (kind === "copilot_plugin") return "GitHub Copilot CLI 插件";
+  if (kind === "managed_skill_bundle") return "托管 Skill Bundle";
   if (kind === "claude_plugin_marketplace") return "Claude Code 插件";
   const labels: Partial<Record<PluginInstallKind, string>> = {
     claude_plugin_marketplace: "Claude 插件",
@@ -2198,6 +2211,29 @@ function pluginKindLabel(kind: PluginInstallKind) {
     resource_link: "资源链接",
   };
   return labels[kind] ?? kind;
+}
+
+function pluginCanInstall(kind: PluginInstallKind) {
+  return [
+    "claude_desktop_mcp",
+    "claude_plugin_marketplace",
+    "claude_code_plugin",
+    "codex_plugin",
+    "copilot_plugin",
+    "managed_skill_bundle",
+  ].includes(kind);
+}
+
+function pluginInstallButtonLabel(kind: PluginInstallKind) {
+  const labels: Partial<Record<PluginInstallKind, string>> = {
+    claude_desktop_mcp: "Install to Claude Desktop",
+    claude_plugin_marketplace: "Install with Claude CLI",
+    claude_code_plugin: "Install to Claude Code",
+    codex_plugin: "Add to Codex",
+    copilot_plugin: "Install to Copilot CLI",
+    managed_skill_bundle: "Install Skills",
+  };
+  return labels[kind] ?? "Install";
 }
 
 function pluginStatusLabel(status: PluginInstallStatus) {
