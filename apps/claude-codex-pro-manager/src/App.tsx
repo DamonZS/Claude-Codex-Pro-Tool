@@ -3,6 +3,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  FileDown,
+  FileUp,
   ExternalLink,
   FileCode2,
   Info,
@@ -10,7 +12,6 @@ import {
   Languages,
   LayoutDashboard,
   MessageCircle,
-  Moon,
   Network,
   PackageSearch,
   PencilRuler,
@@ -19,7 +20,6 @@ import {
   Rocket,
   Settings,
   ShieldCheck,
-  Sun,
   Trash2,
   Wrench,
   X,
@@ -144,6 +144,11 @@ type BackendSettings = {
   codexAppImageOverlayPath: string;
   codexAppImageOverlayOpacity: number;
   codexGoalsEnabled: boolean;
+  memoryAssistEnabled: boolean;
+  memoryAssistInjectEnabled: boolean;
+  memoryAssistAutoSuggestEnabled: boolean;
+  memoryAssistMaxInjectedItems: number;
+  memoryAssistWorkspaceMode: string;
   launchMode: "patch" | "relay";
   relayBaseUrl: string;
   relayApiKey: string;
@@ -248,6 +253,76 @@ type LocalSessionsResult = CommandResult<{
   dbPath: string;
   dbPaths: string[];
   sessions: LocalSession[];
+}>;
+
+type MemoryItem = {
+  id: string;
+  text: string;
+  workspace: string;
+  category: string;
+  tags: string[];
+  source: string;
+  sourceSessionId: string;
+  createdAt: number;
+  updatedAt: number;
+  lastAccessedAt: number;
+  accessCount: number;
+};
+
+type MemoryCandidate = {
+  id: string;
+  text: string;
+  workspace: string;
+  category: string;
+  tags: string[];
+  source: string;
+  reason: string;
+  sourceSessionId: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type MemoryStatusResult = CommandResult<{
+  memory: {
+    status: string;
+    dbPath: string;
+    totalItems: number;
+    pendingCandidates: number;
+    workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number }>;
+    latestBackupPath: string | null;
+  };
+}>;
+
+type MemoryItemsResult = CommandResult<{ items: MemoryItem[] }>;
+type MemoryCandidatesResult = CommandResult<{ candidates: MemoryCandidate[] }>;
+type MemoryItemResult = CommandResult<{ item: MemoryItem }>;
+type MemoryCandidateResult = CommandResult<{ candidate: MemoryCandidate }>;
+type MemoryQueryResult = CommandResult<{
+  memory: {
+    query: string;
+    workspace: string;
+    results: Array<{
+      item: MemoryItem;
+      score: number;
+      matchedKeywords: string[];
+    }>;
+  };
+}>;
+type MemoryExport = {
+  schemaVersion: string;
+  exportedAt: number;
+  items: MemoryItem[];
+  candidates: MemoryCandidate[];
+};
+type MemoryExportResult = CommandResult<{ data: MemoryExport }>;
+type MemorySelfCheckResult = CommandResult<{
+  report: {
+    status: string;
+    repaired: boolean;
+    backupPath: string | null;
+    checks: Array<{ name: string; status: string; message: string }>;
+  };
 }>;
 
 type ProviderSyncResult = CommandResult<{
@@ -365,8 +440,8 @@ type Route =
   | "scripts"
   | "logs"
   | "settings";
-type Theme = "light" | "dark";
-const OPS_THEME_STORAGE_KEY = "claude-codex-pro-ops-theme";
+const MEMORY_ALL_WORKSPACES = "__all__";
+const MEMORY_GLOBAL_WORKSPACE = "global";
 
 declare global {
   interface Window {
@@ -399,7 +474,6 @@ function compactPath(path?: string | null) {
 }
 
 export function App() {
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem(OPS_THEME_STORAGE_KEY) === "dark" ? "dark" : "light"));
   const [route, setRoute] = useState<Route>(() => initialRoute());
   const [notice, setNotice] = useState<{ title: string; message: string; status?: Status } | null>(null);
   const [busyCount, setBusyCount] = useState(0);
@@ -414,6 +488,12 @@ export function App() {
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
+  const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
+  const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
+  const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidatesResult | null>(null);
+  const [memorySelfCheck, setMemorySelfCheck] = useState<MemorySelfCheckResult | null>(null);
+  const [memorySearch, setMemorySearch] = useState<MemoryQueryResult | null>(null);
+  const [memoryExport, setMemoryExport] = useState<MemoryExportResult | null>(null);
   const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
@@ -498,6 +578,19 @@ export function App() {
       if (!silent) notifyIfNeedsAttention({ title: "Codex 会话管理", message: result.message, status: result.status });
     }
     return result;
+  };
+
+  const refreshMemoryAssist = async (silent = false) => {
+    const [status, items, candidates] = await Promise.all([
+      run(() => call<MemoryStatusResult>("load_memory_assist_status"), "记忆辅助"),
+      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80 } }), "记忆列表"),
+      run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true } }), "待确认记忆"),
+    ]);
+    if (status) setMemoryAssist(status);
+    if (items) setMemoryItems(items);
+    if (candidates) setMemoryCandidates(candidates);
+    if (!silent && status) notifyIfNeedsAttention({ title: "记忆辅助", message: status.message, status: status.status });
+    return status;
   };
 
   const refreshLogs = async (silent = false) => {
@@ -665,6 +758,96 @@ export function App() {
     }
   };
 
+  const learnMemoryAssistItem = async (text: string, category = "manual") => {
+    const result = await run(
+      () => call<MemoryItemResult>("learn_memory_assist_item", { request: { text, category, workspace: MEMORY_GLOBAL_WORKSPACE, source: "manager" } }),
+      "保存记忆",
+    );
+    if (result) {
+      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+    return result?.status === "ok";
+  };
+
+  const searchMemoryAssist = async (query: string) => {
+    const result = await run(
+      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 12 } }),
+      "搜索记忆",
+    );
+    if (result) {
+      setMemorySearch(result);
+      notifyIfNeedsAttention({ title: "记忆搜索", message: result.message, status: result.status });
+    }
+  };
+
+  const deleteMemoryAssistItem = async (id: string) => {
+    if (!window.confirm("确认删除这条长期记忆？")) return;
+    const result = await run(() => call<MemoryItemResult>("delete_memory_assist_item", { request: { id } }), "删除记忆");
+    if (result) {
+      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const approveMemoryAssistCandidate = async (id: string) => {
+    const result = await run(() => call<MemoryItemResult>("approve_memory_assist_candidate", { request: { id } }), "确认待确认记忆");
+    if (result) {
+      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const rejectMemoryAssistCandidate = async (id: string) => {
+    const result = await run(() => call<MemoryCandidateResult>("reject_memory_assist_candidate", { request: { id } }), "忽略待确认记忆");
+    if (result) {
+      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const exportMemoryAssist = async () => {
+    const result = await run(() => call<MemoryExportResult>("export_memory_assist"), "导出记忆");
+    if (result) {
+      setMemoryExport(result);
+      notifyIfNeedsAttention({ title: "记忆导出", message: result.message, status: result.status });
+    }
+  };
+
+  const importMemoryAssist = async (jsonText: string, replaceExisting: boolean) => {
+    let data: MemoryExport;
+    try {
+      data = JSON.parse(jsonText) as MemoryExport;
+    } catch (error) {
+      setNotice({ title: "记忆导入", message: `JSON 解析失败：${stringifyError(error)}`, status: "failed" });
+      return;
+    }
+    if (!data || data.schemaVersion !== "memory-assist/v1" || !Array.isArray(data.items) || !Array.isArray(data.candidates)) {
+      setNotice({ title: "记忆导入", message: "导入内容不是 memory-assist/v1 导出包。", status: "failed" });
+      return;
+    }
+    const action = replaceExisting ? "替换现有记忆库" : "合并到现有记忆库";
+    if (!window.confirm(`确认导入记忆数据？\n\n${action}\n长期记忆：${data.items.length} 条\n待确认：${data.candidates.length} 条`)) return;
+    const result = await run(
+      () => call<MemoryStatusResult>("import_memory_assist", { request: { data, replaceExisting } }),
+      "导入记忆",
+    );
+    if (result) {
+      setMemoryAssist(result);
+      notifyIfNeedsAttention({ title: "记忆导入", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const runMemoryAssistSelfcheck = async () => {
+    const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "记忆辅助自检");
+    if (result) {
+      setMemorySelfCheck(result);
+      notifyIfNeedsAttention({ title: "记忆辅助自检", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
   const applyRelayMode = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_relay_injection"), "官方混入 API Key");
     if (result) {
@@ -761,6 +944,7 @@ export function App() {
         refreshClaude(true),
         refreshWatcher(true),
         refreshLocalSessions(true),
+        refreshMemoryAssist(true),
       ]);
     } else if (target === "promptOptimizer") {
       await refreshSettings(true);
@@ -791,15 +975,15 @@ export function App() {
         refreshPluginHub(true),
         refreshWatcher(true),
         refreshLocalSessions(true),
+        refreshMemoryAssist(true),
       ]);
     })();
   }, []);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    document.documentElement.classList.toggle("light", theme === "light");
-    localStorage.setItem(OPS_THEME_STORAGE_KEY, theme);
-  }, [theme]);
+    document.documentElement.classList.add("dark");
+    document.documentElement.classList.remove("light");
+  }, []);
 
   useEffect(() => {
     document.title = routeDocumentTitle(route);
@@ -828,6 +1012,15 @@ export function App() {
       repairHistorySessions,
       refreshLocalSessions,
       deleteLocalSession,
+      refreshMemoryAssist,
+      learnMemoryAssistItem,
+      searchMemoryAssist,
+      deleteMemoryAssistItem,
+      approveMemoryAssistCandidate,
+      rejectMemoryAssistCandidate,
+      runMemoryAssistSelfcheck,
+      exportMemoryAssist,
+      importMemoryAssist,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode,
@@ -843,14 +1036,13 @@ export function App() {
       resetImageOverlaySettings,
       refreshLogs,
       refreshWatcher,
-      setTheme,
     }),
     [route, pluginPreview],
   );
 
   if (isPromptOptimizerStandaloneWindow) {
     return (
-      <div className={`ops-shell prompt-optimizer-window-shell ${theme}`}>
+      <div className="ops-shell dark prompt-optimizer-window-shell">
         <main className="prompt-optimizer-window-workspace">
           <PromptOptimizerScreen actions={actions} />
         </main>
@@ -860,14 +1052,25 @@ export function App() {
   }
 
   return (
-    <div className={`ops-shell ${theme}`}>
+    <div className="ops-shell dark">
       <aside className="ops-rail">
-        <div className="ops-brand" title="Claude Codex Pro">CCP</div>
+        <div className="ops-brand" title="Claude Codex Pro">
+          <span>CCP</span>
+        </div>
         <nav>
           {routes.map((item) => {
             const Icon = item.icon;
             return (
-              <button className={route === item.id ? "active" : ""} key={item.id} onClick={() => { setRoute(item.id); void refreshRoute(item.id); }} title={item.label} type="button">
+              <button
+                className={route === item.id ? "active" : ""}
+                key={item.id}
+                onClick={() => {
+                  setRoute(item.id);
+                  void refreshRoute(item.id);
+                }}
+                title={item.label}
+                type="button"
+              >
                 <Icon className="h-4 w-4" />
                 <span>{item.label}</span>
               </button>
@@ -877,25 +1080,35 @@ export function App() {
       </aside>
       <main className="ops-workspace">
         <header className="ops-topbar">
-          <div>
+          <div className="ops-topbar-copy">
             <h1>{routeLabel(route)}</h1>
             <p>{routeSubtitle(route)}</p>
           </div>
+          <div className="ops-topbar-pill">
+            <span>后端链接</span>
+            <strong>
+              {overview?.latest_launch?.helper_port
+                ? `127.0.0.1:${overview.latest_launch.helper_port}`
+                : overview?.latest_launch?.debug_port
+                  ? `127.0.0.1:${overview.latest_launch.debug_port}`
+                  : "Bridge ready"}
+            </strong>
+          </div>
           <div className="ops-commandbar">
-            <Button disabled={busy} onClick={() => actions.setTheme(theme === "dark" ? "light" : "dark")} size="icon" variant="outline">
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
-            <Button disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
+            <Button aria-label="重启 Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
               <Rocket className="h-4 w-4" />
-              重启 Codex
+              <span className="desktop-command-label">重启 Codex</span>
+              <span aria-hidden="true" className="mobile-command-label">Codex</span>
             </Button>
-            <Button disabled={busy} onClick={() => void actions.launchClaudeDesktop()} variant="outline">
+            <Button aria-label="启动 Claude" disabled={busy} onClick={() => void actions.launchClaudeDesktop()} variant="outline">
               <MessageCircle className="h-4 w-4" />
-              启动 Claude
+              <span className="desktop-command-label">启动 Claude</span>
+              <span aria-hidden="true" className="mobile-command-label">Claude</span>
             </Button>
-            <Button className="ops-primary-command" disabled={busy} onClick={() => void actions.openClaudeChinese()}>
+            <Button aria-label="Claude 中文窗口" className="ops-primary-command" disabled={busy} onClick={() => void actions.openClaudeChinese()}>
               <Languages className="h-4 w-4" />
-              Claude 中文窗口
+              <span className="desktop-command-label">Claude 中文窗口</span>
+              <span aria-hidden="true" className="mobile-command-label">中文窗口</span>
             </Button>
             <Button disabled={busy} onClick={() => void actions.refreshRoute()} size="icon" variant="outline">
               <RefreshCw className="h-4 w-4" />
@@ -912,6 +1125,12 @@ export function App() {
               claudeDesktop={claudeDesktop}
               hub={pluginHub}
               localSessions={localSessions}
+              memoryAssist={memoryAssist}
+              memoryCandidates={memoryCandidates}
+              memoryExport={memoryExport}
+              memoryItems={memoryItems}
+              memorySearch={memorySearch}
+              memorySelfCheck={memorySelfCheck}
               overview={overview}
               preview={pluginPreview}
               providerSync={providerSync}
@@ -943,8 +1162,9 @@ function OverviewScreen({
   claudeChinese: ClaudeChineseWindowResult | null;
   pluginHub: PluginHubResult | null;
 }) {
-  const pluginCount = pluginHub?.catalog.items.length ?? 0;
-  const installedPlugins = pluginHub?.catalog.items.filter((item) => item.installStatus === "installed").length ?? 0;
+  const catalog = pluginHub?.catalog;
+  const pluginCount = catalog?.items?.length ?? 0;
+  const installedPlugins = catalog?.items?.filter((item) => item.installStatus === "installed").length ?? 0;
   return (
     <div className="ops-dashboard">
       <button className="relay-banner" onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} type="button">
@@ -962,7 +1182,7 @@ function OverviewScreen({
         <StatusTile icon={Languages} label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
         <StatusTile icon={MessageCircle} label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
       </div>
-      <div className="ops-columns">
+      <div className="ops-overview-grid">
         <Panel title="核心动作" detail="Codex 与 Claude 的启动入口已分离。">
           <ActionButton icon={Rocket} label="启动 Codex" onClick={() => void actions.launchCodex()} />
           <ActionButton icon={RefreshCw} label="重启 Codex" onClick={() => void actions.restartCodex()} />
@@ -979,8 +1199,8 @@ function OverviewScreen({
           <ActionButton icon={PackageSearch} label="刷新插件目录" onClick={() => void actions.refreshPluginHub()} />
           <ActionButton icon={PackageSearch} label="打开插件中心" onClick={() => void actions.goPluginHub()} />
           <ActionButton icon={ExternalLink} label="官方插件仓库" onClick={() => void actions.openExternalUrl("https://github.com/anthropics/claude-plugins-official")} />
-          <InfoRow label="官方市场" value={pluginHub?.catalog.sources.find((source) => source.id === "official")?.message ?? "未加载"} />
-          <InfoRow label="社区资源" value={pluginHub?.catalog.sources.find((source) => source.id === "awesome")?.message ?? "未加载"} />
+          <InfoRow label="官方市场" value={catalog?.sources?.find((source) => source.id === "official")?.message ?? "未加载"} />
+          <InfoRow label="社区资源" value={catalog?.sources?.find((source) => source.id === "awesome")?.message ?? "未加载"} />
         </Panel>
         <Panel title="提示词工坊" detail="集成 linshenkx/prompt-optimizer，应用内路由打开控制页。">
           <ActionButton icon={PencilRuler} label="打开提示词优化器" onClick={() => void actions.goPromptOptimizer()} />
@@ -1062,6 +1282,12 @@ function ToolsAndPluginsScreen({
   claudeDesktop,
   hub,
   localSessions,
+  memoryAssist,
+  memoryCandidates,
+  memoryExport,
+  memoryItems,
+  memorySearch,
+  memorySelfCheck,
   overview,
   preview,
   providerSync,
@@ -1073,6 +1299,12 @@ function ToolsAndPluginsScreen({
   claudeDesktop: ClaudeDesktopResult | null;
   hub: PluginHubResult | null;
   localSessions: LocalSessionsResult | null;
+  memoryAssist: MemoryStatusResult | null;
+  memoryCandidates: MemoryCandidatesResult | null;
+  memoryExport: MemoryExportResult | null;
+  memoryItems: MemoryItemsResult | null;
+  memorySearch: MemoryQueryResult | null;
+  memorySelfCheck: MemorySelfCheckResult | null;
   overview: OverviewResult | null;
   preview: PluginInstallPreviewResult | null;
   providerSync: ProviderSyncResult | null;
@@ -1088,7 +1320,7 @@ function ToolsAndPluginsScreen({
     : "尚未执行";
   return (
     <div className="stack">
-      <div className="ops-tools-hero">
+      <div className="ops-tools-command-deck">
         <Panel title="工具与插件" detail="插件目录、MCP 配置、Codex 会话管理、Claude 会话诊断和历史会话修复集中在这里。">
           <div className="ops-note">
             <ShieldCheck className="h-4 w-4" />
@@ -1135,6 +1367,7 @@ function ToolsAndPluginsScreen({
       </div>
       <div className="ops-two-column">
         <div className="ops-wide-column">
+          <PluginHubScreen actions={actions} hub={hub} preview={preview} />
           <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
             <div className="ops-status-list">
               <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
@@ -1156,9 +1389,17 @@ function ToolsAndPluginsScreen({
               )) : <Empty text="暂未读取到 Codex 本地会话。" />}
             </div>
           </Panel>
-          <PluginHubScreen actions={actions} hub={hub} preview={preview} />
         </div>
         <div className="stack">
+          <MemoryAssistPanel
+            actions={actions}
+            candidates={memoryCandidates}
+            exported={memoryExport}
+            items={memoryItems}
+            search={memorySearch}
+            selfCheck={memorySelfCheck}
+            status={memoryAssist}
+          />
           <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
             <div className="ops-status-list">
               <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
@@ -1189,6 +1430,171 @@ function ToolsAndPluginsScreen({
   );
 }
 
+function MemoryAssistPanel({
+  actions,
+  candidates,
+  exported,
+  items,
+  search,
+  selfCheck,
+  status,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  candidates: MemoryCandidatesResult | null;
+  exported: MemoryExportResult | null;
+  items: MemoryItemsResult | null;
+  search: MemoryQueryResult | null;
+  selfCheck: MemorySelfCheckResult | null;
+  status: MemoryStatusResult | null;
+}) {
+  const [draft, setDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [importText, setImportText] = useState("");
+  const [replaceExisting, setReplaceExisting] = useState(false);
+  const recentItems = items?.items.slice(0, 5) ?? [];
+  const pending = candidates?.candidates ?? [];
+  const matches = search?.memory.results ?? [];
+  const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
+  const dbPath = status?.memory.dbPath ?? "";
+  return (
+    <Panel title="记忆辅助" detail="本地长期记忆、待确认学习、工作区隔离和自检备份。">
+      <div className="ops-status-list">
+        <StatusRow label="记忆库" status={status?.memory.status ?? "not_checked"} value={compactPath(dbPath)} />
+        <StatusRow label="长期记忆" status={(status?.memory.totalItems ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalItems ?? 0} 条`} />
+        <StatusRow label="待确认" status={(status?.memory.pendingCandidates ?? 0) > 0 ? "running" : "not_checked"} value={`${status?.memory.pendingCandidates ?? 0} 条`} />
+        <StatusRow label="最近备份" status={status?.memory.latestBackupPath ? "ok" : "not_checked"} value={compactPath(status?.memory.latestBackupPath)} />
+      </div>
+      <label className="ops-form-field">
+        <span>手动记忆</span>
+        <textarea
+          className="ops-textarea compact"
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          placeholder="输入要长期保存的项目约定、构建命令、偏好或修复结论"
+          value={draft}
+        />
+      </label>
+      <div className="action-row">
+        <Button
+          disabled={!draft.trim()}
+          onClick={() => {
+            void (async () => {
+              if (await actions.learnMemoryAssistItem(draft)) setDraft("");
+            })();
+          }}
+          size="sm"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          记住
+        </Button>
+        <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新
+        </Button>
+        <Button onClick={() => void actions.runMemoryAssistSelfcheck()} size="sm" variant="outline">
+          <ShieldCheck className="h-4 w-4" />
+          自检并备份
+        </Button>
+      </div>
+      <div className="memory-assist-search">
+        <label className="ops-form-field">
+          <span>搜索记忆</span>
+          <input
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery);
+            }}
+            placeholder="搜索项目约定、构建命令、历史修复结论"
+            value={searchQuery}
+          />
+        </label>
+        <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery)} size="sm" variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          搜索
+        </Button>
+      </div>
+      {matches.length ? (
+        <div className="memory-assist-list">
+          <strong>搜索结果：{search?.memory.query}</strong>
+          {matches.slice(0, 6).map((match) => (
+            <div className="memory-assist-row" key={match.item.id}>
+              <span>{match.item.category} · {match.item.workspace} · score {match.score.toFixed(2)}</span>
+              <p>{match.item.text}</p>
+              {match.matchedKeywords.length ? <em>命中：{match.matchedKeywords.slice(0, 8).join(" / ")}</em> : null}
+            </div>
+          ))}
+        </div>
+      ) : search ? <Empty text="没有匹配到记忆。" /> : null}
+      {selfCheck ? (
+        <div className="ops-note">
+          <ShieldCheck className="h-4 w-4" />
+          <span>{selfCheck.report.status} · {selfCheck.report.checks.map((check) => `${check.name}:${check.status}`).join(" / ")}</span>
+        </div>
+      ) : null}
+      <div className="memory-assist-columns">
+        <div className="memory-assist-list">
+          <strong>最近记忆</strong>
+          {recentItems.length ? recentItems.map((item) => (
+            <div className="memory-assist-row" key={item.id}>
+              <span>{item.category} · {item.workspace}</span>
+              <p>{item.text}</p>
+              <div className="action-row">
+                <Button onClick={() => void actions.deleteMemoryAssistItem(item.id)} size="sm" variant="outline">删除</Button>
+              </div>
+            </div>
+          )) : <Empty text="暂无长期记忆。" />}
+        </div>
+        <div className="memory-assist-list">
+          <strong>待确认</strong>
+          {pending.length ? pending.slice(0, 5).map((candidate) => (
+            <div className="memory-assist-row" key={candidate.id}>
+              <span>{candidate.category} · {candidate.source || "auto"}</span>
+              <p>{candidate.text}</p>
+              <div className="action-row">
+                <Button onClick={() => void actions.approveMemoryAssistCandidate(candidate.id)} size="sm">确认</Button>
+                <Button onClick={() => void actions.rejectMemoryAssistCandidate(candidate.id)} size="sm" variant="outline">忽略</Button>
+              </div>
+            </div>
+          )) : <Empty text="暂无待确认记忆。" />}
+        </div>
+      </div>
+      <div className="memory-assist-transfer">
+        <div className="memory-assist-list">
+          <strong>导出</strong>
+          <div className="action-row">
+            <Button onClick={() => void actions.exportMemoryAssist()} size="sm" variant="outline">
+              <FileDown className="h-4 w-4" />
+              生成导出 JSON
+            </Button>
+          </div>
+          <textarea
+            className="ops-textarea compact mono"
+            placeholder="点击生成导出 JSON 后会显示完整迁移包。"
+            readOnly
+            value={exportJson}
+          />
+        </div>
+        <div className="memory-assist-list">
+          <strong>导入</strong>
+          <textarea
+            className="ops-textarea compact mono"
+            onChange={(event) => setImportText(event.currentTarget.value)}
+            placeholder="粘贴 memory-assist/v1 导出 JSON；导入前会再次确认。"
+            value={importText}
+          />
+          <div className="ops-toggle-line">
+            <span>替换现有记忆库</span>
+            <ToggleSwitch checked={replaceExisting} onChange={setReplaceExisting} />
+          </div>
+          <Button disabled={!importText.trim()} onClick={() => void actions.importMemoryAssist(importText, replaceExisting)} size="sm">
+            <FileUp className="h-4 w-4" />
+            导入记忆
+          </Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function PluginHubScreen({
   actions,
   hub,
@@ -1200,7 +1606,7 @@ function PluginHubScreen({
 }) {
   const [filter, setFilter] = useState<"all" | "official" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
   const [selectedId, setSelectedId] = useState("");
-  const items = hub?.catalog.items ?? [];
+  const items = hub?.catalog?.items ?? [];
   const visible = items.filter((item) => {
     if (filter === "official") return item.sourceId === "official";
     if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex";
@@ -1217,7 +1623,8 @@ function PluginHubScreen({
     ? "Install to Claude Desktop"
     : selected?.installKind === "claude_plugin_marketplace"
       ? "Install with Claude CLI"
-      : "Install";  return (
+      : "Install";
+  return (
     <div className="plugin-layout">
       <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
         <div className="filter-row">
@@ -1240,7 +1647,7 @@ function PluginHubScreen({
           </Button>
         </div>
         <div className="source-strip">
-          {(hub?.catalog.sources ?? []).map((source) => (
+          {(hub?.catalog?.sources ?? []).map((source) => (
             <div className={`source-pill ${source.status}`} key={source.id}>
               <strong>{source.label}</strong>
               <span>{source.itemCount} 项 · {source.message}</span>
@@ -1504,6 +1911,9 @@ function SettingsScreen({
     ["Fast 按钮", "codexAppServiceTierControls"],
     ["图片覆盖", "codexAppImageOverlayEnabled"],
     ["Codex Goals", "codexGoalsEnabled"],
+    ["记忆辅助", "memoryAssistEnabled"],
+    ["记忆 DOM 标识", "memoryAssistInjectEnabled"],
+    ["待确认学习", "memoryAssistAutoSuggestEnabled"],
     ["CLI Wrapper", "cliWrapperEnabled"],
   ] as const;
   return (
@@ -1643,6 +2053,29 @@ function SettingsScreen({
               重置图片覆盖
             </Button>
           </div>
+        </Panel>
+        <Panel title="记忆辅助" detail="控制 Codex 页面顶部记忆标识、会话摘要注入和待确认学习。">
+          <div className="ops-toggle-line">
+            <span>启用记忆辅助</span>
+            <ToggleSwitch checked={Boolean(s?.memoryAssistEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistEnabled", value)} />
+          </div>
+          <div className="ops-toggle-line">
+            <span>显示 DOM 注入标识</span>
+            <ToggleSwitch checked={Boolean(s?.memoryAssistInjectEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistInjectEnabled", value)} />
+          </div>
+          <div className="ops-toggle-line">
+            <span>启用待确认学习</span>
+            <ToggleSwitch checked={Boolean(s?.memoryAssistAutoSuggestEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistAutoSuggestEnabled", value)} />
+          </div>
+          <label className="ops-form-field">
+            <span>每次最多注入：{s?.memoryAssistMaxInjectedItems ?? 5} 条</span>
+            <input disabled={!s} max={20} min={1} onChange={(event) => updateDraft("memoryAssistMaxInjectedItems", Number(event.currentTarget.value))} type="range" value={s?.memoryAssistMaxInjectedItems ?? 5} />
+          </label>
+          <div className="info-grid compact">
+            <InfoRow label="工作区模式" value={s?.memoryAssistWorkspaceMode || "project_plus_global"} />
+            <InfoRow label="存储位置" value="~/.claude-codex-pro/memory_assist.sqlite" />
+          </div>
+          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存记忆辅助设置</Button>
         </Panel>
         <Panel title="安全边界" detail="这些操作只改本工具配置，不静默改写官方 Claude 包。">
           <div className="ops-danger-zone">
@@ -1846,6 +2279,15 @@ function createActionsShape() {
     repairHistorySessions: async () => {},
     refreshLocalSessions: async () => null as LocalSessionsResult | null,
     deleteLocalSession: async (_session: LocalSession) => {},
+    refreshMemoryAssist: async () => null as MemoryStatusResult | null,
+    learnMemoryAssistItem: async (_text: string, _category?: string) => false,
+    searchMemoryAssist: async (_query: string) => {},
+    deleteMemoryAssistItem: async (_id: string) => {},
+    approveMemoryAssistCandidate: async (_id: string) => {},
+    rejectMemoryAssistCandidate: async (_id: string) => {},
+    runMemoryAssistSelfcheck: async () => {},
+    exportMemoryAssist: async () => {},
+    importMemoryAssist: async (_jsonText: string, _replaceExisting: boolean) => {},
     applyRelayMode: async () => {},
     applyPureApiMode: async () => {},
     clearRelayMode: async () => {},
@@ -1861,6 +2303,5 @@ function createActionsShape() {
     resetImageOverlaySettings: async () => {},
     refreshLogs: async () => null as LogsResult | null,
     refreshWatcher: async () => null as WatcherResult | null,
-    setTheme: (_theme: Theme | ((theme: Theme) => Theme)) => {},
   };
 }

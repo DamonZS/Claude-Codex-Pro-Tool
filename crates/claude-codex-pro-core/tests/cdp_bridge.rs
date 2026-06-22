@@ -208,6 +208,42 @@ fn injection_script_keeps_plugin_marketplace_unlock_separate_from_entry_unlock()
 }
 
 #[test]
+fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function codexMemoryMaybeSuggestCandidate"));
+    assert!(
+        script.contains(
+            "if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled || !settings.memoryAssistAutoSuggestEnabled) return"
+        ),
+        "auto-suggest must stop when DOM memory injection is disabled"
+    );
+}
+
+#[test]
+fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
+    let script = assets::injection_script(57321);
+    let start = script
+        .find("function codexMemoryLatestUserText")
+        .expect("memory latest-user function exists");
+    let end = script[start..]
+        .find("function codexMemorySuggestionFromText")
+        .map(|offset| start + offset)
+        .expect("memory suggestion function follows latest-user function");
+    let function_body = &script[start..end];
+
+    assert!(function_body.contains("[data-message-author-role=\"user\"]"));
+    assert!(
+        !function_body.contains("[data-testid=\"conversation-turn\"]"),
+        "auto-suggest fallback must not read generic conversation turns"
+    );
+    assert!(
+        !function_body.contains("main [class*=\"user\"]"),
+        "auto-suggest fallback must not infer user role from class substring"
+    );
+}
+
+#[test]
 fn injection_script_unlocks_nested_disabled_plugin_install_buttons() {
     let script = assets::injection_script(57321);
 

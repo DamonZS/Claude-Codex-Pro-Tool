@@ -83,6 +83,23 @@ async fn bridge_routes_cover_all_current_paths() {
             "/upstream-worktree/create",
             json!({"repoPath": "/repo", "branchName": "feature/demo"}),
         ),
+        ("/memory/status", json!({})),
+        (
+            "/memory/session",
+            json!({"workspace": "repo-a", "query": "插件", "maxItems": 3}),
+        ),
+        (
+            "/memory/search",
+            json!({"workspace": "repo-a", "query": "插件", "includeGlobal": true, "limit": 3}),
+        ),
+        (
+            "/memory/learn",
+            json!({"workspace": "repo-a", "text": "插件安装前展示 diff", "category": "safety"}),
+        ),
+        (
+            "/memory/candidates",
+            json!({"workspace": "repo-a", "text": "以后先备份源码", "category": "preference"}),
+        ),
         ("/delete", json!({"session_id": "s1", "title": "First"})),
         ("/undo", json!({"undo_token": "undo-1"})),
         (
@@ -715,6 +732,148 @@ async fn bridge_context_core_with_data_uses_injected_data_service() {
 }
 
 #[tokio::test]
+async fn memory_bridge_routes_learn_search_and_review_candidates() {
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = CoreRuntimeService::new(9229, StatusStore::default()).with_memory_store(
+        claude_codex_pro_core::memory_assist::MemoryAssistStore::new(
+            temp.path().join("memory.sqlite"),
+        ),
+    );
+    let ctx = BridgeContext::core(Arc::new(runtime));
+
+    let learned = handle_bridge_request(
+        ctx.clone(),
+        "/memory/learn",
+        json!({
+            "workspace": "repo-a",
+            "category": "safety",
+            "text": "插件安装前必须展示 diff，API key sk-test123 不应入库"
+        }),
+    )
+    .await;
+    assert_eq!(learned["status"], "ok");
+    assert!(!learned.to_string().contains("sk-test123"));
+
+    let search = handle_bridge_request(
+        ctx.clone(),
+        "/memory/search",
+        json!({"workspace": "repo-a", "query": "插件 diff", "includeGlobal": true, "limit": 5}),
+    )
+    .await;
+    assert_eq!(search["status"], "ok");
+    assert_eq!(search["results"].as_array().unwrap().len(), 1);
+
+    let candidate = handle_bridge_request(
+        ctx.clone(),
+        "/memory/candidates",
+        json!({
+            "workspace": "repo-a",
+            "category": "preference",
+            "text": "以后大量改动前先备份源码"
+        }),
+    )
+    .await;
+    assert_eq!(candidate["status"], "ok");
+    let candidate_id = candidate["id"].as_str().unwrap();
+
+    let approved =
+        handle_bridge_request(ctx.clone(), "/memory/approve", json!({"id": candidate_id})).await;
+    assert_eq!(approved["status"], "ok");
+
+    let listed = handle_bridge_request(
+        ctx.clone(),
+        "/memory/candidates",
+        json!({"workspace": "repo-a", "includeGlobal": true}),
+    )
+    .await;
+    assert_eq!(listed["candidates"].as_array().unwrap().len(), 0);
+
+    let selfcheck = handle_bridge_request(ctx, "/memory/selfcheck", json!({"repair": true})).await;
+    assert_eq!(selfcheck["status"], "ok");
+    assert!(selfcheck["backupPath"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn memory_bridge_respects_disabled_settings_before_writing() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut disabled = BackendSettings::default();
+    disabled.memory_assist_enabled = false;
+    disabled.memory_assist_auto_suggest_enabled = false;
+    let settings = Arc::new(FakeSettings::with_settings(disabled));
+    let runtime = CoreRuntimeService::new(9229, StatusStore::default()).with_memory_store(
+        claude_codex_pro_core::memory_assist::MemoryAssistStore::new(
+            temp.path().join("memory.sqlite"),
+        ),
+    );
+    let ctx = BridgeContext::new(
+        settings,
+        Arc::new(runtime),
+        Arc::new(FakeData::default()),
+    );
+
+    let learned = handle_bridge_request(
+        ctx.clone(),
+        "/memory/learn",
+        json!({"workspace": "repo-a", "text": "should not persist"}),
+    )
+    .await;
+    assert_eq!(learned["status"], "failed");
+    assert!(
+        learned["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("disabled")
+    );
+
+    let candidate = handle_bridge_request(
+        ctx.clone(),
+        "/memory/candidates",
+        json!({"workspace": "repo-a", "text": "以后默认不要写入"}),
+    )
+    .await;
+    assert_eq!(candidate["status"], "failed");
+
+    let status = handle_bridge_request(ctx, "/memory/status", json!({})).await;
+    assert_eq!(status["totalItems"], json!(0));
+    assert_eq!(status["pendingCandidates"], json!(0));
+}
+
+#[tokio::test]
+async fn memory_bridge_respects_auto_suggest_disabled_for_candidates() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut settings_value = BackendSettings::default();
+    settings_value.memory_assist_enabled = true;
+    settings_value.memory_assist_auto_suggest_enabled = false;
+    let settings = Arc::new(FakeSettings::with_settings(settings_value));
+    let runtime = CoreRuntimeService::new(9229, StatusStore::default()).with_memory_store(
+        claude_codex_pro_core::memory_assist::MemoryAssistStore::new(
+            temp.path().join("memory.sqlite"),
+        ),
+    );
+    let ctx = BridgeContext::new(
+        settings,
+        Arc::new(runtime),
+        Arc::new(FakeData::default()),
+    );
+
+    let learned = handle_bridge_request(
+        ctx.clone(),
+        "/memory/learn",
+        json!({"workspace": "repo-a", "text": "manual memory still works"}),
+    )
+    .await;
+    assert_eq!(learned["status"], "ok");
+
+    let candidate = handle_bridge_request(
+        ctx,
+        "/memory/candidates",
+        json!({"workspace": "repo-a", "text": "以后默认不要自动写入"}),
+    )
+    .await;
+    assert_eq!(candidate["status"], "failed");
+}
+
+#[tokio::test]
 async fn user_script_manager_scans_and_persists_inventory_shape() {
     let temp = tempfile::tempdir().unwrap();
     let builtin_dir = temp.path().join("builtin");
@@ -1146,6 +1305,13 @@ impl FakeSettings {
         Self {
             settings: Mutex::new(BackendSettings::default()),
             codex_app_version: Mutex::new(version.to_string()),
+        }
+    }
+
+    fn with_settings(settings: BackendSettings) -> Self {
+        Self {
+            settings: Mutex::new(settings),
+            codex_app_version: Mutex::new(String::new()),
         }
     }
 }

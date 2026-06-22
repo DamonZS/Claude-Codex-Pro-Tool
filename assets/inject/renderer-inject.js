@@ -55,6 +55,9 @@
   const codexThreadServiceTierVersion = "1";
   const codexServiceTierBadgeClass = "codex-service-tier-badge";
   const codexServiceTierBadgeVersion = "3";
+  const codexMemoryBadgeId = "codex-memory-assist-badge";
+  const codexMemoryPanelId = "codex-memory-assist-panel";
+  const codexMemoryAssistVersion = "1";
   let claudeCodexProVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
   const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
   const claudeCodexProSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
@@ -784,6 +787,123 @@
       .${codexServiceTierBadgeClass}[data-tier="failed"] { border-color: rgba(248,113,113,.42); background: rgba(248,113,113,.12); color: #fca5a5; }
       .${codexServiceTierBadgeClass}[data-tier="unsupported"] { border-color: rgba(251,191,36,.48); background: rgba(251,191,36,.13); color: #fbbf24; }
       .${codexServiceTierBadgeClass}[data-disabled="true"] { cursor: not-allowed; opacity: .78; }
+      #${codexMemoryBadgeId} {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2147483002;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        max-width: min(520px, calc(100vw - 32px));
+        height: 30px;
+        box-sizing: border-box;
+        border: 1px solid rgba(37,99,235,.34);
+        border-radius: 999px;
+        background: rgba(15,23,42,.88);
+        color: #dbeafe;
+        box-shadow: 0 12px 30px rgba(15,23,42,.24);
+        font: 600 12px/1 system-ui, sans-serif;
+        padding: 0 12px;
+        cursor: pointer;
+        backdrop-filter: blur(12px);
+      }
+      #${codexMemoryBadgeId}[data-status="ok"] { border-color: rgba(16,185,129,.44); color: #bbf7d0; }
+      #${codexMemoryBadgeId}[data-status="failed"] { border-color: rgba(248,113,113,.5); color: #fecaca; }
+      #${codexMemoryBadgeId}[data-status="disabled"] { opacity: .75; cursor: default; }
+      #${codexMemoryBadgeId} .codex-memory-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #60a5fa;
+        box-shadow: 0 0 10px rgba(96,165,250,.75);
+      }
+      #${codexMemoryBadgeId}[data-status="ok"] .codex-memory-dot { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,.75); }
+      #${codexMemoryBadgeId}[data-status="failed"] .codex-memory-dot { background: #f87171; box-shadow: 0 0 10px rgba(248,113,113,.75); }
+      .codex-memory-count { color: #93c5fd; font-weight: 700; }
+      #${codexMemoryPanelId} {
+        position: fixed;
+        top: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2147483003;
+        width: min(520px, calc(100vw - 32px));
+        max-height: min(620px, calc(100vh - 72px));
+        overflow: hidden;
+        border: 1px solid rgba(15,23,42,.14);
+        border-radius: 10px;
+        background: #ffffff;
+        color: #111827;
+        box-shadow: 0 20px 70px rgba(15,23,42,.28);
+        font: 13px system-ui, sans-serif;
+      }
+      #${codexMemoryPanelId}[hidden] { display: none !important; }
+      .codex-memory-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid #e5e7eb;
+        padding: 12px 14px;
+      }
+      .codex-memory-panel-header strong { display: block; font-size: 14px; }
+      .codex-memory-panel-header span { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; }
+      .codex-memory-panel-close { border: 0; background: transparent; color: #6b7280; font-size: 18px; cursor: pointer; }
+      .codex-memory-panel-body { display: grid; gap: 10px; max-height: min(520px, calc(100vh - 150px)); overflow-y: auto; padding: 12px 14px 14px; }
+      .codex-memory-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .codex-memory-actions button {
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #111827;
+        font: 12px system-ui, sans-serif;
+        padding: 6px 9px;
+        cursor: pointer;
+      }
+      .codex-memory-actions button[data-primary="true"] { border-color: #2563eb; background: #2563eb; color: #ffffff; }
+      .codex-memory-panel-body textarea,
+      .codex-memory-panel-body input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #111827;
+        font: 13px system-ui, sans-serif;
+        padding: 8px 9px;
+      }
+      .codex-memory-panel-body textarea { min-height: 78px; resize: vertical; }
+      .codex-memory-list { display: grid; gap: 8px; }
+      .codex-memory-card { border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb; padding: 9px; }
+      .codex-memory-card strong { display: block; margin-bottom: 4px; color: #374151; font-size: 12px; }
+      .codex-memory-card p { margin: 0; color: #111827; line-height: 1.45; white-space: pre-wrap; }
+      .codex-memory-card small { display: block; margin-top: 6px; color: #6b7280; }
+      .codex-memory-message { min-height: 18px; color: #6b7280; font-size: 12px; }
+      .codex-memory-message[data-status="ok"] { color: #059669; }
+      .codex-memory-message[data-status="failed"] { color: #dc2626; }
+      html.dark #${codexMemoryPanelId},
+      html[data-theme="dark"] #${codexMemoryPanelId},
+      :root[data-theme="dark"] #${codexMemoryPanelId} {
+        border-color: rgba(255,255,255,.12);
+        background: #27272a;
+        color: #f4f4f5;
+      }
+      html.dark .codex-memory-panel-header,
+      html[data-theme="dark"] .codex-memory-panel-header,
+      :root[data-theme="dark"] .codex-memory-panel-header { border-bottom-color: rgba(255,255,255,.1); }
+      html.dark .codex-memory-panel-header span,
+      html[data-theme="dark"] .codex-memory-panel-header span,
+      :root[data-theme="dark"] .codex-memory-panel-header span { color: #a1a1aa; }
+      html.dark .codex-memory-card,
+      html[data-theme="dark"] .codex-memory-card,
+      :root[data-theme="dark"] .codex-memory-card {
+        border-color: rgba(255,255,255,.1);
+        background: #18181b;
+      }
+      html.dark .codex-memory-card p,
+      html[data-theme="dark"] .codex-memory-card p,
+      :root[data-theme="dark"] .codex-memory-card p { color: #f4f4f5; }
       .claude-codex-pro-about { color: #a1a1aa; line-height: 1.5; }
       .claude-codex-pro-tabs { display: flex; gap: 8px; padding: 0 20px 6px; flex: 0 0 auto; }
       .claude-codex-pro-tab-button { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: transparent; color: #d1d5db; font: 12px system-ui, sans-serif; padding: 5px 10px; }
@@ -935,7 +1055,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5 };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -954,6 +1074,9 @@
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
     chineseOverlayEnabled: "claudeAppChineseOverlayEnabled",
     serviceTierControls: "codexAppServiceTierControls",
+    memoryAssistEnabled: "memoryAssistEnabled",
+    memoryAssistInjectEnabled: "memoryAssistInjectEnabled",
+    memoryAssistAutoSuggestEnabled: "memoryAssistAutoSuggestEnabled",
   };
 
   function backendClaudeCodexProSettings() {
@@ -963,6 +1086,10 @@
         settings[localKey] = claudeCodexProBackendSettings[backendKey];
       }
     });
+    const maxInjectedItems = Number(claudeCodexProBackendSettings.memoryAssistMaxInjectedItems);
+    if (Number.isFinite(maxInjectedItems)) {
+      settings.memoryAssistMaxInjectedItems = Math.max(1, Math.min(20, Math.round(maxInjectedItems)));
+    }
     return settings;
   }
 
@@ -8443,6 +8570,9 @@
     refreshConversationTimeline();
     refreshConversationView();
     installCodexServiceTierBadge();
+    codexMemoryUpdateBadge();
+    void codexMemoryLoadSession();
+    void codexMemoryMaybeSuggestCandidate();
     scheduleThreadScrollSync();
     patchCodexModelWhitelist();
   }
@@ -8463,8 +8593,356 @@
     requestAnimationFrame(() => runScanStep(scanDeferred));
   }
 
+  const codexMemoryState = {
+    status: "loading",
+    workspace: "codex",
+    totalItems: 0,
+    pendingCandidates: 0,
+    injectedItems: [],
+    summary: "正在读取记忆辅助…",
+    lastLoadedAt: 0,
+    lastSuggestionHash: "",
+    lastSuggestionAt: 0,
+  };
+
+  function codexMemoryWorkspace() {
+    const project = currentProjectContext?.();
+    if (project?.repoPath) return `codex:repo:${project.repoPath}`;
+    if (project?.projectId) return `codex:project:${project.projectId}`;
+    const pathParts = String(location.pathname || "").split("/").filter(Boolean);
+    const thread = pathParts.find((part) => /^[a-z0-9_-]{8,}$/i.test(part)) || "";
+    const title = document.querySelector("[data-thread-title]")?.textContent?.trim() || document.title || "";
+    const base = thread || title || "codex";
+    return `codex:${String(base).slice(0, 80)}`;
+  }
+
+  function codexMemoryCurrentText() {
+    const selection = String(window.getSelection?.() || "").trim();
+    if (selection) return selection;
+    const composer = document.querySelector("textarea, [contenteditable='true']");
+    const composerText = composer?.value || composer?.textContent || "";
+    if (String(composerText).trim()) return String(composerText).trim();
+    const messages = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-testid="conversation-turn"], main .prose'))
+      .map((node) => node.textContent?.trim() || "")
+      .filter(Boolean);
+    return messages.slice(-2).join("\n\n").trim();
+  }
+
+  function codexMemoryLatestUserText() {
+    const nodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+    const texts = nodes
+      .map((node) => node.textContent?.trim() || "")
+      .filter((text) => text.length >= 8 && text.length <= 2400);
+    return texts[texts.length - 1] || "";
+  }
+
+  function codexMemorySuggestionFromText(rawText) {
+    const text = String(rawText || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length < 8) return null;
+    const patterns = [
+      { re: /(?:帮我|请|以后)?记住[:：]?\s*(.+)$/i, reason: "explicit remember phrase" },
+      { re: /(?:以后都这样|以后按这个|以后统一|以后默认)[:：]?\s*(.+)$/i, reason: "future preference phrase" },
+      { re: /(?:这个项目约定|项目约定|仓库约定|本项目约定)[:：]?\s*(.+)$/i, reason: "project convention phrase" },
+      { re: /(?:以后.*(?:先|必须|不要|不能|需要).*)$/i, reason: "future rule phrase" },
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern.re);
+      const candidate = (match?.[1] || match?.[0] || "").trim();
+      if (candidate.length >= 6) {
+        return {
+          text: candidate.slice(0, 2000),
+          reason: pattern.reason,
+        };
+      }
+    }
+    return null;
+  }
+
+  function codexMemoryHash(text) {
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return String(hash >>> 0);
+  }
+
+  function codexMemorySetMessage(message, status = "") {
+    const panel = document.getElementById(codexMemoryPanelId);
+    const node = panel?.querySelector("[data-codex-memory-message]");
+    if (!node) return;
+    node.textContent = message || "";
+    node.dataset.status = status;
+  }
+
+  function codexMemoryRenderList(items, emptyText = "暂无匹配记忆。") {
+    const panel = document.getElementById(codexMemoryPanelId);
+    const list = panel?.querySelector("[data-codex-memory-list]");
+    if (!list) return;
+    const rows = (items || []).map((entry) => entry.item || entry).filter(Boolean);
+    list.innerHTML = rows.length ? rows.slice(0, 12).map((item) => `
+      <div class="codex-memory-card">
+        <strong>${escapeHtml(item.category || "general")} · ${escapeHtml(item.workspace || "")}</strong>
+        <p>${escapeHtml(item.text || "")}</p>
+        <small>${escapeHtml((item.tags || []).join(", "))}</small>
+      </div>
+    `).join("") : `<div class="codex-memory-card"><p>${escapeHtml(emptyText)}</p></div>`;
+  }
+
+  function codexMemoryUpdateBadge() {
+    const settings = claudeCodexProSettings();
+    const badge = document.getElementById(codexMemoryBadgeId);
+    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled) {
+      badge?.remove();
+      document.getElementById(codexMemoryPanelId)?.remove();
+      return;
+    }
+    const node = badge || document.createElement("button");
+    node.id = codexMemoryBadgeId;
+    node.type = "button";
+    node.dataset.codexMemoryAssistVersion = codexMemoryAssistVersion;
+    node.dataset.status = codexMemoryState.status;
+    node.innerHTML = `
+      <span class="codex-memory-dot"></span>
+      <span>记忆辅助</span>
+      <span class="codex-memory-count">${codexMemoryState.totalItems || 0}</span>
+      <span>${escapeHtml(codexMemoryState.pendingCandidates ? `待确认 ${codexMemoryState.pendingCandidates}` : codexMemoryState.workspace)}</span>
+    `;
+    node.title = codexMemoryState.summary || "记忆辅助";
+    if (!badge) {
+      node.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        codexMemoryTogglePanel();
+      });
+      document.documentElement.appendChild(node);
+    }
+  }
+
+  async function codexMemoryLoadSession(force = false) {
+    const settings = claudeCodexProSettings();
+    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled) {
+      codexMemoryUpdateBadge();
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - codexMemoryState.lastLoadedAt < 5000) {
+      codexMemoryUpdateBadge();
+      return;
+    }
+    codexMemoryState.lastLoadedAt = now;
+    codexMemoryState.workspace = codexMemoryWorkspace();
+    try {
+      const result = await postJson("/memory/session", {
+        workspace: codexMemoryState.workspace,
+        query: codexMemoryCurrentText().slice(0, 1600),
+        maxItems: settings.memoryAssistMaxInjectedItems || 5,
+      });
+      if (result?.status !== "ok") throw new Error(result?.message || "memory session failed");
+      codexMemoryState.status = "ok";
+      codexMemoryState.totalItems = Number(result.totalItems || 0);
+      codexMemoryState.pendingCandidates = Number(result.pendingCandidates || 0);
+      codexMemoryState.injectedItems = Array.isArray(result.injectedItems) ? result.injectedItems : [];
+      codexMemoryState.summary = result.summary || "记忆辅助已启用。";
+      codexMemoryRenderList(codexMemoryState.injectedItems);
+    } catch (error) {
+      codexMemoryState.status = "failed";
+      codexMemoryState.summary = `记忆辅助不可用：${error?.message || error}`;
+    }
+    codexMemoryUpdateBadge();
+  }
+
+  async function codexMemoryMaybeSuggestCandidate(force = false) {
+    const settings = claudeCodexProSettings();
+    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled || !settings.memoryAssistAutoSuggestEnabled) return;
+    const suggestion = codexMemorySuggestionFromText(codexMemoryLatestUserText());
+    if (!suggestion) return;
+    const hash = codexMemoryHash(`${codexMemoryWorkspace()}\n${suggestion.text}`);
+    const now = Date.now();
+    if (!force && hash === codexMemoryState.lastSuggestionHash && now - codexMemoryState.lastSuggestionAt < 120000) return;
+    codexMemoryState.lastSuggestionHash = hash;
+    codexMemoryState.lastSuggestionAt = now;
+    try {
+      const result = await postJson("/memory/candidates", {
+        workspace: codexMemoryWorkspace(),
+        text: suggestion.text,
+        category: "preference",
+        source: "codex-dom-auto",
+        reason: suggestion.reason,
+        sourceSessionId: location.href,
+      });
+      if (result?.status === "ok") {
+        codexMemoryState.pendingCandidates = Math.max(1, Number(codexMemoryState.pendingCandidates || 0) + 1);
+        codexMemoryState.summary = "已生成待确认记忆，需确认后才会写入长期记忆。";
+        codexMemoryUpdateBadge();
+      }
+    } catch (_error) {
+      // Candidate creation is opportunistic; the visible badge/session loader reports hard failures.
+    }
+  }
+
+  function codexMemoryEnsurePanel() {
+    let panel = document.getElementById(codexMemoryPanelId);
+    if (panel) return panel;
+    panel = document.createElement("div");
+    panel.id = codexMemoryPanelId;
+    panel.hidden = true;
+    panel.innerHTML = `
+      <div class="codex-memory-panel-header">
+        <div>
+          <strong>记忆辅助</strong>
+          <span data-codex-memory-summary>${escapeHtml(codexMemoryState.summary || "")}</span>
+        </div>
+        <button type="button" class="codex-memory-panel-close" data-codex-memory-close="true">×</button>
+      </div>
+      <div class="codex-memory-panel-body">
+        <textarea data-codex-memory-input placeholder="选中文本或填写要长期记住的内容"></textarea>
+        <div class="codex-memory-actions">
+          <button type="button" data-primary="true" data-codex-memory-learn="true">记住</button>
+          <button type="button" data-codex-memory-search="true">搜索</button>
+          <button type="button" data-codex-memory-candidates="true">待确认</button>
+          <button type="button" data-codex-memory-refresh="true">刷新</button>
+          <button type="button" data-codex-memory-manager="true">管理工具</button>
+        </div>
+        <div class="codex-memory-message" data-codex-memory-message></div>
+        <div class="codex-memory-list" data-codex-memory-list></div>
+      </div>
+    `;
+    panel.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target?.closest?.("[data-codex-memory-close]")) {
+        panel.hidden = true;
+        return;
+      }
+      if (target?.closest?.("[data-codex-memory-refresh]")) {
+        void codexMemoryLoadSession(true);
+        return;
+      }
+      if (target?.closest?.("[data-codex-memory-manager]")) {
+        void postJson("/manager/open", {});
+        return;
+      }
+      if (target?.closest?.("[data-codex-memory-learn]")) {
+        void codexMemoryLearnFromPanel();
+        return;
+      }
+      if (target?.closest?.("[data-codex-memory-search]")) {
+        void codexMemorySearchFromPanel();
+        return;
+      }
+      if (target?.closest?.("[data-codex-memory-candidates]")) {
+        void codexMemoryLoadCandidates();
+      }
+    });
+    document.documentElement.appendChild(panel);
+    return panel;
+  }
+
+  function codexMemoryTogglePanel() {
+    const panel = codexMemoryEnsurePanel();
+    const input = panel.querySelector("[data-codex-memory-input]");
+    const selected = codexMemoryCurrentText();
+    if (input && selected && !input.value) input.value = selected.slice(0, 4000);
+    panel.querySelector("[data-codex-memory-summary]").textContent = codexMemoryState.summary || "";
+    panel.hidden = !panel.hidden;
+    codexMemoryRenderList(codexMemoryState.injectedItems);
+  }
+
+  async function codexMemoryLearnFromPanel() {
+    const panel = codexMemoryEnsurePanel();
+    const input = panel.querySelector("[data-codex-memory-input]");
+    const text = String(input?.value || codexMemoryCurrentText()).trim();
+    if (!text) {
+      codexMemorySetMessage("没有可保存的内容。", "failed");
+      return;
+    }
+    codexMemorySetMessage("正在保存记忆…", "");
+    try {
+      const result = await postJson("/memory/learn", {
+        workspace: codexMemoryWorkspace(),
+        text,
+        category: "codex",
+        source: "codex-dom",
+        sourceSessionId: location.href,
+      });
+      if (result?.status !== "ok") throw new Error(result?.message || "learn failed");
+      codexMemorySetMessage("记忆已保存。", "ok");
+      if (input) input.value = "";
+      await codexMemoryLoadSession(true);
+    } catch (error) {
+      codexMemorySetMessage(`保存失败：${error?.message || error}`, "failed");
+    }
+  }
+
+  async function codexMemorySearchFromPanel() {
+    const panel = codexMemoryEnsurePanel();
+    const input = panel.querySelector("[data-codex-memory-input]");
+    const query = String(input?.value || codexMemoryCurrentText()).trim();
+    codexMemorySetMessage("正在检索记忆…", "");
+    try {
+      const result = await postJson("/memory/search", {
+        workspace: codexMemoryWorkspace(),
+        query,
+        includeGlobal: true,
+        limit: 12,
+      });
+      if (result?.status !== "ok") throw new Error(result?.message || "search failed");
+      codexMemoryRenderList(result.results || []);
+      codexMemorySetMessage(`检索完成：${(result.results || []).length} 条。`, "ok");
+    } catch (error) {
+      codexMemorySetMessage(`检索失败：${error?.message || error}`, "failed");
+    }
+  }
+
+  async function codexMemoryLoadCandidates() {
+    codexMemorySetMessage("正在读取待确认记忆…", "");
+    try {
+      const result = await postJson("/memory/candidates", {
+        workspace: codexMemoryWorkspace(),
+        includeGlobal: true,
+      });
+      if (result?.status !== "ok") throw new Error(result?.message || "candidates failed");
+      const candidates = result.candidates || [];
+      const panel = codexMemoryEnsurePanel();
+      const list = panel.querySelector("[data-codex-memory-list]");
+      list.innerHTML = candidates.length ? candidates.map((candidate) => `
+        <div class="codex-memory-card" data-codex-memory-candidate="${escapeHtml(candidate.id)}">
+          <strong>${escapeHtml(candidate.category || "general")} · ${escapeHtml(candidate.workspace || "")}</strong>
+          <p>${escapeHtml(candidate.text || "")}</p>
+          <small>${escapeHtml(candidate.reason || "待确认")}</small>
+          <div class="codex-memory-actions">
+            <button type="button" data-codex-memory-approve="${escapeHtml(candidate.id)}">确认</button>
+            <button type="button" data-codex-memory-reject="${escapeHtml(candidate.id)}">忽略</button>
+          </div>
+        </div>
+      `).join("") : `<div class="codex-memory-card"><p>暂无待确认记忆。</p></div>`;
+      list.querySelectorAll("[data-codex-memory-approve]").forEach((button) => {
+        button.addEventListener("click", () => void codexMemoryReviewCandidate(button.getAttribute("data-codex-memory-approve"), true));
+      });
+      list.querySelectorAll("[data-codex-memory-reject]").forEach((button) => {
+        button.addEventListener("click", () => void codexMemoryReviewCandidate(button.getAttribute("data-codex-memory-reject"), false));
+      });
+      codexMemorySetMessage(`待确认：${candidates.length} 条。`, "ok");
+    } catch (error) {
+      codexMemorySetMessage(`读取失败：${error?.message || error}`, "failed");
+    }
+  }
+
+  async function codexMemoryReviewCandidate(id, approve) {
+    if (!id) return;
+    try {
+      const result = await postJson(approve ? "/memory/approve" : "/memory/reject", { id });
+      if (result?.status !== "ok") throw new Error(result?.message || "review failed");
+      codexMemorySetMessage(approve ? "已确认写入长期记忆。" : "已忽略。", "ok");
+      await codexMemoryLoadCandidates();
+      await codexMemoryLoadSession(true);
+    } catch (error) {
+      codexMemorySetMessage(`操作失败：${error?.message || error}`, "failed");
+    }
+  }
+
   function isExtensionUiNode(node) {
-    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .claude-codex-pro-modal-overlay, .${projectMoveOverlayClass}, .${timelineClass}, .codex-conversation-timeline, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #claude-codex-pro-menu`);
+    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .claude-codex-pro-modal-overlay, .${projectMoveOverlayClass}, .${timelineClass}, .codex-conversation-timeline, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #claude-codex-pro-menu, #${codexMemoryBadgeId}, #${codexMemoryPanelId}`);
   }
 
   function scanRelevantSelector() {

@@ -209,6 +209,23 @@ pub struct BackendSettings {
     pub codex_app_image_overlay_opacity: u8,
     #[serde(rename = "codexGoalsEnabled", default)]
     pub codex_goals_enabled: bool,
+    #[serde(rename = "memoryAssistEnabled", default = "default_true")]
+    pub memory_assist_enabled: bool,
+    #[serde(rename = "memoryAssistInjectEnabled", default = "default_true")]
+    pub memory_assist_inject_enabled: bool,
+    #[serde(rename = "memoryAssistAutoSuggestEnabled", default = "default_true")]
+    pub memory_assist_auto_suggest_enabled: bool,
+    #[serde(
+        rename = "memoryAssistMaxInjectedItems",
+        default = "default_memory_assist_max_injected_items",
+        deserialize_with = "deserialize_memory_assist_max_injected_items"
+    )]
+    pub memory_assist_max_injected_items: u8,
+    #[serde(
+        rename = "memoryAssistWorkspaceMode",
+        default = "default_memory_assist_workspace_mode"
+    )]
+    pub memory_assist_workspace_mode: String,
     #[serde(rename = "launchMode", default)]
     pub launch_mode: LaunchMode,
     #[serde(rename = "relayBaseUrl", default = "default_relay_base_url")]
@@ -273,6 +290,11 @@ impl Default for BackendSettings {
             codex_app_image_overlay_path: String::new(),
             codex_app_image_overlay_opacity: default_image_overlay_opacity(),
             codex_goals_enabled: false,
+            memory_assist_enabled: true,
+            memory_assist_inject_enabled: true,
+            memory_assist_auto_suggest_enabled: true,
+            memory_assist_max_injected_items: default_memory_assist_max_injected_items(),
+            memory_assist_workspace_mode: default_memory_assist_workspace_mode(),
             launch_mode: LaunchMode::Patch,
             relay_base_url: default_relay_base_url(),
             relay_api_key: String::new(),
@@ -381,8 +403,20 @@ fn default_image_overlay_opacity() -> u8 {
     35
 }
 
+fn default_memory_assist_max_injected_items() -> u8 {
+    5
+}
+
+pub fn default_memory_assist_workspace_mode() -> String {
+    "project_plus_global".to_string()
+}
+
 fn clamp_image_overlay_opacity(value: u8) -> u8 {
     value.clamp(1, 100)
+}
+
+fn clamp_memory_assist_max_injected_items(value: u8) -> u8 {
+    value.clamp(1, 20)
 }
 
 pub fn default_true() -> bool {
@@ -422,6 +456,15 @@ where
     Ok(Option::<u8>::deserialize(deserializer)?
         .map(clamp_image_overlay_opacity)
         .unwrap_or_else(default_image_overlay_opacity))
+}
+
+fn deserialize_memory_assist_max_injected_items<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<u8>::deserialize(deserializer)?
+        .map(clamp_memory_assist_max_injected_items)
+        .unwrap_or_else(default_memory_assist_max_injected_items))
 }
 
 fn deserialize_profile_api_key<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -797,6 +840,11 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
     }
     settings.codex_app_image_overlay_opacity =
         clamp_image_overlay_opacity(settings.codex_app_image_overlay_opacity);
+    settings.memory_assist_max_injected_items =
+        clamp_memory_assist_max_injected_items(settings.memory_assist_max_injected_items);
+    if settings.memory_assist_workspace_mode.trim().is_empty() {
+        settings.memory_assist_workspace_mode = default_memory_assist_workspace_mode();
+    }
     settings
 }
 
@@ -906,6 +954,11 @@ mod tests {
         assert!(settings.codex_app_plugin_marketplace_unlock);
         assert!(settings.codex_app_force_plugin_install);
         assert!(!settings.codex_goals_enabled);
+        assert!(settings.memory_assist_enabled);
+        assert!(settings.memory_assist_inject_enabled);
+        assert!(settings.memory_assist_auto_suggest_enabled);
+        assert_eq!(settings.memory_assist_max_injected_items, 5);
+        assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
         assert!(settings.codex_app_path.is_empty());
         assert!(settings.codex_extra_args.is_empty());
         assert_eq!(
@@ -922,6 +975,21 @@ mod tests {
         assert_eq!(settings.relay_test_model, default_relay_test_model());
         assert!(!settings.cli_wrapper_enabled);
         assert_eq!(settings.cli_wrapper_api_key_env, "CUSTOM_OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn legacy_settings_default_memory_assist_fields() {
+        let settings: BackendSettings = serde_json::from_value(json!({
+            "codexAppPath": "C:\\Portable\\Codex\\app",
+            "memoryAssistMaxInjectedItems": 99
+        }))
+        .unwrap();
+
+        assert!(settings.memory_assist_enabled);
+        assert!(settings.memory_assist_inject_enabled);
+        assert!(settings.memory_assist_auto_suggest_enabled);
+        assert_eq!(settings.memory_assist_max_injected_items, 20);
+        assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
     }
 
     #[test]

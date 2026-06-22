@@ -6,6 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use claude_codex_pro_core::install::SILENT_BINARY;
+use claude_codex_pro_core::memory_assist::{
+    MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryExport,
+    MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
+    MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
+};
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
     self, PluginHubCatalog, PluginInstallOutcome, PluginInstallPreview,
@@ -363,6 +368,82 @@ pub struct PluginHubItemRequest {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryAssistStatusPayload {
+    pub memory: MemoryAssistStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistQueryPayload {
+    pub memory: MemoryQueryResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistItemsPayload {
+    pub items: Vec<MemoryItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistItemPayload {
+    pub item: MemoryItem,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistCandidatesPayload {
+    pub candidates: Vec<MemoryCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistCandidatePayload {
+    pub candidate: MemoryCandidate,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistSelfCheckPayload {
+    pub report: MemorySelfCheckResult,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistExportPayload {
+    pub data: MemoryExport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistSessionPayload {
+    pub summary: MemorySessionSummary,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCandidateListRequest {
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default = "default_true")]
+    pub include_global: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryIdRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryIdAndItemRequest {
+    pub id: String,
+    pub item: MemoryItemRequest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartupPayload {
     pub show_update: bool,
 }
@@ -394,6 +475,10 @@ pub fn startup_should_show_update() -> bool {
             .ok()
             .as_deref(),
     )
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn should_show_update<I, S>(args: I, env_value: Option<&str>) -> bool
@@ -1002,6 +1087,373 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
             payload,
         )
     }
+}
+
+#[tauri::command]
+pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
+    match MemoryAssistStore::default().status() {
+        Ok(memory) => ok("记忆辅助状态已加载。", MemoryAssistStatusPayload { memory }),
+        Err(error) => failed(
+            &format!("记忆辅助状态读取失败：{error}"),
+            MemoryAssistStatusPayload {
+                memory: empty_memory_status(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn query_memory_assist(request: MemoryQueryRequest) -> CommandResult<MemoryAssistQueryPayload> {
+    match MemoryAssistStore::default().query(request.clone()) {
+        Ok(memory) => ok("记忆检索完成。", MemoryAssistQueryPayload { memory }),
+        Err(error) => failed(
+            &format!("记忆检索失败：{error}"),
+            MemoryAssistQueryPayload {
+                memory: MemoryQueryResult {
+                    query: request.query,
+                    workspace: request.workspace,
+                    results: Vec::new(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn list_memory_assist_items(
+    request: MemoryQueryRequest,
+) -> CommandResult<MemoryAssistItemsPayload> {
+    match MemoryAssistStore::default().list_items(request) {
+        Ok(items) => ok(
+            &format!("已读取 {} 条记忆。", items.len()),
+            MemoryAssistItemsPayload { items },
+        ),
+        Err(error) => failed(
+            &format!("记忆列表读取失败：{error}"),
+            MemoryAssistItemsPayload { items: Vec::new() },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn learn_memory_assist_item(
+    request: MemoryItemRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().learn_item(request) {
+        Ok(item) => ok("记忆已保存。", MemoryAssistItemPayload { item }),
+        Err(error) => failed(
+            &format!("记忆保存失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn update_memory_assist_item(
+    request: MemoryIdAndItemRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().update_item(&request.id, request.item) {
+        Ok(item) => ok("记忆已更新。", MemoryAssistItemPayload { item }),
+        Err(error) => failed(
+            &format!("记忆更新失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn delete_memory_assist_item(
+    request: MemoryIdRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().delete_item(&request.id) {
+        Ok(item) => ok("记忆已删除。", MemoryAssistItemPayload { item }),
+        Err(error) => failed(
+            &format!("记忆删除失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn create_memory_assist_candidate(
+    request: MemoryCandidateRequest,
+) -> CommandResult<MemoryAssistCandidatePayload> {
+    if !memory_assist_candidate_enabled() {
+        return failed(
+            "Memory assistant auto-suggest is disabled",
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().create_candidate(request) {
+        Ok(candidate) => ok(
+            "待确认记忆已创建。",
+            MemoryAssistCandidatePayload { candidate },
+        ),
+        Err(error) => failed(
+            &format!("待确认记忆创建失败：{error}"),
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn list_memory_assist_candidates(
+    request: MemoryCandidateListRequest,
+) -> CommandResult<MemoryAssistCandidatesPayload> {
+    match MemoryAssistStore::default().list_candidates(&request.workspace, request.include_global) {
+        Ok(candidates) => ok(
+            &format!("已读取 {} 条待确认记忆。", candidates.len()),
+            MemoryAssistCandidatesPayload { candidates },
+        ),
+        Err(error) => failed(
+            &format!("待确认记忆读取失败：{error}"),
+            MemoryAssistCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn approve_memory_assist_candidate(
+    request: MemoryIdRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().approve_candidate(&request.id) {
+        Ok(item) => ok(
+            "待确认记忆已写入长期记忆。",
+            MemoryAssistItemPayload { item },
+        ),
+        Err(error) => failed(
+            &format!("待确认记忆确认失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn reject_memory_assist_candidate(
+    request: MemoryIdRequest,
+) -> CommandResult<MemoryAssistCandidatePayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().reject_candidate(&request.id) {
+        Ok(candidate) => ok(
+            "待确认记忆已忽略。",
+            MemoryAssistCandidatePayload { candidate },
+        ),
+        Err(error) => failed(
+            &format!("待确认记忆忽略失败：{error}"),
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn load_memory_assist_session(
+    request: MemorySessionRequest,
+) -> CommandResult<MemoryAssistSessionPayload> {
+    match MemoryAssistStore::default().session_summary(request) {
+        Ok(summary) => ok(
+            "会话记忆摘要已加载。",
+            MemoryAssistSessionPayload { summary },
+        ),
+        Err(error) => failed(
+            &format!("会话记忆摘要读取失败：{error}"),
+            MemoryAssistSessionPayload {
+                summary: MemorySessionSummary {
+                    workspace: String::new(),
+                    total_items: 0,
+                    pending_candidates: 0,
+                    injected_items: Vec::new(),
+                    summary: String::new(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn run_memory_assist_selfcheck(
+    request: MemorySelfCheckRequest,
+) -> CommandResult<MemoryAssistSelfCheckPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistSelfCheckPayload {
+                report: MemorySelfCheckResult {
+                    status: "failed".to_string(),
+                    repaired: false,
+                    backup_path: None,
+                    checks: Vec::new(),
+                },
+            },
+        );
+    }
+    match MemoryAssistStore::default().run_selfcheck(request) {
+        Ok(report) => ok(
+            "记忆辅助自检完成。",
+            MemoryAssistSelfCheckPayload { report },
+        ),
+        Err(error) => failed(
+            &format!("记忆辅助自检失败：{error}"),
+            MemoryAssistSelfCheckPayload {
+                report: MemorySelfCheckResult {
+                    status: "failed".to_string(),
+                    repaired: false,
+                    backup_path: None,
+                    checks: Vec::new(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
+    match MemoryAssistStore::default().export_json() {
+        Ok(data) => ok("记忆辅助数据已导出。", MemoryAssistExportPayload { data }),
+        Err(error) => failed(
+            &format!("记忆辅助导出失败：{error}"),
+            MemoryAssistExportPayload {
+                data: MemoryExport {
+                    schema_version: "memory-assist/v1".to_string(),
+                    exported_at: 0,
+                    items: Vec::new(),
+                    candidates: Vec::new(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn import_memory_assist(
+    request: MemoryImportRequest,
+) -> CommandResult<MemoryAssistStatusPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "Memory assistant is disabled",
+            MemoryAssistStatusPayload {
+                memory: empty_memory_status(),
+            },
+        );
+    }
+    match MemoryAssistStore::default().import_json(request) {
+        Ok(memory) => ok("记忆辅助数据已导入。", MemoryAssistStatusPayload { memory }),
+        Err(error) => failed(
+            &format!("记忆辅助导入失败：{error}"),
+            MemoryAssistStatusPayload {
+                memory: empty_memory_status(),
+            },
+        ),
+    }
+}
+
+fn empty_memory_status() -> MemoryAssistStatus {
+    MemoryAssistStatus {
+        status: "failed".to_string(),
+        db_path: claude_codex_pro_core::memory_assist::default_memory_assist_db_path()
+            .to_string_lossy()
+            .to_string(),
+        total_items: 0,
+        pending_candidates: 0,
+        workspaces: Vec::new(),
+        latest_backup_path: None,
+    }
+}
+
+fn empty_memory_item() -> MemoryItem {
+    MemoryItem {
+        id: String::new(),
+        text: String::new(),
+        workspace: String::new(),
+        category: String::new(),
+        tags: Vec::new(),
+        source: String::new(),
+        source_session_id: String::new(),
+        created_at: 0,
+        updated_at: 0,
+        last_accessed_at: 0,
+        access_count: 0,
+    }
+}
+
+fn empty_memory_candidate() -> MemoryCandidate {
+    MemoryCandidate {
+        id: String::new(),
+        text: String::new(),
+        workspace: String::new(),
+        category: String::new(),
+        tags: Vec::new(),
+        source: String::new(),
+        reason: String::new(),
+        source_session_id: String::new(),
+        status: "failed".to_string(),
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn memory_assist_write_enabled() -> bool {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    settings.memory_assist_enabled
+}
+
+fn memory_assist_candidate_enabled() -> bool {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    settings.memory_assist_enabled && settings.memory_assist_auto_suggest_enabled
 }
 
 #[tauri::command]
@@ -3882,6 +4334,103 @@ mod tests {
         assert_eq!(result.payload.settings.relay_profiles.len(), 1);
         assert_eq!(result.payload.settings.relay_profiles[0].id, "supplier-a");
         assert_eq!(result.payload.settings.relay_profiles[0].api_key, "sk-test");
+    }
+
+    #[test]
+    fn memory_assist_commands_respect_disabled_settings_before_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings_path = temp.path().join("settings.json");
+        let memory_path = temp.path().join("memory.sqlite");
+        let previous_settings =
+            claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
+        let previous_memory = claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(memory_path));
+
+        let settings = BackendSettings {
+            memory_assist_enabled: false,
+            memory_assist_auto_suggest_enabled: false,
+            ..BackendSettings::default()
+        };
+        SettingsStore::default().save(&settings).unwrap();
+        let loaded = SettingsStore::default().load().unwrap();
+        assert!(!loaded.memory_assist_enabled);
+        assert!(!loaded.memory_assist_auto_suggest_enabled);
+
+        let learned = learn_memory_assist_item(MemoryItemRequest {
+            text: "should not persist".to_string(),
+            workspace: "repo-a".to_string(),
+            category: "manual".to_string(),
+            tags: Vec::new(),
+            source: "manager".to_string(),
+            source_session_id: String::new(),
+        });
+        let candidate = create_memory_assist_candidate(MemoryCandidateRequest {
+            text: "should not become candidate".to_string(),
+            workspace: "repo-a".to_string(),
+            category: "preference".to_string(),
+            tags: Vec::new(),
+            source: "manager".to_string(),
+            reason: "test".to_string(),
+            source_session_id: String::new(),
+        });
+        let status = load_memory_assist_status();
+
+        claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
+        claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
+
+        assert_eq!(learned.status, "failed");
+        assert!(learned.message.contains("disabled"));
+        assert_eq!(candidate.status, "failed");
+        assert!(candidate.message.contains("disabled"));
+        assert_eq!(status.payload.memory.total_items, 0);
+        assert_eq!(status.payload.memory.pending_candidates, 0);
+    }
+
+    #[test]
+    fn memory_assist_candidate_command_respects_auto_suggest_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings_path = temp.path().join("settings.json");
+        let memory_path = temp.path().join("memory.sqlite");
+        let previous_settings =
+            claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
+        let previous_memory = claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(memory_path));
+
+        let settings = BackendSettings {
+            memory_assist_enabled: true,
+            memory_assist_auto_suggest_enabled: false,
+            ..BackendSettings::default()
+        };
+        SettingsStore::default().save(&settings).unwrap();
+        let loaded = SettingsStore::default().load().unwrap();
+        assert!(loaded.memory_assist_enabled);
+        assert!(!loaded.memory_assist_auto_suggest_enabled);
+
+        let learned = learn_memory_assist_item(MemoryItemRequest {
+            text: "manual memory still works".to_string(),
+            workspace: "repo-a".to_string(),
+            category: "manual".to_string(),
+            tags: Vec::new(),
+            source: "manager".to_string(),
+            source_session_id: String::new(),
+        });
+        let candidate = create_memory_assist_candidate(MemoryCandidateRequest {
+            text: "auto suggestion should not persist".to_string(),
+            workspace: "repo-a".to_string(),
+            category: "preference".to_string(),
+            tags: Vec::new(),
+            source: "manager".to_string(),
+            reason: "test".to_string(),
+            source_session_id: String::new(),
+        });
+        let status = load_memory_assist_status();
+
+        claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
+        claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
+
+        assert_eq!(learned.status, "ok");
+        assert_eq!(candidate.status, "failed");
+        assert!(candidate.message.contains("disabled"));
+        assert_eq!(status.payload.memory.total_items, 1);
+        assert_eq!(status.payload.memory.pending_candidates, 0);
     }
 
     #[test]

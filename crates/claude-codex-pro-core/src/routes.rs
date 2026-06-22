@@ -5,6 +5,10 @@ use std::time::Instant;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::memory_assist::{
+    MemoryAssistStore, MemoryCandidateRequest, MemoryItemRequest, MemoryQueryRequest,
+    MemorySelfCheckRequest, MemorySessionRequest,
+};
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -118,6 +122,32 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn upstream_worktree_defaults(&self, payload: Value) -> anyhow::Result<Value>;
     async fn upstream_worktree_prepare(&self, payload: Value) -> anyhow::Result<Value>;
     async fn upstream_worktree_create(&self, payload: Value) -> anyhow::Result<Value>;
+    async fn memory_status(&self) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
+    async fn memory_session(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
+    async fn memory_search(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired", "results": []}))
+    }
+    async fn memory_learn(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
+    async fn memory_candidates(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(
+            json!({"status": "failed", "message": "Memory assistant is not wired", "candidates": []}),
+        )
+    }
+    async fn memory_approve(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
+    async fn memory_reject(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
+    async fn memory_selfcheck(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+    }
 }
 
 #[async_trait]
@@ -236,6 +266,35 @@ pub async fn handle_bridge_request(
             ctx.runtime.upstream_worktree_prepare(payload.clone()).await
         }
         "/upstream-worktree/create" => ctx.runtime.upstream_worktree_create(payload.clone()).await,
+        "/memory/status" => ctx.runtime.memory_status().await,
+        "/memory/session" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_session(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/search" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_search(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/learn" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_learn(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/candidates" => match ensure_memory_candidates_allowed(&ctx, &payload).await {
+            Ok(()) => ctx.runtime.memory_candidates(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/approve" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_approve(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/reject" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_reject(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/selfcheck" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_selfcheck(payload.clone()).await,
+            Err(err) => Err(err),
+        },
         "/delete" => result_value(ctx.data.delete(session_from_payload(&payload)).await),
         "/undo" => {
             let undo_token = payload
@@ -310,6 +369,36 @@ pub async fn handle_bridge_request(
     response
 }
 
+async fn ensure_memory_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
+    let settings = ctx.settings.get_settings().await?;
+    if settings.memory_assist_enabled {
+        Ok(())
+    } else {
+        anyhow::bail!("memory assistant is disabled")
+    }
+}
+
+async fn ensure_memory_candidates_allowed(
+    ctx: &BridgeContext,
+    payload: &Value,
+) -> anyhow::Result<()> {
+    ensure_memory_enabled(ctx).await?;
+    let creates_candidate = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .map(|text| !text.trim().is_empty())
+        .unwrap_or(false);
+    if !creates_candidate {
+        return Ok(());
+    }
+    let settings = ctx.settings.get_settings().await?;
+    if settings.memory_assist_auto_suggest_enabled {
+        Ok(())
+    } else {
+        anyhow::bail!("memory assistant auto-suggest is disabled")
+    }
+}
+
 #[derive(Default)]
 pub struct CoreSettingsService {
     store: SettingsStore,
@@ -360,6 +449,7 @@ pub struct CoreRuntimeService {
     user_script_evaluator: Option<UserScriptEvaluator>,
     devtools_opener: Option<DevtoolsOpener>,
     devtools_target_id: Option<String>,
+    memory_store: MemoryAssistStore,
 }
 
 impl CoreRuntimeService {
@@ -372,6 +462,7 @@ impl CoreRuntimeService {
             user_script_evaluator: None,
             devtools_opener: None,
             devtools_target_id: None,
+            memory_store: MemoryAssistStore::default(),
         }
     }
 
@@ -397,6 +488,11 @@ impl CoreRuntimeService {
 
     pub fn with_devtools_target_id(mut self, target_id: impl Into<String>) -> Self {
         self.devtools_target_id = Some(target_id.into());
+        self
+    }
+
+    pub fn with_memory_store(mut self, memory_store: MemoryAssistStore) -> Self {
+        self.memory_store = memory_store;
         self
     }
 }
@@ -594,6 +690,92 @@ impl BridgeRuntimeService for CoreRuntimeService {
 
     async fn upstream_worktree_create(&self, payload: Value) -> anyhow::Result<Value> {
         Ok(crate::upstream_worktree::create_response(&payload))
+    }
+
+    async fn memory_status(&self) -> anyhow::Result<Value> {
+        let mut value = serde_json::to_value(self.memory_store.status()?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_session(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemorySessionRequest =
+            serde_json::from_value(payload).unwrap_or(MemorySessionRequest {
+                workspace: String::new(),
+                query: String::new(),
+                max_items: 5,
+            });
+        let mut value = serde_json::to_value(self.memory_store.session_summary(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_search(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryQueryRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.query(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_learn(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryItemRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.learn_item(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_candidates(&self, payload: Value) -> anyhow::Result<Value> {
+        if payload
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+        {
+            let request: MemoryCandidateRequest = serde_json::from_value(payload)?;
+            let mut value = serde_json::to_value(self.memory_store.create_candidate(request)?)?;
+            value["status"] = json!("ok");
+            return Ok(value);
+        }
+        let workspace = payload
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let include_global = payload
+            .get("includeGlobal")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        Ok(json!({
+            "status": "ok",
+            "candidates": self.memory_store.list_candidates(workspace, include_global)?
+        }))
+    }
+
+    async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut value = serde_json::to_value(self.memory_store.approve_candidate(id)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_reject(&self, payload: Value) -> anyhow::Result<Value> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut value = serde_json::to_value(self.memory_store.reject_candidate(id)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_selfcheck(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemorySelfCheckRequest =
+            serde_json::from_value(payload).unwrap_or(MemorySelfCheckRequest { repair: false });
+        let mut value = serde_json::to_value(self.memory_store.run_selfcheck(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
     }
 }
 

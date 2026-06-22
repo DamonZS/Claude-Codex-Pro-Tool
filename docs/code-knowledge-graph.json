@@ -1,0 +1,334 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "Claude Codex Pro Tool",
+    "description": "Rust/Tauri + React local operations console for Codex App, Claude Desktop integration, plugin hub, session maintenance, provider configuration, DOM enhancement, and memory assist.",
+    "languages": ["Rust", "TypeScript", "JavaScript", "CSS", "Shell", "NSIS", "Markdown"],
+    "frameworks": ["Tauri 2", "React 19", "Vite", "rusqlite", "tokio"],
+    "analyzedAt": "2026-06-22T11:20:00+08:00",
+    "gitBranch": "codex/memory-assist",
+    "source": "manual-docs-graph"
+  },
+  "nodes": [
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "User-facing product overview, safety boundary, install, build, plugin, Claude, Codex, and troubleshooting documentation.",
+      "tags": ["docs", "product", "build"]
+    },
+    {
+      "id": "config:Cargo.toml",
+      "type": "config",
+      "name": "Cargo workspace",
+      "filePath": "Cargo.toml",
+      "summary": "Rust workspace manifest covering core, data, launcher, and Tauri manager crates.",
+      "tags": ["rust", "workspace", "build"]
+    },
+    {
+      "id": "config:apps/claude-codex-pro-manager/package.json",
+      "type": "config",
+      "name": "Manager package.json",
+      "filePath": "apps/claude-codex-pro-manager/package.json",
+      "summary": "React/Vite/Tauri frontend scripts and dependencies.",
+      "tags": ["frontend", "vite", "tauri"]
+    },
+    {
+      "id": "file:apps/claude-codex-pro-launcher/src/main.rs",
+      "type": "file",
+      "name": "Launcher main",
+      "filePath": "apps/claude-codex-pro-launcher/src/main.rs",
+      "summary": "Silent launcher executable that starts Codex, helper services, diagnostics, and manager entrypoints.",
+      "tags": ["launcher", "codex", "diagnostics"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/launcher.rs",
+      "type": "file",
+      "name": "Core launcher",
+      "filePath": "crates/claude-codex-pro-core/src/launcher.rs",
+      "summary": "Core launch and helper HTTP bridge implementation for Codex integration.",
+      "tags": ["core", "helper", "bridge"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/routes.rs",
+      "type": "file",
+      "name": "Bridge routes",
+      "filePath": "crates/claude-codex-pro-core/src/routes.rs",
+      "summary": "Dispatches renderer bridge paths to settings, runtime, memory, session, Zed, worktree, and diagnostics services.",
+      "tags": ["bridge", "runtime", "memory"]
+    },
+    {
+      "id": "class:crates/claude-codex-pro-core/src/routes.rs:CoreRuntimeService",
+      "type": "class",
+      "name": "CoreRuntimeService",
+      "filePath": "crates/claude-codex-pro-core/src/routes.rs",
+      "summary": "Runtime implementation backing bridge calls for user scripts, Claude Desktop status, plugin/model helpers, worktree, Zed, and memory assist.",
+      "tags": ["runtime", "bridge"]
+    },
+    {
+      "id": "function:crates/claude-codex-pro-core/src/routes.rs:handle_bridge_request",
+      "type": "function",
+      "name": "handle_bridge_request",
+      "filePath": "crates/claude-codex-pro-core/src/routes.rs",
+      "summary": "Central bridge router called by injected renderer scripts.",
+      "tags": ["bridge", "router"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/memory_assist.rs",
+      "type": "file",
+      "name": "Memory assist",
+      "filePath": "crates/claude-codex-pro-core/src/memory_assist.rs",
+      "summary": "SQLite-backed local memory store with items, candidates, events, backups, query, import/export, and selfcheck.",
+      "tags": ["memory", "sqlite", "privacy"]
+    },
+    {
+      "id": "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore",
+      "type": "class",
+      "name": "MemoryAssistStore",
+      "filePath": "crates/claude-codex-pro-core/src/memory_assist.rs",
+      "summary": "Primary API for memory learning, querying, candidate approval/rejection, export/import, selfcheck, and backup.",
+      "tags": ["memory", "api", "sqlite"]
+    },
+    {
+      "id": "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_items",
+      "type": "table",
+      "name": "memory_items",
+      "filePath": "crates/claude-codex-pro-core/src/memory_assist.rs",
+      "summary": "Long-term memory records scoped by workspace with category, tags, source, timestamps, access count, and keywords.",
+      "tags": ["sqlite", "memory"]
+    },
+    {
+      "id": "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_candidates",
+      "type": "table",
+      "name": "memory_candidates",
+      "filePath": "crates/claude-codex-pro-core/src/memory_assist.rs",
+      "summary": "Pending, approved, or rejected candidate memories created by automatic suggestions or user review.",
+      "tags": ["sqlite", "candidate"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/settings.rs",
+      "type": "file",
+      "name": "Settings",
+      "filePath": "crates/claude-codex-pro-core/src/settings.rs",
+      "summary": "Backend settings schema and defaults including memory assist switches and provider configuration.",
+      "tags": ["settings", "schema"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/plugin_hub.rs",
+      "type": "file",
+      "name": "Plugin hub",
+      "filePath": "crates/claude-codex-pro-core/src/plugin_hub.rs",
+      "summary": "Plugin catalog model, source adapters, install preview, install execution, and installed record storage.",
+      "tags": ["plugin", "mcp", "claude"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-core/src/relay_config.rs",
+      "type": "file",
+      "name": "Relay config",
+      "filePath": "crates/claude-codex-pro-core/src/relay_config.rs",
+      "summary": "Codex provider/auth/config TOML and JSON management for API relay profiles.",
+      "tags": ["provider", "config", "codex"]
+    },
+    {
+      "id": "file:crates/claude-codex-pro-data/src/storage.rs",
+      "type": "file",
+      "name": "Codex storage adapter",
+      "filePath": "crates/claude-codex-pro-data/src/storage.rs",
+      "summary": "Reads and manipulates local Codex session storage.",
+      "tags": ["data", "sqlite", "sessions"]
+    },
+    {
+      "id": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs",
+      "type": "file",
+      "name": "Tauri commands",
+      "filePath": "apps/claude-codex-pro-manager/src-tauri/src/commands.rs",
+      "summary": "Tauri command surface for overview, Claude, settings, relay, plugin hub, memory assist, scripts, logs, watcher, and install maintenance.",
+      "tags": ["tauri", "commands", "manager"]
+    },
+    {
+      "id": "file:apps/claude-codex-pro-manager/src-tauri/src/lib.rs",
+      "type": "file",
+      "name": "Tauri app lib",
+      "filePath": "apps/claude-codex-pro-manager/src-tauri/src/lib.rs",
+      "summary": "Registers Tauri commands, tray behavior, single window handling, and startup diagnostics.",
+      "tags": ["tauri", "entrypoint"]
+    },
+    {
+      "id": "file:apps/claude-codex-pro-manager/src/App.tsx",
+      "type": "file",
+      "name": "Manager React app",
+      "filePath": "apps/claude-codex-pro-manager/src/App.tsx",
+      "summary": "Operations console UI with route state, status refresh, Claude/Codex actions, plugin center, memory assist, sessions, settings, and logs.",
+      "tags": ["react", "ui", "manager"]
+    },
+    {
+      "id": "file:apps/claude-codex-pro-manager/src/tauriBridge.ts",
+      "type": "file",
+      "name": "Tauri bridge",
+      "filePath": "apps/claude-codex-pro-manager/src/tauriBridge.ts",
+      "summary": "Frontend invoke wrapper used by App.tsx to call Tauri commands.",
+      "tags": ["frontend", "bridge"]
+    },
+    {
+      "id": "file:assets/inject/renderer-inject.js",
+      "type": "file",
+      "name": "Codex renderer injection",
+      "filePath": "assets/inject/renderer-inject.js",
+      "summary": "Injected browser script adding Codex UI controls, session tools, plugin unlocks, Zed, service tier, timeline, and memory assist panel.",
+      "tags": ["dom", "injection", "codex", "memory"]
+    },
+    {
+      "id": "file:assets/inject/claude-chinese-inject.js",
+      "type": "file",
+      "name": "Claude Chinese injection",
+      "filePath": "assets/inject/claude-chinese-inject.js",
+      "summary": "Wrapped Claude WebView script that translates visible text and attributes, adds status pill, and links to plugin hub.",
+      "tags": ["dom", "claude", "translation"]
+    },
+    {
+      "id": "pipeline:.github/workflows/release-assets.yml",
+      "type": "pipeline",
+      "name": "Release assets workflow",
+      "filePath": ".github/workflows/release-assets.yml",
+      "summary": "Builds distributable Windows and macOS artifacts.",
+      "tags": ["ci", "release"]
+    },
+    {
+      "id": "pipeline:scripts/installer/windows/ClaudeCodexPro.nsi",
+      "type": "pipeline",
+      "name": "Windows NSIS installer",
+      "filePath": "scripts/installer/windows/ClaudeCodexPro.nsi",
+      "summary": "Windows installer definition for launcher and manager apps.",
+      "tags": ["installer", "windows"]
+    }
+  ],
+  "edges": [
+    { "source": "config:Cargo.toml", "target": "file:crates/claude-codex-pro-core/src/memory_assist.rs", "type": "configures", "direction": "out", "weight": 0.6 },
+    { "source": "config:apps/claude-codex-pro-manager/package.json", "target": "file:apps/claude-codex-pro-manager/src/App.tsx", "type": "configures", "direction": "out", "weight": 0.6 },
+    { "source": "file:apps/claude-codex-pro-launcher/src/main.rs", "target": "file:crates/claude-codex-pro-core/src/launcher.rs", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:crates/claude-codex-pro-core/src/launcher.rs", "target": "file:assets/inject/renderer-inject.js", "type": "deploys", "direction": "out", "weight": 0.7 },
+    { "source": "file:assets/inject/renderer-inject.js", "target": "function:crates/claude-codex-pro-core/src/routes.rs:handle_bridge_request", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "function:crates/claude-codex-pro-core/src/routes.rs:handle_bridge_request", "target": "class:crates/claude-codex-pro-core/src/routes.rs:CoreRuntimeService", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "class:crates/claude-codex-pro-core/src/routes.rs:CoreRuntimeService", "target": "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore", "type": "depends_on", "direction": "out", "weight": 0.6 },
+    { "source": "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore", "target": "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_items", "type": "writes_to", "direction": "out", "weight": 0.8 },
+    { "source": "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore", "target": "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_candidates", "type": "writes_to", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src/App.tsx", "target": "file:apps/claude-codex-pro-manager/src/tauriBridge.ts", "type": "imports", "direction": "out", "weight": 0.7 },
+    { "source": "file:apps/claude-codex-pro-manager/src/tauriBridge.ts", "target": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src-tauri/src/lib.rs", "target": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "type": "configures", "direction": "out", "weight": 0.6 },
+    { "source": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "target": "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "target": "file:crates/claude-codex-pro-core/src/plugin_hub.rs", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "target": "file:crates/claude-codex-pro-core/src/relay_config.rs", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "target": "file:assets/inject/claude-chinese-inject.js", "type": "deploys", "direction": "out", "weight": 0.7 },
+    { "source": "file:assets/inject/claude-chinese-inject.js", "target": "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs", "type": "calls", "direction": "out", "weight": 0.8 },
+    { "source": "file:apps/claude-codex-pro-manager/src/App.tsx", "target": "file:crates/claude-codex-pro-data/src/storage.rs", "type": "related", "direction": "out", "weight": 0.5 },
+    { "source": "file:crates/claude-codex-pro-core/src/settings.rs", "target": "file:assets/inject/renderer-inject.js", "type": "configures", "direction": "out", "weight": 0.6 },
+    { "source": "pipeline:.github/workflows/release-assets.yml", "target": "pipeline:scripts/installer/windows/ClaudeCodexPro.nsi", "type": "triggers", "direction": "out", "weight": 0.6 },
+    { "source": "document:README.md", "target": "config:Cargo.toml", "type": "documents", "direction": "out", "weight": 0.5 },
+    { "source": "document:README.md", "target": "config:apps/claude-codex-pro-manager/package.json", "type": "documents", "direction": "out", "weight": 0.5 }
+  ],
+  "layers": [
+    {
+      "id": "layer:launch-and-injection",
+      "name": "Launch And Injection",
+      "description": "Codex launcher, helper bridge, CDP injection, and browser-side enhancements.",
+      "nodeIds": [
+        "file:apps/claude-codex-pro-launcher/src/main.rs",
+        "file:crates/claude-codex-pro-core/src/launcher.rs",
+        "file:assets/inject/renderer-inject.js",
+        "file:assets/inject/claude-chinese-inject.js"
+      ]
+    },
+    {
+      "id": "layer:core-domain",
+      "name": "Core Domain",
+      "description": "Rust core modules that implement settings, bridge routes, plugin hub, relay configuration, memory assist, and integrations.",
+      "nodeIds": [
+        "file:crates/claude-codex-pro-core/src/routes.rs",
+        "class:crates/claude-codex-pro-core/src/routes.rs:CoreRuntimeService",
+        "function:crates/claude-codex-pro-core/src/routes.rs:handle_bridge_request",
+        "file:crates/claude-codex-pro-core/src/memory_assist.rs",
+        "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore",
+        "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_items",
+        "table:crates/claude-codex-pro-core/src/memory_assist.rs:memory_candidates",
+        "file:crates/claude-codex-pro-core/src/settings.rs",
+        "file:crates/claude-codex-pro-core/src/plugin_hub.rs",
+        "file:crates/claude-codex-pro-core/src/relay_config.rs"
+      ]
+    },
+    {
+      "id": "layer:data-maintenance",
+      "name": "Data Maintenance",
+      "description": "Codex local session storage, backup, markdown export, and provider sync.",
+      "nodeIds": [
+        "file:crates/claude-codex-pro-data/src/storage.rs"
+      ]
+    },
+    {
+      "id": "layer:manager-app",
+      "name": "Manager App",
+      "description": "Tauri command surface and React operations console.",
+      "nodeIds": [
+        "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs",
+        "file:apps/claude-codex-pro-manager/src-tauri/src/lib.rs",
+        "file:apps/claude-codex-pro-manager/src/App.tsx",
+        "file:apps/claude-codex-pro-manager/src/tauriBridge.ts"
+      ]
+    },
+    {
+      "id": "layer:build-and-release",
+      "name": "Build And Release",
+      "description": "Workspace manifests, package scripts, CI workflows, and installers.",
+      "nodeIds": [
+        "config:Cargo.toml",
+        "config:apps/claude-codex-pro-manager/package.json",
+        "pipeline:.github/workflows/release-assets.yml",
+        "pipeline:scripts/installer/windows/ClaudeCodexPro.nsi",
+        "document:README.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "Product And Build Boundary",
+      "description": "Start from README and manifests to understand what the tool promises and how it is built.",
+      "nodeIds": ["document:README.md", "config:Cargo.toml", "config:apps/claude-codex-pro-manager/package.json"]
+    },
+    {
+      "order": 2,
+      "title": "Codex Launch Flow",
+      "description": "Follow launcher startup into core helper and injected renderer script.",
+      "nodeIds": ["file:apps/claude-codex-pro-launcher/src/main.rs", "file:crates/claude-codex-pro-core/src/launcher.rs", "file:assets/inject/renderer-inject.js"]
+    },
+    {
+      "order": 3,
+      "title": "Bridge Runtime",
+      "description": "Understand how injected scripts reach Rust capabilities through handle_bridge_request and CoreRuntimeService.",
+      "nodeIds": ["function:crates/claude-codex-pro-core/src/routes.rs:handle_bridge_request", "class:crates/claude-codex-pro-core/src/routes.rs:CoreRuntimeService"]
+    },
+    {
+      "order": 4,
+      "title": "Manager Command Surface",
+      "description": "Trace React invoke calls into Tauri commands and then into core modules.",
+      "nodeIds": ["file:apps/claude-codex-pro-manager/src/App.tsx", "file:apps/claude-codex-pro-manager/src/tauriBridge.ts", "file:apps/claude-codex-pro-manager/src-tauri/src/commands.rs"]
+    },
+    {
+      "order": 5,
+      "title": "Memory Assist",
+      "description": "Review the new SQLite memory store, bridge routes, DOM panel, and manager UI.",
+      "nodeIds": ["file:crates/claude-codex-pro-core/src/memory_assist.rs", "class:crates/claude-codex-pro-core/src/memory_assist.rs:MemoryAssistStore", "file:assets/inject/renderer-inject.js", "file:apps/claude-codex-pro-manager/src/App.tsx"]
+    },
+    {
+      "order": 6,
+      "title": "Plugin And Claude Paths",
+      "description": "Separate plugin hub, Claude wrapped WebView, and provider configuration responsibilities.",
+      "nodeIds": ["file:crates/claude-codex-pro-core/src/plugin_hub.rs", "file:assets/inject/claude-chinese-inject.js", "file:crates/claude-codex-pro-core/src/relay_config.rs"]
+    }
+  ],
+  "reviewNotes": [
+    "This is a manual documentation graph, not a full understand-anything generated dashboard graph.",
+    "CodeGraph MCP was unavailable because .codegraph/ was not initialized.",
+    "The graph focuses on architecture-level nodes and the current memory-assist change set."
+  ]
+}
