@@ -611,6 +611,42 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       },
     });
   }
+  if (command === "load_claude_desktop_dev_mode_status") {
+    return ok("预览模式 Claude Desktop 开发模式未配置。", {
+      devModeStatus: {
+        supported: true,
+        configured: false,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: null,
+        message: "预览模式不会写入 Claude Desktop 配置。",
+      },
+    });
+  }
+  if (command === "configure_claude_desktop_dev_mode") {
+    return ok("预览模式已模拟配置 Claude Desktop 开发模式。", {
+      outcome: {
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        backupPaths: [],
+        message: "预览模式不会写入 Claude Desktop 配置。",
+      },
+      devModeStatus: {
+        supported: true,
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: "00000000-0000-4000-8000-000000157210",
+        message: "预览模式：开发模式已模拟配置。",
+      },
+    });
+  }
   if (command === "open_ponytail_claude_desktop_marketplace_setup") {
     return ok("预览模式不会打开 Claude Desktop 深链。", {
       outcome: {

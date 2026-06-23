@@ -111,6 +111,8 @@ pub fn run() {
             commands::generate_ponytail_mcpb_installer,
             commands::load_claude_desktop_org_plugin_status,
             commands::load_claude_desktop_marketplace_status,
+            commands::load_claude_desktop_dev_mode_status,
+            commands::configure_claude_desktop_dev_mode,
             commands::open_ponytail_claude_desktop_marketplace_setup,
             commands::open_claude_desktop_org_plugins_dir,
             commands::install_ponytail_claude_desktop_org_plugin,

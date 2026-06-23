@@ -493,6 +493,31 @@ type ClaudeDesktopMarketplaceOpenResult = CommandResult<{
   marketplaceStatus: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"];
 }>;
 
+type ClaudeDesktopDevModeStatusResult = CommandResult<{
+  devModeStatus: {
+    supported: boolean;
+    configured: boolean;
+    normalConfigPath: string;
+    threepConfigPath: string;
+    configLibraryDir: string;
+    profileMetaPath: string;
+    appliedId: string | null;
+    message: string;
+  };
+}>;
+
+type ClaudeDesktopDevModeConfigureResult = CommandResult<{
+  outcome: {
+    configured: boolean;
+    normalConfigPath: string;
+    threepConfigPath: string;
+    profileMetaPath: string;
+    backupPaths: string[];
+    message: string;
+  };
+  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
+}>;
+
 type LogsResult = CommandResult<{
   path: string;
   text: string;
@@ -574,6 +599,7 @@ export function App() {
   const [codexHookTrust, setCodexHookTrust] = useState<CodexHookTrustResult | null>(null);
   const [claudeDesktopOrgPlugin, setClaudeDesktopOrgPlugin] = useState<ClaudeDesktopOrgPluginStatusResult | null>(null);
   const [claudeDesktopMarketplace, setClaudeDesktopMarketplace] = useState<ClaudeDesktopMarketplaceStatusResult | null>(null);
+  const [claudeDesktopDevMode, setClaudeDesktopDevMode] = useState<ClaudeDesktopDevModeStatusResult | null>(null);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
@@ -664,6 +690,15 @@ export function App() {
     if (result) {
       setClaudeDesktopMarketplace(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeDesktopDevMode = async (silent = false) => {
+    const result = await run(() => call<ClaudeDesktopDevModeStatusResult>("load_claude_desktop_dev_mode_status"), "Claude Desktop 开发模式");
+    if (result) {
+      setClaudeDesktopDevMode(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 开发模式", message: result.message, status: result.status });
     }
     return result;
   };
@@ -863,6 +898,19 @@ export function App() {
         marketplaceStatus: result.marketplaceStatus,
       });
       notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message || result.outcome.message, status: result.status });
+    }
+  };
+
+  const configureClaudeDesktopDevMode = async () => {
+    const result = await run(() => call<ClaudeDesktopDevModeConfigureResult>("configure_claude_desktop_dev_mode"), "Claude Desktop 开发模式");
+    if (result) {
+      setClaudeDesktopDevMode({
+        status: result.status,
+        message: result.message,
+        devModeStatus: result.devModeStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude Desktop 开发模式", message: result.message || result.outcome.message, status: result.status });
+      await refreshClaudeDesktopOrgPlugin(true);
     }
   };
 
@@ -1109,6 +1157,7 @@ export function App() {
         refreshPluginHub(true),
         refreshClaudeDesktopOrgPlugin(true),
         refreshClaudeDesktopMarketplace(true),
+        refreshClaudeDesktopDevMode(true),
         refreshSettings(true),
         refreshOverview(true),
         refreshClaude(true),
@@ -1145,6 +1194,7 @@ export function App() {
         refreshPluginHub(true),
         refreshClaudeDesktopOrgPlugin(true),
         refreshClaudeDesktopMarketplace(true),
+        refreshClaudeDesktopDevMode(true),
         refreshWatcher(true),
         refreshLocalSessions(true),
         refreshMemoryAssist(true),
@@ -1182,10 +1232,12 @@ export function App() {
       installPonytailClaudeDesktopOrgPlugin,
       openClaudeDesktopOrgPluginsDir,
       openPonytailClaudeDesktopMarketplaceSetup,
+      configureClaudeDesktopDevMode,
       installMarketScript,
       refreshPluginHub,
       refreshClaudeDesktopOrgPlugin,
       refreshClaudeDesktopMarketplace,
+      refreshClaudeDesktopDevMode,
       refreshScripts,
       repairEntrypoints,
       repairBackend,
@@ -1303,6 +1355,7 @@ export function App() {
               actions={actions}
               claudeChinese={claudeChinese}
               claudeDesktop={claudeDesktop}
+              claudeDesktopDevMode={claudeDesktopDevMode}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
               claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
               hub={pluginHub}
@@ -1462,6 +1515,7 @@ function ToolsAndPluginsScreen({
   actions,
   claudeChinese,
   claudeDesktop,
+  claudeDesktopDevMode,
   claudeDesktopMarketplace,
   claudeDesktopOrgPlugin,
   hub,
@@ -1481,6 +1535,7 @@ function ToolsAndPluginsScreen({
   actions: ReturnType<typeof createActionsShape>;
   claudeChinese: ClaudeChineseWindowResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
+  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
   claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
   hub: PluginHubResult | null;
@@ -1556,6 +1611,7 @@ function ToolsAndPluginsScreen({
           <PluginHubScreen
             actions={actions}
             hub={hub}
+            devMode={claudeDesktopDevMode}
             marketplace={claudeDesktopMarketplace}
             orgPlugin={claudeDesktopOrgPlugin}
             preview={preview}
@@ -1789,12 +1845,14 @@ function MemoryAssistPanel({
 
 function PluginHubScreen({
   actions,
+  devMode,
   hub,
   preview,
   orgPlugin,
   marketplace,
 }: {
   actions: ReturnType<typeof createActionsShape>;
+  devMode: ClaudeDesktopDevModeStatusResult | null;
   hub: PluginHubResult | null;
   preview: PluginInstallPreviewResult | null;
   orgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
@@ -1819,7 +1877,7 @@ function PluginHubScreen({
   const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "Install";
   return (
     <div className="stack">
-      <ClaudeDesktopOrgPluginPanel actions={actions} marketplace={marketplace} status={orgPlugin} />
+      <ClaudeDesktopOrgPluginPanel actions={actions} devMode={devMode} marketplace={marketplace} status={orgPlugin} />
       <div className="plugin-layout">
       <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
         <div className="filter-row">
@@ -1944,18 +2002,22 @@ function PluginHubScreen({
 
 function ClaudeDesktopOrgPluginPanel({
   actions,
+  devMode,
   marketplace,
   status,
 }: {
   actions: ReturnType<typeof createActionsShape>;
+  devMode: ClaudeDesktopDevModeStatusResult | null;
   marketplace: ClaudeDesktopMarketplaceStatusResult | null;
   status: ClaudeDesktopOrgPluginStatusResult | null;
 }) {
   const orgStatus = status?.orgPluginStatus;
   const marketStatus = marketplace?.marketplaceStatus;
+  const devStatus = devMode?.devModeStatus;
   return (
     <Panel title="Claude Desktop 插件" detail="官方插件仓库入口、组织插件目录和 Ponytail 安装分开处理。">
       <div className="info-grid compact">
+        <InfoRow label="开发模式" value={devStatus?.configured ? "已配置" : "未配置"} />
         <InfoRow label="官方仓库" value={marketStatus?.marketplace ?? "DietrichGebert/ponytail"} />
         <InfoRow label="自动写入" value={marketStatus?.canAutoWrite ? "支持" : "不支持，需要 Claude 确认"} />
         <InfoRow label="组织目录" value={compactPath(orgStatus?.orgPluginsDir)} />
@@ -1963,14 +2025,27 @@ function ClaudeDesktopOrgPluginPanel({
         <InfoRow label="目录可写" value={orgStatus?.writable ? "是" : "否"} />
       </div>
       <div className="risk-box">
+        {devStatus?.message ?? "Claude Desktop 开发模式会写入本机 deploymentMode=3p 和 Claude-3p 配置库。"}
+        {" "}
         {marketStatus?.message ?? "Claude Desktop 官方插件仓库配置需要打开 Claude 自己的确认页。"}
         {" "}
         {orgStatus?.message ?? "正在检测 Claude Desktop 组织插件目录。"}
       </div>
       <div className="action-row">
-        <Button onClick={() => void actions.refreshClaudeDesktopOrgPlugin()} variant="outline">
+        <Button
+          onClick={() => {
+            void actions.refreshClaudeDesktopDevMode();
+            void actions.refreshClaudeDesktopMarketplace();
+            void actions.refreshClaudeDesktopOrgPlugin();
+          }}
+          variant="outline"
+        >
           <RefreshCw className="h-4 w-4" />
           刷新状态
+        </Button>
+        <Button onClick={() => void actions.configureClaudeDesktopDevMode()}>
+          <Wrench className="h-4 w-4" />
+          一键开发模式
         </Button>
         <Button onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()}>
           <ExternalLink className="h-4 w-4" />
@@ -2575,10 +2650,12 @@ function createActionsShape() {
     installPonytailClaudeDesktopOrgPlugin: async () => {},
     openClaudeDesktopOrgPluginsDir: async () => {},
     openPonytailClaudeDesktopMarketplaceSetup: async () => {},
+    configureClaudeDesktopDevMode: async () => {},
     installMarketScript: async (_id: string) => {},
     refreshPluginHub: async () => null as PluginHubResult | null,
     refreshClaudeDesktopOrgPlugin: async () => null as ClaudeDesktopOrgPluginStatusResult | null,
     refreshClaudeDesktopMarketplace: async () => null as ClaudeDesktopMarketplaceStatusResult | null,
+    refreshClaudeDesktopDevMode: async () => null as ClaudeDesktopDevModeStatusResult | null,
     refreshScripts: async () => null as ScriptMarketResult | null,
     repairEntrypoints: async () => {},
     repairBackend: async () => {},

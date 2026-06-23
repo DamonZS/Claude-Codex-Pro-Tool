@@ -13,9 +13,10 @@ use claude_codex_pro_core::memory_assist::{
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
-    self, ClaudeDesktopMarketplaceOutcome, ClaudeDesktopMarketplaceStatus,
-    ClaudeDesktopOrgPluginOutcome, ClaudeDesktopOrgPluginStatus, CodexHookTrustPreview,
-    McpbPackageOutcome, PluginHubCatalog, PluginInstallOutcome, PluginInstallPreview,
+    self, ClaudeDesktopDevModeOutcome, ClaudeDesktopDevModeStatus, ClaudeDesktopMarketplaceOutcome,
+    ClaudeDesktopMarketplaceStatus, ClaudeDesktopOrgPluginOutcome, ClaudeDesktopOrgPluginStatus,
+    CodexHookTrustPreview, McpbPackageOutcome, PluginHubCatalog, PluginInstallOutcome,
+    PluginInstallPreview,
 };
 use claude_codex_pro_core::script_market::{self, MarketScript, ScriptMarketManifest};
 use claude_codex_pro_core::settings::{BackendSettings, RelayProfile, SettingsStore};
@@ -2206,6 +2207,19 @@ pub struct ClaudeDesktopMarketplaceOpenPayload {
     pub marketplace_status: ClaudeDesktopMarketplaceStatus,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopDevModePayload {
+    #[serde(rename = "devModeStatus")]
+    pub dev_mode_status: ClaudeDesktopDevModeStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopDevModeConfigurePayload {
+    pub outcome: ClaudeDesktopDevModeOutcome,
+    #[serde(rename = "devModeStatus")]
+    pub dev_mode_status: ClaudeDesktopDevModeStatus,
+}
+
 #[tauri::command]
 pub fn load_claude_desktop_org_plugin_status() -> CommandResult<ClaudeDesktopOrgPluginPayload> {
     let status = plugin_hub::load_claude_desktop_org_plugin_status();
@@ -2226,6 +2240,47 @@ pub fn load_claude_desktop_marketplace_status() -> CommandResult<ClaudeDesktopMa
             marketplace_status: status,
         },
     )
+}
+
+#[tauri::command]
+pub fn load_claude_desktop_dev_mode_status() -> CommandResult<ClaudeDesktopDevModePayload> {
+    let status = plugin_hub::load_claude_desktop_dev_mode_status();
+    ok(
+        &status.message.clone(),
+        ClaudeDesktopDevModePayload {
+            dev_mode_status: status,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn configure_claude_desktop_dev_mode() -> CommandResult<ClaudeDesktopDevModeConfigurePayload> {
+    match plugin_hub::configure_claude_desktop_dev_mode() {
+        Ok(outcome) => {
+            let status = plugin_hub::load_claude_desktop_dev_mode_status();
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopDevModeConfigurePayload {
+                    outcome,
+                    dev_mode_status: status,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("Configure Claude Desktop development mode failed: {error}"),
+            ClaudeDesktopDevModeConfigurePayload {
+                outcome: ClaudeDesktopDevModeOutcome {
+                    configured: false,
+                    normal_config_path: String::new(),
+                    threep_config_path: String::new(),
+                    profile_meta_path: String::new(),
+                    backup_paths: Vec::new(),
+                    message: error.to_string(),
+                },
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+            },
+        ),
+    }
 }
 
 #[tauri::command]

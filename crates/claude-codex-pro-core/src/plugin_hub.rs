@@ -21,6 +21,8 @@ const PONYTAIL_CODEX_HOOKS_RELATIVE_PATH: &str = "hooks/claude-codex-hooks.json"
 const PONYTAIL_CLAUDE_DESKTOP_ORG_ID: &str = "ponytail:claude-desktop-org-plugin";
 const PONYTAIL_ORG_PLUGIN_DIR_NAME: &str = "ponytail";
 const PONYTAIL_CLAUDE_DESKTOP_MARKETPLACE_DEEP_LINK: &str = "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail";
+const CLAUDE_DESKTOP_DEV_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
+const CLAUDE_DESKTOP_DEV_PROFILE_NAME: &str = "Claude Codex Pro";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,6 +201,30 @@ pub struct ClaudeDesktopMarketplaceStatus {
 pub struct ClaudeDesktopMarketplaceOutcome {
     pub opened: bool,
     pub deep_link: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopDevModeStatus {
+    pub supported: bool,
+    pub configured: bool,
+    pub normal_config_path: String,
+    pub threep_config_path: String,
+    pub config_library_dir: String,
+    pub profile_meta_path: String,
+    pub applied_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopDevModeOutcome {
+    pub configured: bool,
+    pub normal_config_path: String,
+    pub threep_config_path: String,
+    pub profile_meta_path: String,
+    pub backup_paths: Vec<String>,
     pub message: String,
 }
 
@@ -1929,6 +1955,83 @@ pub fn open_ponytail_claude_desktop_marketplace_setup()
     })
 }
 
+pub fn load_claude_desktop_dev_mode_status() -> ClaudeDesktopDevModeStatus {
+    let normal_config_path = claude_desktop_config_path();
+    let threep_config_path = claude_desktop_threep_config_path();
+    let config_library_dir = claude_desktop_threep_config_library_dir();
+    let profile_meta_path = config_library_dir.join("_meta.json");
+    let supported = matches!(
+        current_platform(),
+        DesktopPlatform::Windows | DesktopPlatform::Macos
+    );
+    let normal_mode = read_deployment_mode(&normal_config_path);
+    let threep_mode = read_deployment_mode(&threep_config_path);
+    let applied_id = read_claude_desktop_meta_applied_id(&profile_meta_path);
+    let configured = normal_mode.as_deref() == Some("3p")
+        && threep_mode.as_deref() == Some("3p")
+        && applied_id.as_deref() == Some(CLAUDE_DESKTOP_DEV_PROFILE_ID);
+    let message = if !supported {
+        "Claude Desktop development mode config is currently supported on Windows and macOS."
+            .to_string()
+    } else if configured {
+        "Claude Desktop development mode is configured. Restart Claude Desktop to reload plugin and config state.".to_string()
+    } else {
+        "Claude Desktop development mode is not fully configured. The one-click action writes deploymentMode=3p and initializes Claude-3p/configLibrary metadata.".to_string()
+    };
+
+    ClaudeDesktopDevModeStatus {
+        supported,
+        configured,
+        normal_config_path: normal_config_path.to_string_lossy().to_string(),
+        threep_config_path: threep_config_path.to_string_lossy().to_string(),
+        config_library_dir: config_library_dir.to_string_lossy().to_string(),
+        profile_meta_path: profile_meta_path.to_string_lossy().to_string(),
+        applied_id,
+        message,
+    }
+}
+
+pub fn configure_claude_desktop_dev_mode() -> anyhow::Result<ClaudeDesktopDevModeOutcome> {
+    let status = load_claude_desktop_dev_mode_status();
+    if !status.supported {
+        anyhow::bail!("{}", status.message);
+    }
+
+    let normal_config_path = PathBuf::from(&status.normal_config_path);
+    let threep_config_path = PathBuf::from(&status.threep_config_path);
+    let profile_meta_path = PathBuf::from(&status.profile_meta_path);
+    let mut backup_paths = Vec::new();
+    if let Some(path) = backup_claude_desktop_config(&normal_config_path)? {
+        backup_paths.push(path);
+    }
+    if normal_config_path != threep_config_path {
+        if let Some(path) = backup_claude_desktop_config(&threep_config_path)? {
+            backup_paths.push(path);
+        }
+    }
+    if let Some(path) = backup_claude_desktop_config(&profile_meta_path)? {
+        backup_paths.push(path);
+    }
+
+    write_claude_desktop_deployment_mode(&normal_config_path, "3p")?;
+    write_claude_desktop_deployment_mode(&threep_config_path, "3p")?;
+    write_claude_desktop_dev_mode_meta(&profile_meta_path)?;
+
+    let next = load_claude_desktop_dev_mode_status();
+    Ok(ClaudeDesktopDevModeOutcome {
+        configured: next.configured,
+        normal_config_path: next.normal_config_path,
+        threep_config_path: next.threep_config_path,
+        profile_meta_path: next.profile_meta_path,
+        backup_paths,
+        message: if next.configured {
+            "Claude Desktop development mode configured. Restart Claude Desktop before installing or refreshing organization plugins.".to_string()
+        } else {
+            "Claude Desktop development mode files were written, but status verification did not observe the expected 3p metadata.".to_string()
+        },
+    })
+}
+
 pub fn open_claude_desktop_org_plugins_dir() -> anyhow::Result<ClaudeDesktopOrgPluginStatus> {
     let status = load_claude_desktop_org_plugin_status();
     let path = PathBuf::from(&status.org_plugins_dir);
@@ -2359,6 +2462,14 @@ fn claude_desktop_config_path() -> PathBuf {
     )
 }
 
+fn claude_desktop_threep_config_path() -> PathBuf {
+    claude_desktop_threep_config_path_for_platform(
+        current_platform(),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()),
+    )
+}
+
 fn claude_desktop_org_plugins_dir() -> PathBuf {
     claude_desktop_org_plugins_dir_for_platform(
         current_platform(),
@@ -2394,7 +2505,25 @@ fn claude_desktop_threep_config_library_dir() -> PathBuf {
     )
 }
 
+fn claude_desktop_threep_config_path_for_platform(
+    platform: DesktopPlatform,
+    local_appdata: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    claude_desktop_threep_config_root_for_platform(platform, local_appdata, home)
+        .join("claude_desktop_config.json")
+}
+
 fn claude_desktop_threep_config_library_dir_for_platform(
+    platform: DesktopPlatform,
+    local_appdata: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    claude_desktop_threep_config_root_for_platform(platform, local_appdata, home)
+        .join("configLibrary")
+}
+
+fn claude_desktop_threep_config_root_for_platform(
     platform: DesktopPlatform,
     local_appdata: Option<PathBuf>,
     home: Option<PathBuf>,
@@ -2402,19 +2531,16 @@ fn claude_desktop_threep_config_library_dir_for_platform(
     match platform {
         DesktopPlatform::Windows => local_appdata
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("Claude-3p")
-            .join("configLibrary"),
+            .join("Claude-3p"),
         DesktopPlatform::Macos => home
             .unwrap_or_else(|| PathBuf::from("."))
             .join("Library")
             .join("Application Support")
-            .join("Claude-3p")
-            .join("configLibrary"),
+            .join("Claude-3p"),
         DesktopPlatform::Other => home
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".config")
-            .join("Claude-3p")
-            .join("configLibrary"),
+            .join("Claude-3p"),
     }
 }
 
@@ -2462,6 +2588,71 @@ fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>
     let backup_path = path.with_extension("json.bak");
     std::fs::copy(path, &backup_path)?;
     Ok(Some(backup_path.to_string_lossy().to_string()))
+}
+
+fn read_deployment_mode(path: &Path) -> Option<String> {
+    let raw: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    raw.get("deploymentMode")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn read_claude_desktop_meta_applied_id(path: &Path) -> Option<String> {
+    let raw: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    raw.get("appliedId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn write_claude_desktop_deployment_mode(path: &Path, mode: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut config = if path.exists() {
+        serde_json::from_str::<Value>(&std::fs::read_to_string(path)?).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
+    root.insert("deploymentMode".to_string(), json!(mode));
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&config)?.as_bytes())
+}
+
+fn write_claude_desktop_dev_mode_meta(path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut raw = if path.exists() {
+        serde_json::from_str::<Value>(&std::fs::read_to_string(path)?).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    if !raw.is_object() {
+        raw = json!({});
+    }
+    let root = raw
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop profile metadata must be a JSON object"))?;
+    let mut entries = root
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    entries.retain(|entry| {
+        entry.get("id").and_then(Value::as_str) != Some(CLAUDE_DESKTOP_DEV_PROFILE_ID)
+    });
+    entries.push(json!({
+        "id": CLAUDE_DESKTOP_DEV_PROFILE_ID,
+        "name": CLAUDE_DESKTOP_DEV_PROFILE_NAME
+    }));
+    root.insert(
+        "appliedId".to_string(),
+        json!(CLAUDE_DESKTOP_DEV_PROFILE_ID),
+    );
+    root.insert("entries".to_string(), Value::Array(entries));
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&raw)?.as_bytes())
 }
 
 fn upsert_claude_desktop_mcp_server(
@@ -3099,6 +3290,83 @@ mod tests {
                 .join("Application Support")
                 .join("Claude-3p")
                 .join("configLibrary")
+        );
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_paths_use_platform_locations() {
+        assert_eq!(
+            claude_desktop_threep_config_path_for_platform(
+                DesktopPlatform::Windows,
+                Some(PathBuf::from("local")),
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("local")
+                .join("Claude-3p")
+                .join("claude_desktop_config.json")
+        );
+        assert_eq!(
+            claude_desktop_threep_config_path_for_platform(
+                DesktopPlatform::Macos,
+                None,
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("home")
+                .join("Library")
+                .join("Application Support")
+                .join("Claude-3p")
+                .join("claude_desktop_config.json")
+        );
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_writers_preserve_existing_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("claude_desktop_config.json");
+        let meta_path = dir.path().join("configLibrary").join("_meta.json");
+        std::fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            r#"{"windowBounds":{"width":1200},"mcpServers":{"existing":{"command":"node"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &meta_path,
+            json!({
+                "entries": [
+                    {"id": "existing-profile", "name": "Existing"},
+                    {"id": CLAUDE_DESKTOP_DEV_PROFILE_ID, "name": "Old Name"}
+                ],
+                "other": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        write_claude_desktop_deployment_mode(&config_path, "3p").unwrap();
+        write_claude_desktop_dev_mode_meta(&meta_path).unwrap();
+
+        let config: Value =
+            serde_json::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+        let meta: Value =
+            serde_json::from_str(&std::fs::read_to_string(meta_path).unwrap()).unwrap();
+        assert_eq!(config["deploymentMode"], "3p");
+        assert_eq!(config["windowBounds"]["width"], 1200);
+        assert_eq!(config["mcpServers"]["existing"]["command"], "node");
+        assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_DEV_PROFILE_ID);
+        assert_eq!(meta["other"], true);
+        let entries = meta["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["id"] == "existing-profile")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["id"] == CLAUDE_DESKTOP_DEV_PROFILE_ID
+                    && entry["name"] == CLAUDE_DESKTOP_DEV_PROFILE_NAME)
         );
     }
 
