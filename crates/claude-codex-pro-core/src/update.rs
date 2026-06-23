@@ -298,8 +298,6 @@ fn is_macos_installer_asset(name: &str) -> bool {
 
 fn is_project_release_asset(name: &str) -> bool {
     name.contains("claude-codex-pro")
-        || name.contains("claude-codex-pro-plus")
-        || (name.contains("codex") && name.contains("plus"))
 }
 
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {

@@ -7,8 +7,6 @@ pub mod windows;
 
 pub const SILENT_NAME: &str = "Claude Codex Pro";
 pub const MANAGER_NAME: &str = "Claude Codex Pro 管理工具";
-pub const LEGACY_SILENT_NAME: &str = "Codex++";
-pub const LEGACY_MANAGER_NAME: &str = "Codex++ 管理工具";
 pub const SILENT_BINARY: &str = "claude-codex-pro";
 pub const MANAGER_BINARY: &str = "claude-codex-pro-manager";
 
@@ -210,26 +208,13 @@ fn entrypoint_candidates(root: &Option<PathBuf>, manager: bool) -> Vec<PathBuf> 
     let Some(root) = root else {
         return Vec::new();
     };
-    let names = if manager {
-        [MANAGER_NAME, LEGACY_MANAGER_NAME]
-    } else {
-        [SILENT_NAME, LEGACY_SILENT_NAME]
-    };
+    let name = if manager { MANAGER_NAME } else { SILENT_NAME };
     if cfg!(windows) {
-        names
-            .into_iter()
-            .map(|name| root.join(format!("{name}.lnk")))
-            .collect()
+        vec![root.join(format!("{name}.lnk"))]
     } else if cfg!(target_os = "macos") {
-        names
-            .into_iter()
-            .map(|name| root.join(format!("{name}.app")))
-            .collect()
+        vec![root.join(format!("{name}.app"))]
     } else {
-        names
-            .into_iter()
-            .map(|name| root.join(format!("{name}.desktop")))
-            .collect()
+        vec![root.join(format!("{name}.desktop"))]
     }
 }
 
@@ -263,25 +248,13 @@ pub fn companion_binary_path_from_exe(exe: &Path, binary: &str) -> PathBuf {
 
 fn macos_silent_app_binary_from_exe(exe: &Path) -> Option<PathBuf> {
     let applications_dir = macos_applications_dir_from_exe(exe)?;
-    [SILENT_NAME, LEGACY_SILENT_NAME]
-        .into_iter()
-        .map(|name| {
-            applications_dir
-                .join(format!("{name}.app"))
-                .join("Contents")
-                .join("MacOS")
-                .join("ClaudeCodexPro")
-        })
-        .find(|path| path.exists())
-        .or_else(|| {
-            Some(
-                applications_dir
-                    .join(format!("{SILENT_NAME}.app"))
-                    .join("Contents")
-                    .join("MacOS")
-                    .join("ClaudeCodexPro"),
-            )
-        })
+    Some(
+        applications_dir
+            .join(format!("{SILENT_NAME}.app"))
+            .join("Contents")
+            .join("MacOS")
+            .join("ClaudeCodexPro"),
+    )
 }
 
 fn macos_applications_dir_from_exe(exe: &Path) -> Option<PathBuf> {

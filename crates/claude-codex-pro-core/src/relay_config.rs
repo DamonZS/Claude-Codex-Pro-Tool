@@ -9,7 +9,6 @@ use toml_edit::{DocumentMut, Item, Table, TableLike};
 use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 
 const RELAY_PROVIDER: &str = "custom";
-const LEGACY_RELAY_PROVIDERS: &[&str] = &["CodexPlusPlus", "CodexPP"];
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "claude_codex_pro_chat_base_url";
 const RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "amazon-bedrock",
@@ -613,13 +612,7 @@ pub fn clear_relay_config_to_home_with_auth_and_computer_use_guard(
     };
     let config_path = home.join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let mut without_tables = remove_table(&existing, &format!("model_providers.{RELAY_PROVIDER}"));
-    for legacy_provider in LEGACY_RELAY_PROVIDERS {
-        without_tables = remove_table(
-            &without_tables,
-            &format!("model_providers.{legacy_provider}"),
-        );
-    }
+    let without_tables = remove_table(&existing, &format!("model_providers.{RELAY_PROVIDER}"));
     let mut updated = without_tables;
     for key in [
         "OPENAI_API_KEY",
@@ -1110,9 +1103,7 @@ fn active_provider_id(doc: &DocumentMut) -> Option<String> {
 
 fn active_or_default_provider_id(doc: &DocumentMut) -> String {
     active_provider_id(doc)
-        .filter(|provider| {
-            is_custom_provider_id(provider) && !LEGACY_RELAY_PROVIDERS.contains(&provider.as_str())
-        })
+        .filter(|provider| is_custom_provider_id(provider))
         .unwrap_or_else(|| RELAY_PROVIDER.to_string())
 }
 
@@ -1789,11 +1780,6 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     let api_key = relay_profile_api_key(profile);
     doc.as_table_mut().remove(CHAT_UPSTREAM_BASE_URL_KEY);
     retain_only_provider_table(&mut doc, &provider_id);
-    for legacy_provider in LEGACY_RELAY_PROVIDERS {
-        if provider_id != *legacy_provider {
-            remove_provider_table(&mut doc, legacy_provider);
-        }
-    }
     let provider = ensure_provider_table(&mut doc, &provider_id)?;
     if provider
         .get("name")
@@ -2302,9 +2288,6 @@ fn upsert_model_provider_config(
     let mut doc = parse_toml_document(contents)?;
     let provider_id = active_or_default_provider_id(&doc);
     set_provider_id(&mut doc, &provider_id);
-    for legacy_provider in LEGACY_RELAY_PROVIDERS {
-        remove_provider_table(&mut doc, legacy_provider);
-    }
     if provider_id != RELAY_PROVIDER {
         remove_provider_table(&mut doc, RELAY_PROVIDER);
     }

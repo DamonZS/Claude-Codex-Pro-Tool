@@ -8,8 +8,6 @@ use super::{
     InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
     install_root_or_default, option_or_current_exe,
 };
-#[cfg(target_os = "macos")]
-use super::{LEGACY_MANAGER_NAME, LEGACY_SILENT_NAME};
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
     let install_root = install_root_or_default(options);
@@ -69,13 +67,6 @@ fn is_bundle_executable_target(target: &Path, executable_name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn install_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
-    let install_root = install_root_or_default(options);
-    for name in [LEGACY_SILENT_NAME, LEGACY_MANAGER_NAME] {
-        let app = install_root.join(format!("{name}.app"));
-        if app.exists() {
-            fs::remove_dir_all(app)?;
-        }
-    }
     write_bundle(&build_app_bundle(options, false))?;
     write_bundle(&build_app_bundle(options, true))?;
     Ok(())
@@ -84,12 +75,7 @@ pub fn install_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
 #[cfg(target_os = "macos")]
 pub fn uninstall_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
     let install_root = install_root_or_default(options);
-    for name in [
-        SILENT_NAME,
-        MANAGER_NAME,
-        LEGACY_SILENT_NAME,
-        LEGACY_MANAGER_NAME,
-    ] {
+    for name in [SILENT_NAME, MANAGER_NAME] {
         let app = install_root.join(format!("{name}.app"));
         if app.exists() {
             fs::remove_dir_all(app)?;

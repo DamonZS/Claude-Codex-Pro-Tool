@@ -102,7 +102,6 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
     assert!(script.contains("ARCH=\"${2:-$(uname -m)}\""));
     assert!(script.contains("BINARY_DIR=\"${BINARY_DIR:-$ROOT/target/release}\""));
     assert!(script.contains("claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"));
-    assert!(!script.contains("claude-codex-pro-plus-${VERSION}-macos-${ARCH}.dmg"));
     assert!(script.contains(
         "create_app \"Claude Codex Pro\" \"ClaudeCodexPro\" \"$BINARY_DIR/claude-codex-pro\" \"com.damonzs.claudecodexpro\" \"true\""
     ));

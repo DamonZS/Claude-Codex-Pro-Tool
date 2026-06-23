@@ -1323,37 +1323,11 @@ model = "gpt-5-mini"
     .unwrap();
     let updated = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
     let provider_index = updated.find(r#"model_provider = "custom""#).unwrap();
-    let codexpp_index = updated.find("[model_providers.custom]").unwrap();
+    let provider_table_index = updated.find("[model_providers.custom]").unwrap();
 
-    assert!(provider_index < codexpp_index);
+    assert!(provider_index < provider_table_index);
     assert!(!updated.contains("[profiles.default]"));
     assert!(!updated.contains(r#"model = "gpt-5""#));
-}
-
-#[test]
-fn apply_relay_config_removes_legacy_codexpp_provider_table() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        temp.path().join("config.toml"),
-        r#"model_provider = "CodexPP"
-[model_providers.CodexPP]
-name = "CodexPP"
-base_url = "https://old.example.test/v1"
-"#,
-    )
-    .unwrap();
-
-    apply_relay_config_to_home(
-        temp.path(),
-        "https://relay.example.test/v1",
-        "sk-test-redacted",
-    )
-    .unwrap();
-    let updated = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-
-    assert!(updated.contains(r#"model_provider = "custom""#));
-    assert!(updated.contains("[model_providers.custom]"));
-    assert!(!updated.contains("[model_providers.CodexPP]"));
 }
 
 #[test]
@@ -1369,10 +1343,6 @@ wire_api = "responses"
 requires_openai_auth = true
 base_url = "https://relay.example.test/v1"
 experimental_bearer_token = "sk-test-redacted"
-
-[model_providers.CodexPP]
-name = "CodexPP"
-base_url = "https://old.example.test/v1"
 
 [model_providers.custom1]
 name = "custom1"
@@ -1400,7 +1370,6 @@ model = "gpt-5-mini"
     assert!(!updated.contains("model_catalog_json"));
     assert!(!updated.contains("OPENAI_API_KEY"));
     assert!(!updated.contains("[model_providers.custom]"));
-    assert!(!updated.contains("[model_providers.CodexPP]"));
     assert!(!updated.contains("[model_providers]\n"));
     assert!(!updated.contains("experimental_bearer_token"));
     assert!(updated.contains("[model_providers.custom1]"));

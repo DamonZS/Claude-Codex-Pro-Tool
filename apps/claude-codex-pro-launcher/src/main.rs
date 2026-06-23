@@ -90,8 +90,8 @@ fn acquire_single_instance_guard_with_retry(
     }
 }
 
-fn try_acquire_single_instance_guard() -> std::io::Result<claude_codex_pro_core::ports::LoopbackPortGuard>
-{
+fn try_acquire_single_instance_guard()
+-> std::io::Result<claude_codex_pro_core::ports::LoopbackPortGuard> {
     claude_codex_pro_core::ports::acquire_resilient_loopback_port_guard(
         claude_codex_pro_core::ports::LAUNCHER_GUARD_PORT,
     )
@@ -110,8 +110,10 @@ fn log_launcher_guard_fallback(fallback_lock_path: &Path) {
 fn should_recover_stale_launcher(debug_port: u16) -> bool {
     let has_codex_process = !claude_codex_pro_core::watcher::find_codex_processes().is_empty();
     let cdp_listening = claude_codex_pro_core::watcher::cdp_listening(debug_port);
-    let recover =
-        claude_codex_pro_core::watcher::should_recover_stale_launcher(has_codex_process, cdp_listening);
+    let recover = claude_codex_pro_core::watcher::should_recover_stale_launcher(
+        has_codex_process,
+        cdp_listening,
+    );
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
         "launcher.stale_recovery_check",
         json!({
@@ -250,7 +252,8 @@ fn log_launcher_already_running(debug_port: u16) {
 
 async fn notify_manager_when_update_available() -> anyhow::Result<bool> {
     let update =
-        claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION).await?;
+        claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION)
+            .await?;
     if !update.update_available {
         return Ok(false);
     }
@@ -327,7 +330,9 @@ impl LaunchHooks for LauncherHooks {
         self.core.select_helper_port(requested)
     }
 
-    async fn load_settings(&self) -> anyhow::Result<claude_codex_pro_core::settings::BackendSettings> {
+    async fn load_settings(
+        &self,
+    ) -> anyhow::Result<claude_codex_pro_core::settings::BackendSettings> {
         self.core.load_settings().await
     }
 
@@ -639,15 +644,11 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 
     async fn resolve_zed_remote_host(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(claude_codex_pro_core::zed_remote::resolve_ssh_target_response(
-            &payload,
-        ))
+        Ok(claude_codex_pro_core::zed_remote::resolve_ssh_target_response(&payload))
     }
 
     async fn fallback_zed_remote_request(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(claude_codex_pro_core::zed_remote::fallback_open_request_response(
-            &payload,
-        ))
+        Ok(claude_codex_pro_core::zed_remote::fallback_open_request_response(&payload))
     }
 
     async fn open_zed_remote(&self, payload: Value) -> anyhow::Result<Value> {
@@ -724,7 +725,8 @@ async fn try_inject_with_context(
     let settings = claude_codex_pro_core::settings::SettingsStore::default()
         .load()
         .unwrap_or_default();
-    let script = claude_codex_pro_core::assets::injection_script_with_settings(helper_port, &settings);
+    let script =
+        claude_codex_pro_core::assets::injection_script_with_settings(helper_port, &settings);
     let user_bundle = runtime
         .user_scripts
         .build_enabled_bundle()
@@ -807,37 +809,20 @@ fn default_user_script_manager() -> UserScriptManager {
 fn default_user_scripts_config_dir() -> PathBuf {
     if cfg!(windows) {
         if let Some(roaming) = std::env::var_os("APPDATA") {
-            return migrate_user_scripts_config_dir(
-                PathBuf::from(&roaming).join("Claude Codex Pro"),
-                PathBuf::from(roaming).join("Codex++"),
-            );
+            return PathBuf::from(roaming).join("Claude Codex Pro");
         }
         if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
-            let roaming = home.join("AppData").join("Roaming");
-            return migrate_user_scripts_config_dir(
-                roaming.join("Claude Codex Pro"),
-                roaming.join("Codex++"),
-            );
+            return home
+                .join("AppData")
+                .join("Roaming")
+                .join("Claude Codex Pro");
         }
     }
     let config_root = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"));
-    migrate_user_scripts_config_dir(
-        config_root.join("claude-codex-pro"),
-        config_root.join("Codex++"),
-    )
-}
-
-fn migrate_user_scripts_config_dir(current: PathBuf, legacy: PathBuf) -> PathBuf {
-    if !current.exists() && legacy.exists() {
-        if let Some(parent) = current.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::rename(&legacy, &current);
-    }
-    current
+    config_root.join("claude-codex-pro")
 }
 
 #[cfg(test)]

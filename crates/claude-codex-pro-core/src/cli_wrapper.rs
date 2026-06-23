@@ -155,15 +155,7 @@ pub fn wrapper_dir() -> PathBuf {
 }
 
 pub fn wrapper_dir_from_roaming(roaming: &Path) -> PathBuf {
-    let current = wrapper_dir_path_from_roaming(roaming, "Claude Codex Pro");
-    let legacy = wrapper_dir_path_from_roaming(roaming, "Codex++");
-    if !current.exists() && legacy.exists() {
-        if let Some(parent) = current.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::rename(&legacy, &current);
-    }
-    current
+    wrapper_dir_path_from_roaming(roaming, "Claude Codex Pro")
 }
 
 fn wrapper_dir_path_from_roaming(roaming: &Path, folder: &str) -> PathBuf {

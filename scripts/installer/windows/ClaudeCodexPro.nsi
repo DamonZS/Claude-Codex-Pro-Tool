@@ -32,27 +32,12 @@ Section "Install"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-plus.exe /F'
-  Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-plus-manager.exe /F'
-  Pop $0
-
-  Delete "$LOCALAPPDATA\Programs\Codex++\claude-codex-pro-plus.exe"
-  Delete "$LOCALAPPDATA\Programs\Codex++\claude-codex-pro-plus-manager.exe"
-  Delete "$LOCALAPPDATA\Programs\Codex++\uninstall.exe"
-  RMDir "$LOCALAPPDATA\Programs\Codex++"
 
   File "${ROOT}\dist\windows\app\claude-codex-pro.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe"
 
-  Delete "$DESKTOP\Codex++.lnk"
-  Delete "$DESKTOP\Codex++ 管理工具.lnk"
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++ 管理工具.lnk"
-  Delete "$SMPROGRAMS\Codex++\卸载 Codex++.lnk"
-  RMDir "$SMPROGRAMS\Codex++"
   Delete "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro.lnk"
   Delete "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro 管理工具.lnk"
   Delete "$SMPROGRAMS\Claude Codex Pro\卸载 Claude Codex Pro.lnk"
@@ -66,9 +51,6 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\Claude Codex Pro\卸载 Claude Codex Pro.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\claude-codex-pro-manager.exe"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++"
-  DeleteRegKey HKCU "Software\Codex++"
   WriteRegStr HKCU "Software\Claude Codex Pro" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayName" "Claude Codex Pro"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayVersion" "${VERSION}"
@@ -83,19 +65,9 @@ Section "Uninstall"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-plus.exe /F'
-  Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-plus-manager.exe /F'
-  Pop $0
 
-  Delete "$DESKTOP\Codex++.lnk"
-  Delete "$DESKTOP\Codex++ 管理工具.lnk"
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++.lnk"
-  Delete "$SMPROGRAMS\Codex++\Codex++ 管理工具.lnk"
-  Delete "$SMPROGRAMS\Codex++\卸载 Codex++.lnk"
-  RMDir "$SMPROGRAMS\Codex++"
   Delete "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro.lnk"
   Delete "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro 管理工具.lnk"
   Delete "$SMPROGRAMS\Claude Codex Pro\卸载 Claude Codex Pro.lnk"
@@ -103,14 +75,9 @@ Section "Uninstall"
 
   Delete "$INSTDIR\claude-codex-pro.exe"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
-  Delete "$INSTDIR\claude-codex-pro-plus.exe"
-  Delete "$INSTDIR\claude-codex-pro-plus-manager.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexPlusPlus"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro"
-  DeleteRegKey HKCU "Software\Codex++"
   DeleteRegKey HKCU "Software\Claude Codex Pro"
 SectionEnd

@@ -10,7 +10,6 @@ const DEFAULT_PROVIDER: &str = "openai";
 const SESSION_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
 const BACKUP_KEEP_COUNT: usize = 5;
 const PROVIDER_SYNC_MANAGED_BY: &str = "Claude Codex Pro provider sync";
-const LEGACY_PROVIDER_SYNC_MANAGED_BY: &str = "Codex++ provider sync";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -185,7 +184,8 @@ pub fn run_provider_sync_with_target(
             .iter()
             .filter_map(|change| Some((change.thread_id.clone()?, change.cwd.clone()?)))
             .collect::<HashMap<_, _>>();
-        let sqlite_paths = claude_codex_pro_core::codex_sqlite::codex_session_db_paths_from_home(&home);
+        let sqlite_paths =
+            claude_codex_pro_core::codex_sqlite::codex_session_db_paths_from_home(&home);
         let sqlite_update_count = count_sqlite_updates_for_paths(
             &sqlite_paths,
             &target_provider,
@@ -720,7 +720,8 @@ fn create_backup(
             if !source.exists() {
                 continue;
             }
-            let relative = claude_codex_pro_core::codex_sqlite::relative_to_codex_home(home, &source);
+            let relative =
+                claude_codex_pro_core::codex_sqlite::relative_to_codex_home(home, &source);
             let target = db_dir.join(&relative);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
@@ -1103,9 +1104,7 @@ fn prune_backups(home: &Path) -> anyhow::Result<()> {
             continue;
         };
         let managed_by = value.get("managedBy").and_then(Value::as_str);
-        if managed_by == Some(PROVIDER_SYNC_MANAGED_BY)
-            || managed_by == Some(LEGACY_PROVIDER_SYNC_MANAGED_BY)
-        {
+        if managed_by == Some(PROVIDER_SYNC_MANAGED_BY) {
             managed.push(path);
         }
     }

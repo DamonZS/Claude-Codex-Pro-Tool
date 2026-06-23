@@ -1,13 +1,15 @@
 /**
- * Claude Codex Pro 供应商预设
- * 基于 cc-switch (MIT) 的 codexProviderPresets.ts，作者 Jason Young
- * https://github.com/farion1231/cc-switch
+ * Claude Codex Pro provider presets.
  *
- * 提供一键填充供应商配置的预设模板，包括 Base URL、协议、模型列表等。
- * 去掉了 cc-switch 原始的商业合作标记（isPartner、partnerPromotionKey）。
+ * Each preset fills the provider name, endpoint, protocol, default model,
+ * and optional model list in the manager UI.
  */
 
-export type PresetCategory = "official" | "aggregator" | "third_party" | "cn_official";
+export type PresetCategory =
+  | "official"
+  | "aggregator"
+  | "third_party"
+  | "cn_official";
 
 export type RelayProtocol = "responses" | "chatCompletions";
 
@@ -23,16 +25,8 @@ export interface ProviderPreset {
   modelList?: string[];
 }
 
-/**
- * 预设列表。选择任一预设会自动填充：
- * - name     → 供应商名称
- * - baseUrl  → API 端点
- * - protocol → responses / chatCompletions（根据上游实际协议）
- * - model    → 默认模型名
- * - modelList → 可选模型清单（换行分隔）
- */
 export const PRESETS: ProviderPreset[] = [
-  // ── 官方 ──
+  // Official
   {
     id: "openai",
     name: "OpenAI Official",
@@ -43,7 +37,7 @@ export const PRESETS: ProviderPreset[] = [
     websiteUrl: "https://chatgpt.com/codex",
   },
 
-  // ── 中国官方 ──
+  // China official
   {
     id: "deepseek",
     name: "DeepSeek",
@@ -112,9 +106,10 @@ export const PRESETS: ProviderPreset[] = [
   },
   {
     id: "volcano-ark",
-    name: "火山引擎 Ark",
+    name: "Volcano Ark",
     websiteUrl: "https://www.volcengine.com/product/ark",
-    apiKeyUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
+    apiKeyUrl:
+      "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
     category: "cn_official",
     baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
     protocol: "chatCompletions",
@@ -123,7 +118,7 @@ export const PRESETS: ProviderPreset[] = [
   },
   {
     id: "baidu-qianfan",
-    name: "百度千帆 Coding Plan",
+    name: "Baidu Qianfan Coding Plan",
     category: "cn_official",
     baseUrl: "https://qianfan.baidubce.com/v2/coding",
     protocol: "chatCompletions",
@@ -132,7 +127,7 @@ export const PRESETS: ProviderPreset[] = [
   },
   {
     id: "xiaomi-mimo",
-    name: "小米 MiMo",
+    name: "Xiaomi MiMo",
     category: "cn_official",
     baseUrl: "https://api.xiaomimimo.com/v1",
     protocol: "chatCompletions",
@@ -161,7 +156,7 @@ export const PRESETS: ProviderPreset[] = [
     websiteUrl: "https://longcat.chat/platform",
   },
 
-  // ── 聚合/中转 ──
+  // Aggregators and relay services
   {
     id: "siliconflow",
     name: "SiliconFlow",
@@ -249,7 +244,7 @@ export const PRESETS: ProviderPreset[] = [
     websiteUrl: "https://www.ccsub.net",
   },
 
-  // ── 第三方 ──
+  // Third party
   {
     id: "azure",
     name: "Azure OpenAI",
@@ -257,6 +252,7 @@ export const PRESETS: ProviderPreset[] = [
     baseUrl: "https://YOUR_RESOURCE_NAME.openai.azure.com/openai",
     protocol: "responses",
     model: "gpt-5.5",
-    websiteUrl: "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/codex",
+    websiteUrl:
+      "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/codex",
   },
 ];

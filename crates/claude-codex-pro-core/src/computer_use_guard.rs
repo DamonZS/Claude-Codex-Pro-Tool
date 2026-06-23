@@ -18,7 +18,7 @@ const SKY_INTERNAL_COMPUTER_USE_CLIENT_EXPORT: &str =
     "./dist/project/cua/sky_js/src/targets/windows/internal/computer_use_client_base.js";
 const SKY_INTERNAL_COMPUTER_USE_CLIENT_IMPORT: &str =
     "@oai/sky/dist/project/cua/sky_js/src/targets/windows/internal/computer_use_client_base.js";
-const SKY_PACKAGE_EXPORTS_BACKUP: &str = "package.json.bak-codexpp-runtime-exports";
+const SKY_PACKAGE_EXPORTS_BACKUP: &str = "package.json.bak-claude-codex-pro-runtime-exports";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GuardResult {
@@ -439,7 +439,7 @@ fn atomic_write_runtime_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("invalid runtime file path"))?;
     let temp = parent.join(format!(
-        ".{}.codexpp-tmp",
+        ".{}.claude-codex-pro-tmp",
         path.file_name()
             .and_then(|value| value.to_str())
             .unwrap_or("package.json")
