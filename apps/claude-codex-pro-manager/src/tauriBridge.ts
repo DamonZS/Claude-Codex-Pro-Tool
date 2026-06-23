@@ -205,10 +205,10 @@ function previewPluginItems(): PreviewPluginItem[] {
       tags: ["ponytail", "codex", "plugin", "skills", "hooks"],
       installKind: "codex_plugin",
       installStatus: "notInstalled",
-      installCommand: ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
-      configPreview: "codex plugin marketplace add DietrichGebert/ponytail\n\n然后在 Codex /plugins 中安装 Ponytail，并在 /hooks 中审查和信任 hooks。",
-      risk: "预览模式不执行命令；真实安装也不会后台静默信任第三方 hooks。",
-      requirements: ["codex CLI", "Node.js", "Codex /plugins 手动确认"],
+      installCommand: ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail", "--json"],
+      configPreview: "codex plugin marketplace add DietrichGebert/ponytail --json\ncodex plugin list --available --json\ncodex plugin add ponytail@ponytail --json\n\n安装后单独审查并信任 hooks。",
+      risk: "真实安装会调用 Codex CLI；不会后台静默信任第三方 hooks。",
+      requirements: ["codex CLI", "Node.js", "hooks 单独确认"],
     },
     {
       id: "ponytail:claude-code-plugin",
@@ -268,6 +268,25 @@ function previewPluginItems(): PreviewPluginItem[] {
       requirements: ["Git", "Node.js", "Claude Desktop"],
     },
     {
+      id: "ponytail:claude-desktop-org-plugin",
+      name: "Ponytail Organization Plugin for Claude Desktop",
+      description: "安装为 Claude Desktop 开发模式可读取的组织插件目录。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "claude-desktop-org-plugin",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "claude-desktop", "organization-plugin", "skills"],
+      installKind: "claude_desktop_org_plugin",
+      installStatus: "notInstalled",
+      installCommand: [],
+      configPreview: "源：~\\.claude-codex-pro\\plugin-hub\\repos\\ponytail\\skills\\*\n目标：C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\*",
+      risk: "真实安装会写入 Claude Desktop 组织插件目录；普通权限不可写时会失败，不会静默信任 hooks。",
+      requirements: ["Claude Desktop 3P / 开发模式", "Git", "管理员权限或可写目录"],
+    },
+    {
       id: "ponytail:codex-skills",
       name: "Ponytail Skills for Codex",
       description: "复制 Ponytail skills 到 Codex 用户技能目录。",
@@ -296,7 +315,7 @@ function previewPluginCatalog(message = "预览模式插件目录。") {
       sources: [
         { id: "official", label: "Claude 官方插件", url: "https://github.com/anthropics/claude-plugins-official", status: "ok", message: "预览数据", itemCount: 2 },
         { id: "codex-plugins", label: "Codex 插件仓库", url: "https://github.com/openai/plugins", status: "ok", message: "预览数据", itemCount: 2 },
-        { id: "ponytail", label: "Ponytail 多工具插件", url: "https://github.com/DietrichGebert/ponytail", status: "ok", message: "预览数据", itemCount: 5 },
+        { id: "ponytail", label: "Ponytail 多工具插件", url: "https://github.com/DietrichGebert/ponytail", status: "ok", message: "预览数据", itemCount: 6 },
         { id: "awesome", label: "awesome-claude-code", url: "https://github.com/hesreallyhim/awesome-claude-code", status: "ok", message: "预览数据", itemCount: 1 },
       ],
       items: previewPluginItems(),
@@ -502,13 +521,14 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "preview_plugin_hub_install") {
     const item = previewPluginItem((_args?.request as { id?: unknown } | undefined)?.id);
+    const canInstall = ["claude_desktop_mcp", "claude_desktop_org_plugin", "claude_plugin_marketplace", "claude_code_plugin", "codex_plugin", "copilot_plugin", "managed_skill_bundle"].includes(item.installKind);
     return ok("预览模式安装预览。", {
       item,
-      canInstall: ["claude_desktop_mcp", "claude_plugin_marketplace", "claude_code_plugin", "codex_plugin", "copilot_plugin", "managed_skill_bundle"].includes(item.installKind),
-      action: item.installKind,
+      canInstall,
+      action: item.installKind === "codex_plugin" ? "codex_cli_plugin" : item.installKind,
       command: item.installCommand,
       configDiff: item.configPreview || "",
-      message: item.installCommand.length ? `将执行：${item.installCommand.join(" ")}` : "该资源需要人工审查，预览模式不执行安装。",
+      message: item.installKind === "codex_plugin" ? "真实环境会调用 Codex CLI 安装；hooks 需要单独审查后信任。" : item.installCommand.length ? `将执行：${item.installCommand.join(" ")}` : "该资源需要人工审查，预览模式不执行安装。",
     });
   }
   if (command === "install_plugin_hub_item") {
@@ -524,7 +544,113 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "uninstall_plugin_hub_item") {
-    return previewPluginCatalog("预览模式已模拟移除插件记录。");
+    return previewPluginCatalog("预览模式已模拟撤销托管配置并更新插件记录。");
+  }
+  if (command === "preview_ponytail_codex_hooks") {
+    return ok("预览模式已生成 Ponytail Codex hooks 审查列表。", {
+      preview: {
+        configPath: "~\\.codex\\config.toml",
+        hooks: [
+          {
+            key: "ponytail@ponytail:hooks/claude-codex-hooks.json:session_start:0:0",
+            eventName: "session_start",
+            matcher: "startup|resume|clear|compact",
+            command: "node ponytail-activate.js",
+            statusMessage: "Loading ponytail mode...",
+            currentHash: "sha256:preview",
+            trusted: false,
+            sourcePath: "~\\.codex\\plugins\\cache\\ponytail\\hooks\\claude-codex-hooks.json",
+          },
+        ],
+        message: "预览模式：发现 1 个待信任 hook。",
+      },
+    });
+  }
+  if (command === "trust_ponytail_codex_hooks") {
+    return ok("预览模式已模拟写入 hooks.state。", {
+      preview: {
+        configPath: "~\\.codex\\config.toml",
+        hooks: [],
+        message: "预览模式不会修改真实 Codex 配置。",
+      },
+    });
+  }
+  if (command === "generate_ponytail_mcpb_installer") {
+    return ok("预览模式已模拟生成并打开 Ponytail MCPB。", {
+      package: {
+        mcpbPath: "~\\.claude-codex-pro\\plugin-hub\\mcpb\\ponytail-preview.mcpb",
+        manifestPath: "~\\.claude-codex-pro\\plugin-hub\\mcpb\\ponytail-preview\\manifest.json",
+        opened: true,
+        message: "预览模式不会打开系统安装弹窗。",
+      },
+    });
+  }
+  if (command === "load_claude_desktop_org_plugin_status" || command === "open_claude_desktop_org_plugins_dir") {
+    return ok("预览模式 Claude Desktop 组织插件目录可用。", {
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: false,
+        writable: true,
+        message: "预览模式不会写入 Program Files。",
+      },
+    });
+  }
+  if (command === "load_claude_desktop_marketplace_status") {
+    return ok("预览模式 Claude Desktop 官方插件仓库入口可用。", {
+      marketplaceStatus: {
+        supported: true,
+        marketplace: "DietrichGebert/ponytail",
+        plugin: "ponytail",
+        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
+        canAutoWrite: false,
+        message: "预览模式：打开 Claude 官方配置页后仍需在 Claude Desktop 内确认。",
+      },
+    });
+  }
+  if (command === "open_ponytail_claude_desktop_marketplace_setup") {
+    return ok("预览模式不会打开 Claude Desktop 深链。", {
+      outcome: {
+        opened: true,
+        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
+        message: "预览模式不会修改 Claude Desktop。",
+      },
+      marketplaceStatus: {
+        supported: true,
+        marketplace: "DietrichGebert/ponytail",
+        plugin: "ponytail",
+        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
+        canAutoWrite: false,
+        message: "预览模式：打开 Claude 官方配置页后仍需在 Claude Desktop 内确认。",
+      },
+    });
+  }
+  if (command === "install_ponytail_claude_desktop_org_plugin") {
+    return ok("预览模式已模拟安装 Ponytail 组织插件。", {
+      outcome: {
+        installed: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        pluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        manifestPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\manifest.json",
+        pluginJsonPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\.claude-plugin\\plugin.json",
+        copiedSkills: ["C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\ponytail"],
+        backupPath: null,
+        message: "预览模式不会修改 Claude Desktop。",
+      },
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: true,
+        writable: true,
+        message: "预览模式：Ponytail 组织插件已模拟安装。",
+      },
+    });
   }
   if (command === "load_memory_assist_status") {
     return previewMemoryStatus();

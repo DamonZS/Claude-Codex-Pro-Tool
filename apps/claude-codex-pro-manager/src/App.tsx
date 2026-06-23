@@ -30,6 +30,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { invokeCommand } from "@/tauriBridge";
 
+const PONYTAIL_REPOSITORY_URL = "https://github.com/DietrichGebert/ponytail";
+
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
 type CommandResult<T> = T & {
@@ -352,6 +354,7 @@ type DeleteLocalSessionResult = CommandResult<{
 type PluginInstallKind =
   | "claude_plugin_marketplace"
   | "claude_desktop_mcp"
+  | "claude_desktop_org_plugin"
   | "claude_code_plugin"
   | "codex_plugin"
   | "copilot_plugin"
@@ -415,6 +418,79 @@ type PluginInstallOutcomeResult = CommandResult<{
   stdout: string;
   stderr: string;
   backupPath: string | null;
+}>;
+
+type CodexHookTrustResult = CommandResult<{
+  preview: {
+    configPath: string;
+    hooks: Array<{
+      key: string;
+      eventName: string;
+      matcher: string | null;
+      command: string;
+      statusMessage: string | null;
+      currentHash: string;
+      trusted: boolean;
+      sourcePath: string;
+    }>;
+    message: string;
+  };
+}>;
+
+type McpbPackageResult = CommandResult<{
+  package: {
+    mcpbPath: string;
+    manifestPath: string;
+    opened: boolean;
+    message: string;
+  };
+}>;
+
+type ClaudeDesktopOrgPluginStatusResult = CommandResult<{
+  orgPluginStatus: {
+    supported: boolean;
+    orgPluginsDir: string;
+    configLibraryDir: string;
+    profileMetaPath: string;
+    ponytailPluginDir: string;
+    ponytailInstalled: boolean;
+    writable: boolean;
+    message: string;
+  };
+}>;
+
+type ClaudeDesktopOrgPluginInstallResult = CommandResult<{
+  outcome: {
+    installed: boolean;
+    orgPluginsDir: string;
+    pluginDir: string;
+    manifestPath: string;
+    pluginJsonPath: string;
+    copiedSkills: string[];
+    backupPath: string | null;
+    message: string;
+  };
+  orgPluginStatus: ClaudeDesktopOrgPluginStatusResult["orgPluginStatus"];
+}>;
+
+type ClaudeDesktopMarketplaceStatusResult = CommandResult<{
+  marketplaceStatus: {
+    supported: boolean;
+    marketplace: string;
+    plugin: string;
+    deepLink: string;
+    canAutoWrite: boolean;
+    message: string;
+  };
+}>;
+
+type ClaudeDesktopMarketplaceOpenResult = CommandResult<{
+  outcome: {
+    opened: boolean;
+    deepLink: string;
+    message: string;
+  };
+  marketplaceStatus: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"];
 }>;
 
 type LogsResult = CommandResult<{
@@ -495,6 +571,9 @@ export function App() {
   const [settingsDraft, setSettingsDraft] = useState<BackendSettings | null>(null);
   const [pluginHub, setPluginHub] = useState<PluginHubResult | null>(null);
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
+  const [codexHookTrust, setCodexHookTrust] = useState<CodexHookTrustResult | null>(null);
+  const [claudeDesktopOrgPlugin, setClaudeDesktopOrgPlugin] = useState<ClaudeDesktopOrgPluginStatusResult | null>(null);
+  const [claudeDesktopMarketplace, setClaudeDesktopMarketplace] = useState<ClaudeDesktopMarketplaceStatusResult | null>(null);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
@@ -567,6 +646,24 @@ export function App() {
     if (result) {
       setPluginHub(result);
       if (!silent) notifyIfNeedsAttention({ title: "插件中心", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeDesktopOrgPlugin = async (silent = false) => {
+    const result = await run(() => call<ClaudeDesktopOrgPluginStatusResult>("load_claude_desktop_org_plugin_status"), "Claude Desktop 组织插件");
+    if (result) {
+      setClaudeDesktopOrgPlugin(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 组织插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeDesktopMarketplace = async (silent = false) => {
+    const result = await run(() => call<ClaudeDesktopMarketplaceStatusResult>("load_claude_desktop_marketplace_status"), "Claude Desktop 插件仓库");
+    if (result) {
+      setClaudeDesktopMarketplace(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message, status: result.status });
     }
     return result;
   };
@@ -684,6 +781,10 @@ export function App() {
   const installPlugin = async (id: string) => {
     const preview = pluginPreview?.item.id === id ? pluginPreview : await previewPlugin(id);
     if (!preview) return;
+    if (!preview.canInstall) {
+      setNotice({ title: "插件中心", message: preview.message, status: "needs_review" });
+      return;
+    }
     const details = [
       preview.command?.length ? `命令：${preview.command.join(" ")}` : "",
       preview.configDiff ? `配置：\n${preview.configDiff}` : "",
@@ -699,11 +800,69 @@ export function App() {
   };
 
   const uninstallPlugin = async (id: string) => {
-    if (!window.confirm("移除该安装记录？这不会静默删除第三方工具自身文件。")) return;
-    const result = await run(() => call<PluginHubResult>("uninstall_plugin_hub_item", { request: { id } }), "移除插件记录");
+    if (!window.confirm("卸载该条目？会撤销本工具写入的 Claude Desktop MCP 配置和托管 Skills；外部 CLI 插件只移除安装记录。")) return;
+    const result = await run(() => call<PluginHubResult>("uninstall_plugin_hub_item", { request: { id } }), "卸载插件");
     if (result) {
       setPluginHub(result);
       notifyIfNeedsAttention({ title: "插件中心", message: result.message, status: result.status });
+    }
+  };
+
+  const previewPonytailCodexHooks = async () => {
+    const result = await run(() => call<CodexHookTrustResult>("preview_ponytail_codex_hooks"), "Ponytail Codex Hooks");
+    if (result) {
+      setCodexHookTrust(result);
+      notifyIfNeedsAttention({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const trustPonytailCodexHooks = async () => {
+    const preview = codexHookTrust ?? await previewPonytailCodexHooks();
+    if (!preview) return;
+    const pending = preview.preview.hooks.filter((hook) => !hook.trusted);
+    if (!pending.length) {
+      setNotice({ title: "Ponytail Codex Hooks", message: "No untrusted Ponytail hooks were found.", status: "ok" });
+      return;
+    }
+    const details = pending.map((hook) => `${hook.eventName}: ${hook.command}`).join("\n\n");
+    if (!window.confirm(`Trust these Ponytail Codex hooks?\n\n${details}`)) return;
+    const result = await run(() => call<CodexHookTrustResult>("trust_ponytail_codex_hooks"), "Trust Ponytail Hooks");
+    if (result) {
+      setCodexHookTrust(result);
+      notifyIfNeedsAttention({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
+    }
+  };
+
+  const generatePonytailMcpbInstaller = async () => {
+    const result = await run(() => call<McpbPackageResult>("generate_ponytail_mcpb_installer"), "Ponytail MCPB");
+    if (result) {
+      notifyIfNeedsAttention({ title: "Ponytail MCPB", message: result.message || result.package.message, status: result.status });
+    }
+  };
+
+  const installPonytailClaudeDesktopOrgPlugin = async () => {
+    await installPlugin("ponytail:claude-desktop-org-plugin");
+    await refreshClaudeDesktopOrgPlugin(true);
+  };
+
+  const openClaudeDesktopOrgPluginsDir = async () => {
+    const result = await run(() => call<ClaudeDesktopOrgPluginStatusResult>("open_claude_desktop_org_plugins_dir"), "Claude Desktop 组织插件目录");
+    if (result) {
+      setClaudeDesktopOrgPlugin(result);
+      notifyIfNeedsAttention({ title: "Claude Desktop 组织插件目录", message: result.message, status: result.status });
+    }
+  };
+
+  const openPonytailClaudeDesktopMarketplaceSetup = async () => {
+    const result = await run(() => call<ClaudeDesktopMarketplaceOpenResult>("open_ponytail_claude_desktop_marketplace_setup"), "Claude Desktop 插件仓库");
+    if (result) {
+      setClaudeDesktopMarketplace({
+        status: result.status,
+        message: result.message,
+        marketplaceStatus: result.marketplaceStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message || result.outcome.message, status: result.status });
     }
   };
 
@@ -948,6 +1107,8 @@ export function App() {
     } else if (target === "tools") {
       await Promise.all([
         refreshPluginHub(true),
+        refreshClaudeDesktopOrgPlugin(true),
+        refreshClaudeDesktopMarketplace(true),
         refreshSettings(true),
         refreshOverview(true),
         refreshClaude(true),
@@ -982,6 +1143,8 @@ export function App() {
         refreshClaude(true),
         refreshSettings(true),
         refreshPluginHub(true),
+        refreshClaudeDesktopOrgPlugin(true),
+        refreshClaudeDesktopMarketplace(true),
         refreshWatcher(true),
         refreshLocalSessions(true),
         refreshMemoryAssist(true),
@@ -1013,8 +1176,16 @@ export function App() {
       previewPlugin,
       installPlugin,
       uninstallPlugin,
+      previewPonytailCodexHooks,
+      trustPonytailCodexHooks,
+      generatePonytailMcpbInstaller,
+      installPonytailClaudeDesktopOrgPlugin,
+      openClaudeDesktopOrgPluginsDir,
+      openPonytailClaudeDesktopMarketplaceSetup,
       installMarketScript,
       refreshPluginHub,
+      refreshClaudeDesktopOrgPlugin,
+      refreshClaudeDesktopMarketplace,
       refreshScripts,
       repairEntrypoints,
       repairBackend,
@@ -1046,7 +1217,7 @@ export function App() {
       refreshLogs,
       refreshWatcher,
     }),
-    [route, pluginPreview],
+    [route, pluginPreview, codexHookTrust],
   );
 
   if (isPromptOptimizerStandaloneWindow) {
@@ -1132,6 +1303,8 @@ export function App() {
               actions={actions}
               claudeChinese={claudeChinese}
               claudeDesktop={claudeDesktop}
+              claudeDesktopMarketplace={claudeDesktopMarketplace}
+              claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
               hub={pluginHub}
               localSessions={localSessions}
               memoryAssist={memoryAssist}
@@ -1289,6 +1462,8 @@ function ToolsAndPluginsScreen({
   actions,
   claudeChinese,
   claudeDesktop,
+  claudeDesktopMarketplace,
+  claudeDesktopOrgPlugin,
   hub,
   localSessions,
   memoryAssist,
@@ -1306,6 +1481,8 @@ function ToolsAndPluginsScreen({
   actions: ReturnType<typeof createActionsShape>;
   claudeChinese: ClaudeChineseWindowResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
+  claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
+  claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
   hub: PluginHubResult | null;
   localSessions: LocalSessionsResult | null;
   memoryAssist: MemoryStatusResult | null;
@@ -1376,7 +1553,13 @@ function ToolsAndPluginsScreen({
       </div>
       <div className="ops-two-column">
         <div className="ops-wide-column">
-          <PluginHubScreen actions={actions} hub={hub} preview={preview} />
+          <PluginHubScreen
+            actions={actions}
+            hub={hub}
+            marketplace={claudeDesktopMarketplace}
+            orgPlugin={claudeDesktopOrgPlugin}
+            preview={preview}
+          />
           <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
             <div className="ops-status-list">
               <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
@@ -1608,10 +1791,14 @@ function PluginHubScreen({
   actions,
   hub,
   preview,
+  orgPlugin,
+  marketplace,
 }: {
   actions: ReturnType<typeof createActionsShape>;
   hub: PluginHubResult | null;
   preview: PluginInstallPreviewResult | null;
+  orgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
+  marketplace: ClaudeDesktopMarketplaceStatusResult | null;
 }) {
   const [filter, setFilter] = useState<"all" | "official" | "ponytail" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
   const [selectedId, setSelectedId] = useState("");
@@ -1620,7 +1807,7 @@ function PluginHubScreen({
     if (filter === "official") return item.sourceId === "official";
     if (filter === "ponytail") return item.sourceId === "ponytail" || item.tags.includes("ponytail");
     if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex" || item.installKind === "codex_plugin" || item.tags.includes("codex");
-    if (filter === "mcp") return item.installKind === "mcp_server" || item.installKind === "claude_desktop_mcp";
+    if (filter === "mcp") return item.installKind === "mcp_server" || item.installKind === "claude_desktop_mcp" || item.installKind === "claude_desktop_org_plugin";
     if (filter === "skill") return item.installKind === "skill_bundle" || item.installKind === "managed_skill_bundle";
     if (filter === "installed") return item.installStatus === "installed";
     if (filter === "review") return item.installStatus === "needsReview";
@@ -1631,7 +1818,9 @@ function PluginHubScreen({
   const selectedCanInstall = selected ? pluginCanInstall(selected.installKind) : false;
   const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "Install";
   return (
-    <div className="plugin-layout">
+    <div className="stack">
+      <ClaudeDesktopOrgPluginPanel actions={actions} marketplace={marketplace} status={orgPlugin} />
+      <div className="plugin-layout">
       <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
         <div className="filter-row">
           {[
@@ -1707,7 +1896,7 @@ function PluginHubScreen({
               {selected.installStatus === "installed" ? (
                 <Button onClick={() => void actions.uninstallPlugin(selected.id)} variant="outline">
                   <Trash2 className="h-4 w-4" />
-                  移除记录
+                  卸载
                 </Button>
               ) : selectedCanInstall ? (
                 <Button onClick={() => void actions.installPlugin(selected.id)}>
@@ -1720,6 +1909,24 @@ function PluginHubScreen({
                   Review required
                 </Button>
               )}
+              {selected.id === "ponytail:codex-plugin" ? (
+                <>
+                  <Button onClick={() => void actions.previewPonytailCodexHooks()} variant="outline">
+                    <ShieldCheck className="h-4 w-4" />
+                    Review hooks
+                  </Button>
+                  <Button onClick={() => void actions.trustPonytailCodexHooks()} variant="outline">
+                    <ShieldCheck className="h-4 w-4" />
+                    Trust hooks
+                  </Button>
+                </>
+              ) : null}
+              {selected.id === "ponytail:claude-desktop-mcp" ? (
+                <Button onClick={() => void actions.generatePonytailMcpbInstaller()} variant="outline">
+                  <Download className="h-4 w-4" />
+                  Generate MCPB
+                </Button>
+              ) : null}
               {selected.homepage ? (
                 <Button onClick={() => void actions.openExternalUrl(selected.homepage)} variant="outline">
                   <ExternalLink className="h-4 w-4" />
@@ -1730,7 +1937,59 @@ function PluginHubScreen({
           </div>
         ) : <Empty text="还没有选择插件。" />}
       </Panel>
+      </div>
     </div>
+  );
+}
+
+function ClaudeDesktopOrgPluginPanel({
+  actions,
+  marketplace,
+  status,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  marketplace: ClaudeDesktopMarketplaceStatusResult | null;
+  status: ClaudeDesktopOrgPluginStatusResult | null;
+}) {
+  const orgStatus = status?.orgPluginStatus;
+  const marketStatus = marketplace?.marketplaceStatus;
+  return (
+    <Panel title="Claude Desktop 插件" detail="官方插件仓库入口、组织插件目录和 Ponytail 安装分开处理。">
+      <div className="info-grid compact">
+        <InfoRow label="官方仓库" value={marketStatus?.marketplace ?? "DietrichGebert/ponytail"} />
+        <InfoRow label="自动写入" value={marketStatus?.canAutoWrite ? "支持" : "不支持，需要 Claude 确认"} />
+        <InfoRow label="组织目录" value={compactPath(orgStatus?.orgPluginsDir)} />
+        <InfoRow label="Ponytail" value={orgStatus?.ponytailInstalled ? "已安装" : "未安装"} />
+        <InfoRow label="目录可写" value={orgStatus?.writable ? "是" : "否"} />
+      </div>
+      <div className="risk-box">
+        {marketStatus?.message ?? "Claude Desktop 官方插件仓库配置需要打开 Claude 自己的确认页。"}
+        {" "}
+        {orgStatus?.message ?? "正在检测 Claude Desktop 组织插件目录。"}
+      </div>
+      <div className="action-row">
+        <Button onClick={() => void actions.refreshClaudeDesktopOrgPlugin()} variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新状态
+        </Button>
+        <Button onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()}>
+          <ExternalLink className="h-4 w-4" />
+          打开官方仓库配置
+        </Button>
+        <Button onClick={() => void actions.installPonytailClaudeDesktopOrgPlugin()} variant="outline">
+          <Download className="h-4 w-4" />
+          写入本机组织插件
+        </Button>
+        <Button onClick={() => void actions.openClaudeDesktopOrgPluginsDir()} variant="outline">
+          <ExternalLink className="h-4 w-4" />
+          打开组织目录
+        </Button>
+        <Button onClick={() => void actions.openExternalUrl(PONYTAIL_REPOSITORY_URL)} variant="outline">
+          <ExternalLink className="h-4 w-4" />
+          Ponytail 源码
+        </Button>
+      </div>
+    </Panel>
   );
 }
 
@@ -2199,6 +2458,7 @@ function Notice({ notice, onClose }: { notice: { title: string; message: string;
 
 function pluginKindLabel(kind: PluginInstallKind) {
   if (kind === "claude_desktop_mcp") return "Claude Desktop MCP";
+  if (kind === "claude_desktop_org_plugin") return "Claude Desktop 组织插件";
   if (kind === "claude_code_plugin") return "Claude Code 插件";
   if (kind === "codex_plugin") return "Codex 插件";
   if (kind === "copilot_plugin") return "GitHub Copilot CLI 插件";
@@ -2216,6 +2476,7 @@ function pluginKindLabel(kind: PluginInstallKind) {
 function pluginCanInstall(kind: PluginInstallKind) {
   return [
     "claude_desktop_mcp",
+    "claude_desktop_org_plugin",
     "claude_plugin_marketplace",
     "claude_code_plugin",
     "codex_plugin",
@@ -2227,9 +2488,10 @@ function pluginCanInstall(kind: PluginInstallKind) {
 function pluginInstallButtonLabel(kind: PluginInstallKind) {
   const labels: Partial<Record<PluginInstallKind, string>> = {
     claude_desktop_mcp: "Install to Claude Desktop",
+    claude_desktop_org_plugin: "Install to Claude Desktop",
     claude_plugin_marketplace: "Install with Claude CLI",
     claude_code_plugin: "Install to Claude Code",
-    codex_plugin: "Add to Codex",
+    codex_plugin: "Install to Codex",
     copilot_plugin: "Install to Copilot CLI",
     managed_skill_bundle: "Install Skills",
   };
@@ -2307,8 +2569,16 @@ function createActionsShape() {
     previewPlugin: async (_id: string) => null as PluginInstallPreviewResult | null,
     installPlugin: async (_id: string) => {},
     uninstallPlugin: async (_id: string) => {},
+    previewPonytailCodexHooks: async () => null as CodexHookTrustResult | null,
+    trustPonytailCodexHooks: async () => {},
+    generatePonytailMcpbInstaller: async () => {},
+    installPonytailClaudeDesktopOrgPlugin: async () => {},
+    openClaudeDesktopOrgPluginsDir: async () => {},
+    openPonytailClaudeDesktopMarketplaceSetup: async () => {},
     installMarketScript: async (_id: string) => {},
     refreshPluginHub: async () => null as PluginHubResult | null,
+    refreshClaudeDesktopOrgPlugin: async () => null as ClaudeDesktopOrgPluginStatusResult | null,
+    refreshClaudeDesktopMarketplace: async () => null as ClaudeDesktopMarketplaceStatusResult | null,
     refreshScripts: async () => null as ScriptMarketResult | null,
     repairEntrypoints: async () => {},
     repairBackend: async () => {},

@@ -735,8 +735,11 @@ impl MemoryAssistStore {
             .unwrap_or_else(|| Path::new("."))
             .join("memory_assist_backups");
         fs::create_dir_all(&backup_dir)?;
-        let backup_path =
-            backup_dir.join(format!("memory_assist-{}-{}.sqlite", now_unix(), now_nanos()));
+        let backup_path = backup_dir.join(format!(
+            "memory_assist-{}-{}.sqlite",
+            now_unix(),
+            now_nanos()
+        ));
         if self.db_path.exists() {
             fs::copy(&self.db_path, &backup_path)?;
         } else {

@@ -7,12 +7,9 @@ const PATCH_MARKER: &str = "claude-codex-pro-zh-cn-patch";
 const LANGUAGE_MARKER: &str = "claude-codex-pro-zh-cn-language";
 const TEXT_MARKER: &str = "claude-codex-pro-zh-cn-text";
 const BACKUP_DIR_NAME: &str = "Claude-zh-CN-official-backup";
-const DESKTOP_I18N_URL: &str =
-    "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/desktop-zh-CN.json";
-const FRONTEND_I18N_URL: &str =
-    "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/frontend-zh-CN.json";
-const STATSIG_I18N_URL: &str =
-    "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/statsig-zh-CN.json";
+const DESKTOP_I18N_URL: &str = "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/desktop-zh-CN.json";
+const FRONTEND_I18N_URL: &str = "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/frontend-zh-CN.json";
+const STATSIG_I18N_URL: &str = "https://raw.githubusercontent.com/Jyy1529/claude-desktop_win-zh_cn/master/resources/statsig-zh-CN.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,7 +116,11 @@ async fn fetch_i18n_json(client: &reqwest::Client, url: &str) -> anyhow::Result<
         .await?;
     let value: serde_json::Value =
         serde_json::from_str(&text).with_context(|| format!("远程汉化资源不是合法 JSON：{url}"))?;
-    if !value.as_object().map(|object| !object.is_empty()).unwrap_or(false) {
+    if !value
+        .as_object()
+        .map(|object| !object.is_empty())
+        .unwrap_or(false)
+    {
         anyhow::bail!("远程汉化资源为空：{url}");
     }
     Ok(text)
@@ -139,8 +140,12 @@ pub fn install_patch_at_with_resources(
     resources: Option<&RemoteI18nResources>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let mut changed_files = Vec::new();
-    std::fs::create_dir_all(&paths.backup_dir)
-        .with_context(|| format!("创建 Claude 中文补丁备份目录失败：{}", paths.backup_dir.display()))?;
+    std::fs::create_dir_all(&paths.backup_dir).with_context(|| {
+        format!(
+            "创建 Claude 中文补丁备份目录失败：{}",
+            paths.backup_dir.display()
+        )
+    })?;
 
     let root_i18n = paths.app_root.join("resources").join("zh-CN.json");
     backup_file(&root_i18n, paths)?;
@@ -402,7 +407,10 @@ fn find_patchable_chunks(app_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(chunks
         .into_iter()
         .filter(|path| {
-            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
             name.starts_with("index-") || name.starts_with("assets-") || name.starts_with("main-")
         })
         .collect())
@@ -410,7 +418,10 @@ fn find_patchable_chunks(app_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
 fn patch_chunk(path: &Path) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(path)?;
-    if text.contains(PATCH_MARKER) && has_zh_cn_language_support(&text) && text.contains(TEXT_MARKER) {
+    if text.contains(PATCH_MARKER)
+        && has_zh_cn_language_support(&text)
+        && text.contains(TEXT_MARKER)
+    {
         return Ok(());
     }
     let mut patched = ensure_language_support(text);
@@ -444,9 +455,7 @@ fn ensure_language_support(text: String) -> String {
             return format!("{patched}\n/* {LANGUAGE_MARKER} */");
         }
     }
-    format!(
-        "{patched}\n;window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__ = \"{LANGUAGE_MARKER}\";"
-    )
+    format!("{patched}\n;window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__ = \"{LANGUAGE_MARKER}\";")
 }
 
 fn has_zh_cn_language_support(text: &str) -> bool {
@@ -659,9 +668,11 @@ mod tests {
         assert!(outcome.status.locale_configured);
         assert!(outcome.status.chunk_patch_present);
         assert!(outcome.status.language_whitelist_patched);
-        assert!(std::fs::read_to_string(&paths.locale_config_path)
-            .unwrap()
-            .contains("zh-CN"));
+        assert!(
+            std::fs::read_to_string(&paths.locale_config_path)
+                .unwrap()
+                .contains("zh-CN")
+        );
         let patched_chunk = std::fs::read_to_string(
             paths
                 .app_root

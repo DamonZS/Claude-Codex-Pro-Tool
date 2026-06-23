@@ -297,7 +297,8 @@ fn is_macos_installer_asset(name: &str) -> bool {
 }
 
 fn is_project_release_asset(name: &str) -> bool {
-    name.contains("claude-codex-pro")
+    (name == "claude-codex-pro.msi" || name.starts_with("claude-codex-pro-"))
+        && !name.starts_with("claude-codex-pro-plus")
 }
 
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {

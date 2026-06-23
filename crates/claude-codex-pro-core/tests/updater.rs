@@ -93,6 +93,14 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
 fn asset_selection_prefers_current_platform_artifacts() {
     let assets = vec![
         (
+            "claude-codex-pro-plus-9.9.9-windows-x64-setup.exe".to_string(),
+            "https://example.test/old-plus-setup.exe".to_string(),
+        ),
+        (
+            "claude-codex-pro-plus-9.9.9-macos-x64.dmg".to_string(),
+            "https://example.test/old-plus.dmg".to_string(),
+        ),
+        (
             "claude-codex-pro.zip".to_string(),
             "https://example.test/source.zip".to_string(),
         ),

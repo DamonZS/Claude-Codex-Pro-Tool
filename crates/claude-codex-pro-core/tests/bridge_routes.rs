@@ -805,11 +805,7 @@ async fn memory_bridge_respects_disabled_settings_before_writing() {
             temp.path().join("memory.sqlite"),
         ),
     );
-    let ctx = BridgeContext::new(
-        settings,
-        Arc::new(runtime),
-        Arc::new(FakeData::default()),
-    );
+    let ctx = BridgeContext::new(settings, Arc::new(runtime), Arc::new(FakeData::default()));
 
     let learned = handle_bridge_request(
         ctx.clone(),
@@ -850,11 +846,7 @@ async fn memory_bridge_respects_auto_suggest_disabled_for_candidates() {
             temp.path().join("memory.sqlite"),
         ),
     );
-    let ctx = BridgeContext::new(
-        settings,
-        Arc::new(runtime),
-        Arc::new(FakeData::default()),
-    );
+    let ctx = BridgeContext::new(settings, Arc::new(runtime), Arc::new(FakeData::default()));
 
     let learned = handle_bridge_request(
         ctx.clone(),

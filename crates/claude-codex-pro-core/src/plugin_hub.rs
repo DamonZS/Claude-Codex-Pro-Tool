@@ -1,6 +1,7 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,6 +15,12 @@ pub const PONYTAIL_REPOSITORY_URL: &str = "https://github.com/DietrichGebert/pon
 const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 const PONYTAIL_MARKETPLACE: &str = "DietrichGebert/ponytail";
 const PONYTAIL_PLUGIN_REF: &str = "ponytail@ponytail";
+const PONYTAIL_CODEX_ID: &str = "ponytail:codex-plugin";
+const PONYTAIL_CODEX_PLUGIN_ID: &str = "ponytail@ponytail";
+const PONYTAIL_CODEX_HOOKS_RELATIVE_PATH: &str = "hooks/claude-codex-hooks.json";
+const PONYTAIL_CLAUDE_DESKTOP_ORG_ID: &str = "ponytail:claude-desktop-org-plugin";
+const PONYTAIL_ORG_PLUGIN_DIR_NAME: &str = "ponytail";
+const PONYTAIL_CLAUDE_DESKTOP_MARKETPLACE_DEEP_LINK: &str = "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +68,7 @@ pub struct PluginCatalogItem {
 pub enum InstallKind {
     ClaudePluginMarketplace,
     ClaudeDesktopMcp,
+    ClaudeDesktopOrgPlugin,
     ClaudeCodePlugin,
     CodexPlugin,
     CopilotPlugin,
@@ -113,6 +121,85 @@ pub struct PluginHubInstallRecord {
     pub command: Vec<String>,
     pub source_url: String,
     pub backup_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_paths: Vec<String>,
+    #[serde(default)]
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexHookTrustEntry {
+    pub key: String,
+    pub event_name: String,
+    pub matcher: Option<String>,
+    pub command: String,
+    pub status_message: Option<String>,
+    pub current_hash: String,
+    pub trusted: bool,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexHookTrustPreview {
+    pub config_path: String,
+    pub hooks: Vec<CodexHookTrustEntry>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpbPackageOutcome {
+    pub mcpb_path: String,
+    pub manifest_path: String,
+    pub opened: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopOrgPluginStatus {
+    pub supported: bool,
+    pub org_plugins_dir: String,
+    pub config_library_dir: String,
+    pub profile_meta_path: String,
+    pub ponytail_plugin_dir: String,
+    pub ponytail_installed: bool,
+    pub writable: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopOrgPluginOutcome {
+    pub installed: bool,
+    pub org_plugins_dir: String,
+    pub plugin_dir: String,
+    pub manifest_path: String,
+    pub plugin_json_path: String,
+    pub copied_skills: Vec<String>,
+    pub backup_path: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopMarketplaceStatus {
+    pub supported: bool,
+    pub marketplace: String,
+    pub plugin: String,
+    pub deep_link: String,
+    pub can_auto_write: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopMarketplaceOutcome {
+    pub opened: bool,
+    pub deep_link: String,
+    pub message: String,
 }
 
 pub async fn fetch_catalog() -> PluginHubCatalog {
@@ -225,9 +312,9 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
 
     match preview.item.install_kind {
         InstallKind::ClaudeDesktopMcp => install_claude_desktop_mcp(preview),
-        InstallKind::ClaudeCodePlugin | InstallKind::CodexPlugin | InstallKind::CopilotPlugin => {
-            install_cli_plugin(preview)
-        }
+        InstallKind::ClaudeDesktopOrgPlugin => install_claude_desktop_org_plugin(preview),
+        InstallKind::CodexPlugin => install_codex_plugin(preview),
+        InstallKind::ClaudeCodePlugin | InstallKind::CopilotPlugin => install_cli_plugin(preview),
         InstallKind::ManagedSkillBundle => install_managed_skill_bundle(preview),
         InstallKind::McpServer => {
             anyhow::bail!(
@@ -243,7 +330,10 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
 
 pub fn uninstall_item(id: &str) -> anyhow::Result<Vec<PluginHubInstallRecord>> {
     let mut records = load_installed_records().unwrap_or_default();
-    records.remove(id);
+    if let Some(record) = records.get(id).cloned() {
+        uninstall_record_artifacts(&record)?;
+        records.remove(id);
+    }
     save_installed_records(&records)?;
     Ok(records.into_values().collect())
 }
@@ -258,10 +348,17 @@ pub fn load_installed_records() -> anyhow::Result<BTreeMap<String, PluginHubInst
                 .with_context(|| format!("读取插件中心安装记录失败：{}", path.display()));
         }
     };
-    let records = serde_json::from_str::<Vec<PluginHubInstallRecord>>(&text)
-        .with_context(|| format!("解析插件中心安装记录失败：{}", path.display()))?;
+    installed_records_from_text(&text)
+        .with_context(|| format!("解析插件中心安装记录失败：{}", path.display()))
+}
+
+fn installed_records_from_text(
+    text: &str,
+) -> anyhow::Result<BTreeMap<String, PluginHubInstallRecord>> {
+    let records = serde_json::from_str::<Vec<PluginHubInstallRecord>>(text)?;
     Ok(records
         .into_iter()
+        .filter(|record| record.install_kind != InstallKind::CodexPlugin || record.verified)
         .map(|record| (record.id.clone(), record))
         .collect())
 }
@@ -571,12 +668,12 @@ fn ponytail_catalog_items(
                 InstallStatus::NotInstalled,
             ),
             install_command: ponytail_codex_install_command(),
-            config_preview: "codex plugin marketplace add DietrichGebert/ponytail\n\n然后打开 Codex，进入 /plugins 选择 Ponytail marketplace 安装，并在 /hooks 中审查和信任 hooks。".to_string(),
-            risk: "Codex CLI 目前只保证添加 marketplace；具体插件安装与 hooks 信任仍在 Codex 交互界面完成，避免后台静默信任第三方 hooks。".to_string(),
+            config_preview: "codex plugin marketplace add DietrichGebert/ponytail --json\ncodex plugin list --available --json\ncodex plugin add ponytail@ponytail --json\n\nHooks are reviewed and trusted only through the separate Review hooks / Trust hooks actions.".to_string(),
+            risk: "Runs Codex CLI marketplace add/list/add. The install is recorded only after CLI success; third-party hooks are never trusted silently.".to_string(),
             requirements: vec![
                 "codex CLI".to_string(),
                 "Node.js on PATH".to_string(),
-                "Codex /plugins 手动确认".to_string(),
+                "Separate hook review".to_string(),
             ],
         },
         PluginCatalogItem {
@@ -644,6 +741,42 @@ fn ponytail_catalog_items(
                 "Node.js".to_string(),
                 "Claude Desktop".to_string(),
                 "npm install 会在托管缓存中安装 MCP 依赖".to_string(),
+            ],
+        },
+        PluginCatalogItem {
+            id: PONYTAIL_CLAUDE_DESKTOP_ORG_ID.to_string(),
+            name: "Ponytail Organization Plugin for Claude Desktop".to_string(),
+            description: format!(
+                "{base_description} 安装为 Claude Desktop 开发模式可读取的组织插件目录。"
+            ),
+            source_id: source_id.to_string(),
+            source_label: source_label.to_string(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            category: "claude-desktop-org-plugin".to_string(),
+            author: "Dietrich Gebert".to_string(),
+            homepage: PONYTAIL_REPOSITORY_URL.to_string(),
+            license: "MIT".to_string(),
+            tags: {
+                let mut tags = base_tags();
+                tags.push("claude-desktop".to_string());
+                tags.push("organization-plugin".to_string());
+                tags
+            },
+            install_kind: InstallKind::ClaudeDesktopOrgPlugin,
+            install_status: status_for(
+                PONYTAIL_CLAUDE_DESKTOP_ORG_ID,
+                installed,
+                InstallStatus::NotInstalled,
+            ),
+            install_command: Vec::new(),
+            config_preview: claude_desktop_org_plugin_preview_text(),
+            risk: "会写入 Claude Desktop 组织插件目录；Windows 默认路径在 Program Files 下，普通权限不可写时会失败并提示以管理员运行。只复制 skills 和插件元数据，不静默信任 hooks。".to_string(),
+            requirements: vec![
+                "Claude Desktop 3P / 开发模式".to_string(),
+                "Git".to_string(),
+                "可写入组织插件目录".to_string(),
+                "Claude 官方插件仓库配置仍需在 Claude Desktop 内确认".to_string(),
+                "完全重启 Claude Desktop 后生效".to_string(),
             ],
         },
         PluginCatalogItem {
@@ -721,16 +854,30 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
                     .to_string(),
             item,
         },
-        InstallKind::ClaudeCodePlugin | InstallKind::CodexPlugin | InstallKind::CopilotPlugin => {
-            PluginInstallPreview {
-                command: item.install_command.clone(),
-                config_diff: item.config_preview.clone(),
-                can_install: true,
-                action: "external_cli_plugin".to_string(),
-                message: "Run the previewed CLI install steps. If the target CLI is missing or not logged in, the error output is returned.".to_string(),
-                item,
-            }
-        }
+        InstallKind::ClaudeDesktopOrgPlugin => PluginInstallPreview {
+            command: Vec::new(),
+            config_diff: claude_desktop_org_plugin_preview_text(),
+            can_install: true,
+            action: "claude_desktop_org_plugin".to_string(),
+            message: "Copies a reviewed plugin directory into Claude Desktop's organization plugin folder. Restart Claude Desktop after install.".to_string(),
+            item,
+        },
+        InstallKind::ClaudeCodePlugin | InstallKind::CopilotPlugin => PluginInstallPreview {
+            command: item.install_command.clone(),
+            config_diff: item.config_preview.clone(),
+            can_install: true,
+            action: "external_cli_plugin".to_string(),
+            message: "Run the previewed CLI install steps. If the target CLI is missing or not logged in, the error output is returned.".to_string(),
+            item,
+        },
+        InstallKind::CodexPlugin => PluginInstallPreview {
+            command: item.install_command.clone(),
+            config_diff: item.config_preview.clone(),
+            can_install: true,
+            action: "codex_cli_plugin".to_string(),
+            message: "Runs Codex CLI marketplace add, verifies Ponytail is available, then installs ponytail@ponytail. Hooks remain untrusted until you review and trust them separately.".to_string(),
+            item,
+        },
         InstallKind::ManagedSkillBundle => PluginInstallPreview {
             command: Vec::new(),
             config_diff: item.config_preview.clone(),
@@ -830,6 +977,7 @@ fn ponytail_codex_install_command() -> Vec<String> {
         "marketplace".to_string(),
         "add".to_string(),
         PONYTAIL_MARKETPLACE.to_string(),
+        "--json".to_string(),
     ]
 }
 
@@ -866,7 +1014,6 @@ fn cli_plugin_install_plan(kind: InstallKind) -> anyhow::Result<Vec<Vec<String>>
                 PONYTAIL_PLUGIN_REF.to_string(),
             ],
         ]),
-        InstallKind::CodexPlugin => Ok(vec![ponytail_codex_install_command()]),
         InstallKind::CopilotPlugin => Ok(vec![
             ponytail_copilot_install_command(),
             vec![
@@ -876,8 +1023,139 @@ fn cli_plugin_install_plan(kind: InstallKind) -> anyhow::Result<Vec<Vec<String>>
                 PONYTAIL_PLUGIN_REF.to_string(),
             ],
         ]),
+        InstallKind::CodexPlugin => Ok(vec![
+            ponytail_codex_install_command(),
+            vec![
+                "codex".to_string(),
+                "plugin".to_string(),
+                "list".to_string(),
+                "--available".to_string(),
+                "--json".to_string(),
+            ],
+            vec![
+                "codex".to_string(),
+                "plugin".to_string(),
+                "add".to_string(),
+                PONYTAIL_PLUGIN_REF.to_string(),
+                "--json".to_string(),
+            ],
+        ]),
         _ => anyhow::bail!("unsupported CLI plugin install kind"),
     }
+}
+
+fn uninstall_record_artifacts(record: &PluginHubInstallRecord) -> anyhow::Result<()> {
+    match record.install_kind {
+        InstallKind::ClaudeDesktopMcp => {
+            let server_name = claude_desktop_server_name_for_record(record);
+            remove_claude_desktop_mcp_server(&claude_desktop_config_path(), &server_name)?;
+        }
+        InstallKind::ClaudeDesktopOrgPlugin => {
+            remove_claude_desktop_org_plugin(record)?;
+        }
+        InstallKind::ManagedSkillBundle => {
+            remove_managed_skill_paths(record)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn remove_managed_skill_paths(record: &PluginHubInstallRecord) -> anyhow::Result<()> {
+    let paths = managed_skill_paths_for_record(record)?;
+    remove_managed_skill_paths_under(record, paths, codex_home_dir().join("skills"))
+}
+
+fn remove_claude_desktop_org_plugin(record: &PluginHubInstallRecord) -> anyhow::Result<()> {
+    let allowed_root = claude_desktop_org_plugins_dir();
+    let plugin_dir = record
+        .managed_paths
+        .first()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| allowed_root.join(PONYTAIL_ORG_PLUGIN_DIR_NAME));
+    let absolute_allowed_root = std::path::absolute(&allowed_root).unwrap_or(allowed_root);
+    let absolute_plugin_dir =
+        std::path::absolute(&plugin_dir).unwrap_or_else(|_| plugin_dir.clone());
+    if !absolute_plugin_dir.starts_with(&absolute_allowed_root) {
+        anyhow::bail!(
+            "Refusing to remove Claude Desktop organization plugin outside org plugin directory: {}",
+            plugin_dir.display()
+        );
+    }
+    remove_path_if_exists(&plugin_dir)?;
+    if let Some(backup_root) = record.backup_path.as_ref().map(PathBuf::from) {
+        if backup_root.exists() {
+            copy_dir_recursive(&backup_root, &plugin_dir)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_managed_skill_paths_under(
+    record: &PluginHubInstallRecord,
+    paths: Vec<PathBuf>,
+    allowed_root: PathBuf,
+) -> anyhow::Result<()> {
+    let allowed_root = std::path::absolute(&allowed_root).unwrap_or(allowed_root);
+    for destination in paths {
+        let absolute_destination =
+            std::path::absolute(&destination).unwrap_or_else(|_| destination.clone());
+        if !absolute_destination.starts_with(&allowed_root) {
+            anyhow::bail!(
+                "Refusing to remove managed skill outside Codex skills directory: {}",
+                destination.display()
+            );
+        }
+        let backup = record.backup_path.as_ref().and_then(|root| {
+            destination
+                .file_name()
+                .map(|name| PathBuf::from(root).join(name))
+        });
+        remove_path_if_exists(&destination)?;
+        if let Some(backup) = backup {
+            if backup.exists() {
+                copy_dir_recursive(&backup, &destination)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn managed_skill_paths_for_record(record: &PluginHubInstallRecord) -> anyhow::Result<Vec<PathBuf>> {
+    if !record.managed_paths.is_empty() {
+        return Ok(record.managed_paths.iter().map(PathBuf::from).collect());
+    }
+    if record.id != "ponytail:codex-skills" {
+        return Ok(Vec::new());
+    }
+    let source_skills = ponytail_repo_dir().join("skills");
+    if !source_skills.is_dir() {
+        anyhow::bail!(
+            "Cannot locate managed Ponytail skills for uninstall: {}",
+            source_skills.display()
+        );
+    }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(source_skills)? {
+        let entry = entry?;
+        let source = entry.path();
+        if source.is_dir() && source.join("SKILL.md").is_file() {
+            paths.push(codex_home_dir().join("skills").join(entry.file_name()));
+        }
+    }
+    Ok(paths)
+}
+
+fn remove_path_if_exists(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 fn run_command(command: &[String]) -> anyhow::Result<(String, String)> {
@@ -897,6 +1175,27 @@ fn run_command(command: &[String]) -> anyhow::Result<(String, String)> {
     Ok((stdout, stderr))
 }
 
+fn install_claude_desktop_org_plugin(
+    preview: PluginInstallPreview,
+) -> anyhow::Result<PluginInstallOutcome> {
+    let outcome = install_ponytail_claude_desktop_org_plugin()?;
+    record_install_with_managed_paths(
+        &preview.item,
+        Vec::new(),
+        outcome.backup_path.clone(),
+        vec![outcome.plugin_dir.clone()],
+    )?;
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: outcome.installed,
+        message: outcome.message,
+        stdout: outcome.copied_skills.join("\n"),
+        stderr: String::new(),
+        backup_path: outcome.backup_path,
+    })
+}
+
 fn install_cli_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
     let plan = cli_plugin_install_plan(preview.item.install_kind)?;
     let mut stdout = String::new();
@@ -906,7 +1205,12 @@ fn install_cli_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginIns
         if recorded_command.is_empty() {
             recorded_command = command.clone();
         }
-        let (out, err) = run_command(&command)?;
+        let (out, err) = run_command(&command).map_err(|error| {
+            anyhow::anyhow!(
+                "{}",
+                cli_plugin_install_failure_message(&preview.item.install_kind, &command, error)
+            )
+        })?;
         if !out.is_empty() {
             stdout.push_str(&out);
         }
@@ -924,6 +1228,412 @@ fn install_cli_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginIns
         stderr,
         backup_path: None,
     })
+}
+
+fn cli_plugin_install_failure_message(
+    kind: &InstallKind,
+    command: &[String],
+    error: anyhow::Error,
+) -> String {
+    let raw = error.to_string();
+    let command_text = command.join(" ");
+    let login_hint = [
+        "未找到有效的登录配置",
+        "请先登录",
+        "No valid login configuration",
+        "please login",
+        "login first",
+    ];
+    if matches!(kind, InstallKind::ClaudeCodePlugin)
+        && login_hint.iter().any(|needle| raw.contains(needle))
+    {
+        return format!(
+            "Claude Code CLI is not logged in. Run `claude` and complete login, then retry.\nCommand: {command_text}\nOutput: {raw}"
+        );
+    }
+    format!("CLI plugin install failed.\nCommand: {command_text}\nOutput: {raw}")
+}
+
+fn install_codex_plugin(preview: PluginInstallPreview) -> anyhow::Result<PluginInstallOutcome> {
+    let plan = cli_plugin_install_plan(InstallKind::CodexPlugin)?;
+    let (marketplace_stdout, marketplace_stderr) = run_command(&plan[0])
+        .with_context(|| "Codex CLI marketplace add failed; plugin was not marked installed")?;
+    let (list_stdout, list_stderr) = run_command(&plan[1]).with_context(
+        || "Codex CLI available plugin list failed; plugin was not marked installed",
+    )?;
+    ensure_codex_available_list_contains_ponytail(&list_stdout)?;
+    let (install_stdout, install_stderr) = run_command(&plan[2])
+        .with_context(|| "Codex CLI plugin add failed; plugin was not marked installed")?;
+    let installed_path = parse_codex_plugin_add_installed_path(&install_stdout);
+    let mut managed_paths = Vec::new();
+    if let Some(path) = installed_path {
+        managed_paths.push(path);
+    }
+    record_install_with_managed_paths(&preview.item, plan[2].clone(), None, managed_paths.clone())?;
+    let stdout = [marketplace_stdout, list_stdout, install_stdout].concat();
+    let stderr = [marketplace_stderr, list_stderr, install_stderr].concat();
+    Ok(PluginInstallOutcome {
+        item: preview.item.clone(),
+        preview,
+        installed: true,
+        message: "Ponytail installed in Codex via CLI. Review hooks before trusting them; this step did not silently trust third-party hooks.".to_string(),
+        stdout,
+        stderr,
+        backup_path: None,
+    })
+}
+
+fn ensure_codex_available_list_contains_ponytail(text: &str) -> anyhow::Result<()> {
+    let raw: Value = serde_json::from_str(text).context("parse codex plugin list --json output")?;
+    let entries = raw
+        .get("available")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .chain(
+            raw.get("installed")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten(),
+        );
+    let found = entries.into_iter().any(codex_plugin_entry_is_ponytail);
+    if found {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Codex marketplace was added, but ponytail@ponytail was not found in `codex plugin list --available --json`; install was not recorded."
+        )
+    }
+}
+
+fn codex_plugin_entry_is_ponytail(entry: &Value) -> bool {
+    ["pluginId", "name", "marketplaceName", "id"]
+        .into_iter()
+        .filter_map(|key| entry.get(key).and_then(Value::as_str))
+        .any(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value == "ponytail@ponytail" || value == "ponytail"
+        })
+}
+
+fn parse_codex_plugin_add_installed_path(text: &str) -> Option<String> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|raw| {
+            raw.get("installedPath")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|value| !value.is_empty())
+}
+
+pub fn preview_ponytail_codex_hooks() -> anyhow::Result<CodexHookTrustPreview> {
+    let hooks = discover_ponytail_codex_hooks()?;
+    let config_path = codex_config_path();
+    let pending = hooks.iter().filter(|hook| !hook.trusted).count();
+    Ok(CodexHookTrustPreview {
+        config_path: config_path.to_string_lossy().to_string(),
+        hooks,
+        message: if pending == 0 {
+            "All discovered Ponytail Codex hooks are already trusted.".to_string()
+        } else {
+            format!(
+                "Discovered {pending} untrusted Ponytail Codex hook(s). Review them before trusting."
+            )
+        },
+    })
+}
+
+pub fn trust_ponytail_codex_hooks() -> anyhow::Result<CodexHookTrustPreview> {
+    let hooks = discover_ponytail_codex_hooks()?;
+    let pending = hooks
+        .iter()
+        .filter(|hook| !hook.trusted)
+        .cloned()
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return preview_ponytail_codex_hooks();
+    }
+    let config_path = codex_config_path();
+    upsert_codex_hook_trust_state(&config_path, &pending)?;
+    preview_ponytail_codex_hooks()
+}
+
+fn discover_ponytail_codex_hooks() -> anyhow::Result<Vec<CodexHookTrustEntry>> {
+    let plugin_root = ponytail_codex_plugin_root()?;
+    let hooks_path = plugin_root.join(PONYTAIL_CODEX_HOOKS_RELATIVE_PATH);
+    if !hooks_path.is_file() {
+        anyhow::bail!(
+            "Ponytail Codex hooks file not found at {}. Install Ponytail for Codex first.",
+            hooks_path.display()
+        );
+    }
+    let text = std::fs::read_to_string(&hooks_path)
+        .with_context(|| format!("read {}", hooks_path.display()))?;
+    let raw: Value =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", hooks_path.display()))?;
+    let states = read_codex_hook_states(&codex_config_path())?;
+    let mut entries = Vec::new();
+    let hooks_object = raw
+        .get("hooks")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("Ponytail hooks JSON must contain a hooks object"))?;
+    for (event_name, groups) in hooks_object {
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        for (group_index, group) in groups.iter().enumerate() {
+            let matcher =
+                matcher_for_hash(event_name, group.get("matcher").and_then(Value::as_str));
+            let Some(hooks) = group.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+            for (handler_index, handler) in hooks.iter().enumerate() {
+                if handler.get("type").and_then(Value::as_str) != Some("command") {
+                    continue;
+                }
+                let command = effective_hook_command(handler);
+                if command.trim().is_empty() {
+                    continue;
+                }
+                let timeout_sec = handler
+                    .get("timeout")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(600)
+                    .max(1);
+                let status_message = handler
+                    .get("statusMessage")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let key = format!(
+                    "{}:{}:{}:{}:{}",
+                    PONYTAIL_CODEX_PLUGIN_ID,
+                    PONYTAIL_CODEX_HOOKS_RELATIVE_PATH,
+                    hook_event_key_label(event_name),
+                    group_index,
+                    handler_index
+                );
+                let current_hash = command_hook_hash_for_value(
+                    hook_event_key_label(event_name),
+                    matcher,
+                    &effective_hook_command(handler),
+                    timeout_sec,
+                    status_message.as_deref(),
+                )?;
+                let trusted = states.get(&key) == Some(&current_hash);
+                entries.push(CodexHookTrustEntry {
+                    key,
+                    event_name: hook_event_key_label(event_name).to_string(),
+                    matcher: matcher.map(str::to_string),
+                    command,
+                    status_message,
+                    current_hash,
+                    trusted,
+                    source_path: hooks_path.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+    if entries.is_empty() {
+        anyhow::bail!(
+            "No command hooks were discovered in {}",
+            hooks_path.display()
+        );
+    }
+    Ok(entries)
+}
+
+fn ponytail_codex_plugin_root() -> anyhow::Result<PathBuf> {
+    if let Some(record) = load_installed_records()?.get(PONYTAIL_CODEX_ID) {
+        if let Some(path) = record.managed_paths.first() {
+            let path = PathBuf::from(path);
+            if path.join(PONYTAIL_CODEX_HOOKS_RELATIVE_PATH).is_file() {
+                return Ok(path);
+            }
+        }
+    }
+    let (stdout, _) = run_command(&[
+        "codex".to_string(),
+        "plugin".to_string(),
+        "list".to_string(),
+        "--json".to_string(),
+    ])
+    .context("cannot locate installed Ponytail plugin; `codex plugin list --json` failed")?;
+    parse_codex_installed_plugin_path(&stdout).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Ponytail is not installed in Codex or Codex CLI did not return an installed path. Install Ponytail for Codex first."
+        )
+    })
+}
+
+fn parse_codex_installed_plugin_path(text: &str) -> Option<PathBuf> {
+    let raw = serde_json::from_str::<Value>(text).ok()?;
+    let installed = raw.get("installed").and_then(Value::as_array)?;
+    installed
+        .iter()
+        .filter(|entry| codex_plugin_entry_is_ponytail(entry))
+        .find_map(|entry| entry.get("installedPath").and_then(Value::as_str))
+        .map(PathBuf::from)
+}
+
+fn codex_config_path() -> PathBuf {
+    codex_home_dir().join("config.toml")
+}
+
+fn read_codex_hook_states(config_path: &Path) -> anyhow::Result<BTreeMap<String, String>> {
+    let text = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", config_path.display())),
+    };
+    let value = text
+        .parse::<toml::Value>()
+        .unwrap_or_else(|_| toml::Value::Table(Default::default()));
+    let mut states = BTreeMap::new();
+    if let Some(table) = value
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table)
+    {
+        for (key, state) in table {
+            if let Some(hash) = state.get("trusted_hash").and_then(toml::Value::as_str) {
+                states.insert(key.clone(), hash.to_string());
+            }
+        }
+    }
+    Ok(states)
+}
+
+fn upsert_codex_hook_trust_state(
+    config_path: &Path,
+    hooks: &[CodexHookTrustEntry],
+) -> anyhow::Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let existing = std::fs::read_to_string(config_path).unwrap_or_default();
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+    let root = doc.as_table_mut();
+    if !root.contains_key("hooks") || !root["hooks"].is_table() {
+        root.insert("hooks", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let hooks_table = root["hooks"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("Codex hooks config is not a TOML table"))?;
+    if !hooks_table.contains_key("state") || !hooks_table["state"].is_table() {
+        hooks_table.insert("state", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let state_table = hooks_table["state"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("Codex hooks.state config is not a TOML table"))?;
+    for hook in hooks {
+        let mut hook_state = toml_edit::Table::new();
+        hook_state.insert("trusted_hash", toml_edit::value(hook.current_hash.clone()));
+        state_table.insert(&hook.key, toml_edit::Item::Table(hook_state));
+    }
+    crate::settings::atomic_write(config_path, doc.to_string().as_bytes())
+}
+
+fn hook_event_key_label(event_name: &str) -> &'static str {
+    match event_name {
+        "PreToolUse" | "pre_tool_use" => "pre_tool_use",
+        "PermissionRequest" | "permission_request" => "permission_request",
+        "PostToolUse" | "post_tool_use" => "post_tool_use",
+        "PreCompact" | "pre_compact" => "pre_compact",
+        "PostCompact" | "post_compact" => "post_compact",
+        "SessionStart" | "session_start" => "session_start",
+        "UserPromptSubmit" | "user_prompt_submit" => "user_prompt_submit",
+        "SubagentStart" | "subagent_start" => "subagent_start",
+        "SubagentStop" | "subagent_stop" => "subagent_stop",
+        "Stop" | "stop" => "stop",
+        _ => "unknown",
+    }
+}
+
+fn matcher_for_hash<'a>(event_name: &str, matcher: Option<&'a str>) -> Option<&'a str> {
+    match hook_event_key_label(event_name) {
+        "user_prompt_submit" | "stop" => None,
+        _ => matcher,
+    }
+}
+
+fn effective_hook_command(handler: &Value) -> String {
+    if cfg!(windows) {
+        handler
+            .get("commandWindows")
+            .or_else(|| handler.get("command_windows"))
+            .and_then(Value::as_str)
+            .or_else(|| handler.get("command").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        handler
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+fn command_hook_hash_for_value(
+    event_name: &str,
+    matcher: Option<&str>,
+    command: &str,
+    timeout_sec: u64,
+    status_message: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut handler = serde_json::Map::new();
+    handler.insert("type".to_string(), json!("command"));
+    handler.insert("command".to_string(), json!(command));
+    handler.insert("timeout".to_string(), json!(timeout_sec));
+    handler.insert("async".to_string(), json!(false));
+    if let Some(status_message) = status_message {
+        handler.insert("statusMessage".to_string(), json!(status_message));
+    }
+
+    let mut group = serde_json::Map::new();
+    if let Some(matcher) = matcher {
+        group.insert("matcher".to_string(), json!(matcher));
+    }
+    group.insert(
+        "hooks".to_string(),
+        Value::Array(vec![Value::Object(handler)]),
+    );
+
+    let mut identity = serde_json::Map::new();
+    identity.insert("event_name".to_string(), json!(event_name));
+    identity.extend(group);
+    let toml_value = toml::Value::try_from(Value::Object(identity))?;
+    Ok(version_for_toml_value(&toml_value))
+}
+
+fn version_for_toml_value(value: &toml::Value) -> String {
+    let json = serde_json::to_value(value).unwrap_or(Value::Null);
+    let canonical = canonical_json_value(&json);
+    let serialized = serde_json::to_vec(&canonical).unwrap_or_default();
+    let hash = Sha256::digest(serialized);
+    format!("sha256:{hash:x}")
+}
+
+fn canonical_json_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut sorted = serde_json::Map::new();
+            let mut keys = map.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                if let Some(value) = map.get(&key) {
+                    sorted.insert(key, canonical_json_value(value));
+                }
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json_value).collect()),
+        other => other.clone(),
+    }
 }
 
 fn install_official_claude_plugin(
@@ -1097,6 +1807,363 @@ fn ensure_ponytail_mcp_ready() -> anyhow::Result<Vec<String>> {
     ])
 }
 
+pub fn generate_and_open_ponytail_mcpb() -> anyhow::Result<McpbPackageOutcome> {
+    let repo_dir = ensure_ponytail_repo()?;
+    let mcp_dir = repo_dir.join("ponytail-mcp");
+    let index = mcp_dir.join("index.js");
+    if !index.is_file() {
+        anyhow::bail!("Ponytail MCP entry not found: {}", index.display());
+    }
+    if !mcp_dir.join("node_modules").is_dir() {
+        run_command(&[
+            "npm".to_string(),
+            "install".to_string(),
+            "--omit=dev".to_string(),
+            "--prefix".to_string(),
+            mcp_dir.to_string_lossy().to_string(),
+        ])?;
+    }
+
+    let package_root = plugin_hub_dir()
+        .join("mcpb")
+        .join(format!("ponytail-{}", current_unix_timestamp_string()));
+    let server_dir = package_root.join("server");
+    std::fs::create_dir_all(&server_dir)?;
+    copy_dir_recursive(&mcp_dir, &server_dir)?;
+    write_ponytail_mcpb_manifest(&package_root)?;
+    write_ponytail_mcpb_package_json(&package_root)?;
+    let mcpb_path = package_root.with_extension("mcpb");
+    pack_mcpb_directory(&package_root, &mcpb_path)?;
+    open_path_with_system(&mcpb_path)?;
+    Ok(McpbPackageOutcome {
+        mcpb_path: mcpb_path.to_string_lossy().to_string(),
+        manifest_path: package_root
+            .join("manifest.json")
+            .to_string_lossy()
+            .to_string(),
+        opened: true,
+        message: "Ponytail MCPB package generated and opened. Complete installation in Claude Desktop's official confirmation dialog.".to_string(),
+    })
+}
+
+pub fn load_claude_desktop_org_plugin_status() -> ClaudeDesktopOrgPluginStatus {
+    let org_plugins_dir = claude_desktop_org_plugins_dir();
+    let config_library_dir = claude_desktop_threep_config_library_dir();
+    let profile_meta_path = config_library_dir.join("_meta.json");
+    let ponytail_plugin_dir = org_plugins_dir.join(PONYTAIL_ORG_PLUGIN_DIR_NAME);
+    let supported = matches!(
+        current_platform(),
+        DesktopPlatform::Windows | DesktopPlatform::Macos
+    );
+    let writable = directory_is_writable(&org_plugins_dir);
+    let ponytail_installed = ponytail_plugin_dir
+        .join(".claude-plugin")
+        .join("plugin.json")
+        .is_file()
+        && ponytail_plugin_dir.join("manifest.json").is_file()
+        && ponytail_plugin_dir.join("skills").is_dir();
+    let message = if !supported {
+        "Claude Desktop organization plugins are currently supported on Windows and macOS."
+            .to_string()
+    } else if ponytail_installed {
+        "Ponytail organization plugin is installed. Fully restart Claude Desktop to reload organization plugins.".to_string()
+    } else if !org_plugins_dir.is_dir() {
+        format!(
+            "Organization plugin directory does not exist yet: {}. Open directory or install Ponytail to create it if permissions allow.",
+            org_plugins_dir.display()
+        )
+    } else if !writable {
+        format!(
+            "Organization plugin directory is not writable: {}. Run the manager as administrator or adjust folder permissions.",
+            org_plugins_dir.display()
+        )
+    } else {
+        "Organization plugin directory is ready.".to_string()
+    };
+
+    ClaudeDesktopOrgPluginStatus {
+        supported,
+        org_plugins_dir: org_plugins_dir.to_string_lossy().to_string(),
+        config_library_dir: config_library_dir.to_string_lossy().to_string(),
+        profile_meta_path: profile_meta_path.to_string_lossy().to_string(),
+        ponytail_plugin_dir: ponytail_plugin_dir.to_string_lossy().to_string(),
+        ponytail_installed,
+        writable,
+        message,
+    }
+}
+
+pub fn load_claude_desktop_marketplace_status() -> ClaudeDesktopMarketplaceStatus {
+    let supported = matches!(
+        current_platform(),
+        DesktopPlatform::Windows | DesktopPlatform::Macos
+    );
+    let message = if supported {
+        "Claude Desktop plugin repositories are managed by Claude's official account/organization UI. This opens the Ponytail marketplace add page; Claude Desktop still asks you to confirm.".to_string()
+    } else {
+        "Claude Desktop marketplace deep links are currently supported on Windows and macOS."
+            .to_string()
+    };
+
+    ClaudeDesktopMarketplaceStatus {
+        supported,
+        marketplace: PONYTAIL_MARKETPLACE.to_string(),
+        plugin: "ponytail".to_string(),
+        deep_link: PONYTAIL_CLAUDE_DESKTOP_MARKETPLACE_DEEP_LINK.to_string(),
+        can_auto_write: false,
+        message,
+    }
+}
+
+pub fn open_ponytail_claude_desktop_marketplace_setup()
+-> anyhow::Result<ClaudeDesktopMarketplaceOutcome> {
+    let status = load_claude_desktop_marketplace_status();
+    if !status.supported {
+        anyhow::bail!("{}", status.message);
+    }
+    open_uri_with_system(&status.deep_link)?;
+    Ok(ClaudeDesktopMarketplaceOutcome {
+        opened: true,
+        deep_link: status.deep_link,
+        message: "Opened Claude Desktop's official Ponytail plugin repository setup page. Complete marketplace add/install inside Claude Desktop.".to_string(),
+    })
+}
+
+pub fn open_claude_desktop_org_plugins_dir() -> anyhow::Result<ClaudeDesktopOrgPluginStatus> {
+    let status = load_claude_desktop_org_plugin_status();
+    let path = PathBuf::from(&status.org_plugins_dir);
+    std::fs::create_dir_all(&path).with_context(|| {
+        format!(
+            "create Claude Desktop organization plugin dir {}",
+            path.display()
+        )
+    })?;
+    open_path_with_system(&path)?;
+    Ok(load_claude_desktop_org_plugin_status())
+}
+
+pub fn install_ponytail_claude_desktop_org_plugin() -> anyhow::Result<ClaudeDesktopOrgPluginOutcome>
+{
+    let org_plugins_dir = claude_desktop_org_plugins_dir();
+    std::fs::create_dir_all(&org_plugins_dir).with_context(|| {
+        format!(
+            "create Claude Desktop organization plugin dir {}",
+            org_plugins_dir.display()
+        )
+    })?;
+    if !directory_is_writable(&org_plugins_dir) {
+        anyhow::bail!(
+            "Claude Desktop organization plugin directory is not writable: {}. Run the manager as administrator or adjust folder permissions.",
+            org_plugins_dir.display()
+        );
+    }
+
+    let repo_dir = ensure_ponytail_repo()?;
+    let source_skills = repo_dir.join("skills");
+    if !source_skills.is_dir() {
+        anyhow::bail!(
+            "Ponytail skills directory not found: {}",
+            source_skills.display()
+        );
+    }
+
+    let plugin_dir = org_plugins_dir.join(PONYTAIL_ORG_PLUGIN_DIR_NAME);
+    let backup_path = if plugin_dir.exists() {
+        let backup = plugin_hub_backup_dir()
+            .join("claude-desktop-org-plugin")
+            .join(PONYTAIL_ORG_PLUGIN_DIR_NAME);
+        if let Some(parent) = backup.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        copy_dir_recursive(&plugin_dir, &backup)?;
+        std::fs::remove_dir_all(&plugin_dir)?;
+        Some(backup.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
+    let skills_dir = plugin_dir.join("skills");
+    std::fs::create_dir_all(plugin_dir.join(".claude-plugin"))?;
+    std::fs::create_dir_all(&skills_dir)?;
+    let copied_skills = copy_skill_dirs(&source_skills, &skills_dir)?;
+    if copied_skills.is_empty() {
+        anyhow::bail!(
+            "No Ponytail skill directories with SKILL.md were found in {}",
+            source_skills.display()
+        );
+    }
+    let plugin_json_path = plugin_dir.join(".claude-plugin").join("plugin.json");
+    let manifest_path = plugin_dir.join("manifest.json");
+    write_ponytail_org_plugin_json(&plugin_json_path)?;
+    write_ponytail_org_plugin_manifest(&manifest_path, &copied_skills)?;
+
+    Ok(ClaudeDesktopOrgPluginOutcome {
+        installed: true,
+        org_plugins_dir: org_plugins_dir.to_string_lossy().to_string(),
+        plugin_dir: plugin_dir.to_string_lossy().to_string(),
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+        plugin_json_path: plugin_json_path.to_string_lossy().to_string(),
+        copied_skills,
+        backup_path,
+        message: "Ponytail organization plugin installed for Claude Desktop. Fully restart Claude Desktop, then check Plugins & skills.".to_string(),
+    })
+}
+
+fn write_ponytail_mcpb_manifest(package_root: &Path) -> anyhow::Result<()> {
+    let manifest = json!({
+        "manifest_version": "0.3",
+        "name": "ponytail",
+        "display_name": "Ponytail MCP",
+        "version": "0.1.0",
+        "description": "Ponytail lazy senior developer instructions as a Claude Desktop MCP extension.",
+        "long_description": "Provides Ponytail's YAGNI, standard-library-first, smallest-correct-implementation guidance through an MCP server.",
+        "author": {
+            "name": "Dietrich Gebert",
+            "url": "https://github.com/DietrichGebert"
+        },
+        "repository": {
+            "type": "git",
+            "url": PONYTAIL_REPOSITORY_URL
+        },
+        "homepage": PONYTAIL_REPOSITORY_URL,
+        "server": {
+            "type": "node",
+            "entry_point": "server/index.js",
+            "mcp_config": {
+                "command": "node",
+                "args": ["${__dirname}/server/index.js"]
+            }
+        },
+        "tools": [
+            {
+                "name": "ponytail",
+                "description": "Return Ponytail lazy senior developer guidance."
+            }
+        ],
+        "keywords": ["ponytail", "yagni", "mcp", "claude-desktop"],
+        "license": "MIT",
+        "compatibility": {
+            "claude_desktop": ">=0.10.0",
+            "platforms": ["darwin", "win32", "linux"],
+            "runtimes": {
+                "node": ">=18.0.0"
+            }
+        },
+        "privacy_policies": []
+    });
+    crate::settings::atomic_write(
+        &package_root.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)?.as_bytes(),
+    )
+}
+
+fn write_ponytail_mcpb_package_json(package_root: &Path) -> anyhow::Result<()> {
+    let package = json!({
+        "type": "module",
+        "private": true
+    });
+    crate::settings::atomic_write(
+        &package_root.join("package.json"),
+        serde_json::to_string_pretty(&package)?.as_bytes(),
+    )
+}
+
+fn pack_mcpb_directory(source_dir: &Path, output_path: &Path) -> anyhow::Result<()> {
+    if output_path.exists() {
+        std::fs::remove_file(output_path)?;
+    }
+    #[cfg(windows)]
+    {
+        let zip_path = output_path.with_extension("zip");
+        if zip_path.exists() {
+            std::fs::remove_file(&zip_path)?;
+        }
+        let command = vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!(
+                "Set-Location -LiteralPath '{}'; Compress-Archive -Path * -DestinationPath '{}' -Force",
+                source_dir.display(),
+                zip_path.display()
+            ),
+        ];
+        run_command(&command)?;
+        std::fs::rename(zip_path, output_path)?;
+    }
+    #[cfg(not(windows))]
+    {
+        let command = vec![
+            "zip".to_string(),
+            "-r".to_string(),
+            output_path.to_string_lossy().to_string(),
+            ".".to_string(),
+        ];
+        let executable = command.first().cloned().unwrap_or_default();
+        let output = Command::new(executable)
+            .args(command.iter().skip(1))
+            .current_dir(source_dir)
+            .output()
+            .with_context(|| format!("cannot run command: {}", command.join(" ")))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "command failed: {}\n{}{}",
+                command.join(" "),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn open_path_with_system(path: &Path) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", &path.to_string_lossy()])
+            .spawn()
+            .with_context(|| format!("open {}", path.display()))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .with_context(|| format!("open {}", path.display()))?;
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .with_context(|| format!("open {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn open_uri_with_system(target: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        crate::windows_open_url(target).with_context(|| format!("open {target}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(target)
+            .spawn()
+            .with_context(|| format!("open {target}"))?;
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .with_context(|| format!("open {target}"))?;
+    }
+    Ok(())
+}
+
 fn codex_home_dir() -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -1156,7 +2223,12 @@ fn install_managed_skill_bundle(
     } else {
         Some(backup_root.to_string_lossy().to_string())
     };
-    record_install(&preview.item, Vec::new(), backup_path.clone())?;
+    record_install_with_managed_paths(
+        &preview.item,
+        Vec::new(),
+        backup_path.clone(),
+        copied.clone(),
+    )?;
     Ok(PluginInstallOutcome {
         item: preview.item.clone(),
         preview,
@@ -1195,12 +2267,192 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn copy_skill_dirs(source_skills: &Path, destination_skills: &Path) -> anyhow::Result<Vec<String>> {
+    let mut copied = Vec::new();
+    for entry in std::fs::read_dir(source_skills)? {
+        let entry = entry?;
+        let source = entry.path();
+        if !source.is_dir() || !source.join("SKILL.md").is_file() {
+            continue;
+        }
+        let destination = destination_skills.join(entry.file_name());
+        copy_dir_recursive(&source, &destination)?;
+        copied.push(destination.to_string_lossy().to_string());
+    }
+    copied.sort();
+    Ok(copied)
+}
+
+fn write_ponytail_org_plugin_json(path: &Path) -> anyhow::Result<()> {
+    let plugin = json!({
+        "name": "ponytail",
+        "version": "1.0.0",
+        "description": "Ponytail skills for Claude Desktop organization plugins"
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&plugin)?.as_bytes())
+}
+
+fn write_ponytail_org_plugin_manifest(path: &Path, copied_skills: &[String]) -> anyhow::Result<()> {
+    let skill_entries = copied_skills
+        .iter()
+        .filter_map(|skill_path| Path::new(skill_path).file_name())
+        .map(|name| {
+            let name = name.to_string_lossy();
+            json!({
+                "skillId": name,
+                "name": name,
+                "description": "Ponytail lazy senior developer guidance.",
+                "creatorType": "organization",
+                "updatedAt": null,
+                "enabled": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let manifest = json!({
+        "lastUpdated": current_unix_timestamp_string().parse::<u64>().unwrap_or(0) * 1000,
+        "skills": skill_entries
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&manifest)?.as_bytes())
+}
+
+fn claude_desktop_org_plugin_preview_text() -> String {
+    format!(
+        "Source: {}\\skills\\*\nTarget: {}\\{}\\skills\\*\nWrites: .claude-plugin\\plugin.json and manifest.json\nRestart Claude Desktop after install.",
+        ponytail_repo_dir().display(),
+        claude_desktop_org_plugins_dir().display(),
+        PONYTAIL_ORG_PLUGIN_DIR_NAME
+    )
+}
+
+fn directory_is_writable(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let probe = path.join(format!(
+        ".claude-codex-pro-write-test-{}",
+        current_unix_timestamp_string()
+    ));
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 fn claude_desktop_config_path() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Claude")
-        .join("claude_desktop_config.json")
+    claude_desktop_config_path_for_platform(
+        current_platform(),
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()),
+    )
+}
+
+fn claude_desktop_org_plugins_dir() -> PathBuf {
+    claude_desktop_org_plugins_dir_for_platform(
+        current_platform(),
+        std::env::var_os("ProgramFiles").map(PathBuf::from),
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()),
+    )
+}
+
+fn claude_desktop_org_plugins_dir_for_platform(
+    platform: DesktopPlatform,
+    program_files: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match platform {
+        DesktopPlatform::Windows => program_files
+            .unwrap_or_else(|| PathBuf::from("C:\\Program Files"))
+            .join("Claude")
+            .join("org-plugins"),
+        DesktopPlatform::Macos => PathBuf::from("/Library/Application Support/Claude/org-plugins"),
+        DesktopPlatform::Other => home
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join("Claude")
+            .join("org-plugins"),
+    }
+}
+
+fn claude_desktop_threep_config_library_dir() -> PathBuf {
+    claude_desktop_threep_config_library_dir_for_platform(
+        current_platform(),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()),
+    )
+}
+
+fn claude_desktop_threep_config_library_dir_for_platform(
+    platform: DesktopPlatform,
+    local_appdata: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match platform {
+        DesktopPlatform::Windows => local_appdata
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Claude-3p")
+            .join("configLibrary"),
+        DesktopPlatform::Macos => home
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("Claude-3p")
+            .join("configLibrary"),
+        DesktopPlatform::Other => home
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join("Claude-3p")
+            .join("configLibrary"),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DesktopPlatform {
+    Windows,
+    Macos,
+    Other,
+}
+
+fn current_platform() -> DesktopPlatform {
+    if cfg!(windows) {
+        DesktopPlatform::Windows
+    } else if cfg!(target_os = "macos") {
+        DesktopPlatform::Macos
+    } else {
+        DesktopPlatform::Other
+    }
+}
+
+fn claude_desktop_config_path_for_platform(
+    platform: DesktopPlatform,
+    appdata: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match platform {
+        DesktopPlatform::Windows => appdata.unwrap_or_else(|| PathBuf::from(".")).join("Claude"),
+        DesktopPlatform::Macos => home
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("Claude"),
+        DesktopPlatform::Other => home
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
+            .join("Claude"),
+    }
+    .join("claude_desktop_config.json")
 }
 
 fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>> {
@@ -1241,6 +2493,37 @@ fn upsert_claude_desktop_mcp_server(
     Ok(())
 }
 
+fn remove_claude_desktop_mcp_server(
+    config_path: &PathBuf,
+    server_name: &str,
+) -> anyhow::Result<()> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let mut config =
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_path)?)
+            .unwrap_or_else(|_| json!({}));
+    if let Some(servers) = config
+        .get_mut("mcpServers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        servers.remove(server_name);
+    }
+    crate::settings::atomic_write(
+        config_path,
+        serde_json::to_string_pretty(&config)?.as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn claude_desktop_server_name_for_record(record: &PluginHubInstallRecord) -> String {
+    match record.id.as_str() {
+        "ponytail:claude-desktop-mcp" => ponytail_mcp_server_name(),
+        "desktop:claude-codex-pro-codex" => desktop_mcp_server_name(),
+        _ => safe_id(&record.name),
+    }
+}
+
 fn claude_desktop_mcp_config_preview(server_name: &str, command: &[String]) -> String {
     let command_name = command
         .first()
@@ -1258,6 +2541,15 @@ fn record_install(
     command: Vec<String>,
     backup_path: Option<String>,
 ) -> anyhow::Result<()> {
+    record_install_with_managed_paths(item, command, backup_path, Vec::new())
+}
+
+fn record_install_with_managed_paths(
+    item: &PluginCatalogItem,
+    command: Vec<String>,
+    backup_path: Option<String>,
+    managed_paths: Vec<String>,
+) -> anyhow::Result<()> {
     let mut records = load_installed_records().unwrap_or_default();
     records.insert(
         item.id.clone(),
@@ -1269,6 +2561,8 @@ fn record_install(
             command,
             source_url: item.homepage.clone(),
             backup_path,
+            managed_paths,
+            verified: true,
         },
     );
     save_installed_records(&records)
@@ -1515,7 +2809,7 @@ mod tests {
             .map(|item| (item.id.as_str(), item.install_kind))
             .collect::<BTreeMap<_, _>>();
 
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
         assert_eq!(
             ids["ponytail:claude-code-plugin"],
             InstallKind::ClaudeCodePlugin
@@ -1525,6 +2819,10 @@ mod tests {
         assert_eq!(
             ids["ponytail:claude-desktop-mcp"],
             InstallKind::ClaudeDesktopMcp
+        );
+        assert_eq!(
+            ids[PONYTAIL_CLAUDE_DESKTOP_ORG_ID],
+            InstallKind::ClaudeDesktopOrgPlugin
         );
         assert_eq!(
             ids["ponytail:codex-skills"],
@@ -1542,7 +2840,7 @@ mod tests {
         let preview = preview_for_item(item);
 
         assert!(preview.can_install);
-        assert_eq!(preview.action, "external_cli_plugin");
+        assert_eq!(preview.action, "codex_cli_plugin");
         assert_eq!(
             preview.command,
             vec![
@@ -1550,10 +2848,54 @@ mod tests {
                 "plugin",
                 "marketplace",
                 "add",
-                "DietrichGebert/ponytail"
+                "DietrichGebert/ponytail",
+                "--json"
             ]
         );
-        assert!(preview.config_diff.contains("/hooks"));
+        assert!(
+            preview
+                .config_diff
+                .contains("codex plugin add ponytail@ponytail --json")
+        );
+        assert!(
+            preview.message.contains("does not silently trust")
+                || preview.message.contains("Hooks remain untrusted")
+        );
+        let plan = cli_plugin_install_plan(InstallKind::CodexPlugin).unwrap();
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[0], ponytail_codex_install_command());
+        assert_eq!(
+            plan[1],
+            vec!["codex", "plugin", "list", "--available", "--json"]
+        );
+        assert_eq!(
+            plan[2],
+            vec!["codex", "plugin", "add", "ponytail@ponytail", "--json"]
+        );
+    }
+
+    #[test]
+    fn codex_available_list_parser_finds_ponytail() {
+        ensure_codex_available_list_contains_ponytail(
+            r#"{"available":[{"pluginId":"ponytail@ponytail","name":"Ponytail","marketplaceName":"ponytail"}],"installed":[]}"#,
+        )
+        .unwrap();
+        assert!(
+            ensure_codex_available_list_contains_ponytail(
+                r#"{"available":[{"pluginId":"other@demo","name":"Other"}],"installed":[]}"#,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn codex_plugin_add_parser_reads_installed_path() {
+        assert_eq!(
+            parse_codex_plugin_add_installed_path(
+                r#"{"pluginId":"ponytail@ponytail","installedPath":"C:\\Users\\Damon\\.codex\\plugins\\cache\\ponytail"}"#
+            ),
+            Some("C:\\Users\\Damon\\.codex\\plugins\\cache\\ponytail".to_string())
+        );
     }
 
     #[test]
@@ -1684,6 +3026,356 @@ mod tests {
         assert_eq!(
             parsed["mcpServers"]["claude-codex-pro-codex"]["args"],
             json!(["mcp", "serve"])
+        );
+    }
+
+    #[test]
+    fn claude_desktop_config_path_uses_platform_locations() {
+        assert_eq!(
+            claude_desktop_config_path_for_platform(
+                DesktopPlatform::Windows,
+                Some(PathBuf::from("appdata")),
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("appdata")
+                .join("Claude")
+                .join("claude_desktop_config.json")
+        );
+        assert_eq!(
+            claude_desktop_config_path_for_platform(
+                DesktopPlatform::Macos,
+                Some(PathBuf::from("appdata")),
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("home")
+                .join("Library")
+                .join("Application Support")
+                .join("Claude")
+                .join("claude_desktop_config.json")
+        );
+        assert_eq!(
+            claude_desktop_config_path_for_platform(
+                DesktopPlatform::Other,
+                None,
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("home")
+                .join(".config")
+                .join("Claude")
+                .join("claude_desktop_config.json")
+        );
+    }
+
+    #[test]
+    fn claude_desktop_org_plugin_paths_use_platform_locations() {
+        assert_eq!(
+            claude_desktop_org_plugins_dir_for_platform(
+                DesktopPlatform::Windows,
+                Some(PathBuf::from("C:\\Program Files")),
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("C:\\Program Files")
+                .join("Claude")
+                .join("org-plugins")
+        );
+        assert_eq!(
+            claude_desktop_threep_config_library_dir_for_platform(
+                DesktopPlatform::Windows,
+                Some(PathBuf::from("local")),
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("local")
+                .join("Claude-3p")
+                .join("configLibrary")
+        );
+        assert_eq!(
+            claude_desktop_threep_config_library_dir_for_platform(
+                DesktopPlatform::Macos,
+                None,
+                Some(PathBuf::from("home")),
+            ),
+            PathBuf::from("home")
+                .join("Library")
+                .join("Application Support")
+                .join("Claude-3p")
+                .join("configLibrary")
+        );
+    }
+
+    #[test]
+    fn claude_desktop_marketplace_status_uses_official_deep_link_without_auto_write() {
+        let status = load_claude_desktop_marketplace_status();
+
+        assert_eq!(status.marketplace, PONYTAIL_MARKETPLACE);
+        assert_eq!(status.plugin, "ponytail");
+        assert!(!status.can_auto_write);
+        assert!(
+            status
+                .deep_link
+                .starts_with("claude://claude.ai/customize/plugins/new?")
+        );
+        assert!(
+            status
+                .deep_link
+                .contains("marketplace=DietrichGebert%2Fponytail")
+        );
+        assert!(status.deep_link.contains("plugin=ponytail"));
+    }
+
+    #[test]
+    fn missing_org_plugin_directory_is_not_reported_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing-org-plugins");
+
+        assert!(!directory_is_writable(&missing));
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn ponytail_org_plugin_manifest_matches_claude_desktop_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_json = dir.path().join(".claude-plugin").join("plugin.json");
+        let manifest = dir.path().join("manifest.json");
+        let copied = vec![
+            dir.path()
+                .join("skills")
+                .join("ponytail")
+                .to_string_lossy()
+                .to_string(),
+        ];
+
+        write_ponytail_org_plugin_json(&plugin_json).unwrap();
+        write_ponytail_org_plugin_manifest(&manifest, &copied).unwrap();
+
+        let plugin_raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(plugin_json).unwrap()).unwrap();
+        let manifest_raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest).unwrap()).unwrap();
+
+        assert_eq!(plugin_raw["name"], "ponytail");
+        assert_eq!(plugin_raw["version"], "1.0.0");
+        assert_eq!(manifest_raw["skills"][0]["skillId"], "ponytail");
+        assert_eq!(manifest_raw["skills"][0]["creatorType"], "organization");
+        assert_eq!(manifest_raw["skills"][0]["enabled"], true);
+    }
+
+    #[test]
+    fn copy_skill_dirs_only_copies_valid_skill_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(source.join("valid")).unwrap();
+        std::fs::create_dir_all(source.join("ignored")).unwrap();
+        std::fs::write(source.join("valid").join("SKILL.md"), "skill").unwrap();
+        std::fs::write(source.join("ignored").join("README.md"), "nope").unwrap();
+
+        let copied = copy_skill_dirs(&source, &dest).unwrap();
+
+        assert_eq!(copied.len(), 1);
+        assert!(dest.join("valid").join("SKILL.md").is_file());
+        assert!(!dest.join("ignored").exists());
+    }
+
+    #[test]
+    fn claude_desktop_config_remove_preserves_existing_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude_desktop_config.json");
+        std::fs::write(
+            &path,
+            r#"{"windowBounds":{"width":1200},"mcpServers":{"existing":{"command":"node"},"claude-codex-pro-codex":{"command":"claude"}}}"#,
+        )
+        .unwrap();
+
+        remove_claude_desktop_mcp_server(&path, "claude-codex-pro-codex").unwrap();
+
+        let parsed: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(parsed["windowBounds"]["width"], 1200);
+        assert_eq!(parsed["mcpServers"]["existing"]["command"], "node");
+        assert!(parsed["mcpServers"]["claude-codex-pro-codex"].is_null());
+    }
+
+    #[test]
+    fn managed_skill_uninstall_removes_copied_paths_and_restores_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let backup_root = dir.path().join("backup");
+        let restored = skills_dir.join("restored");
+        let removed = skills_dir.join("removed");
+        let restored_backup = backup_root.join("restored");
+        std::fs::create_dir_all(&restored).unwrap();
+        std::fs::create_dir_all(&removed).unwrap();
+        std::fs::create_dir_all(&restored_backup).unwrap();
+        std::fs::write(restored.join("SKILL.md"), "installed").unwrap();
+        std::fs::write(removed.join("SKILL.md"), "installed").unwrap();
+        std::fs::write(restored_backup.join("SKILL.md"), "original").unwrap();
+        let record = PluginHubInstallRecord {
+            id: "ponytail:codex-skills".to_string(),
+            name: "Ponytail Skills for Codex".to_string(),
+            install_kind: InstallKind::ManagedSkillBundle,
+            installed_at: "1".to_string(),
+            command: Vec::new(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            backup_path: Some(backup_root.to_string_lossy().to_string()),
+            managed_paths: vec![
+                restored.to_string_lossy().to_string(),
+                removed.to_string_lossy().to_string(),
+            ],
+            verified: true,
+        };
+
+        remove_managed_skill_paths_under(
+            &record,
+            record.managed_paths.iter().map(PathBuf::from).collect(),
+            skills_dir.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(restored.join("SKILL.md")).unwrap(),
+            "original"
+        );
+        assert!(!removed.exists());
+    }
+
+    #[test]
+    fn managed_skill_uninstall_rejects_paths_outside_codex_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside-skill");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("SKILL.md"), "installed").unwrap();
+        let record = PluginHubInstallRecord {
+            id: "ponytail:codex-skills".to_string(),
+            name: "Ponytail Skills for Codex".to_string(),
+            install_kind: InstallKind::ManagedSkillBundle,
+            installed_at: "1".to_string(),
+            command: Vec::new(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            backup_path: None,
+            managed_paths: vec![outside.to_string_lossy().to_string()],
+            verified: true,
+        };
+
+        let error = remove_managed_skill_paths_under(
+            &record,
+            vec![outside.clone()],
+            dir.path().join("codex").join("skills"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("outside Codex skills directory"));
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn claude_desktop_org_plugin_uninstall_rejects_paths_outside_org_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside-plugin");
+        std::fs::create_dir_all(&outside).unwrap();
+        let record = PluginHubInstallRecord {
+            id: PONYTAIL_CLAUDE_DESKTOP_ORG_ID.to_string(),
+            name: "Ponytail Organization Plugin for Claude Desktop".to_string(),
+            install_kind: InstallKind::ClaudeDesktopOrgPlugin,
+            installed_at: "1".to_string(),
+            command: Vec::new(),
+            source_url: PONYTAIL_REPOSITORY_URL.to_string(),
+            backup_path: None,
+            managed_paths: vec![outside.to_string_lossy().to_string()],
+            verified: true,
+        };
+
+        let error = remove_claude_desktop_org_plugin(&record)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("outside org plugin directory"));
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn legacy_install_records_default_empty_managed_paths() {
+        let records: Vec<PluginHubInstallRecord> = serde_json::from_str(
+            r#"[{"id":"x","name":"X","installKind":"managed_skill_bundle","installedAt":"1","command":[],"sourceUrl":"https://example.test","backupPath":null}]"#,
+        )
+        .unwrap();
+
+        assert!(records[0].managed_paths.is_empty());
+    }
+
+    #[test]
+    fn installed_records_ignore_legacy_codex_plugin_false_installs() {
+        let records = installed_records_from_text(
+            r#"[{"id":"ponytail:codex-plugin","name":"Ponytail for Codex","installKind":"codex_plugin","installedAt":"1","command":["codex","plugin","marketplace","add","DietrichGebert/ponytail"],"sourceUrl":"https://github.com/DietrichGebert/ponytail","backupPath":null}]"#,
+        )
+        .unwrap();
+
+        assert!(!records.contains_key("ponytail:codex-plugin"));
+    }
+
+    #[test]
+    fn installed_records_keep_verified_codex_plugin_installs() {
+        let records = installed_records_from_text(
+            r#"[{"id":"ponytail:codex-plugin","name":"Ponytail for Codex","installKind":"codex_plugin","installedAt":"1","command":["codex","plugin","add","ponytail@ponytail","--json"],"sourceUrl":"https://github.com/DietrichGebert/ponytail","backupPath":null,"verified":true}]"#,
+        )
+        .unwrap();
+
+        assert!(records.contains_key("ponytail:codex-plugin"));
+    }
+
+    #[test]
+    fn codex_hook_hash_uses_normalized_identity() {
+        let hash = command_hook_hash_for_value(
+            "session_start",
+            Some("startup|resume|clear|compact"),
+            "if (Get-Command node -ErrorAction SilentlyContinue) { node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\ponytail-activate.js\" }",
+            5,
+            Some("Loading ponytail mode..."),
+        )
+        .unwrap();
+
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), "sha256:".len() + 64);
+    }
+
+    #[test]
+    fn codex_hook_trust_state_writer_preserves_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "model = \"gpt-5\"\n").unwrap();
+        let hook = CodexHookTrustEntry {
+            key: "ponytail@ponytail:hooks/claude-codex-hooks.json:session_start:0:0".to_string(),
+            event_name: "session_start".to_string(),
+            matcher: None,
+            command: "node hook.js".to_string(),
+            status_message: None,
+            current_hash: "sha256:abc".to_string(),
+            trusted: false,
+            source_path: "hooks/claude-codex-hooks.json".to_string(),
+        };
+
+        upsert_codex_hook_trust_state(&path, &[hook]).unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+
+        assert!(text.contains("model = \"gpt-5\""));
+        assert!(text.contains("[hooks.state."));
+        assert!(text.contains("trusted_hash = \"sha256:abc\""));
+    }
+
+    #[test]
+    fn mcpb_manifest_contains_ponytail_server_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ponytail_mcpb_manifest(dir.path()).unwrap();
+        let raw: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(raw["name"], "ponytail");
+        assert_eq!(raw["server"]["type"], "node");
+        assert_eq!(raw["server"]["entry_point"], "server/index.js");
+        assert_eq!(
+            raw["server"]["mcp_config"]["args"][0],
+            "${__dirname}/server/index.js"
         );
     }
 

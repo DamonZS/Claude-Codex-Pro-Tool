@@ -13,7 +13,9 @@ use claude_codex_pro_core::memory_assist::{
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
-    self, PluginHubCatalog, PluginInstallOutcome, PluginInstallPreview,
+    self, ClaudeDesktopMarketplaceOutcome, ClaudeDesktopMarketplaceStatus,
+    ClaudeDesktopOrgPluginOutcome, ClaudeDesktopOrgPluginStatus, CodexHookTrustPreview,
+    McpbPackageOutcome, PluginHubCatalog, PluginInstallOutcome, PluginInstallPreview,
 };
 use claude_codex_pro_core::script_market::{self, MarketScript, ScriptMarketManifest};
 use claude_codex_pro_core::settings::{BackendSettings, RelayProfile, SettingsStore};
@@ -364,6 +366,18 @@ pub struct PluginHubPayload {
 #[serde(rename_all = "camelCase")]
 pub struct PluginHubItemRequest {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHookTrustPayload {
+    pub preview: CodexHookTrustPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpbPackagePayload {
+    pub package: McpbPackageOutcome,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2099,7 +2113,10 @@ pub async fn uninstall_plugin_hub_item(
     match plugin_hub::uninstall_item(request.id.trim()) {
         Ok(_) => {
             let catalog = plugin_hub::fetch_catalog().await;
-            ok("插件中心安装记录已移除。", PluginHubPayload { catalog })
+            ok(
+                "插件中心托管配置已撤销，安装记录已更新。",
+                PluginHubPayload { catalog },
+            )
         }
         Err(error) => {
             let catalog = plugin_hub::fetch_catalog().await;
@@ -2108,6 +2125,185 @@ pub async fn uninstall_plugin_hub_item(
                 PluginHubPayload { catalog },
             )
         }
+    }
+}
+
+#[tauri::command]
+pub fn preview_ponytail_codex_hooks() -> CommandResult<PluginHookTrustPayload> {
+    match plugin_hub::preview_ponytail_codex_hooks() {
+        Ok(preview) => ok(&preview.message.clone(), PluginHookTrustPayload { preview }),
+        Err(error) => failed(
+            &format!("Ponytail Codex hooks preview failed: {error}"),
+            PluginHookTrustPayload {
+                preview: CodexHookTrustPreview {
+                    config_path: String::new(),
+                    hooks: Vec::new(),
+                    message: error.to_string(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn trust_ponytail_codex_hooks() -> CommandResult<PluginHookTrustPayload> {
+    match plugin_hub::trust_ponytail_codex_hooks() {
+        Ok(preview) => ok(&preview.message.clone(), PluginHookTrustPayload { preview }),
+        Err(error) => failed(
+            &format!("Ponytail Codex hooks trust failed: {error}"),
+            PluginHookTrustPayload {
+                preview: CodexHookTrustPreview {
+                    config_path: String::new(),
+                    hooks: Vec::new(),
+                    message: error.to_string(),
+                },
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn generate_ponytail_mcpb_installer() -> CommandResult<McpbPackagePayload> {
+    match plugin_hub::generate_and_open_ponytail_mcpb() {
+        Ok(package) => ok(&package.message.clone(), McpbPackagePayload { package }),
+        Err(error) => failed(
+            &format!("Generate Ponytail MCPB failed: {error}"),
+            McpbPackagePayload {
+                package: McpbPackageOutcome {
+                    mcpb_path: String::new(),
+                    manifest_path: String::new(),
+                    opened: false,
+                    message: error.to_string(),
+                },
+            },
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopOrgPluginPayload {
+    #[serde(rename = "orgPluginStatus")]
+    pub org_plugin_status: ClaudeDesktopOrgPluginStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopOrgPluginInstallPayload {
+    pub outcome: ClaudeDesktopOrgPluginOutcome,
+    #[serde(rename = "orgPluginStatus")]
+    pub org_plugin_status: ClaudeDesktopOrgPluginStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopMarketplacePayload {
+    #[serde(rename = "marketplaceStatus")]
+    pub marketplace_status: ClaudeDesktopMarketplaceStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopMarketplaceOpenPayload {
+    pub outcome: ClaudeDesktopMarketplaceOutcome,
+    #[serde(rename = "marketplaceStatus")]
+    pub marketplace_status: ClaudeDesktopMarketplaceStatus,
+}
+
+#[tauri::command]
+pub fn load_claude_desktop_org_plugin_status() -> CommandResult<ClaudeDesktopOrgPluginPayload> {
+    let status = plugin_hub::load_claude_desktop_org_plugin_status();
+    ok(
+        &status.message.clone(),
+        ClaudeDesktopOrgPluginPayload {
+            org_plugin_status: status,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn load_claude_desktop_marketplace_status() -> CommandResult<ClaudeDesktopMarketplacePayload> {
+    let status = plugin_hub::load_claude_desktop_marketplace_status();
+    ok(
+        &status.message.clone(),
+        ClaudeDesktopMarketplacePayload {
+            marketplace_status: status,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn open_ponytail_claude_desktop_marketplace_setup()
+-> CommandResult<ClaudeDesktopMarketplaceOpenPayload> {
+    match plugin_hub::open_ponytail_claude_desktop_marketplace_setup() {
+        Ok(outcome) => {
+            let status = plugin_hub::load_claude_desktop_marketplace_status();
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopMarketplaceOpenPayload {
+                    outcome,
+                    marketplace_status: status,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("Open Claude Desktop plugin marketplace setup failed: {error}"),
+            ClaudeDesktopMarketplaceOpenPayload {
+                outcome: ClaudeDesktopMarketplaceOutcome {
+                    opened: false,
+                    deep_link: String::new(),
+                    message: error.to_string(),
+                },
+                marketplace_status: plugin_hub::load_claude_desktop_marketplace_status(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn open_claude_desktop_org_plugins_dir() -> CommandResult<ClaudeDesktopOrgPluginPayload> {
+    match plugin_hub::open_claude_desktop_org_plugins_dir() {
+        Ok(status) => ok(
+            &status.message.clone(),
+            ClaudeDesktopOrgPluginPayload {
+                org_plugin_status: status,
+            },
+        ),
+        Err(error) => failed(
+            &format!("Open Claude Desktop organization plugin directory failed: {error}"),
+            ClaudeDesktopOrgPluginPayload {
+                org_plugin_status: plugin_hub::load_claude_desktop_org_plugin_status(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn install_ponytail_claude_desktop_org_plugin()
+-> CommandResult<ClaudeDesktopOrgPluginInstallPayload> {
+    match plugin_hub::install_ponytail_claude_desktop_org_plugin() {
+        Ok(outcome) => {
+            let status = plugin_hub::load_claude_desktop_org_plugin_status();
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopOrgPluginInstallPayload {
+                    outcome,
+                    org_plugin_status: status,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("Install Ponytail Claude Desktop organization plugin failed: {error}"),
+            ClaudeDesktopOrgPluginInstallPayload {
+                outcome: ClaudeDesktopOrgPluginOutcome {
+                    installed: false,
+                    org_plugins_dir: String::new(),
+                    plugin_dir: String::new(),
+                    manifest_path: String::new(),
+                    plugin_json_path: String::new(),
+                    copied_skills: Vec::new(),
+                    backup_path: None,
+                    message: error.to_string(),
+                },
+                org_plugin_status: plugin_hub::load_claude_desktop_org_plugin_status(),
+            },
+        ),
     }
 }
 
