@@ -323,6 +323,18 @@ function previewPluginCatalog(message = "预览模式插件目录。") {
   });
 }
 
+function previewCodexPluginMarketplace(message = "预览模式 Codex OpenAI 插件仓库状态。") {
+  return ok(message, {
+    marketplace: {
+      codexHome: "~\\.codex",
+      marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+      configRegistered: true,
+      needsRepair: false,
+      message: "预览模式：本地 openai-curated marketplace 已模拟下载并注册。",
+    },
+  });
+}
+
 function previewPluginItem(id?: unknown) {
   const requested = typeof id === "string" ? id : "official-files";
   return previewPluginItems().find((item) => item.id === requested) ?? previewPluginItems()[0];
@@ -608,6 +620,29 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
         canAutoWrite: false,
         message: "预览模式：打开 Claude 官方配置页后仍需在 Claude Desktop 内确认。",
+      },
+    });
+  }
+  if (command === "load_codex_plugin_marketplace_status") {
+    return previewCodexPluginMarketplace();
+  }
+  if (command === "repair_codex_plugin_marketplace") {
+    return ok("预览模式已模拟下载、校验并注册 Codex OpenAI 插件仓库。", {
+      repair: {
+        codexHome: "~\\.codex",
+        marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+        initialized: true,
+        configured: true,
+        configRegistered: true,
+        needsRepair: false,
+        message: "预览模式不会下载 GitHub zip 或写入 config.toml。",
+      },
+      marketplace: {
+        codexHome: "~\\.codex",
+        marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+        configRegistered: true,
+        needsRepair: false,
+        message: "预览模式：本地 openai-curated marketplace 已模拟下载并注册。",
       },
     });
   }

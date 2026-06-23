@@ -101,6 +101,8 @@ pub fn run() {
             commands::load_ads,
             commands::refresh_script_market,
             commands::install_market_script,
+            commands::load_codex_plugin_marketplace_status,
+            commands::repair_codex_plugin_marketplace,
             commands::refresh_plugin_hub_catalog,
             commands::get_plugin_hub_catalog,
             commands::preview_plugin_hub_install,

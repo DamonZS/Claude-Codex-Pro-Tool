@@ -240,6 +240,31 @@ type ScriptMarketResult = CommandResult<{
   user_scripts: UserScriptInventory;
 }>;
 
+type CodexPluginMarketplaceStatus = {
+  codexHome: string;
+  marketplaceRoot: string | null;
+  configRegistered: boolean;
+  needsRepair: boolean;
+  message: string;
+};
+
+type CodexPluginMarketplaceStatusResult = CommandResult<{
+  marketplace: CodexPluginMarketplaceStatus;
+}>;
+
+type CodexPluginMarketplaceRepairResult = CommandResult<{
+  repair: {
+    codexHome: string;
+    marketplaceRoot: string | null;
+    initialized: boolean;
+    configured: boolean;
+    configRegistered: boolean;
+    needsRepair: boolean;
+    message: string;
+  };
+  marketplace: CodexPluginMarketplaceStatus;
+}>;
+
 type LocalSession = {
   id: string;
   title: string;
@@ -597,6 +622,7 @@ export function App() {
   const [pluginHub, setPluginHub] = useState<PluginHubResult | null>(null);
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
   const [codexHookTrust, setCodexHookTrust] = useState<CodexHookTrustResult | null>(null);
+  const [codexPluginMarketplace, setCodexPluginMarketplace] = useState<CodexPluginMarketplaceStatusResult | null>(null);
   const [claudeDesktopOrgPlugin, setClaudeDesktopOrgPlugin] = useState<ClaudeDesktopOrgPluginStatusResult | null>(null);
   const [claudeDesktopMarketplace, setClaudeDesktopMarketplace] = useState<ClaudeDesktopMarketplaceStatusResult | null>(null);
   const [claudeDesktopDevMode, setClaudeDesktopDevMode] = useState<ClaudeDesktopDevModeStatusResult | null>(null);
@@ -708,6 +734,15 @@ export function App() {
     if (result) {
       setScriptMarket(result);
       if (!silent) notifyIfNeedsAttention({ title: "脚本市场", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshCodexPluginMarketplace = async (silent = false) => {
+    const result = await run(() => call<CodexPluginMarketplaceStatusResult>("load_codex_plugin_marketplace_status"), "Codex OpenAI 插件仓库");
+    if (result) {
+      setCodexPluginMarketplace(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message, status: result.status });
     }
     return result;
   };
@@ -919,6 +954,19 @@ export function App() {
     if (result) {
       setScriptMarket(result);
       notifyIfNeedsAttention({ title: "脚本市场", message: result.message, status: result.status });
+    }
+  };
+
+  const repairCodexPluginMarketplace = async () => {
+    const result = await run(() => call<CodexPluginMarketplaceRepairResult>("repair_codex_plugin_marketplace"), "下载并注册 Codex 插件仓库");
+    if (result) {
+      setCodexPluginMarketplace({
+        status: result.status,
+        message: result.message,
+        marketplace: result.marketplace,
+      });
+      notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message || result.repair.message, status: result.status });
+      await refreshPluginHub(true);
     }
   };
 
@@ -1155,6 +1203,7 @@ export function App() {
     } else if (target === "tools") {
       await Promise.all([
         refreshPluginHub(true),
+        refreshCodexPluginMarketplace(true),
         refreshClaudeDesktopOrgPlugin(true),
         refreshClaudeDesktopMarketplace(true),
         refreshClaudeDesktopDevMode(true),
@@ -1192,6 +1241,7 @@ export function App() {
         refreshClaude(true),
         refreshSettings(true),
         refreshPluginHub(true),
+        refreshCodexPluginMarketplace(true),
         refreshClaudeDesktopOrgPlugin(true),
         refreshClaudeDesktopMarketplace(true),
         refreshClaudeDesktopDevMode(true),
@@ -1234,6 +1284,8 @@ export function App() {
       openPonytailClaudeDesktopMarketplaceSetup,
       configureClaudeDesktopDevMode,
       installMarketScript,
+      refreshCodexPluginMarketplace,
+      repairCodexPluginMarketplace,
       refreshPluginHub,
       refreshClaudeDesktopOrgPlugin,
       refreshClaudeDesktopMarketplace,
@@ -1358,6 +1410,7 @@ export function App() {
               claudeDesktopDevMode={claudeDesktopDevMode}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
               claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
+              codexPluginMarketplace={codexPluginMarketplace}
               hub={pluginHub}
               localSessions={localSessions}
               memoryAssist={memoryAssist}
@@ -1518,6 +1571,7 @@ function ToolsAndPluginsScreen({
   claudeDesktopDevMode,
   claudeDesktopMarketplace,
   claudeDesktopOrgPlugin,
+  codexPluginMarketplace,
   hub,
   localSessions,
   memoryAssist,
@@ -1538,6 +1592,7 @@ function ToolsAndPluginsScreen({
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
   claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
+  codexPluginMarketplace: CodexPluginMarketplaceStatusResult | null;
   hub: PluginHubResult | null;
   localSessions: LocalSessionsResult | null;
   memoryAssist: MemoryStatusResult | null;
@@ -1662,11 +1717,23 @@ function ToolsAndPluginsScreen({
           <Panel title="工具与插件配置" detail="MCP、Skills、Plugins 仍保存在统一 TOML 配置中。">
             <pre className="ops-code">{common.trim() || "暂无通用 MCP / Skills / Plugins 配置。"}</pre>
           </Panel>
-          <Panel title="Codex 插件仓库" detail={codexPluginSource?.message ?? "OpenAI curated Codex plugin examples。"}>
-            <InfoRow label="来源" value={codexPluginSource?.label ?? "OpenAI Codex Plugins"} />
-            <InfoRow label="状态" value={codexPluginSource?.status ?? "未加载"} />
-            <InfoRow label="条目" value={`${codexPluginSource?.itemCount ?? 0} 个`} />
+          <Panel title="Codex OpenAI 插件仓库" detail={codexPluginMarketplace?.marketplace.message ?? codexPluginSource?.message ?? "下载 openai/plugins 并注册为本地 Codex marketplace。"}>
+            <InfoRow label="目录来源" value={codexPluginSource?.label ?? "OpenAI Codex Plugins"} />
+            <InfoRow label="目录状态" value={codexPluginSource?.status ?? "未加载"} />
+            <InfoRow label="目录条目" value={`${codexPluginSource?.itemCount ?? 0} 个`} />
+            <InfoRow label="Codex Home" value={compactPath(codexPluginMarketplace?.marketplace.codexHome)} />
+            <InfoRow label="本地仓库" value={compactPath(codexPluginMarketplace?.marketplace.marketplaceRoot)} />
+            <InfoRow label="config.toml" value={codexPluginMarketplace?.marketplace.configRegistered ? "已注册" : "未注册"} />
+            <div className={codexPluginMarketplace?.marketplace.needsRepair ? "ops-danger-zone" : "ops-note"}>
+              {codexPluginMarketplace?.marketplace.needsRepair ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+              <span>{codexPluginMarketplace?.message ?? "尚未读取本地 Codex 插件仓库状态。"}</span>
+            </div>
             <div className="action-row">
+              <Button onClick={() => void actions.repairCodexPluginMarketplace()} size="sm">
+                <Download className="h-4 w-4" />
+                下载并注册
+              </Button>
+              <Button onClick={() => void actions.refreshCodexPluginMarketplace()} size="sm" variant="outline">刷新状态</Button>
               <Button onClick={() => void actions.openExternalUrl("https://github.com/openai/plugins")} size="sm" variant="outline">打开仓库</Button>
               <Button onClick={() => void actions.openExternalUrl("https://developers.openai.com/codex/plugins")} size="sm" variant="outline">查看文档</Button>
             </div>
@@ -2652,6 +2719,8 @@ function createActionsShape() {
     openPonytailClaudeDesktopMarketplaceSetup: async () => {},
     configureClaudeDesktopDevMode: async () => {},
     installMarketScript: async (_id: string) => {},
+    refreshCodexPluginMarketplace: async () => null as CodexPluginMarketplaceStatusResult | null,
+    repairCodexPluginMarketplace: async () => {},
     refreshPluginHub: async () => null as PluginHubResult | null,
     refreshClaudeDesktopOrgPlugin: async () => null as ClaudeDesktopOrgPluginStatusResult | null,
     refreshClaudeDesktopMarketplace: async () => null as ClaudeDesktopMarketplaceStatusResult | null,

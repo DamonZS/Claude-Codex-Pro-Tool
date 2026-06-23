@@ -359,6 +359,19 @@ pub struct ScriptMarketPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexPluginMarketplacePayload {
+    pub marketplace: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexPluginMarketplaceRepairPayload {
+    pub repair: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceRepair,
+    pub marketplace: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginHubPayload {
     pub catalog: PluginHubCatalog,
 }
@@ -2055,6 +2068,52 @@ pub async fn install_market_script(id: String) -> CommandResult<ScriptMarketPayl
                 &format!("安装脚本失败：{error}"),
             ),
         ),
+    }
+}
+
+#[tauri::command]
+pub fn load_codex_plugin_marketplace_status() -> CommandResult<CodexPluginMarketplacePayload> {
+    let status = claude_codex_pro_core::codex_plugin_marketplace::status();
+    ok(
+        &status.message.clone(),
+        CodexPluginMarketplacePayload {
+            marketplace: status,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn repair_codex_plugin_marketplace() -> CommandResult<CodexPluginMarketplaceRepairPayload>
+{
+    match claude_codex_pro_core::codex_plugin_marketplace::repair().await {
+        Ok(repair) => {
+            let marketplace = claude_codex_pro_core::codex_plugin_marketplace::status();
+            ok(
+                &repair.message.clone(),
+                CodexPluginMarketplaceRepairPayload {
+                    repair,
+                    marketplace,
+                },
+            )
+        }
+        Err(error) => {
+            let marketplace = claude_codex_pro_core::codex_plugin_marketplace::status();
+            failed(
+                &format!("Codex OpenAI 插件仓库修复失败：{error}"),
+                CodexPluginMarketplaceRepairPayload {
+                    repair: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceRepair {
+                        codex_home: marketplace.codex_home.clone(),
+                        marketplace_root: marketplace.marketplace_root.clone(),
+                        initialized: false,
+                        configured: false,
+                        config_registered: marketplace.config_registered,
+                        needs_repair: marketplace.needs_repair,
+                        message: error.to_string(),
+                    },
+                    marketplace,
+                },
+            )
+        }
     }
 }
 

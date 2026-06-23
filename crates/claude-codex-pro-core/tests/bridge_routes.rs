@@ -17,6 +17,7 @@ use claude_codex_pro_core::settings::BackendSettings;
 use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
+use sha2::Digest;
 
 #[tokio::test]
 async fn bridge_routes_cover_all_current_paths() {
@@ -1214,7 +1215,7 @@ fn install_market_script_writes_file_and_records_metadata() {
 }
 
 #[test]
-fn install_market_script_ignores_checksum_mismatch_and_replaces_existing_file() {
+fn install_market_script_rejects_checksum_mismatch_and_preserves_existing_file() {
     let temp = tempfile::tempdir().unwrap();
     let user_dir = temp.path().join("user");
     std::fs::create_dir_all(&user_dir).unwrap();
@@ -1233,14 +1234,46 @@ fn install_market_script_ignores_checksum_mismatch_and_replaces_existing_file() 
         tags: Vec::new(),
         homepage: String::new(),
         script_url: "https://example.com/demo.js".to_string(),
-        sha256: "0000".to_string(),
+        sha256: "0".repeat(64),
     };
 
-    claude_codex_pro_core::script_market::install_market_script_content(&manager, &script, b"new")
+    let result = claude_codex_pro_core::script_market::install_market_script_content(
+        &manager, &script, b"new",
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read_to_string(user_dir.join("market-demo.js")).unwrap(),
+        "old"
+    );
+}
+
+#[test]
+fn install_market_script_accepts_matching_checksum() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = UserScriptManager::new(
+        temp.path().join("builtin"),
+        temp.path().join("user"),
+        temp.path().join("user_scripts.json"),
+    );
+    let content = b"new";
+    let script = claude_codex_pro_core::script_market::MarketScript {
+        id: "demo".to_string(),
+        name: "Demo".to_string(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        author: String::new(),
+        tags: Vec::new(),
+        homepage: String::new(),
+        script_url: "https://example.com/demo.js".to_string(),
+        sha256: format!("sha256:{:x}", sha2::Sha256::digest(content)),
+    };
+
+    claude_codex_pro_core::script_market::install_market_script_content(&manager, &script, content)
         .unwrap();
 
     assert_eq!(
-        std::fs::read_to_string(user_dir.join("market-demo.js")).unwrap(),
+        std::fs::read_to_string(temp.path().join("user").join("market-demo.js")).unwrap(),
         "new"
     );
 }

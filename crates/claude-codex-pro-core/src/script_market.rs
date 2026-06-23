@@ -1,6 +1,7 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::user_scripts::UserScriptManager;
 
@@ -85,6 +86,7 @@ pub fn install_market_script_content(
     script: &MarketScript,
     content: &[u8],
 ) -> anyhow::Result<()> {
+    verify_script_sha256(script, content)?;
     let path = manager.user_script_path_for_market_id(&script.id);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
@@ -106,6 +108,32 @@ pub async fn install_market_script(
 ) -> anyhow::Result<()> {
     let content = download_script(&script.script_url).await?;
     install_market_script_content(manager, script, &content)
+}
+
+fn verify_script_sha256(script: &MarketScript, content: &[u8]) -> anyhow::Result<()> {
+    let expected = script
+        .sha256
+        .trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(script.sha256.trim())
+        .trim()
+        .to_ascii_lowercase();
+    if expected.is_empty() {
+        return Ok(());
+    }
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("script {} has invalid sha256 metadata", script.id);
+    }
+    let actual = format!("{:x}", Sha256::digest(content));
+    if actual != expected {
+        anyhow::bail!(
+            "script {} sha256 mismatch: expected {}, got {}",
+            script.id,
+            expected,
+            actual
+        );
+    }
+    Ok(())
 }
 
 fn parse_market_script(raw: Value) -> Option<MarketScript> {

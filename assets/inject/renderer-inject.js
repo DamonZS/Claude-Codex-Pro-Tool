@@ -3221,6 +3221,76 @@
     return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-primary-runtime";
   }
 
+  function cloneLocalPluginMarketplace(marketplace) {
+    try {
+      return JSON.parse(JSON.stringify(marketplace));
+    } catch {
+      return null;
+    }
+  }
+
+  function localPluginMarketplaces() {
+    const marketplaces = window.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__;
+    return Array.isArray(marketplaces) ? marketplaces : [];
+  }
+
+  function pluginMarketplaceKey(marketplace) {
+    return restorePluginMarketplaceName(String(marketplace?.name || marketplace?.marketplaceName || ""));
+  }
+
+  function pluginKey(plugin, marketplaceName) {
+    return String(plugin?.id || plugin?.pluginId || plugin?.name || "") + "@" + restorePluginMarketplaceName(String(plugin?.marketplaceName || marketplaceName || ""));
+  }
+
+  function prepareLocalPluginMarketplace(marketplace) {
+    const next = cloneLocalPluginMarketplace(marketplace);
+    if (!next || typeof next !== "object") return null;
+    const marketplaceName = String(next.name || "");
+    if (Array.isArray(next.plugins)) {
+      next.plugins.forEach((plugin) => {
+        if (plugin && typeof plugin === "object" && !plugin.marketplaceName) plugin.marketplaceName = marketplaceName;
+      });
+    }
+    return next;
+  }
+
+  function mergeLocalPluginMarketplaces(result) {
+    if (!result || typeof result !== "object" || !Array.isArray(result.marketplaces)) return 0;
+    const locals = localPluginMarketplaces().map(prepareLocalPluginMarketplace).filter(Boolean);
+    if (locals.length === 0) return 0;
+    const byName = new Map(result.marketplaces.map((marketplace) => [pluginMarketplaceKey(marketplace), marketplace]));
+    let mergedCount = 0;
+    locals.forEach((local) => {
+      const key = pluginMarketplaceKey(local);
+      if (!key) return;
+      const existing = byName.get(key);
+      if (!existing) {
+        result.marketplaces.push(local);
+        byName.set(key, local);
+        mergedCount += 1;
+        return;
+      }
+      if (!Array.isArray(local.plugins)) return;
+      if (!Array.isArray(existing.plugins)) existing.plugins = [];
+      const existingPlugins = new Set(existing.plugins.map((plugin) => pluginKey(plugin, existing.name)));
+      local.plugins.forEach((plugin) => {
+        const key = pluginKey(plugin, local.name);
+        if (key && !existingPlugins.has(key)) {
+          existing.plugins.push(plugin);
+          existingPlugins.add(key);
+          mergedCount += 1;
+        }
+      });
+    });
+    if (mergedCount > 0) {
+      sendClaudeCodexProDiagnostic("plugin_marketplace_local_merged", {
+        marketplaceCount: locals.length,
+        mergedCount,
+      });
+    }
+    return mergedCount;
+  }
+
   function isCodexPluginBuildFlavorFilter(callback, sample) {
     if (!Array.isArray(sample) || sample.length === 0 || typeof callback !== "function") return false;
     let source = "";
@@ -3308,9 +3378,11 @@
     try {
       const pluginMarketplaceCounts = {};
       if (Array.isArray(result?.marketplaces)) {
+        patchedCount += mergeLocalPluginMarketplaces(result);
         result.marketplaces.forEach((marketplace) => {
           if (Array.isArray(marketplace?.plugins)) {
             marketplace.plugins.forEach((plugin) => {
+              if (plugin && typeof plugin === "object" && !plugin.marketplaceName) plugin.marketplaceName = marketplace?.name || "";
               const name = plugin?.marketplaceName || marketplace?.name || "";
               if (name) pluginMarketplaceCounts[name] = (pluginMarketplaceCounts[name] || 0) + 1;
             });

@@ -20,13 +20,16 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     let helper_url = format!("http://127.0.0.1:{helper_port}");
     let image_overlay = image_overlay_config(helper_port, settings);
     let support_payment_qr = image_data_uri("image/png", SUPPORT_PAYMENT_QR);
+    let plugin_marketplaces = crate::codex_plugin_marketplace::local_plugin_marketplaces();
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\n{}",
+        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
         serde_json::to_string(crate::version::VERSION).expect("version should serialize"),
         serde_json::to_string(DIAGNOSTIC_BUILD_ID).expect("build id should serialize"),
         serde_json::to_string(&image_overlay).expect("image overlay config should serialize"),
         serde_json::to_string(&support_payment_qr).expect("support payment QR should serialize"),
+        serde_json::to_string(&plugin_marketplaces)
+            .expect("plugin marketplace config should serialize"),
         renderer_script(),
     )
 }
