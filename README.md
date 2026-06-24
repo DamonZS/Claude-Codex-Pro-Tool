@@ -586,6 +586,16 @@ docs/
 - Issues：<https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues>
 - 讨论群二维码：<https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#>
 
+## 协议与规则
+
+本仓库采用自定义源码可见限制协议，不是 OSI 认证开源协议。未经 DamonZS 或授权维护者书面允许，禁止以任何方式修改、发布、分发、改名、重打包或隐藏本项目来源，包括人工修改、AI 辅助修改、脚本、codemod、批量替换、自动化重写、二进制补丁和元数据改写。
+
+作者信息、仓库地址、版权声明、产品名称、品牌、发布者、赞助或支付身份、协议和规则文件不得被删除、替换、隐藏或弱化。
+
+这些限制不约束 DamonZS、仓库所有者、授权维护者以及在其指令下工作的 AI 助手、脚本、CI、codemod、格式化工具或自动化工具。官方项目后续开发可以继续使用 AI 和自动化能力。
+
+授权维护者名单见 [MAINTAINERS.md](MAINTAINERS.md)。详见 [LICENSE](LICENSE) 和 [RULES.md](RULES.md)。
+
 ## 说明
 
 Claude Codex Pro Tool 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。官方应用更新后，如果页面结构、协议、CLI、插件格式或配置路径变化，本项目的注入脚本和适配逻辑可能需要同步更新。

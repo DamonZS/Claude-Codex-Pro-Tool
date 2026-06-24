@@ -104,3 +104,26 @@ npm run vite:build
 ## License
 
 By contributing, you agree that your contributions are licensed under the repository license.
+
+## Repository Rules
+
+This repository uses a custom source-available restricted license. It is not an
+OSI-approved open source license.
+
+Do not submit code, documentation, assets, workflow changes, generated patches,
+or metadata changes unless DamonZS or an authorized maintainer has requested or
+approved them. Unauthorized modifications are prohibited whether they are made
+manually, with AI, with scripts, with codemods, or with any other automation.
+
+Author information, repository ownership, product name, branding, license,
+rules, release metadata, sponsorship identities, and payment identities must not
+be removed, replaced, hidden, or rewritten.
+
+These restrictions do not limit DamonZS, the repository owner, authorized
+maintainers, or tools acting under their instruction. Official maintainers may
+continue using AI assistants, scripts, CI, codemods, formatting tools, and manual
+editing to develop this project.
+
+Authorized maintainers are recorded in [MAINTAINERS.md](MAINTAINERS.md).
+
+See [LICENSE](LICENSE), [RULES.md](RULES.md), and [MAINTAINERS.md](MAINTAINERS.md).

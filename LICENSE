@@ -1,0 +1,106 @@
+Claude Codex Pro Tool Source-Available Restricted License
+Version 1.0
+
+Copyright (c) 2026 DamonZS and authorized project maintainers.
+All rights reserved except as expressly granted below.
+
+This repository is source-available. It is not an OSI-approved open source
+license, because it restricts unauthorized modification, redistribution, and
+identity changes.
+
+1. Definitions
+
+"Project" means Claude Codex Pro Tool and all source code, documentation,
+assets, configuration, build scripts, workflows, release metadata, package
+metadata, branding, names, logos, author information, repository links, and
+other materials in this repository.
+
+"Author Information" means copyright notices, author names, maintainer names,
+repository ownership, repository URLs, product names, package names, release
+publisher names, payment or sponsorship identities, attribution text, and any
+metadata that identifies the origin or ownership of the Project.
+
+"Restricted Modification" means any change to the Project made by any method,
+including manual editing, AI-assisted editing, automated refactoring, scripts,
+codemods, batch replacement, build-time rewriting, generated patches, binary
+patching, metadata editing, asset replacement, or any other direct or indirect
+alteration.
+
+"Authorized Maintainer" means DamonZS, the repository owner, a person or entity
+listed in MAINTAINERS.md or granted direct write/admin permission by the
+repository owner, or any human, AI assistant, script, automation, CI job, build
+tool, formatting tool, or agent acting under their instruction for this Project.
+
+2. Permission Granted
+
+You may:
+
+- view and study the Project;
+- clone the repository for personal review, security review, compatibility
+  testing, or local evaluation;
+- run and build the unmodified Project for personal or internal evaluation;
+- reference public documentation and issue discussions with proper attribution.
+
+3. Restrictions
+
+Unless you have prior written permission from DamonZS or an Authorized
+Maintainer, you may not:
+
+- make, publish, distribute, or provide a Restricted Modification of the
+  Project;
+- use AI tools, coding agents, scripts, automation, codemods, batch replacement,
+  or manual editing to modify the Project;
+- remove, replace, hide, rewrite, or dilute Author Information;
+- change the Project name, repository link, author identity, maintainer
+  identity, copyright notice, license, rules, release publisher, sponsorship
+  identity, payment identity, logo, or branding in a way that suggests different
+  ownership or origin;
+- publish modified source code, modified binaries, repackaged installers,
+  derivative releases, mirror repositories, renamed distributions, or forked
+  products based on the Project;
+- bypass, delete, weaken, or misrepresent this license or RULES.md;
+- use the Project to create a competing renamed distribution that hides or
+  replaces the original authorship.
+
+4. Contributions
+
+Public issues, bug reports, feature requests, and discussion are welcome.
+
+Code, documentation, asset, workflow, or metadata contributions are accepted
+only when explicitly requested or approved by an Authorized Maintainer. By
+submitting an accepted contribution, you grant DamonZS and Authorized
+Maintainers a perpetual, worldwide, royalty-free right to use, modify,
+distribute, sublicense, and relicense that contribution as part of the Project.
+
+Unauthorized pull requests, patches, forks, or generated modifications do not
+create permission to distribute or use a modified version.
+
+5. Maintainer Exemption
+
+The restrictions in this license do not limit DamonZS, the repository owner, or
+Authorized Maintainers. They may modify, generate, refactor, build, package,
+release, rename, update, or maintain the Project using any method, including AI
+assistants, scripts, automation, codemods, CI systems, IDE tools, and manual
+editing.
+
+This exemption is intentional so that the Project can continue to be developed
+and maintained.
+
+6. Third-Party Components
+
+Third-party libraries, tools, code, documentation, assets, or dependencies keep
+their own licenses. This license applies only to the Project materials owned or
+controlled by DamonZS and Authorized Maintainers.
+
+7. No Warranty
+
+The Project is provided "as is", without warranty of any kind, express or
+implied, including but not limited to warranties of merchantability, fitness for
+a particular purpose, and non-infringement. You use the Project at your own
+risk.
+
+8. Termination
+
+Any permission granted by this license terminates automatically if you violate
+its terms. After termination, you must stop using, distributing, hosting, or
+publishing any copy or derivative of the Project that violates this license.
