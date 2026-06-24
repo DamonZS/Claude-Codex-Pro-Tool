@@ -13,6 +13,7 @@ pub const CODEX_PLUGIN_REPOSITORY_URL: &str = "https://github.com/openai/plugins
 pub const CODEX_PLUGIN_DOCUMENTATION_URL: &str = "https://developers.openai.com/codex/plugins";
 pub const PONYTAIL_REPOSITORY_URL: &str = "https://github.com/DietrichGebert/ponytail";
 const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
+const OFFICIAL_MARKETPLACE_REPOSITORY: &str = "anthropics/claude-plugins-official";
 const PONYTAIL_MARKETPLACE: &str = "DietrichGebert/ponytail";
 const PONYTAIL_PLUGIN_REF: &str = "ponytail@ponytail";
 const PONYTAIL_CODEX_ID: &str = "ponytail:codex-plugin";
@@ -420,6 +421,7 @@ fn parse_official_marketplace(
                 return None;
             }
             let id = format!("official:{name}");
+            let plugin_name = name.clone();
             let category = value_string(plugin, "category");
             let homepage = value_string(plugin, "homepage");
             let author = plugin
@@ -434,12 +436,7 @@ fn parse_official_marketplace(
                 .and_then(Value::as_array)
                 .map(|items| string_array(items))
                 .unwrap_or_default();
-            let command = vec![
-                "claude".to_string(),
-                "plugin".to_string(),
-                "install".to_string(),
-                format!("{name}@{OFFICIAL_MARKETPLACE_NAME}"),
-            ];
+            let command = official_marketplace_add_command();
             Some(PluginCatalogItem {
                 id: id.clone(),
                 name,
@@ -459,7 +456,7 @@ fn parse_official_marketplace(
                 install_kind: InstallKind::ClaudePluginMarketplace,
                 install_status: status_for(&id, installed, InstallStatus::NotInstalled),
                 install_command: command,
-                config_preview: String::new(),
+                config_preview: official_plugin_plan_text(&plugin_name),
                 risk: "官方市场条目，安装前仍会显示 CLI 命令。".to_string(),
                 requirements: vec!["claude CLI".to_string(), "网络访问".to_string()],
             })
@@ -850,8 +847,6 @@ fn classify_awesome_item(id: &str, category: &str, link: &str, description: &str
         InstallKind::McpServer
     } else if haystack.contains("skill") || category.to_lowercase().contains("agent skills") {
         InstallKind::SkillBundle
-    } else if haystack.contains("plugin") {
-        InstallKind::ClaudePluginMarketplace
     } else {
         InstallKind::ResourceLink
     }
@@ -861,7 +856,11 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
     match item.install_kind {
         InstallKind::ClaudePluginMarketplace => PluginInstallPreview {
             command: official_install_command(&item),
-            config_diff: String::new(),
+            config_diff: if item.config_preview.trim().is_empty() {
+                official_plugin_plan_text(&item.name)
+            } else {
+                item.config_preview.clone()
+            },
             can_install: true,
             action: "claude_plugin_cli".to_string(),
             message: "Install through Claude Code CLI after previewing the command.".to_string(),
@@ -974,16 +973,43 @@ fn official_install_failure_message(command: &[String], stdout: &str, stderr: &s
     }
 }
 
-fn official_install_command(item: &PluginCatalogItem) -> Vec<String> {
-    if !item.install_command.is_empty() {
-        return item.install_command.clone();
-    }
+fn official_marketplace_add_command() -> Vec<String> {
+    vec![
+        "claude".to_string(),
+        "plugin".to_string(),
+        "marketplace".to_string(),
+        "add".to_string(),
+        OFFICIAL_MARKETPLACE_REPOSITORY.to_string(),
+    ]
+}
+
+fn official_plugin_install_command(plugin_name: &str) -> Vec<String> {
     vec![
         "claude".to_string(),
         "plugin".to_string(),
         "install".to_string(),
-        format!("{}@{OFFICIAL_MARKETPLACE_NAME}", item.name),
+        format!("{plugin_name}@{OFFICIAL_MARKETPLACE_NAME}"),
     ]
+}
+
+fn official_install_command(item: &PluginCatalogItem) -> Vec<String> {
+    if !item.install_command.is_empty() {
+        return item.install_command.clone();
+    }
+    official_marketplace_add_command()
+}
+
+fn official_plugin_install_plan(item: &PluginCatalogItem) -> Vec<Vec<String>> {
+    vec![
+        official_install_command(item),
+        official_plugin_install_command(&item.name),
+    ]
+}
+
+fn official_plugin_plan_text(plugin_name: &str) -> String {
+    format!(
+        "claude plugin marketplace add {OFFICIAL_MARKETPLACE_REPOSITORY}\nclaude plugin install {plugin_name}@{OFFICIAL_MARKETPLACE_NAME}"
+    )
 }
 
 fn ponytail_claude_code_install_command() -> Vec<String> {
@@ -1665,29 +1691,39 @@ fn canonical_json_value(value: &Value) -> Value {
 fn install_official_claude_plugin(
     preview: PluginInstallPreview,
 ) -> anyhow::Result<PluginInstallOutcome> {
-    let command = official_install_command(&preview.item);
-    let executable = command
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("Claude plugin install command is empty"))?;
-    let args = command.iter().skip(1).collect::<Vec<_>>();
-    let output = Command::new(executable)
-        .args(args)
-        .output()
-        .with_context(|| {
-            format!(
-                "Claude Code CLI unavailable; cannot run plugin install command: {}",
-                command.join(" ")
-            )
-        })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
-        anyhow::bail!(
-            "{}",
-            official_install_failure_message(&command, &stdout, &stderr)
-        );
+    let plan = official_plugin_install_plan(&preview.item);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    for command in &plan {
+        let executable = command
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Claude plugin install command is empty"))?;
+        let args = command.iter().skip(1).collect::<Vec<_>>();
+        let output = Command::new(executable)
+            .args(args)
+            .output()
+            .with_context(|| {
+                format!(
+                    "Claude Code CLI unavailable; cannot run plugin install command: {}",
+                    command.join(" ")
+                )
+            })?;
+        let command_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let command_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output.status.success() {
+            anyhow::bail!(
+                "{}",
+                official_install_failure_message(command, &command_stdout, &command_stderr)
+            );
+        }
+        stdout.push_str(&command_stdout);
+        stderr.push_str(&command_stderr);
     }
-    record_install(&preview.item, command, None)?;
+    let record_command = plan
+        .last()
+        .cloned()
+        .unwrap_or_else(|| official_plugin_install_command(&preview.item.name));
+    record_install(&preview.item, record_command, None)?;
     Ok(PluginInstallOutcome {
         item: preview.item.clone(),
         preview,
@@ -1960,16 +1996,18 @@ pub fn load_claude_desktop_dev_mode_status() -> ClaudeDesktopDevModeStatus {
     let threep_config_path = claude_desktop_threep_config_path();
     let config_library_dir = claude_desktop_threep_config_library_dir();
     let profile_meta_path = config_library_dir.join("_meta.json");
+    let profile_path = claude_desktop_dev_mode_profile_path(&config_library_dir);
     let supported = matches!(
         current_platform(),
         DesktopPlatform::Windows | DesktopPlatform::Macos
     );
-    let normal_mode = read_deployment_mode(&normal_config_path);
-    let threep_mode = read_deployment_mode(&threep_config_path);
     let applied_id = read_claude_desktop_meta_applied_id(&profile_meta_path);
-    let configured = normal_mode.as_deref() == Some("3p")
-        && threep_mode.as_deref() == Some("3p")
-        && applied_id.as_deref() == Some(CLAUDE_DESKTOP_DEV_PROFILE_ID);
+    let configured = claude_desktop_dev_mode_is_configured(
+        &normal_config_path,
+        &threep_config_path,
+        &profile_path,
+        &profile_meta_path,
+    );
     let message = if !supported {
         "Claude Desktop development mode config is currently supported on Windows and macOS."
             .to_string()
@@ -2000,6 +2038,11 @@ pub fn configure_claude_desktop_dev_mode() -> anyhow::Result<ClaudeDesktopDevMod
     let normal_config_path = PathBuf::from(&status.normal_config_path);
     let threep_config_path = PathBuf::from(&status.threep_config_path);
     let profile_meta_path = PathBuf::from(&status.profile_meta_path);
+    let profile_path = claude_desktop_dev_mode_profile_path(
+        profile_meta_path
+            .parent()
+            .unwrap_or_else(|| Path::new(".")),
+    );
     let mut backup_paths = Vec::new();
     if let Some(path) = backup_claude_desktop_config(&normal_config_path)? {
         backup_paths.push(path);
@@ -2012,9 +2055,13 @@ pub fn configure_claude_desktop_dev_mode() -> anyhow::Result<ClaudeDesktopDevMod
     if let Some(path) = backup_claude_desktop_config(&profile_meta_path)? {
         backup_paths.push(path);
     }
+    if let Some(path) = backup_claude_desktop_config(&profile_path)? {
+        backup_paths.push(path);
+    }
 
     write_claude_desktop_deployment_mode(&normal_config_path, "3p")?;
     write_claude_desktop_deployment_mode(&threep_config_path, "3p")?;
+    write_claude_desktop_dev_mode_profile(&profile_path)?;
     write_claude_desktop_dev_mode_meta(&profile_meta_path)?;
 
     let next = load_claude_desktop_dev_mode_status();
@@ -2047,6 +2094,13 @@ pub fn open_claude_desktop_org_plugins_dir() -> anyhow::Result<ClaudeDesktopOrgP
 
 pub fn install_ponytail_claude_desktop_org_plugin() -> anyhow::Result<ClaudeDesktopOrgPluginOutcome>
 {
+    let dev_status = load_claude_desktop_dev_mode_status();
+    if !dev_status.configured {
+        anyhow::bail!(
+            "Claude Desktop development mode is not configured. Run one-click development mode first, then install the organization plugin."
+        );
+    }
+
     let org_plugins_dir = claude_desktop_org_plugins_dir();
     std::fs::create_dir_all(&org_plugins_dir).with_context(|| {
         format!(
@@ -2620,6 +2674,33 @@ fn write_claude_desktop_deployment_mode(path: &Path, mode: &str) -> anyhow::Resu
     crate::settings::atomic_write(path, serde_json::to_string_pretty(&config)?.as_bytes())
 }
 
+fn claude_desktop_dev_mode_profile_path(config_library_dir: &Path) -> PathBuf {
+    config_library_dir.join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"))
+}
+
+fn claude_desktop_dev_mode_is_configured(
+    normal_config_path: &Path,
+    threep_config_path: &Path,
+    profile_path: &Path,
+    profile_meta_path: &Path,
+) -> bool {
+    read_deployment_mode(normal_config_path).as_deref() == Some("3p")
+        && read_deployment_mode(threep_config_path).as_deref() == Some("3p")
+        && profile_path.is_file()
+        && read_claude_desktop_meta_applied_id(profile_meta_path).as_deref()
+            == Some(CLAUDE_DESKTOP_DEV_PROFILE_ID)
+}
+
+fn write_claude_desktop_dev_mode_profile(path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let profile = json!({
+        "disableDeploymentModeChooser": false
+    });
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&profile)?.as_bytes())
+}
+
 fn write_claude_desktop_dev_mode_meta(path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -2943,7 +3024,10 @@ mod tests {
         let items = parse_official_marketplace(raw, &BTreeMap::new());
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].install_kind, InstallKind::ClaudePluginMarketplace);
-        assert_eq!(items[0].install_command[3], "demo@claude-plugins-official");
+        assert_eq!(items[0].install_command, official_marketplace_add_command());
+        assert!(items[0]
+            .config_preview
+            .contains("claude plugin install demo@claude-plugins-official"));
     }
 
     #[test]
@@ -2960,6 +3044,19 @@ mod tests {
         assert_eq!(
             classify_awesome_item("x", "Agent Skills", "https://github.com/a/b", ""),
             InstallKind::SkillBundle
+        );
+    }
+
+    #[test]
+    fn awesome_classifier_does_not_make_community_plugins_auto_installable() {
+        assert_eq!(
+            classify_awesome_item(
+                "x",
+                "Plugins",
+                "https://github.com/example/community-plugin",
+                "Community Claude plugin"
+            ),
+            InstallKind::ResourceLink
         );
     }
 
@@ -3134,13 +3231,8 @@ mod tests {
             tags: Vec::new(),
             install_kind: InstallKind::ClaudePluginMarketplace,
             install_status: InstallStatus::NotInstalled,
-            install_command: vec![
-                "claude".to_string(),
-                "plugin".to_string(),
-                "install".to_string(),
-                "demo@claude-plugins-official".to_string(),
-            ],
-            config_preview: String::new(),
+            install_command: official_marketplace_add_command(),
+            config_preview: official_plugin_plan_text("demo"),
             risk: String::new(),
             requirements: vec!["claude CLI".to_string()],
         };
@@ -3154,12 +3246,59 @@ mod tests {
             vec![
                 "claude",
                 "plugin",
-                "install",
-                "demo@claude-plugins-official"
+                "marketplace",
+                "add",
+                "anthropics/claude-plugins-official"
+            ]
+        );
+        assert!(preview.config_diff.contains(
+            "claude plugin install demo@claude-plugins-official"
+        ));
+        assert_eq!(
+            official_plugin_install_plan(&preview.item),
+            vec![
+                vec![
+                    "claude",
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    "anthropics/claude-plugins-official"
+                ],
+                vec![
+                    "claude",
+                    "plugin",
+                    "install",
+                    "demo@claude-plugins-official"
+                ],
             ]
         );
     }
 
+    #[test]
+    fn official_marketplace_parser_previews_add_then_install() {
+        let raw = serde_json::json!({
+            "plugins": [{
+                "name": "demo",
+                "description": "Demo plugin"
+            }]
+        });
+
+        let items = parse_official_marketplace(raw, &BTreeMap::new());
+
+        assert_eq!(
+            items[0].install_command,
+            vec![
+                "claude",
+                "plugin",
+                "marketplace",
+                "add",
+                "anthropics/claude-plugins-official"
+            ]
+        );
+        assert!(items[0].config_preview.contains(
+            "claude plugin install demo@claude-plugins-official"
+        ));
+    }
     #[test]
     fn community_mcp_preview_does_not_allow_placeholder_install() {
         let item = PluginCatalogItem {
@@ -3368,6 +3507,44 @@ mod tests {
                 .any(|entry| entry["id"] == CLAUDE_DESKTOP_DEV_PROFILE_ID
                     && entry["name"] == CLAUDE_DESKTOP_DEV_PROFILE_NAME)
         );
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_requires_profile_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let normal_config_path = dir.path().join("Claude").join("claude_desktop_config.json");
+        let threep_config_path = dir
+            .path()
+            .join("Claude-3p")
+            .join("claude_desktop_config.json");
+        let profile_path = dir
+            .path()
+            .join("Claude-3p")
+            .join("configLibrary")
+            .join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"));
+        let meta_path = dir
+            .path()
+            .join("Claude-3p")
+            .join("configLibrary")
+            .join("_meta.json");
+        write_claude_desktop_deployment_mode(&normal_config_path, "3p").unwrap();
+        write_claude_desktop_deployment_mode(&threep_config_path, "3p").unwrap();
+        write_claude_desktop_dev_mode_meta(&meta_path).unwrap();
+
+        assert!(!claude_desktop_dev_mode_is_configured(
+            &normal_config_path,
+            &threep_config_path,
+            &profile_path,
+            &meta_path
+        ));
+
+        write_claude_desktop_dev_mode_profile(&profile_path).unwrap();
+        assert!(claude_desktop_dev_mode_is_configured(
+            &normal_config_path,
+            &threep_config_path,
+            &profile_path,
+            &meta_path
+        ));
     }
 
     #[test]

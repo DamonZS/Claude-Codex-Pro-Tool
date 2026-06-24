@@ -237,6 +237,7 @@ fn validate_openai_plugins_marketplace_root(root: &Path) -> anyhow::Result<()> {
     if marketplace != root {
         anyhow::bail!("downloaded openai/plugins marketplace root mismatch");
     }
+    validate_openai_plugins_marketplace_entries(root)?;
     Ok(())
 }
 
@@ -266,6 +267,77 @@ fn local_openai_curated_marketplace_root_from_root(root: &Path) -> anyhow::Resul
         return Ok(None);
     }
     Ok(Some(root.to_path_buf()))
+}
+
+fn validate_openai_plugins_marketplace_entries(root: &Path) -> anyhow::Result<()> {
+    let marketplace_path = root
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    let text = std::fs::read_to_string(&marketplace_path)
+        .with_context(|| format!("failed to read {}", marketplace_path.display()))?;
+    let marketplace: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse {}", marketplace_path.display()))?;
+    let plugins = marketplace
+        .get("plugins")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("downloaded openai/plugins marketplace has no plugins"))?;
+    for plugin in plugins {
+        let name = plugin
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                plugin
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|id| id.split('@').next())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .ok_or_else(|| anyhow::anyhow!("downloaded openai/plugins marketplace has an unnamed plugin"))?;
+        let plugin_root = plugin_marketplace_entry_source_path(plugin)
+            .and_then(|path| plugin_marketplace_entry_path(root, path))
+            .unwrap_or_else(|| root.join("plugins").join(name));
+        let manifest = plugin_root.join(".codex-plugin").join("plugin.json");
+        if !manifest.is_file() {
+            anyhow::bail!(
+                "downloaded openai/plugins marketplace missing Codex plugin manifest for {name}: {}",
+                manifest.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn plugin_marketplace_entry_source_path(plugin: &serde_json::Value) -> Option<&str> {
+    plugin
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            plugin
+                .get("source")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|source| source.get("path"))
+                .and_then(serde_json::Value::as_str)
+        })
+}
+
+fn plugin_marketplace_entry_path(root: &Path, value: &str) -> Option<PathBuf> {
+    let trimmed = value.trim().strip_prefix("./").unwrap_or(value.trim());
+    if trimmed.is_empty() || Path::new(trimmed).is_absolute() {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+    for component in Path::new(trimmed).components() {
+        match component {
+            Component::Normal(value) => relative.push(value),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    (!relative.as_os_str().is_empty()).then(|| root.join(relative))
 }
 
 fn replace_directory(source: &Path, destination: &Path) -> anyhow::Result<()> {
@@ -390,6 +462,7 @@ fn expand_local_plugin_marketplace(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| home.join(".tmp").join("plugins"));
     for plugin in plugins {
+        let source_path = plugin_marketplace_entry_source_path(plugin).map(str::to_string);
         let Some(plugin_object) = plugin.as_object_mut() else {
             continue;
         };
@@ -408,12 +481,11 @@ fn expand_local_plugin_marketplace(
         if plugin_name.is_empty() {
             continue;
         }
-        let manifest_path = marketplace_root
-            .join("plugins")
-            .join(&plugin_name)
-            .join(".codex-plugin")
-            .join("plugin.json");
-        let plugin_root = marketplace_root.join("plugins").join(&plugin_name);
+        let plugin_root = source_path
+            .as_deref()
+            .and_then(|path| plugin_marketplace_entry_path(&marketplace_root, path))
+            .unwrap_or_else(|| marketplace_root.join("plugins").join(&plugin_name));
+        let manifest_path = plugin_root.join(".codex-plugin").join("plugin.json");
         if let Some(manifest) = plugin_manifest(&manifest_path) {
             merge_plugin_manifest(plugin_object, manifest);
         }
@@ -580,7 +652,7 @@ mod tests {
             root.join(".agents")
                 .join("plugins")
                 .join("marketplace.json"),
-            r#"{"name":"openai-curated","plugins":[{"name":"gmail","path":"./plugins/gmail"}]}"#,
+            r#"{"name":"openai-curated","plugins":[{"name":"gmail","source":{"source":"local","path":"./plugins/gmail"}}]}"#,
         )
         .unwrap();
     }
@@ -632,7 +704,7 @@ mod tests {
                 .unwrap();
             std::io::Write::write_all(
                 &mut writer,
-                br#"{"name":"openai-curated","plugins":[{"name":"gmail","path":"./plugins/gmail"}]}"#,
+                br#"{"name":"openai-curated","plugins":[{"name":"gmail","source":{"source":"local","path":"./plugins/gmail"}}]}"#,
             )
             .unwrap();
             writer
@@ -658,6 +730,43 @@ mod tests {
     }
 
     #[test]
+    fn install_zip_rejects_marketplace_without_plugin_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut bytes = Cursor::new(Vec::<u8>::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut bytes);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            writer
+                .start_file("plugins-main/.agents/plugins/marketplace.json", options)
+                .unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                br#"{"name":"openai-curated","plugins":[{"name":"gmail","source":{"source":"local","path":"./plugins/gmail"}}]}"#,
+            )
+            .unwrap();
+            writer.start_file("plugins-main/plugins/.keep", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let error = install_openai_plugins_zip(temp.path(), bytes.get_ref())
+            .expect_err("incomplete marketplace should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing Codex plugin manifest for gmail")
+        );
+        assert!(
+            !temp
+                .path()
+                .join(".tmp/plugins/.agents/plugins/marketplace.json")
+                .exists()
+        );
+    }
+
+    #[test]
     fn local_marketplaces_expand_plugin_manifest() {
         let temp = tempfile::tempdir().unwrap();
         write_marketplace(temp.path());
@@ -678,6 +787,37 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("plugins")
+        );
+    }
+
+    #[test]
+    fn local_marketplaces_use_nested_source_path_for_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".tmp").join("plugins");
+        std::fs::create_dir_all(root.join(".agents").join("plugins")).unwrap();
+        std::fs::create_dir_all(root.join("plugins").join("actual-dir").join(".codex-plugin"))
+            .unwrap();
+        std::fs::write(
+            root.join(".agents")
+                .join("plugins")
+                .join("marketplace.json"),
+            r#"{"name":"openai-curated","plugins":[{"name":"demo","source":{"source":"local","path":"./plugins/actual-dir"}}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("plugins")
+                .join("actual-dir")
+                .join(".codex-plugin")
+                .join("plugin.json"),
+            r#"{"description":"Nested source path plugin"}"#,
+        )
+        .unwrap();
+
+        let marketplaces = local_plugin_marketplaces_from_home(temp.path());
+
+        assert_eq!(
+            marketplaces[0]["plugins"][0]["description"],
+            "Nested source path plugin"
         );
     }
 }

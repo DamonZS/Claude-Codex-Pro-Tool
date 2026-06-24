@@ -68,7 +68,7 @@
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
   const codexAppServerModelRequestPatchVersion = "1";
-  const codexPluginMarketplaceUnlockVersion = "10";
+  const codexPluginMarketplaceUnlockVersion = "11";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -1216,6 +1216,7 @@
 
   let claudeCodexProBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
   const codexPluginLegacyEntryUnlockBeforeVersion = "26.601.2237";
+  const codexPluginBridgeRequestUnlockFromVersion = "26.616.0";
 
   function parseCodexVersionParts(version) {
     const raw = String(version || "").trim();
@@ -3221,6 +3222,15 @@
     return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-primary-runtime";
   }
 
+  function codexPluginMarketplaceRequestPatchStrategy() {
+    const pluginStrategy = codexPluginUnlockStrategy();
+    if (pluginStrategy === "legacy") return "none";
+    const version = String(claudeCodexProBackendSettings.codexAppVersion || "").trim();
+    const comparison = compareCodexVersions(version, codexPluginBridgeRequestUnlockFromVersion);
+    if (comparison == null) return "unknown";
+    return comparison >= 0 ? "bridge" : "client";
+  }
+
   function cloneLocalPluginMarketplace(marketplace) {
     try {
       return JSON.parse(JSON.stringify(marketplace));
@@ -3299,7 +3309,9 @@
     } catch {
       return false;
     }
-    if (!source.includes("!u(e.marketplaceName)||e.marketplaceName===r")) return false;
+    const isKnownFilterSource = source.includes("!u(e.marketplaceName)||e.marketplaceName===r")
+      || source.includes("!ne(e.marketplaceName)||e.marketplaceName===n");
+    if (!isKnownFilterSource) return false;
     if (!sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName))) return false;
     return sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName) && !callback(plugin));
   }
@@ -3412,6 +3424,14 @@
     return result;
   }
 
+  function looksLikePluginMarketplaceResult(value) {
+    if (!value || typeof value !== "object") return false;
+    if (Array.isArray(value.marketplaces)) return true;
+    if (Array.isArray(value.plugins)) return true;
+    if (value.data && typeof value.data === "object") return looksLikePluginMarketplaceResult(value.data);
+    return false;
+  }
+
   function patchPluginMarketplaceRequestClient(client) {
     if (!client || typeof client.sendRequest !== "function") return false;
     if (client.__codexPluginMarketplaceUnlockPatch === codexPluginMarketplaceUnlockVersion) return true;
@@ -3452,6 +3472,205 @@
     };
     client.__codexPluginMarketplaceUnlockPatch = codexPluginMarketplaceUnlockVersion;
     return true;
+  }
+
+  function patchPluginMarketplaceRequestMessage(message) {
+    if (!message || typeof message !== "object") return message;
+    if (message.type === "fetch" && typeof message.url === "string") {
+      const requestMethod = appServerModelRequestMethod(message.url, message.body);
+      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      let requestBody = message.body;
+      let params = null;
+      if (typeof requestBody === "string" && requestBody.trim()) {
+        try {
+          params = JSON.parse(requestBody);
+        } catch {
+          params = null;
+        }
+      } else if (requestBody && typeof requestBody === "object") {
+        params = requestBody;
+      }
+      const requestParams = patchPluginMarketplaceRequestParams(
+        requestMethod,
+        restorePluginMarketplaceRequestParams(params, requestMethod)
+      );
+      if (requestMethod === "list-plugins" && message.requestId != null) {
+        window.__codexPluginMarketplaceFetchRequestIds = window.__codexPluginMarketplaceFetchRequestIds || new Set();
+        window.__codexPluginMarketplaceFetchRequestIds.add(String(message.requestId));
+      }
+      if (requestParams === params) return message;
+      if (requestMethod === "install-plugin") {
+        sendClaudeCodexProDiagnostic("plugin_install_request_debug", {
+          method: message.url,
+          requestMethod,
+          originalMarketplacePath: params?.marketplacePath || null,
+          originalRemoteMarketplaceName: params?.remoteMarketplaceName || null,
+          originalPluginName: params?.pluginName || null,
+          requestMarketplacePath: requestParams?.marketplacePath || null,
+          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
+          requestPluginName: requestParams?.pluginName || null,
+        });
+      }
+      return {
+        ...message,
+        body: typeof requestBody === "string" ? JSON.stringify(requestParams) : requestParams,
+      };
+    }
+    if (message.type === "mcp-request" && message.request && typeof message.request === "object") {
+      const requestMethod = appServerModelRequestMethod(String(message.request.method || ""), message.request.params);
+      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      const requestParams = patchPluginMarketplaceRequestParams(
+        requestMethod,
+        restorePluginMarketplaceRequestParams(message.request.params, requestMethod)
+      );
+      if (requestMethod === "list-plugins" && message.request.id != null) {
+        window.__codexPluginMarketplaceRequestIds = window.__codexPluginMarketplaceRequestIds || new Set();
+        window.__codexPluginMarketplaceRequestIds.add(String(message.request.id));
+      }
+      if (requestParams === message.request.params) return message;
+      if (requestMethod === "install-plugin") {
+        sendClaudeCodexProDiagnostic("plugin_install_request_debug", {
+          method: String(message.request.method || ""),
+          requestMethod,
+          originalMarketplacePath: message.request.params?.marketplacePath || null,
+          originalRemoteMarketplaceName: message.request.params?.remoteMarketplaceName || null,
+          originalPluginName: message.request.params?.pluginName || null,
+          requestMarketplacePath: requestParams?.marketplacePath || null,
+          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
+          requestPluginName: requestParams?.pluginName || null,
+        });
+      }
+      return { ...message, request: { ...message.request, params: requestParams } };
+    }
+    return message;
+  }
+
+  function patchPluginMarketplaceResponseData(data) {
+    if (data?.type === "fetch-response") {
+      const requestId = data.requestId != null ? String(data.requestId) : "";
+      const requestIds = window.__codexPluginMarketplaceFetchRequestIds;
+      if (requestIds instanceof Set && requestIds.size > 0) {
+        if (!requestIds.has(requestId)) return false;
+        requestIds.delete(requestId);
+      }
+      if (typeof data.bodyJsonString !== "string" || !data.bodyJsonString.trim()) return false;
+      try {
+        const result = JSON.parse(data.bodyJsonString);
+        if (!looksLikePluginMarketplaceResult(result)) return false;
+        if (result && typeof result === "object") {
+          patchPluginMarketplaceResult("list-plugins", result);
+          patchPluginMarketplaceResult("list-plugins", result.data);
+        }
+        data.bodyJsonString = JSON.stringify(result);
+        return true;
+      } catch (error) {
+        sendClaudeCodexProDiagnostic("plugin_marketplace_fetch_response_patch_failed", {
+          errorName: error?.name || "",
+          errorMessage: error?.message || String(error),
+        });
+      }
+      return false;
+    }
+    if (data?.type !== "mcp-response") return false;
+    const message = data.message || data.response;
+    const method = String(message?.method || data.method || "");
+    if (appServerModelRequestMethod(method) === "install-plugin") {
+      clearPluginMarketplaceQueryCache();
+    }
+    const requestId = message?.id != null ? String(message.id) : "";
+    const requestIds = window.__codexPluginMarketplaceRequestIds;
+    if (requestIds instanceof Set && requestIds.size > 0) {
+      if (!requestIds.has(requestId)) return false;
+      requestIds.delete(requestId);
+    }
+    const result = message?.result;
+    if (!result || typeof result !== "object") return false;
+    patchPluginMarketplaceResult("list-plugins", result);
+    patchPluginMarketplaceResult("list-plugins", result.data);
+    return true;
+  }
+
+  function clearPluginMarketplaceQueryCache() {
+    try {
+      const queryClient = window.__REACT_QUERY_CLIENT__ || window.__codexQueryClient;
+      if (queryClient && typeof queryClient.invalidateQueries === "function") {
+        queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      }
+    } catch {
+    }
+  }
+
+  function installPluginMarketplaceBridgePatch() {
+    if (window.__codexPluginMarketplaceBridgePatch === codexPluginMarketplaceUnlockVersion) return;
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!claudeCodexProSettings().pluginMarketplaceUnlock) return;
+    installPluginMarketplaceWindowEventPatchOnly();
+    const bridge = window.electronBridge;
+    if (!bridge || typeof bridge.sendMessageFromView !== "function") {
+      sendClaudeCodexProDiagnostic("plugin_marketplace_bridge_patch_not_found", {});
+      return;
+    }
+    if (!bridge.__codexPluginMarketplaceOriginalSendMessageFromView) {
+      bridge.__codexPluginMarketplaceOriginalSendMessageFromView = bridge.sendMessageFromView.bind(bridge);
+      bridge.sendMessageFromView = function claudeCodexProPluginMarketplacePatchedSendMessageFromView(message) {
+        let nextMessage = message;
+        try {
+          nextMessage = patchPluginMarketplaceRequestMessage(message);
+        } catch (error) {
+          sendClaudeCodexProDiagnostic("plugin_marketplace_bridge_request_patch_failed", {
+            errorName: error?.name || "",
+            errorMessage: error?.message || String(error),
+          });
+        }
+        return bridge.__codexPluginMarketplaceOriginalSendMessageFromView(nextMessage);
+      };
+    }
+    bridge.__codexPluginMarketplaceBridgePatch = codexPluginMarketplaceUnlockVersion;
+    window.__codexPluginMarketplaceBridgePatch = codexPluginMarketplaceUnlockVersion;
+    sendClaudeCodexProDiagnostic("plugin_marketplace_bridge_patch_installed", {});
+  }
+
+  function installPluginMarketplaceWindowEventPatchOnly() {
+    if (window.__codexPluginMarketplaceWindowEventPatch === codexPluginMarketplaceUnlockVersion) return;
+    if (pluginPatchDisabledInRelayMode()) return;
+    if (!claudeCodexProSettings().pluginMarketplaceUnlock) return;
+    const originalDispatchEvent = window.__codexPluginMarketplaceOriginalDispatchEvent || window.dispatchEvent;
+    if (!window.__codexPluginMarketplaceOriginalDispatchEvent) {
+      window.__codexPluginMarketplaceOriginalDispatchEvent = originalDispatchEvent;
+      window.dispatchEvent = function claudeCodexProPluginMarketplacePatchedDispatchEvent(event) {
+        try {
+          const detail = event?.detail;
+          if (event?.type === "codex-message-from-view" && detail?.type === "mcp-request") {
+            const patched = patchPluginMarketplaceRequestMessage(detail);
+            if (patched !== detail) {
+              Object.keys(detail).forEach((key) => delete detail[key]);
+              Object.assign(detail, patched);
+            }
+          }
+          if (event?.type === "message") patchPluginMarketplaceResponseData(event.data);
+        } catch (error) {
+          sendClaudeCodexProDiagnostic("plugin_marketplace_dispatch_event_patch_failed", {
+            errorName: error?.name || "",
+            errorMessage: error?.message || String(error),
+          });
+        }
+        return originalDispatchEvent.call(this, event);
+      };
+    }
+    if (!window.__codexPluginMarketplaceResponseListenerInstalled) {
+      window.__codexPluginMarketplaceResponseListenerInstalled = true;
+      window.addEventListener("message", (event) => {
+        try {
+          patchPluginMarketplaceResponseData(event?.data);
+        } catch (error) {
+          sendClaudeCodexProDiagnostic("plugin_marketplace_response_message_patch_failed", {
+            errorName: error?.name || "",
+            errorMessage: error?.message || String(error),
+          });
+        }
+      }, true);
+    }
+    window.__codexPluginMarketplaceWindowEventPatch = codexPluginMarketplaceUnlockVersion;
   }
 
   function installPluginMarketplaceRequestPatch() {
@@ -4919,6 +5138,12 @@
 
   function appServerModelRequestMethod(method, params) {
     if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
+    if (method === "vscode://codex/list-plugins") return "list-plugins";
+    if (method === "vscode://codex/plugin/install") return "install-plugin";
+    if (method === "vscode://codex/plugin/uninstall") return "uninstall-plugin";
+    if (method === "plugin/list") return "list-plugins";
+    if (method === "plugin/install") return "install-plugin";
+    if (method === "plugin/uninstall") return "uninstall-plugin";
     return String(method || "");
   }
 
@@ -8627,8 +8852,17 @@
         enablePluginEntry();
       }
       if ((pluginUnlockStrategy === "modern" || pluginUnlockStrategy === "unknown") && settings.pluginMarketplaceUnlock) {
+        const marketplaceRequestPatchStrategy = codexPluginMarketplaceRequestPatchStrategy();
         installPluginBuildFlavorFilterPatch();
-        installPluginMarketplaceRequestPatch();
+        if (marketplaceRequestPatchStrategy === "bridge") {
+          installPluginMarketplaceBridgePatch();
+        } else if (marketplaceRequestPatchStrategy === "client") {
+          installPluginMarketplaceRequestPatch();
+        } else {
+          installPluginMarketplaceWindowEventPatchOnly();
+          installPluginMarketplaceBridgePatch();
+          installPluginMarketplaceRequestPatch();
+        }
       }
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
