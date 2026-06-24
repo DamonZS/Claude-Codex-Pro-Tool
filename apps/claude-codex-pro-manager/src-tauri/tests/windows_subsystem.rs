@@ -186,9 +186,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
     assert!(workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg --clobber"));
     assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
-    assert!(workflow.contains("gh api --method PATCH \"repos/$REPO/releases/$release_id\""));
-    assert!(workflow.contains("-F draft=false"));
-    assert!(workflow.contains("-f make_latest=true"));
+    assert!(workflow.contains("gh release edit \"$TAG\" --repo \"$REPO\" --draft=false --latest"));
     assert!(workflow.contains("version: tag"));
 
     assert!(release_assets.contains("auto-release-installers-managed"));
