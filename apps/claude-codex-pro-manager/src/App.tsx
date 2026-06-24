@@ -12,6 +12,7 @@ import {
   Languages,
   LayoutDashboard,
   MessageCircle,
+  MessageSquare,
   Network,
   PackageSearch,
   PencilRuler,
@@ -612,6 +613,7 @@ type Route =
   | "overview"
   | "supplier"
   | "tools"
+  | "sessions"
   | "scripts"
   | "logs"
   | "settings";
@@ -630,6 +632,7 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon }> = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
   { id: "supplier", label: "供应商", icon: Network },
   { id: "tools", label: "工具与插件", icon: PackageSearch },
+  { id: "sessions", label: "会话管理", icon: MessageSquare },
   { id: "scripts", label: "脚本", icon: FileCode2 },
   { id: "logs", label: "日志", icon: Info },
   { id: "settings", label: "设置", icon: Settings },
@@ -1352,8 +1355,14 @@ export function App() {
         refreshOverview(true),
         refreshClaude(true),
         refreshWatcher(true),
+      ]);
+    } else if (target === "sessions") {
+      await Promise.all([
         refreshLocalSessions(true),
         refreshMemoryAssist(true),
+        refreshSettings(true),
+        refreshOverview(true),
+        refreshClaude(true),
       ]);
     } else if (target === "scripts") {
       await Promise.all([refreshSettings(true), refreshScripts(true)]);
@@ -1545,13 +1554,22 @@ export function App() {
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}
-              claudeChinese={claudeChinese}
-              claudeDesktop={claudeDesktop}
               claudeDesktopDevMode={claudeDesktopDevMode}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
               claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
               codexPluginMarketplace={codexPluginMarketplace}
               hub={pluginHub}
+              overview={overview}
+              preview={pluginPreview}
+              settings={settings}
+              watcher={watcher}
+            />
+          ) : null}
+          {route === "sessions" ? (
+            <SessionManagementScreen
+              actions={actions}
+              claudeChinese={claudeChinese}
+              claudeDesktop={claudeDesktop}
               localSessions={localSessions}
               memoryAssist={memoryAssist}
               memoryCandidates={memoryCandidates}
@@ -1559,11 +1577,8 @@ export function App() {
               memoryItems={memoryItems}
               memorySearch={memorySearch}
               memorySelfCheck={memorySelfCheck}
-              overview={overview}
-              preview={pluginPreview}
               providerSync={providerSync}
               settings={settings}
-              watcher={watcher}
             />
           ) : null}
           {route === "scripts" ? <ScriptsScreen actions={actions} market={scriptMarket} settings={settings} /> : null}
@@ -1799,58 +1814,33 @@ function SupplierScreen({
 
 function ToolsAndPluginsScreen({
   actions,
-  claudeChinese,
-  claudeDesktop,
   claudeDesktopDevMode,
   claudeDesktopMarketplace,
   claudeDesktopOrgPlugin,
   codexPluginMarketplace,
   hub,
-  localSessions,
-  memoryAssist,
-  memoryCandidates,
-  memoryExport,
-  memoryItems,
-  memorySearch,
-  memorySelfCheck,
   overview,
   preview,
-  providerSync,
   settings,
   watcher,
 }: {
   actions: ReturnType<typeof createActionsShape>;
-  claudeChinese: ClaudeChineseWindowResult | null;
-  claudeDesktop: ClaudeDesktopResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
   claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
   codexPluginMarketplace: CodexPluginMarketplaceStatusResult | null;
   hub: PluginHubResult | null;
-  localSessions: LocalSessionsResult | null;
-  memoryAssist: MemoryStatusResult | null;
-  memoryCandidates: MemoryCandidatesResult | null;
-  memoryExport: MemoryExportResult | null;
-  memoryItems: MemoryItemsResult | null;
-  memorySearch: MemoryQueryResult | null;
-  memorySelfCheck: MemorySelfCheckResult | null;
   overview: OverviewResult | null;
   preview: PluginInstallPreviewResult | null;
-  providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
   watcher: WatcherResult | null;
 }) {
   const common = settings?.settings.relayContextConfigContents || settings?.settings.relayCommonConfigContents || "";
-  const sessions = localSessions?.sessions ?? [];
-  const latestSessions = sessions.slice(0, 8);
   const codexPluginSource = hub?.catalog.sources.find((source) => source.id === "codex-plugins");
-  const syncSummary = providerSync
-    ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
-    : "尚未执行";
   return (
     <div className="stack">
       <div className="ops-tools-command-deck">
-        <Panel title="工具与插件" detail="插件目录、MCP 配置、Codex 会话管理、Claude 会话诊断和历史会话修复集中在这里。">
+        <Panel title="工具与插件" detail="插件目录、MCP 配置和启动入口集中在这里。">
           <div className="ops-note">
             <ShieldCheck className="h-4 w-4" />
             <span>第三方插件和 MCP 安装前仍先展示命令或配置 diff；社区资源不会静默执行脚本。</span>
@@ -1870,32 +1860,9 @@ function ToolsAndPluginsScreen({
             </Button>
           </div>
         </Panel>
-        <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
-          <div className="ops-status-list">
-            <StatusRow label="Provider Sync" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
-            <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
-            <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.repairHistorySessions()}>
-              <Wrench className="h-4 w-4" />
-              修复历史会话
-            </Button>
-            <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              刷新会话
-            </Button>
-          </div>
-          {providerSync?.encryptedContentWarning ? (
-            <div className="ops-danger-zone">
-              <AlertTriangle className="h-4 w-4" />
-              <span>{providerSync.encryptedContentWarning}</span>
-            </div>
-          ) : null}
-        </Panel>
       </div>
-      <div className="ops-two-column">
-        <div className="ops-wide-column">
+      <div className="ops-tools-columns">
+        <div className="ops-tools-column">
           <PluginHubScreen
             actions={actions}
             hub={hub}
@@ -1904,50 +1871,10 @@ function ToolsAndPluginsScreen({
             orgPlugin={claudeDesktopOrgPlugin}
             preview={preview}
           />
-          <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
-            <div className="ops-status-list">
-              <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
-              <StatusRow label="候选库" status={(localSessions?.dbPaths.length ?? 0) > 0 ? "found" : "not_checked"} value={`${localSessions?.dbPaths.length ?? 0} 个`} />
-              <StatusRow label="会话数" status={sessions.length ? "ok" : "not_checked"} value={`${sessions.length} 个`} />
-            </div>
-            <div className="session-list">
-              {latestSessions.length ? latestSessions.map((session) => (
-                <div className="session-row" key={`${session.dbPath}:${session.id}`}>
-                  <div>
-                    <strong>{session.title || "未命名会话"}</strong>
-                    <span>{session.modelProvider || "unknown"} · {compactPath(session.cwd || session.rolloutPath || session.id)}</span>
-                  </div>
-                  <Button onClick={() => void actions.deleteLocalSession(session)} size="sm" variant="outline">
-                    <Trash2 className="h-4 w-4" />
-                    删除
-                  </Button>
-                </div>
-              )) : <Empty text="暂未读取到 Codex 本地会话。" />}
-            </div>
-          </Panel>
-        </div>
-        <div className="stack">
           <PromptOptimizerCard actions={actions} />
-          <MemoryAssistPanel
-            actions={actions}
-            candidates={memoryCandidates}
-            exported={memoryExport}
-            items={memoryItems}
-            search={memorySearch}
-            selfCheck={memorySelfCheck}
-            status={memoryAssist}
-          />
-          <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
-            <div className="ops-status-list">
-              <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
-              <StatusRow label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
-              <StatusRow label="安全边界" status="ok" value="不修改官方 MSIX / app.asar" />
-            </div>
-            <div className="action-row">
-              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动 Claude</Button>
-              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 中文窗口</Button>
-            </div>
-          </Panel>
+        </div>
+        <div className="ops-tools-column">
+          <ClaudeDesktopOrgPluginPanel actions={actions} devMode={claudeDesktopDevMode} marketplace={claudeDesktopMarketplace} status={claudeDesktopOrgPlugin} />
           <Panel title="工具与插件配置" detail="MCP、Skills、Plugins 仍保存在统一 TOML 配置中。">
             <pre className="ops-code">{common.trim() || "暂无通用 MCP / Skills / Plugins 配置。"}</pre>
           </Panel>
@@ -2144,6 +2071,121 @@ function MemoryAssistPanel({
   );
 }
 
+function SessionManagementScreen({
+  actions,
+  claudeChinese,
+  claudeDesktop,
+  localSessions,
+  memoryAssist,
+  memoryCandidates,
+  memoryExport,
+  memoryItems,
+  memorySearch,
+  memorySelfCheck,
+  providerSync,
+  settings,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  claudeChinese: ClaudeChineseWindowResult | null;
+  claudeDesktop: ClaudeDesktopResult | null;
+  localSessions: LocalSessionsResult | null;
+  memoryAssist: MemoryStatusResult | null;
+  memoryCandidates: MemoryCandidatesResult | null;
+  memoryExport: MemoryExportResult | null;
+  memoryItems: MemoryItemsResult | null;
+  memorySearch: MemoryQueryResult | null;
+  memorySelfCheck: MemorySelfCheckResult | null;
+  providerSync: ProviderSyncResult | null;
+  settings: SettingsResult | null;
+}) {
+  const sessions = localSessions?.sessions ?? [];
+  const latestSessions = sessions.slice(0, 8);
+  const syncSummary = providerSync
+    ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
+    : "尚未执行";
+
+  return (
+    <div className="stack">
+      <Panel title="会话管理" detail="历史会话修复、记忆辅助、Codex 会话管理和 Claude 会话诊断集中在这里。">
+        <div className="ops-note">
+          <ShieldCheck className="h-4 w-4" />
+          <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
+        </div>
+      </Panel>
+      <div className="ops-two-column">
+        <div className="ops-wide-column">
+          <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
+            <div className="ops-status-list">
+              <StatusRow label="Provider Sync" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
+              <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
+              <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
+            </div>
+            <div className="action-row">
+              <Button onClick={() => void actions.repairHistorySessions()}>
+                <Wrench className="h-4 w-4" />
+                修复历史会话
+              </Button>
+              <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                刷新会话
+              </Button>
+            </div>
+            {providerSync?.encryptedContentWarning ? (
+              <div className="ops-danger-zone">
+                <AlertTriangle className="h-4 w-4" />
+                <span>{providerSync.encryptedContentWarning}</span>
+              </div>
+            ) : null}
+          </Panel>
+          <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
+            <div className="ops-status-list">
+              <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
+              <StatusRow label="候选库" status={(localSessions?.dbPaths.length ?? 0) > 0 ? "found" : "not_checked"} value={`${localSessions?.dbPaths.length ?? 0} 个`} />
+              <StatusRow label="会话数" status={sessions.length ? "ok" : "not_checked"} value={`${sessions.length} 个`} />
+            </div>
+            <div className="session-list">
+              {latestSessions.length ? latestSessions.map((session) => (
+                <div className="session-row" key={`${session.dbPath}:${session.id}`}>
+                  <div>
+                    <strong>{session.title || "未命名会话"}</strong>
+                    <span>{session.modelProvider || "unknown"} · {compactPath(session.cwd || session.rolloutPath || session.id)}</span>
+                  </div>
+                  <Button onClick={() => void actions.deleteLocalSession(session)} size="sm" variant="outline">
+                    <Trash2 className="h-4 w-4" />
+                    删除
+                  </Button>
+                </div>
+              )) : <Empty text="暂未读取到 Codex 本地会话。" />}
+            </div>
+          </Panel>
+        </div>
+        <div className="ops-wide-column">
+          <MemoryAssistPanel
+            actions={actions}
+            candidates={memoryCandidates}
+            exported={memoryExport}
+            items={memoryItems}
+            search={memorySearch}
+            selfCheck={memorySelfCheck}
+            status={memoryAssist}
+          />
+          <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
+            <div className="ops-status-list">
+              <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
+              <StatusRow label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
+              <StatusRow label="安全边界" status="ok" value="不修改官方 MSIX / app.asar" />
+            </div>
+            <div className="action-row">
+              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动 Claude</Button>
+              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 中文窗口</Button>
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PluginHubScreen({
   actions,
   devMode,
@@ -2178,7 +2220,6 @@ function PluginHubScreen({
   const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "Install";
   return (
     <div className="stack">
-      <ClaudeDesktopOrgPluginPanel actions={actions} devMode={devMode} marketplace={marketplace} status={orgPlugin} />
       <div className="plugin-layout">
       <Panel title="插件目录" detail="Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。">
         <div className="filter-row">
@@ -2900,7 +2941,8 @@ function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "运行状态、启动动作和 Claude 中文窗口诊断。",
     supplier: "Codex 中转配置与 Claude Desktop 开发模式供应商写入。",
-    tools: "插件目录、MCP 配置、会话管理和历史修复。",
+    tools: "插件目录、MCP 配置和启动入口。",
+    sessions: "历史会话修复、记忆辅助和会话诊断。",
     scripts: "Codex 前端用户脚本市场。",
     logs: "诊断日志与运行信息。",
     settings: "全局开关和配置摘要。",
@@ -2909,7 +2951,6 @@ function routeSubtitle(route: Route) {
 }
 
 function routeDocumentTitle(route: Route) {
-  if (normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE) === "tools") return "工具与插件";
   return route === "overview" ? "Claude Codex Pro 管理工具" : `${routeLabel(route)} - Claude Codex Pro 管理工具`;
 }
 

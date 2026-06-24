@@ -243,8 +243,11 @@ fn plugin_hub_is_first_class_ops_console_route() {
 
     assert!(app_tsx.contains("id: \"tools\""));
     assert!(app_tsx.contains("label: \"工具与插件\""));
+    assert!(app_tsx.contains("id: \"sessions\""));
+    assert!(app_tsx.contains("label: \"会话管理\""));
     assert!(app_tsx.contains("function PluginHubScreen"));
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
+    assert!(app_tsx.contains("function SessionManagementScreen"));
     assert!(app_tsx.contains("claude-codex-pro-navigate"));
     assert!(commands_rs.contains("route_main_window_to_plugin_hub"));
     assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
@@ -264,6 +267,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
         )
     );
     assert!(styles.contains(".plugin-layout"));
+    assert!(styles.contains(".ops-tools-columns"));
     assert!(styles.contains(".plugin-list"));
     assert!(styles.contains(".preview-box"));
     assert!(styles.contains(".risk-box"));
@@ -282,17 +286,52 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
     assert!(!app_tsx.contains("id: \"context\""));
     assert!(!app_tsx.contains("id: \"pluginHub\""));
     assert!(!app_tsx.contains("id: \"maintenance\""));
-    assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
-    assert!(app_tsx.contains("Codex 插件仓库"));
-    assert!(app_tsx.contains("https://github.com/openai/plugins"));
-    assert!(app_tsx.contains("Codex 会话管理"));
-    assert!(app_tsx.contains("Claude 会话诊断"));
-    assert!(app_tsx.contains("历史会话修复"));
-    assert!(app_tsx.contains("list_local_sessions"));
-    assert!(app_tsx.contains("delete_local_session"));
-    assert!(app_tsx.contains("sync_providers_now"));
+    let tools_section = app_tsx
+        .split("function ToolsAndPluginsScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function SessionManagementScreen").next())
+        .expect("tools screen source");
+
+    assert!(tools_section.contains("Codex 插件仓库"));
+    assert!(tools_section.contains("https://github.com/openai/plugins"));
+    assert!(tools_section.contains("工具与插件配置"));
+    assert!(tools_section.contains("ClaudeDesktopOrgPluginPanel"));
+    assert!(tools_section.contains("PromptOptimizerCard"));
+    assert!(!tools_section.contains("Codex 会话管理"));
+    assert!(!tools_section.contains("Claude 会话诊断"));
+    assert!(!tools_section.contains("历史会话修复"));
+    assert!(!tools_section.contains("list_local_sessions"));
+    assert!(!tools_section.contains("delete_local_session"));
+    assert!(!tools_section.contains("sync_providers_now"));
     assert!(commands_rs.contains("list_local_sessions"));
     assert!(commands_rs.contains("sync_providers_now"));
+}
+
+#[test]
+fn session_management_route_contains_history_memory_and_diagnostics() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let styles = manifest_dir.parent().unwrap().join("src/styles.css");
+    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+
+    let session_section = app_tsx
+        .split("function SessionManagementScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function PluginHubScreen").next())
+        .expect("session screen source");
+
+    assert!(session_section.contains("会话管理"));
+    assert!(session_section.contains("历史会话修复"));
+    assert!(session_section.contains("记忆辅助"));
+    assert!(session_section.contains("Codex 会话管理"));
+    assert!(session_section.contains("Claude 会话诊断"));
+    assert!(session_section.contains("refreshLocalSessions"));
+    assert!(session_section.contains("deleteLocalSession"));
+    assert!(session_section.contains("repairHistorySessions"));
+    assert!(session_section.contains("launchClaudeDesktop"));
+    assert!(session_section.contains("openClaudeChinese"));
+    assert!(styles.contains(".ops-two-column"));
 }
 
 #[test]

@@ -3314,6 +3314,19 @@ body {
   height: 100%;
 }
 
+.ops-tools-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.ops-tools-column {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
 .relay-banner {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
@@ -4355,6 +4368,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .ops-tools-columns {
+    grid-template-columns: 1fr;
+  }
+
   .ops-setting-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -4487,6 +4504,10 @@ body {
   }
 
   .ops-two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .ops-tools-columns {
     grid-template-columns: 1fr;
   }
 
