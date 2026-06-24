@@ -11,6 +11,9 @@ use claude_codex_pro_core::memory_assist::{
     MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
     MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
 };
+use claude_codex_pro_core::claude_desktop_provider::{
+    ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
+};
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
     self, ClaudeDesktopDevModeOutcome, ClaudeDesktopDevModeStatus, ClaudeDesktopMarketplaceOutcome,
@@ -223,6 +226,20 @@ pub struct RelaySwitchPayload {
     pub relay: RelayPayload,
     pub settings_path: String,
     pub user_scripts: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopProviderPreviewPayload {
+    pub preview: ClaudeDesktopProviderPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopProviderApplyPayload {
+    pub outcome: ClaudeDesktopProviderOutcome,
+    #[serde(rename = "devModeStatus")]
+    pub dev_mode_status: ClaudeDesktopDevModeStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -788,39 +805,16 @@ pub async fn open_plugin_hub_window(
 pub async fn open_prompt_optimizer_window(
     app: tauri::AppHandle,
 ) -> CommandResult<PromptOptimizerWindowPayload> {
-    let label = "prompt-optimizer";
-    if let Some(window) = app.get_webview_window(label) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.eval(main_window_route_script("tools"));
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        return ok(
-            "提示词优化器窗口已聚焦。",
-            prompt_optimizer_window_payload(true),
-        );
     }
-
-    let handle = app.clone();
-    let build_result = tauri::async_runtime::spawn_blocking(move || {
-        prompt_optimizer_window_background_task(handle, label)
-    })
-    .await;
-
-    match build_result {
-        Ok(Ok(window)) => {
-            let _ = window.set_focus();
-            ok(
-                "提示词优化器窗口已打开。",
-                prompt_optimizer_window_payload(true),
-            )
-        }
-        Ok(Err(error)) => failed(
-            &format!("提示词优化器窗口打开失败：{error}"),
-            prompt_optimizer_window_payload(false),
-        ),
-        Err(error) => failed(
-            &format!("提示词优化器窗口后台任务失败：{error}"),
-            prompt_optimizer_window_payload(false),
-        ),
+    let payload = prompt_optimizer_window_payload(false);
+    match open_url(&payload.default_url) {
+        Ok(()) => ok("提示词优化已在系统浏览器打开。", payload),
+        Err(error) => failed(&format!("提示词优化打开失败：{error}"), payload),
     }
 }
 
@@ -2886,6 +2880,113 @@ pub fn switch_relay_profile(
 }
 
 #[tauri::command]
+pub fn preview_claude_desktop_provider(
+    request: ClaudeDesktopProviderRequest,
+) -> CommandResult<ClaudeDesktopProviderPreviewPayload> {
+    log_manager_event(
+        "manager.claude_desktop_provider.preview",
+        json!({
+            "baseUrl": request.base_url.trim(),
+            "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
+        }),
+    );
+    match claude_codex_pro_core::claude_desktop_provider::preview_claude_desktop_provider(&request)
+    {
+        Ok(preview) => ok(
+            "Claude Desktop 供应商写入预览已生成。",
+            ClaudeDesktopProviderPreviewPayload { preview },
+        ),
+        Err(error) => failed(
+            &format!("Claude Desktop 供应商预览失败：{error}"),
+            ClaudeDesktopProviderPreviewPayload {
+                preview: empty_claude_desktop_provider_preview(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn apply_claude_desktop_provider(
+    request: ClaudeDesktopProviderRequest,
+) -> CommandResult<ClaudeDesktopProviderApplyPayload> {
+    log_manager_event(
+        "manager.claude_desktop_provider.apply.start",
+        json!({
+            "baseUrl": request.base_url.trim(),
+            "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
+        }),
+    );
+    let _ = plugin_hub::configure_claude_desktop_dev_mode();
+    match claude_codex_pro_core::claude_desktop_provider::apply_claude_desktop_provider(&request) {
+        Ok(outcome) => {
+            log_manager_event(
+                "manager.claude_desktop_provider.apply.ok",
+                json!({
+                    "normalConfigPath": outcome.normal_config_path,
+                    "threepConfigPath": outcome.threep_config_path,
+                    "backupCount": outcome.backup_paths.len()
+                }),
+            );
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome,
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.claude_desktop_provider.apply.failed",
+                json!({ "error": error.to_string() }),
+            );
+            failed(
+                &format!("Claude Desktop 供应商写入失败：{error}"),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub fn restore_claude_desktop_provider_official() -> CommandResult<ClaudeDesktopProviderApplyPayload>
+{
+    log_manager_event("manager.claude_desktop_provider.restore.start", json!({}));
+    match claude_codex_pro_core::claude_desktop_provider::restore_claude_desktop_provider_official()
+    {
+        Ok(outcome) => {
+            log_manager_event(
+                "manager.claude_desktop_provider.restore.ok",
+                json!({ "backupCount": outcome.backup_paths.len() }),
+            );
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome,
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.claude_desktop_provider.restore.failed",
+                json!({ "error": error.to_string() }),
+            );
+            failed(
+                &format!("Claude Desktop 官方模式恢复失败：{error}"),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
 pub fn write_diagnostic_event(event: String, detail: Value) -> CommandResult<Value> {
     let event = sanitize_manager_event(&event);
     match claude_codex_pro_core::diagnostic_log::append_diagnostic_log(&event, detail) {
@@ -3599,6 +3700,32 @@ fn relay_switch_mutex() -> &'static Mutex<()> {
     RELAY_SWITCH_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn empty_claude_desktop_provider_preview() -> ClaudeDesktopProviderPreview {
+    ClaudeDesktopProviderPreview {
+        profile_id: String::new(),
+        profile_name: String::new(),
+        normal_config_path: String::new(),
+        threep_config_path: String::new(),
+        profile_path: String::new(),
+        meta_path: String::new(),
+        write_targets: Vec::new(),
+        config_diff: String::new(),
+        redacted_profile: String::new(),
+    }
+}
+
+fn empty_claude_desktop_provider_outcome(message: String) -> ClaudeDesktopProviderOutcome {
+    ClaudeDesktopProviderOutcome {
+        configured: false,
+        normal_config_path: String::new(),
+        threep_config_path: String::new(),
+        profile_path: String::new(),
+        meta_path: String::new(),
+        backup_paths: Vec::new(),
+        message,
+    }
+}
+
 fn empty_context_entries() -> claude_codex_pro_core::relay_config::CodexContextEntries {
     claude_codex_pro_core::relay_config::CodexContextEntries {
         mcp_servers: Vec::new(),
@@ -3873,23 +4000,11 @@ fn claude_chinese_window_payload(
 fn prompt_optimizer_window_payload(open: bool) -> PromptOptimizerWindowPayload {
     PromptOptimizerWindowPayload {
         open,
-        label: "prompt-optimizer".to_string(),
+        label: "main".to_string(),
         default_url: "https://prompt.always200.com".to_string(),
-        integration_mode: "internal_launcher_external_browser".to_string(),
+        integration_mode: "tools_card_external_browser".to_string(),
         license: "AGPL-3.0-only".to_string(),
     }
-}
-
-fn prompt_optimizer_window_background_task(
-    app: tauri::AppHandle,
-    label: &str,
-) -> tauri::Result<tauri::WebviewWindow> {
-    tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("/".into()))
-        .title("提示词优化器")
-        .inner_size(1120.0, 760.0)
-        .min_inner_size(900.0, 640.0)
-        .initialization_script(ops_console_initial_route_script("promptOptimizer"))
-        .build()
 }
 
 fn route_main_window_to_plugin_hub(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -3908,11 +4023,6 @@ fn main_window_route_script(route: &str) -> String {
     format!(
         "window.dispatchEvent(new CustomEvent('claude-codex-pro-navigate', {{ detail: {{ route: {route} }} }}));"
     )
-}
-
-fn ops_console_initial_route_script(route: &str) -> String {
-    let route = serde_json::to_string(route).unwrap_or_else(|_| "\"overview\"".to_string());
-    format!("window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE = {route};")
 }
 
 fn empty_plugin_item(id: String) -> claude_codex_pro_core::plugin_hub::PluginCatalogItem {
@@ -4285,6 +4395,21 @@ mod tests {
             assert!(!audit.integrity_level.is_empty());
             assert!(!audit.verification_scope.is_empty());
         }
+    }
+
+    #[test]
+    fn claude_desktop_provider_preview_command_redacts_api_key() {
+        let result = preview_claude_desktop_provider(ClaudeDesktopProviderRequest {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn".to_string(),
+            api_key: "sk-manager-secret".to_string(),
+            model_list: "claude-sonnet-4-6".to_string(),
+        });
+
+        assert_eq!(result.status, "ok");
+        assert!(result.payload.preview.config_diff.contains("***redacted***"));
+        assert!(!result.payload.preview.config_diff.contains("sk-manager-secret"));
+        assert!(!result.payload.preview.redacted_profile.contains("sk-manager-secret"));
     }
 
     #[test]

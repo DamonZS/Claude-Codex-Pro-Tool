@@ -25,7 +25,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { invokeCommand } from "@/tauriBridge";
@@ -545,6 +545,33 @@ type ClaudeDesktopDevModeConfigureResult = CommandResult<{
   devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
 }>;
 
+type ClaudeDesktopProviderPreviewResult = CommandResult<{
+  preview: {
+    profileId: string;
+    profileName: string;
+    normalConfigPath: string;
+    threepConfigPath: string;
+    profilePath: string;
+    metaPath: string;
+    writeTargets: string[];
+    configDiff: string;
+    redactedProfile: string;
+  };
+}>;
+
+type ClaudeDesktopProviderApplyResult = CommandResult<{
+  outcome: {
+    configured: boolean;
+    normalConfigPath: string;
+    threepConfigPath: string;
+    profilePath: string;
+    metaPath: string;
+    backupPaths: string[];
+    message: string;
+  };
+  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
+}>;
+
 type ClaudeDesktopLocalBundleResult = CommandResult<{
   outcome: {
     devMode: ClaudeDesktopDevModeConfigureResult["outcome"];
@@ -583,26 +610,26 @@ type InstallEntrypointsResult = CommandResult<{
 
 type Route =
   | "overview"
-  | "relay"
+  | "supplier"
   | "tools"
-  | "promptOptimizer"
   | "scripts"
   | "logs"
   | "settings";
+type LegacyRoute = "promptOptimizer" | "relay";
 const MEMORY_ALL_WORKSPACES = "__all__";
 const MEMORY_GLOBAL_WORKSPACE = "global";
+const PROMPT_OPTIMIZER_URL = "https://prompt.always200.com";
 
 declare global {
   interface Window {
-    __CLAUDE_CODEX_PRO_INITIAL_ROUTE?: Route;
+    __CLAUDE_CODEX_PRO_INITIAL_ROUTE?: Route | LegacyRoute;
   }
 }
 
 const routes: Array<{ id: Route; label: string; icon: LucideIcon }> = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
-  { id: "relay", label: "供应商", icon: KeyRound },
+  { id: "supplier", label: "供应商", icon: Network },
   { id: "tools", label: "工具与插件", icon: PackageSearch },
-  { id: "promptOptimizer", label: "提示词", icon: PencilRuler },
   { id: "scripts", label: "脚本", icon: FileCode2 },
   { id: "logs", label: "日志", icon: Info },
   { id: "settings", label: "设置", icon: Settings },
@@ -635,6 +662,14 @@ export function App() {
   const [settingsDraft, setSettingsDraft] = useState<BackendSettings | null>(null);
   const [pluginHub, setPluginHub] = useState<PluginHubResult | null>(null);
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
+  const [claudeDesktopProviderPreview, setClaudeDesktopProviderPreview] = useState<ClaudeDesktopProviderPreviewResult | null>(null);
+  const [claudeDesktopProviderApply, setClaudeDesktopProviderApply] = useState<ClaudeDesktopProviderApplyResult | null>(null);
+  const [claudeDesktopProviderDraft, setClaudeDesktopProviderDraft] = useState({
+    name: "拓扑熵减API",
+    baseUrl: "https://api.toporeduce.cn",
+    apiKey: "",
+    modelList: "claude-sonnet-4-6\nclaude-opus-4-8 [1m]\nclaude-haiku-4-5",
+  });
   const [codexHookTrust, setCodexHookTrust] = useState<CodexHookTrustResult | null>(null);
   const [codexPluginMarketplace, setCodexPluginMarketplace] = useState<CodexPluginMarketplaceStatusResult | null>(null);
   const [claudeDesktopOrgPlugin, setClaudeDesktopOrgPlugin] = useState<ClaudeDesktopOrgPluginStatusResult | null>(null);
@@ -651,7 +686,6 @@ export function App() {
   const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
-  const isPromptOptimizerStandaloneWindow = window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE === "promptOptimizer";
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invokeCommand<T>(command, args);
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
@@ -1016,8 +1050,7 @@ export function App() {
   };
 
   const goPromptOptimizer = async () => {
-    setRoute("promptOptimizer");
-    await refreshRoute("promptOptimizer");
+    await openExternalUrl(PROMPT_OPTIMIZER_URL);
   };
 
   const repairEntrypoints = async () => {
@@ -1172,6 +1205,76 @@ export function App() {
     }
   };
 
+  const switchCodexRelayProfile = async (profileId: string) => {
+    const current = settings?.settings;
+    if (!current) {
+      setNotice({ title: "供应商切换", message: "设置尚未加载，无法切换 Codex 供应商。", status: "failed" });
+      return;
+    }
+    const previousActiveRelayId = current.activeRelayId;
+    const next = { ...current, activeRelayId: profileId, relayProfilesEnabled: true };
+    const result = await run(
+      () => call<SettingsResult & { relay?: unknown }>("switch_relay_profile", { request: { settings: next, previousActiveRelayId } }),
+      "切换 Codex 供应商",
+    );
+    if (result) {
+      setSettings(result);
+      setSettingsDraft(result.settings);
+      notifyIfNeedsAttention({ title: "切换 Codex 供应商", message: result.message, status: result.status });
+      await refreshSettings(true);
+    }
+  };
+
+  const previewClaudeDesktopProvider = async (request: typeof claudeDesktopProviderDraft) => {
+    const result = await run(
+      () => call<ClaudeDesktopProviderPreviewResult>("preview_claude_desktop_provider", { request }),
+      "预览 Claude Desktop 供应商",
+    );
+    if (result) {
+      setClaudeDesktopProviderPreview(result);
+      notifyIfNeedsAttention({ title: "Claude Desktop 供应商预览", message: result.message, status: result.status });
+    }
+  };
+
+  const applyClaudeDesktopProvider = async (request: typeof claudeDesktopProviderDraft) => {
+    if (!request.apiKey.trim()) {
+      setNotice({ title: "Claude Desktop 供应商", message: "API Key 为空，未写入配置。", status: "failed" });
+      return;
+    }
+    const result = await run(
+      () => call<ClaudeDesktopProviderApplyResult>("apply_claude_desktop_provider", { request }),
+      "写入 Claude Desktop 供应商",
+    );
+    if (result) {
+      setClaudeDesktopProviderApply(result);
+      setClaudeDesktopDevMode({
+        status: result.status,
+        message: result.message,
+        devModeStatus: result.devModeStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude Desktop 供应商", message: result.message, status: result.status });
+      await refreshClaudeDesktopDevMode(true);
+    }
+  };
+
+  const restoreClaudeDesktopProviderOfficial = async () => {
+    if (!window.confirm("确认将 Claude Desktop 切回官方部署模式？操作前会备份现有配置。")) return;
+    const result = await run(
+      () => call<ClaudeDesktopProviderApplyResult>("restore_claude_desktop_provider_official"),
+      "恢复 Claude Desktop 官方模式",
+    );
+    if (result) {
+      setClaudeDesktopProviderApply(result);
+      setClaudeDesktopDevMode({
+        status: result.status,
+        message: result.message,
+        devModeStatus: result.devModeStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude Desktop 官方模式", message: result.message, status: result.status });
+      await refreshClaudeDesktopDevMode(true);
+    }
+  };
+
   const saveSettings = async (next: BackendSettings) => {
     const result = await run(() => call<SettingsResult>("save_settings", { settings: next }), "保存设置");
     if (result) {
@@ -1234,8 +1337,10 @@ export function App() {
   const refreshRoute = async (target = route) => {
     if (target === "overview") {
       await Promise.all([refreshOverview(true), refreshClaude(true)]);
-    } else if (target === "relay" || target === "settings") {
+    } else if (target === "settings") {
       await refreshSettings(true);
+    } else if (target === "supplier") {
+      await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
     } else if (target === "tools") {
       await Promise.all([
         refreshPluginHub(true),
@@ -1250,8 +1355,6 @@ export function App() {
         refreshLocalSessions(true),
         refreshMemoryAssist(true),
       ]);
-    } else if (target === "promptOptimizer") {
-      await refreshSettings(true);
     } else if (target === "scripts") {
       await Promise.all([refreshSettings(true), refreshScripts(true)]);
     } else if (target === "logs") {
@@ -1296,8 +1399,7 @@ export function App() {
     document.title = routeDocumentTitle(route);
   }, [route]);
 
-  const actions = useMemo(
-    () => ({
+  const actions = {
       refreshRoute,
       openClaudeChinese,
       installClaudeZhPatch,
@@ -1344,6 +1446,10 @@ export function App() {
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode,
+      switchCodexRelayProfile,
+      previewClaudeDesktopProvider,
+      applyClaudeDesktopProvider,
+      restoreClaudeDesktopProviderOfficial,
       saveSettings,
       installEntrypoints,
       uninstallEntrypoints,
@@ -1356,20 +1462,7 @@ export function App() {
       resetImageOverlaySettings,
       refreshLogs,
       refreshWatcher,
-    }),
-    [route, pluginPreview, codexHookTrust],
-  );
-
-  if (isPromptOptimizerStandaloneWindow) {
-    return (
-      <div className="ops-shell dark prompt-optimizer-window-shell">
-        <main className="prompt-optimizer-window-workspace">
-          <PromptOptimizerScreen actions={actions} />
-        </main>
-        {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
-      </div>
-    );
-  }
+  };
 
   return (
     <div className="ops-shell dark">
@@ -1403,16 +1496,18 @@ export function App() {
             <h1>{routeLabel(route)}</h1>
             <p>{routeSubtitle(route)}</p>
           </div>
-          <div className="ops-topbar-pill">
-            <span>后端链接</span>
-            <strong>
-              {overview?.latest_launch?.helper_port
-                ? `127.0.0.1:${overview.latest_launch.helper_port}`
-                : overview?.latest_launch?.debug_port
-                  ? `127.0.0.1:${overview.latest_launch.debug_port}`
-                  : "Bridge ready"}
-            </strong>
-          </div>
+          {route !== "overview" ? (
+            <div className="ops-topbar-pill">
+              <span>后端链接</span>
+              <strong>
+                {overview?.latest_launch?.helper_port
+                  ? `127.0.0.1:${overview.latest_launch.helper_port}`
+                  : overview?.latest_launch?.debug_port
+                    ? `127.0.0.1:${overview.latest_launch.debug_port}`
+                    : "Bridge ready"}
+              </strong>
+            </div>
+          ) : null}
           <div className="ops-commandbar">
             <Button aria-label="重启 Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
               <Rocket className="h-4 w-4" />
@@ -1435,8 +1530,18 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} overview={overview} pluginHub={pluginHub} /> : null}
-          {route === "relay" ? <RelayScreen actions={actions} settings={settings} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} memoryAssist={memoryAssist} overview={overview} /> : null}
+          {route === "supplier" ? (
+            <SupplierScreen
+              actions={actions}
+              claudeDesktopDevMode={claudeDesktopDevMode}
+              claudeDesktopProviderApply={claudeDesktopProviderApply}
+              claudeDesktopProviderDraft={claudeDesktopProviderDraft}
+              claudeDesktopProviderPreview={claudeDesktopProviderPreview}
+              onClaudeDesktopProviderDraftChange={setClaudeDesktopProviderDraft}
+              settings={settings}
+            />
+          ) : null}
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}
@@ -1461,7 +1566,6 @@ export function App() {
               watcher={watcher}
             />
           ) : null}
-          {route === "promptOptimizer" ? <PromptOptimizerScreen actions={actions} /> : null}
           {route === "scripts" ? <ScriptsScreen actions={actions} market={scriptMarket} settings={settings} /> : null}
           {route === "logs" ? <LogsScreen actions={actions} logs={logs} /> : null}
           {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
@@ -1477,33 +1581,35 @@ function OverviewScreen({
   overview,
   claudeDesktop,
   claudeChinese,
-  pluginHub,
+  memoryAssist,
 }: {
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   claudeChinese: ClaudeChineseWindowResult | null;
-  pluginHub: PluginHubResult | null;
+  memoryAssist: MemoryStatusResult | null;
 }) {
-  const catalog = pluginHub?.catalog;
-  const pluginCount = catalog?.items?.length ?? 0;
-  const installedPlugins = catalog?.items?.filter((item) => item.installStatus === "installed").length ?? 0;
+  const memory = memoryAssist?.memory;
   return (
     <div className="ops-dashboard">
-      <button className="relay-banner" onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} type="button">
+      <section className="relay-banner">
         <Network className="h-5 w-5" />
         <div>
           <span>官方中转站</span>
           <strong>拓扑熵减API</strong>
           <p>ClaudeCodexPro 官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。</p>
         </div>
-        <ExternalLink className="h-4 w-4" />
-      </button>
+        <Button className="relay-banner-open" onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} variant="outline">
+          <ExternalLink className="h-4 w-4" />
+          打开
+        </Button>
+      </section>
       <div className="ops-matrix">
+        <StatusTile icon={Power} label="Codex 运行" status={overview?.latest_launch?.status ?? "not_checked"} value={overview?.latest_launch?.status ?? "无记录"} />
         <StatusTile icon={Activity} label="Codex 版本" status={overview?.codex_version ? "ok" : "not_checked"} value={overview?.codex_version ?? "未检测"} />
-        <StatusTile icon={Power} label="最近启动" status={overview?.latest_launch?.status ?? "not_checked"} value={overview?.latest_launch?.status ?? "无记录"} />
+        <StatusTile icon={MessageCircle} label="Claude 状态" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
         <StatusTile icon={Languages} label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
-        <StatusTile icon={MessageCircle} label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
+        <StatusTile icon={ShieldCheck} label="记忆大脑" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
       </div>
       <div className="ops-overview-grid">
         <Panel title="核心动作" detail="Codex 与 Claude 的启动入口已分离。">
@@ -1512,37 +1618,71 @@ function OverviewScreen({
           <ActionButton icon={MessageCircle} label="启动官方 Claude" onClick={() => void actions.launchClaudeDesktop()} />
           <ActionButton icon={Languages} label="打开 Claude 中文窗口" onClick={() => void actions.openClaudeChinese()} />
         </Panel>
+        <Panel title="Codex 诊断" detail="默认只展示运行、入口和版本状态；修复动作需要手动触发。">
+          <InfoRow label="运行状态" value={overview?.latest_launch?.status ?? "无记录"} />
+          <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />
+          <InfoRow label="静默入口" value={overview?.silent_shortcut.status ?? "未检测"} />
+          <InfoRow label="管理入口" value={overview?.management_shortcut.status ?? "未检测"} />
+        </Panel>
         <Panel title="Claude 诊断" detail="官方 MSIX 只读诊断，中文化在包装窗口完成。">
           <InfoRow label="安装类型" value={claudeDesktop?.installKind ?? "未检测"} />
           <InfoRow label="CDP 状态" value={claudeDesktop?.cdpStatus ?? "未检测"} />
           <InfoRow label="阻断原因" value={claudeDesktop?.cdpBlocker || "无"} />
           <InfoRow label="包装窗口" value={`${claudeChinese?.injectionMode ?? "wrapped_webview"} · ${claudeChinese?.defaultUrl ?? "https://claude.ai/new"}`} />
         </Panel>
-        <Panel title="插件中心" detail={`${pluginCount} 个条目，${installedPlugins} 个已安装记录。`}>
-          <ActionButton icon={PackageSearch} label="刷新插件目录" onClick={() => void actions.refreshPluginHub()} />
-          <ActionButton icon={PackageSearch} label="打开插件中心" onClick={() => void actions.goPluginHub()} />
-          <ActionButton icon={ExternalLink} label="官方插件仓库" onClick={() => void actions.openExternalUrl("https://github.com/anthropics/claude-plugins-official")} />
-          <InfoRow label="官方市场" value={catalog?.sources?.find((source) => source.id === "official")?.message ?? "未加载"} />
-          <InfoRow label="社区资源" value={catalog?.sources?.find((source) => source.id === "awesome")?.message ?? "未加载"} />
+        <Panel title="记忆辅助大脑" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
+          <InfoRow label="状态" value={memory?.status ?? "未检测"} />
+          <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
+          <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
+          <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
+          <ActionButton icon={ShieldCheck} label="记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
         </Panel>
-        <Panel title="提示词工坊" detail="集成 linshenkx/prompt-optimizer，应用内路由打开控制页。">
-          <ActionButton icon={PencilRuler} label="打开提示词优化器" onClick={() => void actions.goPromptOptimizer()} />
-          <ActionButton icon={ExternalLink} label="查看开源仓库" onClick={() => void actions.openExternalUrl("https://github.com/linshenkx/prompt-optimizer")} />
-          <InfoRow label="集成方式" value="外部 WebView / 本地 Docker / MCP" />
-          <InfoRow label="许可证" value="AGPL-3.0-only" />
+        <Panel title="诊断与修复" detail="检查和修复入口集中在这里；不会自动改写配置。">
+          <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
+          <ActionButton icon={Wrench} label="修复入口" onClick={() => void actions.repairEntrypoints()} />
+          <ActionButton icon={Wrench} label="修复后端" onClick={() => void actions.repairBackend()} />
         </Panel>
       </div>
     </div>
   );
 }
 
-function RelayScreen({ actions, settings }: { actions: ReturnType<typeof createActionsShape>; settings: SettingsResult | null }) {
+function SupplierScreen({
+  actions,
+  settings,
+  claudeDesktopDevMode,
+  claudeDesktopProviderPreview,
+  claudeDesktopProviderApply,
+  claudeDesktopProviderDraft,
+  onClaudeDesktopProviderDraftChange,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  settings: SettingsResult | null;
+  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
+  claudeDesktopProviderPreview: ClaudeDesktopProviderPreviewResult | null;
+  claudeDesktopProviderApply: ClaudeDesktopProviderApplyResult | null;
+  claudeDesktopProviderDraft: {
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    modelList: string;
+  };
+  onClaudeDesktopProviderDraftChange: Dispatch<SetStateAction<{
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    modelList: string;
+  }>>;
+}) {
   const profiles = settings?.settings.relayProfiles ?? [];
   const active = profiles.find((profile) => profile.id === settings?.settings.activeRelayId) ?? profiles[0];
+  const updateClaudeDraft = (field: keyof typeof claudeDesktopProviderDraft, value: string) => {
+    onClaudeDesktopProviderDraftChange((draft) => ({ ...draft, [field]: value }));
+  };
   return (
     <div className="ops-two-column">
       <div className="ops-wide-column">
-        <Panel title="供应商配置" detail="选择写入方式后会更新 Codex 配置；真实 Key 不会写入日志或提示。">
+        <Panel title="Codex 供应商" detail="复用现有 RelayProfile 真实写入 ~/.codex/config.toml 和 auth.json，失败会回滚设置。">
           <div className="info-grid">
             <InfoRow label="当前供应商" value={active?.name || active?.id || "未配置"} />
             <InfoRow label="模式" value={active?.relayMode || "official"} />
@@ -1565,25 +1705,83 @@ function RelayScreen({ actions, settings }: { actions: ReturnType<typeof createA
             </Button>
           </div>
         </Panel>
-        <Panel title="供应商列表" detail={`${profiles.length} 个配置；当前页面保留关键操作，复杂编辑在设置文件中维护。`}>
+        <Panel title="Codex 供应商列表" detail={`${profiles.length} 个配置；点击切换会写入 Codex live 配置，不只是改 UI 状态。`}>
           <div className="ops-status-list">
-            {profiles.length ? profiles.map((profile) => (
-              <StatusRow
-                key={profile.id}
-                label={profile.name || profile.id}
-                status={profile.id === settings?.settings.activeRelayId ? "running" : "not_checked"}
-                value={`${profile.relayMode || "official"} · ${profile.model || profile.testModel || "默认模型"}`}
-              />
-            )) : <Empty text="暂无供应商配置。" />}
+            {profiles.length ? profiles.map((profile) => {
+              const selected = profile.id === settings?.settings.activeRelayId;
+              return (
+                <div className="supplier-profile-row" key={profile.id}>
+                  <StatusRow
+                    label={profile.name || profile.id}
+                    status={selected ? "running" : "not_checked"}
+                    value={`${profile.relayMode || "official"} · ${profile.model || profile.testModel || "默认模型"}`}
+                  />
+                  <Button disabled={selected} onClick={() => void actions.switchCodexRelayProfile(profile.id)} variant="outline">
+                    {selected ? "当前" : "切换"}
+                  </Button>
+                </div>
+              );
+            }) : <Empty text="暂无供应商配置。可在设置文件中添加 RelayProfile 后回到这里切换。" />}
           </div>
+        </Panel>
+        <Panel title="Claude Desktop 开发模式供应商" detail="写入 Claude Desktop 3P gateway profile；不修改 MSIX，不需要 Claude CLI 登录。">
+          <div className="supplier-form-grid">
+            <label className="ops-form-field">
+              <span>显示名称</span>
+              <input onChange={(event) => updateClaudeDraft("name", event.currentTarget.value)} value={claudeDesktopProviderDraft.name} />
+            </label>
+            <label className="ops-form-field">
+              <span>Gateway Base URL</span>
+              <input onChange={(event) => updateClaudeDraft("baseUrl", event.currentTarget.value)} placeholder="https://api.toporeduce.cn" value={claudeDesktopProviderDraft.baseUrl} />
+            </label>
+            <label className="ops-form-field">
+              <span>API Key / Bearer Token</span>
+              <input onChange={(event) => updateClaudeDraft("apiKey", event.currentTarget.value)} placeholder="写入前不会出现在日志和预览中" type="password" value={claudeDesktopProviderDraft.apiKey} />
+            </label>
+            <label className="ops-form-field span-2">
+              <span>Claude Desktop 模型菜单，可选；一行一个，支持 [1m]</span>
+              <textarea className="ops-textarea mono" onChange={(event) => updateClaudeDraft("modelList", event.currentTarget.value)} rows={5} value={claudeDesktopProviderDraft.modelList} />
+            </label>
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.previewClaudeDesktopProvider(claudeDesktopProviderDraft)} variant="outline">
+              <FileCode2 className="h-4 w-4" />
+              预览写入
+            </Button>
+            <Button onClick={() => void actions.applyClaudeDesktopProvider(claudeDesktopProviderDraft)}>
+              <KeyRound className="h-4 w-4" />
+              写入 Claude Desktop
+            </Button>
+            <Button onClick={() => void actions.restoreClaudeDesktopProviderOfficial()} variant="outline">
+              <Trash2 className="h-4 w-4" />
+              恢复官方模式
+            </Button>
+          </div>
+          {claudeDesktopProviderPreview?.preview.configDiff ? (
+            <pre className="preview-box">{claudeDesktopProviderPreview.preview.configDiff}</pre>
+          ) : null}
+          {claudeDesktopProviderApply?.outcome.backupPaths?.length ? (
+            <div className="risk-box">
+              <strong>已创建备份</strong>
+              <span>{claudeDesktopProviderApply.outcome.backupPaths.map(compactPath).join("；")}</span>
+            </div>
+          ) : null}
         </Panel>
       </div>
       <div className="stack">
-        <Panel title="写入模式" detail="按使用场景选择，不混淆 Claude Desktop 插件安装。">
+        <Panel title="Codex 写入模式" detail="按使用场景选择，不混淆 Claude Desktop 插件安装。">
           <div className="ops-status-list">
             <StatusRow label="官方混入 API Key" status={active?.officialMixApiKey ? "running" : "not_checked"} value="保留官方账号能力，把模型请求转到自定义兼容 API。" />
             <StatusRow label="纯 API" status={active?.relayMode === "pure_api" ? "running" : "not_checked"} value="写入 custom provider，并将 auth 状态切换到当前供应商。" />
             <StatusRow label="清除 API 模式" status="not_checked" value="移除中转 API 配置，回到官方 ChatGPT 登录态。" />
+          </div>
+        </Panel>
+        <Panel title="Claude Desktop 3P 状态" detail="开发模式和 profile 写入状态，配置后需要重启 Claude Desktop。">
+          <div className="info-grid compact">
+            <InfoRow label="开发模式" value={claudeDesktopDevMode?.devModeStatus.configured ? "已配置" : "未配置"} />
+            <InfoRow label="普通配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.normalConfigPath)} />
+            <InfoRow label="3P 配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.threepConfigPath)} />
+            <InfoRow label="Profile Meta" value={compactPath(claudeDesktopDevMode?.devModeStatus.profileMetaPath)} />
           </div>
         </Panel>
         <Panel title="当前配置摘录" detail="只展示路径和非敏感字段。">
@@ -1729,6 +1927,7 @@ function ToolsAndPluginsScreen({
           </Panel>
         </div>
         <div className="stack">
+          <PromptOptimizerCard actions={actions} />
           <MemoryAssistPanel
             actions={actions}
             candidates={memoryCandidates}
@@ -2172,42 +2371,30 @@ function ClaudeDesktopOrgPluginPanel({
   );
 }
 
-function PromptOptimizerScreen({ actions }: { actions: ReturnType<typeof createActionsShape> }) {
+function PromptOptimizerCard({ actions }: { actions: ReturnType<typeof createActionsShape> }) {
   return (
-    <div className="stack">
-      <Panel title="提示词优化器" detail="基于 linshenkx/prompt-optimizer 的独立集成入口。">
-        <div className="prompt-optimizer-hero">
-          <div>
-            <span>Prompt Optimizer</span>
-            <strong>打磨系统提示词、用户提示词和可复用模板</strong>
-            <p>当前窗口是本地控制入口，在线优化器使用系统浏览器打开，避开远程站点在嵌入式 WebView 中白屏的兼容问题，同时保留清晰的 AGPL 许可边界。</p>
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.openExternalUrl("https://prompt.always200.com")}>
-              <PencilRuler className="h-4 w-4" />
-              浏览器打开在线版
-            </Button>
-          </div>
+    <section className="ops-panel prompt-optimizer-card">
+      <header>
+        <div>
+          <h2>提示词优化</h2>
+          <p>把提示词优化放到 Codex/Claude 运维流旁边。</p>
         </div>
-      </Panel>
-      <div className="ops-columns">
-        <Panel title="接入方式" detail="第一版先保证可用：本地控制页不白屏，实际在线版交给系统浏览器。">
-          <InfoRow label="在线版" value="https://prompt.always200.com" />
-          <InfoRow label="窗口模式" value="内部控制页 + 系统浏览器" />
-          <InfoRow label="本地 Web" value="docker run -p 8081:80 linshen/prompt-optimizer" />
-          <InfoRow label="MCP 地址" value="http://localhost:8081/mcp" />
-          <InfoRow label="源码仓库" value="github.com/linshenkx/prompt-optimizer" />
-        </Panel>
-        <Panel title="适合场景" detail="把提示词优化放到 Codex/Claude 运维流旁边。">
-          <div className="prompt-usecase-list">
-            <span>系统提示词优化</span>
-            <span>用户提示词改写</span>
-            <span>多轮迭代比较</span>
-            <span>MCP 方式给 Claude 使用</span>
-          </div>
-        </Panel>
+      </header>
+      <div className="ops-panel-body">
+        <Button className="prompt-optimizer-card-button" onClick={() => void actions.goPromptOptimizer()}>
+          <PencilRuler className="h-4 w-4" />
+          提示词优化
+        </Button>
+        <button
+          className="prompt-optimizer-source-link"
+          onClick={() => void actions.openExternalUrl("https://github.com/linshenkx/prompt-optimizer")}
+          type="button"
+        >
+          <ExternalLink className="h-4 w-4" />
+          linshenkx/prompt-optimizer
+        </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -2704,16 +2891,16 @@ function initialRoute(): Route {
 }
 
 function normalizeRoute(value: unknown): unknown {
-  if (value === "pluginHub" || value === "context" || value === "maintenance") return "tools";
+  if (value === "pluginHub" || value === "context" || value === "maintenance" || value === "promptOptimizer") return "tools";
+  if (value === "relay") return "supplier";
   return value;
 }
 
 function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "运行状态、启动动作和 Claude 中文窗口诊断。",
-    relay: "供应商与模型接入摘要。",
+    supplier: "Codex 中转配置与 Claude Desktop 开发模式供应商写入。",
     tools: "插件目录、MCP 配置、会话管理和历史修复。",
-    promptOptimizer: "提示词优化、测试和 MCP 接入。",
     scripts: "Codex 前端用户脚本市场。",
     logs: "诊断日志与运行信息。",
     settings: "全局开关和配置摘要。",
@@ -2722,7 +2909,6 @@ function routeSubtitle(route: Route) {
 }
 
 function routeDocumentTitle(route: Route) {
-  if (window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE === "promptOptimizer") return "提示词优化器";
   if (normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE) === "tools") return "工具与插件";
   return route === "overview" ? "Claude Codex Pro 管理工具" : `${routeLabel(route)} - Claude Codex Pro 管理工具`;
 }
@@ -2781,6 +2967,10 @@ function createActionsShape() {
     applyRelayMode: async () => {},
     applyPureApiMode: async () => {},
     clearRelayMode: async () => {},
+    switchCodexRelayProfile: async (_profileId: string) => {},
+    previewClaudeDesktopProvider: async (_request: { name: string; baseUrl: string; apiKey: string; modelList: string }) => {},
+    applyClaudeDesktopProvider: async (_request: { name: string; baseUrl: string; apiKey: string; modelList: string }) => {},
+    restoreClaudeDesktopProviderOfficial: async () => {},
     saveSettings: async (_settings: BackendSettings) => null as SettingsResult | null,
     installEntrypoints: async () => {},
     uninstallEntrypoints: async () => {},

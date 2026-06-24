@@ -151,6 +151,9 @@ pub fn run() {
             commands::test_relay_profile,
             commands::fetch_relay_profile_models,
             commands::switch_relay_profile,
+            commands::preview_claude_desktop_provider,
+            commands::apply_claude_desktop_provider,
+            commands::restore_claude_desktop_provider_official,
             commands::apply_relay_injection,
             commands::apply_pure_api_injection,
             commands::clear_relay_injection

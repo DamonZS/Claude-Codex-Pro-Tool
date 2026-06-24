@@ -218,14 +218,15 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(app_tsx.contains("启动 Claude"));
     assert!(app_tsx.contains("Claude 中文窗口"));
     assert!(app_tsx.contains("open_claude_chinese_window"));
-    assert!(app_tsx.contains("goPromptOptimizer"));
+    assert!(app_tsx.contains("PromptOptimizerCard"));
     assert!(commands_rs.contains("pub async fn open_claude_chinese_window"));
     assert!(commands_rs.contains("pub async fn open_plugin_hub_window"));
     assert!(commands_rs.contains("pub async fn open_prompt_optimizer_window"));
     assert!(commands_rs.contains("tauri::WebviewUrl::External"));
     assert!(commands_rs.contains("https://claude.ai/new"));
     assert!(commands_rs.contains("https://prompt.always200.com"));
-    assert!(commands_rs.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
+    assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
+    assert!(commands_rs.contains("claude-codex-pro-navigate"));
     assert!(commands_rs.contains("window.eval(script)"));
     assert!(commands_rs.contains("find_running_codex_app_dir"));
 }
@@ -295,7 +296,7 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
 }
 
 #[test]
-fn prompt_optimizer_is_integrated_as_internal_launcher() {
+fn prompt_optimizer_is_integrated_as_tools_card_launcher() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
@@ -303,37 +304,31 @@ fn prompt_optimizer_is_integrated_as_internal_launcher() {
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
-    let prompt_screen = app_tsx
-        .split("function PromptOptimizerScreen")
-        .nth(1)
-        .and_then(|rest| rest.split("function ScriptsScreen").next())
-        .expect("prompt optimizer screen source");
 
-    assert!(app_tsx.contains("id: \"promptOptimizer\""));
-    assert!(app_tsx.contains("function PromptOptimizerScreen"));
+    assert!(!app_tsx.contains("id: \"promptOptimizer\""));
+    assert!(!app_tsx.contains("function PromptOptimizerScreen"));
+    assert!(app_tsx.contains("function PromptOptimizerCard"));
     assert!(app_tsx.contains("linshenkx/prompt-optimizer"));
-    assert!(app_tsx.contains("http://localhost:8081/mcp"));
-    assert!(app_tsx.contains("isPromptOptimizerStandaloneWindow"));
-    assert!(app_tsx.contains("prompt-optimizer-window-shell"));
-    assert!(app_tsx.contains("if (isPromptOptimizerStandaloneWindow)"));
+    assert!(!app_tsx.contains("http://localhost:8081/mcp"));
+    assert!(!app_tsx.contains("isPromptOptimizerStandaloneWindow"));
+    assert!(!app_tsx.contains("prompt-optimizer-window-shell"));
     assert!(app_tsx.contains("goPromptOptimizer"));
     assert!(
         !app_tsx.contains("call<PromptOptimizerWindowResult>(\"open_prompt_optimizer_window\")")
     );
-    assert!(app_tsx.contains("浏览器打开在线版"));
-    assert!(!prompt_screen.contains("打开控制窗口"));
-    assert!(!prompt_screen.contains("openPromptOptimizerWindow"));
-    assert!(!prompt_screen.contains("GitHub"));
-    assert!(!prompt_screen.contains("安全边界"));
+    assert!(app_tsx.contains("提示词优化"));
+    assert!(app_tsx.contains("PROMPT_OPTIMIZER_URL"));
+    assert!(app_tsx.contains("normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE)"));
     assert!(app_tsx.contains("routeDocumentTitle"));
-    assert!(app_tsx.contains("return \"提示词优化器\""));
-    assert!(styles.contains(".prompt-optimizer-hero"));
-    assert!(styles.contains(".prompt-optimizer-window-shell"));
-    assert!(styles.contains(".prompt-usecase-list"));
-    assert!(commands_rs.contains("internal_launcher_external_browser"));
-    assert!(commands_rs.contains("ops_console_initial_route_script(\"promptOptimizer\")"));
-    assert!(commands_rs.contains("prompt_optimizer_window_background_task"));
-    assert!(commands_rs.contains("tauri::WebviewUrl::App(\"/\".into())"));
+    assert!(!app_tsx.contains("return \"提示词优化器\""));
+    assert!(styles.contains(".prompt-optimizer-card"));
+    assert!(styles.contains(".prompt-optimizer-card-button"));
+    assert!(!styles.contains(".prompt-optimizer-hero"));
+    assert!(!styles.contains(".prompt-optimizer-window-shell"));
+    assert!(!styles.contains(".prompt-usecase-list"));
+    assert!(commands_rs.contains("tools_card_external_browser"));
+    assert!(!commands_rs.contains("ops_console_initial_route_script"));
+    assert!(!commands_rs.contains("prompt_optimizer_window_background_task"));
     assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
     assert!(!commands_rs.contains(
         "tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))"
@@ -356,7 +351,36 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("ops-shell"));
     assert!(app_tsx.contains("ops-rail"));
     assert!(app_tsx.contains("ops-commandbar"));
+    assert!(app_tsx.contains("id: \"supplier\""));
+    assert!(app_tsx.contains("label: \"供应商\""));
+    assert!(app_tsx.contains("function SupplierScreen"));
+    assert!(app_tsx.contains("switch_relay_profile"));
+    assert!(app_tsx.contains("preview_claude_desktop_provider"));
+    assert!(app_tsx.contains("apply_claude_desktop_provider"));
+    assert!(app_tsx.contains("restore_claude_desktop_provider_official"));
+    assert!(app_tsx.contains("if (value === \"relay\") return \"supplier\""));
+    assert!(lib_rs.contains("commands::preview_claude_desktop_provider"));
+    assert!(lib_rs.contains("commands::apply_claude_desktop_provider"));
+    assert!(lib_rs.contains("commands::restore_claude_desktop_provider_official"));
+    assert!(!app_tsx.contains("const actions = useMemo("));
     assert!(app_tsx.contains("relay-banner"));
+    assert!(app_tsx.contains("relay-banner-open"));
+    assert!(app_tsx.contains("route !== \"overview\""));
+    assert!(app_tsx.contains("<span>后端链接</span>"));
+    assert!(app_tsx.contains("https://api.toporeduce.cn"));
+    assert!(app_tsx.contains("打开"));
+    assert!(app_tsx.contains("Codex 运行"));
+    assert!(app_tsx.contains("Claude 状态"));
+    assert!(app_tsx.contains("记忆辅助大脑"));
+    assert!(app_tsx.contains("诊断与修复"));
+    let overview_screen = app_tsx
+        .split("function OverviewScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function SupplierScreen").next())
+        .expect("overview screen source");
+    assert!(!overview_screen.contains("插件中心"));
+    assert!(!overview_screen.contains("提示词工坊"));
+    assert!(!overview_screen.contains("PromptOptimizerCard"));
     assert!(app_tsx.contains("ops-primary-command"));
     assert!(styles.contains(".ops-shell"));
     assert!(styles.contains("grid-template-columns: 92px minmax(0, 1fr)"));
@@ -368,6 +392,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains("padding-bottom: 32px;"));
     assert!(styles.contains(".ops-commandbar"));
     assert!(styles.contains(".relay-banner"));
+    assert!(styles.contains(".relay-banner-open"));
     assert!(styles.contains(".status-tile"));
     assert!(styles.contains(".toast-wrap"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
