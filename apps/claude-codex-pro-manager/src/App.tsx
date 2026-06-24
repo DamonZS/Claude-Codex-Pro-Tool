@@ -445,6 +445,8 @@ type PluginInstallOutcomeResult = CommandResult<{
   backupPath: string | null;
 }>;
 
+type PluginInstallOutcomePayload = Omit<PluginInstallOutcomeResult, "status" | "message">;
+
 type CodexHookTrustResult = CommandResult<{
   preview: {
     configPath: string;
@@ -541,6 +543,18 @@ type ClaudeDesktopDevModeConfigureResult = CommandResult<{
     message: string;
   };
   devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
+}>;
+
+type ClaudeDesktopLocalBundleResult = CommandResult<{
+  outcome: {
+    devMode: ClaudeDesktopDevModeConfigureResult["outcome"];
+    codexMcp: PluginInstallOutcomePayload;
+    ponytailMcp: PluginInstallOutcomePayload;
+    organizationPlugin: ClaudeDesktopOrgPluginInstallResult["outcome"];
+    message: string;
+  };
+  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
+  orgPluginStatus: ClaudeDesktopOrgPluginStatusResult["orgPluginStatus"];
 }>;
 
 type LogsResult = CommandResult<{
@@ -863,7 +877,10 @@ export function App() {
     if (!window.confirm(`确认安装？\n\n${details}`)) return;
     const result = await run(() => call<PluginInstallOutcomeResult>("install_plugin_hub_item", { request: { id } }), "安装插件");
     if (result) {
-      const message = result.message || result.installMessage || result.stderr || result.stdout || "插件安装失败，请检查 Claude CLI 登录状态和插件安装预览。";
+      const defaultFailure = preview.item.installKind === "claude_plugin_marketplace" || preview.item.installKind === "claude_code_plugin"
+        ? "插件安装失败，请检查 Claude CLI 状态和安装预览。"
+        : "插件安装失败，请检查安装预览、文件权限和本地依赖。";
+      const message = result.message || result.installMessage || result.stderr || result.stdout || defaultFailure;
       notifyIfNeedsAttention({ title: "插件中心", message, status: result.status });
       await refreshPluginHub(true);
     }
@@ -914,6 +931,25 @@ export function App() {
   const installPonytailClaudeDesktopOrgPlugin = async () => {
     await installPlugin("ponytail:claude-desktop-org-plugin");
     await refreshClaudeDesktopOrgPlugin(true);
+  };
+
+  const installPonytailClaudeDesktopLocalBundle = async () => {
+    if (!window.confirm("确认写入 Claude Desktop 本地开发模式插件包？将配置开发模式、写入 Codex/Ponytail MCP，并复制 Ponytail skills 到组织插件目录；不会调用 Claude CLI 登录。")) return;
+    const result = await run(() => call<ClaudeDesktopLocalBundleResult>("install_ponytail_claude_desktop_local_bundle"), "Claude Desktop 本地插件包");
+    if (result) {
+      setClaudeDesktopDevMode({
+        status: result.status,
+        message: result.message,
+        devModeStatus: result.devModeStatus,
+      });
+      setClaudeDesktopOrgPlugin({
+        status: result.status,
+        message: result.message,
+        orgPluginStatus: result.orgPluginStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude Desktop 本地插件包", message: result.message || result.outcome.message, status: result.status });
+      await refreshPluginHub(true);
+    }
   };
 
   const openClaudeDesktopOrgPluginsDir = async () => {
@@ -1280,6 +1316,7 @@ export function App() {
       trustPonytailCodexHooks,
       generatePonytailMcpbInstaller,
       installPonytailClaudeDesktopOrgPlugin,
+      installPonytailClaudeDesktopLocalBundle,
       openClaudeDesktopOrgPluginsDir,
       openPonytailClaudeDesktopMarketplaceSetup,
       configureClaudeDesktopDevMode,
@@ -2082,19 +2119,17 @@ function ClaudeDesktopOrgPluginPanel({
   const marketStatus = marketplace?.marketplaceStatus;
   const devStatus = devMode?.devModeStatus;
   return (
-    <Panel title="Claude Desktop 插件" detail="官方插件仓库入口、组织插件目录和 Ponytail 安装分开处理。">
+    <Panel title="Claude Desktop 本地插件" detail="开发模式下直接写 MCP 配置和组织插件 skills 目录，不依赖 Claude CLI 登录。">
       <div className="info-grid compact">
         <InfoRow label="开发模式" value={devStatus?.configured ? "已配置" : "未配置"} />
-        <InfoRow label="官方仓库" value={marketStatus?.marketplace ?? "DietrichGebert/ponytail"} />
-        <InfoRow label="自动写入" value={marketStatus?.canAutoWrite ? "支持" : "不支持，需要 Claude 确认"} />
+        <InfoRow label="本地写入" value="MCP + skills + 组织插件目录" />
+        <InfoRow label="官方仓库" value={`${marketStatus?.marketplace ?? "DietrichGebert/ponytail"}（可选）`} />
         <InfoRow label="组织目录" value={compactPath(orgStatus?.orgPluginsDir)} />
         <InfoRow label="Ponytail" value={orgStatus?.ponytailInstalled ? "已安装" : "未安装"} />
         <InfoRow label="目录可写" value={orgStatus?.writable ? "是" : "否"} />
       </div>
       <div className="risk-box">
         {devStatus?.message ?? "Claude Desktop 开发模式会写入本机 deploymentMode=3p 和 Claude-3p 配置库。"}
-        {" "}
-        {marketStatus?.message ?? "Claude Desktop 官方插件仓库配置需要打开 Claude 自己的确认页。"}
         {" "}
         {orgStatus?.message ?? "正在检测 Claude Desktop 组织插件目录。"}
       </div>
@@ -2114,17 +2149,21 @@ function ClaudeDesktopOrgPluginPanel({
           <Wrench className="h-4 w-4" />
           一键开发模式
         </Button>
-        <Button onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()}>
-          <ExternalLink className="h-4 w-4" />
-          打开官方仓库配置
+        <Button onClick={() => void actions.installPonytailClaudeDesktopLocalBundle()}>
+          <Download className="h-4 w-4" />
+          一键写入本地插件
         </Button>
         <Button onClick={() => void actions.installPonytailClaudeDesktopOrgPlugin()} variant="outline">
           <Download className="h-4 w-4" />
-          写入本机组织插件
+          仅写入组织插件
         </Button>
         <Button onClick={() => void actions.openClaudeDesktopOrgPluginsDir()} variant="outline">
           <ExternalLink className="h-4 w-4" />
           打开组织目录
+        </Button>
+        <Button onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()} variant="outline">
+          <ExternalLink className="h-4 w-4" />
+          可选官方仓库
         </Button>
         <Button onClick={() => void actions.openExternalUrl(PONYTAIL_REPOSITORY_URL)} variant="outline">
           <ExternalLink className="h-4 w-4" />
@@ -2715,6 +2754,7 @@ function createActionsShape() {
     trustPonytailCodexHooks: async () => {},
     generatePonytailMcpbInstaller: async () => {},
     installPonytailClaudeDesktopOrgPlugin: async () => {},
+    installPonytailClaudeDesktopLocalBundle: async () => {},
     openClaudeDesktopOrgPluginsDir: async () => {},
     openPonytailClaudeDesktopMarketplaceSetup: async () => {},
     configureClaudeDesktopDevMode: async () => {},

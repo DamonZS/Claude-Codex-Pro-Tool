@@ -2254,6 +2254,15 @@ pub struct ClaudeDesktopOrgPluginInstallPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopLocalBundlePayload {
+    pub outcome: plugin_hub::ClaudeDesktopLocalBundleOutcome,
+    #[serde(rename = "devModeStatus")]
+    pub dev_mode_status: ClaudeDesktopDevModeStatus,
+    #[serde(rename = "orgPluginStatus")]
+    pub org_plugin_status: ClaudeDesktopOrgPluginStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ClaudeDesktopMarketplacePayload {
     #[serde(rename = "marketplaceStatus")]
     pub marketplace_status: ClaudeDesktopMarketplaceStatus,
@@ -2415,6 +2424,57 @@ pub fn install_ponytail_claude_desktop_org_plugin()
                     backup_path: None,
                     message: error.to_string(),
                 },
+                org_plugin_status: plugin_hub::load_claude_desktop_org_plugin_status(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn install_ponytail_claude_desktop_local_bundle()
+-> CommandResult<ClaudeDesktopLocalBundlePayload> {
+    match plugin_hub::install_ponytail_claude_desktop_local_bundle().await {
+        Ok(outcome) => ok(
+            &outcome.message.clone(),
+            ClaudeDesktopLocalBundlePayload {
+                outcome,
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                org_plugin_status: plugin_hub::load_claude_desktop_org_plugin_status(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Install Claude Desktop local plugin bundle failed: {error}"),
+            ClaudeDesktopLocalBundlePayload {
+                outcome: plugin_hub::ClaudeDesktopLocalBundleOutcome {
+                    dev_mode: ClaudeDesktopDevModeOutcome {
+                        configured: false,
+                        normal_config_path: String::new(),
+                        threep_config_path: String::new(),
+                        profile_meta_path: String::new(),
+                        backup_paths: Vec::new(),
+                        message: error.to_string(),
+                    },
+                    codex_mcp: empty_plugin_install_outcome_with_message(
+                        "desktop:claude-codex-pro-codex".to_string(),
+                        error.to_string(),
+                    ),
+                    ponytail_mcp: empty_plugin_install_outcome_with_message(
+                        "ponytail:claude-desktop-mcp".to_string(),
+                        error.to_string(),
+                    ),
+                    organization_plugin: ClaudeDesktopOrgPluginOutcome {
+                        installed: false,
+                        org_plugins_dir: String::new(),
+                        plugin_dir: String::new(),
+                        manifest_path: String::new(),
+                        plugin_json_path: String::new(),
+                        copied_skills: Vec::new(),
+                        backup_path: None,
+                        message: error.to_string(),
+                    },
+                    message: error.to_string(),
+                },
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
                 org_plugin_status: plugin_hub::load_claude_desktop_org_plugin_status(),
             },
         ),

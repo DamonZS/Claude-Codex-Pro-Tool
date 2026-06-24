@@ -118,6 +118,7 @@ pub fn run() {
             commands::open_ponytail_claude_desktop_marketplace_setup,
             commands::open_claude_desktop_org_plugins_dir,
             commands::install_ponytail_claude_desktop_org_plugin,
+            commands::install_ponytail_claude_desktop_local_bundle,
             commands::set_user_script_enabled,
             commands::delete_user_script,
             commands::open_external_url,

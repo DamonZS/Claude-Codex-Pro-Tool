@@ -188,6 +188,16 @@ pub struct ClaudeDesktopOrgPluginOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopLocalBundleOutcome {
+    pub dev_mode: ClaudeDesktopDevModeOutcome,
+    pub codex_mcp: PluginInstallOutcome,
+    pub ponytail_mcp: PluginInstallOutcome,
+    pub organization_plugin: ClaudeDesktopOrgPluginOutcome,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopMarketplaceStatus {
     pub supported: bool,
     pub marketplace: String,
@@ -353,6 +363,37 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
             anyhow::bail!("该社区资源需要人工审查后安装")
         }
     }
+}
+
+pub async fn install_ponytail_claude_desktop_local_bundle()
+-> anyhow::Result<ClaudeDesktopLocalBundleOutcome> {
+    let dev_mode = configure_claude_desktop_dev_mode()?;
+    if !dev_mode.configured {
+        anyhow::bail!("{}", dev_mode.message);
+    }
+
+    let catalog = fetch_catalog().await;
+    let install_local_mcp = |id: &str| -> anyhow::Result<PluginInstallOutcome> {
+        let item = catalog
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("plugin hub item not found: {id}"))?;
+        install_claude_desktop_mcp(preview_for_item(item))
+    };
+
+    let codex_mcp = install_local_mcp("desktop:claude-codex-pro-codex")?;
+    let ponytail_mcp = install_local_mcp("ponytail:claude-desktop-mcp")?;
+    let organization_plugin = install_ponytail_claude_desktop_org_plugin()?;
+
+    Ok(ClaudeDesktopLocalBundleOutcome {
+        dev_mode,
+        codex_mcp,
+        ponytail_mcp,
+        organization_plugin,
+        message: "Claude Desktop development mode, MCP config, Ponytail MCP, and local organization plugin skills were written locally. No Claude CLI login or official plugin marketplace install was used. Fully restart Claude Desktop.".to_string(),
+    })
 }
 
 pub fn uninstall_item(id: &str) -> anyhow::Result<Vec<PluginHubInstallRecord>> {
@@ -798,7 +839,7 @@ fn ponytail_catalog_items(
                 "Claude Desktop 3P / 开发模式".to_string(),
                 "Git".to_string(),
                 "可写入组织插件目录".to_string(),
-                "Claude 官方插件仓库配置仍需在 Claude Desktop 内确认".to_string(),
+                "本地写入 MCP/skills/组织插件目录，不调用 Claude CLI 登录".to_string(),
                 "完全重启 Claude Desktop 后生效".to_string(),
             ],
         },
@@ -884,7 +925,7 @@ fn preview_for_item(item: PluginCatalogItem) -> PluginInstallPreview {
             config_diff: claude_desktop_org_plugin_preview_text(),
             can_install: true,
             action: "claude_desktop_org_plugin".to_string(),
-            message: "Copies a reviewed plugin directory into Claude Desktop's organization plugin folder. Restart Claude Desktop after install.".to_string(),
+            message: "Writes the reviewed plugin directory and skills into Claude Desktop development-mode local folders. No Claude CLI login is required; restart Claude Desktop after install.".to_string(),
             item,
         },
         InstallKind::ClaudeCodePlugin | InstallKind::CopilotPlugin => PluginInstallPreview {
@@ -2162,7 +2203,7 @@ pub fn install_ponytail_claude_desktop_org_plugin() -> anyhow::Result<ClaudeDesk
         plugin_json_path: plugin_json_path.to_string_lossy().to_string(),
         copied_skills,
         backup_path,
-        message: "Ponytail organization plugin installed for Claude Desktop. Fully restart Claude Desktop, then check Plugins & skills.".to_string(),
+        message: "Ponytail organization plugin and skills were written locally for Claude Desktop development mode. No Claude CLI login was used. Fully restart Claude Desktop, then check Plugins & skills.".to_string(),
     })
 }
 
@@ -3001,6 +3042,37 @@ impl InstallStatus {
 mod tests {
     use super::*;
 
+    fn empty_test_plugin_outcome(id: &str) -> PluginInstallOutcome {
+        let item = PluginCatalogItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            source_id: String::new(),
+            source_label: String::new(),
+            source_url: String::new(),
+            category: String::new(),
+            author: String::new(),
+            homepage: String::new(),
+            license: String::new(),
+            tags: Vec::new(),
+            install_kind: InstallKind::ClaudeDesktopMcp,
+            install_status: InstallStatus::NotInstalled,
+            install_command: Vec::new(),
+            config_preview: String::new(),
+            risk: String::new(),
+            requirements: Vec::new(),
+        };
+        PluginInstallOutcome {
+            item: item.clone(),
+            preview: preview_for_item(item),
+            installed: true,
+            message: String::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+            backup_path: None,
+        }
+    }
+
     #[test]
     fn csv_parser_handles_quotes() {
         let rows =
@@ -3117,6 +3189,65 @@ mod tests {
             InstallKind::ManagedSkillBundle
         );
         assert!(items.iter().all(|item| item.source_id == "ponytail"));
+    }
+
+    #[test]
+    fn claude_desktop_org_plugin_uses_local_dev_mode_install_not_claude_cli_login() {
+        let item = ponytail_catalog_items(&BTreeMap::new())
+            .into_iter()
+            .find(|item| item.id == PONYTAIL_CLAUDE_DESKTOP_ORG_ID)
+            .expect("ponytail claude desktop organization plugin item");
+        let preview = preview_for_item(item.clone());
+        let combined = format!(
+            "{}\n{}\n{}\n{}",
+            item.requirements.join("\n"),
+            item.risk,
+            preview.message,
+            preview.config_diff
+        )
+        .to_lowercase();
+
+        assert_eq!(item.install_kind, InstallKind::ClaudeDesktopOrgPlugin);
+        assert_eq!(preview.action, "claude_desktop_org_plugin");
+        assert!(preview.command.is_empty());
+        assert!(combined.contains("development-mode local folders"));
+        assert!(combined.contains("no claude cli login"));
+        assert!(!combined.contains("claude plugin install"));
+        assert!(!combined.contains("claude plugin marketplace add"));
+        assert!(!combined.contains("official plugin"));
+    }
+
+    #[test]
+    fn claude_desktop_local_bundle_message_stays_local_and_login_free() {
+        let outcome = ClaudeDesktopLocalBundleOutcome {
+            dev_mode: ClaudeDesktopDevModeOutcome {
+                configured: true,
+                normal_config_path: String::new(),
+                threep_config_path: String::new(),
+                profile_meta_path: String::new(),
+                backup_paths: Vec::new(),
+                message: String::new(),
+            },
+            codex_mcp: empty_test_plugin_outcome("desktop:claude-codex-pro-codex"),
+            ponytail_mcp: empty_test_plugin_outcome("ponytail:claude-desktop-mcp"),
+            organization_plugin: ClaudeDesktopOrgPluginOutcome {
+                installed: true,
+                org_plugins_dir: String::new(),
+                plugin_dir: String::new(),
+                manifest_path: String::new(),
+                plugin_json_path: String::new(),
+                copied_skills: Vec::new(),
+                backup_path: None,
+                message: String::new(),
+            },
+            message: "Claude Desktop development mode, MCP config, Ponytail MCP, and local organization plugin skills were written locally. No Claude CLI login or official plugin marketplace install was used. Fully restart Claude Desktop.".to_string(),
+        };
+        let message = outcome.message.to_lowercase();
+
+        assert!(message.contains("written locally"));
+        assert!(message.contains("no claude cli login"));
+        assert!(!message.contains("claude plugin install"));
+        assert!(!message.contains("claude plugin marketplace add"));
     }
 
     #[test]

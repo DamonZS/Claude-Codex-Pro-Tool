@@ -283,8 +283,8 @@ function previewPluginItems(): PreviewPluginItem[] {
       installStatus: "notInstalled",
       installCommand: [],
       configPreview: "源：~\\.claude-codex-pro\\plugin-hub\\repos\\ponytail\\skills\\*\n目标：C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\*",
-      risk: "真实安装会写入 Claude Desktop 组织插件目录；普通权限不可写时会失败，不会静默信任 hooks。",
-      requirements: ["Claude Desktop 3P / 开发模式", "Git", "管理员权限或可写目录"],
+      risk: "真实安装会写入 Claude Desktop 组织插件目录；普通权限不可写时会失败，不会调用 Claude CLI 登录，也不会静默信任 hooks。",
+      requirements: ["Claude Desktop 3P / 开发模式", "Git", "管理员权限或可写目录", "本地写入 MCP/skills/组织插件目录"],
     },
     {
       id: "ponytail:codex-skills",
@@ -619,7 +619,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         plugin: "ponytail",
         deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
         canAutoWrite: false,
-        message: "预览模式：打开 Claude 官方配置页后仍需在 Claude Desktop 内确认。",
+        message: "预览模式：官方仓库入口仅作为可选方式；开发模式本地安装不依赖 Claude CLI 登录。",
       },
     });
   }
@@ -687,7 +687,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       outcome: {
         opened: true,
         deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
-        message: "预览模式不会修改 Claude Desktop。",
+        message: "预览模式不会修改 Claude Desktop；真实环境会本地写入组织插件 skills。",
       },
       marketplaceStatus: {
         supported: true,
@@ -710,6 +710,69 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         copiedSkills: ["C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\ponytail"],
         backupPath: null,
         message: "预览模式不会修改 Claude Desktop。",
+      },
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: true,
+        writable: true,
+        message: "预览模式：Ponytail 组织插件已模拟安装。",
+      },
+    });
+  }
+  if (command === "install_ponytail_claude_desktop_local_bundle") {
+    return ok("预览模式已模拟本地写入 Claude Desktop 开发模式插件包。", {
+      outcome: {
+        devMode: {
+          configured: true,
+          normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+          threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+          profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+          backupPaths: [],
+          message: "预览模式：开发模式已模拟配置。",
+        },
+        codexMcp: {
+          item: { id: "desktop:claude-codex-pro-codex" },
+          preview: null,
+          installed: true,
+          installMessage: "预览模式：已模拟写入 Codex MCP。",
+          stdout: "",
+          stderr: "",
+          backupPath: null,
+        },
+        ponytailMcp: {
+          item: { id: "ponytail:claude-desktop-mcp" },
+          preview: null,
+          installed: true,
+          installMessage: "预览模式：已模拟写入 Ponytail MCP。",
+          stdout: "",
+          stderr: "",
+          backupPath: null,
+        },
+        organizationPlugin: {
+          installed: true,
+          orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+          pluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+          manifestPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\manifest.json",
+          pluginJsonPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\.claude-plugin\\plugin.json",
+          copiedSkills: ["C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\ponytail"],
+          backupPath: null,
+          message: "预览模式：已模拟本地复制组织插件 skills。",
+        },
+        message: "预览模式：开发模式、MCP 和组织插件 skills 均为本地写入链路，不调用 Claude CLI 登录。",
+      },
+      devModeStatus: {
+        supported: true,
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: "00000000-0000-4000-8000-000000157210",
+        message: "预览模式：开发模式已模拟配置。",
       },
       orgPluginStatus: {
         supported: true,
