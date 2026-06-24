@@ -140,6 +140,7 @@ pub fn install_patch_at_with_resources(
     resources: Option<&RemoteI18nResources>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let mut changed_files = Vec::new();
+    ensure_patch_writable(paths)?;
     std::fs::create_dir_all(&paths.backup_dir).with_context(|| {
         format!(
             "创建 Claude 中文补丁备份目录失败：{}",
@@ -257,7 +258,7 @@ pub fn status_for_paths(paths: &ClaudeZhPatchPaths) -> ClaudeZhPatchStatus {
     let language_whitelist_patched = chunk_texts
         .iter()
         .any(|text| text.contains(LANGUAGE_MARKER) || has_zh_cn_language_support(text));
-    let writable = paths.app_root.join("resources").exists();
+    let writable = resource_tree_writable(paths);
     let locale_configured = locale_configured(&paths.locale_config_path);
     let resources_present = valid_i18n_resource(&root_i18n);
     let frontend_i18n_present = valid_i18n_resource(&frontend_i18n);
@@ -299,9 +300,9 @@ fn detect_paths() -> Option<ClaudeZhPatchPaths> {
 }
 
 fn candidate_install_roots() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
+    let mut candidates = running_claude_install_roots();
     if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
-        candidates.push(local_app_data.join("AnthropicClaude"));
+        push_unique_path(&mut candidates, local_app_data.join("AnthropicClaude"));
     }
     if let Some(program_files) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
         let windows_apps = program_files.join("WindowsApps");
@@ -318,10 +319,57 @@ fn candidate_install_roots() -> Vec<PathBuf> {
                 .collect::<Vec<_>>();
             matches.sort();
             matches.reverse();
-            candidates.extend(matches);
+            for path in matches {
+                push_unique_path(&mut candidates, path);
+            }
         }
     }
     candidates
+}
+
+#[cfg(windows)]
+fn running_claude_install_roots() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for process in crate::windows_integration::enumerate_processes()
+        .into_iter()
+        .filter(|process| process.exe_file.eq_ignore_ascii_case("claude.exe"))
+    {
+        if let Some(path) = process
+            .executable_path
+            .as_deref()
+            .and_then(install_root_from_executable_path)
+        {
+            push_unique_path(&mut candidates, path);
+        }
+    }
+    candidates
+}
+
+#[cfg(not(windows))]
+fn running_claude_install_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn install_root_from_executable_path(executable_path: &Path) -> Option<PathBuf> {
+    let app_root = executable_path.parent()?;
+    if !app_root.join("resources").exists() {
+        return None;
+    }
+    if app_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case("app"))
+        .unwrap_or(false)
+    {
+        return app_root.parent().map(Path::to_path_buf);
+    }
+    Some(app_root.to_path_buf())
+}
+
+fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if !candidates.iter().any(|existing| existing == &path) {
+        candidates.push(path);
+    }
 }
 
 fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> {
@@ -378,6 +426,39 @@ fn write_locale_config(path: &Path) -> anyhow::Result<()> {
     }
     config["locale"] = json!("zh-CN");
     crate::settings::atomic_write(path, serde_json::to_string_pretty(&config)?.as_bytes())
+}
+
+fn ensure_patch_writable(paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
+    if resource_tree_writable(paths) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Claude Desktop 安装目录已找到，但资源目录不可写：{}。如果这是 Microsoft Store/MSIX 版本，WindowsApps 受系统保护，不能直接写入汉化资源；请使用“Claude 中文窗口”，或安装可写入的桌面版后再执行本机汉化。",
+        paths.app_root.join("resources").display()
+    );
+}
+
+fn resource_tree_writable(paths: &ClaudeZhPatchPaths) -> bool {
+    let resources = paths.app_root.join("resources");
+    if !resources.is_dir() {
+        return false;
+    }
+    let probe = resources.join(format!(
+        ".claude-codex-pro-zh-probe-{}.tmp",
+        std::process::id()
+    ));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(mut file) => {
+            let _ = std::io::Write::write_all(&mut file, b"probe");
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn locale_configured(path: &Path) -> bool {
@@ -734,6 +815,18 @@ mod tests {
 
         assert_eq!(paths.install_root, install_root);
         assert!(paths.app_root.ends_with("app"));
+    }
+
+    #[test]
+    fn install_root_from_executable_path_supports_running_msix_app_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_root = temp.path().join("Claude_1.0.0.0_x64__abcd");
+        let app_root = install_root.join("app");
+        std::fs::create_dir_all(app_root.join("resources")).unwrap();
+
+        let detected = install_root_from_executable_path(&app_root.join("Claude.exe")).unwrap();
+
+        assert_eq!(detected, install_root);
     }
 
     #[test]

@@ -1264,7 +1264,6 @@ export function App() {
       const route = normalizeRoute((event as CustomEvent<{ route?: unknown }>).detail?.route);
       if (!isRoute(route)) return;
       setRoute(route);
-      void refreshRoute(route);
     };
     window.addEventListener("claude-codex-pro-navigate", navigate);
     return () => window.removeEventListener("claude-codex-pro-navigate", navigate);
@@ -1387,7 +1386,6 @@ export function App() {
                 key={item.id}
                 onClick={() => {
                   setRoute(item.id);
-                  void refreshRoute(item.id);
                 }}
                 title={item.label}
                 type="button"
