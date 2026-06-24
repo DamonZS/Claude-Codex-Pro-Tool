@@ -2916,7 +2916,6 @@ pub fn apply_claude_desktop_provider(
             "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
         }),
     );
-    let _ = plugin_hub::configure_claude_desktop_dev_mode();
     match claude_codex_pro_core::claude_desktop_provider::apply_claude_desktop_provider(&request) {
         Ok(outcome) => {
             log_manager_event(

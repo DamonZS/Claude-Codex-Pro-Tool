@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use url::Url;
 
 pub const CLAUDE_DESKTOP_PROVIDER_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
 pub const CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME: &str = "Claude Codex Pro";
@@ -145,6 +146,7 @@ pub fn preview_claude_desktop_provider_at_paths(
     request: &ClaudeDesktopProviderRequest,
 ) -> anyhow::Result<ClaudeDesktopProviderPreview> {
     validate_request(request)?;
+    let profile_name = display_provider_name(request);
     let profile = build_gateway_profile(request);
     let redacted_profile = redact_profile(profile.clone());
     let redacted_profile_text =
@@ -154,12 +156,12 @@ pub fn preview_claude_desktop_provider_at_paths(
         paths.normal_config_path.display(),
         paths.threep_config_path.display(),
         paths.profile_path.display(),
-        display_provider_name(request),
+        profile_name,
         redacted_profile_text
     );
     Ok(ClaudeDesktopProviderPreview {
         profile_id: CLAUDE_DESKTOP_PROVIDER_PROFILE_ID.to_string(),
-        profile_name: display_provider_name(request),
+        profile_name,
         normal_config_path: path_string(&paths.normal_config_path),
         threep_config_path: path_string(&paths.threep_config_path),
         profile_path: path_string(&paths.profile_path),
@@ -181,6 +183,7 @@ pub fn apply_claude_desktop_provider_at_paths(
     request: &ClaudeDesktopProviderRequest,
 ) -> anyhow::Result<ClaudeDesktopProviderOutcome> {
     validate_request(request)?;
+    let profile_name = display_provider_name(request);
     let profile = build_gateway_profile(request);
     let snapshots = snapshot_files(paths)?;
     let backup_paths = backup_existing_files(paths)?;
@@ -188,7 +191,11 @@ pub fn apply_claude_desktop_provider_at_paths(
         write_deployment_mode(&paths.normal_config_path, "3p")?;
         write_deployment_mode(&paths.threep_config_path, "3p")?;
         write_json(&paths.profile_path, &profile)?;
-        write_meta(&paths.meta_path, Some(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID))?;
+        write_meta(
+            &paths.meta_path,
+            Some(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID),
+            Some(&profile_name),
+        )?;
         Ok::<(), anyhow::Error>(())
     })();
 
@@ -222,7 +229,7 @@ pub fn restore_claude_desktop_provider_official_at_paths(
         write_deployment_mode(&paths.normal_config_path, "1p")?;
         write_deployment_mode(&paths.threep_config_path, "1p")?;
         remove_file_if_exists(&paths.profile_path)?;
-        write_meta(&paths.meta_path, None)?;
+        write_meta(&paths.meta_path, None, None)?;
         Ok::<(), anyhow::Error>(())
     })();
 
@@ -245,8 +252,22 @@ pub fn restore_claude_desktop_provider_official_at_paths(
 
 fn validate_request(request: &ClaudeDesktopProviderRequest) -> anyhow::Result<()> {
     let base_url = request.base_url.trim();
-    if !(base_url.starts_with("https://") || base_url.starts_with("http://127.0.0.1") || base_url.starts_with("http://localhost")) {
-        bail!("Claude Desktop 供应商 Base URL 必须是 https://，或本机 http://127.0.0.1 / localhost。");
+    let parsed = Url::parse(base_url)
+        .with_context(|| format!("Claude Desktop 供应商 Base URL 无效：{}", base_url))?;
+    match parsed.scheme() {
+        "https" => {}
+        "http"
+            if parsed
+                .host_str()
+                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")) =>
+        {
+        }
+        "http" => {
+            bail!("Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。")
+        }
+        _ => {
+            bail!("Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。")
+        }
     }
     if request.api_key.trim().is_empty() {
         bail!("Claude Desktop 供应商 API Key 不能为空。");
@@ -330,7 +351,11 @@ fn write_deployment_mode(path: &Path, mode: &str) -> anyhow::Result<()> {
     write_json(path, &value)
 }
 
-fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> anyhow::Result<()> {
+fn write_meta(
+    path: &Path,
+    applied_profile_id: Option<&str>,
+    profile_name: Option<&str>,
+) -> anyhow::Result<()> {
     let mut value = read_json_object_or_empty(path)?;
     let object = value.as_object_mut().expect("object was just normalized");
     let mut entries = object
@@ -345,7 +370,10 @@ fn write_meta(path: &Path, applied_profile_id: Option<&str>) -> anyhow::Result<(
     if let Some(id) = applied_profile_id {
         entries.push(json!({
             "id": CLAUDE_DESKTOP_PROVIDER_PROFILE_ID,
-            "name": CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME
+            "name": profile_name
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME)
         }));
         object.insert("appliedId".to_string(), Value::String(id.to_string()));
     } else if object

@@ -31,6 +31,22 @@ fn claude_desktop_provider_preview_redacts_secret_and_shows_real_targets() {
 }
 
 #[test]
+fn claude_desktop_provider_rejects_fake_localhost_urls() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = ClaudeDesktopProviderPaths::from_single_root(temp.path());
+    let request = ClaudeDesktopProviderRequest {
+        name: "TopoReduce".to_string(),
+        base_url: "http://localhost.evil.com/v1".to_string(),
+        api_key: "sk-test-secret".to_string(),
+        model_list: String::new(),
+    };
+
+    let error = preview_claude_desktop_provider_at_paths(&paths, &request).unwrap_err();
+
+    assert!(error.to_string().contains("Base URL"));
+}
+
+#[test]
 fn claude_desktop_provider_apply_writes_gateway_profile_meta_and_backups() {
     let temp = tempfile::tempdir().unwrap();
     let paths = ClaudeDesktopProviderPaths::from_single_root(temp.path());
@@ -75,6 +91,11 @@ fn claude_desktop_provider_apply_writes_gateway_profile_meta_and_backups() {
     assert_eq!(profile["disableDeploymentModeChooser"], json!(true));
     assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
     assert_eq!(meta["appliedId"], json!(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID));
+    assert!(meta["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["id"] == CLAUDE_DESKTOP_PROVIDER_PROFILE_ID && entry["name"] == "TopoReduce"));
     assert!(outcome.backup_paths.iter().all(|path| std::path::Path::new(path).is_file()));
     assert!(outcome.backup_paths.len() >= 2);
 }
