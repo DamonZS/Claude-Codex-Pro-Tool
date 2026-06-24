@@ -93,7 +93,8 @@ jobs:
             --repo "$REPO" \
             --title "Claude Codex Pro $TAG" \
             --notes-file release-notes.md \
-            --draft
+            --draft \
+            --verify-tag
 
   windows-installer:
     name: Windows installer
@@ -261,6 +262,14 @@ jobs:
       - windows-installer
       - macos-dmg
     steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+
       - name: Generate latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -297,16 +306,3 @@ jobs:
           REPO: ${{ github.repository }}
         shell: bash
         run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
-
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-          REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_id="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.id')"
-          gh api --method PATCH "repos/$REPO/releases/$release_id" \
-            -F draft=false \
-            -f make_latest=true >/dev/null
