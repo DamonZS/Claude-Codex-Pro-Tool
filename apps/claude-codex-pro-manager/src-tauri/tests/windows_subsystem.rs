@@ -187,6 +187,11 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg --clobber"));
     assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
     assert!(workflow.contains("gh release edit \"$TAG\" --repo \"$REPO\" --draft=false --latest"));
+    assert!(workflow.contains("cleanup-failed-draft:"));
+    assert!(workflow.contains("if: ${{ failure() }}"));
+    assert!(workflow.contains("--json databaseId,isDraft"));
+    assert!(workflow.contains("data.isDraft ? \"true\" : \"false\""));
+    assert!(workflow.contains("gh api --method DELETE \"repos/$REPO/releases/$release_id\""));
     assert!(workflow.contains("version: tag"));
 
     assert!(release_assets.contains("auto-release-installers-managed"));

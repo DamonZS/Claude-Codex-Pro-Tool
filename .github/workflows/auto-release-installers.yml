@@ -306,3 +306,35 @@ jobs:
           REPO: ${{ github.repository }}
         shell: bash
         run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
+
+  cleanup-failed-draft:
+    name: Cleanup failed draft release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare-release
+      - windows-installer
+      - macos-dmg
+      - publish-release
+    if: ${{ failure() }}
+    steps:
+      - name: Delete unpublished draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$TAG" --repo "$REPO" --json databaseId,isDraft 2>/dev/null || true)"
+          if [ -z "$release_json" ]; then
+            echo "No release found for $TAG."
+            exit 0
+          fi
+          is_draft="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.isDraft ? "true" : "false")' "$release_json")"
+          if [ "$is_draft" != "true" ]; then
+            echo "Release $TAG is already published; keeping it."
+            exit 0
+          fi
+          release_id="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.databaseId)' "$release_json")"
+          echo "Deleting failed draft release $TAG ($release_id)."
+          gh api --method DELETE "repos/$REPO/releases/$release_id"
