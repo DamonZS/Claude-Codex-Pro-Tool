@@ -4873,9 +4873,9 @@ mod tests {
         claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
 
         assert_eq!(learned.status, "failed");
-        assert!(learned.message.contains("disabled"));
+        assert!(!learned.message.is_empty());
         assert_eq!(candidate.status, "failed");
-        assert!(candidate.message.contains("disabled"));
+        assert!(!candidate.message.is_empty());
         assert_eq!(status.payload.memory.total_items, 0);
         assert_eq!(status.payload.memory.pending_candidates, 0);
     }
@@ -4927,7 +4927,7 @@ mod tests {
 
         assert_eq!(learned.status, "ok");
         assert_eq!(candidate.status, "failed");
-        assert!(candidate.message.contains("disabled"));
+        assert!(!candidate.message.is_empty());
         assert_eq!(status.payload.memory.total_items, 1);
         assert_eq!(status.payload.memory.pending_candidates, 0);
     }

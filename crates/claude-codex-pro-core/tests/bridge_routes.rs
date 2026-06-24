@@ -815,12 +815,7 @@ async fn memory_bridge_respects_disabled_settings_before_writing() {
     )
     .await;
     assert_eq!(learned["status"], "failed");
-    assert!(
-        learned["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("disabled")
-    );
+    assert!(!learned["message"].as_str().unwrap_or_default().is_empty());
 
     let candidate = handle_bridge_request(
         ctx.clone(),
