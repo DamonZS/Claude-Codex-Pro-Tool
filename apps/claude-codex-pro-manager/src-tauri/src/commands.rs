@@ -1114,9 +1114,9 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
 #[tauri::command]
 pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
     match MemoryAssistStore::default().status() {
-        Ok(memory) => ok("记忆辅助状态已加载。", MemoryAssistStatusPayload { memory }),
+        Ok(memory) => ok("盘古记忆状态已加载。", MemoryAssistStatusPayload { memory }),
         Err(error) => failed(
-            &format!("记忆辅助状态读取失败：{error}"),
+            &format!("盘古记忆状态读取失败：{error}"),
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },
@@ -1163,7 +1163,7 @@ pub fn learn_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -1186,7 +1186,7 @@ pub fn update_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -1209,7 +1209,7 @@ pub fn delete_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -1232,7 +1232,7 @@ pub fn create_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_candidate_enabled() {
         return failed(
-            "Memory assistant auto-suggest is disabled",
+            "盘古记忆自动学习已禁用",
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -1276,7 +1276,7 @@ pub fn approve_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -1302,7 +1302,7 @@ pub fn reject_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -1352,7 +1352,7 @@ pub fn run_memory_assist_selfcheck(
 ) -> CommandResult<MemoryAssistSelfCheckPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistSelfCheckPayload {
                 report: MemorySelfCheckResult {
                     status: "failed".to_string(),
@@ -1365,11 +1365,11 @@ pub fn run_memory_assist_selfcheck(
     }
     match MemoryAssistStore::default().run_selfcheck(request) {
         Ok(report) => ok(
-            "记忆辅助自检完成。",
+            "盘古记忆自检完成。",
             MemoryAssistSelfCheckPayload { report },
         ),
         Err(error) => failed(
-            &format!("记忆辅助自检失败：{error}"),
+            &format!("盘古记忆自检失败：{error}"),
             MemoryAssistSelfCheckPayload {
                 report: MemorySelfCheckResult {
                     status: "failed".to_string(),
@@ -1385,9 +1385,9 @@ pub fn run_memory_assist_selfcheck(
 #[tauri::command]
 pub fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
     match MemoryAssistStore::default().export_json() {
-        Ok(data) => ok("记忆辅助数据已导出。", MemoryAssistExportPayload { data }),
+        Ok(data) => ok("盘古记忆数据已导出。", MemoryAssistExportPayload { data }),
         Err(error) => failed(
-            &format!("记忆辅助导出失败：{error}"),
+            &format!("盘古记忆导出失败：{error}"),
             MemoryAssistExportPayload {
                 data: MemoryExport {
                     schema_version: "memory-assist/v1".to_string(),
@@ -1406,16 +1406,16 @@ pub fn import_memory_assist(
 ) -> CommandResult<MemoryAssistStatusPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "Memory assistant is disabled",
+            "盘古记忆已禁用",
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },
         );
     }
     match MemoryAssistStore::default().import_json(request) {
-        Ok(memory) => ok("记忆辅助数据已导入。", MemoryAssistStatusPayload { memory }),
+        Ok(memory) => ok("盘古记忆数据已导入。", MemoryAssistStatusPayload { memory }),
         Err(error) => failed(
-            &format!("记忆辅助导入失败：{error}"),
+            &format!("盘古记忆导入失败：{error}"),
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },

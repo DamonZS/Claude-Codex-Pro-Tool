@@ -622,6 +622,9 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "claudeAppChineseOverlayEnabled");
     merge_bool_setting(target, source, "codexAppServiceTierControls");
     merge_bool_setting(target, source, "codexAppImageOverlayEnabled");
+    merge_bool_setting(target, source, "memoryAssistEnabled");
+    merge_bool_setting(target, source, "memoryAssistInjectEnabled");
+    merge_bool_setting(target, source, "memoryAssistAutoSuggestEnabled");
     if let Some(value) = source
         .get("codexAppImageOverlayPath")
         .and_then(Value::as_str)
@@ -643,6 +646,28 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     }
     if let Some(value) = source.get("codexGoalsEnabled").and_then(Value::as_bool) {
         target.insert("codexGoalsEnabled".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = source
+        .get("memoryAssistMaxInjectedItems")
+        .and_then(Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+    {
+        target.insert(
+            "memoryAssistMaxInjectedItems".to_string(),
+            Value::Number(serde_json::Number::from(clamp_memory_assist_max_injected_items(
+                value,
+            ))),
+        );
+    }
+    if let Some(value) = source.get("memoryAssistWorkspaceMode").and_then(Value::as_str) {
+        target.insert(
+            "memoryAssistWorkspaceMode".to_string(),
+            Value::String(if value.trim().is_empty() {
+                default_memory_assist_workspace_mode()
+            } else {
+                value.trim().to_string()
+            }),
+        );
     }
     if let Some(value) = source.get("launchMode").and_then(Value::as_str) {
         if matches!(value, "patch" | "relay") {
@@ -1520,6 +1545,38 @@ experimental_bearer_token = "sk-existing""#
         );
         assert_eq!(updated.codex_app_image_overlay_opacity, 42);
         assert_eq!(store.load().unwrap(), updated);
+    }
+
+    #[test]
+    fn settings_store_update_persists_memory_assist_settings() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+
+        let updated = store
+            .update(json!({
+                "memoryAssistEnabled": false,
+                "memoryAssistInjectEnabled": false,
+                "memoryAssistAutoSuggestEnabled": false,
+                "memoryAssistMaxInjectedItems": 8,
+                "memoryAssistWorkspaceMode": "global_only"
+            }))
+            .unwrap();
+
+        assert!(!updated.memory_assist_enabled);
+        assert!(!updated.memory_assist_inject_enabled);
+        assert!(!updated.memory_assist_auto_suggest_enabled);
+        assert_eq!(updated.memory_assist_max_injected_items, 8);
+        assert_eq!(updated.memory_assist_workspace_mode, "global_only");
+        assert_eq!(store.load().unwrap(), updated);
+
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["memoryAssistEnabled"], json!(false));
+        assert_eq!(saved["memoryAssistInjectEnabled"], json!(false));
+        assert_eq!(saved["memoryAssistAutoSuggestEnabled"], json!(false));
+        assert_eq!(saved["memoryAssistMaxInjectedItems"], json!(8));
+        assert_eq!(saved["memoryAssistWorkspaceMode"], json!("global_only"));
     }
 
     #[test]

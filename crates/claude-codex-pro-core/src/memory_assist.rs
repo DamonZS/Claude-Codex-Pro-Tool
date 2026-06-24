@@ -560,7 +560,7 @@ impl MemoryAssistStore {
             limit: max_items,
         })?;
         let summary = if query.results.is_empty() {
-            format!("记忆辅助已启用：{workspace} 暂无匹配记忆。")
+            format!("盘古记忆已启用：{workspace} 暂无匹配记忆。")
         } else {
             let joined = query
                 .results
@@ -569,7 +569,7 @@ impl MemoryAssistStore {
                 .collect::<Vec<_>>()
                 .join("；");
             format!(
-                "记忆辅助已启用：{workspace} 命中 {} 条：{joined}",
+                "盘古记忆已启用：{workspace} 命中 {} 条：{joined}",
                 query.results.len()
             )
         };

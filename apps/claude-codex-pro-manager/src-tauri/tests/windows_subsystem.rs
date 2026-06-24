@@ -323,7 +323,7 @@ fn session_management_route_contains_history_memory_and_diagnostics() {
 
     assert!(session_section.contains("会话管理"));
     assert!(session_section.contains("历史会话修复"));
-    assert!(session_section.contains("记忆辅助"));
+    assert!(session_section.contains("盘古记忆"));
     assert!(session_section.contains("Codex 会话管理"));
     assert!(session_section.contains("Claude 会话诊断"));
     assert!(session_section.contains("refreshLocalSessions"));
@@ -410,7 +410,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("打开"));
     assert!(app_tsx.contains("Codex 运行"));
     assert!(app_tsx.contains("Claude 状态"));
-    assert!(app_tsx.contains("记忆辅助大脑"));
+    assert!(app_tsx.contains("盘古记忆总览"));
     assert!(app_tsx.contains("诊断与修复"));
     let overview_screen = app_tsx
         .split("function OverviewScreen")

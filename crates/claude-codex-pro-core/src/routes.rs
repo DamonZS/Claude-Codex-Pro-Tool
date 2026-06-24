@@ -123,30 +123,30 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn upstream_worktree_prepare(&self, payload: Value) -> anyhow::Result<Value>;
     async fn upstream_worktree_create(&self, payload: Value) -> anyhow::Result<Value>;
     async fn memory_status(&self) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_session(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_search(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired", "results": []}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线", "results": []}))
     }
     async fn memory_learn(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_candidates(&self, _payload: Value) -> anyhow::Result<Value> {
         Ok(
-            json!({"status": "failed", "message": "Memory assistant is not wired", "candidates": []}),
+            json!({"status": "failed", "message": "盘古记忆尚未接线", "candidates": []}),
         )
     }
     async fn memory_approve(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_reject(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_selfcheck(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "Memory assistant is not wired"}))
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
 }
 
@@ -374,7 +374,7 @@ async fn ensure_memory_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
     if settings.memory_assist_enabled {
         Ok(())
     } else {
-        anyhow::bail!("memory assistant is disabled")
+        anyhow::bail!("盘古记忆已禁用")
     }
 }
 
@@ -395,7 +395,7 @@ async fn ensure_memory_candidates_allowed(
     if settings.memory_assist_auto_suggest_enabled {
         Ok(())
     } else {
-        anyhow::bail!("memory assistant auto-suggest is disabled")
+        anyhow::bail!("盘古记忆自动学习已禁用")
     }
 }
 

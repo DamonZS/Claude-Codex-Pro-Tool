@@ -809,14 +809,14 @@ export function App() {
 
   const refreshMemoryAssist = async (silent = false) => {
     const [status, items, candidates] = await Promise.all([
-      run(() => call<MemoryStatusResult>("load_memory_assist_status"), "记忆辅助"),
+      run(() => call<MemoryStatusResult>("load_memory_assist_status"), "盘古记忆"),
       run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80 } }), "记忆列表"),
       run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true } }), "待确认记忆"),
     ]);
     if (status) setMemoryAssist(status);
     if (items) setMemoryItems(items);
     if (candidates) setMemoryCandidates(candidates);
-    if (!silent && status) notifyIfNeedsAttention({ title: "记忆辅助", message: status.message, status: status.status });
+    if (!silent && status) notifyIfNeedsAttention({ title: "盘古记忆", message: status.message, status: status.status });
     return status;
   };
 
@@ -1100,7 +1100,7 @@ export function App() {
       "保存记忆",
     );
     if (result) {
-      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
     return result?.status === "ok";
@@ -1121,7 +1121,7 @@ export function App() {
     if (!window.confirm("确认删除这条长期记忆？")) return;
     const result = await run(() => call<MemoryItemResult>("delete_memory_assist_item", { request: { id } }), "删除记忆");
     if (result) {
-      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1129,7 +1129,7 @@ export function App() {
   const approveMemoryAssistCandidate = async (id: string) => {
     const result = await run(() => call<MemoryItemResult>("approve_memory_assist_candidate", { request: { id } }), "确认待确认记忆");
     if (result) {
-      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1137,7 +1137,7 @@ export function App() {
   const rejectMemoryAssistCandidate = async (id: string) => {
     const result = await run(() => call<MemoryCandidateResult>("reject_memory_assist_candidate", { request: { id } }), "忽略待确认记忆");
     if (result) {
-      notifyIfNeedsAttention({ title: "记忆辅助", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1176,10 +1176,10 @@ export function App() {
   };
 
   const runMemoryAssistSelfcheck = async () => {
-    const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "记忆辅助自检");
+    const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "盘古记忆自检");
     if (result) {
       setMemorySelfCheck(result);
-      notifyIfNeedsAttention({ title: "记忆辅助自检", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "盘古记忆自检", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1645,12 +1645,12 @@ function OverviewScreen({
           <InfoRow label="阻断原因" value={claudeDesktop?.cdpBlocker || "无"} />
           <InfoRow label="包装窗口" value={`${claudeChinese?.injectionMode ?? "wrapped_webview"} · ${claudeChinese?.defaultUrl ?? "https://claude.ai/new"}`} />
         </Panel>
-        <Panel title="记忆辅助大脑" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
+        <Panel title="盘古记忆总览" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
           <InfoRow label="状态" value={memory?.status ?? "未检测"} />
           <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
           <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
           <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
-          <ActionButton icon={ShieldCheck} label="记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
+          <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
         </Panel>
         <Panel title="诊断与修复" detail="检查和修复入口集中在这里；不会自动改写配置。">
           <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
@@ -1933,7 +1933,7 @@ function MemoryAssistPanel({
   const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
   const dbPath = status?.memory.dbPath ?? "";
   return (
-    <Panel title="记忆辅助" detail="本地长期记忆、待确认学习、工作区隔离和自检备份。">
+    <Panel title="盘古记忆" detail="本地长期记忆、待确认学习、工作区隔离和自检备份。">
       <div className="ops-status-list">
         <StatusRow label="记忆库" status={status?.memory.status ?? "not_checked"} value={compactPath(dbPath)} />
         <StatusRow label="长期记忆" status={(status?.memory.totalItems ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalItems ?? 0} 条`} />
@@ -2106,7 +2106,7 @@ function SessionManagementScreen({
 
   return (
     <div className="stack">
-      <Panel title="会话管理" detail="历史会话修复、记忆辅助、Codex 会话管理和 Claude 会话诊断集中在这里。">
+      <Panel title="会话管理" detail="历史会话修复、盘古记忆、Codex 会话管理和 Claude 会话诊断集中在这里。">
         <div className="ops-note">
           <ShieldCheck className="h-4 w-4" />
           <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
@@ -2586,8 +2586,8 @@ function SettingsScreen({
     ["Fast 按钮", "codexAppServiceTierControls"],
     ["图片覆盖", "codexAppImageOverlayEnabled"],
     ["Codex Goals", "codexGoalsEnabled"],
-    ["记忆辅助", "memoryAssistEnabled"],
-    ["记忆 DOM 标识", "memoryAssistInjectEnabled"],
+    ["盘古记忆", "memoryAssistEnabled"],
+    ["盘古记忆 DOM 标识", "memoryAssistInjectEnabled"],
     ["待确认学习", "memoryAssistAutoSuggestEnabled"],
     ["CLI Wrapper", "cliWrapperEnabled"],
   ] as const;
@@ -2729,9 +2729,9 @@ function SettingsScreen({
             </Button>
           </div>
         </Panel>
-        <Panel title="记忆辅助" detail="控制 Codex 页面顶部记忆标识、会话摘要注入和待确认学习。">
+        <Panel title="盘古记忆" detail="控制 Codex 页面顶部盘古记忆标识、会话摘要注入和待确认学习。">
           <div className="ops-toggle-line">
-            <span>启用记忆辅助</span>
+            <span>启用盘古记忆</span>
             <ToggleSwitch checked={Boolean(s?.memoryAssistEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistEnabled", value)} />
           </div>
           <div className="ops-toggle-line">
@@ -2750,7 +2750,7 @@ function SettingsScreen({
             <InfoRow label="工作区模式" value={s?.memoryAssistWorkspaceMode || "project_plus_global"} />
             <InfoRow label="存储位置" value="~/.claude-codex-pro/memory_assist.sqlite" />
           </div>
-          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存记忆辅助设置</Button>
+          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存盘古记忆设置</Button>
         </Panel>
         <Panel title="安全边界" detail="这些操作只改本工具配置，不静默改写官方 Claude 包。">
           <div className="ops-danger-zone">
@@ -2942,7 +2942,7 @@ function routeSubtitle(route: Route) {
     overview: "运行状态、启动动作和 Claude 中文窗口诊断。",
     supplier: "Codex 中转配置与 Claude Desktop 开发模式供应商写入。",
     tools: "插件目录、MCP 配置和启动入口。",
-    sessions: "历史会话修复、记忆辅助和会话诊断。",
+    sessions: "历史会话修复、盘古记忆和会话诊断。",
     scripts: "Codex 前端用户脚本市场。",
     logs: "诊断日志与运行信息。",
     settings: "全局开关和配置摘要。",

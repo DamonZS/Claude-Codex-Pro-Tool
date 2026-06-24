@@ -378,7 +378,7 @@ function previewMemoryCandidates(): PreviewMemoryCandidate[] {
   ];
 }
 
-function previewMemoryStatus(message = "预览模式记忆辅助状态。") {
+function previewMemoryStatus(message = "预览模式盘古记忆状态。") {
   return ok(message, {
     memory: {
       status: "ok",
@@ -834,7 +834,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     return ok("预览模式已模拟忽略待确认记忆。", { candidate: { ...previewMemoryCandidates()[0], status: "rejected" } });
   }
   if (command === "run_memory_assist_selfcheck") {
-    return ok("预览模式已模拟记忆辅助自检。", {
+    return ok("预览模式已模拟盘古记忆自检。", {
       report: {
         status: "ok",
         repaired: false,

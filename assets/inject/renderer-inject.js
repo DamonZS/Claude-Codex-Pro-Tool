@@ -8905,7 +8905,7 @@
     totalItems: 0,
     pendingCandidates: 0,
     injectedItems: [],
-    summary: "正在读取记忆辅助…",
+    summary: "正在读取盘古记忆…",
     lastLoadedAt: 0,
     lastSuggestionHash: "",
     lastSuggestionAt: 0,
@@ -9010,11 +9010,11 @@
     node.dataset.status = codexMemoryState.status;
     node.innerHTML = `
       <span class="codex-memory-dot"></span>
-      <span>记忆辅助</span>
+      <span>盘古记忆</span>
       <span class="codex-memory-count">${codexMemoryState.totalItems || 0}</span>
       <span>${escapeHtml(codexMemoryState.pendingCandidates ? `待确认 ${codexMemoryState.pendingCandidates}` : codexMemoryState.workspace)}</span>
     `;
-    node.title = codexMemoryState.summary || "记忆辅助";
+    node.title = codexMemoryState.summary || "盘古记忆";
     if (!badge) {
       node.addEventListener("click", (event) => {
         event.preventDefault();
@@ -9049,11 +9049,11 @@
       codexMemoryState.totalItems = Number(result.totalItems || 0);
       codexMemoryState.pendingCandidates = Number(result.pendingCandidates || 0);
       codexMemoryState.injectedItems = Array.isArray(result.injectedItems) ? result.injectedItems : [];
-      codexMemoryState.summary = result.summary || "记忆辅助已启用。";
+      codexMemoryState.summary = result.summary || "盘古记忆已启用。";
       codexMemoryRenderList(codexMemoryState.injectedItems);
     } catch (error) {
       codexMemoryState.status = "failed";
-      codexMemoryState.summary = `记忆辅助不可用：${error?.message || error}`;
+      codexMemoryState.summary = `盘古记忆不可用：${error?.message || error}`;
     }
     codexMemoryUpdateBadge();
   }
@@ -9096,7 +9096,7 @@
     panel.innerHTML = `
       <div class="codex-memory-panel-header">
         <div>
-          <strong>记忆辅助</strong>
+          <strong>盘古记忆</strong>
           <span data-codex-memory-summary>${escapeHtml(codexMemoryState.summary || "")}</span>
         </div>
         <button type="button" class="codex-memory-panel-close" data-codex-memory-close="true">×</button>
