@@ -5,11 +5,16 @@ use std::path::Path;
 use crate::settings::BackendSettings;
 
 const RENDERER_SCRIPT: &str = include_str!("../../../assets/inject/renderer-inject.js");
+const CLAUDE_CHINESE_INJECT_SCRIPT: &str = include_str!("../../../assets/inject/claude-chinese-inject.js");
 const SUPPORT_PAYMENT_QR: &[u8] = include_bytes!("../../../assets/images/support-payment-qr.png");
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
+}
+
+pub fn claude_chinese_injection_script() -> &'static str {
+    CLAUDE_CHINESE_INJECT_SCRIPT
 }
 
 pub fn injection_script(helper_port: u16) -> String {

@@ -141,7 +141,7 @@
     pill.dataset.claudeCodexProInjected = "true";
     pill.innerHTML = [
       '<span class="ccp-dot"></span>',
-      '<strong>Claude 中文窗口</strong>',
+      '<strong>Claude 一键汉化</strong>',
       '<span>后端：包装 WebView</span>',
       '<button type="button" id="ccp-plugin-hub-button">插件中心</button>',
     ].join("");

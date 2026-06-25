@@ -214,9 +214,9 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
-    assert!(app_tsx.contains("重启 Codex"));
-    assert!(app_tsx.contains("启动 Claude"));
-    assert!(app_tsx.contains("Claude 中文窗口"));
+    assert!(app_tsx.contains("启动/重启Codex"));
+    assert!(app_tsx.contains("启动/重启Claude"));
+    assert!(app_tsx.contains("Claude 一键汉化"));
     assert!(app_tsx.contains("open_claude_chinese_window"));
     assert!(app_tsx.contains("PromptOptimizerCard"));
     assert!(commands_rs.contains("pub async fn open_claude_chinese_window"));
@@ -445,6 +445,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(tauri_conf.contains("\"height\": 820"));
     assert!(tauri_conf.contains("\"minWidth\": 960"));
     assert!(tauri_conf.contains("\"minHeight\": 720"));
+    assert!(tauri_conf.contains("cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev"));
 }
 
 #[test]
@@ -462,9 +463,10 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("修复入口"));
     assert!(app_tsx.contains("修复后端"));
     assert!(app_tsx.contains("Watcher 自动接管"));
-    assert!(app_tsx.contains("启动 Claude"));
-    assert!(app_tsx.contains("Claude 中文窗口"));
-    assert!(app_tsx.contains("重启 Codex"));
+    assert!(app_tsx.contains("启动/重启Claude"));
+    assert!(app_tsx.contains("Claude 一键汉化"));
+    assert!(app_tsx.contains("Claude 一键开发模式"));
+    assert!(app_tsx.contains("启动/重启Codex"));
     assert!(app_tsx.contains("load_watcher_state"));
     assert!(app_tsx.contains("install_entrypoints"));
     assert!(app_tsx.contains("uninstall_entrypoints"));
@@ -474,7 +476,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("function SettingsScreen"));
     assert!(app_tsx.contains("设置文件位置"));
     assert!(app_tsx.contains("Codex 增强矩阵"));
-    assert!(app_tsx.contains("Claude 中文包装窗口"));
+    assert!(app_tsx.contains("Claude 一键汉化"));
     assert!(app_tsx.contains("CLI Wrapper"));
     assert!(app_tsx.contains("Codex 启动参数"));
     assert!(app_tsx.contains("安全边界"));

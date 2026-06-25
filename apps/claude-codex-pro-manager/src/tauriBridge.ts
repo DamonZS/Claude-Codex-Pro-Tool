@@ -429,7 +429,7 @@ export function invokeCommand<T>(command: string, args?: Record<string, unknown>
 async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
   if (command === "launch_claude_codex_pro" || command === "restart_claude_codex_pro") {
-    return ok(command === "launch_claude_codex_pro" ? "预览模式已模拟启动 Codex。" : "预览模式已模拟重启 Codex。", {
+    return ok(command === "launch_claude_codex_pro" ? "预览模式已模拟启动/重启 Codex。" : "预览模式已模拟重启 Codex。", {
       preview: true,
       action: command,
       startedAtMs: Date.now(),
@@ -474,9 +474,9 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "load_claude_chinese_window_status" || command === "open_claude_chinese_window") {
-    return ok("预览模式 Claude 中文窗口状态。", {
+    return ok("预览模式 Claude 一键汉化状态。", {
       open: command === "open_claude_chinese_window",
-      label: "Claude 中文窗口",
+      label: "Claude 一键汉化",
       defaultUrl: "https://claude.ai/new",
       injectionMode: "wrapped_webview",
       cdpStatus: "blocked",

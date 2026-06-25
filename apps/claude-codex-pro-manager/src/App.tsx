@@ -643,7 +643,7 @@ function isRoute(value: unknown): value is Route {
 }
 
 function statusOk(status?: string | null) {
-  return status === "ok" || status === "found" || status === "installed" || status === "running";
+  return status === "ok" || status === "accepted" || status === "found" || status === "installed" || status === "running";
 }
 
 function compactPath(path?: string | null) {
@@ -724,14 +724,14 @@ export function App() {
 
   const refreshClaude = async (silent = false) => {
     const [desktop, wrapped, zhPatch] = await Promise.all([
-      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude status"),
-      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude Chinese window"),
-      run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude zh-CN patch"),
+      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude Desktop"),
+      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化"),
+      run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化"),
     ]);
     if (desktop) setClaudeDesktop(desktop);
     if (wrapped) setClaudeChinese(wrapped);
     if (zhPatch) setClaudeZhPatch(zhPatch);
-    if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude status", message: desktop.message, status: desktop.status });
+    if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude Desktop", message: desktop.message, status: desktop.status });
   };
 
   const refreshSettings = async (silent = false) => {
@@ -838,20 +838,20 @@ export function App() {
     return result;
   };
 
-  const openClaudeChinese = async () => {
-    const result = await run(() => call<ClaudeChineseWindowResult>("open_claude_chinese_window"), "Claude 中文窗口");
-    if (result) {
-      setClaudeChinese(result);
-      notifyIfNeedsAttention({ title: "Claude 中文窗口", message: result.message, status: result.status });
-      await refreshClaude(true);
-    }
-  };
-
   const installClaudeZhPatch = async () => {
     const result = await run(() => call<ClaudeZhPatchResult>("install_claude_zh_patch"), "Claude 本机汉化");
     if (result) {
       setClaudeZhPatch(result);
       notifyIfNeedsAttention({ title: "Claude 本机汉化", message: result.message, status: result.status });
+      await refreshClaude(true);
+    }
+  };
+
+  const openClaudeChinese = async () => {
+    const result = await run(() => call<ClaudeChineseWindowResult>("open_claude_chinese_window"), "Claude 一键汉化");
+    if (result) {
+      setClaudeChinese(result);
+      notifyIfNeedsAttention({ title: "Claude 一键汉化", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -867,9 +867,9 @@ export function App() {
   };
 
   const launchClaudeDesktop = async () => {
-    const result = await run(() => call<CommandResult<Record<string, unknown>>>("open_claude_desktop"), "启动 Claude");
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("open_claude_desktop"), "启动/重启Claude");
     if (result) {
-      notifyIfNeedsAttention({ title: "启动 Claude", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "启动/重启Claude", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -883,9 +883,9 @@ export function App() {
   };
 
   const launchCodex = async () => {
-    const result = await run(() => call<CommandResult<Record<string, unknown>>>("launch_claude_codex_pro", { request: {} }), "启动 Codex");
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("launch_claude_codex_pro", { request: {} }), "启动/重启Codex");
     if (result) {
-      notifyIfNeedsAttention({ title: "启动 Codex", message: result.message, status: result.status });
+      notifyIfNeedsAttention({ title: "启动/重启Codex", message: result.message, status: result.status });
       await refreshOverview(true);
     }
   };
@@ -1518,20 +1518,20 @@ export function App() {
             </div>
           ) : null}
           <div className="ops-commandbar">
-            <Button aria-label="重启 Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
+            <Button aria-label="启动/重启Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
               <Rocket className="h-4 w-4" />
-              <span className="desktop-command-label">重启 Codex</span>
+              <span className="desktop-command-label">启动/重启Codex</span>
               <span aria-hidden="true" className="mobile-command-label">Codex</span>
             </Button>
-            <Button aria-label="启动 Claude" disabled={busy} onClick={() => void actions.launchClaudeDesktop()} variant="outline">
+            <Button aria-label="启动/重启Claude" disabled={busy} onClick={() => void actions.launchClaudeDesktop()} variant="outline">
               <MessageCircle className="h-4 w-4" />
-              <span className="desktop-command-label">启动 Claude</span>
+              <span className="desktop-command-label">启动/重启Claude</span>
               <span aria-hidden="true" className="mobile-command-label">Claude</span>
             </Button>
-            <Button aria-label="Claude 中文窗口" className="ops-primary-command" disabled={busy} onClick={() => void actions.openClaudeChinese()}>
+            <Button aria-label="Claude 一键汉化" className="ops-primary-command" disabled={busy} onClick={() => void actions.openClaudeChinese()}>
               <Languages className="h-4 w-4" />
-              <span className="desktop-command-label">Claude 中文窗口</span>
-              <span aria-hidden="true" className="mobile-command-label">中文窗口</span>
+              <span className="desktop-command-label">Claude 一键汉化</span>
+              <span aria-hidden="true" className="mobile-command-label">汉化</span>
             </Button>
             <Button disabled={busy} onClick={() => void actions.refreshRoute()} size="icon" variant="outline">
               <RefreshCw className="h-4 w-4" />
@@ -1623,27 +1623,21 @@ function OverviewScreen({
         <StatusTile icon={Power} label="Codex 运行" status={overview?.latest_launch?.status ?? "not_checked"} value={overview?.latest_launch?.status ?? "无记录"} />
         <StatusTile icon={Activity} label="Codex 版本" status={overview?.codex_version ? "ok" : "not_checked"} value={overview?.codex_version ?? "未检测"} />
         <StatusTile icon={MessageCircle} label="Claude 状态" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
-        <StatusTile icon={Languages} label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
+        <StatusTile icon={Languages} label="Claude 一键汉化" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
         <StatusTile icon={ShieldCheck} label="记忆大脑" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
       </div>
       <div className="ops-overview-grid">
-        <Panel title="核心动作" detail="Codex 与 Claude 的启动入口已分离。">
-          <ActionButton icon={Rocket} label="启动 Codex" onClick={() => void actions.launchCodex()} />
-          <ActionButton icon={RefreshCw} label="重启 Codex" onClick={() => void actions.restartCodex()} />
-          <ActionButton icon={MessageCircle} label="启动官方 Claude" onClick={() => void actions.launchClaudeDesktop()} />
-          <ActionButton icon={Languages} label="打开 Claude 中文窗口" onClick={() => void actions.openClaudeChinese()} />
-        </Panel>
         <Panel title="Codex 诊断" detail="默认只展示运行、入口和版本状态；修复动作需要手动触发。">
           <InfoRow label="运行状态" value={overview?.latest_launch?.status ?? "无记录"} />
           <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />
           <InfoRow label="静默入口" value={overview?.silent_shortcut.status ?? "未检测"} />
           <InfoRow label="管理入口" value={overview?.management_shortcut.status ?? "未检测"} />
         </Panel>
-        <Panel title="Claude 诊断" detail="官方 MSIX 只读诊断，中文化在包装窗口完成。">
+        <Panel title="Claude 诊断" detail="官方 MSIX 只读诊断，一键汉化通过包装 WebView 完成。">
           <InfoRow label="安装类型" value={claudeDesktop?.installKind ?? "未检测"} />
           <InfoRow label="CDP 状态" value={claudeDesktop?.cdpStatus ?? "未检测"} />
           <InfoRow label="阻断原因" value={claudeDesktop?.cdpBlocker || "无"} />
-          <InfoRow label="包装窗口" value={`${claudeChinese?.injectionMode ?? "wrapped_webview"} · ${claudeChinese?.defaultUrl ?? "https://claude.ai/new"}`} />
+          <InfoRow label="一键汉化方式" value={`${claudeChinese?.injectionMode ?? "wrapped_webview"} · ${claudeChinese?.defaultUrl ?? "https://claude.ai/new"}`} />
         </Panel>
         <Panel title="盘古记忆总览" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
           <InfoRow label="状态" value={memory?.status ?? "未检测"} />
@@ -1651,6 +1645,7 @@ function OverviewScreen({
           <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
           <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
           <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
+          <ActionButton icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} />
         </Panel>
         <Panel title="诊断与修复" detail="检查和修复入口集中在这里；不会自动改写配置。">
           <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
@@ -2172,12 +2167,12 @@ function SessionManagementScreen({
           <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
             <div className="ops-status-list">
               <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
-              <StatusRow label="中文窗口" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
+              <StatusRow label="Claude 一键汉化" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
               <StatusRow label="安全边界" status="ok" value="不修改官方 MSIX / app.asar" />
             </div>
             <div className="action-row">
-              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动 Claude</Button>
-              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 中文窗口</Button>
+              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动/重启Claude</Button>
+              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 一键汉化</Button>
             </div>
           </Panel>
         </div>
@@ -2385,7 +2380,7 @@ function ClaudeDesktopOrgPluginPanel({
         </Button>
         <Button onClick={() => void actions.configureClaudeDesktopDevMode()}>
           <Wrench className="h-4 w-4" />
-          一键开发模式
+          Claude 一键开发模式
         </Button>
         <Button onClick={() => void actions.installPonytailClaudeDesktopLocalBundle()}>
           <Download className="h-4 w-4" />
@@ -2498,7 +2493,7 @@ function MaintenanceToolsPanel({
         <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "已启用" : "未启用"} />
       </div>
       <div className="action-row">
-        <Button onClick={() => void actions.launchCodex()} size="sm">启动 Codex</Button>
+        <Button onClick={() => void actions.launchCodex()} size="sm">启动/重启Codex</Button>
         <Button onClick={() => void actions.restartCodex()} size="sm" variant="outline">重启 Codex</Button>
         <Button onClick={() => void actions.repairEntrypoints()} size="sm" variant="outline">修复入口</Button>
         <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
@@ -2647,9 +2642,9 @@ function SettingsScreen({
         </Panel>
       </div>
       <div className="stack">
-        <Panel title="Claude 中文包装窗口" detail="中文化目标是包装 WebView，不改官方 MSIX。">
+        <Panel title="Claude 一键汉化" detail="一键汉化目标是包装 WebView，不改官方 MSIX。">
           <div className="info-grid compact">
-            <InfoRow label="窗口状态" value={claudeChinese?.open ? "已打开" : "未打开"} />
+            <InfoRow label="状态" value={claudeChinese?.open ? "已打开" : "未打开"} />
             <InfoRow label="入口 URL" value={claudeChinese?.defaultUrl ?? "https://claude.ai/new"} />
             <InfoRow label="注入模式" value={claudeChinese?.injectionMode ?? "wrapped_webview"} />
             <InfoRow label="官方 Claude" value={claudeChinese?.officialInstallKind ?? "未检测"} />
@@ -2665,11 +2660,11 @@ function SettingsScreen({
           <div className="action-row">
             <Button onClick={() => void actions.openClaudeChinese()}>
               <Languages className="h-4 w-4" />
-              打开 Claude 中文窗口
+              Claude 一键汉化
             </Button>
             <Button onClick={() => void actions.installClaudeZhPatch()}>
               <Languages className="h-4 w-4" />
-              一键汉化 Claude
+              Claude 本机汉化
             </Button>
             <Button onClick={() => void actions.restoreClaudeZhPatch()} variant="outline">
               <RefreshCw className="h-4 w-4" />
@@ -2677,7 +2672,7 @@ function SettingsScreen({
             </Button>
             <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">
               <MessageCircle className="h-4 w-4" />
-              启动 Claude
+              启动/重启Claude
             </Button>
           </div>
         </Panel>
@@ -2939,7 +2934,7 @@ function normalizeRoute(value: unknown): unknown {
 
 function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
-    overview: "运行状态、启动动作和 Claude 中文窗口诊断。",
+    overview: "运行状态、启动动作和 Claude 一键汉化诊断。",
     supplier: "Codex 中转配置与 Claude Desktop 开发模式供应商写入。",
     tools: "插件目录、MCP 配置和启动入口。",
     sessions: "历史会话修复、盘古记忆和会话诊断。",

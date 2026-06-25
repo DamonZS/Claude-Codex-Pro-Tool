@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
 use claude_codex_pro_core::install::SILENT_BINARY;
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryExport,
@@ -704,33 +703,23 @@ pub async fn open_claude_chinese_window(
     let status = claude_codex_pro_core::claude_desktop::detect_status();
     let label = "claude-chinese";
     let default_url = "https://claude.ai/new";
+    let script = claude_codex_pro_core::assets::claude_chinese_injection_script();
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        if let Ok(script) = claude_chinese_injection_script() {
-            let _ = window.eval(script);
-        }
+        let _ = window.eval(script);
         return ok(
-            "Claude 中文窗口已聚焦。",
+            "Claude 一键汉化已聚焦。",
             claude_chinese_window_payload(&app, &status),
         );
     }
 
-    let script = match claude_chinese_injection_script() {
-        Ok(script) => script,
-        Err(error) => {
-            return failed(
-                &format!("Claude 中文注入脚本读取失败：{error}"),
-                claude_chinese_window_payload(&app, &status),
-            );
-        }
-    };
     let url = match tauri::Url::parse(default_url) {
         Ok(url) => url,
         Err(error) => {
             return failed(
-                &format!("Claude 中文窗口 URL 无效：{error}"),
+                &format!("Claude 一键汉化 URL 无效：{error}"),
                 claude_chinese_window_payload(&app, &status),
             );
         }
@@ -739,7 +728,7 @@ pub async fn open_claude_chinese_window(
     let nav_handle = app.clone();
     let build_result = tauri::async_runtime::spawn_blocking(move || {
         tauri::WebviewWindowBuilder::new(&handle, label, tauri::WebviewUrl::External(url))
-            .title("Claude 中文窗口")
+            .title("Claude 一键汉化")
             .inner_size(1220.0, 860.0)
             .min_inner_size(980.0, 720.0)
             .initialization_script(script)
@@ -760,20 +749,18 @@ pub async fn open_claude_chinese_window(
     match build_result {
         Ok(Ok(window)) => {
             let _ = window.set_focus();
-            if let Ok(script) = claude_chinese_injection_script() {
-                let _ = window.eval(script);
-            }
+            let _ = window.eval(script);
             ok(
-                "Claude 中文窗口已打开。",
+                "Claude 一键汉化已打开。",
                 claude_chinese_window_payload(&app, &status),
             )
         }
         Ok(Err(error)) => failed(
-            &format!("Claude 中文窗口打开失败：{error}"),
+            &format!("Claude 一键汉化打开失败：{error}"),
             claude_chinese_window_payload(&app, &status),
         ),
         Err(error) => failed(
-            &format!("Claude 中文窗口后台任务失败：{error}"),
+            &format!("Claude 一键汉化后台任务失败：{error}"),
             claude_chinese_window_payload(&app, &status),
         ),
     }
@@ -824,7 +811,7 @@ pub fn load_claude_chinese_window_status(
 ) -> CommandResult<ClaudeChineseWindowPayload> {
     let status = claude_codex_pro_core::claude_desktop::detect_status();
     ok(
-        "Claude 中文窗口状态已读取。",
+        "Claude 一键汉化状态已读取。",
         claude_chinese_window_payload(&app, &status),
     )
 }
@@ -3924,61 +3911,6 @@ fn market_script_payload(script: &MarketScript, installed: &BTreeMap<String, Str
         "installedVersion": installed_version,
         "updateAvailable": is_installed && installed.get(&script.id).map(|version| version != &script.version).unwrap_or(false)
     })
-}
-
-fn claude_chinese_injection_script() -> anyhow::Result<String> {
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(
-                dir.join("assets")
-                    .join("inject")
-                    .join("claude-chinese-inject.js"),
-            );
-            candidates.push(
-                dir.join("..")
-                    .join("assets")
-                    .join("inject")
-                    .join("claude-chinese-inject.js"),
-            );
-            candidates.push(
-                dir.join("..")
-                    .join("..")
-                    .join("assets")
-                    .join("inject")
-                    .join("claude-chinese-inject.js"),
-            );
-        }
-    }
-    if let Ok(dir) = std::env::current_dir() {
-        candidates.push(
-            dir.join("assets")
-                .join("inject")
-                .join("claude-chinese-inject.js"),
-        );
-        candidates.push(
-            dir.join("..")
-                .join("..")
-                .join("assets")
-                .join("inject")
-                .join("claude-chinese-inject.js"),
-        );
-    }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("..")
-            .join("assets")
-            .join("inject")
-            .join("claude-chinese-inject.js"),
-    );
-    let candidate = candidates
-        .into_iter()
-        .find(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("assets/inject/claude-chinese-inject.js"));
-    std::fs::read_to_string(&candidate)
-        .with_context(|| format!("读取 {} 失败", candidate.display()))
 }
 
 fn claude_chinese_window_payload(

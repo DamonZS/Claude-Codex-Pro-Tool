@@ -4,7 +4,7 @@
   "version": "1.2.9",
   "identifier": "com.damonzs.claudecodexpro.manager",
   "build": {
-    "beforeDevCommand": "npm run vite:dev",
+    "beforeDevCommand": "cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev",
     "beforeBuildCommand": "npm run vite:build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
