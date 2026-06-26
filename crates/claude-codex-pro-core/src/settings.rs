@@ -654,12 +654,15 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     {
         target.insert(
             "memoryAssistMaxInjectedItems".to_string(),
-            Value::Number(serde_json::Number::from(clamp_memory_assist_max_injected_items(
-                value,
-            ))),
+            Value::Number(serde_json::Number::from(
+                clamp_memory_assist_max_injected_items(value),
+            )),
         );
     }
-    if let Some(value) = source.get("memoryAssistWorkspaceMode").and_then(Value::as_str) {
+    if let Some(value) = source
+        .get("memoryAssistWorkspaceMode")
+        .and_then(Value::as_str)
+    {
         target.insert(
             "memoryAssistWorkspaceMode".to_string(),
             Value::String(if value.trim().is_empty() {
@@ -684,6 +687,13 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
         let mut profiles = serde_json::from_value::<Vec<RelayProfile>>(Value::Array(value.clone()))
             .unwrap_or_default();
         preserve_official_mix_bearer_tokens(&mut profiles, target);
+        for profile in &mut profiles {
+            if profile.relay_mode == RelayMode::PureApi
+                || (profile.relay_mode == RelayMode::Official && profile.official_mix_api_key)
+            {
+                let _ = crate::relay_config::normalize_relay_profile_for_storage(profile);
+            }
+        }
         target.insert(
             "relayProfiles".to_string(),
             serde_json::to_value(profiles).unwrap_or_else(|_| Value::Array(Vec::new())),
@@ -1630,6 +1640,161 @@ experimental_bearer_token = "sk-existing""#
                 .unwrap();
         assert!(saved["relayProfiles"][1].get("baseUrl").is_none());
         assert!(saved["relayProfiles"][1].get("apiKey").is_none());
+    }
+
+    #[test]
+    fn settings_store_update_saves_editable_supplier_as_single_record() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+
+        let updated = store
+            .update(json!({
+                "relayProfilesEnabled": true,
+                "relayProfiles": [{
+                    "id": "gpt-plus",
+                    "name": "GPT Plus",
+                    "relayMode": "pureApi",
+                    "protocol": "responses",
+                    "model": "gpt-5.5",
+                    "baseUrl": "https://api.toporeduce.cn/v1",
+                    "apiKey": "sk-test",
+                    "configContents": "model = \"gpt-5.5\"\nmodel_provider = \"gpt-plus\"\n\n[model_providers.gpt-plus]\nname = \"gpt-plus\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://api.toporeduce.cn/v1\"\n",
+                    "authContents": "{\"OPENAI_API_KEY\":\"sk-test\"}\n"
+                }],
+                "activeRelayId": "gpt-plus"
+            }))
+            .unwrap();
+
+        assert_eq!(updated.relay_profiles.len(), 1);
+        let profile = &updated.relay_profiles[0];
+        assert_eq!(profile.id, "gpt-plus");
+        assert_eq!(profile.name, "GPT Plus");
+        assert_eq!(profile.base_url, "https://api.toporeduce.cn/v1");
+        assert_eq!(profile.api_key, "sk-test");
+        assert_eq!(updated.active_relay_id, "gpt-plus");
+        assert!(
+            profile
+                .config_contents
+                .contains("model_provider = \"gpt-plus\"")
+        );
+        assert!(
+            profile
+                .config_contents
+                .contains("[model_providers.gpt-plus]")
+        );
+
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["relayProfiles"].as_array().unwrap().len(), 1);
+        assert_eq!(saved["relayProfiles"][0]["id"], json!("gpt-plus"));
+        assert_eq!(saved["activeRelayId"], json!("gpt-plus"));
+        assert!(saved["relayProfiles"][0].get("baseUrl").is_none());
+        assert!(saved["relayProfiles"][0].get("apiKey").is_none());
+        assert!(
+            saved["relayProfiles"][0]["configContents"]
+                .as_str()
+                .unwrap()
+                .contains("model_provider = \"gpt-plus\"")
+        );
+    }
+
+    #[test]
+    fn settings_store_update_rewrites_supplier_config_to_edited_id() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+
+        let updated = store
+            .update(json!({
+                "relayProfilesEnabled": true,
+                "relayProfiles": [{
+                    "id": "gpt-plus",
+                    "name": "GPT Plus",
+                    "relayMode": "pureApi",
+                    "protocol": "responses",
+                    "model": "gpt-5.5",
+                    "baseUrl": "https://api.toporeduce.cn/v1",
+                    "apiKey": "sk-new",
+                    "configContents": "model = \"old-model\"\nmodel_provider = \"custom\"\n\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://old.example/v1\"\n",
+                    "authContents": "{\"OPENAI_API_KEY\":\"sk-old\"}\n"
+                }],
+                "activeRelayId": "gpt-plus"
+            }))
+            .unwrap();
+
+        assert_eq!(updated.relay_profiles.len(), 1);
+        let profile = &updated.relay_profiles[0];
+        assert_eq!(profile.id, "gpt-plus");
+        assert!(
+            profile
+                .config_contents
+                .contains("model_provider = \"gpt-plus\"")
+        );
+        assert!(
+            profile
+                .config_contents
+                .contains("[model_providers.gpt-plus]")
+        );
+        assert!(
+            !profile
+                .config_contents
+                .contains("model_provider = \"custom\"")
+        );
+        assert!(!profile.config_contents.contains("[model_providers.custom]"));
+        assert!(profile.config_contents.contains("model = \"gpt-5.5\""));
+        assert!(
+            profile
+                .config_contents
+                .contains("base_url = \"https://api.toporeduce.cn/v1\"")
+        );
+        assert_eq!(profile.base_url, "https://api.toporeduce.cn/v1");
+        assert_eq!(profile.api_key, "sk-new");
+        assert!(profile.auth_contents.contains("sk-new"));
+        assert_eq!(updated.active_relay_id, "gpt-plus");
+    }
+
+    #[test]
+    fn settings_store_save_roundtrips_editable_supplier_record() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+        let settings = BackendSettings {
+            relay_profiles_enabled: true,
+            active_relay_id: "gpt-plus".to_string(),
+            relay_profiles: vec![RelayProfile {
+                id: "gpt-plus".to_string(),
+                name: "GPT Plus".to_string(),
+                relay_mode: RelayMode::PureApi,
+                protocol: RelayProtocol::Responses,
+                model: "gpt-5.5".to_string(),
+                base_url: "https://api.toporeduce.cn/v1".to_string(),
+                api_key: "sk-test".to_string(),
+                config_contents: "model = \"gpt-5.5\"\nmodel_provider = \"gpt-plus\"\n\n[model_providers.gpt-plus]\nname = \"gpt-plus\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://api.toporeduce.cn/v1\"\n".to_string(),
+                auth_contents: "{\"OPENAI_API_KEY\":\"sk-test\"}\n".to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        let profile = &loaded.relay_profiles[0];
+        assert_eq!(profile.id, "gpt-plus");
+        assert_eq!(profile.name, "GPT Plus");
+        assert_eq!(profile.base_url, "https://api.toporeduce.cn/v1");
+        assert_eq!(profile.api_key, "sk-test");
+        assert_eq!(loaded.active_relay_id, "gpt-plus");
+        assert!(
+            profile
+                .config_contents
+                .contains("model_provider = \"gpt-plus\"")
+        );
+        assert!(
+            profile
+                .config_contents
+                .contains("[model_providers.gpt-plus]")
+        );
     }
 
     #[test]

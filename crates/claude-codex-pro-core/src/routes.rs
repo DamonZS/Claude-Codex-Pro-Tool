@@ -135,9 +135,7 @@ pub trait BridgeRuntimeService: Send + Sync {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
     async fn memory_candidates(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(
-            json!({"status": "failed", "message": "盘古记忆尚未接线", "candidates": []}),
-        )
+        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线", "candidates": []}))
     }
     async fn memory_approve(&self, _payload: Value) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))

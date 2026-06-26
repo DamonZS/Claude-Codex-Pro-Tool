@@ -61,11 +61,20 @@ pub fn diagnostic_log_path() -> PathBuf {
             }
         }
     }
+    if let Some(path) = std::env::var_os("CLAUDE_CODEX_PRO_DIAGNOSTIC_LOG").map(PathBuf::from) {
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
     crate::paths::default_diagnostic_log_path()
 }
 
 #[doc(hidden)]
 pub fn set_diagnostic_log_path_for_tests(path: Option<PathBuf>) {
+    set_diagnostic_log_path_override(path);
+}
+
+pub fn set_diagnostic_log_path_override(path: Option<PathBuf>) {
     let lock = TEST_LOG_PATH.get_or_init(|| Mutex::new(None));
     *lock.lock().expect("test log path lock poisoned") = path;
 }
@@ -75,4 +84,20 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_log_path_honors_runtime_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("custom.log");
+        set_diagnostic_log_path_override(Some(path.clone()));
+
+        assert_eq!(diagnostic_log_path(), path);
+
+        set_diagnostic_log_path_override(None);
+    }
 }

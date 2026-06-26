@@ -2474,6 +2474,11 @@ body {
   background: hsl(0 72% 61%);
 }
 
+.toast-card.running .toast-progress {
+  width: 42%;
+  animation: toast-running-progress 1100ms ease-in-out infinite;
+}
+
 .toast-icon {
   display: grid;
   place-items: center;
@@ -2526,6 +2531,16 @@ body {
 
   to {
     transform: scaleX(0);
+  }
+}
+
+@keyframes toast-running-progress {
+  from {
+    transform: translateX(-120%);
+  }
+
+  to {
+    transform: translateX(260%);
   }
 }
 
@@ -3447,6 +3462,19 @@ body {
   white-space: nowrap;
 }
 
+.status-action-tile {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+
+.status-action-tile:hover,
+.status-action-tile:focus-visible {
+  border-color: #5e6ad2;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.28), 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
 .ops-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3587,6 +3615,188 @@ body {
 
 .supplier-form-grid .span-2 {
   grid-column: 1 / -1;
+}
+
+.supplier-layout {
+  grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.72fr);
+}
+
+.supplier-workbench {
+  display: grid;
+  gap: 14px;
+}
+
+.supplier-headline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid #24272d;
+  border-radius: 8px;
+  background: #141516;
+  padding: 13px;
+}
+
+.supplier-headline div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.supplier-headline span,
+.supplier-headline small,
+.supplier-inline-note {
+  color: #8a8f98;
+  font-size: 12px;
+}
+
+.supplier-headline strong {
+  overflow: hidden;
+  color: #f7f8f8;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-toolbar,
+.supplier-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.supplier-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.supplier-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #24272d;
+  border-radius: 8px;
+  background: #111214;
+  padding: 12px;
+}
+
+.supplier-card.selected {
+  border-color: #5e6ad2;
+  background: linear-gradient(180deg, rgba(94, 106, 210, 0.14), rgba(94, 106, 210, 0.03)), #111214;
+}
+
+.supplier-card-main,
+.supplier-title-line {
+  min-width: 0;
+}
+
+.supplier-card-main {
+  display: grid;
+  gap: 5px;
+}
+
+.supplier-title-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.supplier-title-line strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f7f8f8;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-card-main span,
+.supplier-card-main small {
+  overflow: hidden;
+  color: #9aa2ad;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(94, 106, 210, 0.42);
+  border-radius: 999px;
+  background: rgba(94, 106, 210, 0.16);
+  color: #cdd3ff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+}
+
+.supplier-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.supplier-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.74fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.supplier-main-editor,
+.supplier-config-preview {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.supplier-preset-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.supplier-preset-strip button {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #2b2d32;
+  border-radius: 8px;
+  background: #141516;
+  color: #f7f8f8;
+  cursor: pointer;
+  padding: 10px;
+  text-align: left;
+}
+
+.supplier-preset-strip button:hover {
+  border-color: #5e6ad2;
+  background: #181a20;
+}
+
+.supplier-preset-strip strong,
+.supplier-preset-strip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-preset-strip span {
+  color: #8a8f98;
+  font-size: 12px;
+}
+
+.ops-select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #2b2d32;
+  border-radius: 6px;
+  background: #141516;
+  color: #f7f8f8;
+  padding: 9px 10px;
+  font: inherit;
 }
 
 .ops-status-row {

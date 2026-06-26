@@ -1,0 +1,1214 @@
+{
+  "c71860c77-DNv5VYLZ.js": [
+    [
+      "\"Egress Requirements\"",
+      "\"出口要求\""
+    ],
+    [
+      "\"Gateway base URL\"",
+      "\"第三方 URL\""
+    ],
+    [
+      "\"Gateway API key\"",
+      "\"第三方 API Key\""
+    ],
+    [
+      "\"Gateway auth scheme\"",
+      "\"第三方认证方式\""
+    ],
+    [
+      "\"Gateway extra headers\"",
+      "\"第三方额外请求头\""
+    ],
+    [
+      "\"Allow desktop extensions\"",
+      "\"允许桌面扩展\""
+    ],
+    [
+      "\"Show extension directory\"",
+      "\"显示扩展目录\""
+    ],
+    [
+      "\"Require signed extensions\"",
+      "\"要求扩展签名\""
+    ],
+    [
+      "\"Allow user-added MCP servers\"",
+      "\"允许用户添加 MCP 服务器\""
+    ],
+    [
+      "\"Allow Claude Code tab\"",
+      "\"允许 Claude Code 标签页\""
+    ],
+    [
+      "\"Secure VM features\"",
+      "\"安全虚拟机功能\""
+    ],
+    [
+      "\"Require full VM sandbox\"",
+      "\"要求完整虚拟机沙盒\""
+    ],
+    [
+      "\"Allowed egress hosts\"",
+      "\"允许的出口主机\""
+    ],
+    [
+      "\"OpenTelemetry collector endpoint\"",
+      "\"OpenTelemetry 采集器端点\""
+    ],
+    [
+      "\"OpenTelemetry exporter protocol\"",
+      "\"OpenTelemetry 导出协议\""
+    ],
+    [
+      "\"OpenTelemetry exporter headers\"",
+      "\"OpenTelemetry 导出请求头\""
+    ],
+    [
+      "\"Auto-update enforcement window\"",
+      "\"自动更新强制窗口\""
+    ],
+    [
+      "\"Block auto-updates\"",
+      "\"禁止自动更新\""
+    ],
+    [
+      "\"Skip login-mode chooser\"",
+      "\"跳过登录模式选择\""
+    ],
+    [
+      "\"Required organization\"",
+      "\"必需的组织\""
+    ],
+    [
+      "\"Inference provider\"",
+      "\"推理供应商\""
+    ],
+    [
+      "\"Connection\"",
+      "\"连接方式\""
+    ],
+    [
+      "\"Sandbox & workspace\"",
+      "\"沙盒与工作区\""
+    ],
+    [
+      "\"Connectors & extensions\"",
+      "\"连接器与扩展\""
+    ],
+    [
+      "\"Telemetry & updates\"",
+      "\"遥测与更新\""
+    ],
+    [
+      "\"Usage limits\"",
+      "\"使用限制\""
+    ],
+    [
+      "\"Plugins & skills\"",
+      "\"插件与技能\""
+    ],
+    [
+      "gateway:\"自定义\"",
+      "gateway:\"第三方\""
+    ],
+    [
+      "gateway:\"Gateway\"",
+      "gateway:\"第三方\""
+    ]
+  ],
+  "__claude_zh_cn_hardcoded_ui__.js": [
+    [
+      "\"工件\"",
+      "\"Artifacts\""
+    ],
+    [
+      "label:\"项目\"",
+      "label:\"Projects\""
+    ],
+    [
+      "[\"project\",\"项目\"]",
+      "[\"project\",\"Project\"]"
+    ],
+    [
+      "label:\"实时工件\"",
+      "label:\"Live artifacts\""
+    ],
+    [
+      "label:\"实时 Artifacts\"",
+      "label:\"Live artifacts\""
+    ],
+    [
+      "\"Theme\"",
+      "\"主题\""
+    ],
+    [
+      "\"Interface font\"",
+      "\"界面字体\""
+    ],
+    [
+      "\"Font for the Claude Code interface — menus, sidebar, and chat.\"",
+      "\"Claude Code 界面字体，用于菜单、侧边栏和聊天。\""
+    ],
+    [
+      "\"Transcript text size\"",
+      "\"对话记录文字大小\""
+    ],
+    [
+      "\"Size of the conversation transcript text.\"",
+      "\"对话记录文字的大小。\""
+    ],
+    [
+      "\"Code appearance\"",
+      "\"代码外观\""
+    ],
+    [
+      "\"Set a custom monospace font for code and terminal.\"",
+      "\"为代码和终端设置自定义等宽字体。\""
+    ],
+    [
+      "\"Local sessions\"",
+      "\"本地会话\""
+    ],
+    [
+      "\"Enable remote control by default\"",
+      "\"默认启用远程控制\""
+    ],
+    [
+      "\"Automatically connect new local sessions to Remote Control so you can continue them from the CLI or claude.ai/code.\"",
+      "\"自动将新的本地会话连接到远程控制，以便你可以从 CLI 或 claude.ai/code 继续使用。\""
+    ],
+    [
+      "\"When Claude pushes changes to a branch, it automatically opens a pull request without asking first. Applies to remote sessions only.\"",
+      "\"Claude 将更改推送到分支时，会自动打开拉取请求，而不会先询问。仅适用于远程会话。\""
+    ],
+    [
+      "\"Discard Changes\"",
+      "\"放弃更改\""
+    ],
+    [
+      "\"Discard changes\"",
+      "\"放弃更改\""
+    ],
+    [
+      "\"Discard changes?\"",
+      "\"放弃更改？\""
+    ],
+    [
+      "\"Apply Changes\"",
+      "\"应用更改\""
+    ],
+    [
+      "\"Apply changes\"",
+      "\"应用更改\""
+    ],
+    [
+      "\"Shown in the model picker. Leave blank to auto-format from the ID.\"",
+      "\"显示在模型选择器中。留空将根据 ID 自动格式化。\""
+    ],
+    [
+      "\"Offer 1M-context variant\"",
+      "\"提供 1M 上下文变体\""
+    ],
+    [
+      "\"Model ID\"",
+      "\"模型 ID\""
+    ],
+    [
+      "\"Allowed surfaces\"",
+      "\"允许的功能界面\""
+    ],
+    [
+      "\"Enable the Cowork tab. Claude works on longer tasks like research, analysis, and documents.\"",
+      "\"启用 Cowork 标签页。Claude 可处理研究、分析和文档等长任务。\""
+    ],
+    [
+      "\"Enable the Code tab. Claude writes and runs code.\"",
+      "\"启用 Code 标签页。Claude 可编写并运行代码。\""
+    ],
+    [
+      "\"General restrictions\"",
+      "\"通用限制\""
+    ],
+    [
+      "\"These apply regardless of which surfaces are enabled.\"",
+      "\"无论启用哪些功能界面，这些限制都会生效。\""
+    ],
+    [
+      "\"Hostnames the agent's tools may reach from the Cowork and Code tabs. Also surfaced under Egress Requirements.\"",
+      "\"Agent 工具可从 Cowork 和 Code 标签页访问的主机名。也会显示在出口要求中。\""
+    ],
+    [
+      "\"Applies to both the Cowork and Code tabs.\"",
+      "\"同时适用于 Cowork 和 Code 标签页。\""
+    ],
+    [
+      "Applies to both the Cowork and Code tabs.",
+      "同时适用于 Cowork 和 Code 标签页。"
+    ],
+    [
+      "\"Only affects **tool calls**. Inference and MCP traffic are covered by their own allowlists elsewhere.\"",
+      "\"仅影响 **工具调用**。推理和 MCP 流量由其他位置的允许列表控制。\""
+    ],
+    [
+      "Only affects **tool calls**. Inference and MCP traffic are covered by their own allowlists elsewhere.",
+      "仅影响 **工具调用**。推理和 MCP 流量由其他位置的允许列表控制。"
+    ],
+    [
+      "\"When unset, only the inference endpoint is reachable from the sandbox; the agent's package installs (pip/npm) and web fetches will fail with a 403.\"",
+      "\"未设置时，沙盒只能访问推理端点；Agent 的包安装（pip/npm）和网页抓取将因 403 失败。\""
+    ],
+    [
+      "When unset, only the inference endpoint is reachable from the sandbox; the agent's package installs (pip/npm) and web fetches will fail with a 403.",
+      "未设置时，沙盒只能访问推理端点；Agent 的包安装（pip/npm）和网页抓取将因 403 失败。"
+    ],
+    [
+      "\"Accepts exact hostnames (`api.github.com`), wildcards (`*.corp.com` matches one subdomain level), and `*` to allow all.\"",
+      "\"接受精确主机名（`api.github.com`）、通配符（`*.corp.com` 匹配一级子域）和 `*`（允许全部）。\""
+    ],
+    [
+      "Accepts exact hostnames (`api.github.com`), wildcards (`*.corp.com` matches one subdomain level), and `*` to allow all.",
+      "接受精确主机名（`api.github.com`）、通配符（`*.corp.com` 匹配一级子域）和 `*`（允许全部）。"
+    ],
+    [
+      "\"Wildcards don't cross schemes. `*.corp.com` matches `docs.corp.com` but not `corp.com` itself; add both if you need the apex.\"",
+      "\"通配符不跨越层级。`*.corp.com` 匹配 `docs.corp.com`，不匹配 `corp.com` 本身；需要顶级域时请同时添加两者。\""
+    ],
+    [
+      "Wildcards don't cross schemes. `*.corp.com` matches `docs.corp.com` but not `corp.com` itself; add both if you need the apex.",
+      "通配符不跨越层级。`*.corp.com` 匹配 `docs.corp.com`，不匹配 `corp.com` 本身；需要顶级域时请同时添加两者。"
+    ],
+    [
+      "\"IP literals and localhost always resolve regardless of this list; this is a public-egress filter, not a sandbox.\"",
+      "\"IP 字面量和 localhost 始终可解析，不受此列表影响；这是公共出站过滤器，不是沙盒。\""
+    ],
+    [
+      "IP literals and localhost always resolve regardless of this list; this is a public-egress filter, not a sandbox.",
+      "IP 字面量和 localhost 始终可解析，不受此列表影响；这是公共出站过滤器，不是沙盒。"
+    ],
+    [
+      "\"Hosts you add here also need to be open on your network firewall. See Egress Requirements for the full allowlist.\"",
+      "\"你在此添加的主机也需在网络防火墙上开放。完整允许列表请查看出口要求。\""
+    ],
+    [
+      "Hosts you add here also need to be open on your network firewall. See Egress Requirements for the full allowlist.",
+      "你在此添加的主机也需在网络防火墙上开放。完整允许列表请查看出口要求。"
+    ],
+    [
+      "\"Discard unsaved changes?\"",
+      "\"放弃未保存的更改？\""
+    ],
+    [
+      "\"This configuration has changes that haven't been saved. They will be lost.\"",
+      "\"此配置有未保存的更改。这些更改将丢失。\""
+    ],
+    [
+      "\"Keep editing\"",
+      "\"继续编辑\""
+    ],
+    [
+      "defaultMessage:\"Discard\",id:\"nmpevlUATU\"",
+      "defaultMessage:\"放弃\",id:\"nmpevlUATU\""
+    ],
+    [
+      "\"High-contrast dark theme\"",
+      "\"高对比度深色主题\""
+    ],
+    [
+      "\"Use a darker, near-black background when dark mode is on.\"",
+      "\"深色模式开启时使用更深、接近纯黑的背景。\""
+    ],
+    [
+      "defaultMessage:\"Small\",id:\"BPnT3TVya+\"",
+      "defaultMessage:\"小\",id:\"BPnT3TVya+\""
+    ],
+    [
+      "defaultMessage:\"Medium\",id:\"ovJ26CKo4Q\"",
+      "defaultMessage:\"中\",id:\"ovJ26CKo4Q\""
+    ],
+    [
+      "defaultMessage:\"Large\",id:\"/06iwcQHPz\"",
+      "defaultMessage:\"大\",id:\"/06iwcQHPz\""
+    ],
+    [
+      "\"Dynamic workflows\"",
+      "\"动态工作流\""
+    ],
+    [
+      "\"Let Claude run multiple agents in parallel for complex tasks. Workflows can use a lot of your usage limit quickly.\"",
+      "\"允许 Claude 为复杂任务并行运行多个 Agent。工作流可能很快消耗你的使用额度。\""
+    ],
+    [
+      "\"Dynamic workflows run many subagents in parallel and can use a lot of your usage limit. Stop them any time from the <link>tasks panel</link>.\"",
+      "\"动态工作流会并行运行多个子 Agent，并可能消耗大量使用额度。你可随时从<link>任务面板</link>停止它们。\""
+    ],
+    [
+      "\"Dynamic workflows are disabled by your organization's policy.\"",
+      "\"动态工作流已被你的组织策略禁用。\""
+    ],
+    [
+      "\"Cowork files\"",
+      "\"Cowork 文件\""
+    ],
+    [
+      "\"Your artifacts and scheduled tasks are stored at {path}.\"",
+      "\"你的工件和计划任务存储在 {path}。\""
+    ],
+    [
+      "\"Change location for Cowork files?\"",
+      "\"更改 Cowork 文件位置？\""
+    ],
+    [
+      "\"Copy files to {location} and restart the app. Your existing files will remain in {previousLocation}.\"",
+      "\"将文件复制到 {location} 并重启应用。你的现有文件将保留在 {previousLocation}。\""
+    ],
+    [
+      "\"{provider} returned an error\"",
+      "\"{provider} 返回错误\""
+    ],
+    [
+      "\"Your connection works, but the provider rejected a test request. Often a model-access or quota issue.\"",
+      "\"连接正常，但提供商拒绝了测试请求。这通常是模型访问权限或配额问题。\""
+    ],
+    [
+      "\"Connectors have moved to Customize. Head there to browse, connect, and manage them.\"",
+      "\"连接器已移至“自定义”。前往那里浏览、连接和管理连接器。\""
+    ],
+    [
+      "Connectors have moved to Customize. Head there to browse, connect, and manage them.",
+      "连接器已移至“自定义”。前往那里浏览、连接和管理连接器。"
+    ],
+    [
+      "\"Connectors have moved to <link>Customize</link>. Head there to browse, connect, and manage them.\"",
+      "\"连接器已移至<link>自定义</link>。前往那里浏览、连接和管理连接器。\""
+    ],
+    [
+      "\"Skills have moved to Customize.\"",
+      "\"技能已移至“自定义”。\""
+    ],
+    [
+      "Skills have moved to Customize.",
+      "技能已移至“自定义”。"
+    ],
+    [
+      "\"Skills have moved to <link>Customize</link>.\"",
+      "\"技能已移至<link>自定义</link>。\""
+    ],
+    [
+      "\"Generate code, documents, and designs in a dedicated window alongside your conversation.\"",
+      "\"在对话旁的专用窗口中生成代码、文档和设计。\""
+    ],
+    [
+      "Generate code, documents, and designs in a dedicated window alongside your conversation.",
+      "在对话旁的专用窗口中生成代码、文档和设计。"
+    ],
+    [
+      "\"Create dynamic artifacts that stay up-to-date using live data from your connectors.\"",
+      "\"使用来自连接器的实时数据，创建保持更新的动态工件。\""
+    ],
+    [
+      "Create dynamic artifacts that stay up-to-date using live data from your connectors.",
+      "使用来自连接器的实时数据，创建保持更新的动态工件。"
+    ],
+    [
+      "\"Create dynamic artifacts that stay up-to-date using live data from <link>your connectors</link>.\"",
+      "\"使用来自<link>你的连接器</link>的实时数据，创建保持更新的动态工件。\""
+    ],
+    [
+      "\"Claude will keep these in mind across chats and Cowork within <aupLink>Anthropic's guidelines</aupLink>. <learnMoreLink>Learn more</learnMoreLink>\"",
+      "\"Claude 会在聊天和 Cowork 中记住这些内容，并遵循<aupLink>Anthropic 的指南</aupLink>。<learnMoreLink>了解更多</learnMoreLink>\""
+    ],
+    [
+      "Claude will keep these in mind across chats and Cowork within <aupLink>Anthropic's guidelines</aupLink>. <learnMoreLink>Learn more</learnMoreLink>",
+      "Claude 会在聊天和 Cowork 中记住这些内容，并遵循<aupLink>Anthropic 的指南</aupLink>。<learnMoreLink>了解更多</learnMoreLink>"
+    ],
+    [
+      "\"Claude will keep these in mind across chats and Cowork within Anthropic's guidelines. Learn more\"",
+      "\"Claude 会在聊天和 Cowork 中记住这些内容，并遵循 Anthropic 的指南。了解更多\""
+    ],
+    [
+      "Claude will keep these in mind across chats and Cowork within Anthropic's guidelines. Learn more",
+      "Claude 会在聊天和 Cowork 中记住这些内容，并遵循 Anthropic 的指南。了解更多"
+    ],
+    [
+      "\"Claude will keep these in mind across chats and Cowork within Anthropic’s guidelines. Learn more\"",
+      "\"Claude 会在聊天和 Cowork 中记住这些内容，并遵循 Anthropic 的指南。了解更多\""
+    ],
+    [
+      "Claude will keep these in mind across chats and Cowork within Anthropic’s guidelines. Learn more",
+      "Claude 会在聊天和 Cowork 中记住这些内容，并遵循 Anthropic 的指南。了解更多"
+    ],
+    [
+      "\"Configured model not available\"",
+      "\"配置的模型不可用\""
+    ],
+    [
+      "\"Your gateway couldn't serve {model}. This model may not be configured on your gateway, or access may be restricted.\"",
+      "\"第三方无法提供 {model}。该模型可能未在第三方配置，或访问受限。\""
+    ],
+    [
+      "\"Your gateway couldn’t serve {model}. This model may not be configured on your gateway, or access may be restricted.\"",
+      "\"第三方无法提供 {model}。该模型可能未在第三方配置，或访问受限。\""
+    ],
+    [
+      "\"Gateway base URL\"",
+      "\"第三方 URL\""
+    ],
+    [
+      "\"Gateway API key\"",
+      "\"第三方 API Key\""
+    ],
+    [
+      "\"Gateway auth scheme\"",
+      "\"第三方认证方式\""
+    ],
+    [
+      "\"Gateway extra headers\"",
+      "\"第三方额外请求头\""
+    ],
+    [
+      "\"Gateway SSO IdP (OIDC)\"",
+      "\"第三方 SSO IdP (OIDC)\""
+    ],
+    [
+      "\"Gateway sign-in (OIDC)\"",
+      "\"第三方登录 (OIDC)\""
+    ],
+    [
+      "\"Interactive sign-in\"",
+      "\"交互式登录\""
+    ],
+    [
+      "\"Helper script\"",
+      "\"辅助脚本\""
+    ],
+    [
+      "\"Link URL\"",
+      "\"链接 URL\""
+    ],
+    [
+      "\"Optional HTTPS URL. The banner text becomes a link when set.\"",
+      "\"可选 HTTPS URL。设置后，横幅文本会变成链接。\""
+    ],
+    [
+      "\"Show banner\"",
+      "\"显示横幅\""
+    ],
+    [
+      "\"Banner text\"",
+      "\"横幅文本\""
+    ],
+    [
+      "\"Single line, truncated on overflow. Maximum 200 characters.\"",
+      "\"单行显示，溢出时截断。最多 200 个字符。\""
+    ],
+    [
+      "\"Internal use only\"",
+      "\"仅供内部使用\""
+    ],
+    [
+      "\"Background color\"",
+      "\"背景颜色\""
+    ],
+    [
+      "\"Six-digit hex (#RRGGBB). Applied exactly as configured; not theme-adapted.\"",
+      "\"六位十六进制颜色（#RRGGBB）。将完全按配置应用，不会适配主题。\""
+    ],
+    [
+      "\"Text color\"",
+      "\"文本颜色\""
+    ],
+    [
+      "\"Appearance\"",
+      "\"组织横幅\""
+    ],
+    [
+      "\"MCP servers\"",
+      "\"MCP 服务器\""
+    ],
+    [
+      "\"Blank\"",
+      "\"空白\""
+    ],
+    [
+      "\"Microsoft365\"",
+      "\"Microsoft 365\""
+    ],
+    [
+      "\"OpenTelemetry collector endpoint\"",
+      "\"OpenTelemetry 采集器端点\""
+    ],
+    [
+      "\"OpenTelemetry exporter headers\"",
+      "\"OpenTelemetry 导出器标头\""
+    ],
+    [
+      "\"Telemetry config conflict\"",
+      "\"遥测配置冲突\""
+    ],
+    [
+      "\"Local MCP servers\"",
+      "\"本地 MCP 服务器\""
+    ],
+    [
+      "\"Known MCP servers\"",
+      "\"已知 MCP 服务器\""
+    ],
+    [
+      "\"Your MCP servers\"",
+      "\"你的 MCP 服务器\""
+    ],
+    [
+      "\"Usage limits\"",
+      "\"使用限制\""
+    ],
+    [
+      "\"Max tokens per window\"",
+      "\"每个窗口的最大令牌数\""
+    ],
+    [
+      "\"Require signed extensions\"",
+      "\"需要签名的扩展\""
+    ],
+    [
+      "\"Allow Claude Code tab\"",
+      "\"允许 Claude Code 选项卡\""
+    ],
+    [
+      "\"No organization plugins found\"",
+      "\"没有组织插件\""
+    ],
+    [
+      "\"Add desktop extensions\"",
+      "\"添加桌面扩展\""
+    ],
+    [
+      "\"Link URL (optional)\"",
+      "\"链接 URL（可选）\""
+    ],
+    [
+      "\"Headers helper script\"",
+      "\"Headers 辅助脚本\""
+    ],
+    [
+      "\"Absolute path\"",
+      "\"绝对路径\""
+    ],
+    [
+      "\"Tool policy\"",
+      "\"工具策略\""
+    ],
+    [
+      "\"Lock the approval state for specific tools. Unlisted tools stay user-controlled.\"",
+      "\"锁定特定工具的审批状态。未列出的工具仍由用户控制。\""
+    ],
+    [
+      "\"Auto-register (dynamic client registration)\"",
+      "\"自动注册（动态客户端注册）\""
+    ],
+    [
+      "\"Bring your own client\"",
+      "\"使用自己的客户端\""
+    ],
+    [
+      "\"Streamable HTTP\"",
+      "\"流式 HTTP\""
+    ],
+    [
+      "\"SSE (legacy)\"",
+      "\"SSE（旧版）\""
+    ],
+    [
+      "\"Local command (stdio)\"",
+      "\"本地命令（stdio）\""
+    ],
+    [
+      "\"Item 1\"",
+      "\"项 1\""
+    ],
+    [
+      "\"Invalid configuration\"",
+      "\"无效配置\""
+    ],
+    [
+      "\"Hi, I'm Claude. How can I help you today?\"",
+      "\"你好，我是 Claude。今天我能帮你什么？\""
+    ],
+    [
+      "\"Hi, I’m Claude. How can I help you today?\"",
+      "\"你好，我是 Claude。今天我能帮你什么？\""
+    ],
+    [
+      "\"Hi, I'm Claude. How can I helpyou today?\"",
+      "\"你好，我是 Claude。今天我能帮你什么？\""
+    ],
+    [
+      "\"Hi, I’m Claude. How can I helpyou today?\"",
+      "\"你好，我是 Claude。今天我能帮你什么？\""
+    ],
+    [
+      "\"Allowed egress hosts\"",
+      "\"允许的出站主机\""
+    ],
+    [
+      "\"Disable claude:// deep-link handling\"",
+      "\"禁用 claude:// 深度链接处理\""
+    ],
+    [
+      "\"Enable Main Process Debugger\"",
+      "\"启用主进程调试器\""
+    ],
+    [
+      "\"Record Performance Trace\"",
+      "\"记录性能跟踪\""
+    ],
+    [
+      "\"Write Main Process Heap Snapshot\"",
+      "\"写入主进程堆快照\""
+    ],
+    [
+      "\"Record Memory Trace (auto-stop)\"",
+      "\"记录内存跟踪（自动停止）\""
+    ],
+    [
+      "\"server-name\"",
+      "\"服务器名称\""
+    ],
+    [
+      "\"tool name\"",
+      "\"工具名称\""
+    ],
+    [
+      "\"+ Add server policy\"",
+      "\"+ 添加服务器策略\""
+    ],
+    [
+      "\"Open Setup\"",
+      "\"打开设置向导\""
+    ],
+    [
+      "\"Sort by\"",
+      "\"排序方式\""
+    ],
+    [
+      "\"Recency\"",
+      "\"最近\""
+    ],
+    [
+      "\"Alphabetically\"",
+      "\"按字母顺序\""
+    ],
+    [
+      "\"Created time\"",
+      "\"创建时间\""
+    ],
+    [
+      "\"Custom groups\"",
+      "\"自定义分组\""
+    ],
+    [
+      "\"Avatar\"",
+      "\"头像\""
+    ],
+    [
+      "\"Instructions for Claude\"",
+      "\"给 Claude 的指令\""
+    ],
+    [
+      "\"Preferences\"",
+      "\"偏好设置\""
+    ],
+    [
+      "\"Get notified when Claude has finished a response. Useful for long-running tasks.\"",
+      "\"Claude 完成回复时接收通知。对长时间运行的任务很有用。\""
+    ],
+    [
+      "\"You’re running Claude through your organization’s own inference provider (cc.freemodel.dev). Your conversations are sent there, not to Anthropic, and are governed by your organization’s agreement with that provider.\"",
+      "\"你正在通过组织自己的推理提供方 (cc.freemodel.dev) 运行 Claude。你的对话会发送到该提供方，而不是 Anthropic，并受你的组织与该提供方之间协议的约束。\""
+    ],
+    [
+      "You’re running Claude through your organization’s own inference provider (cc.freemodel.dev). Your conversations are sent there, not to Anthropic, and are governed by your organization’s agreement with that provider.",
+      "你正在通过组织自己的推理提供方 (cc.freemodel.dev) 运行 Claude。你的对话会发送到该提供方，而不是 Anthropic，并受你的组织与该提供方之间协议的约束。"
+    ],
+    [
+      "\"What Anthropic doesn’t see\"",
+      "\"Anthropic 不会看到的内容\""
+    ],
+    [
+      "\"Your prompts, Claude’s responses, or any conversation content\"",
+      "\"你的提示、Claude 的回复或任何对话内容\""
+    ],
+    [
+      "\"Your files, code, or workspace contents\"",
+      "\"你的文件、代码或工作区内容\""
+    ],
+    [
+      "\"Your identity or account details\"",
+      "\"你的身份或账号详情\""
+    ],
+    [
+      "\"What Anthropic may receive (configured by your organization)\"",
+      "\"Anthropic 可能收到的内容（由你的组织配置）\""
+    ],
+    [
+      "\"Crash reports and error diagnostics, so we can fix bugs\"",
+      "\"崩溃报告和错误诊断，用于修复问题\""
+    ],
+    [
+      "\"Anonymous usage metrics including usage counts (not conversation content)\"",
+      "\"包含使用次数的匿名使用指标（不包含对话内容）\""
+    ],
+    [
+      "\"Update-check requests, so the app can stay current\"",
+      "\"更新检查请求，用于保持应用为最新版本\""
+    ],
+    [
+      "\"A diagnostic report, only if you explicitly choose “Send to Anthropic”\"",
+      "\"诊断报告，仅当你明确选择“发送给 Anthropic”时才会发送\""
+    ],
+    [
+      "\"New task\"",
+      "\"新建任务\""
+    ],
+    [
+      "\"New session\"",
+      "\"新建会话\""
+    ],
+    [
+      "\"New Projects\"",
+      "\"新建项目\""
+    ],
+    [
+      "\"Scheduled\"",
+      "\"已安排\""
+    ],
+    [
+      "\"Customize\"",
+      "\"自定义\""
+    ],
+    [
+      "\"Status\"",
+      "\"状态\""
+    ],
+    [
+      "\"Last activity\"",
+      "\"最近活动\""
+    ],
+    [
+      "\"Group by\"",
+      "\"分组方式\""
+    ],
+    [
+      "\"Date\"",
+      "\"日期\""
+    ],
+    [
+      "\"Custom groups\"",
+      "\"自定义分组\""
+    ],
+    [
+      "\"None\"",
+      "\"无\""
+    ],
+    [
+      "\"1d\"",
+      "\"1天\""
+    ],
+    [
+      "\"3d\"",
+      "\"3天\""
+    ],
+    [
+      "\"7d\"",
+      "\"7天\""
+    ],
+    [
+      "\"30d\"",
+      "\"30天\""
+    ],
+    [
+      "\"All projects\"",
+      "\"所有项目\""
+    ],
+    [
+      "\"View all\"",
+      "\"查看全部\""
+    ],
+    [
+      "\"Viewall\"",
+      "\"查看全部\""
+    ],
+    [
+      "\"Cowork\"",
+      "\"协作\""
+    ],
+    [
+      "\"Code\"",
+      "\"代码\""
+    ],
+    [
+      "\"Create your first scheduled task\"",
+      "\"创建你的第一个计划任务\""
+    ],
+    [
+      "\"Daily brief\"",
+      "\"每日简报\""
+    ],
+    [
+      "\"Weekly review\"",
+      "\"每周回顾\""
+    ],
+    [
+      "\"Run tasks on a schedule or whenever you need them. Type /schedule in any existing task to set one up.\"",
+      "\"按计划或在需要时运行任务。在任何现有任务中输入 /schedule 即可设置。\""
+    ],
+    [
+      "\"Tasks\"",
+      "\"任务\""
+    ],
+    [
+      "\"Active\"",
+      "\"活跃\""
+    ],
+    [
+      "\"Archived\"",
+      "\"已归档\""
+    ],
+    [
+      "\"All\"",
+      "\"全部\""
+    ],
+    [
+      "\"Local\"",
+      "\"本地\""
+    ],
+    [
+      "\"Cloud\"",
+      "\"云端\""
+    ],
+    [
+      "\"Environment\"",
+      "\"环境\""
+    ],
+    [
+      "\"Recents\"",
+      "\"最近\""
+    ]
+  ],
+  "cbc59a8af-DbOQVv5S.js": [
+    [
+      "label:\"Chat\"",
+      "label:\"聊天\""
+    ],
+    [
+      "label:\"Cowork\"",
+      "label:\"协作\""
+    ],
+    [
+      "label:\"Code\"",
+      "label:\"代码\""
+    ],
+    [
+      "label:\"Operon\"",
+      "label:\"实验室\""
+    ],
+    [
+      "label:\"项目\"",
+      "label:\"Projects\""
+    ],
+    [
+      "label:\"Scheduled\"",
+      "label:\"已安排\""
+    ],
+    [
+      "label:\"Tasks\"",
+      "label:\"任务\""
+    ],
+    [
+      "label:\"Pull Requests\"",
+      "label:\"拉取请求\""
+    ],
+    [
+      "label:\"Replay\"",
+      "label:\"回放\""
+    ],
+    [
+      "label:\"Dispatch\"",
+      "label:\"调度\""
+    ],
+    [
+      "label:\"Ideas\"",
+      "label:\"想法\""
+    ],
+    [
+      "label:\"Apps\"",
+      "label:\"应用\""
+    ],
+    [
+      "label:\"Security\"",
+      "label:\"安全\""
+    ],
+    [
+      "label:\"Customize\"",
+      "label:\"自定义\""
+    ],
+    [
+      "\"Custom\"",
+      "\"自定义\""
+    ],
+    [
+      "label:\"Status\"",
+      "label:\"状态\""
+    ],
+    [
+      "label:\"Environment\"",
+      "label:\"环境\""
+    ],
+    [
+      "chat:\"New chat\"",
+      "chat:\"新建聊天\""
+    ],
+    [
+      "cowork:\"New task\"",
+      "cowork:\"新建任务\""
+    ],
+    [
+      "code:\"New session\"",
+      "code:\"新建会话\""
+    ],
+    [
+      "operon:\"New session\"",
+      "operon:\"新建会话\""
+    ],
+    [
+      "oo=\"Local\"",
+      "oo=\"本地\""
+    ],
+    [
+      "io=\"Cloud\"",
+      "io=\"云端\""
+    ],
+    [
+      "ro=\"Remote Control\"",
+      "ro=\"远程控制\""
+    ],
+    [
+      "co=\"All\"",
+      "co=\"全部\""
+    ],
+    [
+      "const Ea=\"Scheduled\"",
+      "const Ea=\"已安排\""
+    ],
+    [
+      "[\"active\",\"Active\"]",
+      "[\"active\",\"活跃\"]"
+    ],
+    [
+      "[\"archived\",\"Archived\"]",
+      "[\"archived\",\"已归档\"]"
+    ],
+    [
+      "[\"all\",\"All\"]",
+      "[\"all\",\"全部\"]"
+    ],
+    [
+      "[\"0\",\"All\"]",
+      "[\"0\",\"全部\"]"
+    ],
+    [
+      "[\"1\",\"1d\"]",
+      "[\"1\",\"1天\"]"
+    ],
+    [
+      "[\"3\",\"3d\"]",
+      "[\"3\",\"3天\"]"
+    ],
+    [
+      "[\"7\",\"7d\"]",
+      "[\"7\",\"7天\"]"
+    ],
+    [
+      "[\"14\",\"14d\"]",
+      "[\"14\",\"14天\"]"
+    ],
+    [
+      "[\"30\",\"30d\"]",
+      "[\"30\",\"30天\"]"
+    ],
+    [
+      "\"Date\"",
+      "\"日期\""
+    ],
+    [
+      "\"None\"",
+      "\"无\""
+    ],
+    [
+      "[\"project\",\"项目\"]",
+      "[\"project\",\"Project\"]"
+    ],
+    [
+      "[\"state\",\"State\"]",
+      "[\"state\",\"状态\"]"
+    ],
+    [
+      "?\"All\":",
+      "?\"全部\":"
+    ],
+    [
+      "children:\"Pinned\"",
+      "children:\"已固定\""
+    ],
+    [
+      "children:\"Drag to pin\"",
+      "children:\"拖拽固定\""
+    ],
+    [
+      "\"Drop here\"",
+      "\"放在这里\""
+    ],
+    [
+      "\"Let go\"",
+      "\"松开\""
+    ],
+    [
+      "children:[\"View all\"",
+      "children:[\"查看全部\""
+    ],
+    [
+      "title:\"Delete older sessions?\"",
+      "title:\"删除较旧的会话？\""
+    ],
+    [
+      "children:\"Clear filters\"",
+      "children:\"清除筛选\""
+    ],
+    [
+      "children:\"All projects\"",
+      "children:\"所有项目\""
+    ],
+    [
+      "children:\"Dev panels\"",
+      "children:\"开发面板\""
+    ],
+    [
+      "children:\"Theme\"",
+      "children:\"主题\""
+    ],
+    [
+      "children:\"Font\"",
+      "children:\"字体\""
+    ],
+    [
+      "children:\"Project\"",
+      "children:\"项目\""
+    ],
+    [
+      "const Co=\"Recents\"",
+      "const Co=\"最近\""
+    ],
+    [
+      "label:\"Last activity\"",
+      "label:\"最近活动\""
+    ],
+    [
+      "label:\"Group by\"",
+      "label:\"分组方式\""
+    ],
+    [
+      "\"Stale after\"",
+      "\"过期时间\""
+    ],
+    [
+      "\"Older\"",
+      "\"更早\""
+    ],
+    [
+      "\"Ungrouped\"",
+      "\"未分组\""
+    ]
+  ],
+  "index-*.js": [
+    [
+      "title:\"Scheduled tasks\",subheader",
+      "title:\"计划任务\",subheader"
+    ],
+    [
+      "message:\"Scheduled tasks only run while your computer is awake.\"",
+      "message:\"计划任务仅在计算机保持唤醒时运行。\""
+    ],
+    [
+      "Keep awake",
+      "保持唤醒"
+    ],
+    [
+      "Ifn={all:\"All\",active:\"Active\",archived:\"Archived\"}",
+      "Ifn={all:\"全部\",active:\"活跃\",archived:\"已归档\"}"
+    ],
+    [
+      "\"No tasks yet.\"",
+      "\"还没有任务。\""
+    ],
+    [
+      "\"No active tasks.\"",
+      "\"没有活跃任务。\""
+    ],
+    [
+      "\"No archived tasks.\"",
+      "\"没有已归档任务。\""
+    ],
+    [
+      "children:\"Active\"}),renderRow",
+      "children:\"活跃\"}),renderRow"
+    ],
+    [
+      "children:\"New task\"",
+      "children:\"新建任务\""
+    ],
+    [
+      "?\"New task\":\"New chat\"",
+      "?\"新建任务\":\"新建聊天\""
+    ],
+    [
+      "baseDescription:\"New task\"",
+      "baseDescription:\"新建任务\""
+    ],
+    [
+      "nextRun:\"Next run\",name:\"Name\"",
+      "nextRun:\"下次运行\",name:\"名称\""
+    ],
+    [
+      "children:\"3P\"",
+      "children:\"第三方\""
+    ],
+    [
+      "label:\"Documents\"",
+      "label:\"文档\""
+    ],
+    [
+      "label:\"Files\"",
+      "label:\"文件\""
+    ],
+    [
+      "label:\"Sync Sources\"",
+      "label:\"同步源\""
+    ],
+    [
+      "title:\"Add content from GitHub\"",
+      "title:\"从 GitHub 添加内容\""
+    ],
+    [
+      "title:\"Connect Claude to Google Drive\"",
+      "title:\"将 Claude 连接到 Google Drive\""
+    ],
+    [
+      "title:\"End this call?\"",
+      "title:\"结束此通话？\""
+    ],
+    [
+      "title:\"Code execution and file creation\"",
+      "title:\"代码执行与文件创建\""
+    ]
+  ]
+}

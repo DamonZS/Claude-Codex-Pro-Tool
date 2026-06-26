@@ -1,9 +1,9 @@
 use claude_codex_pro_core::claude_desktop_provider::{
+    CLAUDE_DESKTOP_PROVIDER_PROFILE_ID, ClaudeDesktopProviderPaths, ClaudeDesktopProviderRequest,
     apply_claude_desktop_provider_at_paths, preview_claude_desktop_provider_at_paths,
-    restore_claude_desktop_provider_official_at_paths, ClaudeDesktopProviderPaths,
-    ClaudeDesktopProviderRequest, CLAUDE_DESKTOP_PROVIDER_PROFILE_ID,
+    restore_claude_desktop_provider_official_at_paths,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn claude_desktop_provider_preview_redacts_secret_and_shows_real_targets() {
@@ -68,11 +68,9 @@ fn claude_desktop_provider_apply_writes_gateway_profile_meta_and_backups() {
     let outcome = apply_claude_desktop_provider_at_paths(&paths, &request).unwrap();
 
     let normal: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap()).unwrap();
     let threep: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap()).unwrap();
     let profile: Value =
         serde_json::from_str(&std::fs::read_to_string(&paths.profile_path).unwrap()).unwrap();
     let meta: Value =
@@ -91,12 +89,20 @@ fn claude_desktop_provider_apply_writes_gateway_profile_meta_and_backups() {
     assert_eq!(profile["disableDeploymentModeChooser"], json!(true));
     assert_eq!(profile["coworkEgressAllowedHosts"], json!(["*"]));
     assert_eq!(meta["appliedId"], json!(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID));
-    assert!(meta["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| entry["id"] == CLAUDE_DESKTOP_PROVIDER_PROFILE_ID && entry["name"] == "TopoReduce"));
-    assert!(outcome.backup_paths.iter().all(|path| std::path::Path::new(path).is_file()));
+    assert!(
+        meta["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"] == CLAUDE_DESKTOP_PROVIDER_PROFILE_ID
+                && entry["name"] == "TopoReduce")
+    );
+    assert!(
+        outcome
+            .backup_paths
+            .iter()
+            .all(|path| std::path::Path::new(path).is_file())
+    );
     assert!(outcome.backup_paths.len() >= 2);
 }
 
@@ -111,8 +117,11 @@ fn claude_desktop_provider_apply_rolls_back_when_late_write_fails() {
         r#"{"deploymentMode":"1p","normal":true}"#,
     )
     .unwrap();
-    std::fs::write(&paths.threep_config_path, r#"{"deploymentMode":"1p","threep":true}"#)
-        .unwrap();
+    std::fs::write(
+        &paths.threep_config_path,
+        r#"{"deploymentMode":"1p","threep":true}"#,
+    )
+    .unwrap();
     std::fs::write(&paths.config_library_dir, "not a directory").unwrap();
     let request = ClaudeDesktopProviderRequest {
         name: "TopoReduce".to_string(),
@@ -124,11 +133,9 @@ fn claude_desktop_provider_apply_rolls_back_when_late_write_fails() {
     let error = apply_claude_desktop_provider_at_paths(&paths, &request).unwrap_err();
 
     let normal: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap()).unwrap();
     let threep: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap()).unwrap();
     assert!(!error.to_string().trim().is_empty());
     assert_eq!(normal, json!({"deploymentMode":"1p","normal":true}));
     assert_eq!(threep, json!({"deploymentMode":"1p","threep":true}));
@@ -150,13 +157,16 @@ fn claude_desktop_provider_restore_switches_back_to_official_mode() {
     let outcome = restore_claude_desktop_provider_official_at_paths(&paths).unwrap();
 
     let normal: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.normal_config_path).unwrap()).unwrap();
     let threep: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&paths.threep_config_path).unwrap()).unwrap();
     assert_eq!(normal["deploymentMode"], json!("1p"));
     assert_eq!(threep["deploymentMode"], json!("1p"));
     assert!(!paths.profile_path.exists());
-    assert!(outcome.backup_paths.iter().all(|path| std::path::Path::new(path).is_file()));
+    assert!(
+        outcome
+            .backup_paths
+            .iter()
+            .all(|path| std::path::Path::new(path).is_file())
+    );
 }

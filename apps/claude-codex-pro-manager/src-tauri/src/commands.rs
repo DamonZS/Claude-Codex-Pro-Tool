@@ -2,16 +2,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
+use claude_codex_pro_core::claude_desktop_provider::{
+    ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
+};
 use claude_codex_pro_core::install::SILENT_BINARY;
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryExport,
     MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
     MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
-};
-use claude_codex_pro_core::claude_desktop_provider::{
-    ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
@@ -42,9 +43,21 @@ where
     pub payload: T,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeZhPatchCliResult {
+    status: String,
+    message: String,
+}
+
+const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionPayload {
     pub version: String,
+    pub exe_path: String,
+    pub exe_last_modified_ms: Option<u128>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +152,7 @@ pub struct ClaudeZhPatchPayload {
     pub status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
     pub changed_files: Vec<String>,
     pub backup_dir: String,
+    pub logs_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +170,57 @@ pub struct PromptOptimizerWindowPayload {
     pub default_url: String,
     pub integration_mode: String,
     pub license: String,
+}
+
+fn claude_zh_patch_payload(
+    status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
+    changed_files: Vec<String>,
+) -> ClaudeZhPatchPayload {
+    ClaudeZhPatchPayload {
+        backup_dir: status.backup_dir.clone(),
+        status,
+        changed_files,
+        logs_path: claude_codex_pro_core::paths::default_diagnostic_log_path()
+            .to_string_lossy()
+            .to_string(),
+    }
+}
+
+fn complete_claude_zh_patch_install(
+    message: String,
+    status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
+    changed_files: Vec<String>,
+) -> CommandResult<ClaudeZhPatchPayload> {
+    let launch = claude_codex_pro_core::claude_desktop::open_claude_desktop();
+    log_manager_event(
+        "manager.claude_zh_patch.launch_after_install",
+        json!({
+            "status": &launch.status,
+            "message": &launch.message,
+            "action": &launch.action,
+            "processId": launch.process_id,
+            "foregroundVerified": launch.foreground_verified,
+            "foregroundProcessId": launch.foreground_process_id,
+            "foregroundTitle": &launch.foreground_title,
+            "observedWindowTitles": &launch.observed_window_titles,
+        }),
+    );
+
+    let payload = claude_zh_patch_payload(status, changed_files);
+    if matches!(launch.status.as_str(), "ok" | "accepted") {
+        ok(
+            &format!("{message} 已自动启动/重启 Claude Desktop，请验证界面语言。"),
+            payload,
+        )
+    } else {
+        ok(
+            &format!(
+                "{message} 汉化已写入，但自动启动 Claude Desktop 失败：{}",
+                launch.message
+            ),
+            payload,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -498,6 +563,8 @@ pub fn backend_version() -> CommandResult<VersionPayload> {
         "后端版本已读取。",
         VersionPayload {
             version: claude_codex_pro_core::version::VERSION.to_string(),
+            exe_path: current_exe_path_string(),
+            exe_last_modified_ms: current_exe_last_modified_ms(),
         },
     )
 }
@@ -523,6 +590,21 @@ pub fn startup_should_show_update() -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+pub fn current_exe_path_string() -> String {
+    std::env::current_exe()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+pub fn current_exe_last_modified_ms() -> Option<u128> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
 }
 
 fn should_show_update<I, S>(args: I, env_value: Option<&str>) -> bool
@@ -821,34 +903,629 @@ pub fn load_claude_zh_patch_status() -> CommandResult<ClaudeZhPatchPayload> {
     let status = claude_codex_pro_core::claude_zh_patch::detect_status();
     ok(
         &status.message.clone(),
-        ClaudeZhPatchPayload {
-            backup_dir: status.backup_dir.clone(),
-            status,
-            changed_files: Vec::new(),
-        },
+        claude_zh_patch_payload(status, Vec::new()),
     )
 }
 
 #[tauri::command]
 pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+    log_manager_event("manager.claude_zh_patch.install.start", json!({}));
+    if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
+        log_manager_event(
+            "manager.claude_zh_patch.install.close_claude_failed",
+            json!({}),
+        );
+        let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+        return failed(
+            "Failed to close Claude Desktop before patch. Please exit Claude and retry.",
+            claude_zh_patch_payload(status, Vec::new()),
+        );
+    }
+    if claude_codex_pro_core::claude_zh_patch::detected_patch_needs_elevation() {
+        log_manager_event(
+            "manager.claude_zh_patch.install.elevation_required",
+            json!({}),
+        );
+        match install_claude_zh_patch_elevated() {
+            Ok(result) if result.status == "ok" => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                if status.status != "ok" {
+                    return failed(
+                        &format!(
+                            "Claude Chinese patch elevated run did not complete: {}",
+                            status.message
+                        ),
+                        claude_zh_patch_payload(status, Vec::new()),
+                    );
+                }
+                return complete_claude_zh_patch_install(result.message, status, Vec::new());
+            }
+            Ok(result) => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                return failed(
+                    &format!(
+                        "Claude Chinese patch elevated run failed: {}",
+                        result.message
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+            Err(error) => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                return failed(
+                    &format!(
+                        "Claude Chinese patch requires administrator approval, but elevation failed: {error}"
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+        }
+    }
+    log_manager_event("manager.claude_zh_patch.install.direct.start", json!({}));
     match claude_codex_pro_core::claude_zh_patch::install_patch_with_remote_resources().await {
-        Ok(outcome) => ok(
-            &outcome.status.message.clone(),
-            ClaudeZhPatchPayload {
-                backup_dir: outcome.backup_dir,
-                status: outcome.status,
-                changed_files: outcome.changed_files,
-            },
+        Ok(outcome) => complete_claude_zh_patch_install(
+            outcome.status.message.clone(),
+            outcome.status,
+            outcome.changed_files,
         ),
         Err(error) => {
+            log_manager_event(
+                "manager.claude_zh_patch.direct.failed",
+                json!({
+                    "error": error.to_string(),
+                }),
+            );
+            if should_retry_claude_zh_patch_with_elevation(&error) {
+                match install_claude_zh_patch_elevated() {
+                    Ok(result) if result.status == "ok" => {
+                        let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                        if status.status != "ok" {
+                            return failed(
+                                &format!(
+                                    "Claude Chinese patch elevated fallback did not complete: {}",
+                                    status.message
+                                ),
+                                claude_zh_patch_payload(status, Vec::new()),
+                            );
+                        }
+                        return complete_claude_zh_patch_install(
+                            result.message,
+                            status,
+                            Vec::new(),
+                        );
+                    }
+                    Ok(result) => {
+                        let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                        return failed(
+                            &format!(
+                                "Claude Chinese patch elevated fallback failed: {}",
+                                result.message
+                            ),
+                            claude_zh_patch_payload(status, Vec::new()),
+                        );
+                    }
+                    Err(elevation_error) => {
+                        let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                        return failed(
+                            &format!(
+                                "Claude Chinese patch requires administrator approval, but fallback elevation failed: {elevation_error}; direct error: {error}"
+                            ),
+                            claude_zh_patch_payload(status, Vec::new()),
+                        );
+                    }
+                }
+            }
             let status = claude_codex_pro_core::claude_zh_patch::detect_status();
             failed(
                 &format!("Claude 本机汉化失败：{error}"),
-                ClaudeZhPatchPayload {
-                    backup_dir: status.backup_dir.clone(),
-                    status,
-                    changed_files: Vec::new(),
-                },
+                claude_zh_patch_payload(status, Vec::new()),
+            )
+        }
+    }
+}
+
+fn should_retry_claude_zh_patch_with_elevation(error: &anyhow::Error) -> bool {
+    let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+    should_retry_claude_zh_patch_status_with_elevation(&status.install_kind, error)
+}
+
+fn should_retry_claude_zh_patch_with_elevation_at_install_root(
+    install_root: &Path,
+    error: &anyhow::Error,
+) -> bool {
+    let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(install_root);
+    should_retry_claude_zh_patch_status_with_elevation(&status.install_kind, error)
+}
+
+fn should_retry_claude_zh_patch_status_with_elevation(
+    install_kind: &str,
+    error: &anyhow::Error,
+) -> bool {
+    if install_kind != "msix" {
+        return false;
+    }
+    let error = error.to_string().to_ascii_lowercase();
+    error.contains("access is denied")
+        || error.contains("permission denied")
+        || error.contains("windowsapps")
+        || error.contains("zh-cn.json")
+        || error.contains(".tmp")
+}
+
+pub fn handle_internal_cli() -> bool {
+    let mut args = std::env::args().skip(1);
+    let Some(command) = args.next() else {
+        return false;
+    };
+    if command != "--internal-install-claude-zh-patch"
+        && command != "--internal-restore-claude-zh-patch"
+    {
+        return false;
+    }
+    let result_path = args.next().map(PathBuf::from);
+    let target_user_sid = args.next().filter(|value| !value.trim().is_empty());
+    let target_appdata = args.next().filter(|value| !value.trim().is_empty());
+    let target_localappdata = args.next().filter(|value| !value.trim().is_empty());
+    let target_install_root = args.next().filter(|value| !value.trim().is_empty());
+    let target_diagnostic_log = args.next().filter(|value| !value.trim().is_empty());
+    if let Some(path) = target_diagnostic_log.as_deref() {
+        claude_codex_pro_core::diagnostic_log::set_diagnostic_log_path_override(Some(
+            PathBuf::from(path),
+        ));
+    }
+    log_manager_event(
+        "manager.claude_zh_patch.internal.start",
+        json!({
+            "command": command,
+            "targetUserSidPresent": target_user_sid.is_some(),
+            "targetAppDataPresent": target_appdata.is_some(),
+            "targetLocalAppDataPresent": target_localappdata.is_some(),
+            "targetInstallRootPresent": target_install_root.is_some(),
+            "targetDiagnosticLogPresent": target_diagnostic_log.is_some(),
+        }),
+    );
+    let result = match command.as_str() {
+        "--internal-install-claude-zh-patch" => install_claude_zh_patch_internal(
+            target_user_sid.as_deref(),
+            target_appdata.as_deref(),
+            target_localappdata.as_deref(),
+            target_install_root.as_deref(),
+        ),
+        "--internal-restore-claude-zh-patch" => restore_claude_zh_patch_internal(
+            target_user_sid.as_deref(),
+            target_appdata.as_deref(),
+            target_localappdata.as_deref(),
+            target_install_root.as_deref(),
+        ),
+        _ => unreachable!(),
+    };
+    let cli_result = match result {
+        Ok(message) => ClaudeZhPatchCliResult {
+            status: "ok".to_string(),
+            message,
+        },
+        Err(error) => ClaudeZhPatchCliResult {
+            status: "failed".to_string(),
+            message: error.to_string(),
+        },
+    };
+    log_manager_event(
+        "manager.claude_zh_patch.internal.finish",
+        json!({
+            "command": command,
+            "status": cli_result.status,
+            "message": cli_result.message,
+        }),
+    );
+    if let Some(path) = result_path {
+        if let Ok(text) = serde_json::to_string(&cli_result) {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if let Err(error) = fs::write(&path, text) {
+                log_manager_event(
+                    "manager.claude_zh_patch.internal.result_write_failed",
+                    json!({
+                        "path": path,
+                        "error": error.to_string(),
+                    }),
+                );
+            }
+        }
+    }
+    cli_result.status == "ok"
+}
+
+fn install_claude_zh_patch_internal(
+    target_user_sid: Option<&str>,
+    target_appdata: Option<&str>,
+    target_localappdata: Option<&str>,
+    target_install_root: Option<&str>,
+) -> anyhow::Result<String> {
+    if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
+        anyhow::bail!("Failed to close Claude Desktop before patch");
+    }
+    let runtime = tokio::runtime::Runtime::new()?;
+    let appdata = target_appdata.map(Path::new);
+    let localappdata = target_localappdata.map(Path::new);
+    if let Some(root) = target_install_root.map(Path::new) {
+        runtime.block_on(claude_codex_pro_core::claude_zh_patch::install_patch_with_remote_resources_elevated_for_user_dirs_at_install_root(
+            root,
+            target_user_sid,
+            appdata,
+            localappdata,
+        ))?;
+    } else {
+        runtime.block_on(claude_codex_pro_core::claude_zh_patch::install_patch_with_remote_resources_elevated_for_user_dirs(
+            target_user_sid,
+            appdata,
+            localappdata,
+        ))?;
+    }
+    Ok("Claude Chinese patch installed.".to_string())
+}
+
+fn restore_claude_zh_patch_internal(
+    target_user_sid: Option<&str>,
+    target_appdata: Option<&str>,
+    target_localappdata: Option<&str>,
+    target_install_root: Option<&str>,
+) -> anyhow::Result<String> {
+    if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
+        anyhow::bail!("Failed to close Claude Desktop before restore");
+    }
+    let appdata = target_appdata.map(Path::new);
+    let localappdata = target_localappdata.map(Path::new);
+    if let Some(root) = target_install_root.map(Path::new) {
+        claude_codex_pro_core::claude_zh_patch::restore_patch_elevated_for_user_dirs_at_install_root(
+            root,
+            target_user_sid,
+            appdata,
+            localappdata,
+        )?;
+    } else {
+        claude_codex_pro_core::claude_zh_patch::restore_patch_elevated_for_user_dirs(
+            target_user_sid,
+            appdata,
+            localappdata,
+        )?;
+    }
+    Ok("Claude official files restored.".to_string())
+}
+
+fn install_claude_zh_patch_elevated() -> anyhow::Result<ClaudeZhPatchCliResult> {
+    run_claude_zh_patch_elevated("--internal-install-claude-zh-patch", None)
+}
+
+fn restore_claude_zh_patch_elevated() -> anyhow::Result<ClaudeZhPatchCliResult> {
+    run_claude_zh_patch_elevated("--internal-restore-claude-zh-patch", None)
+}
+
+fn install_claude_zh_patch_elevated_at_install_root(
+    install_root: &Path,
+) -> anyhow::Result<ClaudeZhPatchCliResult> {
+    run_claude_zh_patch_elevated("--internal-install-claude-zh-patch", Some(install_root))
+}
+
+fn run_claude_zh_patch_elevated(
+    internal_command: &str,
+    install_root: Option<&Path>,
+) -> anyhow::Result<ClaudeZhPatchCliResult> {
+    let exe = std::env::current_exe()?;
+    let result_dir = claude_codex_pro_core::paths::default_app_state_dir().join("tmp");
+    fs::create_dir_all(&result_dir).with_context(|| {
+        format!(
+            "Failed to create Claude Chinese patch result directory: {}",
+            result_dir.display()
+        )
+    })?;
+    let result_path = result_dir.join(format!(
+        "claude-codex-pro-zh-patch-{}-{}.json",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ));
+    if result_path.exists() {
+        let _ = fs::remove_file(&result_path);
+    }
+    let exe_quoted = powershell_single_quoted(&exe.to_string_lossy());
+    let target_user_sid = current_user_sid().unwrap_or_default();
+    let (target_appdata, target_localappdata) = current_user_data_dirs();
+    let target_install_root = install_root
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| {
+            claude_codex_pro_core::claude_zh_patch::detect_status()
+                .install_root
+                .unwrap_or_default()
+        });
+    let diagnostic_log_path = claude_codex_pro_core::paths::default_diagnostic_log_path()
+        .to_string_lossy()
+        .to_string();
+    let argument_list = windows_argument_list(&[
+        internal_command,
+        &result_path.to_string_lossy(),
+        &target_user_sid,
+        &target_appdata,
+        &target_localappdata,
+        &target_install_root,
+        &diagnostic_log_path,
+    ]);
+    let argument_list_quoted = powershell_single_quoted(&argument_list);
+    log_manager_event(
+        "manager.claude_zh_patch.elevated.start",
+        json!({
+            "command": internal_command,
+            "exe": exe,
+            "resultPath": result_path,
+            "diagnosticLogPath": diagnostic_log_path,
+            "targetUserSidPresent": !target_user_sid.trim().is_empty(),
+            "targetAppDataPresent": !target_appdata.trim().is_empty(),
+            "targetLocalAppDataPresent": !target_localappdata.trim().is_empty(),
+            "targetInstallRoot": target_install_root,
+        }),
+    );
+    let script = format!(
+        "$ErrorActionPreference='Stop'; try {{ $p = Start-Process -FilePath {exe_quoted} -ArgumentList {argument_list_quoted} -Verb RunAs -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode }} catch {{ Write-Error $_; exit 1 }}"
+    );
+    let mut command = std::process::Command::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        &script,
+    ]);
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(claude_codex_pro_core::windows_create_no_window());
+    }
+    let output = run_elevated_process_with_timeout(&mut command)?;
+    log_manager_event(
+        "manager.claude_zh_patch.elevated.exit",
+        json!({
+            "command": internal_command,
+            "resultPath": result_path,
+            "success": output.status.success(),
+            "exitCode": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout).trim(),
+            "stderr": String::from_utf8_lossy(&output.stderr).trim(),
+        }),
+    );
+    if !output.status.success() {
+        anyhow::bail!(
+            "User cancelled elevation or elevated child failed: {:?}; stdout={}; stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let contents = fs::read_to_string(&result_path).with_context(|| {
+        format!(
+            "Elevated child did not write result file: {}; stdout={}; stderr={}",
+            result_path.display(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })?;
+    let _ = fs::remove_file(&result_path);
+    let result = serde_json::from_str::<ClaudeZhPatchCliResult>(&contents)?;
+    log_manager_event(
+        "manager.claude_zh_patch.elevated.result",
+        json!({
+            "command": internal_command,
+            "status": result.status,
+            "message": result.message,
+        }),
+    );
+    Ok(result)
+}
+
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn windows_argument_list(values: &[&str]) -> String {
+    values
+        .iter()
+        .map(|value| windows_quote_arg(value))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn windows_quote_arg(value: &str) -> String {
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+            quoted.push('"');
+        } else {
+            quoted.push_str(&"\\".repeat(backslashes));
+            quoted.push(ch);
+        }
+        backslashes = 0;
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+fn run_elevated_process_with_timeout(
+    command: &mut std::process::Command,
+) -> anyhow::Result<std::process::Output> {
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .context("Failed to collect elevated Claude Chinese patch output");
+        }
+        if started.elapsed() >= CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait_with_output();
+            anyhow::bail!(
+                "Elevated Claude Chinese patch timed out. Confirm the UAC prompt was handled and retry."
+            );
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn current_user_sid() -> Option<String> {
+    let output = std::process::Command::new("whoami.exe")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split(',')
+        .map(|part| part.trim().trim_matches('"'))
+        .find(|part| {
+            part.starts_with("S-")
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_digit() || ch == '-' || ch == 'S')
+        })
+        .map(str::to_string)
+}
+
+fn current_user_data_dirs() -> (String, String) {
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    (appdata, localappdata)
+}
+
+#[tauri::command]
+pub async fn install_claude_zh_patch_at_install_root(
+    install_root: String,
+) -> CommandResult<ClaudeZhPatchPayload> {
+    let install_root = PathBuf::from(install_root);
+    log_manager_event(
+        "manager.claude_zh_patch.manual_install.start",
+        json!({
+            "installRoot": install_root,
+        }),
+    );
+    if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
+        log_manager_event(
+            "manager.claude_zh_patch.manual_install.close_claude_failed",
+            json!({}),
+        );
+        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+        return failed(
+            "Failed to close Claude Desktop before manual patch. Please exit Claude and retry.",
+            claude_zh_patch_payload(status, Vec::new()),
+        );
+    }
+    if claude_codex_pro_core::claude_zh_patch::install_root_patch_needs_elevation(&install_root) {
+        log_manager_event(
+            "manager.claude_zh_patch.manual_install.elevation_required",
+            json!({
+                "installRoot": install_root,
+            }),
+        );
+        match install_claude_zh_patch_elevated_at_install_root(&install_root) {
+            Ok(result) if result.status == "ok" => {
+                let status =
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                if status.status != "ok" {
+                    return failed(
+                        &format!(
+                            "Claude manual Chinese patch elevated run did not complete: {}",
+                            status.message
+                        ),
+                        claude_zh_patch_payload(status, Vec::new()),
+                    );
+                }
+                return complete_claude_zh_patch_install(result.message, status, Vec::new());
+            }
+            Ok(result) => {
+                let status =
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                return failed(
+                    &format!(
+                        "Claude manual Chinese patch elevated run failed: {}",
+                        result.message
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+            Err(error) => {
+                let status =
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                return failed(
+                    &format!(
+                        "Claude manual Chinese patch requires administrator approval, but elevation failed: {error}"
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+        }
+    }
+    log_manager_event(
+        "manager.claude_zh_patch.manual_install.direct.start",
+        json!({
+            "installRoot": install_root,
+        }),
+    );
+    match claude_codex_pro_core::claude_zh_patch::install_patch_at_install_root_with_remote_resources(&install_root).await {
+        Ok(outcome) => complete_claude_zh_patch_install(
+            outcome.status.message.clone(),
+            outcome.status,
+            outcome.changed_files,
+        ),
+        Err(error) => {
+            log_manager_event(
+                "manager.claude_zh_patch.manual_direct.failed",
+                json!({
+                    "installRoot": install_root,
+                    "error": error.to_string(),
+                }),
+            );
+            if should_retry_claude_zh_patch_with_elevation_at_install_root(&install_root, &error) {
+                match install_claude_zh_patch_elevated_at_install_root(&install_root) {
+                    Ok(result) if result.status == "ok" => {
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        if status.status != "ok" {
+                            return failed(
+                                &format!("Claude manual Chinese patch elevated fallback did not complete: {}", status.message),
+                                claude_zh_patch_payload(status, Vec::new()),
+                            );
+                        }
+                        return complete_claude_zh_patch_install(result.message, status, Vec::new());
+                    }
+                    Ok(result) => {
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        return failed(
+                            &format!("Claude manual Chinese patch elevated fallback failed: {}", result.message),
+                            claude_zh_patch_payload(status, Vec::new()),
+                        );
+                    }
+                    Err(elevation_error) => {
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        return failed(
+                            &format!("Claude manual Chinese patch requires administrator approval, but fallback elevation failed: {elevation_error}; direct error: {error}"),
+                            claude_zh_patch_payload(status, Vec::new()),
+                        );
+                    }
+                }
+            }
+            let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+            failed(
+                &format!("Claude manual Chinese patch failed: {error}"),
+                claude_zh_patch_payload(status, Vec::new()),
             )
         }
     }
@@ -856,24 +1533,72 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
 
 #[tauri::command]
 pub fn restore_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+    log_manager_event("manager.claude_zh_patch.restore.start", json!({}));
+    if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
+        log_manager_event(
+            "manager.claude_zh_patch.restore.close_claude_failed",
+            json!({}),
+        );
+        let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+        return failed(
+            "Failed to close Claude Desktop before restore. Please exit Claude and retry.",
+            claude_zh_patch_payload(status, Vec::new()),
+        );
+    }
+    if claude_codex_pro_core::claude_zh_patch::detected_patch_needs_elevation() {
+        log_manager_event(
+            "manager.claude_zh_patch.restore.elevation_required",
+            json!({}),
+        );
+        match restore_claude_zh_patch_elevated() {
+            Ok(result) if result.status == "ok" => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                if status.status != "not_installed" {
+                    return failed(
+                        &format!(
+                            "Claude official restore elevated run left patch residue: {}",
+                            status.message
+                        ),
+                        claude_zh_patch_payload(status, Vec::new()),
+                    );
+                }
+                return ok(
+                    &format!("{} Restart Claude Desktop.", result.message),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+            Ok(result) => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                return failed(
+                    &format!(
+                        "Claude official restore elevated run failed: {}",
+                        result.message
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+            Err(error) => {
+                let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                return failed(
+                    &format!(
+                        "Claude official restore requires administrator approval, but elevation failed: {error}"
+                    ),
+                    claude_zh_patch_payload(status, Vec::new()),
+                );
+            }
+        }
+    }
+    log_manager_event("manager.claude_zh_patch.restore.direct.start", json!({}));
     match claude_codex_pro_core::claude_zh_patch::restore_patch() {
         Ok(outcome) => ok(
             "Claude 官方文件已从备份恢复。",
-            ClaudeZhPatchPayload {
-                backup_dir: outcome.backup_dir,
-                status: outcome.status,
-                changed_files: outcome.changed_files,
-            },
+            claude_zh_patch_payload(outcome.status, outcome.changed_files),
         ),
         Err(error) => {
             let status = claude_codex_pro_core::claude_zh_patch::detect_status();
             failed(
                 &format!("Claude 汉化恢复失败：{error}"),
-                ClaudeZhPatchPayload {
-                    backup_dir: status.backup_dir.clone(),
-                    status,
-                    changed_files: Vec::new(),
-                },
+                claude_zh_patch_payload(status, Vec::new()),
             )
         }
     }
@@ -2303,8 +3028,10 @@ pub fn load_claude_desktop_dev_mode_status() -> CommandResult<ClaudeDesktopDevMo
 }
 
 #[tauri::command]
-pub fn configure_claude_desktop_dev_mode() -> CommandResult<ClaudeDesktopDevModeConfigurePayload> {
-    match plugin_hub::configure_claude_desktop_dev_mode() {
+pub fn configure_claude_desktop_dev_mode(
+    request: Option<ClaudeDesktopProviderRequest>,
+) -> CommandResult<ClaudeDesktopDevModeConfigurePayload> {
+    match plugin_hub::configure_claude_desktop_dev_mode(request.as_ref()) {
         Ok(outcome) => {
             let status = plugin_hub::load_claude_desktop_dev_mode_status();
             ok(
@@ -2322,6 +3049,7 @@ pub fn configure_claude_desktop_dev_mode() -> CommandResult<ClaudeDesktopDevMode
                     configured: false,
                     normal_config_path: String::new(),
                     threep_config_path: String::new(),
+                    profile_path: String::new(),
                     profile_meta_path: String::new(),
                     backup_paths: Vec::new(),
                     message: error.to_string(),
@@ -2431,6 +3159,7 @@ pub async fn install_ponytail_claude_desktop_local_bundle()
                         configured: false,
                         normal_config_path: String::new(),
                         threep_config_path: String::new(),
+                        profile_path: String::new(),
                         profile_meta_path: String::new(),
                         backup_paths: Vec::new(),
                         message: error.to_string(),
@@ -4068,6 +4797,8 @@ fn diagnostics_report() -> String {
     serde_json::to_string_pretty(&json!({
         "generatedAtMs": generated_at_ms,
         "version": claude_codex_pro_core::version::VERSION,
+        "exePath": current_exe_path_string(),
+        "exeLastModifiedMs": current_exe_last_modified_ms(),
         "overview": overview.payload,
         "settings": settings,
         "logs": {
@@ -4192,6 +4923,8 @@ mod tests {
 
         assert_eq!(result.status, "ok");
         assert!(!result.payload.version.is_empty());
+        assert!(!result.payload.exe_path.is_empty());
+        assert!(result.payload.exe_last_modified_ms.is_some());
     }
 
     #[test]
@@ -4338,9 +5071,27 @@ mod tests {
         });
 
         assert_eq!(result.status, "ok");
-        assert!(result.payload.preview.config_diff.contains("***redacted***"));
-        assert!(!result.payload.preview.config_diff.contains("sk-manager-secret"));
-        assert!(!result.payload.preview.redacted_profile.contains("sk-manager-secret"));
+        assert!(
+            result
+                .payload
+                .preview
+                .config_diff
+                .contains("***redacted***")
+        );
+        assert!(
+            !result
+                .payload
+                .preview
+                .config_diff
+                .contains("sk-manager-secret")
+        );
+        assert!(
+            !result
+                .payload
+                .preview
+                .redacted_profile
+                .contains("sk-manager-secret")
+        );
     }
 
     #[test]

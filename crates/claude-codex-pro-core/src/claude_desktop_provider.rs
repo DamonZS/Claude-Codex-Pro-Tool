@@ -200,8 +200,9 @@ pub fn apply_claude_desktop_provider_at_paths(
     })();
 
     if let Err(error) = result {
-        restore_snapshots(&snapshots)
-            .with_context(|| format!("Claude Desktop provider write failed and rollback failed: {error}"))?;
+        restore_snapshots(&snapshots).with_context(|| {
+            format!("Claude Desktop provider write failed and rollback failed: {error}")
+        })?;
         return Err(error);
     }
 
@@ -212,7 +213,8 @@ pub fn apply_claude_desktop_provider_at_paths(
         profile_path: path_string(&paths.profile_path),
         meta_path: path_string(&paths.meta_path),
         backup_paths,
-        message: "Claude Desktop 开发模式供应商已写入。请完全退出并重启 Claude Desktop。".to_string(),
+        message: "Claude Desktop 开发模式供应商已写入。请完全退出并重启 Claude Desktop。"
+            .to_string(),
     })
 }
 
@@ -234,8 +236,9 @@ pub fn restore_claude_desktop_provider_official_at_paths(
     })();
 
     if let Err(error) = result {
-        restore_snapshots(&snapshots)
-            .with_context(|| format!("Claude Desktop provider restore failed and rollback failed: {error}"))?;
+        restore_snapshots(&snapshots).with_context(|| {
+            format!("Claude Desktop provider restore failed and rollback failed: {error}")
+        })?;
         return Err(error);
     }
 
@@ -259,14 +262,16 @@ fn validate_request(request: &ClaudeDesktopProviderRequest) -> anyhow::Result<()
         "http"
             if parsed
                 .host_str()
-                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")) =>
-        {
-        }
+                .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")) => {}
         "http" => {
-            bail!("Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。")
+            bail!(
+                "Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。"
+            )
         }
         _ => {
-            bail!("Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。")
+            bail!(
+                "Claude Desktop 供应商 Base URL 仅允许 https://，或本机 http://localhost / 127.0.0.1 / [::1]。"
+            )
         }
     }
     if request.api_key.trim().is_empty() {
@@ -436,10 +441,7 @@ fn backup_existing_files(paths: &ClaudeDesktopProviderPaths) -> anyhow::Result<V
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("backups")
-        .join(format!(
-            "claude-codex-pro-provider-{}",
-            timestamp_millis()
-        ));
+        .join(format!("claude-codex-pro-provider-{}", timestamp_millis()));
     let mut backups = Vec::new();
     for path in [
         &paths.normal_config_path,

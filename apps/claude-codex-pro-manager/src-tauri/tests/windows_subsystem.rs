@@ -217,7 +217,10 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(app_tsx.contains("启动/重启Codex"));
     assert!(app_tsx.contains("启动/重启Claude"));
     assert!(app_tsx.contains("Claude 一键汉化"));
-    assert!(app_tsx.contains("open_claude_chinese_window"));
+    assert!(app_tsx.contains("install_claude_zh_patch"));
+    assert!(app_tsx.contains("onClick={() => void actions.installClaudeZhPatch()}"));
+    assert!(!app_tsx.contains("onClick={() => void actions.openClaudeChinese()}"));
+    assert!(!app_tsx.contains("包装 WebView"));
     assert!(app_tsx.contains("PromptOptimizerCard"));
     assert!(commands_rs.contains("pub async fn open_claude_chinese_window"));
     assert!(commands_rs.contains("pub async fn open_plugin_hub_window"));
@@ -330,7 +333,8 @@ fn session_management_route_contains_history_memory_and_diagnostics() {
     assert!(session_section.contains("deleteLocalSession"));
     assert!(session_section.contains("repairHistorySessions"));
     assert!(session_section.contains("launchClaudeDesktop"));
-    assert!(session_section.contains("openClaudeChinese"));
+    assert!(session_section.contains("installClaudeZhPatch"));
+    assert!(!session_section.contains("openClaudeChinese"));
     assert!(styles.contains(".ops-two-column"));
 }
 
@@ -420,6 +424,18 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
+    let overview_matrix = overview_screen
+        .split("<div className=\"ops-matrix\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .expect("overview matrix source");
+    assert!(!overview_matrix.contains("actions.installClaudeZhPatch()"));
+    assert!(overview_screen.contains("StatusActionTile"));
+    assert!(overview_screen.contains("Claude 一键开发模式"));
+    assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
+    assert!(app_tsx.contains("const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);"));
+    assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: \"正在写入 Claude Desktop 开发配置...\", status: \"running\" });"));
+    assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: result.message || result.outcome.message, status: result.status });"));
     assert!(app_tsx.contains("ops-primary-command"));
     assert!(styles.contains(".ops-shell"));
     assert!(styles.contains("grid-template-columns: 92px minmax(0, 1fr)"));
@@ -446,6 +462,673 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(tauri_conf.contains("\"minWidth\": 960"));
     assert!(tauri_conf.contains("\"minHeight\": 720"));
     assert!(tauri_conf.contains("cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev"));
+}
+
+#[test]
+fn supplier_editor_generates_config_from_editable_supplier_id() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+
+    let supplier_config_helper = app_tsx
+        .split("function buildSupplierConfigToml")
+        .nth(1)
+        .and_then(|rest| rest.split("function tomlString").next())
+        .expect("supplier config helper source");
+
+    assert!(
+        supplier_config_helper
+            .contains("const providerId = supplierIdFromName(profile.id || profile.name);")
+    );
+    assert!(supplier_config_helper.contains("`model_provider = ${tomlString(providerId)}`"));
+    assert!(supplier_config_helper.contains("`[model_providers.${providerId}]`"));
+    assert!(supplier_config_helper.contains("`name = ${tomlString(providerId)}`"));
+    assert!(!supplier_config_helper.contains("model_provider = \"custom\""));
+    assert!(!supplier_config_helper.contains("[model_providers.custom]"));
+}
+
+#[test]
+fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = app_tsx.replace("\r\n", "\n");
+
+    assert!(app_tsx.contains("const refreshMemoryAssistStatus = async (silent = false) => {"));
+    assert!(app_tsx.contains("options: { trackBusy?: boolean; notify?: boolean } = {}"));
+    assert!(app_tsx.contains("const trackBusy = options.trackBusy !== false;"));
+    assert!(app_tsx.contains("if (trackBusy) setBusyCount((count) => count + 1);"));
+    assert!(app_tsx.contains("if (trackBusy) setBusyCount((count) => Math.max(0, count - 1));"));
+    assert!(
+        app_tsx.contains("load_overview\"), \"概览\", { trackBusy: !silent, notify: !silent }")
+    );
+    assert!(app_tsx.contains(
+        "load_claude_desktop_status\"), \"Claude Desktop\", { trackBusy: !silent, notify: !silent }"
+    ));
+    assert!(app_tsx.contains(
+        "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
+    ));
+    assert!(app_tsx.contains(
+        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaude(true), refreshMemoryAssistStatus(true)]);"
+    ));
+    assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
+    assert!(!app_tsx.contains(
+        "useEffect(() => {\n    void (async () => {\n      await Promise.all([\n        refreshOverview(true),\n        refreshClaude(true),\n        refreshSettings(true),\n        refreshPluginHub(true),"
+    ));
+}
+
+#[test]
+fn claude_restart_button_closes_existing_processes_before_launching() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let core_claude = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_desktop.rs");
+    let core_claude = std::fs::read_to_string(&core_claude).expect("read core claude_desktop.rs");
+
+    assert!(app_tsx.contains("\"open_claude_desktop\"), \"启动/重启Claude\""));
+    assert!(core_claude.contains("let existing_process_ids = claude_process_ids();"));
+    assert!(core_claude.contains("let is_restart = !existing_process_ids.is_empty();"));
+    assert!(core_claude.contains("terminate_claude_processes(&existing_process_ids)"));
+    assert!(core_claude.contains("wait_for_claude_process_exit("));
+    assert!(core_claude.contains("Claude Desktop was closed and restart was requested"));
+    assert!(
+        core_claude.contains("action: if is_restart { \"restart\" } else { \"open\" }.to_string()")
+    );
+    assert!(!core_claude.contains("Claude Desktop is already running and was focused."));
+}
+
+#[test]
+fn supplier_screen_exposes_real_provider_crud_and_switching() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = app_tsx.replace("\r\n", "\n");
+    let styles = manifest_dir.parent().unwrap().join("src/styles.css");
+    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+
+    let supplier_screen = app_tsx
+        .split("function SupplierScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function LegacySupplierScreen").next())
+        .expect("supplier screen source");
+
+    assert!(supplier_screen.contains("actions.saveSettings(next)"));
+    assert!(supplier_screen.contains("actions.switchCodexRelayProfile"));
+    assert!(supplier_screen.contains("switchCodexRelayProfile(savedProfile.id, saved.settings)"));
+    assert!(supplier_screen.contains("actions.fetchRelayProfileModels"));
+    assert!(supplier_screen.contains("const originalId = editingId;"));
+    assert!(supplier_screen.contains("profile.id === originalId ? normalized : profile"));
+    assert!(supplier_screen.contains("activeRelayId: nextActiveRelayId"));
+    assert!(
+        supplier_screen
+            .contains("actions.showNotice({ title: \"供应商保存\", message: `正在保存供应商")
+    );
+    assert!(supplier_screen.contains("const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;"));
+    assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
+    assert!(supplier_screen.contains("setDraft(null);"));
+    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true })"));
+    assert!(supplier_screen.contains("!normalized.name.trim() || !normalized.baseUrl.trim()"));
+    assert!(!supplier_screen.contains(
+        "!normalized.name.trim() || !normalized.baseUrl.trim() || !normalized.apiKey.trim()"
+    ));
+    assert!(supplier_screen.contains("API Key 可以后续补入"));
+    assert!(supplier_screen.contains("请先补入 API Key"));
+    assert!(app_tsx.contains(
+        "const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);"
+    ));
+    assert!(app_tsx.contains("该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。"));
+    assert!(!supplier_screen.contains("if (!requestedId || requestedId !== normalizedId)"));
+    assert!(supplier_screen.contains("const idWasNormalized = requestedId !== normalizedId;"));
+    assert!(supplier_screen.contains("actions.showNotice({ title: \"供应商保存\", message: `供应商 ID 已自动整理为「${savedProfile.id}」。`, status: \"ok\" });"));
+    assert!(supplier_screen.contains(
+        "const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {"
+    ));
+    assert!(
+        supplier_screen
+            .contains("const next = withSupplierGeneratedFiles({ ...current, id: nextId });")
+    );
+    assert!(supplier_screen.contains(
+        "onBlur={(event) => updateDraftId(event.currentTarget.value || draft.name, { normalize: true })}"
+    ));
+    assert!(supplier_screen.contains(
+        "onChange={(event) => updateDraftId(event.currentTarget.value)} value={draft.id}"
+    ));
+    assert!(!supplier_screen.contains("onChange={(event) => setDraft((current) => current ? { ...current, id: event.currentTarget.value } : current)} value={draft.id}"));
+    assert!(!supplier_screen.contains("onChange={(event) => updateDraft({ id: supplierIdFromName(event.currentTarget.value) })} value={generated.id}"));
+    assert!(!supplier_screen.contains("input disabled={!isNewDraft} onChange={(event) => updateDraft({ id: supplierIdFromName(event.currentTarget.value) })}"));
+    assert!(supplier_screen.contains("createSupplierProfile(appSettings)"));
+    assert!(supplier_screen.contains("withSupplierGeneratedFiles"));
+    assert!(supplier_screen.contains("SUPPLIER_PRESETS.map"));
+    assert!(supplier_screen.contains("添加供应商"));
+    assert!(supplier_screen.contains("编辑"));
+    assert!(supplier_screen.contains("删除供应商"));
+    assert!(app_tsx.contains("function buildSupplierConfigToml"));
+    assert!(!supplier_screen.contains("model_provider = \"custom\""));
+    assert!(!supplier_screen.contains("[model_providers.custom]"));
+    assert!(app_tsx.contains("OPENAI_API_KEY"));
+    assert!(app_tsx.contains("fetch_relay_profile_models"));
+    assert!(app_tsx.contains("const modelList = profile.modelList ?? \"\";"));
+    assert!(app_tsx.contains("const apiKey = profile.apiKey ?? \"\";"));
+    assert!(app_tsx.contains("configContents: profile.configContents ?? \"\""));
+    assert!(app_tsx.contains("authContents: profile.authContents ?? \"\""));
+    assert!(styles.contains(".supplier-card"));
+    assert!(styles.contains(".supplier-editor-layout"));
+    assert!(styles.contains(".supplier-preset-strip"));
+}
+
+#[test]
+fn claude_dev_mode_button_uses_the_current_provider_draft() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = app_tsx.replace("\r\n", "\n");
+
+    assert!(app_tsx.contains("claudeDesktopProviderDraft.baseUrl.trim()"));
+    assert!(app_tsx.contains(
+        "call<ClaudeDesktopDevModeConfigureResult>(\"configure_claude_desktop_dev_mode\", request)"
+    ));
+    assert!(app_tsx.contains("? { request: claudeDesktopProviderDraft }\n      : undefined;"));
+    assert!(!app_tsx.contains(
+        "claudeDesktopProviderDraft.baseUrl.trim() && claudeDesktopProviderDraft.apiKey.trim()"
+    ));
+}
+
+#[test]
+fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let primary_start = app_tsx
+        .find("const installClaudeZhPatch = async () => {")
+        .expect("primary zh patch action");
+    let manual_start = app_tsx
+        .find("const installClaudeZhPatchFromDirectory = async () => {")
+        .expect("manual zh patch action");
+    let primary_action = &app_tsx[primary_start..manual_start];
+    let manual_action = &app_tsx[manual_start
+        ..app_tsx[manual_start..]
+            .find("const openClaudeChinese")
+            .unwrap()
+            + manual_start];
+
+    assert!(app_tsx.contains(
+        "const writeUiEvent = async (event: string, detail: Record<string, unknown> = {}) => {"
+    ));
+    assert!(app_tsx.contains("\"write_diagnostic_event\", { event, detail }"));
+    assert!(primary_action.contains("void writeUiEvent(\"claude_zh_patch.install.click\")"));
+    assert!(manual_action.contains("writeUiEvent(\"claude_zh_patch.manual_install.click\")"));
+    assert!(primary_action.contains("\"install_claude_zh_patch\""));
+    assert!(primary_action.contains("status: \"running\""));
+    assert!(primary_action.contains("waitForPaint()"));
+    assert!(primary_action.contains("setNotice({ title: \"Claude 一键汉化\", message: zhPatchNoticeMessage(autoResult), status: autoResult.status })"));
+    assert!(
+        primary_action.find("setNotice({").unwrap()
+            < primary_action
+                .find("void writeUiEvent(\"claude_zh_patch.install.click\")")
+                .unwrap()
+    );
+    assert!(
+        primary_action
+            .find("void writeUiEvent(\"claude_zh_patch.install.click\")")
+            .unwrap()
+            < primary_action.find("\"install_claude_zh_patch\"").unwrap()
+    );
+    assert!(!primary_action.contains("open({ directory: true"));
+    assert!(!primary_action.contains("install_claude_zh_patch_at_install_root"));
+    assert!(manual_action.contains("open({ directory: true"));
+    assert!(manual_action.contains("status: \"running\""));
+    assert!(manual_action.contains("waitForPaint()"));
+    assert!(manual_action.contains("setNotice({ title: \"Claude 手动汉化\", message: zhPatchNoticeMessage(result), status: result.status })"));
+    assert!(manual_action.contains("install_claude_zh_patch_at_install_root"));
+    assert!(app_tsx.contains("actions.installClaudeZhPatchFromDirectory()"));
+    assert!(commands_rs.contains("pub async fn install_claude_zh_patch_at_install_root"));
+    assert!(commands_rs.contains("install_root_patch_needs_elevation(&install_root)"));
+    assert!(
+        commands_rs.contains("install_claude_zh_patch_elevated_at_install_root(&install_root)")
+    );
+    assert!(commands_rs.contains("status_for_install_root(&install_root)"));
+}
+
+#[test]
+fn diagnostics_include_running_exe_identity_for_zh_patch_debugging() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib_rs = manifest_dir.join("src/lib.rs");
+    let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    assert!(commands_rs.contains("pub fn current_exe_path_string() -> String"));
+    assert!(commands_rs.contains("pub fn current_exe_last_modified_ms() -> Option<u128>"));
+    assert!(commands_rs.contains("exe_path: current_exe_path_string()"));
+    assert!(commands_rs.contains("exe_last_modified_ms: current_exe_last_modified_ms()"));
+    assert!(commands_rs.contains("\"exePath\": current_exe_path_string()"));
+    assert!(commands_rs.contains("\"exeLastModifiedMs\": current_exe_last_modified_ms()"));
+    assert!(lib_rs.contains("\"exePath\": commands::current_exe_path_string()"));
+    assert!(lib_rs.contains("\"exeLastModifiedMs\": commands::current_exe_last_modified_ms()"));
+}
+
+#[test]
+fn claude_zh_patch_restore_shows_immediate_running_toast() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+
+    let restore_action = app_tsx
+        .split("const restoreClaudeZhPatch = async () => {")
+        .nth(1)
+        .and_then(|rest| rest.split("const launchClaudeDesktop").next())
+        .expect("restore zh patch action source");
+
+    assert!(restore_action.contains("void writeUiEvent(\"claude_zh_patch.restore.click\")"));
+    assert!(restore_action.contains("setNotice({"));
+    assert!(restore_action.contains("title: \"恢复 Claude 官方文件\""));
+    assert!(restore_action.contains("status: \"running\""));
+    assert!(restore_action.contains("waitForPaint()"));
+    assert!(restore_action.contains("setNotice({ title: \"恢复 Claude 官方文件\", message: result.message, status: result.status })"));
+    assert!(
+        restore_action.find("setNotice({").unwrap()
+            < restore_action
+                .find("void writeUiEvent(\"claude_zh_patch.restore.click\")")
+                .unwrap()
+    );
+    assert!(restore_action.contains("\"restore_claude_zh_patch\""));
+}
+
+#[test]
+fn claude_zh_patch_auto_launches_claude_after_successful_install() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+
+    assert!(commands_rs.contains("fn complete_claude_zh_patch_install("));
+    assert!(commands_rs.contains("claude_codex_pro_core::claude_desktop::open_claude_desktop()"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.launch_after_install"));
+    assert!(commands_rs.contains("已自动启动/重启 Claude Desktop，请验证界面语言。"));
+    assert!(!commands_rs.contains("Restart Claude Desktop to see the result."));
+
+    assert!(app_tsx.contains("已自动启动/重启 Claude Desktop，请验证界面语言。"));
+    assert!(!app_tsx.contains("请重启 Claude Desktop 后验证界面语言。"));
+}
+
+#[test]
+fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let main_rs = manifest_dir.join("src/main.rs");
+    let main_rs = std::fs::read_to_string(&main_rs).expect("read manager main.rs");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let core_zh_patch = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch =
+        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+
+    assert!(main_rs.contains("handle_internal_cli()"));
+    assert!(commands_rs.contains("detected_patch_needs_elevation()"));
+    assert!(commands_rs.contains("--internal-install-claude-zh-patch"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.install.start"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.install.close_claude_failed"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.install.elevation_required"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.install.direct.start"));
+    assert!(commands_rs.contains("current_user_sid()"));
+    assert!(commands_rs.contains("windows_argument_list(&["));
+    assert!(commands_rs.contains("powershell_single_quoted(&argument_list)"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.elevated.start"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.elevated.exit"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.elevated.result"));
+    assert!(commands_rs.contains("default_app_state_dir().join(\"tmp\")"));
+    assert!(!commands_rs.contains("let result_path = std::env::temp_dir().join"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.internal.start"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.internal.finish"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.internal.result_write_failed"));
+    assert!(commands_rs.contains("targetDiagnosticLogPresent"));
+    assert!(commands_rs.contains("set_diagnostic_log_path_override"));
+    assert!(commands_rs.contains("&diagnostic_log_path"));
+    assert!(!commands_rs.contains("Start-Process -FilePath {exe_quoted} -ArgumentList {argument_list_quoted} -Verb RunAs -Wait -PassThru -Environment"));
+    assert!(commands_rs.contains("install_claude_zh_patch_internal("));
+    assert!(commands_rs.contains("target_appdata.as_deref()"));
+    assert!(commands_rs.contains("target_localappdata.as_deref()"));
+    assert!(commands_rs.contains("target_install_root.as_deref()"));
+    assert!(commands_rs.contains("install_patch_with_remote_resources_elevated_for_user_dirs("));
+    assert!(
+        commands_rs.contains(
+            "install_patch_with_remote_resources_elevated_for_user_dirs_at_install_root("
+        )
+    );
+    assert!(commands_rs.contains("whoami.exe"));
+    assert!(commands_rs.contains(".args([\"/user\", \"/fo\", \"csv\", \"/nh\"])"));
+    assert!(commands_rs.contains("-Verb RunAs -Wait -PassThru"));
+    assert!(core_zh_patch.contains("pub fn detected_patch_needs_elevation()"));
+    assert!(core_zh_patch.contains("appx_claude_install_roots()"));
+    assert!(core_zh_patch.contains("Get-AppxPackage -Name Claude"));
+    assert!(core_zh_patch.contains("Get-AppxPackage -AllUsers -Name Claude"));
+    assert!(
+        core_zh_patch
+            .contains("self.install_kind == \"msix\" && !resource_tree_writable_no_create(self)")
+    );
+    assert!(core_zh_patch.contains("fn resource_tree_writable_no_create"));
+    assert!(core_zh_patch.contains("fn resource_tree_writable_or_create"));
+    assert!(core_zh_patch.contains("prepare_elevated_patch_access(paths, target_user_sid)?;"));
+    assert!(core_zh_patch.contains("ensure_patch_writable(paths)?;"));
+    assert!(core_zh_patch.contains("patch_target_dirs(paths)"));
+    assert!(core_zh_patch.contains("probe_writable_dir(&dir)"));
+    assert!(core_zh_patch.contains("unique_atomic_temp_path_for(path)"));
+    assert!(core_zh_patch.contains("std::fs::write(path, contents).with_context"));
+    assert!(core_zh_patch.contains("直接覆盖 Claude 汉化文件失败"));
+    assert!(!core_zh_patch.contains("创建 zh-CN.json.tmp 后替换资源文件"));
+    assert!(
+        core_zh_patch.contains("include_str!(\"../../../assets/claude-zh/frontend-zh-CN.json\")")
+    );
+    assert!(core_zh_patch.contains("unwrap_or_else(|_| embedded_i18n_resources())"));
+    assert!(core_zh_patch.contains("pub fn embedded_i18n_resources() -> RemoteI18nResources"));
+    assert!(core_zh_patch.contains("remove_zh_cn_artifacts(paths, &mut changed_files)?;"));
+    assert!(core_zh_patch.contains("remove_locale_config(paths, &mut changed_files)?;"));
+    assert!(core_zh_patch.contains("scrub_zh_cn_from_chunks(paths, &mut changed_files)?;"));
+    assert!(core_zh_patch.contains("access_warnings.extend(grant_current_user_write_access("));
+    assert!(!core_zh_patch.contains("grant_current_user_write_access(\n        &paths.app_root"));
+    assert!(core_zh_patch.contains("for target in patch_access_targets(paths)"));
+    assert!(core_zh_patch.contains(
+        "access_warnings.extend(grant_current_user_write_access(&target, target_user_sid)?);"
+    ));
+    assert!(core_zh_patch.contains("fn patch_target_files(paths: &ClaudeZhPatchPaths)"));
+    assert!(core_zh_patch.contains("fn patch_access_targets(paths: &ClaudeZhPatchPaths)"));
+    assert!(core_zh_patch.contains("write_patch_file_for_install("));
+    assert!(core_zh_patch.contains("retry_write_patch_file_after_elevated_access("));
+    assert!(core_zh_patch.contains("管理员授权后写入 Claude 汉化文件仍失败"));
+    assert!(core_zh_patch.contains("授权诊断"));
+    assert!(core_zh_patch.contains("icacls 当前用户"));
+    assert!(core_zh_patch.contains("icacls Users 组"));
+    assert!(core_zh_patch.contains("icacls Administrators 组"));
+    assert!(core_zh_patch.contains("*S-1-5-32-544:(OI)(CI)F"));
+    assert!(core_zh_patch.contains("user_grant.is_err() && users_grant.is_err()"));
+    assert!(core_zh_patch.contains("is_real_windows_apps_path(&paths.install_root)"));
+    assert!(core_zh_patch.contains("takeown.exe"));
+    assert!(core_zh_patch.contains("icacls.exe"));
+}
+
+#[test]
+fn claude_zh_patch_commands_close_claude_before_writing_resources() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let install_action = commands_rs
+        .split("pub async fn install_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn handle_internal_cli()").next())
+        .expect("install command source");
+    let manual_action = commands_rs
+        .split("pub async fn install_claude_zh_patch_at_install_root")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+                .next()
+        })
+        .expect("manual command source");
+    let restore_action = commands_rs
+        .split("pub fn restore_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
+                .next()
+        })
+        .expect("restore command source");
+
+    assert!(install_action.contains("close_claude_desktop_for_patch()"));
+    assert!(install_action.contains("Failed to close Claude Desktop before patch"));
+    assert!(manual_action.contains("close_claude_desktop_for_patch()"));
+    assert!(manual_action.contains("Failed to close Claude Desktop before manual patch"));
+    assert!(restore_action.contains("close_claude_desktop_for_patch()"));
+    assert!(restore_action.contains("Failed to close Claude Desktop before restore"));
+}
+
+#[test]
+fn claude_zh_patch_closes_claude_before_elevation_branch() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let install_action = commands_rs
+        .split("pub async fn install_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn handle_internal_cli()").next())
+        .expect("install command source");
+    let manual_action = commands_rs
+        .split("pub async fn install_claude_zh_patch_at_install_root")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+                .next()
+        })
+        .expect("manual command source");
+    let restore_action = commands_rs
+        .split("pub fn restore_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
+                .next()
+        })
+        .expect("restore command source");
+
+    assert!(
+        install_action
+            .find("close_claude_desktop_for_patch()")
+            .unwrap()
+            < install_action
+                .find("detected_patch_needs_elevation()")
+                .unwrap()
+    );
+    assert!(
+        manual_action
+            .find("close_claude_desktop_for_patch()")
+            .unwrap()
+            < manual_action
+                .find("install_root_patch_needs_elevation(&install_root)")
+                .unwrap()
+    );
+    assert!(
+        restore_action
+            .find("close_claude_desktop_for_patch()")
+            .unwrap()
+            < restore_action
+                .find("detected_patch_needs_elevation()")
+                .unwrap()
+    );
+}
+
+#[test]
+fn claude_zh_patch_parent_verifies_final_status_after_elevation() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let install_action = commands_rs
+        .split("pub async fn install_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn handle_internal_cli()").next())
+        .expect("install command source");
+    let restore_action = commands_rs
+        .split("pub fn restore_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
+                .next()
+        })
+        .expect("restore command source");
+
+    assert!(install_action.contains("if status.status != \"ok\""));
+    assert!(install_action.contains("elevated run did not complete"));
+    assert!(restore_action.contains("if status.status != \"not_installed\""));
+    assert!(restore_action.contains("elevated run left patch residue"));
+}
+
+#[test]
+fn claude_zh_patch_falls_back_to_uac_when_direct_msix_write_fails() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let install_action = commands_rs
+        .split("pub async fn install_claude_zh_patch()")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn handle_internal_cli()").next())
+        .expect("install command source");
+
+    assert!(install_action.contains("manager.claude_zh_patch.direct.failed"));
+    assert!(install_action.contains("should_retry_claude_zh_patch_with_elevation(&error)"));
+    assert!(install_action.contains("install_claude_zh_patch_elevated()"));
+    assert!(
+        commands_rs.contains(
+            "fn should_retry_claude_zh_patch_with_elevation(error: &anyhow::Error) -> bool"
+        )
+    );
+    assert!(commands_rs.contains(
+        "should_retry_claude_zh_patch_status_with_elevation(&status.install_kind, error)"
+    ));
+    assert!(commands_rs.contains("if install_kind != \"msix\""));
+}
+
+#[test]
+fn claude_zh_patch_manual_install_falls_back_to_uac_when_direct_msix_write_fails() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let manual_action = commands_rs
+        .split("pub async fn install_claude_zh_patch_at_install_root")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+                .next()
+        })
+        .expect("manual command source");
+
+    assert!(manual_action.contains("manager.claude_zh_patch.manual_direct.failed"));
+    assert!(manual_action.contains("manager.claude_zh_patch.manual_install.start"));
+    assert!(manual_action.contains("manager.claude_zh_patch.manual_install.close_claude_failed"));
+    assert!(manual_action.contains("manager.claude_zh_patch.manual_install.elevation_required"));
+    assert!(manual_action.contains("manager.claude_zh_patch.manual_install.direct.start"));
+    assert!(manual_action.contains(
+        "should_retry_claude_zh_patch_with_elevation_at_install_root(&install_root, &error)"
+    ));
+    assert!(
+        manual_action.contains("install_claude_zh_patch_elevated_at_install_root(&install_root)")
+    );
+    assert!(
+        commands_rs.contains("fn should_retry_claude_zh_patch_with_elevation_at_install_root(")
+    );
+    assert!(commands_rs.contains("status_for_install_root(install_root)"));
+}
+
+#[test]
+fn claude_zh_patch_restore_uses_uac_elevation_for_msix_paths() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let core_zh_patch = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch =
+        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+
+    assert!(commands_rs.contains("--internal-restore-claude-zh-patch"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.restore.start"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.restore.close_claude_failed"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.restore.elevation_required"));
+    assert!(commands_rs.contains("manager.claude_zh_patch.restore.direct.start"));
+    assert!(commands_rs.contains("restore_claude_zh_patch_internal("));
+    assert!(commands_rs.contains("restore_claude_zh_patch_elevated()"));
+    assert!(commands_rs.contains("restore_patch_elevated_for_user_dirs("));
+    assert!(core_zh_patch.contains("pub fn restore_patch_elevated_for_user_dirs"));
+    assert!(core_zh_patch.contains("restore_patch_at_elevated_for_user(&paths, target_user_sid)"));
+    assert!(core_zh_patch.contains("pub fn restore_patch_at_elevated_for_user"));
+    assert!(core_zh_patch.contains("prepare_elevated_patch_access(paths, target_user_sid)?;"));
+    assert!(core_zh_patch.contains("restore_patch_at(paths)"));
+}
+
+#[test]
+fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let core_zh_patch = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch =
+        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+
+    assert!(commands_rs.contains("current_user_data_dirs()"));
+    assert!(commands_rs.contains("windows_argument_list(&["));
+    assert!(commands_rs.contains("powershell_single_quoted(&argument_list)"));
+    assert!(commands_rs.contains("-ArgumentList {argument_list_quoted}"));
+    assert!(commands_rs.contains("target_install_root"));
+    let internal_cli = commands_rs
+        .split("pub fn handle_internal_cli()")
+        .nth(1)
+        .and_then(|rest| rest.split("fn install_claude_zh_patch_internal").next())
+        .expect("internal cli source");
+    assert!(internal_cli.contains("install_claude_zh_patch_internal("));
+    assert!(internal_cli.contains("restore_claude_zh_patch_internal("));
+    assert!(internal_cli.contains("target_user_sid.as_deref()"));
+    assert!(internal_cli.contains("target_appdata.as_deref()"));
+    assert!(internal_cli.contains("target_localappdata.as_deref()"));
+    assert!(internal_cli.contains("target_install_root.as_deref()"));
+    assert!(core_zh_patch.contains("detect_paths_for_user_dirs"));
+    assert!(core_zh_patch.contains("with_user_data_dirs"));
+    assert!(
+        core_zh_patch
+            .contains("install_patch_with_remote_resources_elevated_for_user_dirs_at_install_root")
+    );
+    assert!(core_zh_patch.contains("restore_patch_elevated_for_user_dirs_at_install_root"));
+    assert!(core_zh_patch.contains("appdata.join(\"Claude-3p\").join(\"config.json\")"));
+    assert!(core_zh_patch.contains("local_appdata.join(BACKUP_DIR_NAME)"));
+}
+
+#[test]
+fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    assert!(commands_rs.contains("CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT"));
+    assert!(commands_rs.contains("run_elevated_process_with_timeout"));
+    assert!(commands_rs.contains("command.spawn()?"));
+    assert!(commands_rs.contains("command.stdout(std::process::Stdio::piped())"));
+    assert!(commands_rs.contains("command.stderr(std::process::Stdio::piped())"));
+    assert!(commands_rs.contains("child.try_wait()?"));
+    assert!(commands_rs.contains("child.wait_with_output()"));
+    assert!(commands_rs.contains("stdout={}"));
+    assert!(commands_rs.contains("stderr={}"));
+    assert!(commands_rs.contains("Elevated child did not write result file"));
+    assert!(commands_rs.contains("child.kill()"));
+    assert!(commands_rs.contains("Elevated Claude Chinese patch timed out"));
 }
 
 #[test]
@@ -477,12 +1160,28 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("设置文件位置"));
     assert!(app_tsx.contains("Codex 增强矩阵"));
     assert!(app_tsx.contains("Claude 一键汉化"));
+    let zh_settings_panel = app_tsx
+        .split("<Panel title=\"Claude 一键汉化\"")
+        .nth(1)
+        .and_then(|rest| rest.split("<Panel title=\"CLI Wrapper\"").next())
+        .expect("Claude zh settings panel source");
+    assert!(zh_settings_panel.contains("安装类型"));
+    assert!(zh_settings_panel.contains("目录可写"));
+    assert!(zh_settings_panel.contains("诊断日志"));
+    assert!(zh_settings_panel.contains("桌面资源"));
+    assert!(zh_settings_panel.contains("前端资源"));
+    assert!(zh_settings_panel.contains("Statsig 资源"));
+    assert!(!zh_settings_panel.contains("入口 URL"));
+    assert!(!zh_settings_panel.contains("wrapped_webview"));
     assert!(app_tsx.contains("CLI Wrapper"));
     assert!(app_tsx.contains("Codex 启动参数"));
     assert!(app_tsx.contains("安全边界"));
     assert!(app_tsx.contains("reset_settings"));
     assert!(app_tsx.contains("reset_image_overlay_settings"));
     assert!(app_tsx.contains("saveSettings"));
+    assert!(app_tsx.contains("logsPath: string;"));
+    assert!(app_tsx.contains("function zhPatchNoticeMessage"));
+    assert!(app_tsx.contains("诊断日志：${logPath}"));
     assert!(app_tsx.contains("ops-form-field"));
     assert!(app_tsx.contains("ToggleSwitch"));
     assert!(app_tsx.contains("ops-toggle-line"));

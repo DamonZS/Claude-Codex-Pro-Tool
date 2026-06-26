@@ -1107,6 +1107,14 @@ fn active_or_default_provider_id(doc: &DocumentMut) -> String {
         .unwrap_or_else(|| RELAY_PROVIDER.to_string())
 }
 
+fn profile_or_active_provider_id(profile: &RelayProfile, doc: &DocumentMut) -> String {
+    let profile_id = profile.id.trim();
+    if is_custom_provider_id(profile_id) {
+        return profile_id.to_string();
+    }
+    active_or_default_provider_id(doc)
+}
+
 fn is_custom_provider_id(provider: &str) -> bool {
     !provider.is_empty() && !RESERVED_MODEL_PROVIDER_IDS.contains(&provider)
 }
@@ -1709,12 +1717,15 @@ fn codex_auth_api_key(auth_contents: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// 解析 profile 實際使用的模型：優先取 config.toml 裡的 `model =`，
-/// 否則退回 profile.model 欄位。供應商測試用它做回退，避免串到別家供應商的模型名。
+/// 解析 profile 實際使用的模型：编辑表单字段非空时优先，旧 config.toml 仅兜底。
+/// 这样修改供应商 ID/模型后，保存会重写旧 TOML，而不是继续沿用残留配置。
 pub fn relay_profile_model(profile: &RelayProfile) -> String {
+    if !profile.model.trim().is_empty() {
+        return profile.model.trim().to_string();
+    }
     root_key_string(&profile.config_contents, "model")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| profile.model.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn relay_profile_base_url(profile: &RelayProfile) -> String {
@@ -1727,9 +1738,9 @@ fn relay_profile_base_url(profile: &RelayProfile) -> String {
         {
             return value;
         }
-        if !profile.base_url.trim().is_empty() {
-            return profile.base_url.trim().to_string();
-        }
+    }
+    if !profile.base_url.trim().is_empty() {
+        return profile.base_url.trim().to_string();
     }
     let provider_base_url = provider_string_from_config(&profile.config_contents, "base_url")
         .filter(|value| !value.trim().is_empty())
@@ -1749,12 +1760,15 @@ fn relay_profile_base_url(profile: &RelayProfile) -> String {
 }
 
 fn relay_profile_api_key(profile: &RelayProfile) -> String {
+    if !profile.api_key.trim().is_empty() {
+        return profile.api_key.trim().to_string();
+    }
     if profile.relay_mode == crate::settings::RelayMode::Official {
         return experimental_bearer_token_from_config(&profile.config_contents)
             .ok()
             .flatten()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| profile.api_key.trim().to_string());
+            .unwrap_or_default();
     }
     codex_auth_api_key(&profile.auth_contents)
         .or_else(|| {
@@ -1763,12 +1777,12 @@ fn relay_profile_api_key(profile: &RelayProfile) -> String {
                 .flatten()
         })
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| profile.api_key.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<String> {
     let mut doc = parse_toml_document(&profile.config_contents)?;
-    let provider_id = active_or_default_provider_id(&doc);
+    let provider_id = profile_or_active_provider_id(profile, &doc);
     set_provider_id(&mut doc, &provider_id);
 
     let model = relay_profile_model(profile);
@@ -1844,12 +1858,10 @@ pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow
         }
     }
     if profile.relay_mode == crate::settings::RelayMode::PureApi
-        && profile.auth_contents.trim().is_empty()
         && !source_api_key.trim().is_empty()
     {
-        profile.auth_contents = serde_json::to_string_pretty(&json!({
-            "OPENAI_API_KEY": source_api_key.trim()
-        }))?;
+        profile.auth_contents =
+            set_openai_api_key_in_auth_contents(&profile.auth_contents, source_api_key.trim())?;
     }
     if profile.relay_mode == crate::settings::RelayMode::Official {
         profile.auth_contents = remove_openai_api_key_from_auth_contents(&profile.auth_contents)?;
@@ -1889,6 +1901,26 @@ fn remove_openai_api_key_from_auth_contents(auth_contents: &str) -> anyhow::Resu
     if object.is_empty() {
         return Ok(String::new());
     }
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+}
+
+fn set_openai_api_key_in_auth_contents(auth_contents: &str, token: &str) -> anyhow::Result<String> {
+    let mut value = if auth_contents.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str::<Value>(auth_contents)
+            .with_context(|| "auth.json JSON 瑙ｆ瀽澶辫触")?
+    };
+    if !value.is_object() {
+        value = json!({});
+    }
+    let Some(object) = value.as_object_mut() else {
+        anyhow::bail!("auth.json 蹇呴』鏄?JSON 瀵硅薄");
+    };
+    object.insert(
+        "OPENAI_API_KEY".to_string(),
+        Value::String(token.trim().to_string()),
+    );
     Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
 }
 
@@ -2229,23 +2261,24 @@ mod tests {
     }
 
     #[test]
-    fn relay_profile_model_prefers_config_then_field_then_empty() {
-        // 1. 供應商測試的回退第一級：config.toml 的 model = 優先
-        let from_config = RelayProfile {
+    fn relay_profile_model_prefers_field_then_config_then_empty() {
+        // 1. 编辑表单字段非空时优先，避免旧 config.toml 残留覆盖供应商编辑结果。
+        let from_field = RelayProfile {
             config_contents: "model = \"deepseek-v4-flash\"\nmodel_provider = \"custom\"\n"
                 .to_string(),
-            model: "should-not-be-used".to_string(),
-            ..RelayProfile::default()
-        };
-        assert_eq!(relay_profile_model(&from_config), "deepseek-v4-flash");
-
-        // 2. config 沒寫 model 時退回 profile.model 欄位
-        let from_field = RelayProfile {
-            config_contents: "model_provider = \"custom\"\n".to_string(),
             model: "deepseek-v4-pro".to_string(),
             ..RelayProfile::default()
         };
         assert_eq!(relay_profile_model(&from_field), "deepseek-v4-pro");
+
+        // 2. 表单字段为空时才退回 config.toml 的 model =。
+        let from_config = RelayProfile {
+            config_contents: "model = \"deepseek-v4-flash\"\nmodel_provider = \"custom\"\n"
+                .to_string(),
+            model: String::new(),
+            ..RelayProfile::default()
+        };
+        assert_eq!(relay_profile_model(&from_config), "deepseek-v4-flash");
 
         // 3. 兩者皆空 → 空字串；呼叫端據此才回退到全域 relayTestModel
         let empty = RelayProfile {

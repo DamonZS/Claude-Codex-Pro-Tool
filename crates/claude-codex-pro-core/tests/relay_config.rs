@@ -313,6 +313,45 @@ base_url = "http://127.0.0.1:57321/v1"
 }
 
 #[test]
+fn default_supplier_profile_id_is_used_as_provider_table() {
+    let mut profile = RelayProfile {
+        id: "default".to_string(),
+        name: "默认中转".to_string(),
+        model: "gpt-5.5".to_string(),
+        base_url: "https://api.toporeduce.cn/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "gpt-5.5"
+model_provider = "default"
+
+[model_providers.default]
+name = "default"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://api.toporeduce.cn/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-test-redacted"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    assert_eq!(profile.id, "default");
+    assert!(
+        profile
+            .config_contents
+            .contains(r#"model_provider = "default""#)
+    );
+    assert!(
+        profile
+            .config_contents
+            .contains("[model_providers.default]")
+    );
+    assert!(!profile.config_contents.contains("[model_providers.custom]"));
+}
+
+#[test]
 fn official_mix_api_profile_does_not_generate_auth_api_key() {
     let mut profile = RelayProfile {
         relay_mode: RelayMode::Official,

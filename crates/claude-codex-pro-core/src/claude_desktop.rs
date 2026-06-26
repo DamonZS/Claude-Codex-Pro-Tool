@@ -300,27 +300,47 @@ pub fn verify_claude_target() -> ClaudeDesktopActionResult {
 }
 
 pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
-    let focus = focus_claude_window();
-    if focus.status == "ok" {
-        return ClaudeDesktopActionResult {
-            status: "ok".to_string(),
-            message: "Claude Desktop is already running and was focused.".to_string(),
-            process_id: focus.process_id,
-            action: "open".to_string(),
-            foreground_verified: focus.foreground_verified,
-            foreground_process_id: focus.foreground_process_id,
-            foreground_title: focus.foreground_title,
-            observed_window_titles: focus.observed_window_titles,
-        };
+    let existing_process_ids = claude_process_ids();
+    let is_restart = !existing_process_ids.is_empty();
+    if is_restart {
+        let terminated = terminate_claude_processes(&existing_process_ids);
+        if terminated == 0 {
+            return ClaudeDesktopActionResult {
+                status: "failed".to_string(),
+                message: "Claude Desktop is running, but existing processes could not be terminated before restart.".to_string(),
+                process_id: existing_process_ids.first().copied(),
+                action: "restart".to_string(),
+                foreground_verified: false,
+                foreground_process_id: None,
+                foreground_title: None,
+                observed_window_titles: Vec::new(),
+            };
+        }
+        if !wait_for_claude_process_exit(&existing_process_ids, std::time::Duration::from_secs(5)) {
+            return ClaudeDesktopActionResult {
+                status: "failed".to_string(),
+                message: "Claude Desktop restart was requested, but existing processes did not exit in time.".to_string(),
+                process_id: existing_process_ids.first().copied(),
+                action: "restart".to_string(),
+                foreground_verified: false,
+                foreground_process_id: None,
+                foreground_title: None,
+                observed_window_titles: Vec::new(),
+            };
+        }
     }
 
     match launch_claude_desktop_app() {
         Ok(()) => ClaudeDesktopActionResult {
             status: "accepted".to_string(),
-            message: "Claude Desktop launch was requested through the Windows app registry."
-                .to_string(),
+            message: if is_restart {
+                "Claude Desktop was closed and restart was requested through the Windows app registry."
+                    .to_string()
+            } else {
+                "Claude Desktop launch was requested through the Windows app registry.".to_string()
+            },
             process_id: None,
-            action: "open".to_string(),
+            action: if is_restart { "restart" } else { "open" }.to_string(),
             foreground_verified: false,
             foreground_process_id: None,
             foreground_title: None,
@@ -328,9 +348,13 @@ pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
         },
         Err(error) => ClaudeDesktopActionResult {
             status: "failed".to_string(),
-            message: format!("Unable to launch Claude Desktop: {error}"),
+            message: if is_restart {
+                format!("Claude Desktop was closed, but restart failed: {error}")
+            } else {
+                format!("Unable to launch Claude Desktop: {error}")
+            },
             process_id: None,
-            action: "open".to_string(),
+            action: if is_restart { "restart" } else { "open" }.to_string(),
             foreground_verified: false,
             foreground_process_id: None,
             foreground_title: None,
@@ -675,6 +699,17 @@ fn claude_process_inventory() -> (usize, Vec<String>) {
     (processes.len(), paths)
 }
 
+pub fn close_claude_desktop_for_patch() -> bool {
+    let process_ids = claude_process_ids();
+    if process_ids.is_empty() {
+        return true;
+    }
+    if terminate_claude_processes(&process_ids) == 0 {
+        return false;
+    }
+    wait_for_claude_process_exit(&process_ids, std::time::Duration::from_secs(5))
+}
+
 #[cfg(windows)]
 fn claude_process_ids() -> Vec<u32> {
     let mut ids = crate::windows_integration::enumerate_processes()
@@ -689,6 +724,37 @@ fn claude_process_ids() -> Vec<u32> {
 #[cfg(not(windows))]
 fn claude_process_ids() -> Vec<u32> {
     Vec::new()
+}
+
+#[cfg(windows)]
+fn terminate_claude_processes(process_ids: &[u32]) -> usize {
+    process_ids
+        .iter()
+        .copied()
+        .filter(|process_id| crate::windows_integration::terminate_process(*process_id))
+        .count()
+}
+
+#[cfg(not(windows))]
+fn terminate_claude_processes(_process_ids: &[u32]) -> usize {
+    0
+}
+
+fn wait_for_claude_process_exit(process_ids: &[u32], timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let running = claude_process_ids();
+        if process_ids
+            .iter()
+            .all(|process_id| !running.contains(process_id))
+        {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 }
 
 #[cfg(windows)]

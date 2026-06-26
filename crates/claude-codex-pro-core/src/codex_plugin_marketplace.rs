@@ -296,7 +296,9 @@ fn validate_openai_plugins_marketplace_entries(root: &Path) -> anyhow::Result<()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
             })
-            .ok_or_else(|| anyhow::anyhow!("downloaded openai/plugins marketplace has an unnamed plugin"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("downloaded openai/plugins marketplace has an unnamed plugin")
+            })?;
         let plugin_root = plugin_marketplace_entry_source_path(plugin)
             .and_then(|path| plugin_marketplace_entry_path(root, path))
             .unwrap_or_else(|| root.join("plugins").join(name));
@@ -745,7 +747,9 @@ mod tests {
                 br#"{"name":"openai-curated","plugins":[{"name":"gmail","source":{"source":"local","path":"./plugins/gmail"}}]}"#,
             )
             .unwrap();
-            writer.start_file("plugins-main/plugins/.keep", options).unwrap();
+            writer
+                .start_file("plugins-main/plugins/.keep", options)
+                .unwrap();
             std::io::Write::write_all(&mut writer, b"").unwrap();
             writer.finish().unwrap();
         }
@@ -795,8 +799,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".tmp").join("plugins");
         std::fs::create_dir_all(root.join(".agents").join("plugins")).unwrap();
-        std::fs::create_dir_all(root.join("plugins").join("actual-dir").join(".codex-plugin"))
-            .unwrap();
+        std::fs::create_dir_all(
+            root.join("plugins")
+                .join("actual-dir")
+                .join(".codex-plugin"),
+        )
+        .unwrap();
         std::fs::write(
             root.join(".agents")
                 .join("plugins")

@@ -338,7 +338,9 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     assert!(script.contains("installPluginMarketplaceWindowEventPatchOnly"));
     assert!(script.contains("bridge.sendMessageFromView = function claudeCodexProPluginMarketplacePatchedSendMessageFromView"));
     assert!(script.contains("window.__codexPluginMarketplaceOriginalDispatchEvent"));
-    assert!(script.contains("event?.type === \"codex-message-from-view\" && detail?.type === \"mcp-request\""));
+    assert!(script.contains(
+        "event?.type === \"codex-message-from-view\" && detail?.type === \"mcp-request\""
+    ));
     assert!(script.contains("data?.type === \"fetch-response\""));
     assert!(script.contains("clearPluginMarketplaceQueryCache"));
     assert!(!script.contains("marketplace.path ="));

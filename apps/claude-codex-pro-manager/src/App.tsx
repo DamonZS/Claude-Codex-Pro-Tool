@@ -21,6 +21,9 @@ import {
   Rocket,
   Settings,
   ShieldCheck,
+  Copy,
+  Plus,
+  Save,
   Trash2,
   Wrench,
   X,
@@ -29,6 +32,7 @@ import {
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
 
 const PONYTAIL_REPOSITORY_URL = "https://github.com/DietrichGebert/ponytail";
@@ -113,6 +117,7 @@ type ClaudeZhPatchResult = CommandResult<{
   status: ClaudeZhPatchStatus;
   changedFiles: string[];
   backupDir: string;
+  logsPath: string;
 }>;
 
 type BackendSettings = {
@@ -192,11 +197,33 @@ type RelayProfile = {
   userAgent: string;
 };
 
+type SupplierSaveResult = {
+  settings: BackendSettings;
+  profile: RelayProfile;
+};
+
 type SettingsResult = CommandResult<{
   settings: BackendSettings;
   settings_path: string;
   user_scripts: UserScriptInventory;
 }>;
+
+type RelayProfileModelsResult = CommandResult<{
+  models: string[];
+  endpoint: string;
+}>;
+
+type SupplierPreset = {
+  id: string;
+  name: string;
+  category: "official" | "cn_official" | "aggregator" | "third_party";
+  baseUrl: string;
+  protocol: "responses" | "chatCompletions";
+  model: string;
+  modelList?: string[];
+  websiteUrl?: string;
+  apiKeyUrl?: string;
+};
 
 type UserScriptInventory = {
   enabled?: boolean;
@@ -646,10 +673,26 @@ function statusOk(status?: string | null) {
   return status === "ok" || status === "accepted" || status === "found" || status === "installed" || status === "running";
 }
 
+function statusFailed(status?: string | null) {
+  return status === "failed" || status === "not_implemented";
+}
+
 function compactPath(path?: string | null) {
   if (!path) return "未设置";
   if (path.length <= 58) return path;
   return `${path.slice(0, 24)}...${path.slice(-28)}`;
+}
+
+function zhPatchNoticeMessage(result: ClaudeZhPatchResult) {
+  const status = result.status;
+  const patchStatus = result.status.status;
+  const installKind = result.status.installKind || "unknown";
+  const writable = result.status.writable ? "可写" : "不可写/需管理员授权";
+  if (!statusFailed(status)) {
+    return `${result.message}\n资源状态：${patchStatus} / ${installKind} / ${writable}\n已自动启动/重启 Claude Desktop，请验证界面语言。`;
+  }
+  const logPath = result.logsPath || "~\\.claude-codex-pro\\claude-codex-pro.log";
+  return `${result.message}\n资源状态：${patchStatus} / ${installKind} / ${writable}\n诊断日志：${logPath}`;
 }
 
 export function App() {
@@ -678,6 +721,7 @@ export function App() {
   const [claudeDesktopOrgPlugin, setClaudeDesktopOrgPlugin] = useState<ClaudeDesktopOrgPluginStatusResult | null>(null);
   const [claudeDesktopMarketplace, setClaudeDesktopMarketplace] = useState<ClaudeDesktopMarketplaceStatusResult | null>(null);
   const [claudeDesktopDevMode, setClaudeDesktopDevMode] = useState<ClaudeDesktopDevModeStatusResult | null>(null);
+  const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
@@ -695,26 +739,33 @@ export function App() {
     if (!statusOk(next.status)) setNotice(next);
   };
 
-  const run = async <T,>(task: () => Promise<T>, title?: string): Promise<T | null> => {
-    setBusyCount((count) => count + 1);
+  const run = async <T,>(
+    task: () => Promise<T>,
+    title?: string,
+    options: { trackBusy?: boolean; notify?: boolean } = {},
+  ): Promise<T | null> => {
+    const trackBusy = options.trackBusy !== false;
+    const notify = options.notify !== false;
+    if (trackBusy) setBusyCount((count) => count + 1);
     try {
       return await task();
     } catch (error) {
-      setNotice({ title: title || "调用失败", message: stringifyError(error), status: "failed" });
+      if (notify) setNotice({ title: title || "调用失败", message: stringifyError(error), status: "failed" });
       return null;
     } finally {
-      setBusyCount((count) => Math.max(0, count - 1));
+      if (trackBusy) setBusyCount((count) => Math.max(0, count - 1));
     }
   };
 
   useEffect(() => {
     if (!notice) return;
+    if (notice.status === "running") return;
     const timeout = window.setTimeout(() => setNotice(null), 5200);
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
   const refreshOverview = async (silent = false) => {
-    const result = await run(() => call<OverviewResult>("load_overview"), "概览");
+    const result = await run(() => call<OverviewResult>("load_overview"), "概览", { trackBusy: !silent, notify: !silent });
     if (result) {
       setOverview(result);
       if (!silent) notifyIfNeedsAttention({ title: "概览", message: result.message, status: result.status });
@@ -724,9 +775,9 @@ export function App() {
 
   const refreshClaude = async (silent = false) => {
     const [desktop, wrapped, zhPatch] = await Promise.all([
-      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude Desktop"),
-      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化"),
-      run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化"),
+      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude Desktop", { trackBusy: !silent, notify: !silent }),
+      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化", { trackBusy: !silent, notify: !silent }),
+      run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化", { trackBusy: !silent, notify: !silent }),
     ]);
     if (desktop) setClaudeDesktop(desktop);
     if (wrapped) setClaudeChinese(wrapped);
@@ -735,7 +786,7 @@ export function App() {
   };
 
   const refreshSettings = async (silent = false) => {
-    const result = await run(() => call<SettingsResult>("load_settings"), "设置");
+    const result = await run(() => call<SettingsResult>("load_settings"), "设置", { trackBusy: !silent, notify: !silent });
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
@@ -745,7 +796,7 @@ export function App() {
   };
 
   const refreshPluginHub = async (silent = false) => {
-    const result = await run(() => call<PluginHubResult>("refresh_plugin_hub_catalog"), "插件中心");
+    const result = await run(() => call<PluginHubResult>("refresh_plugin_hub_catalog"), "插件中心", { trackBusy: !silent, notify: !silent });
     if (result) {
       setPluginHub(result);
       if (!silent) notifyIfNeedsAttention({ title: "插件中心", message: result.message, status: result.status });
@@ -754,7 +805,7 @@ export function App() {
   };
 
   const refreshClaudeDesktopOrgPlugin = async (silent = false) => {
-    const result = await run(() => call<ClaudeDesktopOrgPluginStatusResult>("load_claude_desktop_org_plugin_status"), "Claude Desktop 组织插件");
+    const result = await run(() => call<ClaudeDesktopOrgPluginStatusResult>("load_claude_desktop_org_plugin_status"), "Claude Desktop 组织插件", { trackBusy: !silent, notify: !silent });
     if (result) {
       setClaudeDesktopOrgPlugin(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 组织插件", message: result.message, status: result.status });
@@ -763,7 +814,7 @@ export function App() {
   };
 
   const refreshClaudeDesktopMarketplace = async (silent = false) => {
-    const result = await run(() => call<ClaudeDesktopMarketplaceStatusResult>("load_claude_desktop_marketplace_status"), "Claude Desktop 插件仓库");
+    const result = await run(() => call<ClaudeDesktopMarketplaceStatusResult>("load_claude_desktop_marketplace_status"), "Claude Desktop 插件仓库", { trackBusy: !silent, notify: !silent });
     if (result) {
       setClaudeDesktopMarketplace(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message, status: result.status });
@@ -772,7 +823,7 @@ export function App() {
   };
 
   const refreshClaudeDesktopDevMode = async (silent = false) => {
-    const result = await run(() => call<ClaudeDesktopDevModeStatusResult>("load_claude_desktop_dev_mode_status"), "Claude Desktop 开发模式");
+    const result = await run(() => call<ClaudeDesktopDevModeStatusResult>("load_claude_desktop_dev_mode_status"), "Claude Desktop 开发模式", { trackBusy: !silent, notify: !silent });
     if (result) {
       setClaudeDesktopDevMode(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 开发模式", message: result.message, status: result.status });
@@ -781,7 +832,7 @@ export function App() {
   };
 
   const refreshScripts = async (silent = false) => {
-    const result = await run(() => call<ScriptMarketResult>("refresh_script_market"), "脚本市场");
+    const result = await run(() => call<ScriptMarketResult>("refresh_script_market"), "脚本市场", { trackBusy: !silent, notify: !silent });
     if (result) {
       setScriptMarket(result);
       if (!silent) notifyIfNeedsAttention({ title: "脚本市场", message: result.message, status: result.status });
@@ -790,7 +841,7 @@ export function App() {
   };
 
   const refreshCodexPluginMarketplace = async (silent = false) => {
-    const result = await run(() => call<CodexPluginMarketplaceStatusResult>("load_codex_plugin_marketplace_status"), "Codex OpenAI 插件仓库");
+    const result = await run(() => call<CodexPluginMarketplaceStatusResult>("load_codex_plugin_marketplace_status"), "Codex OpenAI 插件仓库", { trackBusy: !silent, notify: !silent });
     if (result) {
       setCodexPluginMarketplace(result);
       if (!silent) notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message, status: result.status });
@@ -799,7 +850,7 @@ export function App() {
   };
 
   const refreshLocalSessions = async (silent = false) => {
-    const result = await run(() => call<LocalSessionsResult>("list_local_sessions"), "Codex 会话管理");
+    const result = await run(() => call<LocalSessionsResult>("list_local_sessions"), "Codex 会话管理", { trackBusy: !silent, notify: !silent });
     if (result) {
       setLocalSessions(result);
       if (!silent) notifyIfNeedsAttention({ title: "Codex 会话管理", message: result.message, status: result.status });
@@ -807,21 +858,28 @@ export function App() {
     return result;
   };
 
+  const refreshMemoryAssistStatus = async (silent = false) => {
+    const status = await run(() => call<MemoryStatusResult>("load_memory_assist_status"), "盘古记忆", { trackBusy: !silent, notify: !silent });
+    if (status) {
+      setMemoryAssist(status);
+      if (!silent) notifyIfNeedsAttention({ title: "盘古记忆", message: status.message, status: status.status });
+    }
+    return status;
+  };
+
   const refreshMemoryAssist = async (silent = false) => {
     const [status, items, candidates] = await Promise.all([
-      run(() => call<MemoryStatusResult>("load_memory_assist_status"), "盘古记忆"),
-      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80 } }), "记忆列表"),
-      run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true } }), "待确认记忆"),
+      refreshMemoryAssistStatus(silent),
+      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80 } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
+      run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true } }), "待确认记忆", { trackBusy: !silent, notify: !silent }),
     ]);
-    if (status) setMemoryAssist(status);
     if (items) setMemoryItems(items);
     if (candidates) setMemoryCandidates(candidates);
-    if (!silent && status) notifyIfNeedsAttention({ title: "盘古记忆", message: status.message, status: status.status });
     return status;
   };
 
   const refreshLogs = async (silent = false) => {
-    const result = await run(() => call<LogsResult>("read_latest_logs", { request: { lines: 240 } }), "日志");
+    const result = await run(() => call<LogsResult>("read_latest_logs", { request: { lines: 240 } }), "日志", { trackBusy: !silent, notify: !silent });
     if (result) {
       setLogs(result);
       if (!silent) notifyIfNeedsAttention({ title: "日志", message: result.message, status: result.status });
@@ -830,7 +888,7 @@ export function App() {
   };
 
   const refreshWatcher = async (silent = false) => {
-    const result = await run(() => call<WatcherResult>("load_watcher_state"), "Watcher");
+    const result = await run(() => call<WatcherResult>("load_watcher_state"), "Watcher", { trackBusy: !silent, notify: !silent });
     if (result) {
       setWatcher(result);
       if (!silent) notifyIfNeedsAttention({ title: "Watcher", message: result.message, status: result.status });
@@ -838,11 +896,49 @@ export function App() {
     return result;
   };
 
+  const writeUiEvent = async (event: string, detail: Record<string, unknown> = {}) => {
+    try {
+      await call<CommandResult<Record<string, unknown>>>("write_diagnostic_event", { event, detail });
+    } catch {
+      // Diagnostic logging must never block the user action it is observing.
+    }
+  };
+
   const installClaudeZhPatch = async () => {
-    const result = await run(() => call<ClaudeZhPatchResult>("install_claude_zh_patch"), "Claude 本机汉化");
+    setNotice({
+      title: "Claude 一键汉化",
+      message: "正在请求管理员授权并写入 Claude 本机汉化资源，请在弹出的 UAC 授权框中选择允许。",
+      status: "running",
+    });
+    await waitForPaint();
+    void writeUiEvent("claude_zh_patch.install.click");
+    const autoResult = await run(() => call<ClaudeZhPatchResult>("install_claude_zh_patch"), "Claude 一键汉化");
+    if (autoResult) {
+      setClaudeZhPatch(autoResult);
+      setNotice({ title: "Claude 一键汉化", message: zhPatchNoticeMessage(autoResult), status: autoResult.status });
+      await refreshClaude(true);
+    }
+  };
+
+  const installClaudeZhPatchFromDirectory = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "选择可写的 Claude Desktop 安装目录" });
+    const installRoot = Array.isArray(selected) ? selected[0] : selected;
+    if (!installRoot) return;
+    setNotice({
+      title: "Claude 手动汉化",
+      message: "正在写入所选 Claude 安装目录，需要时会弹出管理员授权...",
+      status: "running",
+    });
+    await waitForPaint();
+    void writeUiEvent("claude_zh_patch.manual_install.click");
+
+    const result = await run(
+      () => call<ClaudeZhPatchResult>("install_claude_zh_patch_at_install_root", { installRoot }),
+      "Claude 手动汉化"
+    );
     if (result) {
       setClaudeZhPatch(result);
-      notifyIfNeedsAttention({ title: "Claude 本机汉化", message: result.message, status: result.status });
+      setNotice({ title: "Claude 手动汉化", message: zhPatchNoticeMessage(result), status: result.status });
       await refreshClaude(true);
     }
   };
@@ -858,10 +954,17 @@ export function App() {
 
   const restoreClaudeZhPatch = async () => {
     if (!window.confirm("确认恢复 Claude 官方文件？这会用汉化前的备份覆盖已修改文件。")) return;
+    setNotice({
+      title: "恢复 Claude 官方文件",
+      message: "正在恢复 Claude 官方文件，需要时会弹出管理员授权...",
+      status: "running",
+    });
+    await waitForPaint();
+    void writeUiEvent("claude_zh_patch.restore.click");
     const result = await run(() => call<ClaudeZhPatchResult>("restore_claude_zh_patch"), "恢复 Claude 官方文件");
     if (result) {
       setClaudeZhPatch(result);
-      notifyIfNeedsAttention({ title: "恢复 Claude 官方文件", message: result.message, status: result.status });
+      setNotice({ title: "恢复 Claude 官方文件", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -1010,15 +1113,25 @@ export function App() {
   };
 
   const configureClaudeDesktopDevMode = async () => {
-    const result = await run(() => call<ClaudeDesktopDevModeConfigureResult>("configure_claude_desktop_dev_mode"), "Claude Desktop 开发模式");
-    if (result) {
-      setClaudeDesktopDevMode({
-        status: result.status,
-        message: result.message,
-        devModeStatus: result.devModeStatus,
-      });
-      notifyIfNeedsAttention({ title: "Claude Desktop 开发模式", message: result.message || result.outcome.message, status: result.status });
-      await refreshClaudeDesktopOrgPlugin(true);
+    const request = claudeDesktopProviderDraft.baseUrl.trim()
+      ? { request: claudeDesktopProviderDraft }
+      : undefined;
+    setClaudeDevModeBusy(true);
+    setNotice({ title: "Claude 一键开发模式", message: "正在写入 Claude Desktop 开发配置...", status: "running" });
+    try {
+      const result = await run(() => call<ClaudeDesktopDevModeConfigureResult>("configure_claude_desktop_dev_mode", request), "Claude Desktop 开发模式");
+      if (result) {
+        setClaudeDesktopDevMode({
+          status: result.status,
+          message: result.message,
+          devModeStatus: result.devModeStatus,
+        });
+        setNotice({ title: "Claude 一键开发模式", message: result.message || result.outcome.message, status: result.status });
+        await refreshClaudeDesktopDevMode(true);
+        await refreshClaudeDesktopOrgPlugin(true);
+      }
+    } finally {
+      setClaudeDevModeBusy(false);
     }
   };
 
@@ -1208,10 +1321,15 @@ export function App() {
     }
   };
 
-  const switchCodexRelayProfile = async (profileId: string) => {
-    const current = settings?.settings;
+  const switchCodexRelayProfile = async (profileId: string, sourceSettings?: BackendSettings) => {
+    const current = sourceSettings ?? settings?.settings;
     if (!current) {
       setNotice({ title: "供应商切换", message: "设置尚未加载，无法切换 Codex 供应商。", status: "failed" });
+      return;
+    }
+    const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);
+    if (targetProfile && !targetProfile.apiKey.trim()) {
+      setNotice({ title: "供应商切换", message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
       return;
     }
     const previousActiveRelayId = current.activeRelayId;
@@ -1226,6 +1344,14 @@ export function App() {
       notifyIfNeedsAttention({ title: "切换 Codex 供应商", message: result.message, status: result.status });
       await refreshSettings(true);
     }
+  };
+
+  const fetchRelayProfileModels = async (profile: RelayProfile) => {
+    const result = await run(() => call<RelayProfileModelsResult>("fetch_relay_profile_models", { profile }), "获取供应商模型");
+    if (result) {
+      notifyIfNeedsAttention({ title: "获取供应商模型", message: result.message, status: result.status });
+    }
+    return result;
   };
 
   const previewClaudeDesktopProvider = async (request: typeof claudeDesktopProviderDraft) => {
@@ -1339,7 +1465,7 @@ export function App() {
 
   const refreshRoute = async (target = route) => {
     if (target === "overview") {
-      await Promise.all([refreshOverview(true), refreshClaude(true)]);
+      await Promise.all([refreshOverview(true), refreshClaude(true), refreshMemoryAssistStatus(true)]);
     } else if (target === "settings") {
       await refreshSettings(true);
     } else if (target === "supplier") {
@@ -1382,22 +1508,8 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void (async () => {
-      await Promise.all([
-        refreshOverview(true),
-        refreshClaude(true),
-        refreshSettings(true),
-        refreshPluginHub(true),
-        refreshCodexPluginMarketplace(true),
-        refreshClaudeDesktopOrgPlugin(true),
-        refreshClaudeDesktopMarketplace(true),
-        refreshClaudeDesktopDevMode(true),
-        refreshWatcher(true),
-        refreshLocalSessions(true),
-        refreshMemoryAssist(true),
-      ]);
-    })();
-  }, []);
+    void refreshRoute(route);
+  }, [route]);
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -1410,8 +1522,10 @@ export function App() {
 
   const actions = {
       refreshRoute,
+      showNotice: setNotice,
       openClaudeChinese,
       installClaudeZhPatch,
+      installClaudeZhPatchFromDirectory,
       restoreClaudeZhPatch,
       launchClaudeDesktop,
       launchCodex,
@@ -1456,6 +1570,7 @@ export function App() {
       applyPureApiMode,
       clearRelayMode,
       switchCodexRelayProfile,
+      fetchRelayProfileModels,
       previewClaudeDesktopProvider,
       applyClaudeDesktopProvider,
       restoreClaudeDesktopProviderOfficial,
@@ -1528,7 +1643,7 @@ export function App() {
               <span className="desktop-command-label">启动/重启Claude</span>
               <span aria-hidden="true" className="mobile-command-label">Claude</span>
             </Button>
-            <Button aria-label="Claude 一键汉化" className="ops-primary-command" disabled={busy} onClick={() => void actions.openClaudeChinese()}>
+            <Button aria-label="Claude 一键汉化" className="ops-primary-command" disabled={busy} onClick={() => void actions.installClaudeZhPatch()}>
               <Languages className="h-4 w-4" />
               <span className="desktop-command-label">Claude 一键汉化</span>
               <span aria-hidden="true" className="mobile-command-label">汉化</span>
@@ -1539,7 +1654,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} memoryAssist={memoryAssist} overview={overview} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} memoryAssist={memoryAssist} overview={overview} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -1596,15 +1711,22 @@ function OverviewScreen({
   overview,
   claudeDesktop,
   claudeChinese,
+  claudeDesktopDevMode,
+  claudeDevModeBusy,
   memoryAssist,
 }: {
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   claudeChinese: ClaudeChineseWindowResult | null;
+  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
+  claudeDevModeBusy: boolean;
   memoryAssist: MemoryStatusResult | null;
 }) {
   const memory = memoryAssist?.memory;
+  const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
+  const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";
+  const devModeValue = claudeDevModeBusy ? "写入中..." : devModeConfigured ? "已配置" : "写入开发配置";
   return (
     <div className="ops-dashboard">
       <section className="relay-banner">
@@ -1623,7 +1745,7 @@ function OverviewScreen({
         <StatusTile icon={Power} label="Codex 运行" status={overview?.latest_launch?.status ?? "not_checked"} value={overview?.latest_launch?.status ?? "无记录"} />
         <StatusTile icon={Activity} label="Codex 版本" status={overview?.codex_version ? "ok" : "not_checked"} value={overview?.codex_version ?? "未检测"} />
         <StatusTile icon={MessageCircle} label="Claude 状态" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
-        <StatusTile icon={Languages} label="Claude 一键汉化" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
+        <StatusActionTile disabled={claudeDevModeBusy} icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} status={devModeStatus} value={devModeValue} />
         <StatusTile icon={ShieldCheck} label="记忆大脑" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
       </div>
       <div className="ops-overview-grid">
@@ -1633,11 +1755,11 @@ function OverviewScreen({
           <InfoRow label="静默入口" value={overview?.silent_shortcut.status ?? "未检测"} />
           <InfoRow label="管理入口" value={overview?.management_shortcut.status ?? "未检测"} />
         </Panel>
-        <Panel title="Claude 诊断" detail="官方 MSIX 只读诊断，一键汉化通过包装 WebView 完成。">
+        <Panel title="Claude 诊断" detail="一键汉化会写入本机 Claude Desktop zh-CN 资源、locale 和前端 chunk 补丁。">
           <InfoRow label="安装类型" value={claudeDesktop?.installKind ?? "未检测"} />
           <InfoRow label="CDP 状态" value={claudeDesktop?.cdpStatus ?? "未检测"} />
           <InfoRow label="阻断原因" value={claudeDesktop?.cdpBlocker || "无"} />
-          <InfoRow label="一键汉化方式" value={`${claudeChinese?.injectionMode ?? "wrapped_webview"} · ${claudeChinese?.defaultUrl ?? "https://claude.ai/new"}`} />
+          <InfoRow label="一键汉化方式" value="本机资源补丁（zh-CN JSON + locale + chunk）" />
         </Panel>
         <Panel title="盘古记忆总览" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
           <InfoRow label="状态" value={memory?.status ?? "未检测"} />
@@ -1658,6 +1780,426 @@ function OverviewScreen({
 }
 
 function SupplierScreen({
+  actions,
+  settings,
+  claudeDesktopDevMode,
+  claudeDesktopProviderPreview,
+  claudeDesktopProviderApply,
+  claudeDesktopProviderDraft,
+  onClaudeDesktopProviderDraftChange,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  settings: SettingsResult | null;
+  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
+  claudeDesktopProviderPreview: ClaudeDesktopProviderPreviewResult | null;
+  claudeDesktopProviderApply: ClaudeDesktopProviderApplyResult | null;
+  claudeDesktopProviderDraft: {
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    modelList: string;
+  };
+  onClaudeDesktopProviderDraftChange: Dispatch<SetStateAction<{
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    modelList: string;
+  }>>;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<RelayProfile | null>(null);
+  const [modelFetch, setModelFetch] = useState<RelayProfileModelsResult | null>(null);
+  const [supplierSaveBusy, setSupplierSaveBusy] = useState(false);
+  const appSettings = settings?.settings ?? null;
+  const profiles = appSettings?.relayProfiles ?? [];
+  const active = profiles.find((profile) => profile.id === appSettings?.activeRelayId) ?? profiles[0];
+  const editingExisting = draft && editingId ? profiles.find((profile) => profile.id === editingId) : null;
+  const isNewDraft = !!draft && !editingExisting;
+  const updateClaudeDraft = (field: keyof typeof claudeDesktopProviderDraft, value: string) => {
+    onClaudeDesktopProviderDraftChange((current) => ({ ...current, [field]: value }));
+  };
+  const saveSupplierSettings = async (next: BackendSettings) => {
+    const result = await actions.saveSettings(next);
+    if (!result) return null;
+    if (statusFailed(result.status)) {
+      actions.showNotice({ title: "供应商保存", message: result.message || "保存设置失败。", status: "failed" });
+      return null;
+    }
+    return result.settings;
+  };
+  const openProfileEditor = (profile: RelayProfile) => {
+    setModelFetch(null);
+    setEditingId(profile.id);
+    setDraft(normalizeSupplierProfile(profile));
+  };
+  const createProfile = () => {
+    if (!appSettings) return;
+    setModelFetch(null);
+    setEditingId(null);
+    setDraft(createSupplierProfile(appSettings));
+  };
+  const duplicateProfile = (profile: RelayProfile) => {
+    if (!appSettings) return;
+    const copy = {
+      ...normalizeSupplierProfile(profile),
+      id: uniqueSupplierProfileId(appSettings.relayProfiles, `${profile.id || "provider"}-copy`),
+      name: `${profile.name || profile.id || "供应商"} 副本`,
+    };
+    setModelFetch(null);
+    setEditingId(null);
+    setDraft(copy);
+  };
+  const updateDraft = (patch: Partial<RelayProfile>) => {
+    setDraft((current) => current ? normalizeSupplierProfile(withSupplierGeneratedFiles({ ...current, ...patch })) : current);
+  };
+  const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {
+    setDraft((current) => {
+      if (!current) return current;
+      const nextId = options.normalize ? supplierIdFromName(value || current.name) : value;
+      const next = withSupplierGeneratedFiles({ ...current, id: nextId });
+      return options.normalize ? normalizeSupplierProfile(next) : { ...next, id: nextId };
+    });
+  };
+  const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {
+    if (!appSettings || !draft || supplierSaveBusy) return null;
+    const requestedId = draft.id.trim();
+    const normalizedId = supplierIdFromName(requestedId || draft.name);
+    const idWasNormalized = requestedId !== normalizedId;
+    const normalized = normalizeSupplierProfile(withSupplierGeneratedFiles({ ...draft, id: normalizedId }));
+    if (!normalized.name.trim() || !normalized.baseUrl.trim()) {
+      window.alert("请填写供应商名称和 Base URL 后再保存。API Key 可以后续补入。");
+      return null;
+    }
+    const originalId = editingId;
+    const conflicts = profiles.some((profile) => profile.id === normalized.id && profile.id !== originalId);
+    if (conflicts) {
+      window.alert(`供应商 ID「${normalized.id}」已存在，请换一个 ID。`);
+      return null;
+    }
+    const nextProfiles = originalId && profiles.some((profile) => profile.id === originalId)
+      ? profiles.map((profile) => (profile.id === originalId ? normalized : profile))
+      : profiles.some((profile) => profile.id === normalized.id)
+        ? profiles.map((profile) => (profile.id === normalized.id ? normalized : profile))
+        : [...profiles, normalized];
+    const nextActiveRelayId = appSettings.activeRelayId === originalId || !appSettings.activeRelayId
+      ? normalized.id
+      : appSettings.activeRelayId;
+    setSupplierSaveBusy(true);
+    try {
+      actions.showNotice({ title: "供应商保存", message: `正在保存供应商「${normalized.name || normalized.id}」...`, status: "running" });
+      const saved = await saveSupplierSettings({
+        ...appSettings,
+        relayProfilesEnabled: true,
+        relayProfiles: nextProfiles,
+        activeRelayId: nextActiveRelayId,
+      });
+      if (saved) {
+        const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;
+        if (options.stayInEditor) {
+          setEditingId(savedProfile.id);
+          setDraft(normalizeSupplierProfile(withSupplierGeneratedFiles(savedProfile)));
+        } else {
+          setEditingId(null);
+          setDraft(null);
+        }
+        actions.showNotice({ title: "供应商保存", message: `已保存供应商「${savedProfile.name || savedProfile.id}」。`, status: "ok" });
+        if (idWasNormalized) {
+          actions.showNotice({ title: "供应商保存", message: `供应商 ID 已自动整理为「${savedProfile.id}」。`, status: "ok" });
+        }
+        return { settings: saved, profile: savedProfile };
+      }
+      return null;
+    } finally {
+      setSupplierSaveBusy(false);
+    }
+  };
+  const saveAndSwitchDraft = async () => {
+    if (!draft) return;
+    const saved = await saveDraft({ stayInEditor: true });
+    if (saved) {
+      const savedProfile = normalizeSupplierProfile(saved.profile);
+      if (!savedProfile.apiKey.trim()) {
+        actions.showNotice({ title: "供应商切换", message: "供应商已保存。请先补入 API Key，再写入为当前供应商。", status: "failed" });
+        return;
+      }
+      await actions.switchCodexRelayProfile(savedProfile.id, saved.settings);
+    }
+  };
+  const removeProfile = async (profile: RelayProfile) => {
+    if (!appSettings || profiles.length <= 1) {
+      window.alert("至少保留一个供应商配置。");
+      return;
+    }
+    if (!window.confirm(`确认删除供应商「${profile.name || profile.id}」？`)) return;
+    const nextProfiles = profiles.filter((item) => item.id !== profile.id);
+    const nextActive = appSettings.activeRelayId === profile.id ? nextProfiles[0]?.id ?? "" : appSettings.activeRelayId;
+    const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles, activeRelayId: nextActive });
+    if (saved && editingId === profile.id) {
+      setEditingId(null);
+      setDraft(null);
+    }
+  };
+  const applyPreset = (preset: SupplierPreset) => {
+    if (!draft) return;
+    updateDraft({
+      id: isNewDraft ? uniqueSupplierProfileId(profiles, preset.id) : draft.id,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      upstreamBaseUrl: preset.baseUrl,
+      protocol: preset.protocol,
+      relayMode: "pureApi",
+      model: preset.model,
+      testModel: preset.model,
+      modelList: preset.modelList?.join("\n") ?? preset.model,
+    });
+  };
+  const fetchModels = async () => {
+    if (!draft) return;
+    const normalized = normalizeSupplierProfile(withSupplierGeneratedFiles(draft));
+    const result = await actions.fetchRelayProfileModels(normalized);
+    if (result) {
+      setModelFetch(result);
+      if (result.models.length) {
+        updateDraft({
+          modelList: result.models.join("\n"),
+          model: normalized.model || result.models[0],
+          testModel: normalized.testModel || result.models[0],
+        });
+      }
+    }
+  };
+  const toggleMasterSwitch = async (enabled: boolean) => {
+    if (!appSettings) return;
+    await saveSupplierSettings({ ...appSettings, relayProfilesEnabled: enabled });
+  };
+
+  if (draft) {
+    const generated = normalizeSupplierProfile(withSupplierGeneratedFiles(draft));
+    const canSwitch = !!editingExisting && appSettings?.relayProfilesEnabled !== false;
+    return (
+      <div className="supplier-workbench">
+        <Panel title={isNewDraft ? "添加 Codex 供应商" : "编辑 Codex 供应商"} detail="保存会写入管理器 settings；设为当前会调用真实切换命令写入 Codex config.toml 和 auth.json。">
+          <div className="supplier-editor-toolbar">
+            <Button onClick={() => { setDraft(null); setEditingId(null); }} variant="outline">返回列表</Button>
+            <Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button" variant="outline">
+              <Save className="h-4 w-4" />
+              {supplierSaveBusy ? "保存中" : "保存"}
+            </Button>
+            <Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button">
+              <KeyRound className="h-4 w-4" />
+              {generated.id === appSettings?.activeRelayId ? "重新写入当前供应商" : "保存并设为当前"}
+            </Button>
+          </div>
+          <div className="supplier-editor-layout">
+            <div className="supplier-main-editor">
+              {isNewDraft ? (
+                <div className="supplier-preset-strip">
+                  {SUPPLIER_PRESETS.map((preset) => (
+                    <button key={preset.id} onClick={() => applyPreset(preset)} type="button">
+                      <strong>{preset.name}</strong>
+                      <span>{supplierCategoryLabel(preset.category)} · {supplierProtocolLabel(preset.protocol)}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="supplier-form-grid">
+                <label className="ops-form-field">
+                  <span>供应商名称</span>
+                  <input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={generated.name} />
+                </label>
+                <label className="ops-form-field">
+                  <span>供应商 ID</span>
+                  <input onBlur={(event) => updateDraftId(event.currentTarget.value || draft.name, { normalize: true })} onChange={(event) => updateDraftId(event.currentTarget.value)} value={draft.id} />
+                </label>
+                <label className="ops-form-field">
+                  <span>Base URL</span>
+                  <input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder="https://api.example.com/v1" value={generated.baseUrl} />
+                </label>
+                <label className="ops-form-field">
+                  <span>默认模型</span>
+                  <input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} placeholder="gpt-5.5" value={generated.model} />
+                </label>
+                <label className="ops-form-field">
+                  <span>API Key / Bearer Token</span>
+                  <input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type="password" value={generated.apiKey} />
+                </label>
+                <label className="ops-form-field">
+                  <span>协议</span>
+                  <select className="ops-select" onChange={(event) => updateDraft({ protocol: event.currentTarget.value })} value={generated.protocol || "responses"}>
+                    <option value="responses">Responses API</option>
+                    <option value="chatCompletions">Chat Completions（本地协议代理）</option>
+                  </select>
+                </label>
+                <label className="ops-form-field span-2">
+                  <span>模型列表（一行一个）</span>
+                  <textarea className="ops-textarea mono" onChange={(event) => updateDraft({ modelList: event.currentTarget.value })} rows={5} value={generated.modelList} />
+                </label>
+              </div>
+              <div className="action-row">
+                <Button onClick={() => void fetchModels()} variant="outline">
+                  <RefreshCw className="h-4 w-4" />
+                  从供应商拉取模型
+                </Button>
+                {modelFetch?.models.length ? <span className="supplier-inline-note">已从 {modelFetch.endpoint || "模型接口"} 获取 {modelFetch.models.length} 个模型</span> : null}
+              </div>
+            </div>
+            <div className="supplier-config-preview">
+              <StatusRow label="写入模式" status="running" value="纯 API：config.toml + auth.json" />
+              <StatusRow label="当前状态" status={generated.id === appSettings?.activeRelayId ? "running" : "not_checked"} value={generated.id === appSettings?.activeRelayId ? "当前供应商" : "未启用"} />
+              <div className="preview-box">
+                <strong>config.toml 预览</strong>
+                <pre>{generated.configContents}</pre>
+              </div>
+              <div className="preview-box">
+                <strong>auth.json 预览</strong>
+                <pre>{redactSupplierAuth(generated.authContents)}</pre>
+              </div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ops-two-column supplier-layout">
+      <div className="ops-wide-column">
+        <Panel title="供应商配置" detail="管理 Codex API 供应商、协议、Key 与配置文件；切换时会真实写入 Codex live 配置。">
+          <div className="supplier-headline">
+            <div>
+              <span>当前供应商</span>
+              <strong>{active?.name || active?.id || "未配置"}</strong>
+              <small>{active?.baseUrl || "官方登录模式"} · {supplierProtocolLabel(active?.protocol)}</small>
+            </div>
+            <ToggleSwitch checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(value) => void toggleMasterSwitch(value)} />
+          </div>
+          <div className="supplier-toolbar">
+            <Button disabled={!appSettings} onClick={createProfile}>
+              <Plus className="h-4 w-4" />
+              添加供应商
+            </Button>
+            <Button disabled title="当前后端尚未实现聚合轮转代理；为避免假功能，暂不开放保存。" variant="outline">
+              <Plus className="h-4 w-4" />
+              添加聚合供应商
+            </Button>
+            <Button onClick={() => window.alert("当前版本的后端模型没有聚合轮转字段；等核心代理接入后再开放真实聚合供应商。")} variant="outline">
+              查看聚合说明
+            </Button>
+          </div>
+          <div className="supplier-card-list">
+            {profiles.length ? profiles.map((profile) => {
+              const selected = profile.id === appSettings?.activeRelayId;
+              return (
+                <div className={`supplier-card ${selected ? "selected" : ""}`} key={profile.id}>
+                  <div className="supplier-card-main">
+                    <div className="supplier-title-line">
+                      <strong>{profile.name || profile.id}</strong>
+                      {selected ? <span className="supplier-badge">当前</span> : null}
+                    </div>
+                    <span>{supplierRelayModeLabel(profile.relayMode)} · {profile.model || profile.testModel || "未设置模型"}</span>
+                    <small>{profile.baseUrl || "官方登录"} · {supplierProtocolLabel(profile.protocol)}</small>
+                  </div>
+                  <div className="supplier-card-actions">
+                    <Button disabled={selected || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">
+                      {selected ? "使用中" : "切换"}
+                    </Button>
+                    <Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline">编辑</Button>
+                    <Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制供应商">
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            }) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
+          </div>
+        </Panel>
+        <Panel title="Claude Desktop 开发模式供应商" detail="写入 Claude Desktop 3P gateway profile；不修改 MSIX，不需要 Claude CLI 登录。">
+          <div className="supplier-form-grid">
+            <label className="ops-form-field">
+              <span>显示名称</span>
+              <input onChange={(event) => updateClaudeDraft("name", event.currentTarget.value)} value={claudeDesktopProviderDraft.name} />
+            </label>
+            <label className="ops-form-field">
+              <span>Gateway Base URL</span>
+              <input onChange={(event) => updateClaudeDraft("baseUrl", event.currentTarget.value)} placeholder="https://api.toporeduce.cn" value={claudeDesktopProviderDraft.baseUrl} />
+            </label>
+            <label className="ops-form-field">
+              <span>API Key / Bearer Token</span>
+              <input onChange={(event) => updateClaudeDraft("apiKey", event.currentTarget.value)} placeholder="写入前不会出现在日志和预览中" type="password" value={claudeDesktopProviderDraft.apiKey} />
+            </label>
+            <label className="ops-form-field span-2">
+              <span>Claude Desktop 模型菜单，可选，一行一个，支持 [1m]</span>
+              <textarea className="ops-textarea mono" onChange={(event) => updateClaudeDraft("modelList", event.currentTarget.value)} rows={5} value={claudeDesktopProviderDraft.modelList} />
+            </label>
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.previewClaudeDesktopProvider(claudeDesktopProviderDraft)} variant="outline">
+              <FileCode2 className="h-4 w-4" />
+              预览写入
+            </Button>
+            <Button onClick={() => void actions.applyClaudeDesktopProvider(claudeDesktopProviderDraft)}>
+              <KeyRound className="h-4 w-4" />
+              写入 Claude Desktop
+            </Button>
+            <Button onClick={() => void actions.restoreClaudeDesktopProviderOfficial()} variant="outline">
+              <Trash2 className="h-4 w-4" />
+              恢复官方模式
+            </Button>
+          </div>
+          {claudeDesktopProviderPreview?.preview.configDiff ? (
+            <pre className="preview-box">{claudeDesktopProviderPreview.preview.configDiff}</pre>
+          ) : null}
+          {claudeDesktopProviderApply?.outcome.backupPaths?.length ? (
+            <div className="risk-box">
+              <strong>已创建备份</strong>
+              <span>{claudeDesktopProviderApply.outcome.backupPaths.map(compactPath).join("；")}</span>
+            </div>
+          ) : null}
+        </Panel>
+      </div>
+      <div className="stack">
+        <Panel title="Codex 写入状态" detail="这里展示当前 RelayProfile 如何落地到 Codex 配置。">
+          <div className="ops-status-list">
+            <StatusRow label="供应商开关" status={appSettings?.relayProfilesEnabled !== false ? "running" : "not_checked"} value={appSettings?.relayProfilesEnabled !== false ? "已开启" : "已关闭"} />
+            <StatusRow label="纯 API" status={active?.relayMode === "pureApi" ? "running" : "not_checked"} value="写入当前供应商 ID，并将 auth.json 切换到当前供应商。" />
+            <StatusRow label="协议代理" status={active?.protocol === "chatCompletions" ? "running" : "not_checked"} value={active?.protocol === "chatCompletions" ? "Chat Completions 会通过本地协议代理转为 Responses。" : "Responses 直连供应商。"} />
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.applyPureApiMode()} variant="outline">
+              <Network className="h-4 w-4" />
+              重新写入当前供应商
+            </Button>
+            <Button onClick={() => void actions.clearRelayMode()} variant="outline">
+              <Trash2 className="h-4 w-4" />
+              清除 API 模式
+            </Button>
+          </div>
+        </Panel>
+        <Panel title="Claude Desktop 3P 状态" detail="开发模式和 profile 写入状态，配置后需要重启 Claude Desktop。">
+          <div className="info-grid compact">
+            <InfoRow label="开发模式" value={claudeDesktopDevMode?.devModeStatus.configured ? "已配置" : "未配置"} />
+            <InfoRow label="普通配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.normalConfigPath)} />
+            <InfoRow label="3P 配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.threepConfigPath)} />
+            <InfoRow label="Profile Meta" value={compactPath(claudeDesktopDevMode?.devModeStatus.profileMetaPath)} />
+          </div>
+        </Panel>
+        <Panel title="当前配置摘要" detail="只展示路径和非敏感字段。">
+          <div className="info-grid compact">
+            <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
+            <InfoRow label="供应商数量" value={`${profiles.length} 个`} />
+            <InfoRow label="当前供应商 ID" value={appSettings?.activeRelayId ?? "default"} />
+            <InfoRow label="测试模型" value={active?.testModel || appSettings?.relayTestModel || "默认"} />
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function LegacySupplierScreen({
   actions,
   settings,
   claudeDesktopDevMode,
@@ -1782,7 +2324,7 @@ function SupplierScreen({
         <Panel title="Codex 写入模式" detail="按使用场景选择，不混淆 Claude Desktop 插件安装。">
           <div className="ops-status-list">
             <StatusRow label="官方混入 API Key" status={active?.officialMixApiKey ? "running" : "not_checked"} value="保留官方账号能力，把模型请求转到自定义兼容 API。" />
-            <StatusRow label="纯 API" status={active?.relayMode === "pure_api" ? "running" : "not_checked"} value="写入 custom provider，并将 auth 状态切换到当前供应商。" />
+            <StatusRow label="纯 API" status={active?.relayMode === "pure_api" ? "running" : "not_checked"} value="写入当前供应商 ID，并将 auth 状态切换到当前供应商。" />
             <StatusRow label="清除 API 模式" status="not_checked" value="移除中转 API 配置，回到官方 ChatGPT 登录态。" />
           </div>
         </Panel>
@@ -2172,7 +2714,7 @@ function SessionManagementScreen({
             </div>
             <div className="action-row">
               <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动/重启Claude</Button>
-              <Button onClick={() => void actions.openClaudeChinese()} variant="outline">Claude 一键汉化</Button>
+              <Button onClick={() => void actions.installClaudeZhPatch()} variant="outline">Claude 一键汉化</Button>
             </div>
           </Panel>
         </div>
@@ -2642,29 +3184,29 @@ function SettingsScreen({
         </Panel>
       </div>
       <div className="stack">
-        <Panel title="Claude 一键汉化" detail="一键汉化目标是包装 WebView，不改官方 MSIX。">
+        <Panel title="Claude 一键汉化" detail="一键汉化目标是本机 zh-CN 资源补丁；MSIX/WindowsApps 不可写时会提示选择可写安装目录。">
           <div className="info-grid compact">
-            <InfoRow label="状态" value={claudeChinese?.open ? "已打开" : "未打开"} />
-            <InfoRow label="入口 URL" value={claudeChinese?.defaultUrl ?? "https://claude.ai/new"} />
-            <InfoRow label="注入模式" value={claudeChinese?.injectionMode ?? "wrapped_webview"} />
-            <InfoRow label="官方 Claude" value={claudeChinese?.officialInstallKind ?? "未检测"} />
-            <InfoRow label="CDP 状态" value={claudeChinese?.cdpStatus ?? "未检测"} />
             <InfoRow label="本机汉化" value={claudeZhPatch?.status.status ?? "not_checked"} />
+            <InfoRow label="安装类型" value={claudeZhPatch?.status.installKind ?? claudeChinese?.officialInstallKind ?? "未检测"} />
             <InfoRow label="补丁目标" value={compactPath(claudeZhPatch?.status.appRoot)} />
+            <InfoRow label="目录可写" value={claudeZhPatch?.status.writable ? "是" : "否，需要管理员授权"} />
             <InfoRow label="备份目录" value={compactPath(claudeZhPatch?.backupDir)} />
-            <InfoRow label="资源文件" value={claudeZhPatch?.status.frontendI18nPresent ? "已写入" : "未写入"} />
+            <InfoRow label="诊断日志" value={compactPath(claudeZhPatch?.logsPath)} />
+            <InfoRow label="桌面资源" value={claudeZhPatch?.status.resourcesPresent ? "已写入" : "未写入"} />
+            <InfoRow label="前端资源" value={claudeZhPatch?.status.frontendI18nPresent ? "已写入" : "未写入"} />
+            <InfoRow label="Statsig 资源" value={claudeZhPatch?.status.statsigI18nPresent ? "已写入" : "未写入"} />
             <InfoRow label="Locale" value={claudeZhPatch?.status.localeConfigured ? "zh-CN" : "未设置"} />
             <InfoRow label="语言白名单" value={claudeZhPatch?.status.languageWhitelistPatched ? "已激活" : "未激活"} />
             <InfoRow label="Chunk 注入" value={claudeZhPatch?.status.chunkPatchPresent ? "已注入" : "未注入"} />
           </div>
           <div className="action-row">
-            <Button onClick={() => void actions.openClaudeChinese()}>
+            <Button onClick={() => void actions.installClaudeZhPatch()}>
               <Languages className="h-4 w-4" />
               Claude 一键汉化
             </Button>
-            <Button onClick={() => void actions.installClaudeZhPatch()}>
+            <Button onClick={() => void actions.installClaudeZhPatchFromDirectory()} variant="outline">
               <Languages className="h-4 w-4" />
-              Claude 本机汉化
+              手动选择安装目录
             </Button>
             <Button onClick={() => void actions.restoreClaudeZhPatch()} variant="outline">
               <RefreshCw className="h-4 w-4" />
@@ -2786,6 +3328,16 @@ function StatusTile({ icon: Icon, label, value, status }: { icon: LucideIcon; la
   );
 }
 
+function StatusActionTile({ disabled, icon: Icon, label, value, status, onClick }: { disabled?: boolean; icon: LucideIcon; label: string; value: string; status: string; onClick: () => void }) {
+  return (
+    <button className={`status-tile status-action-tile ${statusOk(status) ? "ok" : "warn"}`} disabled={disabled} onClick={onClick} type="button">
+      <Icon className="h-4 w-4" />
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </button>
+  );
+}
+
 function ActionButton({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
   return (
     <button className="action-button" onClick={onClick} type="button">
@@ -2839,11 +3391,207 @@ function Empty({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
 
+const SUPPLIER_PRESETS: SupplierPreset[] = [
+  {
+    id: "openai",
+    name: "OpenAI Official",
+    category: "official",
+    baseUrl: "https://api.openai.com/v1",
+    protocol: "responses",
+    model: "gpt-5.5",
+    websiteUrl: "https://chatgpt.com/codex",
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    category: "cn_official",
+    baseUrl: "https://api.deepseek.com",
+    protocol: "chatCompletions",
+    model: "deepseek-v4-flash",
+    modelList: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    apiKeyUrl: "https://platform.deepseek.com/api_keys",
+  },
+  {
+    id: "kimi",
+    name: "Kimi",
+    category: "cn_official",
+    baseUrl: "https://api.moonshot.cn/v1",
+    protocol: "chatCompletions",
+    model: "kimi-k2.6",
+    modelList: ["kimi-k2.6"],
+  },
+  {
+    id: "qwen",
+    name: "Qwen / Bailian",
+    category: "cn_official",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    protocol: "chatCompletions",
+    model: "qwen3-coder-plus",
+    modelList: ["qwen3-coder-plus", "qwen3-max"],
+  },
+  {
+    id: "siliconflow",
+    name: "SiliconFlow",
+    category: "aggregator",
+    baseUrl: "https://api.siliconflow.cn/v1",
+    protocol: "chatCompletions",
+    model: "Pro/MiniMaxAI/MiniMax-M2.7",
+    modelList: ["Pro/MiniMaxAI/MiniMax-M2.7"],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    category: "aggregator",
+    baseUrl: "https://openrouter.ai/api/v1",
+    protocol: "chatCompletions",
+    model: "openai/gpt-5.5",
+  },
+];
+
+function supplierIdFromName(value: string) {
+  const id = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return id || "provider";
+}
+
+function uniqueSupplierProfileId(profiles: RelayProfile[], base: string) {
+  const root = supplierIdFromName(base);
+  const existing = new Set(profiles.map((profile) => profile.id));
+  if (!existing.has(root)) return root;
+  for (let index = 2; index < 999; index += 1) {
+    const candidate = `${root}-${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${root}-${Date.now().toString(36)}`;
+}
+
+function createSupplierProfile(settings: BackendSettings): RelayProfile {
+  return normalizeSupplierProfile(withSupplierGeneratedFiles({
+    id: uniqueSupplierProfileId(settings.relayProfiles, "provider"),
+    name: `供应商 ${settings.relayProfiles.length + 1}`,
+    model: "gpt-5.5",
+    baseUrl: "",
+    upstreamBaseUrl: "",
+    apiKey: "",
+    protocol: "responses",
+    relayMode: "pureApi",
+    officialMixApiKey: false,
+    testModel: "gpt-5.5",
+    configContents: "",
+    authContents: "",
+    useCommonConfig: true,
+    contextSelection: { mcpServers: [], skills: [], plugins: [] },
+    contextSelectionInitialized: false,
+    contextWindow: "",
+    autoCompactLimit: "",
+    modelList: "gpt-5.5",
+    userAgent: "",
+  }));
+}
+
+function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
+  const modelList = profile.modelList ?? "";
+  const apiKey = profile.apiKey ?? "";
+  const baseUrl = profile.baseUrl || profile.upstreamBaseUrl || "";
+  const model = profile.model || profile.testModel || firstSupplierModel(modelList) || "gpt-5.5";
+  return {
+    ...profile,
+    id: supplierIdFromName(profile.id || profile.name),
+    name: profile.name || profile.id || "未命名供应商",
+    model,
+    testModel: profile.testModel || model,
+    baseUrl,
+    upstreamBaseUrl: profile.upstreamBaseUrl || baseUrl,
+    apiKey,
+    protocol: profile.protocol || "responses",
+    relayMode: profile.relayMode === "official" ? "official" : "pureApi",
+    officialMixApiKey: false,
+    configContents: profile.configContents ?? "",
+    authContents: profile.authContents ?? "",
+    modelList: modelList || model,
+    contextWindow: profile.contextWindow ?? "",
+    autoCompactLimit: profile.autoCompactLimit ?? "",
+    userAgent: profile.userAgent ?? "",
+  };
+}
+
+function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile {
+  const normalized = normalizeSupplierProfile({
+    ...profile,
+    configContents: "",
+    authContents: "",
+  });
+  return {
+    ...normalized,
+    configContents: buildSupplierConfigToml(normalized),
+    authContents: `${JSON.stringify({ OPENAI_API_KEY: normalized.apiKey.trim() }, null, 2)}\n`,
+  };
+}
+
+function buildSupplierConfigToml(profile: RelayProfile) {
+  const model = profile.model.trim();
+  const baseUrl = profile.baseUrl.trim();
+  const providerId = supplierIdFromName(profile.id || profile.name);
+  return [
+    model ? `model = ${tomlString(model)}` : null,
+    `model_provider = ${tomlString(providerId)}`,
+    'model_reasoning_effort = "high"',
+    "disable_response_storage = true",
+    "",
+    `[model_providers.${providerId}]`,
+    `name = ${tomlString(providerId)}`,
+    'wire_api = "responses"',
+    "requires_openai_auth = true",
+    baseUrl ? `base_url = ${tomlString(baseUrl)}` : null,
+    "",
+  ].filter((line): line is string => line !== null).join("\n");
+}
+
+function tomlString(value: string) {
+  return JSON.stringify(value);
+}
+
+function firstSupplierModel(modelList: string) {
+  return modelList.split(/\r?\n/).map((item) => item.trim()).find(Boolean) || "";
+}
+
+function redactSupplierAuth(contents: string) {
+  try {
+    const parsed = JSON.parse(contents || "{}") as Record<string, unknown>;
+    if (typeof parsed.OPENAI_API_KEY === "string" && parsed.OPENAI_API_KEY) {
+      parsed.OPENAI_API_KEY = `${parsed.OPENAI_API_KEY.slice(0, 6)}...${parsed.OPENAI_API_KEY.slice(-4)}`;
+    }
+    return `${JSON.stringify(parsed, null, 2)}\n`;
+  } catch {
+    return "{\n  \"OPENAI_API_KEY\": \"***\"\n}\n";
+  }
+}
+
+function supplierCategoryLabel(category: SupplierPreset["category"]) {
+  const labels: Record<SupplierPreset["category"], string> = {
+    official: "官方",
+    cn_official: "国内官方",
+    aggregator: "聚合/中转",
+    third_party: "第三方",
+  };
+  return labels[category];
+}
+
+function supplierProtocolLabel(protocol?: string) {
+  return protocol === "chatCompletions" ? "Chat Completions" : "Responses";
+}
+
+function supplierRelayModeLabel(mode?: string) {
+  if (mode === "official") return "官方登录";
+  if (mode === "mixedApi") return "官方混入 API Key";
+  return "纯 API";
+}
+
 function Notice({ notice, onClose }: { notice: { title: string; message: string; status?: Status }; onClose: () => void }) {
   const ok = statusOk(notice.status);
+  const running = notice.status === "running";
   return (
     <div className="toast-wrap" role="status" aria-live={ok ? "polite" : "assertive"}>
-      <div className={ok ? "toast-card" : "toast-card failed"}>
+      <div className={`${ok ? "toast-card" : "toast-card failed"}${running ? " running" : ""}`}>
         <div className="toast-progress" />
         <div className="toast-icon">{ok ? <CheckCircle2 className="h-5 w-5" /> : <AlertTriangle className="h-5 w-5" />}</div>
         <div className="toast-body">
@@ -2955,11 +3703,19 @@ function stringifyError(error: unknown) {
   return JSON.stringify(error);
 }
 
+function waitForPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
 function createActionsShape() {
   return {
     refreshRoute: async (_route?: Route) => {},
+    showNotice: (_notice: { title: string; message: string; status?: Status } | null) => {},
     openClaudeChinese: async () => {},
     installClaudeZhPatch: async () => {},
+    installClaudeZhPatchFromDirectory: async () => {},
     restoreClaudeZhPatch: async () => {},
     launchClaudeDesktop: async () => {},
     launchCodex: async () => {},
@@ -3003,7 +3759,8 @@ function createActionsShape() {
     applyRelayMode: async () => {},
     applyPureApiMode: async () => {},
     clearRelayMode: async () => {},
-    switchCodexRelayProfile: async (_profileId: string) => {},
+    switchCodexRelayProfile: async (_profileId: string, _settings?: BackendSettings) => {},
+    fetchRelayProfileModels: async (_profile: RelayProfile) => null as RelayProfileModelsResult | null,
     previewClaudeDesktopProvider: async (_request: { name: string; baseUrl: string; apiKey: string; modelList: string }) => {},
     applyClaudeDesktopProvider: async (_request: { name: string; baseUrl: string; apiKey: string; modelList: string }) => {},
     restoreClaudeDesktopProviderOfficial: async () => {},

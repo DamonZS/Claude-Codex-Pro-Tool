@@ -14,7 +14,9 @@ pub fn run() {
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
         "manager.start",
         serde_json::json!({
-            "version": env!("CARGO_PKG_VERSION")
+            "version": env!("CARGO_PKG_VERSION"),
+            "exePath": commands::current_exe_path_string(),
+            "exeLastModifiedMs": commands::current_exe_last_modified_ms()
         }),
     );
     let Some(_guard) = acquire_single_instance_guard() else {
@@ -67,6 +69,7 @@ pub fn run() {
             commands::load_claude_chinese_window_status,
             commands::load_claude_zh_patch_status,
             commands::install_claude_zh_patch,
+            commands::install_claude_zh_patch_at_install_root,
             commands::restore_claude_zh_patch,
             commands::open_plugin_hub_window,
             commands::open_prompt_optimizer_window,
