@@ -152,13 +152,21 @@ pub fn submit_response(payload: &Value) -> Value {
 }
 
 pub fn detect_status() -> ClaudeDesktopStatus {
+    let mut status = detect_status_light();
+    let (integrity_status, integrity_message, executable_audits) =
+        integrity_for_paths(&status.executable_paths);
+    status.integrity_status = integrity_status;
+    status.integrity_message = integrity_message;
+    status.executable_audits = executable_audits;
+    status
+}
+
+pub fn detect_status_light() -> ClaudeDesktopStatus {
     let (process_count, executable_paths) = claude_process_inventory();
     let install_kind = install_kind(&executable_paths);
     let process_ids = claude_process_ids();
     let debug_probe = detect_debug_probe(&process_ids);
     let cdp_blocker = cdp_blocker_for_install_kind(&install_kind);
-    let (integrity_status, integrity_message, executable_audits) =
-        integrity_for_paths(&executable_paths);
     let cdp_status = if debug_probe.debug_flags_present || !debug_probe.debug_ports.is_empty() {
         "observed_but_unverified".to_string()
     } else {
@@ -189,9 +197,9 @@ pub fn detect_status() -> ClaudeDesktopStatus {
         listening_ports: debug_probe.listening_ports,
         debug_evidence: debug_probe.evidence,
         supported_integration: "external_automation".to_string(),
-        integrity_status,
-        integrity_message,
-        executable_audits,
+        integrity_status: "not_checked".to_string(),
+        integrity_message: "Executable integrity audit deferred for faster startup.".to_string(),
+        executable_audits: Vec::new(),
     }
 }
 

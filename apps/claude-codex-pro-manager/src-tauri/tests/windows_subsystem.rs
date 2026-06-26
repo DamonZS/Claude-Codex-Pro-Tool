@@ -412,15 +412,42 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("<span>后端链接</span>"));
     assert!(app_tsx.contains("https://api.toporeduce.cn"));
     assert!(app_tsx.contains("打开"));
-    assert!(app_tsx.contains("Codex 运行"));
+    assert!(app_tsx.contains("Codex 状态"));
     assert!(app_tsx.contains("Claude 状态"));
+    assert!(app_tsx.contains("盘古记忆"));
     assert!(app_tsx.contains("盘古记忆总览"));
     assert!(app_tsx.contains("诊断与修复"));
+    assert!(app_tsx.contains("function codexOverviewStatus"));
+    assert!(app_tsx.contains("function claudeOverviewStatus"));
+    assert!(app_tsx.contains("status-segment-list"));
+    assert!(app_tsx.contains("status-segment"));
+    assert!(app_tsx.contains("运行中"));
+    assert!(app_tsx.contains("未运行"));
+    assert!(app_tsx.contains("注入成功"));
+    assert!(app_tsx.contains("前端在线"));
+    assert!(app_tsx.contains("后端在线"));
+    assert!(app_tsx.contains("汉化已注入"));
+    assert!(app_tsx.contains("CDP 受阻"));
+    assert!(app_tsx.contains("注入异常"));
+    assert!(!app_tsx.contains("inject ok"));
+    assert!(!app_tsx.contains("FE on"));
+    assert!(!app_tsx.contains("BE on"));
+    assert!(!app_tsx.contains("Codex 运行"));
     let overview_screen = app_tsx
         .split("function OverviewScreen")
         .nth(1)
         .and_then(|rest| rest.split("function SupplierScreen").next())
         .expect("overview screen source");
+    assert!(!overview_screen.contains("Codex 诊断"));
+    assert!(!overview_screen.contains("Claude 诊断"));
+    assert!(!overview_screen.contains("installKind ?? \"unknown\""));
+    assert!(!overview_screen.contains("cdpStatus ?? \"unknown\""));
+    let memory_panel = overview_screen
+        .split("title=\"盘古记忆总览\"")
+        .nth(1)
+        .and_then(|rest| rest.split("title=\"诊断与修复\"").next())
+        .expect("memory overview panel source");
+    assert!(!memory_panel.contains("Claude 一键开发模式"));
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
@@ -430,8 +457,11 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .and_then(|rest| rest.split("</div>").next())
         .expect("overview matrix source");
     assert!(!overview_matrix.contains("actions.installClaudeZhPatch()"));
+    assert!(overview_matrix.contains("items={codexStatus.items}"));
+    assert!(overview_matrix.contains("items={claudeStatus.items}"));
     assert!(overview_screen.contains("StatusActionTile"));
     assert!(overview_screen.contains("Claude 一键开发模式"));
+    assert!(overview_screen.contains("已写入"));
     assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
     assert!(app_tsx.contains("const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: \"正在写入 Claude Desktop 开发配置...\", status: \"running\" });"));
@@ -449,6 +479,10 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains(".relay-banner"));
     assert!(styles.contains(".relay-banner-open"));
     assert!(styles.contains(".status-tile"));
+    assert!(styles.contains(".status-segment-list"));
+    assert!(styles.contains(".status-segment.ok"));
+    assert!(styles.contains(".status-segment.warn"));
+    assert!(styles.contains(".status-segment.muted"));
     assert!(styles.contains(".toast-wrap"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
     assert!(!app_tsx.contains("role=\"dialog\""));
@@ -509,8 +543,10 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaude(true), refreshMemoryAssistStatus(true)]);"
+        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);"
     ));
+    assert!(app_tsx.contains("afterFirstPaint(() => {\n        void refreshMemoryAssistStatus(true);"));
+    assert!(app_tsx.contains("afterFirstPaint(() => {\n        void refreshClaudeZhPatch(true);"));
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
         "useEffect(() => {\n    void (async () => {\n      await Promise.all([\n        refreshOverview(true),\n        refreshClaude(true),\n        refreshSettings(true),\n        refreshPluginHub(true),"
@@ -638,6 +674,40 @@ fn claude_dev_mode_button_uses_the_current_provider_draft() {
     assert!(!app_tsx.contains(
         "claudeDesktopProviderDraft.baseUrl.trim() && claudeDesktopProviderDraft.apiKey.trim()"
     ));
+}
+
+#[test]
+fn overview_startup_uses_light_claude_status_and_defers_heavy_checks() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx)
+        .expect("read manager App.tsx")
+        .replace("\r\n", "\n");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let lib_rs = manifest_dir.join("src/lib.rs");
+    let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
+
+    let refresh_route = app_tsx
+        .split("const refreshRoute = async (target = route) => {")
+        .nth(1)
+        .and_then(|rest| rest.split("const actions = {").next())
+        .expect("refreshRoute body");
+    let overview_branch = refresh_route
+        .split("if (target === \"overview\") {")
+        .nth(1)
+        .and_then(|rest| rest.split("} else if").next())
+        .expect("overview branch");
+
+    assert!(commands_rs.contains("pub async fn load_claude_desktop_status_light()"));
+    assert!(commands_rs.contains("detect_status_light()"));
+    assert!(lib_rs.contains("commands::load_claude_desktop_status_light"));
+    assert!(app_tsx.contains("\"load_claude_desktop_status_light\""));
+    assert!(overview_branch.contains("refreshClaudeLight(true)"));
+    assert!(!overview_branch.contains("refreshClaude(true)"));
+    assert!(overview_branch.contains("afterFirstPaint"));
+    assert!(overview_branch.contains("refreshClaudeZhPatch(true)"));
+    assert!(overview_branch.contains("refreshMemoryAssistStatus(true)"));
 }
 
 #[test]

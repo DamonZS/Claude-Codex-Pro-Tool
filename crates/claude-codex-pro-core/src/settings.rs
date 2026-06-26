@@ -686,14 +686,15 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     if let Some(value) = source.get("relayProfiles").and_then(Value::as_array) {
         let mut profiles = serde_json::from_value::<Vec<RelayProfile>>(Value::Array(value.clone()))
             .unwrap_or_default();
-        preserve_official_mix_bearer_tokens(&mut profiles, target);
         for profile in &mut profiles {
             if profile.relay_mode == RelayMode::PureApi
                 || (profile.relay_mode == RelayMode::Official && profile.official_mix_api_key)
             {
                 let _ = crate::relay_config::normalize_relay_profile_for_storage(profile);
+                rewrite_profile_provider_id_to_match_profile_id(profile);
             }
         }
+        preserve_official_mix_bearer_tokens(&mut profiles, target);
         target.insert(
             "relayProfiles".to_string(),
             serde_json::to_value(profiles).unwrap_or_else(|_| Value::Array(Vec::new())),
@@ -803,6 +804,28 @@ fn preserve_official_mix_bearer_tokens(
         profile.config_contents =
             set_or_replace_experimental_bearer_token(&profile.config_contents, &token);
     }
+}
+
+fn rewrite_profile_provider_id_to_match_profile_id(profile: &mut RelayProfile) {
+    let profile_id = profile.id.trim();
+    if profile_id.is_empty() || profile_id == "custom" {
+        return;
+    }
+    let Ok(mut doc) = parse_toml_document(&profile.config_contents) else {
+        return;
+    };
+    let Some(current_provider) = active_provider_id(&doc) else {
+        return;
+    };
+    if current_provider != "custom" {
+        return;
+    }
+    doc["model_provider"] = toml_edit::value(profile_id);
+    if let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) {
+        let moved = providers.remove("custom").unwrap_or_else(toml_edit::table);
+        providers.insert(profile_id, moved);
+    }
+    profile.config_contents = ensure_text_newline(doc.to_string());
 }
 
 fn set_or_replace_experimental_bearer_token(contents: &str, token: &str) -> String {
@@ -1373,11 +1396,8 @@ experimental_bearer_token = "sk-existing"
         let profile = &updated.relay_profiles[0];
         assert_eq!(profile.api_key, "sk-existing");
         assert!(!profile.config_contents.contains("sk-other"));
-        assert!(profile.config_contents.contains(
-            r#"[model_providers.custom]
-base_url = "https://relay.example/v1"
-experimental_bearer_token = "sk-existing""#
-        ));
+        assert!(profile.config_contents.contains(r#"experimental_bearer_token = "sk-existing""#));
+        assert!(profile.config_contents.contains(r#"base_url = "https://relay.example/v1""#));
     }
 
     #[test]

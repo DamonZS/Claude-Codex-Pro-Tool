@@ -44,6 +44,12 @@ type CommandResult<T> = T & {
   message: string;
 };
 
+type StatusChipTone = "ok" | "warn" | "muted";
+type StatusChip = {
+  label: string;
+  tone: StatusChipTone;
+};
+
 type PathState = {
   status: string;
   path: string | null;
@@ -683,6 +689,36 @@ function compactPath(path?: string | null) {
   return `${path.slice(0, 24)}...${path.slice(-28)}`;
 }
 
+function codexOverviewStatus(overview: OverviewResult | null) {
+  const launch = overview?.latest_launch;
+  const launchStatus = launch?.status ?? "not_checked";
+  const running = launchStatus === "running" || launchStatus === "degraded";
+  const failed = statusFailed(launchStatus);
+  const items: StatusChip[] = [
+    { label: failed ? "运行异常" : running ? "运行中" : "未运行", tone: failed ? "warn" : running ? "ok" : "muted" },
+    { label: launchStatus === "degraded" || failed ? "注入异常" : running ? "注入成功" : "未注入", tone: launchStatus === "degraded" || failed ? "warn" : running ? "ok" : "muted" },
+    { label: launch?.debug_port ? "前端在线" : "前端离线", tone: launch?.debug_port ? "ok" : running ? "warn" : "muted" },
+    { label: launch?.helper_port ? "后端在线" : "后端离线", tone: launch?.helper_port ? "ok" : running ? "warn" : "muted" },
+  ];
+  const status = items.some((item) => item.tone === "warn") ? "failed" : running ? "running" : "not_checked";
+  return { status, items };
+}
+
+function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZhPatch: ClaudeZhPatchResult | null) {
+  const hasProcess = (claudeDesktop?.processCount ?? 0) > 0;
+  const cdpStatus = claudeDesktop?.cdpStatus ?? "not_checked";
+  const detectFailed = !!claudeDesktop && statusFailed(claudeDesktop.status);
+  const injected = !!claudeZhPatch?.status.localeConfigured && !!claudeZhPatch?.status.frontendI18nPresent && !!claudeZhPatch?.status.chunkPatchPresent;
+  const cdpWarn = cdpStatus === "blocked" || cdpStatus === "failed";
+  const items: StatusChip[] = [
+    { label: detectFailed ? "检测异常" : hasProcess ? "运行中" : "未运行", tone: detectFailed ? "warn" : hasProcess ? "ok" : "muted" },
+    { label: injected ? "汉化已注入" : "汉化未注入", tone: injected ? "ok" : "muted" },
+    { label: cdpStatus === "blocked" ? "CDP 受阻" : cdpStatus === "failed" ? "CDP 异常" : cdpStatus === "ok" ? "CDP 在线" : "CDP 未检测", tone: cdpWarn ? "warn" : cdpStatus === "ok" ? "ok" : "muted" },
+  ];
+  const status = items.some((item) => item.tone === "warn") ? "failed" : hasProcess ? "running" : "not_checked";
+  return { status, items };
+}
+
 function zhPatchNoticeMessage(result: ClaudeZhPatchResult) {
   const status = result.status;
   const patchStatus = result.status.status;
@@ -693,6 +729,14 @@ function zhPatchNoticeMessage(result: ClaudeZhPatchResult) {
   }
   const logPath = result.logsPath || "~\\.claude-codex-pro\\claude-codex-pro.log";
   return `${result.message}\n资源状态：${patchStatus} / ${installKind} / ${writable}\n诊断日志：${logPath}`;
+}
+
+function afterFirstPaint(task: () => void, delayMs = 0) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(task, delayMs);
+    });
+  });
 }
 
 export function App() {
@@ -783,6 +827,22 @@ export function App() {
     if (wrapped) setClaudeChinese(wrapped);
     if (zhPatch) setClaudeZhPatch(zhPatch);
     if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude Desktop", message: desktop.message, status: desktop.status });
+  };
+
+  const refreshClaudeLight = async (silent = false) => {
+    const [desktop, wrapped] = await Promise.all([
+      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status_light"), "Claude Desktop", { trackBusy: !silent, notify: !silent }),
+      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化", { trackBusy: !silent, notify: !silent }),
+    ]);
+    if (desktop) setClaudeDesktop(desktop);
+    if (wrapped) setClaudeChinese(wrapped);
+    if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude Desktop", message: desktop.message, status: desktop.status });
+  };
+
+  const refreshClaudeZhPatch = async (silent = false) => {
+    const result = await run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化", { trackBusy: !silent, notify: !silent });
+    if (result) setClaudeZhPatch(result);
+    return result;
   };
 
   const refreshSettings = async (silent = false) => {
@@ -1465,7 +1525,13 @@ export function App() {
 
   const refreshRoute = async (target = route) => {
     if (target === "overview") {
-      await Promise.all([refreshOverview(true), refreshClaude(true), refreshMemoryAssistStatus(true)]);
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);
+      afterFirstPaint(() => {
+        void refreshMemoryAssistStatus(true);
+      }, 250);
+      afterFirstPaint(() => {
+        void refreshClaudeZhPatch(true);
+      }, 650);
     } else if (target === "settings") {
       await refreshSettings(true);
     } else if (target === "supplier") {
@@ -1654,7 +1720,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} memoryAssist={memoryAssist} overview={overview} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -1710,7 +1776,7 @@ function OverviewScreen({
   actions,
   overview,
   claudeDesktop,
-  claudeChinese,
+  claudeZhPatch,
   claudeDesktopDevMode,
   claudeDevModeBusy,
   memoryAssist,
@@ -1718,15 +1784,17 @@ function OverviewScreen({
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
-  claudeChinese: ClaudeChineseWindowResult | null;
+  claudeZhPatch: ClaudeZhPatchResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDevModeBusy: boolean;
   memoryAssist: MemoryStatusResult | null;
 }) {
   const memory = memoryAssist?.memory;
+  const codexStatus = codexOverviewStatus(overview);
+  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
   const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";
-  const devModeValue = claudeDevModeBusy ? "写入中..." : devModeConfigured ? "已配置" : "写入开发配置";
+  const devModeValue = claudeDevModeBusy ? "写入中..." : devModeConfigured ? "已写入" : "写入开发配置";
   return (
     <div className="ops-dashboard">
       <section className="relay-banner">
@@ -1742,32 +1810,19 @@ function OverviewScreen({
         </Button>
       </section>
       <div className="ops-matrix">
-        <StatusTile icon={Power} label="Codex 运行" status={overview?.latest_launch?.status ?? "not_checked"} value={overview?.latest_launch?.status ?? "无记录"} />
+        <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
         <StatusTile icon={Activity} label="Codex 版本" status={overview?.codex_version ? "ok" : "not_checked"} value={overview?.codex_version ?? "未检测"} />
-        <StatusTile icon={MessageCircle} label="Claude 状态" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "unknown"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
+        <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />
         <StatusActionTile disabled={claudeDevModeBusy} icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} status={devModeStatus} value={devModeValue} />
-        <StatusTile icon={ShieldCheck} label="记忆大脑" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
+        <StatusTile icon={ShieldCheck} label="盘古记忆" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
       </div>
       <div className="ops-overview-grid">
-        <Panel title="Codex 诊断" detail="默认只展示运行、入口和版本状态；修复动作需要手动触发。">
-          <InfoRow label="运行状态" value={overview?.latest_launch?.status ?? "无记录"} />
-          <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />
-          <InfoRow label="静默入口" value={overview?.silent_shortcut.status ?? "未检测"} />
-          <InfoRow label="管理入口" value={overview?.management_shortcut.status ?? "未检测"} />
-        </Panel>
-        <Panel title="Claude 诊断" detail="一键汉化会写入本机 Claude Desktop zh-CN 资源、locale 和前端 chunk 补丁。">
-          <InfoRow label="安装类型" value={claudeDesktop?.installKind ?? "未检测"} />
-          <InfoRow label="CDP 状态" value={claudeDesktop?.cdpStatus ?? "未检测"} />
-          <InfoRow label="阻断原因" value={claudeDesktop?.cdpBlocker || "无"} />
-          <InfoRow label="一键汉化方式" value="本机资源补丁（zh-CN JSON + locale + chunk）" />
-        </Panel>
         <Panel title="盘古记忆总览" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
           <InfoRow label="状态" value={memory?.status ?? "未检测"} />
           <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
           <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
           <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
           <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
-          <ActionButton icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} />
         </Panel>
         <Panel title="诊断与修复" detail="检查和修复入口集中在这里；不会自动改写配置。">
           <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
@@ -3318,12 +3373,20 @@ function Panel({ title, detail, children }: { title: string; detail?: string; ch
   );
 }
 
-function StatusTile({ icon: Icon, label, value, status }: { icon: LucideIcon; label: string; value: string; status: string }) {
+function StatusTile({ icon: Icon, label, value, status, items }: { icon: LucideIcon; label: string; value?: string; status: string; items?: StatusChip[] }) {
   return (
     <div className={`status-tile ${statusOk(status) ? "ok" : "warn"}`}>
       <Icon className="h-4 w-4" />
       <span>{label}</span>
-      <strong>{value}</strong>
+      {items?.length ? (
+        <div className="status-segment-list">
+          {items.map((item) => (
+            <b className={`status-segment ${item.tone}`} key={item.label}>{item.label}</b>
+          ))}
+        </div>
+      ) : (
+        <strong>{value}</strong>
+      )}
     </div>
   );
 }

@@ -3456,10 +3456,48 @@ body {
   min-width: 0;
   overflow: hidden;
   color: #f7f8f8;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.25;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.status-segment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.status-segment {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.1;
   white-space: nowrap;
+}
+
+.status-segment.ok {
+  border-color: rgba(94, 106, 210, 0.42);
+  background: rgba(94, 106, 210, 0.16);
+  color: #eef0ff;
+}
+
+.status-segment.warn {
+  border-color: rgba(244, 196, 111, 0.45);
+  background: rgba(244, 196, 111, 0.14);
+  color: #ffe1a6;
+}
+
+.status-segment.muted {
+  border-color: rgba(138, 143, 152, 0.22);
+  background: rgba(138, 143, 152, 0.08);
+  color: #a5abb5;
 }
 
 .status-action-tile {

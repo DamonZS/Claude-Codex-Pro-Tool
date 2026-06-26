@@ -60,6 +60,7 @@ pub fn run() {
             commands::startup_options,
             commands::load_overview,
             commands::load_claude_desktop_status,
+            commands::load_claude_desktop_status_light,
             commands::load_claude_desktop_integrity,
             commands::focus_claude_desktop,
             commands::verify_claude_desktop,

@@ -1107,7 +1107,26 @@ fn active_or_default_provider_id(doc: &DocumentMut) -> String {
         .unwrap_or_else(|| RELAY_PROVIDER.to_string())
 }
 
+fn configured_custom_provider_id(doc: &DocumentMut) -> Option<String> {
+    if let Some(active_provider) = active_provider_id(doc).filter(|provider| is_custom_provider_id(provider)) {
+        return Some(active_provider);
+    }
+    doc.get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| {
+            for (provider, _) in providers.iter() {
+                if is_custom_provider_id(provider) {
+                    return Some(provider.to_string());
+                }
+            }
+            None
+        })
+}
+
 fn profile_or_active_provider_id(profile: &RelayProfile, doc: &DocumentMut) -> String {
+    if let Some(configured_provider) = configured_custom_provider_id(doc) {
+        return configured_provider;
+    }
     let profile_id = profile.id.trim();
     if is_custom_provider_id(profile_id) {
         return profile_id.to_string();

@@ -661,8 +661,28 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
 }
 
 #[tauri::command]
-pub fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload> {
-    let status = claude_codex_pro_core::claude_desktop::detect_status();
+pub async fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload> {
+    let status =
+        tauri::async_runtime::spawn_blocking(claude_codex_pro_core::claude_desktop::detect_status)
+            .await
+            .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
+    claude_desktop_status_result(status, "status")
+}
+
+#[tauri::command]
+pub async fn load_claude_desktop_status_light() -> CommandResult<ClaudeDesktopPayload> {
+    let status = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::claude_desktop::detect_status_light,
+    )
+    .await
+    .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
+    claude_desktop_status_result(status, "status_light")
+}
+
+fn claude_desktop_status_result(
+    status: claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+    log_action: &str,
+) -> CommandResult<ClaudeDesktopPayload> {
     let message = status.message.clone();
     let result = CommandResult {
         status: status.status.clone(),
@@ -683,13 +703,24 @@ pub fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload> {
             executable_audits: status.executable_audits,
         },
     };
-    log_claude_desktop_command("status", &result);
+    log_claude_desktop_command(log_action, &result);
     result
 }
 
 #[tauri::command]
-pub fn load_claude_desktop_integrity() -> CommandResult<ClaudeDesktopIntegrityPayload> {
-    let result = claude_codex_pro_core::claude_desktop::detect_integrity_status();
+pub async fn load_claude_desktop_integrity() -> CommandResult<ClaudeDesktopIntegrityPayload> {
+    let result = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::claude_desktop::detect_integrity_status,
+    )
+    .await
+    .unwrap_or_else(
+        |_| claude_codex_pro_core::claude_desktop::ClaudeDesktopIntegrityStatus {
+            status: "failed".to_string(),
+            message: "Claude Desktop integrity audit background task failed.".to_string(),
+            executable_audits: Vec::new(),
+            policy: "read_only_audit_no_executable_or_asar_patch".to_string(),
+        },
+    );
     let command_result = CommandResult {
         status: result.status,
         message: result.message,
@@ -782,7 +813,7 @@ pub fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
 pub async fn open_claude_chinese_window(
     app: tauri::AppHandle,
 ) -> CommandResult<ClaudeChineseWindowPayload> {
-    let status = claude_codex_pro_core::claude_desktop::detect_status();
+    let status = claude_codex_pro_core::claude_desktop::detect_status_light();
     let label = "claude-chinese";
     let default_url = "https://claude.ai/new";
     let script = claude_codex_pro_core::assets::claude_chinese_injection_script();
@@ -891,7 +922,7 @@ pub async fn open_prompt_optimizer_window(
 pub fn load_claude_chinese_window_status(
     app: tauri::AppHandle,
 ) -> CommandResult<ClaudeChineseWindowPayload> {
-    let status = claude_codex_pro_core::claude_desktop::detect_status();
+    let status = claude_codex_pro_core::claude_desktop::detect_status_light();
     ok(
         "Claude 一键汉化状态已读取。",
         claude_chinese_window_payload(&app, &status),
@@ -5021,7 +5052,7 @@ mod tests {
 
     #[test]
     fn claude_desktop_status_preserves_read_only_audit_contract() {
-        let result = load_claude_desktop_status();
+        let result = tauri::async_runtime::block_on(load_claude_desktop_status());
 
         assert!(matches!(result.status.as_str(), "ok" | "not_running"));
         assert_eq!(result.payload.supported_integration, "external_automation");
@@ -5044,7 +5075,7 @@ mod tests {
 
     #[test]
     fn claude_desktop_integrity_returns_policy_and_audit_shape() {
-        let result = load_claude_desktop_integrity();
+        let result = tauri::async_runtime::block_on(load_claude_desktop_integrity());
 
         assert!(matches!(
             result.status.as_str(),
