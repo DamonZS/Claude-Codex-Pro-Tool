@@ -43,6 +43,7 @@
   const codexDeleteStyleVersion = "13";
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
+  const claudeCodexProMenuVersion = "8";
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
@@ -593,15 +594,15 @@
       }
       #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass} {
         position: fixed;
-        top: var(--claude-codex-pro-menu-top, 0);
-        left: 50%;
+        top: var(--claude-codex-pro-menu-top, 8px);
+        left: var(--claude-codex-pro-menu-left, 44px);
         right: auto;
-        transform: translateX(-50%);
-        z-index: 2147483645;
+        transform: none;
+        z-index: 2147483647;
         height: var(--claude-codex-pro-menu-height, 30px);
-        color: #d1d5db;
+        color: #ffffff;
         font: 13px system-ui, sans-serif;
-        text-align: center;
+        text-align: left;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -620,17 +621,49 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 4px;
+        gap: 6px;
         border: 0;
         background: transparent;
         color: inherit;
         font: inherit;
         height: 100%;
         line-height: 1;
-        padding: 0 8px;
+        padding: 0 4px;
+        border-radius: 0;
+        box-shadow: none;
         cursor: pointer;
         pointer-events: auto;
         -webkit-app-region: no-drag;
+      }
+      .claude-codex-pro-trigger:hover {
+        background: transparent;
+      }
+      .claude-codex-pro-window-status-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+      }
+      .claude-codex-pro-window-status-title {
+        margin-right: 2px;
+        color: #f4f4f5;
+        font-weight: 650;
+      }
+      .claude-codex-pro-window-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #ef4444;
+        box-shadow: 0 0 0 3px rgba(239,68,68,.18);
+        display: inline-block;
+      }
+      .claude-codex-pro-window-status-dot[data-status="ok"] {
+        background: #34d399;
+        box-shadow: 0 0 0 3px rgba(52,211,153,.18);
+      }
+      .claude-codex-pro-window-status-dot[data-status="checking"] {
+        background: #ef4444;
+        box-shadow: 0 0 0 3px rgba(239,68,68,.18);
       }
       .claude-codex-pro-modal-overlay {
         position: fixed;
@@ -731,7 +764,7 @@
       .claude-codex-pro-toggle,
       .claude-codex-pro-action-button,
       .claude-codex-pro-issue-button,
-      .claude-codex-pro-backend-status {
+      .claude-codex-pro-status-note {
         flex-shrink: 0;
         align-self: center;
       }
@@ -789,9 +822,9 @@
       .${codexServiceTierBadgeClass}[data-disabled="true"] { cursor: not-allowed; opacity: .78; }
       #${codexMemoryBadgeId} {
         position: fixed;
-        top: 12px;
-        left: 50%;
-        transform: translateX(-50%);
+        top: var(--codex-memory-badge-top, 8px);
+        left: var(--codex-memory-badge-left, 44px);
+        transform: none;
         z-index: 2147483002;
         display: inline-flex;
         align-items: center;
@@ -799,15 +832,15 @@
         max-width: min(520px, calc(100vw - 32px));
         height: 30px;
         box-sizing: border-box;
-        border: 1px solid rgba(37,99,235,.34);
-        border-radius: 999px;
-        background: rgba(15,23,42,.88);
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         color: #dbeafe;
-        box-shadow: 0 12px 30px rgba(15,23,42,.24);
+        box-shadow: none;
         font: 600 12px/1 system-ui, sans-serif;
-        padding: 0 12px;
+        padding: 0 4px;
         cursor: pointer;
-        backdrop-filter: blur(12px);
+        backdrop-filter: none;
       }
       #${codexMemoryBadgeId}[data-status="ok"] { border-color: rgba(16,185,129,.44); color: #bbf7d0; }
       #${codexMemoryBadgeId}[data-status="failed"] { border-color: rgba(248,113,113,.5); color: #fecaca; }
@@ -943,10 +976,9 @@
       .claude-codex-pro-form-message[data-status="ok"] { color: #34d399; }
       .claude-codex-pro-form-message[data-status="failed"] { color: #f87171; }
       .claude-codex-pro-form-message[data-status="loading"] { color: #fbbf24; }
-      .claude-codex-pro-backend-status { display: grid; gap: 4px; min-width: 132px; justify-items: center; }
-      .claude-codex-pro-backend-label { color: #a1a1aa; font-size: 12px; }
-      .claude-codex-pro-backend-label[data-status="ok"] { color: #34d399; }
-      .claude-codex-pro-backend-label[data-status="failed"] { color: #f87171; }
+      .claude-codex-pro-status-note { min-width: 132px; color: #a1a1aa; font-size: 12px; text-align: right; }
+      .claude-codex-pro-status-note[data-status="ok"] { color: #34d399; }
+      .claude-codex-pro-status-note[data-status="failed"] { color: #f87171; }
       .claude-codex-pro-backend-repair { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
       .claude-codex-pro-backend-repair[hidden] { display: none; }
       .claude-codex-pro-user-script-warning { margin-top: 4px; color: #fbbf24; font-size: 12px; }
@@ -1651,8 +1683,8 @@
   }
 
   function codexServiceTierBadgeState() {
-    if (claudeCodexProBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查后端连接" };
-    if (claudeCodexProBackendStatus.status && claudeCodexProBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：后端未连接，无法切换" };
+    if (claudeCodexProBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查连接" };
+    if (claudeCodexProBackendStatus.status && claudeCodexProBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：未连接，无法切换" };
     if (codexServiceTierState.status === "loading") return { tier: "loading", label: "...", title: "服务模式：正在读取" };
     if (codexServiceTierState.status === "failed") return { tier: "failed", label: "?", title: "服务模式：读取失败" };
     const fastAvailability = codexServiceTierFastAvailability();
@@ -1701,7 +1733,7 @@
     document.querySelectorAll("[data-codex-service-tier-status]").forEach((node) => {
       node.dataset.status = fastUnsupportedActive ? "unsupported" : (featureEnabled && backendConnected ? (codexServiceTierState.status || "loading") : (backendChecking ? "loading" : "failed"));
       node.textContent = featureEnabled
-        ? (backendConnected ? (codexServiceTierState.message || "未读取") : (backendChecking ? "正在检查后端…" : "未连接"))
+        ? (backendConnected ? (codexServiceTierState.message || "未读取") : (backendChecking ? "正在检查连接…" : "未连接"))
         : "未启用";
     });
     document.querySelectorAll("[data-codex-service-tier-inherit]").forEach((button) => {
@@ -2015,7 +2047,7 @@
   }
 
   let claudeCodexProUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
-  let claudeCodexProBackendStatus = { status: "checking", message: "正在检查后端…" };
+  let claudeCodexProBackendStatus = { status: "checking", message: "正在检查连接…" };
   let claudeCodexProBackendCheckSeq = 0;
   let claudeChineseOverlayObserver = null;
   let claudeChineseOverlayScheduled = false;
@@ -2416,8 +2448,10 @@
 
   function translateClaudeChineseText(value) {
     let next = String(value || "");
+    if (/\bCodex\b/.test(next)) return next;
     const map = claudeChineseOverlaySortedMap || (claudeChineseOverlaySortedMap = [...claudeChineseOverlayMap].sort((a, b) => b[0].length - a[0].length));
     map.forEach(([source, target]) => {
+      if (/\bCodex\b/.test(next)) return;
       next = next.replaceAll(source, target);
     });
     return next;
@@ -2483,13 +2517,19 @@
 
   function setClaudeCodexProTriggerLabel(trigger) {
     if (!trigger) return;
-    let label = trigger.querySelector("[data-claude-codex-pro-trigger-label]");
-    if (!label) {
-      label = document.createElement("span");
-      label.dataset.claudeCodexProTriggerLabel = "true";
-      trigger.appendChild(label);
-    }
-    label.textContent = `Claude Codex Pro ${claudeCodexProVersion}`;
+    trigger.setAttribute("aria-label", `CCP ${claudeCodexProVersion}`);
+    trigger.title = `CCP ${claudeCodexProVersion}`;
+    if (trigger.dataset.claudeCodexProTriggerLabel === "ccp-status-v2") return;
+    trigger.dataset.claudeCodexProTriggerLabel = "ccp-status-v2";
+    trigger.textContent = "";
+    const indicator = document.createElement("span");
+    indicator.className = "claude-codex-pro-window-status-dot";
+    indicator.dataset.codexBackendIndicator = "true";
+    indicator.dataset.status = claudeCodexProBackendStatus.status || "checking";
+    const title = document.createElement("span");
+    title.className = "claude-codex-pro-window-status-title";
+    title.textContent = `CCP ${claudeCodexProVersion}`;
+    trigger.append(indicator, title);
   }
 
   function ensureClaudeCodexProTriggerIndicator(trigger) {
@@ -2497,7 +2537,7 @@
     let indicator = trigger.querySelector("[data-codex-backend-indicator]");
     if (!indicator) {
       indicator = document.createElement("span");
-      indicator.className = "claude-codex-pro-backend-indicator";
+      indicator.className = "claude-codex-pro-window-status-dot";
       indicator.dataset.codexBackendIndicator = "true";
       trigger.prepend(indicator);
     }
@@ -2506,14 +2546,18 @@
 
   function renderBackendStatus() {
     const status = claudeCodexProBackendStatus.status || "failed";
+    const statusMessage = claudeCodexProBackendStatus.message || (status === "ok" ? "已连接" : status === "checking" ? "检查中" : "未连接");
     const label = document.querySelector("[data-codex-backend-status]");
     if (label) {
       label.dataset.status = status;
-      label.textContent = claudeCodexProBackendStatus.message || (status === "ok" ? "后端已连接" : "未连接");
+      label.textContent = statusMessage;
     }
     document.querySelectorAll("[data-codex-backend-indicator]").forEach((indicator) => {
       indicator.dataset.status = status;
-      indicator.title = status === "ok" ? "后端已连接" : status === "checking" ? "正在检查后端" : "未连接";
+      indicator.title = statusMessage;
+    });
+    document.querySelectorAll(".claude-codex-pro-trigger").forEach((trigger) => {
+      trigger.title = `CCP ${claudeCodexProVersion}：${statusMessage}`;
     });
     const repair = document.querySelector("[data-codex-backend-repair]");
     if (repair) repair.hidden = status === "ok" || status === "checking";
@@ -2523,7 +2567,7 @@
   function withBackendTimeout(request) {
     return Promise.race([
       request,
-      new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "后端检查超时", timeout: true }), 2000)),
+      new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "连接检查超时", timeout: true }), 2000)),
     ]);
   }
 
@@ -2543,23 +2587,14 @@
   }
 
   async function repairBackend() {
-    claudeCodexProBackendStatus = { status: "checking", message: "正在修复后端…" };
+    claudeCodexProBackendStatus = { status: "checking", message: "正在修复连接…" };
     renderBackendStatus();
     try {
       claudeCodexProBackendStatus = await postJson("/backend/repair", {});
     } catch (error) {
-      claudeCodexProBackendStatus = { status: "failed", message: "后端修复失败" };
+      claudeCodexProBackendStatus = { status: "failed", message: "连接修复失败" };
     }
     renderBackendStatus();
-  }
-
-  async function openManagerFromCodex() {
-    const result = await postJson("/manager/open", {});
-    if (result.status === "ok") {
-      showToast("管理工具已打开", null);
-    } else {
-      showToast(result.message || "打开管理工具失败", null);
-    }
   }
 
   function scheduleBackendHeartbeat() {
@@ -2750,11 +2785,8 @@
         <div class="claude-codex-pro-modal-body">
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">后端连接</div><div class="claude-codex-pro-row-description">每 5 秒检查一次 launcher 后端状态；断开时可尝试修复后端运行。</div></div>
-              <div class="claude-codex-pro-backend-status">
-                <div class="claude-codex-pro-backend-label" data-codex-backend-status="true" data-status="checking">正在检查后端…</div>
-                <button type="button" class="claude-codex-pro-backend-repair" data-codex-backend-repair="true" hidden>修复后端运行</button>
-              </div>
+              <div><div class="claude-codex-pro-row-title">连接状态</div><div class="claude-codex-pro-row-description">状态灯同步显示当前注入连接，异常时可尝试修复运行。</div></div>
+              <div class="claude-codex-pro-status-note" data-codex-backend-status="true" data-status="checking">检查中</div>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">页面功能增强</div><div class="claude-codex-pro-row-description">关闭后停用删除、导出、移动、Timeline、插件相关和菜单位置增强。</div></div>
@@ -2842,7 +2874,7 @@
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动、Timeline 和用户脚本，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
-              <button type="button" class="claude-codex-pro-action-button" data-codex-open-manager="true">打开管理工具</button>
+              <button type="button" class="claude-codex-pro-action-button" data-codex-backend-repair="true">修复运行</button>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">原生菜单栏位置</div><div class="claude-codex-pro-row-description">把 Claude Codex Pro 菜单插入顶部原生菜单栏；默认关闭以避免页面重渲染冲突。</div></div>
@@ -2929,10 +2961,6 @@
       }
       if (target?.closest("[data-codex-open-devtools]")) {
         postJson("/devtools/open", {});
-        return;
-      }
-      if (target?.closest("[data-codex-open-manager]")) {
-        openManagerFromCodex();
         return;
       }
       if (target?.closest("[data-claude-codex-pro-discord]")) {
@@ -3066,7 +3094,7 @@
 
   function configureClaudeCodexProTrigger(menu, trigger, nativeButtonClass) {
     if (!trigger) return;
-    if (nativeButtonClass) trigger.className = normalizeClaudeCodexProTriggerClassName(nativeButtonClass);
+    trigger.className = "claude-codex-pro-trigger";
     if (trigger.dataset.claudeCodexProTriggerInstalled === "5") return;
     trigger.dataset.claudeCodexProTriggerInstalled = "5";
     trigger.addEventListener("click", (event) => {
@@ -3074,6 +3102,60 @@
       event.stopPropagation();
       openClaudeCodexProModal();
     }, true);
+  }
+
+  function visibleRectForCodexStatusAnchor(node, headerRect) {
+    if (!(node instanceof Element) || node.closest?.(`#${claudeCodexProMenuId}`) || isExtensionUiNode(node)) return null;
+    const rect = node.getBoundingClientRect();
+    if (!(rect.width > 0 && rect.height > 0)) return null;
+    if (rect.right < headerRect.left || rect.left > Math.min(window.innerWidth * 0.55, headerRect.right)) return null;
+    if (!String(node.textContent || node.getAttribute("aria-label") || node.getAttribute("title") || "").trim() && !node.querySelector?.("svg")) return null;
+    return rect;
+  }
+
+  function findCodexStatusLeftAnchor(header, headerRect) {
+    const selector = [
+      "button",
+      "a",
+      '[role="button"]',
+      '[aria-label]',
+      '[title]',
+      '[class*="truncate"]',
+      '[class*="text-sm"]',
+      '[class*="text-base"]',
+      '[data-testid]',
+      "h1",
+      "h2",
+      "svg",
+    ].join(",");
+    const candidates = Array.from(header?.querySelectorAll?.(selector) || []);
+    return candidates
+      .map((node) => visibleRectForCodexStatusAnchor(node, headerRect))
+      .filter(Boolean)
+      .sort((a, b) => a.left - b.left || a.top - b.top)[0] || null;
+  }
+
+  function findCodexWindowLeftAnchor(header, headerRect) {
+    const leftRoots = [
+      document.querySelector("aside"),
+      document.querySelector("nav"),
+      document.querySelector('[role="navigation"]'),
+      document.querySelector('[class*="sidebar"]'),
+    ].filter(Boolean);
+    const viewportRect = {
+      left: 0,
+      right: Math.min(window.innerWidth * 0.55, headerRect?.right || window.innerWidth),
+    };
+    for (const root of leftRoots) {
+      const rootRect = root.getBoundingClientRect?.();
+      if (!rootRect || !(rootRect.width > 0 && rootRect.height > 0)) continue;
+      const anchor = findCodexStatusLeftAnchor(root, {
+        left: Math.max(0, rootRect.left),
+        right: Math.min(viewportRect.right, rootRect.right),
+      });
+      if (anchor) return anchor;
+    }
+    return findCodexStatusLeftAnchor(header, headerRect);
   }
 
   function numericCssValue(value) {
@@ -3109,19 +3191,54 @@
   function updateFloatingClaudeCodexProMenuPosition(menu) {
     if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
-    if (!header) return;
+    if (!header) {
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
+      return;
+    }
     const headerRect = header.getBoundingClientRect();
     if (headerRect.height) {
+      const anchorRect = findCodexWindowLeftAnchor(header, headerRect);
+      const menuWidth = menu.getBoundingClientRect().width || 168;
+      const minLeft = Math.max(8, headerRect.left + 8);
+      const maxLeft = Math.max(minLeft, Math.min(window.innerWidth - menuWidth - 8, headerRect.right - menuWidth - 8));
+      const anchorLeft = anchorRect ? anchorRect.right + 8 : headerRect.left + 12;
+      const left = Math.max(minLeft, Math.min(anchorLeft, maxLeft));
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${headerRect.top}px`);
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${left}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${headerRect.height}px`);
+    } else {
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
     }
+    updateCodexMemoryBadgePosition();
+  }
+
+  function updateCodexMemoryBadgePosition() {
+    const badge = document.getElementById(codexMemoryBadgeId);
+    if (!badge) return;
+    const statusMenu = document.getElementById(claudeCodexProMenuId);
+    const statusRect = statusMenu?.getBoundingClientRect?.();
+    if (statusRect && statusRect.width > 0 && statusRect.height > 0) {
+      const badgeWidth = badge.getBoundingClientRect().width || 150;
+      const left = Math.min(Math.max(8, statusRect.right + 8), Math.max(8, window.innerWidth - badgeWidth - 8));
+      badge.style.setProperty("--codex-memory-badge-left", `${left}px`);
+      badge.style.setProperty("--codex-memory-badge-top", `${statusRect.top}px`);
+      badge.style.height = `${statusRect.height}px`;
+      return;
+    }
+    badge.style.setProperty("--codex-memory-badge-left", "44px");
+    badge.style.setProperty("--codex-memory-badge-top", "8px");
+    badge.style.height = "30px";
   }
 
   function installClaudeCodexProMenu() {
     const existing = document.getElementById(claudeCodexProMenuId);
     removeDuplicateClaudeCodexProMenus(existing);
     let insertionPoint = findNativeMenuInsertionPoint();
-    if (existing && existing.dataset.claudeCodexProMenuVersion !== "6") {
+    if (existing && existing.dataset.claudeCodexProMenuVersion !== claudeCodexProMenuVersion) {
       existing.remove();
       insertionPoint = findNativeMenuInsertionPoint();
     } else if (existing && insertionPoint && existing.parentElement === insertionPoint.parent) {
@@ -3141,7 +3258,7 @@
     const menu = document.createElement("div");
     menu.id = claudeCodexProMenuId;
     menu.dataset.claudeCodexProMenu = "true";
-    menu.dataset.claudeCodexProMenuVersion = "6";
+    menu.dataset.claudeCodexProMenuVersion = claudeCodexProMenuVersion;
     const trigger = document.createElement("button");
     trigger.type = "button";
     const indicator = ensureClaudeCodexProTriggerIndicator(trigger);
@@ -9023,6 +9140,7 @@
       });
       document.documentElement.appendChild(node);
     }
+    updateCodexMemoryBadgePosition();
   }
 
   async function codexMemoryLoadSession(force = false) {

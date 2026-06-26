@@ -26,7 +26,7 @@ impl Default for LauncherHooks {
             core: Arc::new(DefaultLaunchHooks::default()),
             data: Arc::new(LauncherDataService::default()),
             runtime: Arc::new(LauncherRuntimeService::new(
-                9229,
+                claude_codex_pro_core::launcher::LaunchOptions::default().debug_port,
                 default_user_script_manager(),
             )),
         }
@@ -35,14 +35,24 @@ impl Default for LauncherHooks {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Err(error) = run_launcher().await {
+        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            "launcher.fatal",
+            json!({
+                "error": error.to_string()
+            }),
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn run_launcher() -> Result<()> {
     let options = parse_launch_options(std::env::args().skip(1));
     let Some(_guard) = acquire_single_instance_guard(options.debug_port)? else {
         activate_existing_codex_app(&options).await?;
         return Ok(());
     };
-    tokio::spawn(async {
-        let _ = notify_manager_when_update_available().await;
-    });
     let hooks = LauncherHooks::default();
     let handle = launch_and_inject_with_hooks(options, &hooks).await?;
     handle.wait_for_codex_exit().await?;
@@ -250,30 +260,6 @@ fn log_launcher_already_running(debug_port: u16) {
     );
 }
 
-async fn notify_manager_when_update_available() -> anyhow::Result<bool> {
-    let update =
-        claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION)
-            .await?;
-    if !update.update_available {
-        return Ok(false);
-    }
-    open_manager_with_update_prompt()?;
-    Ok(true)
-}
-
-fn open_manager_with_update_prompt() -> anyhow::Result<()> {
-    let manager_path = manager_exe_path();
-    let mut command = std::process::Command::new(&manager_path);
-    command.arg("--show-update");
-    #[cfg(windows)]
-    {
-        command.creation_flags(claude_codex_pro_core::windows_create_no_window());
-    }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("启动管理工具失败：{error}"))
-}
 
 fn parse_launch_options<I, S>(args: I) -> LaunchOptions
 where

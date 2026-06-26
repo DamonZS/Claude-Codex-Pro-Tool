@@ -99,6 +99,50 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 }
 
 #[test]
+fn injection_script_exposes_left_anchored_codex_status_entry() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("const claudeCodexProMenuVersion = \"8\""));
+    assert!(script.contains("findCodexStatusLeftAnchor"));
+    assert!(script.contains("findCodexWindowLeftAnchor"));
+    assert!(script.contains("document.querySelector(\"aside\")"));
+    assert!(script.contains("--claude-codex-pro-menu-left"));
+    assert!(script.contains("CCP ${claudeCodexProVersion}"));
+    assert!(script.contains("setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", \"44px\")"));
+    assert!(!script.contains("data-codex-frontend-indicator=\"true\""));
+    assert!(script.contains("data-codex-backend-indicator=\"true\""));
+    assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));
+    assert!(script.contains("background: transparent"));
+    assert!(script.contains("updateCodexMemoryBadgePosition"));
+    assert!(script.contains("openClaudeCodexProModal()"));
+    assert!(script.contains("trigger.dataset.claudeCodexProTriggerLabel = \"ccp-status-v2\""));
+}
+
+#[test]
+fn claude_chinese_script_exposes_left_anchored_status_panel() {
+    let script = assets::claude_chinese_injection_script();
+
+    assert!(script.contains("ccp-claude-status-pill"));
+    assert!(script.contains("ccp-claude-status-panel"));
+    assert!(script.contains("findLeftAnchor"));
+    assert!(script.contains("findWindowLeftAnchor"));
+    assert!(script.contains("document.querySelector(\"aside\")"));
+    assert!(script.contains("CCP ' + ccpDisplayVersion"));
+    assert!(script.contains("pill.style.left = \"44px\""));
+    assert!(!script.contains("data-ccp-frontend-status"));
+    assert!(script.contains("data-ccp-backend-status"));
+    assert!(script.contains("isEditableUi"));
+    assert!(script.contains("[contenteditable]"));
+    assert!(script.contains("[role=\"textbox\"]"));
+    assert!(script.contains("tauriInvoke(\"backend_version\", {})"));
+    assert!(script.contains("scheduleBackendHeartbeat"));
+    assert!(script.contains("openStatusPanel"));
+    assert!(script.contains("openPluginHub"));
+    assert!(script.contains("data-ccp-toggle-chinese"));
+    assert!(!script.contains("translateX(-50%)"));
+}
+
+#[test]
 fn injection_script_fetches_ads_without_bridge() {
     let script = assets::injection_script(57321);
 

@@ -9,6 +9,8 @@ use toml_edit::{DocumentMut, Item, Table, TableLike};
 use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 
 const RELAY_PROVIDER: &str = "custom";
+const CODEX_PROVIDER_AUTH_ENV_KEY: &str = "OPENAI_API_KEY";
+const WINDOWS_USER_ENVIRONMENT_KEY: &str = "Environment";
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "claude_codex_pro_chat_base_url";
 const RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "amazon-bedrock",
@@ -211,6 +213,15 @@ pub fn relay_config_status_from_home(home: &Path) -> RelayConfigStatus {
         .map(|value| unquote_toml_string(value).trim().to_string())
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
+    let auth_env_key = provider
+        .as_ref()
+        .and_then(|values| values.get("env_key"))
+        .map(|value| unquote_toml_string(value).trim().to_string())
+        .filter(|value| !value.is_empty());
+    let has_env_api_key = auth_env_key
+        .as_deref()
+        .and_then(user_env_var)
+        .is_some_and(|value| !value.trim().is_empty());
     let has_base_url = provider
         .as_ref()
         .and_then(|values| values.get("base_url"))
@@ -219,10 +230,10 @@ pub fn relay_config_status_from_home(home: &Path) -> RelayConfigStatus {
     RelayConfigStatus {
         configured: root_provider.is_some()
             && requires_openai_auth
-            && (has_bearer_token || codex_auth_api_key(&auth_contents).is_some())
+            && (has_bearer_token || has_env_api_key || codex_auth_api_key(&auth_contents).is_some())
             && has_base_url,
         requires_openai_auth,
-        has_bearer_token,
+        has_bearer_token: has_bearer_token || has_env_api_key || auth_env_key.is_some(),
         config_path: config_path.to_string_lossy().to_string(),
     }
 }
@@ -263,6 +274,7 @@ pub fn apply_relay_config_to_home_with_protocol(
     }))?;
     let backup_path =
         write_codex_live_atomic(home, Some(&updated), Some(auth_contents.as_bytes()), false)?;
+    set_codex_provider_auth_env_var(bearer_token)?;
     let status = relay_config_status_from_home(home);
     Ok(RelayApplyResult {
         config_path: status.config_path,
@@ -404,12 +416,21 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
     )?;
 
     if profile.relay_mode == crate::settings::RelayMode::PureApi {
-        apply_relay_files_to_home_with_computer_use_guard(
+        let result = apply_relay_files_to_home_with_computer_use_guard(
             home,
             &config_with_limits,
             &profile.auth_contents,
             preserve_computer_use_guard,
-        )
+        )?;
+        if let Some(token) = codex_auth_api_key(&profile.auth_contents)
+            .or_else(|| {
+                let api_key = relay_profile_api_key(profile);
+                (!api_key.trim().is_empty()).then_some(api_key)
+            })
+        {
+            set_codex_provider_auth_env_var(&token)?;
+        }
+        Ok(result)
     } else {
         let auth_contents = official_profile_auth_for_switch(home, &profile.auth_contents)?;
         apply_relay_files_to_home_with_computer_use_guard(
@@ -482,6 +503,7 @@ pub fn apply_pure_api_config_to_home_with_protocol(
     }))?;
     let backup_path =
         write_codex_live_atomic(home, Some(&updated), Some(auth_contents.as_bytes()), false)?;
+    set_codex_provider_auth_env_var(bearer_token)?;
     let status = relay_config_status_from_home(home);
     Ok(RelayApplyResult {
         config_path: status.config_path,
@@ -1736,6 +1758,40 @@ fn codex_auth_api_key(auth_contents: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn user_env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+fn set_codex_provider_auth_env_var(token: &str) -> anyhow::Result<()> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(());
+    }
+    set_user_env_var(CODEX_PROVIDER_AUTH_ENV_KEY, token)
+}
+
+#[cfg(all(windows, not(test)))]
+fn set_user_env_var(name: &str, value: &str) -> anyhow::Result<()> {
+    crate::windows_integration::set_current_user_string_value(
+        WINDOWS_USER_ENVIRONMENT_KEY,
+        name,
+        value,
+    )?;
+    unsafe {
+        std::env::set_var(name, value);
+    }
+    Ok(())
+}
+
+#[cfg(any(not(windows), test))]
+fn set_user_env_var(name: &str, value: &str) -> anyhow::Result<()> {
+    let _ = WINDOWS_USER_ENVIRONMENT_KEY;
+    unsafe {
+        std::env::set_var(name, value);
+    }
+    Ok(())
+}
+
 /// 解析 profile 實際使用的模型：编辑表单字段非空时优先，旧 config.toml 仅兜底。
 /// 这样修改供应商 ID/模型后，保存会重写旧 TOML，而不是继续沿用残留配置。
 pub fn relay_profile_model(profile: &RelayProfile) -> String {
@@ -1837,6 +1893,7 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     {
         provider["requires_openai_auth"] = toml_edit::value(true);
     }
+    provider["env_key"] = toml_edit::value(CODEX_PROVIDER_AUTH_ENV_KEY);
     let provider_base_url = codex_base_url_for_protocol(
         base_url.trim(),
         profile.protocol,
@@ -2335,7 +2392,7 @@ fn root_key_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
 fn upsert_model_provider_config(
     contents: &str,
     base_url: &str,
-    bearer_token: &str,
+    _bearer_token: &str,
 ) -> anyhow::Result<String> {
     let mut doc = parse_toml_document(contents)?;
     let provider_id = active_or_default_provider_id(&doc);
@@ -2348,8 +2405,9 @@ fn upsert_model_provider_config(
     provider["name"] = toml_edit::value(provider_id.as_str());
     provider["wire_api"] = toml_edit::value("responses");
     provider["requires_openai_auth"] = toml_edit::value(true);
+    provider["env_key"] = toml_edit::value(CODEX_PROVIDER_AUTH_ENV_KEY);
     provider["base_url"] = toml_edit::value(base_url);
-    provider["experimental_bearer_token"] = toml_edit::value(bearer_token);
+    provider.remove("experimental_bearer_token");
 
     Ok(move_model_providers_before_profiles(
         &ensure_trailing_newline(doc.to_string()),

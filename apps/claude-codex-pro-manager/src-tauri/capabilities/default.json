@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default permissions for the Claude Codex Pro Manager main window. Grants the dialog plugin's default permission set so the file/folder picker can be opened from settings (fixes #345).",
-  "windows": ["main"],
+  "windows": ["main", "claude-chinese"],
   "permissions": [
     "core:default",
     "dialog:default"

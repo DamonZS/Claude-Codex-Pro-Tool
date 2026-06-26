@@ -22,6 +22,17 @@ fn manager_release_binary_uses_embedded_frontend_assets() {
 }
 
 #[test]
+fn claude_chinese_window_can_call_manager_backend_commands() {
+    let capability =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities/default.json"))
+            .expect("read default capability");
+
+    assert!(capability.contains("\"main\""));
+    assert!(capability.contains("\"claude-chinese\""));
+    assert!(capability.contains("\"core:default\""));
+}
+
+#[test]
 fn manager_uses_single_instance_guard_before_starting_tauri() {
     let lib_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
         .expect("read manager lib.rs");
@@ -83,8 +94,64 @@ fn manager_launch_button_spawns_silent_launcher_binary() {
             .expect("read manager commands.rs");
 
     assert!(commands_rs.contains("SILENT_BINARY"));
+    assert!(commands_rs.contains("resolve_silent_launcher_path()"));
+    assert!(commands_rs.contains("target\").join(\"debug\").join(&launcher_name)"));
+    assert!(commands_rs.contains("target\").join(\"release\").join(&launcher_name)"));
+    assert!(commands_rs.contains("找不到静默启动器"));
     assert!(commands_rs.contains("std::process::Command::new"));
     assert!(!commands_rs.contains("launch_and_inject_with_hooks(options"));
+}
+
+#[test]
+fn codex_launch_and_injected_status_do_not_auto_open_manager() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
+            .expect("read manager commands.rs");
+    let repo_root = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let launcher_main =
+        std::fs::read_to_string(repo_root.join("apps/claude-codex-pro-launcher/src/main.rs"))
+            .expect("read launcher main");
+    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
+        .expect("read renderer inject");
+
+    let launch_command = commands_rs
+        .split("fn spawn_silent_launcher(request: &LaunchRequest)")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn resolve_silent_launcher_path").next())
+        .expect("spawn_silent_launcher source");
+    assert!(launch_command.contains("std::process::Command::new(&launcher)"));
+    assert!(!launch_command.contains("claude-codex-pro-manager"));
+    assert!(!launch_command.contains("--show-update"));
+
+    assert!(launcher_main.contains("async fn open_manager(&self)"));
+    assert!(!codex_inject.contains("data-codex-open-manager"));
+    assert!(!codex_inject.contains("function openManagerFromCodex"));
+    assert!(codex_inject.contains("data-codex-memory-manager"));
+    assert!(codex_inject.contains("void postJson(\"/manager/open\", {});"));
+}
+
+#[test]
+fn watcher_install_uses_resolved_existing_launcher_path() {
+    let commands_rs =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
+            .expect("read manager commands.rs");
+    let watcher_section = commands_rs
+        .split("pub fn install_watcher()")
+        .nth(1)
+        .expect("install_watcher should exist")
+        .split("pub fn uninstall_watcher()")
+        .next()
+        .expect("install_watcher section should end before uninstall_watcher");
+
+    assert!(watcher_section.contains("resolve_silent_launcher_path()"));
+    assert!(!watcher_section.contains("companion_binary_path("));
 }
 
 #[test]
@@ -554,6 +621,42 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
 }
 
 #[test]
+fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let commands_rs =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
+            .expect("read manager commands.rs");
+
+    assert!(app_tsx.contains("function codexLaunchRequestFromOverview"));
+    assert!(app_tsx.contains("overview?.codex_app.path || overview?.latest_launch?.codex_app"));
+    assert!(app_tsx.contains("restart_claude_codex_pro\", { request }"));
+    assert!(app_tsx.contains("launch_claude_codex_pro\", { request }"));
+    assert!(commands_rs.contains("fn normalize_launch_request"));
+    assert!(commands_rs.contains("find_running_codex_app_dir()"));
+    assert!(commands_rs.contains("current_codex_app_path_for_launch"));
+    assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
+    assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
+}
+
+#[test]
+fn silent_launcher_logs_fatal_startup_errors() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let launcher_main = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap()
+        .join("apps/claude-codex-pro-launcher/src/main.rs");
+    let launcher_main = std::fs::read_to_string(&launcher_main).expect("read launcher main.rs");
+
+    assert!(launcher_main.contains("async fn run_launcher()"));
+    assert!(launcher_main.contains("\"launcher.fatal\""));
+    assert!(launcher_main.contains("\"error\": error.to_string()"));
+}
+
+#[test]
 fn claude_restart_button_closes_existing_processes_before_launching() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
@@ -610,7 +713,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
     assert!(supplier_screen.contains("setDraft(null);"));
     assert!(supplier_screen.contains("saveDraft({ stayInEditor: true })"));
-    assert!(supplier_screen.contains("!normalized.name.trim() || !normalized.baseUrl.trim()"));
+    assert!(supplier_screen.contains("!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())"));
     assert!(!supplier_screen.contains(
         "!normalized.name.trim() || !normalized.baseUrl.trim() || !normalized.apiKey.trim()"
     ));
@@ -660,6 +763,79 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
 }
 
 #[test]
+fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = app_tsx.replace("\r\n", "\n");
+    let styles = manifest_dir.parent().unwrap().join("src/styles.css");
+    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let commands_rs =
+        std::fs::read_to_string(manifest_dir.join("src/commands.rs")).expect("read commands.rs");
+    let lib_rs = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read lib.rs");
+
+    let supplier_screen = app_tsx
+        .split("function SupplierScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function LegacySupplierScreen").next())
+        .expect("supplier screen source");
+
+    assert!(supplier_screen.contains("供应商配置"));
+    assert!(supplier_screen.contains("管理 API 供应商、协议、Key 与配置文件"));
+    assert!(supplier_screen.contains("供应商列表"));
+    assert!(supplier_screen.contains("检测到 OPENAI 环境变量"));
+    assert!(supplier_screen.contains("启用供应商配置切换"));
+    assert!(supplier_screen.contains("添加供应商"));
+    assert!(supplier_screen.contains("添加聚合供应商"));
+    assert!(supplier_screen.contains("从第三方导入"));
+    assert!(supplier_screen.contains("ccswitch"));
+    assert!(supplier_screen.contains("发现"));
+    assert!(supplier_screen.contains("刷新列表"));
+    assert!(supplier_screen.contains("onDragStart"));
+    assert!(supplier_screen.contains("onDragOver"));
+    assert!(supplier_screen.contains("onDrop"));
+    assert!(supplier_screen.contains("const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);"));
+    assert!(supplier_screen.contains("useEffect(() => {\n    setSupplierOrderIds(profiles.map((profile) => profile.id));\n  }, [profileIdsKey]);"));
+    assert!(supplier_screen.contains("const supplierOrderFromIds = (ids: string[]) => {"));
+    assert!(supplier_screen.contains("const reorderSupplierIds = (sourceId: string, targetId: string, ids = supplierOrderIds) => {"));
+    assert!(supplier_screen.contains("const previewSupplierOrder = (sourceId: string, targetId: string) => {"));
+    assert!(supplier_screen.contains("setSupplierOrderIds((current) => reorderSupplierIds(sourceId, targetId, current) ?? current);"));
+    assert!(supplier_screen.contains("saveSupplierOrder"));
+    assert!(supplier_screen.contains("saveSupplierSettings({ ...appSettings, relayProfiles: reordered })"));
+    assert!(supplier_screen.contains("setSupplierOrderIds(saved.relayProfiles.map((profile) => profile.id));"));
+    assert!(supplier_screen.contains("setSupplierOrderIds(previousIds);"));
+    assert!(supplier_screen.contains("供应商顺序保存失败，已恢复原顺序。"));
+    assert!(supplier_screen.contains("supplierOrderFromIds(supplierOrderIds).map((profile) => {"));
+    assert!(supplier_screen.contains("previewSupplierOrder(draggedId, profile.id);"));
+
+    assert!(supplier_screen.contains("从预设模板创建"));
+    assert!(supplier_screen.contains("接入模式"));
+    assert!(supplier_screen.contains("Codex 目标"));
+    assert!(supplier_screen.contains("混入 API KEY"));
+    assert!(supplier_screen.contains("config.toml 预览"));
+    assert!(supplier_screen.contains("通用配置文件"));
+    assert!(supplier_screen.contains("auth.json"));
+
+    assert!(supplier_screen.contains("聚合策略"));
+    assert!(app_tsx.contains("失败切换"));
+    assert!(app_tsx.contains("按对话轮转"));
+    assert!(app_tsx.contains("按请求轮转"));
+    assert!(app_tsx.contains("权重轮转"));
+    assert!(supplier_screen.contains("aggregate.strategy / aggregate.members"));
+    assert!(supplier_screen.contains("请先添加或选择至少 1 个普通 API 供应商"));
+
+    assert!(app_tsx.contains("importCcswitchCodexProviders"));
+    assert!(app_tsx.contains("import_ccswitch_codex_providers"));
+    assert!(commands_rs.contains("pub fn import_ccswitch_codex_providers"));
+    assert!(lib_rs.contains("commands::import_ccswitch_codex_providers"));
+    assert!(styles.contains(".supplier-list-shell"));
+    assert!(styles.contains(".supplier-drop-popover"));
+    assert!(styles.contains(".supplier-card.dragging"));
+    assert!(styles.contains(".supplier-card.drag-over"));
+    assert!(styles.contains(".supplier-aggregate-grid"));
+}
+
+#[test]
 fn claude_dev_mode_button_uses_the_current_provider_draft() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
@@ -674,6 +850,69 @@ fn claude_dev_mode_button_uses_the_current_provider_draft() {
     assert!(!app_tsx.contains(
         "claudeDesktopProviderDraft.baseUrl.trim() && claudeDesktopProviderDraft.apiKey.trim()"
     ));
+}
+
+#[test]
+fn injected_status_bars_are_transparent_single_backend_lamp_and_safe_for_codex_text() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
+        .expect("read renderer inject");
+    let claude_inject =
+        std::fs::read_to_string(repo_root.join("assets/inject/claude-chinese-inject.js"))
+            .expect("read claude chinese inject");
+
+    assert!(codex_inject.contains(".claude-codex-pro-trigger {"));
+    assert!(codex_inject.contains("background: transparent;"));
+    assert!(codex_inject.contains("CCP ${claudeCodexProVersion}"));
+    assert!(codex_inject.contains("claude-codex-pro-window-status-dot"));
+    assert!(!codex_inject.contains("claude-codex-pro-window-status-title\">后端"));
+    assert!(!codex_inject.contains("claude-codex-pro-row-title\">后端连接"));
+    assert!(!codex_inject.contains("正在检查后端…"));
+    assert!(codex_inject.contains("Claude Codex Pro ${claudeCodexProVersion}"));
+    assert!(!codex_inject.contains("data-codex-open-manager"));
+    assert!(!codex_inject.contains("openManagerFromCodex();"));
+    assert!(!codex_inject.contains("function openManagerFromCodex"));
+
+    assert!(claude_inject.contains("#ccp-claude-status-pill"));
+    assert!(claude_inject.contains("background: transparent;"));
+    assert!(claude_inject.contains("CCP ' + ccpDisplayVersion"));
+    assert!(claude_inject.contains("data-ccp-backend-status"));
+    assert!(claude_inject.contains("Claude Codex Pro ' + ccpDisplayVersion"));
+    assert!(!claude_inject.contains("data-ccp-panel-frontend"));
+    assert!(!claude_inject.contains("data-ccp-panel-backend"));
+    assert!(!claude_inject.contains("前端注入"));
+    assert!(!claude_inject.contains("后端连接"));
+    assert!(!claude_inject.contains("后端${state.backend}"));
+    assert!(claude_inject.contains("if (/\\bCodex\\b/.test(trimmed)) return value;"));
+    assert!(claude_inject.contains("if (/\\bCodex\\b/.test(next)) continue;"));
+}
+
+#[test]
+fn codex_memory_badge_aligns_with_injection_status_strip() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
+        .expect("read renderer inject");
+
+    assert!(codex_inject.contains("const left = Math.min(Math.max(8, statusRect.right + 8)"));
+    assert!(codex_inject.contains("badge.style.height = `${statusRect.height}px`;"));
+    assert!(codex_inject.contains("background: transparent;"));
+    assert!(codex_inject.contains("<span>盘古记忆</span>"));
+    assert!(codex_inject.contains("display: inline-flex;"));
+    assert!(!codex_inject.contains("statusRect.right + 12"));
 }
 
 #[test]

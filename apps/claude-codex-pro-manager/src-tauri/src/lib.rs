@@ -154,6 +154,7 @@ pub fn run() {
             commands::extract_relay_common_config,
             commands::test_relay_profile,
             commands::fetch_relay_profile_models,
+            commands::import_ccswitch_codex_providers,
             commands::switch_relay_profile,
             commands::preview_claude_desktop_provider,
             commands::apply_claude_desktop_provider,

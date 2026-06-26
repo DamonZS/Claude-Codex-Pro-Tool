@@ -16,6 +16,7 @@ pub struct ClaudeDesktopStatus {
     pub cdp_blocker: String,
     pub debug_flags_present: bool,
     pub debug_ports: Vec<u16>,
+    pub inspector_ports: Vec<u16>,
     pub listening_ports: Vec<u16>,
     pub debug_evidence: Vec<String>,
     pub supported_integration: String,
@@ -167,7 +168,9 @@ pub fn detect_status_light() -> ClaudeDesktopStatus {
     let process_ids = claude_process_ids();
     let debug_probe = detect_debug_probe(&process_ids);
     let cdp_blocker = cdp_blocker_for_install_kind(&install_kind);
-    let cdp_status = if debug_probe.debug_flags_present || !debug_probe.debug_ports.is_empty() {
+    let cdp_status = if !debug_probe.inspector_ports.is_empty() {
+        "node_inspector_ready".to_string()
+    } else if debug_probe.debug_flags_present || !debug_probe.debug_ports.is_empty() {
         "observed_but_unverified".to_string()
     } else {
         "blocked".to_string()
@@ -194,6 +197,7 @@ pub fn detect_status_light() -> ClaudeDesktopStatus {
         cdp_blocker,
         debug_flags_present: debug_probe.debug_flags_present,
         debug_ports: debug_probe.debug_ports,
+        inspector_ports: debug_probe.inspector_ports,
         listening_ports: debug_probe.listening_ports,
         debug_evidence: debug_probe.evidence,
         supported_integration: "external_automation".to_string(),
@@ -308,6 +312,7 @@ pub fn verify_claude_target() -> ClaudeDesktopActionResult {
 }
 
 pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
+    let executable_hint = claude_desktop_executable_path_from_inventory();
     let existing_process_ids = claude_process_ids();
     let is_restart = !existing_process_ids.is_empty();
     if is_restart {
@@ -338,7 +343,7 @@ pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
         }
     }
 
-    match launch_claude_desktop_app() {
+    match launch_claude_desktop_app(executable_hint.as_deref()) {
         Ok(()) => ClaudeDesktopActionResult {
             status: "accepted".to_string(),
             message: if is_restart {
@@ -963,7 +968,23 @@ fn ensure_claude_foreground(process_id: Option<u32>) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn launch_claude_desktop_app() -> anyhow::Result<()> {
+fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
+    if let Some(path) = executable_hint
+        .map(Path::to_path_buf)
+        .or_else(claude_desktop_executable_path)
+    {
+        let mut command = std::process::Command::new(path);
+        command.args(["--inspect=127.0.0.1:9229"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(crate::windows_create_no_window());
+        }
+        if command.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+
     let script = r#"
 $app = Get-StartApps |
   Where-Object { $_.Name -eq 'Claude' -or $_.AppID -like 'Claude_*!Claude' } |
@@ -998,8 +1019,62 @@ Start-Process ('shell:AppsFolder\' + $app.AppID)
     Ok(())
 }
 
+#[cfg(windows)]
+fn claude_desktop_executable_path() -> Option<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.extend([
+        std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("Programs").join("Claude").join("Claude.exe")),
+        std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("AnthropicClaude").join("Claude.exe")),
+        std::env::var_os("ProgramFiles")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join("Claude").join("Claude.exe")),
+    ]);
+    candidates.extend(claude_desktop_appx_executable_paths());
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn claude_desktop_executable_path_from_inventory() -> Option<std::path::PathBuf> {
+    let (_, paths) = claude_process_inventory();
+    paths.into_iter().map(std::path::PathBuf::from).find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn claude_desktop_appx_executable_paths() -> Vec<Option<std::path::PathBuf>> {
+    let script = r#"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+Get-AppxPackage |
+  Where-Object { $_.Name -like '*Claude*' -or $_.PackageFamilyName -like '*Claude*' } |
+  ForEach-Object { Join-Path $_.InstallLocation 'app\Claude.exe' } |
+  ConvertTo-Json -Compress
+"#;
+    let Ok(output) = powershell_json(script) else {
+        return Vec::new();
+    };
+    let Some(value) = output else {
+        return Vec::new();
+    };
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|path| Some(std::path::PathBuf::from(path)))
+            .collect(),
+        Value::String(path) => vec![Some(std::path::PathBuf::from(path))],
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(not(windows))]
-fn launch_claude_desktop_app() -> anyhow::Result<()> {
+fn launch_claude_desktop_app(_executable_hint: Option<&Path>) -> anyhow::Result<()> {
     anyhow::bail!("Claude Desktop launch is only supported on Windows")
 }
 
@@ -1038,6 +1113,7 @@ fn detect_debug_probe(process_ids: &[u32]) -> DebugProbe {
     let command_lines = windows_process_command_lines(process_ids);
     let mut debug_flags_present = false;
     let mut debug_ports = Vec::new();
+    let mut inspector_ports = Vec::new();
     let mut evidence = Vec::new();
 
     for (pid, command_line) in command_lines {
@@ -1061,6 +1137,13 @@ fn detect_debug_probe(process_ids: &[u32]) -> DebugProbe {
                 "pid {pid} command line includes remote debugging flags"
             ));
         }
+
+        if let Some(port) = extract_node_inspector_port(&command_line) {
+            inspector_ports.push(port);
+            evidence.push(format!(
+                "pid {pid} command line includes Node inspector on port {port}"
+            ));
+        }
     }
 
     let mut listening_ports = windows_listening_ports_for_pids(process_ids);
@@ -1068,14 +1151,25 @@ fn detect_debug_probe(process_ids: &[u32]) -> DebugProbe {
     listening_ports.dedup();
     debug_ports.sort_unstable();
     debug_ports.dedup();
+    inspector_ports.sort_unstable();
+    inspector_ports.dedup();
 
     for port in &listening_ports {
         evidence.push(format!("Claude pid is listening on local TCP port {port}"));
     }
+    for port in &inspector_ports {
+        if !listening_ports.contains(port) && local_inspector_http_ready(*port) {
+            listening_ports.push(*port);
+            evidence.push(format!("Node inspector responded on 127.0.0.1:{port}"));
+        }
+    }
+    listening_ports.sort_unstable();
+    listening_ports.dedup();
 
     DebugProbe {
         debug_flags_present,
         debug_ports,
+        inspector_ports,
         listening_ports,
         evidence,
     }
@@ -1213,6 +1307,68 @@ fn extract_remote_debugging_port(command_line: &str) -> Option<u16> {
         return None;
     }
     digits.parse::<u16>().ok()
+}
+
+fn extract_node_inspector_port(command_line: &str) -> Option<u16> {
+    extract_flag_port(command_line, "--inspect=")
+        .or_else(|| extract_flag_port(command_line, "--inspect-brk="))
+        .or_else(|| {
+            let lowered = command_line.to_ascii_lowercase();
+            if lowered.split_whitespace().any(|part| part == "--inspect") {
+                Some(9229)
+            } else {
+                None
+            }
+        })
+}
+
+fn extract_flag_port(command_line: &str, flag: &str) -> Option<u16> {
+    let index = command_line.to_ascii_lowercase().find(flag)?;
+    let value = &command_line[index + flag.len()..];
+    let token = value
+        .chars()
+        .take_while(|ch| !ch.is_whitespace() && *ch != '"' && *ch != '\'')
+        .collect::<String>();
+    let port_text = token.rsplit_once(':').map(|(_, port)| port).unwrap_or(&token);
+    let digits = port_text
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u16>().ok()
+}
+
+fn local_inspector_http_ready(port: u16) -> bool {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+
+    let Ok(mut addrs) = ("127.0.0.1", port).to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+    if stream
+        .write_all(b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut buffer = [0_u8; 512];
+    let Ok(read) = stream.read(&mut buffer) else {
+        return false;
+    };
+    std::str::from_utf8(&buffer[..read])
+        .map(|text| text.contains("200 OK") && text.contains("webSocketDebuggerUrl"))
+        .unwrap_or(false)
 }
 
 fn integrity_for_paths(paths: &[String]) -> (String, String, Vec<ClaudeDesktopExecutableAudit>) {
@@ -1383,6 +1539,7 @@ struct SignatureAudit {
 struct DebugProbe {
     debug_flags_present: bool,
     debug_ports: Vec<u16>,
+    inspector_ports: Vec<u16>,
     listening_ports: Vec<u16>,
     evidence: Vec<String>,
 }
@@ -1649,6 +1806,22 @@ mod tests {
     #[test]
     fn cdp_blocker_documents_auth_gate_for_msix() {
         assert!(cdp_blocker_for_install_kind("msix").contains("CLAUDE_CDP_AUTH"));
+    }
+
+    #[test]
+    fn extracts_node_inspector_ports_from_common_flags() {
+        assert_eq!(
+            extract_node_inspector_port(r#"Claude.exe --inspect=127.0.0.1:9229"#),
+            Some(9229)
+        );
+        assert_eq!(
+            extract_node_inspector_port(r#"Claude.exe --inspect-brk=localhost:9330"#),
+            Some(9330)
+        );
+        assert_eq!(
+            extract_node_inspector_port(r#"Claude.exe --inspect"#),
+            Some(9229)
+        );
     }
 
     #[test]

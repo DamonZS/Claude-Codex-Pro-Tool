@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
@@ -29,6 +29,7 @@ use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::Manager;
+use toml_edit::DocumentMut;
 
 use crate::install::{self, InstallActionResult, InstallOptions};
 
@@ -89,6 +90,7 @@ pub struct ClaudeDesktopPayload {
     pub cdp_blocker: String,
     pub debug_flags_present: bool,
     pub debug_ports: Vec<u16>,
+    pub inspector_ports: Vec<u16>,
     pub listening_ports: Vec<u16>,
     pub debug_evidence: Vec<String>,
     pub supported_integration: String,
@@ -695,6 +697,7 @@ fn claude_desktop_status_result(
             cdp_blocker: status.cdp_blocker,
             debug_flags_present: status.debug_flags_present,
             debug_ports: status.debug_ports,
+            inspector_ports: status.inspector_ports,
             listening_ports: status.listening_ports,
             debug_evidence: status.debug_evidence,
             supported_integration: status.supported_integration,
@@ -1712,14 +1715,46 @@ where
 
 #[tauri::command]
 pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
+    let request = normalize_launch_request(request);
     spawn_claude_codex_pro_launch(request, "启动任务已在后台开始，可稍后查看概览状态。")
 }
 
 #[tauri::command]
 pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
+    let request = normalize_launch_request(request);
     claude_codex_pro_core::watcher::stop_launcher_processes();
     claude_codex_pro_core::watcher::stop_codex_processes();
     spawn_claude_codex_pro_launch(request, "Codex 已请求重启，启动任务正在后台运行。")
+}
+
+fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
+    if request.app_path.trim().is_empty() {
+        if let Some(path) = current_codex_app_path_for_launch() {
+            request.app_path = path.to_string_lossy().to_string();
+        }
+    }
+    request
+}
+
+fn current_codex_app_path_for_launch() -> Option<PathBuf> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    claude_codex_pro_core::app_paths::find_running_codex_app_dir()
+        .or_else(|| {
+            claude_codex_pro_core::app_paths::resolve_codex_app_dir_with_saved(
+                None,
+                Some(settings.codex_app_path.as_str()),
+            )
+        })
+        .or_else(|| {
+            StatusStore::default()
+                .load_latest()
+                .ok()
+                .flatten()
+                .and_then(|status| status.codex_app)
+                .and_then(|path| {
+                    claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(&path))
+                })
+        })
 }
 
 fn spawn_claude_codex_pro_launch(
@@ -1756,7 +1791,7 @@ fn spawn_claude_codex_pro_launch(
 }
 
 fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
-    let launcher = claude_codex_pro_core::install::companion_binary_path(SILENT_BINARY);
+    let launcher = resolve_silent_launcher_path()?;
     let mut command = std::process::Command::new(&launcher);
     if !request.app_path.trim().is_empty() {
         command.arg("--app-path").arg(request.app_path.trim());
@@ -1775,6 +1810,46 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
         .spawn()
         .map(|_| ())
         .map_err(|error| anyhow::anyhow!("无法启动 {}：{error}", launcher.to_string_lossy()))
+}
+
+pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let companion =
+        claude_codex_pro_core::install::companion_binary_path_from_exe(&current_exe, SILENT_BINARY);
+    if companion.is_file() {
+        return Ok(companion);
+    }
+
+    let exe_dir = current_exe.parent().unwrap_or_else(|| Path::new("."));
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let launcher_name = format!("{SILENT_BINARY}{exe_suffix}");
+    let mut candidates = vec![
+        exe_dir.join(&launcher_name),
+        PathBuf::from("target").join("debug").join(&launcher_name),
+        PathBuf::from("target").join("release").join(&launcher_name),
+    ];
+    if let Some(profile_dir) = exe_dir.parent() {
+        candidates.push(profile_dir.join("debug").join(&launcher_name));
+        candidates.push(profile_dir.join("release").join(&launcher_name));
+        if let Some(target_dir) = profile_dir.parent() {
+            candidates.push(target_dir.join("debug").join(&launcher_name));
+            candidates.push(target_dir.join("release").join(&launcher_name));
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+
+    if let Some(path) = candidates.iter().find(|path| path.is_file()).cloned() {
+        return Ok(path);
+    }
+
+    let searched = candidates
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    bail!("找不到静默启动器 {launcher_name}，已检查：{searched}")
 }
 
 #[tauri::command]
@@ -3397,9 +3472,10 @@ pub fn load_watcher_state() -> CommandResult<WatcherPayload> {
 
 #[tauri::command]
 pub fn install_watcher() -> CommandResult<WatcherPayload> {
-    let launcher_path = claude_codex_pro_core::install::companion_binary_path(
-        claude_codex_pro_core::install::SILENT_BINARY,
-    );
+    let launcher_path = match resolve_silent_launcher_path() {
+        Ok(path) => path,
+        Err(error) => return failed(&format!("安装 watcher 失败：{error}"), watcher_payload()),
+    };
     match claude_codex_pro_core::watcher::install_watcher(&launcher_path, default_debug_port()) {
         Ok(()) => ok("watcher 已安装。", watcher_payload()),
         Err(error) => failed(&format!("安装 watcher 失败：{error}"), watcher_payload()),
@@ -3558,6 +3634,49 @@ pub struct RelayProfileSwitchRequest {
     pub settings: BackendSettings,
     #[serde(default)]
     pub previous_active_relay_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcswitchImportPayload {
+    pub db_path: String,
+    pub profiles: Vec<RelayProfile>,
+    pub scanned: usize,
+}
+
+#[tauri::command]
+pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload> {
+    let Some(db_path) = default_ccswitch_db_path() else {
+        return failed(
+            "未找到 cc-switch 数据库：~/.cc-switch/cc-switch.db。",
+            CcswitchImportPayload {
+                db_path: String::new(),
+                profiles: Vec::new(),
+                scanned: 0,
+            },
+        );
+    };
+    match read_ccswitch_codex_profiles(&db_path) {
+        Ok((profiles, scanned)) => {
+            let count = profiles.len();
+            ok(
+                &format!("已从 cc-switch 导入供应商配置：{count} 个。"),
+                CcswitchImportPayload {
+                    db_path: db_path.to_string_lossy().to_string(),
+                    profiles,
+                    scanned,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("读取 cc-switch 供应商失败：{error}"),
+            CcswitchImportPayload {
+                db_path: db_path.to_string_lossy().to_string(),
+                profiles: Vec::new(),
+                scanned: 0,
+            },
+        ),
+    }
 }
 
 #[tauri::command]
@@ -4910,6 +5029,193 @@ fn shortcut_state(shortcut: install::ShortcutState) -> PathState {
     }
 }
 
+fn default_ccswitch_db_path() -> Option<PathBuf> {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().join(".cc-switch").join("cc-switch.db"))
+        .filter(|path| path.is_file())
+}
+
+fn read_ccswitch_codex_profiles(db_path: &Path) -> anyhow::Result<(Vec<RelayProfile>, usize)> {
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("打开 {}", db_path.display()))?;
+    let mut statement = conn.prepare(
+        "SELECT id, name, settings_config, COALESCE(sort_index, 0)
+         FROM providers
+         WHERE app_type = 'codex'
+         ORDER BY COALESCE(sort_index, 0), name COLLATE NOCASE, id COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut profiles = Vec::new();
+    let mut scanned = 0usize;
+    for row in rows {
+        scanned += 1;
+        let (id, name, settings_config) = row?;
+        if let Some(profile) = ccswitch_codex_profile_from_settings(&id, &name, &settings_config) {
+            profiles.push(profile);
+        }
+    }
+    Ok((profiles, scanned))
+}
+
+fn ccswitch_codex_profile_from_settings(
+    id: &str,
+    name: &str,
+    settings: &str,
+) -> Option<RelayProfile> {
+    let parsed = serde_json::from_str::<Value>(settings).ok()?;
+    let config = parsed.get("config").and_then(Value::as_str).unwrap_or_default();
+    let auth = parsed.get("auth").unwrap_or(&Value::Null);
+    let base_url = codex_config_base_url(config)
+        .or_else(|| string_at(&parsed, &["base_url", "baseUrl", "apiBaseUrl"]))
+        .unwrap_or_default();
+    if base_url.trim().is_empty() {
+        return None;
+    }
+    let api_key = codex_auth_api_key(auth)
+        .or_else(|| string_at(&parsed, &["apiKey", "api_key", "OPENAI_API_KEY"]))
+        .unwrap_or_default();
+    let model = codex_config_model(config)
+        .or_else(|| string_at(&parsed, &["model", "testModel"]))
+        .unwrap_or_else(|| "gpt-5.5".to_string());
+    let mut profile = RelayProfile {
+        id: format!("{}-ccswitch", supplier_id_from_import(id)),
+        name: format!("{name} (ccswitch)"),
+        model,
+        base_url: base_url.trim().to_string(),
+        upstream_base_url: base_url.trim().to_string(),
+        api_key: api_key.trim().to_string(),
+        relay_mode: claude_codex_pro_core::settings::RelayMode::PureApi,
+        user_agent: "ccswitch".to_string(),
+        ..RelayProfile::default()
+    };
+    profile.test_model = profile.model.clone();
+    profile.config_contents = imported_supplier_config_toml(&profile);
+    profile.auth_contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": profile.api_key }))
+            .unwrap_or_else(|_| "{}".to_string())
+    );
+    Some(profile)
+}
+
+fn codex_auth_api_key(auth: &Value) -> Option<String> {
+    auth.get("OPENAI_API_KEY")
+        .or_else(|| auth.get("api_key"))
+        .or_else(|| auth.get("apiKey"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn codex_config_model(config: &str) -> Option<String> {
+    let doc = config.parse::<DocumentMut>().ok()?;
+    doc.get("model")
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn codex_config_base_url(config: &str) -> Option<String> {
+    let doc = config.parse::<DocumentMut>().ok()?;
+    if let Some(provider_id) = doc.get("model_provider").and_then(|item| item.as_str()) {
+        if let Some(value) = doc
+            .get("model_providers")
+            .and_then(|item| item.as_table())
+            .and_then(|providers| providers.get(provider_id))
+            .and_then(|item| item.as_table())
+            .and_then(|provider| provider.get("base_url"))
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        {
+            return Some(value);
+        }
+    }
+    doc.get("base_url")
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn supplier_id_from_import(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_dash = false;
+    for ch in value.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch);
+            previous_dash = false;
+        } else if !previous_dash && !output.is_empty() {
+            output.push('-');
+            previous_dash = true;
+        }
+    }
+    while output.ends_with('-') {
+        output.pop();
+    }
+    if output.is_empty() {
+        "provider".to_string()
+    } else {
+        output
+    }
+}
+
+fn imported_supplier_config_toml(profile: &RelayProfile) -> String {
+    let provider_id = supplier_id_from_import(&profile.id);
+    let mut lines = Vec::new();
+    if !profile.model.trim().is_empty() {
+        lines.push(format!(
+            "model = {}",
+            serde_json::to_string(profile.model.trim()).unwrap()
+        ));
+    }
+    lines.push(format!(
+        "model_provider = {}",
+        serde_json::to_string(&provider_id).unwrap()
+    ));
+    lines.push("model_reasoning_effort = \"high\"".to_string());
+    lines.push("disable_response_storage = true".to_string());
+    lines.push(String::new());
+    lines.push(format!("[model_providers.{provider_id}]"));
+    lines.push(format!(
+        "name = {}",
+        serde_json::to_string(&provider_id).unwrap()
+    ));
+    lines.push("wire_api = \"responses\"".to_string());
+    lines.push("requires_openai_auth = true".to_string());
+    lines.push("env_key = \"OPENAI_API_KEY\"".to_string());
+    lines.push(format!(
+        "base_url = {}",
+        serde_json::to_string(profile.base_url.trim()).unwrap()
+    ));
+    lines.push(String::new());
+    lines.join("\n")
+}
+
 fn ok<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
     CommandResult {
         status: "ok".to_string(),
@@ -4927,7 +5233,7 @@ fn failed<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
 }
 
 fn default_debug_port() -> u16 {
-    9229
+    9230
 }
 
 fn default_helper_port() -> u16 {
@@ -5056,7 +5362,10 @@ mod tests {
 
         assert!(matches!(result.status.as_str(), "ok" | "not_running"));
         assert_eq!(result.payload.supported_integration, "external_automation");
-        assert_eq!(result.payload.cdp_status, "blocked");
+        assert!(matches!(
+            result.payload.cdp_status.as_str(),
+            "blocked" | "observed_but_unverified" | "node_inspector_ready"
+        ));
 
         for audit in &result.payload.executable_audits {
             assert!(!audit.patch_eligible);

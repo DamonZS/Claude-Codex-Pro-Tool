@@ -22,9 +22,11 @@ claude-codex-pro-data = { path = "../../../crates/claude-codex-pro-data" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rusqlite.workspace = true
 tauri = { version = "2", features = ["custom-protocol", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tokio.workspace = true
+toml_edit.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

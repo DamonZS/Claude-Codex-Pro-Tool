@@ -481,6 +481,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       cdpBlocker: "官方 MSIX 窗口不可直接 DOM 注入",
       debugFlagsPresent: false,
       debugPorts: [],
+      inspectorPorts: [],
       listeningPorts: [],
       debugEvidence: [],
       supportedIntegration: "wrapped_webview",
@@ -907,6 +908,33 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "save_settings") {
     return previewSettingsResult("预览模式已模拟保存设置。", (_args?.settings as ReturnType<typeof previewSettings> | undefined) ?? previewSettings());
+  }
+  if (command === "import_ccswitch_codex_providers") {
+    return ok("已从 cc-switch 导入供应商配置：4 个。", {
+      dbPath: "~\\.cc-switch\\cc-switch.db",
+      scanned: 4,
+      profiles: ["kuaipao", "Gpt-pro", "gpt-plus", "Claude-krio"].map((name) => ({
+        id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-ccswitch`,
+        name: `${name} (ccswitch)`,
+        model: "gpt-5.5",
+        baseUrl: name === "kuaipao" ? "https://kuaipao.ai/v1" : "https://api.toporeduce.cn/v1",
+        upstreamBaseUrl: name === "kuaipao" ? "https://kuaipao.ai/v1" : "https://api.toporeduce.cn/v1",
+        apiKey: "sk-preview",
+        protocol: "responses",
+        relayMode: "pureApi",
+        officialMixApiKey: false,
+        testModel: "gpt-5.5",
+        configContents: "",
+        authContents: "{\"OPENAI_API_KEY\":\"sk-preview\"}\n",
+        useCommonConfig: true,
+        contextSelection: { mcpServers: [], skills: [], plugins: [] },
+        contextSelectionInitialized: false,
+        contextWindow: "",
+        autoCompactLimit: "",
+        modelList: "gpt-5.5",
+        userAgent: "ccswitch",
+      })),
+    });
   }
   if (command === "repair_backend") {
     return previewSettingsResult("预览模式已模拟修复后端。");

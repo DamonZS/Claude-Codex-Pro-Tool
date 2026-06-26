@@ -173,6 +173,9 @@ experimental_bearer_token = "sk-test-redacted"
     assert!(status.configured);
     assert!(status.requires_openai_auth);
     assert!(status.has_bearer_token);
+    unsafe {
+        std::env::remove_var("OPENAI_API_KEY");
+    }
 }
 
 #[test]
@@ -202,6 +205,34 @@ base_url = "http://127.0.0.1:57321/v1"
     assert!(status.configured);
     assert!(status.requires_openai_auth);
     assert!(!status.has_bearer_token);
+}
+
+#[test]
+fn reports_pure_api_configured_from_provider_env_key() {
+    unsafe {
+        std::env::set_var("CCP_TEST_OPENAI_API_KEY", "sk-env-redacted");
+    }
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model = "deepseek-v4-flash"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "CCP_TEST_OPENAI_API_KEY"
+base_url = "https://api.toporeduce.cn/v1"
+"#,
+    )
+    .unwrap();
+
+    let status = relay_config_status_from_home(temp.path());
+
+    assert!(status.configured);
+    assert!(status.requires_openai_auth);
+    assert!(status.has_bearer_token);
 }
 
 #[test]
@@ -243,7 +274,8 @@ model = "gpt-5-mini"
     assert!(updated.contains(r#"wire_api = "responses""#));
     assert!(updated.contains("requires_openai_auth = true"));
     assert!(updated.contains(r#"base_url = "https://relay.example.test/v1""#));
-    assert!(updated.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(updated.contains(r#"env_key = "OPENAI_API_KEY""#));
+    assert!(!updated.contains("experimental_bearer_token"));
 }
 
 #[test]
@@ -263,7 +295,8 @@ fn apply_chat_protocol_relay_points_codex_to_local_responses_proxy() {
     assert!(result.configured);
     assert!(updated.contains(r#"wire_api = "responses""#));
     assert!(updated.contains(r#"base_url = "http://127.0.0.1:57321/v1""#));
-    assert!(updated.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(updated.contains(r#"env_key = "OPENAI_API_KEY""#));
+    assert!(!updated.contains("experimental_bearer_token"));
     assert!(!updated.contains("claude_codex_pro_chat_base_url"));
 }
 
@@ -481,7 +514,8 @@ fn apply_pure_api_config_switches_auth_json_and_writes_provider_token() {
     assert!(config.contains(r#"wire_api = "responses""#));
     assert!(config.contains("requires_openai_auth = true"));
     assert!(config.contains(r#"base_url = "http://192.168.188.245:3001/v1""#));
-    assert!(config.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(config.contains(r#"env_key = "OPENAI_API_KEY""#));
+    assert!(!config.contains("experimental_bearer_token"));
 }
 
 #[test]
@@ -2079,6 +2113,7 @@ base_url = "https://relay.example/v1"
     assert!(auth.get("tokens").is_none());
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
     assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains(r#"env_key = "OPENAI_API_KEY""#));
     assert!(config.contains(r#"model_provider = "custom""#));
     assert!(config.contains("[model_providers.custom]"));
 }
@@ -2466,6 +2501,7 @@ base_url = "http://192.168.188.245:3001/v1"
     assert!(config.contains(r#"model_provider = "custom""#));
     assert!(config.contains("[model_providers.custom]"));
     assert!(config.contains(r#"base_url = "http://192.168.188.245:3001/v1""#));
+    assert!(config.contains(r#"env_key = "OPENAI_API_KEY""#));
 }
 
 #[test]

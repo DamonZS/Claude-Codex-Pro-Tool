@@ -87,6 +87,20 @@ pub struct RelayProfile {
         skip_serializing_if = "String::is_empty"
     )]
     pub user_agent: String,
+    #[serde(rename = "aggregateEnabled", default, skip_serializing_if = "is_false")]
+    pub aggregate_enabled: bool,
+    #[serde(
+        rename = "aggregateStrategy",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub aggregate_strategy: String,
+    #[serde(
+        rename = "aggregateMembers",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub aggregate_members: Vec<String>,
 }
 
 impl Default for RelayProfile {
@@ -112,6 +126,9 @@ impl Default for RelayProfile {
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
             user_agent: String::new(),
+            aggregate_enabled: false,
+            aggregate_strategy: String::new(),
+            aggregate_members: Vec::new(),
         }
     }
 }
@@ -347,6 +364,7 @@ impl BackendSettings {
                 model_insert_mode: RelayModelInsertMode::Patch,
                 model_list: String::new(),
                 user_agent: String::new(),
+                ..RelayProfile::default()
             };
         }
 
@@ -391,6 +409,7 @@ impl BackendSettings {
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
             user_agent: String::new(),
+            ..RelayProfile::default()
         }
     }
 }
@@ -421,6 +440,10 @@ fn clamp_memory_assist_max_injected_items(value: u8) -> u8 {
 
 pub fn default_true() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub fn default_relay_base_url() -> String {
@@ -1660,6 +1683,50 @@ experimental_bearer_token = "sk-existing"
                 .unwrap();
         assert!(saved["relayProfiles"][1].get("baseUrl").is_none());
         assert!(saved["relayProfiles"][1].get("apiKey").is_none());
+    }
+
+    #[test]
+    fn settings_store_update_roundtrips_aggregate_supplier_fields() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+
+        let updated = store
+            .update(json!({
+                "relayProfiles": [
+                    {
+                        "id": "relay-a",
+                        "name": "供应商 A",
+                        "baseUrl": "https://relay-a.example/v1",
+                        "apiKey": "sk-a"
+                    },
+                    {
+                        "id": "aggregate-1",
+                        "name": "聚合供应商1",
+                        "aggregateEnabled": true,
+                        "aggregateStrategy": "failover",
+                        "aggregateMembers": ["relay-a"]
+                    }
+                ]
+            }))
+            .unwrap();
+
+        let aggregate = updated
+            .relay_profiles
+            .iter()
+            .find(|profile| profile.id == "aggregate-1")
+            .expect("aggregate profile");
+        assert!(aggregate.aggregate_enabled);
+        assert_eq!(aggregate.aggregate_strategy, "failover");
+        assert_eq!(aggregate.aggregate_members, vec!["relay-a".to_string()]);
+
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved["relayProfiles"][1]["aggregateStrategy"],
+            json!("failover")
+        );
+        assert_eq!(saved["relayProfiles"][1]["aggregateMembers"], json!(["relay-a"]));
     }
 
     #[test]

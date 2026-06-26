@@ -80,7 +80,7 @@ impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
             app_dir: None,
-            debug_port: 9229,
+            debug_port: 9230,
             helper_port: 57321,
             status_store: StatusStore::default(),
         }
@@ -257,10 +257,6 @@ where
         if settings.computer_use_guard_enabled {
             hooks.ensure_computer_use_config(&settings).await?;
         }
-        // Apply active relay profile to ~/.codex/config.toml and auth.json
-        // before launching Codex so that custom providers (dev mode, third-party APIs)
-        // take effect on startup.
-        hooks.apply_active_relay_profile(&settings).await?;
         let protocol_proxy_enabled = relay_protocol_proxy_enabled(&settings);
         if protocol_proxy_enabled {
             helper_port = crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT;
@@ -275,6 +271,17 @@ where
             .await?;
         launched = Some(launch.clone());
         keep_launched_on_error = true;
+        if settings.enhancements_enabled {
+            let launched_status = launch_status(
+                "running_degraded",
+                "Codex launched; Claude Codex Pro enhancements are still waiting for the page bridge.",
+                debug_port,
+                helper_port,
+                &app_dir,
+            );
+            let _ = options.status_store.save_latest(&launched_status);
+            hooks.write_status("running_degraded").await;
+        }
         if settings.computer_use_guard_enabled {
             hooks.start_computer_use_guard_watchdog(&settings).await?;
         }
@@ -288,15 +295,6 @@ where
                 keep_launched_on_error = false;
                 hooks.start_bridge_watchdog(debug_port, helper_port).await?;
             } else {
-                let degraded = launch_status(
-                    "running_degraded",
-                    "Codex launched; Claude Codex Pro enhancements are still waiting for the page bridge.",
-                    debug_port,
-                    helper_port,
-                    &app_dir,
-                );
-                options.status_store.save_latest(&degraded)?;
-                hooks.write_status("running_degraded").await;
                 injection_degraded = true;
             }
         }
@@ -416,38 +414,10 @@ impl LaunchHooks for DefaultLaunchHooks {
         if !settings.relay_profiles_enabled {
             return Ok(());
         }
-        let profile = settings.active_relay_profile();
-        let home = crate::relay_config::default_codex_home_dir();
-        let common_config = crate::relay_config::normalize_config_text(
-            &[
-                settings.relay_common_config_contents.as_str(),
-                settings.relay_context_config_contents.as_str(),
-            ]
-            .into_iter()
-            .map(str::trim)
-            .filter(|section| !section.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        );
-        if profile.relay_mode == crate::settings::RelayMode::Official
-            && !profile.official_mix_api_key
-        {
-            let auth_contents = (!profile.auth_contents.trim().is_empty())
-                .then_some(profile.auth_contents.as_str());
-            crate::relay_config::clear_relay_config_to_home_with_auth_and_computer_use_guard(
-                &home,
-                auth_contents,
-                settings.computer_use_guard_enabled,
-            )?;
-            return Ok(());
-        }
-        crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
-            &home,
-            &profile,
-            &common_config,
-            settings.computer_use_guard_enabled,
-        )?;
-        Ok(())
+        apply_active_relay_profile_to_home(
+            settings,
+            &crate::relay_config::default_codex_home_dir(),
+        )
     }
 
     async fn ensure_computer_use_config(&self, settings: &BackendSettings) -> anyhow::Result<()> {
@@ -552,7 +522,7 @@ impl LaunchHooks for DefaultLaunchHooks {
                     return Ok(packaged_launch);
                 }
                 let _ = crate::diagnostic_log::append_diagnostic_log(
-                    "launcher.packaged_activation_cdp_unready_direct_fallback",
+                    "launcher.packaged_activation_cdp_unready_degraded",
                     serde_json::json!({
                         "debug_port": debug_port,
                         "app_user_model_id": app_user_model_id_for_log,
@@ -560,7 +530,7 @@ impl LaunchHooks for DefaultLaunchHooks {
                         "preexisting_cdp_target_count": preexisting_cdp_targets.len()
                     }),
                 );
-                let _ = terminate_windows_process_id(process_id).await;
+                return Ok(packaged_launch);
             }
         }
 
@@ -734,6 +704,42 @@ impl LaunchHooks for DefaultLaunchHooks {
             } => {}
         }
     }
+}
+
+fn apply_active_relay_profile_to_home(
+    settings: &BackendSettings,
+    home: &Path,
+) -> anyhow::Result<()> {
+    let profile = settings.active_relay_profile();
+    let common_config = crate::relay_config::normalize_config_text(
+        &[
+            settings.relay_common_config_contents.as_str(),
+            settings.relay_context_config_contents.as_str(),
+        ]
+        .into_iter()
+        .map(str::trim)
+        .filter(|section| !section.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n"),
+    );
+    if profile.relay_mode == crate::settings::RelayMode::Official && !profile.official_mix_api_key
+    {
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "launcher.relay_profile_unchanged",
+            serde_json::json!({
+                "reason": "default_official_profile",
+                "home": home.to_string_lossy()
+            }),
+        );
+        return Ok(());
+    }
+    crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
+        home,
+        &profile,
+        &common_config,
+        settings.computer_use_guard_enabled,
+    )?;
+    Ok(())
 }
 
 async fn handle_helper_connection(
@@ -2157,6 +2163,34 @@ mod tests {
         assert_eq!(
             cdp_target_fingerprint(&target),
             "ws://127.0.0.1:9229/devtools/page/target-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_official_launch_profile_does_not_clear_live_provider_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path().join("codex");
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let config = r#"model_provider = "toporeduce"
+
+[model_providers.toporeduce]
+name = "TopoReduce"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://api.toporeduce.cn/v1"
+"#;
+        let auth = r#"{"OPENAI_API_KEY":"sk-third-party"}"#;
+        std::fs::write(codex_home.join("config.toml"), config).unwrap();
+        std::fs::write(codex_home.join("auth.json"), auth).unwrap();
+
+        apply_active_relay_profile_to_home(&BackendSettings::default(), &codex_home).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(codex_home.join("config.toml")).unwrap(),
+            config
+        );
+        assert_eq!(
+            std::fs::read_to_string(codex_home.join("auth.json")).unwrap(),
+            auth
         );
     }
 
