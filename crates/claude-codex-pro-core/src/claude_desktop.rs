@@ -1046,6 +1046,11 @@ fn claude_desktop_executable_path_from_inventory() -> Option<std::path::PathBuf>
     paths.into_iter().map(std::path::PathBuf::from).find(|path| path.is_file())
 }
 
+#[cfg(not(windows))]
+fn claude_desktop_executable_path_from_inventory() -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg(windows)]
 fn claude_desktop_appx_executable_paths() -> Vec<Option<std::path::PathBuf>> {
     let script = r#"

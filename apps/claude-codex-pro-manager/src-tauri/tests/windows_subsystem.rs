@@ -355,18 +355,28 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
 
     assert!(!app_tsx.contains("id: \"context\""));
     assert!(!app_tsx.contains("id: \"pluginHub\""));
-    assert!(!app_tsx.contains("id: \"maintenance\""));
+    assert!(app_tsx.contains("id: \"maintenance\""));
+    assert!(app_tsx.contains("id: \"about\""));
+    assert!(!app_tsx.contains("id: \"scripts\""));
+    assert!(!app_tsx.contains("id: \"logs\""));
     let tools_section = app_tsx
         .split("function ToolsAndPluginsScreen")
         .nth(1)
         .and_then(|rest| rest.split("function SessionManagementScreen").next())
         .expect("tools screen source");
 
-    assert!(tools_section.contains("Codex 插件仓库"));
-    assert!(tools_section.contains("https://github.com/openai/plugins"));
-    assert!(tools_section.contains("工具与插件配置"));
-    assert!(tools_section.contains("ClaudeDesktopOrgPluginPanel"));
-    assert!(tools_section.contains("PromptOptimizerCard"));
+    assert!(tools_section.contains("ContextManagerPanel"));
+    assert!(tools_section.contains("scope=\"codex\""));
+    assert!(tools_section.contains("scope=\"claude\""));
+    assert!(tools_section.contains("claudeContextEntries"));
+    assert!(app_tsx.contains("Codex 工具与插件"));
+    assert!(app_tsx.contains("Claude 工具与插件"));
+    assert!(app_tsx.contains("list_context_entries"));
+    assert!(app_tsx.contains("upsert_context_entry"));
+    assert!(app_tsx.contains("delete_context_entry"));
+    assert!(app_tsx.contains("list_claude_context_entries"));
+    assert!(app_tsx.contains("upsert_claude_context_entry"));
+    assert!(app_tsx.contains("delete_claude_context_entry"));
     assert!(!tools_section.contains("Codex 会话管理"));
     assert!(!tools_section.contains("Claude 会话诊断"));
     assert!(!tools_section.contains("历史会话修复"));
