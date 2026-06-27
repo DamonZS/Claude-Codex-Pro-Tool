@@ -3701,14 +3701,14 @@ body {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
-  border: 1px solid rgba(24, 201, 100, 0.45);
+  border: 1px solid rgba(130, 143, 255, 0.45);
   border-radius: 8px;
-  background: rgba(24, 201, 100, 0.14);
+  background: rgba(94, 106, 210, 0.14);
   padding: 12px;
 }
 
 .supplier-env-card svg {
-  color: #22c55e;
+  color: #aeb7ff;
 }
 
 .supplier-env-card strong,
@@ -3853,8 +3853,8 @@ body {
 }
 
 .supplier-card.drag-over {
-  border-color: #20d37b;
-  box-shadow: 0 0 0 1px rgba(32, 211, 123, 0.28);
+  border-color: #828fff;
+  box-shadow: 0 0 0 1px rgba(130, 143, 255, 0.28);
 }
 
 .supplier-drag-handle {
@@ -3874,8 +3874,8 @@ body {
 }
 
 .supplier-card.selected {
-  border-color: #20d37b;
-  background: rgba(24, 201, 100, 0.16);
+  border-color: #828fff;
+  background: rgba(94, 106, 210, 0.16);
 }
 
 .supplier-card-main,
@@ -3981,8 +3981,8 @@ body {
 }
 
 .supplier-aggregate-grid button.selected {
-  border-color: #20d37b;
-  background: rgba(24, 201, 100, 0.15);
+  border-color: #828fff;
+  background: rgba(94, 106, 210, 0.15);
 }
 
 .supplier-aggregate-grid span {
@@ -4993,7 +4993,7 @@ body {
     flex: 0 0 auto;
   }
 
-  .ops-commandbar button span {
+.ops-commandbar button span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -5064,4 +5064,161 @@ body {
     bottom: 12px;
     width: calc(100vw - 24px);
   }
+}
+
+.context-manager-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #23252a;
+  border-radius: 8px;
+  background: #141516;
+  padding: 16px;
+}
+
+.context-manager-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: start;
+}
+
+.context-manager-head h2 {
+  margin: 0;
+  color: #f7f8f8;
+  font-size: 16px;
+}
+
+.context-manager-head p,
+.context-manager-note {
+  margin: 5px 0 0;
+  color: #9aa2ad;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.context-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.context-tabs button {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #2b2d32;
+  border-radius: 8px;
+  background: #18191a;
+  color: #f7f8f8;
+  cursor: pointer;
+  padding: 10px;
+}
+
+.context-tabs button.active {
+  border-color: #828fff;
+  background: rgba(94, 106, 210, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(130, 143, 255, 0.22);
+}
+
+.context-tabs span {
+  color: #9aa2ad;
+  font-weight: 800;
+}
+
+.context-entry-list {
+  display: grid;
+  gap: 8px;
+}
+
+.context-entry-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 50px;
+  border: 1px solid #2b2d32;
+  border-radius: 8px;
+  background: #18191a;
+  padding: 9px 10px;
+}
+
+.context-entry-row strong,
+.context-entry-row span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-entry-row strong {
+  color: #f7f8f8;
+  font-size: 14px;
+}
+
+.context-entry-row span {
+  margin-top: 3px;
+  color: #8a8f98;
+  font-size: 12px;
+}
+
+.context-entry-row > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #d8dde6;
+  cursor: pointer;
+}
+
+.context-entry-row > button:hover:not(:disabled) {
+  background: rgba(94, 106, 210, 0.16);
+  color: #eef0ff;
+}
+
+.context-entry-row > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.context-entry-row .danger-icon-button {
+  color: #ef4444;
+}
+
+.context-editor {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #2b2d32;
+  padding-top: 12px;
+}
+
+.context-editor-grid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.context-toml-editor {
+  min-height: 160px;
+}
+
+.supplier-card.drag-over,
+.supplier-card.selected,
+.supplier-aggregate-grid button.selected {
+  border-color: #828fff;
+  background: rgba(94, 106, 210, 0.16);
+  box-shadow: 0 0 0 1px rgba(130, 143, 255, 0.22);
+}
+
+.supplier-env-card {
+  border-color: rgba(94, 106, 210, 0.45);
+  background: rgba(94, 106, 210, 0.14);
+}
+
+.supplier-env-card svg,
+.supplier-env-chip {
+  color: #cdd3ff;
 }

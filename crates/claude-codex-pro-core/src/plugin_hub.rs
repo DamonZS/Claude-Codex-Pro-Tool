@@ -244,6 +244,23 @@ pub struct ClaudeDesktopDevModeOutcome {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopMcpEntry {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub json_body: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopMcpEntries {
+    pub config_path: String,
+    pub entries: Vec<ClaudeDesktopMcpEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClaudeDesktopDevModeProfile {
     name: String,
@@ -2092,6 +2109,91 @@ pub fn load_claude_desktop_dev_mode_status() -> ClaudeDesktopDevModeStatus {
         applied_id,
         message,
     }
+}
+
+pub fn list_claude_desktop_mcp_entries() -> anyhow::Result<ClaudeDesktopMcpEntries> {
+    let config_path = claude_desktop_config_path();
+    let config = if config_path.exists() {
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&config_path)?)
+            .unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+    let mut entries = Vec::new();
+    if let Some(servers) = config.get("mcpServers").and_then(Value::as_object) {
+        for (id, server) in servers {
+            let enabled = server
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let command = server
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let args = server
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            let summary = if command.is_empty() {
+                "未配置 command".to_string()
+            } else if args.is_empty() {
+                command.clone()
+            } else {
+                format!("{command} {args}")
+            };
+            let json_body = serde_json::to_string_pretty(server).unwrap_or_else(|_| "{}".to_string());
+            entries.push(ClaudeDesktopMcpEntry {
+                id: id.to_string(),
+                title: id.to_string(),
+                summary,
+                json_body,
+                enabled,
+            });
+        }
+    }
+    Ok(ClaudeDesktopMcpEntries {
+        config_path: config_path.to_string_lossy().to_string(),
+        entries,
+    })
+}
+
+pub fn upsert_claude_desktop_mcp_entry(
+    id: &str,
+    json_body: &str,
+) -> anyhow::Result<ClaudeDesktopMcpEntries> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("MCP ID cannot be empty");
+    }
+    let server_config: Value = serde_json::from_str(json_body)
+        .with_context(|| format!("parse Claude Desktop MCP JSON for {trimmed}"))?;
+    if !server_config.is_object() {
+        anyhow::bail!("Claude Desktop MCP config must be a JSON object");
+    }
+    let config_path = claude_desktop_config_path();
+    let _ = backup_claude_desktop_config(&config_path)?;
+    upsert_claude_desktop_mcp_server(&config_path, trimmed, server_config)?;
+    list_claude_desktop_mcp_entries()
+}
+
+pub fn delete_claude_desktop_mcp_entry(id: &str) -> anyhow::Result<ClaudeDesktopMcpEntries> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("MCP ID cannot be empty");
+    }
+    let config_path = claude_desktop_config_path();
+    let _ = backup_claude_desktop_config(&config_path)?;
+    remove_claude_desktop_mcp_server(&config_path, trimmed)?;
+    list_claude_desktop_mcp_entries()
 }
 
 pub fn configure_claude_desktop_dev_mode(

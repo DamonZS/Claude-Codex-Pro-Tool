@@ -329,13 +329,6 @@ impl LaunchHooks for LauncherHooks {
         Ok(())
     }
 
-    async fn apply_active_relay_profile(
-        &self,
-        settings: &claude_codex_pro_core::settings::BackendSettings,
-    ) -> anyhow::Result<()> {
-        self.core.apply_active_relay_profile(settings).await
-    }
-
     async fn ensure_computer_use_config(
         &self,
         settings: &claude_codex_pro_core::settings::BackendSettings,

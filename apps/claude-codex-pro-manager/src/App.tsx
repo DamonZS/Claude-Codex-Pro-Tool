@@ -231,6 +231,37 @@ type CcswitchImportResult = CommandResult<{
   scanned: number;
 }>;
 
+type ContextKind = "mcp" | "skill" | "plugin";
+
+type ContextEntry = {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  tomlBody: string;
+  enabled: boolean;
+};
+
+type ContextEntries = {
+  mcpServers: ContextEntry[];
+  skills: ContextEntry[];
+  plugins: ContextEntry[];
+};
+
+type ContextEntriesResult = CommandResult<{
+  settings: BackendSettings;
+  entries: ContextEntries;
+}>;
+
+type LiveContextEntriesResult = CommandResult<{
+  entries: ContextEntries;
+}>;
+
+type ClaudeContextEntriesResult = CommandResult<{
+  configPath: string;
+  entries: ContextEntries;
+}>;
+
 type SupplierPreset = {
   id: string;
   name: string;
@@ -290,6 +321,26 @@ type ScriptMarketResult = CommandResult<{
     scripts: ScriptMarketItem[];
   };
   user_scripts: UserScriptInventory;
+}>;
+
+type UpdateReleasePayload = {
+  version: string;
+  url: string;
+  body: string;
+  asset_name: string | null;
+  asset_url: string | null;
+};
+
+type UpdateResult = CommandResult<{
+  currentVersion: string;
+  latestVersion?: string | null;
+  releaseSummary?: string;
+  assetName?: string | null;
+  assetUrl?: string | null;
+  updateAvailable?: boolean;
+  progress?: number;
+  installedPath?: string;
+  launched?: boolean;
 }>;
 
 type CodexPluginMarketplaceStatus = {
@@ -665,9 +716,9 @@ type Route =
   | "supplier"
   | "tools"
   | "sessions"
-  | "scripts"
-  | "logs"
-  | "settings";
+  | "maintenance"
+  | "settings"
+  | "about";
 type LegacyRoute = "promptOptimizer" | "relay";
 const MEMORY_ALL_WORKSPACES = "__all__";
 const MEMORY_GLOBAL_WORKSPACE = "global";
@@ -684,9 +735,9 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon }> = [
   { id: "supplier", label: "供应商", icon: Network },
   { id: "tools", label: "工具与插件", icon: PackageSearch },
   { id: "sessions", label: "会话管理", icon: MessageSquare },
-  { id: "scripts", label: "脚本", icon: FileCode2 },
-  { id: "logs", label: "日志", icon: Info },
+  { id: "maintenance", label: "维护", icon: Wrench },
   { id: "settings", label: "设置", icon: Settings },
+  { id: "about", label: "关于", icon: Info },
 ];
 
 function isRoute(value: unknown): value is Route {
@@ -705,6 +756,19 @@ function compactPath(path?: string | null) {
   if (!path) return "未设置";
   if (path.length <= 58) return path;
   return `${path.slice(0, 24)}...${path.slice(-28)}`;
+}
+
+function displayProductPath(path?: string | null) {
+  if (!path) return "";
+  return path
+    .replace(/Codex\+\+/g, "Claude Code Pro")
+    .replace(/Claude Codex Pro 管理工具/g, "Claude Code Pro 管理工具")
+    .replace(/Claude Codex Pro/g, "Claude Code Pro");
+}
+
+function compactDisplayPath(path?: string | null) {
+  const display = displayProductPath(path);
+  return display ? compactPath(display) : "未设置";
 }
 
 function codexOverviewStatus(overview: OverviewResult | null) {
@@ -802,6 +866,10 @@ export function App() {
   const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
+  const [codexContextEntries, setCodexContextEntries] = useState<ContextEntriesResult | null>(null);
+  const [liveCodexContextEntries, setLiveCodexContextEntries] = useState<LiveContextEntriesResult | null>(null);
+  const [claudeContextEntries, setClaudeContextEntries] = useState<ClaudeContextEntriesResult | null>(null);
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invokeCommand<T>(command, args);
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
@@ -977,6 +1045,117 @@ export function App() {
     if (result) {
       setWatcher(result);
       if (!silent) notifyIfNeedsAttention({ title: "Watcher", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshContextEntries = async (silent = false, sourceSettings = settings?.settings ?? settingsDraft) => {
+    if (!sourceSettings) return null;
+    const [managed, live] = await Promise.all([
+      run(() => call<ContextEntriesResult>("list_context_entries", { request: { settings: sourceSettings } }), "Codex 工具与插件", { trackBusy: !silent, notify: !silent }),
+      run(() => call<LiveContextEntriesResult>("read_live_context_entries"), "Codex 当前工具与插件", { trackBusy: !silent, notify: !silent }),
+    ]);
+    if (managed) {
+      setCodexContextEntries(managed);
+      setSettingsDraft(managed.settings);
+      if (!silent) notifyIfNeedsAttention({ title: "Codex 工具与插件", message: managed.message, status: managed.status });
+    }
+    if (live) setLiveCodexContextEntries(live);
+    return managed;
+  };
+
+  const saveContextEntry = async (kind: ContextKind, id: string, tomlBody: string, sourceSettings = settings?.settings ?? settingsDraft) => {
+    if (!sourceSettings) return null;
+    const result = await run(
+      () => call<ContextEntriesResult>("upsert_context_entry", { request: { settings: sourceSettings, kind, id, tomlBody } }),
+      "保存工具与插件",
+    );
+    if (result) {
+      setCodexContextEntries(result);
+      setSettingsDraft(result.settings);
+      notifyIfNeedsAttention({ title: "保存工具与插件", message: result.message, status: result.status });
+      await saveSettings(result.settings);
+      await refreshContextEntries(true, result.settings);
+    }
+    return result;
+  };
+
+  const deleteContextEntry = async (kind: ContextKind, id: string, sourceSettings = settings?.settings ?? settingsDraft) => {
+    if (!sourceSettings) return null;
+    const result = await run(
+      () => call<ContextEntriesResult>("delete_context_entry", { request: { settings: sourceSettings, kind, id } }),
+      "删除工具与插件",
+    );
+    if (result) {
+      setCodexContextEntries(result);
+      setSettingsDraft(result.settings);
+      notifyIfNeedsAttention({ title: "删除工具与插件", message: result.message, status: result.status });
+      await saveSettings(result.settings);
+      await refreshContextEntries(true, result.settings);
+    }
+    return result;
+  };
+
+  const syncLiveContextEntries = async (sourceSettings = settings?.settings ?? settingsDraft) => {
+    if (!sourceSettings) return null;
+    const result = await run(
+      () => call<LiveContextEntriesResult>("sync_live_context_entries", { request: { settings: sourceSettings } }),
+      "同步当前 Codex 配置",
+    );
+    if (result) {
+      setLiveCodexContextEntries(result);
+      notifyIfNeedsAttention({ title: "同步当前 Codex 配置", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeContextEntries = async (silent = false) => {
+    const result = await run(() => call<ClaudeContextEntriesResult>("list_claude_context_entries"), "Claude 工具与插件", { trackBusy: !silent, notify: !silent });
+    if (result) {
+      setClaudeContextEntries(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Claude 工具与插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const saveClaudeContextEntry = async (kind: ContextKind, id: string, body: string) => {
+    const result = await run(
+      () => call<ClaudeContextEntriesResult>("upsert_claude_context_entry", { request: { kind, id, body } }),
+      "保存 Claude 工具与插件",
+    );
+    if (result) {
+      setClaudeContextEntries(result);
+      notifyIfNeedsAttention({ title: "保存 Claude 工具与插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const deleteClaudeContextEntry = async (kind: ContextKind, id: string) => {
+    const result = await run(
+      () => call<ClaudeContextEntriesResult>("delete_claude_context_entry", { request: { kind, id } }),
+      "删除 Claude 工具与插件",
+    );
+    if (result) {
+      setClaudeContextEntries(result);
+      notifyIfNeedsAttention({ title: "删除 Claude 工具与插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const checkUpdate = async (silent = false) => {
+    const result = await run(() => call<UpdateResult>("check_update"), "检查更新", { trackBusy: !silent, notify: !silent });
+    if (result) {
+      setUpdateInfo(result);
+      if (!silent) notifyIfNeedsAttention({ title: "检查更新", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const performUpdate = async (release?: UpdateReleasePayload | null) => {
+    const result = await run(() => call<UpdateResult>("perform_update", release ? { release } : undefined), "下载并运行安装包");
+    if (result) {
+      setUpdateInfo(result);
+      notifyIfNeedsAttention({ title: "下载并运行安装包", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1568,21 +1747,24 @@ export function App() {
         void refreshClaudeZhPatch(true);
       }, 650);
     } else if (target === "settings") {
-      await refreshSettings(true);
+      await Promise.all([refreshSettings(true), refreshLogs(true)]);
     } else if (target === "supplier") {
       await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
     } else if (target === "tools") {
+      const loadedSettings = await refreshSettings(true);
       await Promise.all([
         refreshPluginHub(true),
         refreshCodexPluginMarketplace(true),
         refreshClaudeDesktopOrgPlugin(true),
         refreshClaudeDesktopMarketplace(true),
         refreshClaudeDesktopDevMode(true),
-        refreshSettings(true),
+        refreshClaudeContextEntries(true),
         refreshOverview(true),
         refreshClaude(true),
         refreshWatcher(true),
       ]);
+      const sourceSettings = loadedSettings?.settings ?? settings?.settings ?? settingsDraft;
+      if (sourceSettings) await refreshContextEntries(true, sourceSettings);
     } else if (target === "sessions") {
       await Promise.all([
         refreshLocalSessions(true),
@@ -1591,10 +1773,10 @@ export function App() {
         refreshOverview(true),
         refreshClaude(true),
       ]);
-    } else if (target === "scripts") {
-      await Promise.all([refreshSettings(true), refreshScripts(true)]);
-    } else if (target === "logs") {
-      await refreshLogs(true);
+    } else if (target === "maintenance") {
+      await Promise.all([refreshOverview(true), refreshSettings(true), refreshWatcher(true), refreshClaudeLight(true)]);
+    } else if (target === "about") {
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true), checkUpdate(true)]);
     }
   };
 
@@ -1688,6 +1870,15 @@ export function App() {
       resetImageOverlaySettings,
       refreshLogs,
       refreshWatcher,
+      checkUpdate,
+      performUpdate,
+      refreshContextEntries,
+      saveContextEntry,
+      deleteContextEntry,
+      syncLiveContextEntries,
+      refreshClaudeContextEntries,
+      saveClaudeContextEntry,
+      deleteClaudeContextEntry,
   };
 
   return (
@@ -1771,11 +1962,14 @@ export function App() {
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}
+              claudeContextEntries={claudeContextEntries}
               claudeDesktopDevMode={claudeDesktopDevMode}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
               claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
               codexPluginMarketplace={codexPluginMarketplace}
+              codexContextEntries={codexContextEntries}
               hub={pluginHub}
+              liveCodexContextEntries={liveCodexContextEntries}
               overview={overview}
               preview={pluginPreview}
               settings={settings}
@@ -1798,9 +1992,9 @@ export function App() {
               settings={settings}
             />
           ) : null}
-          {route === "scripts" ? <ScriptsScreen actions={actions} market={scriptMarket} settings={settings} /> : null}
-          {route === "logs" ? <LogsScreen actions={actions} logs={logs} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
+          {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} logs={logs} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
+          {route === "about" ? <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} /> : null}
         </section>
       </main>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
@@ -2136,6 +2330,14 @@ function SupplierScreen({
       actions.showNotice({ title: "供应商排序", message: "供应商顺序保存失败，已恢复原顺序。", status: "failed" });
     }
   };
+  const pinSupplierToTop = (profileId: string) => {
+    const currentIds = supplierOrderFromIds(supplierOrderIds.length ? supplierOrderIds : profiles.map((profile) => profile.id))
+      .map((profile) => profile.id);
+    if (!currentIds.length || currentIds[0] === profileId) return;
+    const nextIds = [profileId, ...currentIds.filter((id) => id !== profileId)];
+    setSupplierOrderIds(nextIds);
+    void saveSupplierOrder(nextIds);
+  };
   const importFromCcswitch = async () => {
     if (!appSettings) return;
     setImportOpen(false);
@@ -2233,27 +2435,23 @@ function SupplierScreen({
 
   return (
     <div className="supplier-list-shell">
-      <div className="supplier-page-heading"><div><h2>供应商配置</h2><p>管理 API 供应商、协议、Key 与配置文件</p></div><div className="supplier-page-actions"><Button onClick={() => void actions.launchCodex()} variant="outline"><RefreshCw className="h-4 w-4" />重启 Codex++</Button><Button onClick={() => void actions.refreshRoute("supplier")} variant="outline"><RefreshCw className="h-4 w-4" />刷新</Button></div></div>
-      <Panel title="供应商列表" detail={`${profiles.length} 个供应商配置；可拖动排序，点编辑进入详情`}>
-        <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>检测到 OPENAI 环境变量</strong><p>这些变量可能覆盖当前供应商写入的 config.toml / auth.json；CODEX_HOME 不会被清理。</p><span className="supplier-env-chip">OPENAI_API_KEY 用户环境</span></div><div className="supplier-env-actions"><Button size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button size="sm" variant="outline"><RefreshCw className="h-4 w-4" />检测</Button></div></div>
-        <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
-        <div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现 {profiles.filter((profile) => profile.userAgent === "ccswitch" || profile.name.includes("ccswitch")).length || 4} 个 Codex 供应商</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div>
-        <div className="supplier-card-list">
-          {profiles.length ? supplierOrderFromIds(supplierOrderIds).map((profile) => {
-            const selected = profile.id === appSettings?.activeRelayId;
-            const aggregate = !!profile.aggregateEnabled;
-            return (
-              <div className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""}`} draggable key={profile.id} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDragOver={(event) => { event.preventDefault(); if (draggedId) previewSupplierOrder(draggedId, profile.id); }} onDragStart={() => { setDraggedId(profile.id); setDragOverId(null); }} onDrop={(event) => { event.preventDefault(); const nextIds = draggedId && !dragOverId ? reorderSupplierIds(draggedId, profile.id) ?? supplierOrderIds : supplierOrderIds; setDraggedId(null); setDragOverId(null); setSupplierOrderIds(nextIds); void saveSupplierOrder(nextIds); }}>
-                <GripVertical className="supplier-drag-handle h-4 w-4" />
-                <div className="supplier-avatar">{aggregate ? "聚" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
-                <div className="supplier-card-main"><div className="supplier-title-line"><strong>{profile.name || profile.id}</strong>{selected ? <span className="supplier-badge">当前</span> : null}{aggregate ? <span className="supplier-badge">聚合</span> : null}</div><span>{aggregate ? `${aggregateStrategyLabel(profile.aggregateStrategy)} · ${profile.aggregateMembers?.length ?? 0} 个成员` : `${supplierRelayModeLabel(profile.relayMode)} · ${supplierProtocolLabel(profile.protocol)} · ${profile.baseUrl || "不写 API 文件"}`}</span></div>
-                <div className="supplier-card-actions"><Button disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">{selected ? "使用中" : "使用"}</Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="置顶"><Pin className="h-4 w-4" /></Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="编辑"><PencilRuler className="h-4 w-4" /></Button><Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制"><Copy className="h-4 w-4" /></Button><Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商"><Trash2 className="h-4 w-4" /></Button></div>
-              </div>
-            );
-          }) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
-        </div>
-      </Panel>
-      <div className="supplier-side-summary"><Panel title="Claude Desktop 3P 状态" detail="开发模式和 profile 写入状态。"><div className="info-grid compact"><InfoRow label="开发模式" value={claudeDesktopDevMode?.devModeStatus.configured ? "已配置" : "未配置"} /><InfoRow label="普通配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.normalConfigPath)} /><InfoRow label="3P 配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.threepConfigPath)} /></div></Panel><Panel title="当前配置摘要" detail="只展示路径和非敏感字段。"><div className="info-grid compact"><InfoRow label="设置文件" value={compactPath(settings?.settings_path)} /><InfoRow label="供应商数量" value={`${profiles.length} 个`} /><InfoRow label="当前供应商 ID" value={appSettings?.activeRelayId ?? "default"} /><InfoRow label="聚合供应商" value={`${aggregateProfiles.length} 个`} /></div></Panel></div>
+      <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>检测到 OPENAI 环境变量</strong><p>这些变量可能覆盖当前供应商写入的 config.toml / auth.json；CODEX_HOME 不会被清理。</p><span className="supplier-env-chip">OPENAI_API_KEY 用户环境</span></div><div className="supplier-env-actions"><Button size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button size="sm" variant="outline"><RefreshCw className="h-4 w-4" />检测</Button></div></div>
+      <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
+      <div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现 {profiles.filter((profile) => profile.userAgent === "ccswitch" || profile.name.includes("ccswitch")).length || 4} 个 Codex 供应商</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div>
+      <div className="supplier-card-list">
+        {profiles.length ? supplierOrderFromIds(supplierOrderIds).map((profile) => {
+          const selected = profile.id === appSettings?.activeRelayId;
+          const aggregate = !!profile.aggregateEnabled;
+          return (
+            <div className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""}`} draggable key={profile.id} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDragOver={(event) => { event.preventDefault(); if (draggedId) previewSupplierOrder(draggedId, profile.id); }} onDragStart={() => { setDraggedId(profile.id); setDragOverId(null); }} onDrop={(event) => { event.preventDefault(); const nextIds = draggedId && !dragOverId ? reorderSupplierIds(draggedId, profile.id) ?? supplierOrderIds : supplierOrderIds; setDraggedId(null); setDragOverId(null); setSupplierOrderIds(nextIds); void saveSupplierOrder(nextIds); }}>
+              <GripVertical className="supplier-drag-handle h-4 w-4" />
+              <div className="supplier-avatar">{aggregate ? "聚" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
+              <div className="supplier-card-main"><div className="supplier-title-line"><strong>{profile.name || profile.id}</strong>{selected ? <span className="supplier-badge">当前</span> : null}{aggregate ? <span className="supplier-badge">聚合</span> : null}</div><span>{aggregate ? `${aggregateStrategyLabel(profile.aggregateStrategy)} · ${profile.aggregateMembers?.length ?? 0} 个成员` : `${supplierRelayModeLabel(profile.relayMode)} · ${supplierProtocolLabel(profile.protocol)} · ${profile.baseUrl || "不写 API 文件"}`}</span></div>
+              <div className="supplier-card-actions"><Button disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">{selected ? "使用中" : "使用"}</Button><Button onClick={() => pinSupplierToTop(profile.id)} size="sm" variant="outline" title="置顶"><Pin className="h-4 w-4" /></Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="编辑"><PencilRuler className="h-4 w-4" /></Button><Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制"><Copy className="h-4 w-4" /></Button><Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商"><Trash2 className="h-4 w-4" /></Button></div>
+            </div>
+          );
+        }) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
+      </div>
     </div>
   );
 }
@@ -2409,95 +2607,253 @@ function LegacySupplierScreen({
 
 function ToolsAndPluginsScreen({
   actions,
+  claudeContextEntries,
   claudeDesktopDevMode,
   claudeDesktopMarketplace,
   claudeDesktopOrgPlugin,
+  codexContextEntries,
   codexPluginMarketplace,
   hub,
+  liveCodexContextEntries,
   overview,
   preview,
   settings,
   watcher,
 }: {
   actions: ReturnType<typeof createActionsShape>;
+  claudeContextEntries: ClaudeContextEntriesResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
   claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
+  codexContextEntries: ContextEntriesResult | null;
   codexPluginMarketplace: CodexPluginMarketplaceStatusResult | null;
   hub: PluginHubResult | null;
+  liveCodexContextEntries: LiveContextEntriesResult | null;
   overview: OverviewResult | null;
   preview: PluginInstallPreviewResult | null;
   settings: SettingsResult | null;
   watcher: WatcherResult | null;
 }) {
-  const common = settings?.settings.relayContextConfigContents || settings?.settings.relayCommonConfigContents || "";
-  const codexPluginSource = hub?.catalog.sources.find((source) => source.id === "codex-plugins");
   return (
     <div className="stack">
-      <div className="ops-tools-command-deck">
-        <Panel title="工具与插件" detail="插件目录、MCP 配置和启动入口集中在这里。">
-          <div className="ops-note">
-            <ShieldCheck className="h-4 w-4" />
-            <span>第三方插件和 MCP 安装前仍先展示命令或配置 diff；社区资源不会静默执行脚本。</span>
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.refreshRoute("tools")}>
-              <RefreshCw className="h-4 w-4" />
-              刷新工具与插件
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://github.com/openai/plugins")} variant="outline">
-              <ExternalLink className="h-4 w-4" />
-              Codex 插件仓库
-            </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://developers.openai.com/codex/plugins")} variant="outline">
-              <ExternalLink className="h-4 w-4" />
-              Codex 插件文档
-            </Button>
-          </div>
-        </Panel>
-      </div>
-      <div className="ops-tools-columns">
-        <div className="ops-tools-column">
-          <PluginHubScreen
-            actions={actions}
-            hub={hub}
-            devMode={claudeDesktopDevMode}
-            marketplace={claudeDesktopMarketplace}
-            orgPlugin={claudeDesktopOrgPlugin}
-            preview={preview}
-          />
-          <PromptOptimizerCard actions={actions} />
-        </div>
-        <div className="ops-tools-column">
-          <ClaudeDesktopOrgPluginPanel actions={actions} devMode={claudeDesktopDevMode} marketplace={claudeDesktopMarketplace} status={claudeDesktopOrgPlugin} />
-          <Panel title="工具与插件配置" detail="MCP、Skills、Plugins 仍保存在统一 TOML 配置中。">
-            <pre className="ops-code">{common.trim() || "暂无通用 MCP / Skills / Plugins 配置。"}</pre>
-          </Panel>
-          <Panel title="Codex OpenAI 插件仓库" detail={codexPluginMarketplace?.marketplace.message ?? codexPluginSource?.message ?? "下载 openai/plugins 并注册为本地 Codex marketplace。"}>
-            <InfoRow label="目录来源" value={codexPluginSource?.label ?? "OpenAI Codex Plugins"} />
-            <InfoRow label="目录状态" value={codexPluginSource?.status ?? "未加载"} />
-            <InfoRow label="目录条目" value={`${codexPluginSource?.itemCount ?? 0} 个`} />
-            <InfoRow label="Codex Home" value={compactPath(codexPluginMarketplace?.marketplace.codexHome)} />
-            <InfoRow label="本地仓库" value={compactPath(codexPluginMarketplace?.marketplace.marketplaceRoot)} />
-            <InfoRow label="config.toml" value={codexPluginMarketplace?.marketplace.configRegistered ? "已注册" : "未注册"} />
-            <div className={codexPluginMarketplace?.marketplace.needsRepair ? "ops-danger-zone" : "ops-note"}>
-              {codexPluginMarketplace?.marketplace.needsRepair ? <AlertTriangle className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
-              <span>{codexPluginMarketplace?.message ?? "尚未读取本地 Codex 插件仓库状态。"}</span>
-            </div>
-            <div className="action-row">
-              <Button onClick={() => void actions.repairCodexPluginMarketplace()} size="sm">
-                <Download className="h-4 w-4" />
-                下载并注册
-              </Button>
-              <Button onClick={() => void actions.refreshCodexPluginMarketplace()} size="sm" variant="outline">刷新状态</Button>
-              <Button onClick={() => void actions.openExternalUrl("https://github.com/openai/plugins")} size="sm" variant="outline">打开仓库</Button>
-              <Button onClick={() => void actions.openExternalUrl("https://developers.openai.com/codex/plugins")} size="sm" variant="outline">查看文档</Button>
-            </div>
-          </Panel>
-          <MaintenanceToolsPanel actions={actions} overview={overview} settings={settings} watcher={watcher} />
-        </div>
-      </div>
+      <ContextManagerPanel
+        actions={actions}
+        entries={codexContextEntries?.entries ?? emptyContextEntries()}
+        liveEntries={liveCodexContextEntries?.entries ?? emptyContextEntries()}
+        scope="codex"
+        settings={settings?.settings ?? null}
+      />
+      <ContextManagerPanel
+        actions={actions}
+        claudeDesktopDevMode={claudeDesktopDevMode}
+        claudeDesktopMarketplace={claudeDesktopMarketplace}
+        claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
+        entries={mergeContextEntries(claudeContextEntries?.entries ?? emptyContextEntries(), claudeStatusContextEntries(claudeDesktopDevMode, claudeDesktopMarketplace, claudeDesktopOrgPlugin))}
+        configPath={claudeContextEntries?.configPath}
+        scope="claude"
+        settings={settings?.settings ?? null}
+      />
     </div>
+  );
+}
+
+function ContextManagerPanel({
+  actions,
+  claudeDesktopDevMode,
+  claudeDesktopMarketplace,
+  claudeDesktopOrgPlugin,
+  configPath,
+  entries,
+  liveEntries,
+  scope,
+  settings,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  claudeDesktopDevMode?: ClaudeDesktopDevModeStatusResult | null;
+  claudeDesktopMarketplace?: ClaudeDesktopMarketplaceStatusResult | null;
+  claudeDesktopOrgPlugin?: ClaudeDesktopOrgPluginStatusResult | null;
+  configPath?: string;
+  entries: ContextEntries;
+  liveEntries?: ContextEntries;
+  scope: "codex" | "claude";
+  settings: BackendSettings | null;
+}) {
+  const [tab, setTab] = useState<ContextKind>("mcp");
+  const [editing, setEditing] = useState<ContextEntry | null>(null);
+  const [draftKind, setDraftKind] = useState<ContextKind>("mcp");
+  const [draftId, setDraftId] = useState("");
+  const [draftToml, setDraftToml] = useState(defaultContextToml("mcp"));
+  const isCodex = scope === "codex";
+  const sourceEntries = isCodex ? mergeContextEntries(entries, liveEntries) : entries;
+  const currentEntries = contextEntriesByKind(sourceEntries, tab);
+  const title = isCodex ? "Codex 工具与插件" : "Claude 工具与插件";
+  const detail = isCodex
+    ? "独立管理 Codex 的 MCP、Skills、Plugins；切换任意供应商都会带上。"
+    : "管理 Claude Desktop 的 MCP；Skills 和插件显示当前本地写入/官方入口状态。";
+  const canEditCurrentTab = isCodex || tab === "mcp";
+  const editorLabel = isCodex ? "TOML 配置体" : "JSON 配置体";
+
+  const beginEdit = (entry: ContextEntry) => {
+    const kind = normalizeContextKind(entry.kind);
+    setTab(kind);
+    setDraftKind(kind);
+    setDraftId(entry.id);
+    setDraftToml(entry.tomlBody || defaultContextToml(kind));
+    setEditing(entry);
+  };
+  const beginCreate = () => {
+    setDraftKind(tab);
+    setDraftId("");
+    setDraftToml(isCodex ? defaultContextToml(tab) : defaultClaudeContextBody(tab));
+    setEditing({
+      id: "",
+      kind: tab,
+      title: "",
+      summary: "",
+      tomlBody: isCodex ? defaultContextToml(tab) : defaultClaudeContextBody(tab),
+      enabled: true,
+    });
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setDraftKind(tab);
+    setDraftId("");
+    setDraftToml(defaultContextToml(tab));
+  };
+  const saveDraft = async () => {
+    if (!draftId.trim()) return;
+    const result = isCodex
+      ? settings ? await actions.saveContextEntry(draftKind, draftId.trim(), draftToml, settings) : null
+      : await actions.saveClaudeContextEntry(draftKind, draftId.trim(), draftToml);
+    if (result) cancelEdit();
+  };
+  const toggleEntry = async (entry: ContextEntry) => {
+    const kind = normalizeContextKind(entry.kind);
+    if (isCodex) {
+      if (!settings) return;
+      await actions.saveContextEntry(kind, entry.id, setContextEnabled(entry.tomlBody, !entry.enabled), settings);
+      return;
+    }
+    if (kind !== "mcp") return;
+    await actions.saveClaudeContextEntry(kind, entry.id, setJsonEnabled(entry.tomlBody, !entry.enabled));
+  };
+  const removeEntry = async (entry: ContextEntry) => {
+    if (!window.confirm(`删除 ${entry.id}？`)) return;
+    const kind = normalizeContextKind(entry.kind);
+    if (isCodex) {
+      if (!settings) return;
+      await actions.deleteContextEntry(kind, entry.id, settings);
+      return;
+    }
+    if (kind !== "mcp") return;
+    await actions.deleteClaudeContextEntry(kind, entry.id);
+  };
+
+  return (
+    <section className="context-manager-card">
+      <header className="context-manager-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{detail}</p>
+        </div>
+        <div className="action-row">
+          {isCodex ? (
+            <>
+              <Button onClick={() => void actions.refreshContextEntries()} size="sm" variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                检测
+              </Button>
+              <Button onClick={() => void actions.syncLiveContextEntries(settings ?? undefined)} size="sm" variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                同步到当前 Codex
+              </Button>
+              <Button disabled={!settings} onClick={beginCreate} size="sm">
+                <Plus className="h-4 w-4" />
+                新增{contextKindLabel(tab)}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => void actions.refreshClaudeContextEntries()} size="sm" variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                检测
+              </Button>
+              <Button disabled={tab !== "mcp"} onClick={beginCreate} size="sm" variant="outline">
+                <Plus className="h-4 w-4" />
+                新增MCP
+              </Button>
+              <Button onClick={() => void actions.installPonytailClaudeDesktopLocalBundle()} size="sm">
+                <Plus className="h-4 w-4" />
+                写入 Claude 本地插件
+              </Button>
+            </>
+          )}
+        </div>
+      </header>
+      <div className="context-tabs">
+        {(["mcp", "skill", "plugin"] as ContextKind[]).map((kind) => (
+          <button className={tab === kind ? "active" : ""} key={kind} onClick={() => setTab(kind)} type="button">
+            <strong>{contextKindLabel(kind)}</strong>
+            <span>{contextEntriesByKind(sourceEntries, kind).length}</span>
+          </button>
+        ))}
+      </div>
+      <p className="context-manager-note">
+        {isCodex
+          ? `当前共有 ${currentEntries.length} 个${contextKindLabel(tab)}；这些条目独立于供应商保存，会写入所有供应商切换后的 config.toml。`
+          : `${claudeContextSummary(claudeDesktopDevMode ?? null, claudeDesktopMarketplace ?? null, claudeDesktopOrgPlugin ?? null)}${tab === "mcp" && configPath ? ` MCP 配置：${compactPath(configPath)}。` : " Skills/插件由 Claude Desktop 组织插件目录和官方插件入口管理。"}`}
+      </p>
+      <div className="context-entry-list">
+        {currentEntries.length ? currentEntries.map((entry) => (
+          <div className="context-entry-row" key={`${entry.kind}:${entry.id}`}>
+            <div>
+              <strong>{entry.title || entry.id}</strong>
+              {entry.summary ? <span>{entry.summary}</span> : null}
+            </div>
+            <ToggleSwitch checked={entry.enabled} disabled={!canEditCurrentTab || (isCodex && !settings)} onChange={() => void toggleEntry(entry)} />
+            <button disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
+              <PencilRuler className="h-4 w-4" />
+            </button>
+            <button className="danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        )) : <Empty text={`暂无${contextKindLabel(tab)}，可以从通用配置文件或这里新增。`} />}
+      </div>
+      {editing ? (
+        <div className="context-editor">
+          <div className="context-editor-grid">
+            <label className="ops-form-field">
+              <span>类型</span>
+              <select className="ops-select" disabled={!isCodex && editing.id !== ""} onChange={(event) => {
+                const next = event.currentTarget.value as ContextKind;
+                setDraftKind(next);
+                if (!draftToml.trim()) setDraftToml(isCodex ? defaultContextToml(next) : defaultClaudeContextBody(next));
+              }} value={draftKind}>
+                <option value="mcp">MCP</option>
+                <option value="skill">Skills</option>
+                <option value="plugin">插件</option>
+              </select>
+            </label>
+            <label className="ops-form-field">
+              <span>ID</span>
+              <input disabled={Boolean(editing.id)} onChange={(event) => setDraftId(event.currentTarget.value)} value={draftId} />
+            </label>
+          </div>
+          <label className="ops-form-field">
+            <span>{editorLabel}</span>
+            <textarea className="ops-textarea context-toml-editor mono" disabled={!canEditCurrentTab} onChange={(event) => setDraftToml(event.currentTarget.value)} value={draftToml} />
+          </label>
+          <div className="action-row">
+            <Button disabled={!canEditCurrentTab || (isCodex && !settings) || !draftId.trim()} onClick={() => void saveDraft()} size="sm">
+              <Save className="h-4 w-4" />
+              保存扩展项
+            </Button>
+            <Button onClick={cancelEdit} size="sm" variant="outline">取消</Button>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -3075,43 +3431,86 @@ function ScriptsScreen({ actions, market, settings }: { actions: ReturnType<type
 
 function MaintenanceToolsPanel({
   actions,
+  claudeDesktop,
   overview,
   settings,
   watcher,
 }: {
   actions: ReturnType<typeof createActionsShape>;
+  claudeDesktop: ClaudeDesktopResult | null;
   overview: OverviewResult | null;
   settings: SettingsResult | null;
   watcher: WatcherResult | null;
 }) {
+  const savedCodexPath = settings?.settings.codexAppPath?.trim() || "";
+  const detectedCodexPath = overview?.codex_app.path || "";
+  const detectedClaudePath = claudeDesktop?.executablePaths[0] || "";
   return (
-    <Panel title="入口与修复" detail="会话工具旁保留启动、快捷方式、后端和 Watcher 修复入口。">
-      <div className="ops-status-list">
-        <StatusRow label="Codex 应用" status={overview?.codex_app.status ?? "not_checked"} value={compactPath(overview?.codex_app.path)} />
-        <StatusRow label="静默启动入口" status={overview?.silent_shortcut.status ?? "not_checked"} value={compactPath(overview?.silent_shortcut.path)} />
-        <StatusRow label="管理工具入口" status={overview?.management_shortcut.status ?? "not_checked"} value={compactPath(overview?.management_shortcut.path)} />
-        <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "已启用" : "未启用"} />
-      </div>
-      <div className="action-row">
-        <Button onClick={() => void actions.launchCodex()} size="sm">启动/重启Codex</Button>
-        <Button onClick={() => void actions.restartCodex()} size="sm" variant="outline">重启 Codex</Button>
-        <Button onClick={() => void actions.repairEntrypoints()} size="sm" variant="outline">修复入口</Button>
-        <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
-        <Button onClick={() => void actions.installEntrypoints()} size="sm" variant="outline">安装入口</Button>
-        <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复快捷方式</Button>
-      </div>
-      <div className="action-row">
-        <Button onClick={() => void actions.installWatcher()} size="sm" variant="outline">安装 Watcher</Button>
-        <Button onClick={() => void actions.enableWatcher()} size="sm" variant="outline">启用 Watcher</Button>
-        <Button onClick={() => void actions.disableWatcher()} size="sm" variant="outline">禁用 Watcher</Button>
-        <Button onClick={() => void actions.uninstallWatcher()} size="sm" variant="outline">移除 Watcher</Button>
-      </div>
-      <div className="info-grid compact">
-        <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
-        <InfoRow label="日志文件" value={compactPath(overview?.logs_path)} />
-        <InfoRow label="当前版本" value={overview?.current_version ?? "未加载"} />
-      </div>
-    </Panel>
+    <div className="stack">
+      <Panel title="检查与修复" detail="检查入口、Codex 应用和 Watcher 状态。">
+        <div className="ops-status-list">
+          <StatusRow label="Codex 应用" status={overview?.codex_app.status ?? "not_checked"} value={compactDisplayPath(detectedCodexPath)} />
+          <StatusRow label="静默启动入口" status={overview?.silent_shortcut.status ?? "not_checked"} value={compactDisplayPath(overview?.silent_shortcut.path)} />
+          <StatusRow label="管理控制台入口" status={overview?.management_shortcut.status ?? "not_checked"} value={compactDisplayPath(overview?.management_shortcut.path)} />
+          <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "正常" : compactDisplayPath(watcher?.disabled_flag)} />
+        </div>
+        <div className="action-row">
+          <Button onClick={() => void actions.refreshRoute("maintenance")} size="sm">检查</Button>
+          <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复快捷方式</Button>
+          <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
+        </div>
+      </Panel>
+
+      <Panel title="入口管理" detail="快捷方式写入系统实际桌面位置，不使用写死桌面路径。">
+        <div className="ops-toggle-line">
+          <span>卸载时移除 Claude Code Pro 托管数据</span>
+          <ToggleSwitch checked={false} disabled onChange={() => {}} />
+        </div>
+        <div className="action-row">
+          <Button onClick={() => void actions.installEntrypoints()} size="sm">安装入口</Button>
+          <Button onClick={() => void actions.uninstallEntrypoints()} size="sm" variant="outline">卸载入口</Button>
+          <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复入口</Button>
+        </div>
+      </Panel>
+
+      <Panel title="自动接管" detail="Watcher 用于保持 Claude Code Pro 接管状态。">
+        <div className="action-row">
+          <Button onClick={() => void actions.installWatcher()} size="sm" variant="outline">安装 Watcher</Button>
+          <Button onClick={() => void actions.uninstallWatcher()} size="sm" variant="outline">移除 Watcher</Button>
+          <Button onClick={() => void actions.enableWatcher()} size="sm" variant="outline">启用</Button>
+          <Button onClick={() => void actions.disableWatcher()} size="sm" variant="outline">禁用</Button>
+        </div>
+      </Panel>
+
+      <Panel title="Codex 应用路径" detail="免安装版或绿色版只需要选择一次，之后静默启动会自动复用。">
+        <div className="ops-status-list">
+          <StatusRow label="保存路径" status={savedCodexPath ? "ok" : "not_checked"} value={savedCodexPath ? compactDisplayPath(savedCodexPath) : "未记录路径"} />
+          <StatusRow label="当前识别" status={overview?.codex_app.status ?? "not_checked"} value={compactDisplayPath(detectedCodexPath)} />
+        </div>
+        <label className="ops-form-field">
+          <span>保存的应用路径</span>
+          <input readOnly value={savedCodexPath || "选择 Codex.exe、Codex.app、app 目录或绿色目录"} />
+        </label>
+        <div className="action-row">
+          <Button disabled size="sm">选择应用目录</Button>
+          <Button disabled size="sm" variant="outline">选择 Codex.exe</Button>
+          <Button disabled size="sm" variant="outline">清除保存路径</Button>
+        </div>
+      </Panel>
+
+      <Panel title="Claude 应用路径" detail="用于核对 Claude Desktop 安装位置和开发模式相关操作。">
+        <div className="ops-status-list">
+          <StatusRow label="当前识别" status={detectedClaudePath ? "found" : claudeDesktop?.status ?? "not_checked"} value={detectedClaudePath ? compactDisplayPath(detectedClaudePath) : "未检测到 Claude 路径"} />
+          <StatusRow label="安装类型" status={claudeDesktop?.installKind ? "ok" : "not_checked"} value={claudeDesktop?.installKind ?? "未检测"} />
+          <StatusRow label="CDP 状态" status={claudeDesktop?.cdpStatus === "blocked" || claudeDesktop?.cdpStatus === "failed" ? "failed" : claudeDesktop?.cdpStatus ?? "not_checked"} value={claudeDesktop?.cdpStatus ?? "未检测"} />
+        </div>
+        <div className="action-row">
+          <Button onClick={() => void actions.launchClaudeDesktop()} size="sm" variant="outline">启动/重启Claude</Button>
+          <Button onClick={() => void actions.installClaudeZhPatch()} size="sm" variant="outline">Claude 一键汉化</Button>
+          <Button onClick={() => void actions.configureClaudeDesktopDevMode()} size="sm" variant="outline">Claude 一键开发模式</Button>
+        </div>
+      </Panel>
+    </div>
   );
 }
 
@@ -3129,11 +3528,32 @@ function LogsScreen({ actions, logs }: { actions: ReturnType<typeof createAction
   );
 }
 
+function MaintenanceScreen({
+  actions,
+  claudeDesktop,
+  overview,
+  settings,
+  watcher,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  claudeDesktop: ClaudeDesktopResult | null;
+  overview: OverviewResult | null;
+  settings: SettingsResult | null;
+  watcher: WatcherResult | null;
+}) {
+  return (
+    <div className="stack">
+      <MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} />
+    </div>
+  );
+}
+
 function SettingsScreen({
   actions,
   claudeChinese,
   claudeZhPatch,
   draft,
+  logs,
   onDraftChange,
   overview,
   settings,
@@ -3143,6 +3563,7 @@ function SettingsScreen({
   claudeChinese: ClaudeChineseWindowResult | null;
   claudeZhPatch: ClaudeZhPatchResult | null;
   draft: BackendSettings | null;
+  logs: LogsResult | null;
   onDraftChange: (settings: BackendSettings) => void;
   overview: OverviewResult | null;
   settings: SettingsResult | null;
@@ -3357,6 +3778,67 @@ function SettingsScreen({
             重置设置
           </Button>
         </Panel>
+        <LogsScreen actions={actions} logs={logs} />
+      </div>
+    </div>
+  );
+}
+
+function AboutScreen({
+  actions,
+  claudeDesktop,
+  overview,
+  updateInfo,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  claudeDesktop: ClaudeDesktopResult | null;
+  overview: OverviewResult | null;
+  updateInfo: UpdateResult | null;
+}) {
+  const release = updateInfoToRelease(updateInfo);
+  return (
+    <div className="ops-two-column">
+      <div className="ops-wide-column">
+        <Panel title="关于 Claude Codex Pro" detail="Claude Codex Pro 本地管理、供应商、会话与维护工具。">
+          <div className="info-grid compact">
+            <InfoRow label="Claude Codex Pro 版本" value={overview?.current_version ?? updateInfo?.currentVersion ?? "未加载"} />
+            <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />
+            <InfoRow label="Claude 版本" value={claudeDesktopVersionLabel(claudeDesktop)} />
+            <InfoRow label="资源名称" value={displayAssetName(updateInfo?.assetName)} />
+            <InfoRow label="项目地址" value="github.com/DamonZS/Claude-Codex-Pro-Tool" />
+          </div>
+          <div className="action-row">
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/DamonZS/Claude-Codex-Pro-Tool")} variant="outline">
+              <ExternalLink className="h-4 w-4" />
+              打开项目
+            </Button>
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases")} variant="outline">
+              <ExternalLink className="h-4 w-4" />
+              Release
+            </Button>
+          </div>
+        </Panel>
+      </div>
+      <div className="stack">
+        <Panel title="GitHub Release 更新" detail="调用后端真实检查更新；有安装包时可下载并运行。">
+          <div className="ops-status-list">
+            <StatusRow label="更新状态" status={updateInfo?.status ?? "not_checked"} value={updateStatusLabel(updateInfo)} />
+            <StatusRow label="当前版本" status={overview?.current_version || updateInfo?.currentVersion ? "ok" : "not_checked"} value={updateInfo?.currentVersion ?? overview?.current_version ?? "未加载"} />
+            <StatusRow label="最新版本" status={updateInfo?.latestVersion ? "ok" : "not_checked"} value={updateInfo?.latestVersion ?? "未检查"} />
+            <StatusRow label="安装资源" status={updateInfo?.assetUrl ? "ok" : "not_checked"} value={displayAssetName(updateInfo?.assetName)} />
+          </div>
+          {updateInfo?.releaseSummary ? <pre className="ops-code compact">{updateInfo.releaseSummary}</pre> : <Empty text="暂未检查到 Release 信息。" />}
+          <div className="action-row">
+            <Button onClick={() => void actions.checkUpdate()}>
+              <RefreshCw className="h-4 w-4" />
+              检查更新
+            </Button>
+            <Button disabled={!release?.asset_url} onClick={() => void actions.performUpdate(release)} variant="outline">
+              <Download className="h-4 w-4" />
+              下载并运行安装包
+            </Button>
+          </div>
+        </Panel>
       </div>
     </div>
   );
@@ -3451,6 +3933,178 @@ function StatusRow({ label, value, status }: { label: string; value: string; sta
       <strong>{value}</strong>
     </div>
   );
+}
+
+function emptyContextEntries(): ContextEntries {
+  return { mcpServers: [], skills: [], plugins: [] };
+}
+
+function normalizeContextKind(kind?: string | null): ContextKind {
+  if (kind === "skill" || kind === "skills") return "skill";
+  if (kind === "plugin" || kind === "plugins") return "plugin";
+  return "mcp";
+}
+
+function contextKindLabel(kind: ContextKind) {
+  if (kind === "skill") return "Skills";
+  if (kind === "plugin") return "插件";
+  return "MCP";
+}
+
+function contextEntriesByKind(entries: ContextEntries, kind: ContextKind) {
+  if (kind === "skill") return entries.skills;
+  if (kind === "plugin") return entries.plugins;
+  return entries.mcpServers;
+}
+
+function mergeContextEntries(managed: ContextEntries, live?: ContextEntries) {
+  if (!live) return managed;
+  const merge = (left: ContextEntry[], right: ContextEntry[]) => {
+    const map = new Map<string, ContextEntry>();
+    for (const entry of right) map.set(entry.id, entry);
+    for (const entry of left) map.set(entry.id, entry);
+    return [...map.values()];
+  };
+  return {
+    mcpServers: merge(managed.mcpServers, live.mcpServers),
+    skills: merge(managed.skills, live.skills),
+    plugins: merge(managed.plugins, live.plugins),
+  };
+}
+
+function defaultContextToml(kind: ContextKind) {
+  if (kind === "skill") return "enabled = true\npath = \"~/.codex/skills/example\"\n";
+  if (kind === "plugin") return "enabled = true\n";
+  return "enabled = true\ntype = \"stdio\"\ncommand = \"node\"\nargs = [\"server.js\"]\n";
+}
+
+function setContextEnabled(tomlBody: string, enabled: boolean) {
+  const lines = tomlBody.trimEnd().split(/\r?\n/);
+  const nextLine = `enabled = ${enabled ? "true" : "false"}`;
+  const index = lines.findIndex((line) => line.trim().startsWith("enabled"));
+  if (index >= 0) {
+    lines[index] = nextLine;
+  } else {
+    lines.unshift(nextLine);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function setJsonEnabled(jsonBody: string, enabled: boolean) {
+  try {
+    const parsed = JSON.parse(jsonBody || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return `${JSON.stringify({ ...parsed, enabled }, null, 2)}\n`;
+    }
+  } catch {
+    // Keep the user's body intact if it is not valid JSON yet.
+  }
+  return jsonBody;
+}
+
+function defaultClaudeContextBody(kind: ContextKind) {
+  if (kind === "mcp") {
+    return "{\n  \"command\": \"node\",\n  \"args\": [\"server.js\"],\n  \"enabled\": true\n}\n";
+  }
+  if (kind === "skill") {
+    return "{\n  \"enabled\": true,\n  \"skills\": []\n}\n";
+  }
+  return "{\n  \"enabled\": true\n}\n";
+}
+
+function claudeStatusContextEntries(
+  devMode: ClaudeDesktopDevModeStatusResult | null,
+  marketplace: ClaudeDesktopMarketplaceStatusResult | null,
+  orgPlugin: ClaudeDesktopOrgPluginStatusResult | null,
+): ContextEntries {
+  const org = orgPlugin?.orgPluginStatus;
+  const market = marketplace?.marketplaceStatus;
+  const dev = devMode?.devModeStatus;
+  return {
+    mcpServers: [
+      {
+        id: "claude-codex-pro-codex",
+        kind: "mcp",
+        title: "Claude Code Pro MCP",
+        summary: dev?.configured ? "开发模式配置已写入" : "等待写入 Claude 开发模式配置",
+        tomlBody: "enabled = true\ncommand = \"claude-codex-pro\"\n",
+        enabled: Boolean(dev?.configured),
+      },
+      {
+        id: "ponytail",
+        kind: "mcp",
+        title: "Ponytail MCP",
+        summary: org?.ponytailInstalled ? "本地组织插件已安装" : "可通过一键写入本地插件安装",
+        tomlBody: "enabled = true\ncommand = \"node\"\n",
+        enabled: Boolean(org?.ponytailInstalled),
+      },
+    ],
+    skills: [
+      {
+        id: "ponytail",
+        kind: "skill",
+        title: "Ponytail Skills",
+        summary: org?.ponytailPluginDir ? compactPath(org.ponytailPluginDir) : "组织插件 Skills 目录未检测",
+        tomlBody: "enabled = true\n",
+        enabled: Boolean(org?.ponytailInstalled),
+      },
+    ],
+    plugins: [
+      {
+        id: market?.plugin || "ponytail",
+        kind: "plugin",
+        title: market?.marketplace || "DietrichGebert/ponytail",
+        summary: market?.message || "Claude 官方插件仓库入口，可选。",
+        tomlBody: "enabled = true\n",
+        enabled: Boolean(market?.supported),
+      },
+    ],
+  };
+}
+
+function claudeContextSummary(
+  devMode: ClaudeDesktopDevModeStatusResult | null,
+  marketplace: ClaudeDesktopMarketplaceStatusResult | null,
+  orgPlugin: ClaudeDesktopOrgPluginStatusResult | null,
+) {
+  const dev = devMode?.devModeStatus.configured ? "开发模式已配置" : "开发模式未配置";
+  const org = orgPlugin?.orgPluginStatus.ponytailInstalled ? "组织插件已安装" : "组织插件未安装";
+  const market = marketplace?.marketplaceStatus.supported ? "官方插件入口可用" : "官方插件入口未检测";
+  return `${dev}；${org}；${market}。`;
+}
+
+function updateInfoToRelease(updateInfo: UpdateResult | null): UpdateReleasePayload | null {
+  if (!updateInfo?.latestVersion) return null;
+  return {
+    version: updateInfo.latestVersion,
+    url: "",
+    body: updateInfo.releaseSummary ?? "",
+    asset_name: updateInfo.assetName ?? null,
+    asset_url: updateInfo.assetUrl ?? null,
+  };
+}
+
+function updateStatusLabel(updateInfo: UpdateResult | null) {
+  if (!updateInfo) return "未检查";
+  if (updateInfo.status === "running") return "检查中";
+  if (statusFailed(updateInfo.status)) return "检查失败";
+  if (updateInfo.updateAvailable) return "有可用更新";
+  if (statusOk(updateInfo.status)) return "已是最新";
+  return "未检查";
+}
+
+function displayAssetName(name?: string | null) {
+  if (!name) return "未检测";
+  return name
+    .replace(/CodexPlusPlus/gi, "Claude Codex Pro")
+    .replace(/claude-codex-pro/gi, "Claude Codex Pro");
+}
+
+function claudeDesktopVersionLabel(claudeDesktop: ClaudeDesktopResult | null) {
+  if (!claudeDesktop) return "未检测";
+  const install = claudeDesktop.installKind || "未知安装";
+  const path = claudeDesktop.executablePaths[0] ? compactPath(claudeDesktop.executablePaths[0]) : "未检测到路径";
+  return `${install} · ${path}`;
 }
 
 function Empty({ text }: { text: string }) {
@@ -3772,7 +4426,8 @@ function initialRoute(): Route {
 }
 
 function normalizeRoute(value: unknown): unknown {
-  if (value === "pluginHub" || value === "context" || value === "maintenance" || value === "promptOptimizer") return "tools";
+  if (value === "pluginHub" || value === "context" || value === "promptOptimizer" || value === "scripts") return "tools";
+  if (value === "logs") return "settings";
   if (value === "relay") return "supplier";
   return value;
 }
@@ -3783,9 +4438,9 @@ function routeSubtitle(route: Route) {
     supplier: "Codex 中转配置与 Claude Desktop 开发模式供应商写入。",
     tools: "插件目录、MCP 配置和启动入口。",
     sessions: "历史会话修复、盘古记忆和会话诊断。",
-    scripts: "Codex 前端用户脚本市场。",
-    logs: "诊断日志与运行信息。",
-    settings: "全局开关和配置摘要。",
+    maintenance: "入口、快捷方式、后端和 Watcher 维护。",
+    settings: "全局开关、配置摘要和运行日志。",
+    about: "版本信息、项目地址和 GitHub Release 更新。",
   };
   return subtitles[route];
 }
@@ -3874,5 +4529,14 @@ function createActionsShape() {
     resetImageOverlaySettings: async () => {},
     refreshLogs: async () => null as LogsResult | null,
     refreshWatcher: async () => null as WatcherResult | null,
+    checkUpdate: async () => null as UpdateResult | null,
+    performUpdate: async (_release?: UpdateReleasePayload | null) => null as UpdateResult | null,
+    refreshContextEntries: async (_silent?: boolean, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
+    saveContextEntry: async (_kind: ContextKind, _id: string, _tomlBody: string, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
+    deleteContextEntry: async (_kind: ContextKind, _id: string, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
+    syncLiveContextEntries: async (_settings?: BackendSettings | null) => null as LiveContextEntriesResult | null,
+    refreshClaudeContextEntries: async (_silent?: boolean) => null as ClaudeContextEntriesResult | null,
+    saveClaudeContextEntry: async (_kind: ContextKind, _id: string, _body: string) => null as ClaudeContextEntriesResult | null,
+    deleteClaudeContextEntry: async (_kind: ContextKind, _id: string) => null as ClaudeContextEntriesResult | null,
   };
 }

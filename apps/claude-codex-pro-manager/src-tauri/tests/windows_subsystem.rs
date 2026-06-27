@@ -781,8 +781,10 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
         .expect("supplier screen source");
 
     assert!(supplier_screen.contains("供应商配置"));
-    assert!(supplier_screen.contains("管理 API 供应商、协议、Key 与配置文件"));
-    assert!(supplier_screen.contains("供应商列表"));
+    assert!(!supplier_screen.contains("管理 API 供应商、协议、Key 与配置文件"));
+    assert!(!supplier_screen.contains("供应商列表"));
+    assert!(!supplier_screen.contains("Claude Desktop 3P 状态"));
+    assert!(!supplier_screen.contains("当前配置摘要"));
     assert!(supplier_screen.contains("检测到 OPENAI 环境变量"));
     assert!(supplier_screen.contains("启用供应商配置切换"));
     assert!(supplier_screen.contains("添加供应商"));

@@ -132,9 +132,6 @@ pub trait LaunchHooks: Send + Sync {
     fn select_helper_port(&self, requested: u16) -> u16;
     async fn load_settings(&self) -> anyhow::Result<BackendSettings>;
     async fn run_provider_sync(&self) -> anyhow::Result<()>;
-    async fn apply_active_relay_profile(&self, _settings: &BackendSettings) -> anyhow::Result<()> {
-        Ok(())
-    }
     async fn ensure_computer_use_config(&self, _settings: &BackendSettings) -> anyhow::Result<()> {
         Ok(())
     }
@@ -407,16 +404,6 @@ impl LaunchHooks for DefaultLaunchHooks {
     async fn run_provider_sync(&self) -> anyhow::Result<()> {
         anyhow::bail!(
             "provider sync requires launcher hooks with claude-codex-pro-data integration"
-        )
-    }
-
-    async fn apply_active_relay_profile(&self, settings: &BackendSettings) -> anyhow::Result<()> {
-        if !settings.relay_profiles_enabled {
-            return Ok(());
-        }
-        apply_active_relay_profile_to_home(
-            settings,
-            &crate::relay_config::default_codex_home_dir(),
         )
     }
 
@@ -704,42 +691,6 @@ impl LaunchHooks for DefaultLaunchHooks {
             } => {}
         }
     }
-}
-
-fn apply_active_relay_profile_to_home(
-    settings: &BackendSettings,
-    home: &Path,
-) -> anyhow::Result<()> {
-    let profile = settings.active_relay_profile();
-    let common_config = crate::relay_config::normalize_config_text(
-        &[
-            settings.relay_common_config_contents.as_str(),
-            settings.relay_context_config_contents.as_str(),
-        ]
-        .into_iter()
-        .map(str::trim)
-        .filter(|section| !section.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n"),
-    );
-    if profile.relay_mode == crate::settings::RelayMode::Official && !profile.official_mix_api_key
-    {
-        let _ = crate::diagnostic_log::append_diagnostic_log(
-            "launcher.relay_profile_unchanged",
-            serde_json::json!({
-                "reason": "default_official_profile",
-                "home": home.to_string_lossy()
-            }),
-        );
-        return Ok(());
-    }
-    crate::relay_config::apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
-        home,
-        &profile,
-        &common_config,
-        settings.computer_use_guard_enabled,
-    )?;
-    Ok(())
 }
 
 async fn handle_helper_connection(
@@ -2163,34 +2114,6 @@ mod tests {
         assert_eq!(
             cdp_target_fingerprint(&target),
             "ws://127.0.0.1:9229/devtools/page/target-1"
-        );
-    }
-
-    #[tokio::test]
-    async fn default_official_launch_profile_does_not_clear_live_provider_config() {
-        let temp = tempfile::tempdir().unwrap();
-        let codex_home = temp.path().join("codex");
-        std::fs::create_dir_all(&codex_home).unwrap();
-        let config = r#"model_provider = "toporeduce"
-
-[model_providers.toporeduce]
-name = "TopoReduce"
-wire_api = "responses"
-requires_openai_auth = true
-base_url = "https://api.toporeduce.cn/v1"
-"#;
-        let auth = r#"{"OPENAI_API_KEY":"sk-third-party"}"#;
-        std::fs::write(codex_home.join("config.toml"), config).unwrap();
-        std::fs::write(codex_home.join("auth.json"), auth).unwrap();
-
-        apply_active_relay_profile_to_home(&BackendSettings::default(), &codex_home).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(codex_home.join("config.toml")).unwrap(),
-            config
-        );
-        assert_eq!(
-            std::fs::read_to_string(codex_home.join("auth.json")).unwrap(),
-            auth
         );
     }
 

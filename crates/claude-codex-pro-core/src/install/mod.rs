@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 pub mod macos;
 pub mod windows;
 
-pub const SILENT_NAME: &str = "Claude Codex Pro";
-pub const MANAGER_NAME: &str = "Claude Codex Pro 管理工具";
+pub const SILENT_NAME: &str = "Claude Code Pro";
+pub const MANAGER_NAME: &str = "Claude Code Pro 管理工具";
 pub const SILENT_BINARY: &str = "claude-codex-pro";
 pub const MANAGER_BINARY: &str = "claude-codex-pro-manager";
 
@@ -72,11 +72,11 @@ impl ShortcutState {
 }
 
 pub fn shortcut_names() -> (&'static str, &'static str) {
-    ("Claude Codex Pro.lnk", "Claude Codex Pro 管理工具.lnk")
+    ("Claude Code Pro.lnk", "Claude Code Pro 管理工具.lnk")
 }
 
 pub fn app_bundle_names() -> (&'static str, &'static str) {
-    ("Claude Codex Pro.app", "Claude Codex Pro 管理工具.app")
+    ("Claude Code Pro.app", "Claude Code Pro 管理工具.app")
 }
 
 pub fn inspect_entrypoints() -> EntryPointState {

@@ -435,6 +435,77 @@ function previewScriptMarket(message = "预览模式脚本市场。") {
   });
 }
 
+function previewContextEntries(settings = previewSettings()) {
+  const entries = {
+    mcpServers: [
+      {
+        id: "codegraph",
+        kind: "mcp",
+        title: "codegraph",
+        summary: "command = \"codegraph\"",
+        tomlBody: "enabled = true\ntype = \"stdio\"\ncommand = \"codegraph\"\nargs = [\"serve\", \"--mcp\"]\n",
+        enabled: true,
+      },
+      {
+        id: "node_repl",
+        kind: "mcp",
+        title: "node_repl",
+        summary: "command = \"node\"",
+        tomlBody: "enabled = true\ntype = \"stdio\"\ncommand = \"node\"\nargs = [\"server.js\"]\n",
+        enabled: true,
+      },
+    ],
+    skills: [],
+    plugins: previewPluginItems().slice(0, 20).map((item) => ({
+      id: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}@${item.sourceId}`,
+      kind: "plugin",
+      title: `${item.name}@${item.sourceId}`,
+      summary: item.description,
+      tomlBody: "enabled = true\n",
+      enabled: true,
+    })),
+  };
+  return ok("预览模式工具与插件列表。", { settings, entries });
+}
+
+function previewClaudeContextEntries() {
+  return ok("预览模式 Claude 工具与插件列表。", {
+    configPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+    entries: {
+      mcpServers: [
+        {
+          id: "claude-codex-pro-codex",
+          kind: "mcp",
+          title: "claude-codex-pro-codex",
+          summary: "claude-codex-pro mcp",
+          tomlBody: "{\n  \"command\": \"claude-codex-pro\",\n  \"args\": [\"mcp\"],\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+      skills: [
+        {
+          id: "ponytail",
+          kind: "skill",
+          title: "Ponytail Skills",
+          summary: "预览模式组织插件已写入",
+          tomlBody: "{\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+      plugins: [
+        {
+          id: "ponytail",
+          kind: "plugin",
+          title: "DietrichGebert/ponytail",
+          summary: "预览模式 Claude 官方插件入口",
+          tomlBody: "{\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+    },
+  });
+}
+
 const hasTauriInternals = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
@@ -457,7 +528,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       codex_app: { status: "found", path: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro-manager.exe" },
       codex_version: "preview",
       silent_shortcut: { status: "not_checked", path: null },
-      management_shortcut: { status: "installed", path: "Desktop\\Claude Codex Pro.lnk" },
+      management_shortcut: { status: "installed", path: "Desktop\\Claude Code Pro.lnk" },
       latest_launch: {
         status: "running",
         message: "preview bridge",
@@ -909,6 +980,19 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "save_settings") {
     return previewSettingsResult("预览模式已模拟保存设置。", (_args?.settings as ReturnType<typeof previewSettings> | undefined) ?? previewSettings());
   }
+  if (command === "list_context_entries" || command === "upsert_context_entry" || command === "delete_context_entry") {
+    const request = _args?.request as { settings?: ReturnType<typeof previewSettings> } | undefined;
+    return previewContextEntries(request?.settings ?? previewSettings());
+  }
+  if (command === "read_live_context_entries" || command === "sync_live_context_entries") {
+    const preview = previewContextEntries();
+    return ok(command === "sync_live_context_entries" ? "预览模式已模拟同步当前 Codex 配置。" : "预览模式已模拟读取当前 Codex 配置。", {
+      entries: preview.entries,
+    });
+  }
+  if (command === "list_claude_context_entries" || command === "upsert_claude_context_entry" || command === "delete_claude_context_entry") {
+    return previewClaudeContextEntries();
+  }
   if (command === "import_ccswitch_codex_providers") {
     return ok("已从 cc-switch 导入供应商配置：4 个。", {
       dbPath: "~\\.cc-switch\\cc-switch.db",
@@ -969,8 +1053,8 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "install_entrypoints" || command === "uninstall_entrypoints" || command === "repair_shortcuts") {
     return ok("预览模式已模拟入口维护。", {
-      silent_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Codex Pro Silent.lnk" },
-      management_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Codex Pro.lnk" },
+      silent_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Code Pro.lnk" },
+      management_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Code Pro 管理工具.lnk" },
     });
   }
   if (command === "load_watcher_state" || command === "install_watcher" || command === "enable_watcher" || command === "disable_watcher" || command === "uninstall_watcher") {
@@ -989,6 +1073,30 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         "[preview] 所有命令均返回可渲染响应",
       ].join("\n"),
       lines: 3,
+    });
+  }
+  if (command === "check_update") {
+    return ok("预览模式已模拟检查更新。", {
+      currentVersion: "1.2.9-preview",
+      latestVersion: "v1.2.9",
+      releaseSummary: "预览模式：当前已是最新版本。",
+      assetName: "claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      updateAvailable: false,
+      progress: 0,
+    });
+  }
+  if (command === "perform_update") {
+    return ok("预览模式已模拟下载并运行安装包。", {
+      currentVersion: "1.2.9-preview",
+      latestVersion: "v1.2.9",
+      releaseSummary: "预览模式不会下载真实安装包。",
+      assetName: "claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      updateAvailable: false,
+      progress: 100,
+      installedPath: "~\\.claude-codex-pro\\updates\\preview-installer.exe",
+      launched: true,
     });
   }
   if (command === "apply_relay_injection" || command === "apply_pure_api_injection" || command === "clear_relay_injection") {

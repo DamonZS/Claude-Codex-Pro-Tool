@@ -1204,13 +1204,6 @@ impl LaunchHooks for FakeHooks {
         Ok(())
     }
 
-    async fn apply_active_relay_profile(&self, settings: &BackendSettings) -> anyhow::Result<()> {
-        if settings.relay_profiles_enabled {
-            self.event("apply-relay");
-        }
-        Ok(())
-    }
-
     async fn ensure_computer_use_config(&self, _settings: &BackendSettings) -> anyhow::Result<()> {
         self.event("computer-use-guard");
         Ok(())

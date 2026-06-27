@@ -1298,6 +1298,7 @@ async fn launch_lifecycle_uses_hook_supplied_bridge_context_for_injection() {
     assert_eq!(
         *events.lock().unwrap(),
         vec![
+            "status:running_degraded",
             "bridge-context:9229",
             "inject-bridge:9229:57321",
             "watchdog:9229:57321",

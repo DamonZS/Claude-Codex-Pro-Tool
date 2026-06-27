@@ -329,6 +329,13 @@ pub struct LiveContextEntriesPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClaudeContextEntriesPayload {
+    pub config_path: String,
+    pub entries: claude_codex_pro_core::relay_config::CodexContextEntries,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtractRelayCommonConfigPayload {
     pub common_config_contents: String,
     pub profile_config_contents: String,
@@ -382,6 +389,21 @@ pub struct ContextEntryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ContextDeleteRequest {
     pub settings: BackendSettings,
+    pub kind: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeContextEntryRequest {
+    pub kind: String,
+    pub id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeContextDeleteRequest {
     pub kind: String,
     pub id: String,
 }
@@ -4078,6 +4100,100 @@ pub fn delete_context_entry(request: ContextDeleteRequest) -> CommandResult<Cont
 }
 
 #[tauri::command]
+pub fn list_claude_context_entries() -> CommandResult<ClaudeContextEntriesPayload> {
+    match plugin_hub::list_claude_desktop_mcp_entries() {
+        Ok(mcp) => {
+            let org = plugin_hub::load_claude_desktop_org_plugin_status();
+            let market = plugin_hub::load_claude_desktop_marketplace_status();
+            ok(
+                "Claude 工具与插件列表已读取。",
+                ClaudeContextEntriesPayload {
+                    config_path: mcp.config_path,
+                    entries: claude_entries_from_status(mcp.entries, org, market),
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("读取 Claude 工具与插件列表失败：{error}"),
+            ClaudeContextEntriesPayload {
+                config_path: String::new(),
+                entries: empty_context_entries(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn upsert_claude_context_entry(
+    request: ClaudeContextEntryRequest,
+) -> CommandResult<ClaudeContextEntriesPayload> {
+    if request.kind != "mcp" {
+        return failed(
+            "Claude 当前仅支持直接编辑 MCP；Skills/插件请使用本地插件写入或 Claude 官方插件入口。",
+            ClaudeContextEntriesPayload {
+                config_path: String::new(),
+                entries: empty_context_entries(),
+            },
+        );
+    }
+    match plugin_hub::upsert_claude_desktop_mcp_entry(&request.id, &request.body) {
+        Ok(mcp) => {
+            let org = plugin_hub::load_claude_desktop_org_plugin_status();
+            let market = plugin_hub::load_claude_desktop_marketplace_status();
+            ok(
+                "Claude MCP 已保存。",
+                ClaudeContextEntriesPayload {
+                    config_path: mcp.config_path,
+                    entries: claude_entries_from_status(mcp.entries, org, market),
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("保存 Claude MCP 失败：{error}"),
+            ClaudeContextEntriesPayload {
+                config_path: String::new(),
+                entries: empty_context_entries(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn delete_claude_context_entry(
+    request: ClaudeContextDeleteRequest,
+) -> CommandResult<ClaudeContextEntriesPayload> {
+    if request.kind != "mcp" {
+        return failed(
+            "Claude 当前仅支持直接删除 MCP；Skills/插件请使用本地插件写入或 Claude 官方插件入口。",
+            ClaudeContextEntriesPayload {
+                config_path: String::new(),
+                entries: empty_context_entries(),
+            },
+        );
+    }
+    match plugin_hub::delete_claude_desktop_mcp_entry(&request.id) {
+        Ok(mcp) => {
+            let org = plugin_hub::load_claude_desktop_org_plugin_status();
+            let market = plugin_hub::load_claude_desktop_marketplace_status();
+            ok(
+                "Claude MCP 已删除。",
+                ClaudeContextEntriesPayload {
+                    config_path: mcp.config_path,
+                    entries: claude_entries_from_status(mcp.entries, org, market),
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("删除 Claude MCP 失败：{error}"),
+            ClaudeContextEntriesPayload {
+                config_path: String::new(),
+                entries: empty_context_entries(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
 pub fn extract_relay_common_config(
     request: ExtractRelayCommonConfigRequest,
 ) -> CommandResult<ExtractRelayCommonConfigPayload> {
@@ -4597,6 +4713,55 @@ fn empty_context_entries() -> claude_codex_pro_core::relay_config::CodexContextE
         skills: Vec::new(),
         plugins: Vec::new(),
     }
+}
+
+fn claude_entries_from_status(
+    mcp_entries: Vec<plugin_hub::ClaudeDesktopMcpEntry>,
+    org: ClaudeDesktopOrgPluginStatus,
+    market: ClaudeDesktopMarketplaceStatus,
+) -> claude_codex_pro_core::relay_config::CodexContextEntries {
+    let mut entries = empty_context_entries();
+    entries.mcp_servers = mcp_entries
+        .into_iter()
+        .map(|entry| claude_codex_pro_core::relay_config::CodexContextEntry {
+            id: entry.id,
+            kind: "mcp".to_string(),
+            title: entry.title,
+            summary: entry.summary,
+            toml_body: entry.json_body,
+            enabled: entry.enabled,
+        })
+        .collect();
+    entries.skills.push(claude_codex_pro_core::relay_config::CodexContextEntry {
+        id: "ponytail".to_string(),
+        kind: "skill".to_string(),
+        title: "Ponytail Skills".to_string(),
+        summary: if org.ponytail_installed {
+            format!("已写入：{}", org.ponytail_plugin_dir)
+        } else {
+            format!("未写入：{}", org.org_plugins_dir)
+        },
+        toml_body: serde_json::to_string_pretty(&json!({
+            "pluginDir": org.ponytail_plugin_dir,
+            "orgPluginsDir": org.org_plugins_dir,
+            "writable": org.writable
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        enabled: org.ponytail_installed,
+    });
+    entries.plugins.push(claude_codex_pro_core::relay_config::CodexContextEntry {
+        id: market.plugin,
+        kind: "plugin".to_string(),
+        title: market.marketplace,
+        summary: market.message,
+        toml_body: serde_json::to_string_pretty(&json!({
+            "deepLink": market.deep_link,
+            "canAutoWrite": market.can_auto_write
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        enabled: market.supported,
+    });
+    entries
 }
 
 fn relay_files_payload_from_home(home: &std::path::Path) -> anyhow::Result<RelayFilesPayload> {
