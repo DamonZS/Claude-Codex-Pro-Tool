@@ -1053,11 +1053,10 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "repair_frontend_connection") {
     return ok("预览模式已模拟修复前端连接。", {
-      target: "codex_and_claude",
+      target: "codex",
       frontendInjected: true,
       backendOnline: false,
       codexFrontendInjected: true,
-      claudeFrontendInjected: true,
       codexBackendOnline: false,
       claudeBackendOnline: false,
       debugPort: 57321,
@@ -1068,11 +1067,10 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "repair_backend_service") {
     return ok("预览模式已模拟修复后端服务。", {
-      target: "codex_and_claude",
+      target: "local_backends",
       frontendInjected: false,
       backendOnline: true,
       codexFrontendInjected: false,
-      claudeFrontendInjected: false,
       codexBackendOnline: true,
       claudeBackendOnline: true,
       debugPort: 57321,

@@ -117,6 +117,19 @@ pub fn filter_killable_launcher_processes<'a>(
         .collect()
 }
 
+pub fn filter_restartable_launcher_processes<'a>(
+    processes: impl IntoIterator<Item = (u32, &'a str)>,
+    current_process_id: u32,
+) -> Vec<u32> {
+    processes
+        .into_iter()
+        .filter(|(process_id, exe_file)| {
+            *process_id != current_process_id && exe_file.eq_ignore_ascii_case("claude-codex-pro.exe")
+        })
+        .map(|(process_id, _)| process_id)
+        .collect()
+}
+
 pub fn should_recover_stale_launcher(has_codex_process: bool, cdp_listening: bool) -> bool {
     !has_codex_process && !cdp_listening
 }
@@ -198,6 +211,23 @@ pub fn stop_launcher_processes() {
 
 #[cfg(not(windows))]
 pub fn stop_launcher_processes() {}
+
+#[cfg(windows)]
+pub fn stop_launcher_processes_for_codex_restart() {
+    let processes = crate::windows_integration::enumerate_processes();
+    let killable = filter_restartable_launcher_processes(
+        processes
+            .iter()
+            .map(|process| (process.process_id, process.exe_file.as_str())),
+        std::process::id(),
+    );
+    for process_id in killable {
+        let _ = crate::windows_integration::terminate_process(process_id);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn stop_launcher_processes_for_codex_restart() {}
 
 #[cfg(windows)]
 pub fn stop_codex_processes() {

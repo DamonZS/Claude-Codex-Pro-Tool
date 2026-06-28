@@ -3412,8 +3412,9 @@ body {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   grid-template-rows: auto auto;
-  gap: 3px 10px;
+  gap: 4px 10px;
   align-items: center;
+  align-content: center;
   min-height: 78px;
   border: 1px solid #23252a;
   border-left-width: 4px;
@@ -3447,12 +3448,17 @@ body {
 }
 
 .status-tile span {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: end;
   color: #8a8f98;
   font-size: 12px;
   line-height: 1.2;
 }
 
 .status-tile strong {
+  grid-column: 2;
+  grid-row: 2;
   min-width: 0;
   overflow: hidden;
   color: #f7f8f8;
@@ -3467,10 +3473,15 @@ body {
 }
 
 .status-segment-list {
+  grid-column: 2;
+  grid-row: 2;
+  justify-content: flex-start;
+  align-self: start;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
+  transform: translateY(-1px);
 }
 
 .status-segment {
@@ -3508,6 +3519,12 @@ body {
   width: 100%;
   cursor: pointer;
   text-align: left;
+}
+
+.status-action-tile .status-segment-list {
+  align-self: start;
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .status-action-tile:hover,

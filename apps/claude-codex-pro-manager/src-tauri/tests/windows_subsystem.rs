@@ -488,6 +488,15 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .expect("read manager commands.rs");
     let tauri_conf =
         std::fs::read_to_string(manifest_dir.join("tauri.conf.json")).expect("read tauri config");
+    let launcher_main = std::fs::read_to_string(
+        manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("claude-codex-pro-launcher/src/main.rs"),
+    )
+    .expect("read launcher main.rs");
 
     assert!(app_tsx.contains("ops-shell"));
     assert!(app_tsx.contains("ops-rail"));
@@ -518,26 +527,37 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("function codexOverviewStatus"));
     assert!(app_tsx.contains("function claudeOverviewStatus"));
     assert!(app_tsx.contains("function memoryOverviewStatus"));
-    assert!(app_tsx.contains("const result = await run(() => call<SettingsResult>(\"load_settings\"), \"设置\""));
+    assert!(app_tsx.contains(
+        "const result = await run(() => call<SettingsResult>(\"load_settings\"), \"设置\""
+    ));
     assert!(app_tsx.contains("if (result) {\n      setSettings(result);"));
-    assert!(app_tsx.contains("const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });"));
+    assert!(app_tsx.contains(
+        "const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });"
+    ));
     assert!(app_tsx.contains("if (saved) await actions.refreshMemoryAssist();"));
     assert!(!app_tsx.contains("设置尚未加载，无法切换盘古记忆。"));
     assert!(app_tsx.contains("status-segment-list"));
     assert!(app_tsx.contains("status-segment"));
+    assert!(app_tsx.contains("status-action-tile"));
     assert!(app_tsx.contains("运行中"));
     assert!(app_tsx.contains("未运行"));
     assert!(app_tsx.contains("注入成功"));
     assert!(app_tsx.contains("前端在线"));
+    assert!(app_tsx.contains("launch?.frontend_runtime_online || launch?.debug_port_online"));
+    assert!(app_tsx.contains("CDP 离线"));
     assert!(app_tsx.contains("后端在线"));
     assert!(app_tsx.contains("汉化已注入"));
-    assert!(app_tsx.contains("前端已注入"));
-    assert!(app_tsx.contains("包装窗口已注入"));
-    assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
-    assert!(app_tsx.contains("前端未注入"));
+    assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch)"));
+    assert!(!app_tsx.contains("前端已注入"));
+    assert!(!app_tsx.contains("包装窗口已注入"));
+    assert!(!app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
+    assert!(!app_tsx.contains("前端未注入"));
     assert!(app_tsx.contains("Inspector 在线"));
-    assert!(app_tsx.contains("CDP 未检测"));
-    assert!(app_tsx.contains("CDP 受阻"));
+    assert!(!app_tsx.contains("CDP 未检测"));
+    assert!(!app_tsx.contains("CDP 受阻"));
+    assert!(!app_tsx.contains("调试受限"));
+    assert!(!app_tsx.contains("cdpStatus === \"blocked\" ? \"CDP 受阻\""));
+    assert!(app_tsx.contains("const cdpWarn = !inspectorReady && cdpStatus === \"failed\""));
     assert!(app_tsx.contains("注入异常"));
     assert!(!app_tsx.contains("inject ok"));
     assert!(!app_tsx.contains("FE on"));
@@ -568,7 +588,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("repair_frontend_connection"));
     assert!(app_tsx.contains("repair_backend_service"));
     assert!(app_tsx.contains("codexFrontendInjected"));
-    assert!(app_tsx.contains("claudeFrontendInjected"));
+    assert!(!app_tsx.contains("claudeFrontendInjected"));
     assert!(app_tsx.contains("codexBackendOnline"));
     assert!(app_tsx.contains("claudeBackendOnline"));
     assert!(app_tsx.contains("launchStatus === \"degraded\""));
@@ -576,23 +596,36 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::repair_frontend_connection"));
     assert!(lib_rs.contains("commands::repair_backend_service"));
     assert!(commands_rs.contains("codex_frontend_injected"));
-    assert!(commands_rs.contains("claude_frontend_injected"));
+    assert!(!commands_rs.contains("claude_frontend_injected"));
     assert!(commands_rs.contains("codex_backend_online"));
     assert!(commands_rs.contains("claude_backend_online"));
+    assert!(commands_rs.contains("frontend_runtime_online"));
+    assert!(commands_rs.contains("latest_renderer_runtime_heartbeat"));
+    assert!(commands_rs.contains("renderer_heartbeat_is_fresh"));
+    assert!(commands_rs.contains("renderer_runtime_heartbeat_is_ready"));
+    assert!(commands_rs.contains("heartbeat.runtime_reported"));
+    assert!(commands_rs.contains("renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)"));
+    assert!(commands_rs.contains(".map(|runtime| runtime.status != \"failed\")"));
+    assert!(commands_rs.contains("renderer.memory_runtime"));
     assert!(commands_rs.contains("force_reinject_bridge"));
-    assert!(commands_rs.contains("repair_claude_frontend_via_node_inspector"));
-    assert!(commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
-    assert!(commands_rs.contains("open_claude_chinese_window(app.clone()).await"));
-    assert!(commands_rs.contains("Claude 中文包装窗口已打开并注入。"));
+    assert!(commands_rs.contains("stop_launcher_processes_for_codex_restart"));
+    assert!(launcher_main.contains("MemoryAssistStore"));
+    assert!(launcher_main.contains("async fn memory_session(&self, payload: Value)"));
+    assert!(launcher_main.contains("self.memory_store.session_summary(request)"));
+    assert!(launcher_main.contains("async fn memory_status(&self)"));
+    assert!(!commands_rs.contains("repair_claude_frontend_via_node_inspector"));
+    assert!(!commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
+    assert!(!commands_rs.contains("open_claude_chinese_window(app.clone()).await"));
+    assert!(commands_rs.contains("Claude localization window opened."));
     assert!(commands_rs.contains("pub async fn repair_frontend_connection("));
-    assert!(commands_rs.contains("app: tauri::AppHandle"));
-    assert!(commands_rs.contains("BrowserWindow.getAllWindows"));
-    assert!(commands_rs.contains("Claude Inspector 端口已声明但未就绪"));
+    assert!(commands_rs.contains("pub async fn repair_frontend_connection()"));
+    assert!(!commands_rs.contains("BrowserWindow.getAllWindows"));
+    assert!(commands_rs.contains("inspector_ports: status.inspector_ports"));
     assert!(commands_rs.contains("本地模型代理启动失败"));
     assert!(commands_rs.contains("if !status.debug_port_online"));
-    assert!(commands_rs.contains("Codex CDP 端口 127.0.0.1:{debug_port} 仍离线或 /json 不可用"));
+    assert!(commands_rs.contains("Codex CDP 端口 127.0.0.1:{debug_port}"));
     assert!(commands_rs.contains("强制刷新超时"));
-    assert!(commands_rs.contains("codex_frontend_ok && claude_probe.injected"));
+    assert!(!commands_rs.contains("codex_frontend_ok && claude_probe.injected"));
     assert!(commands_rs.contains("codex_helper && claude_helper"));
     assert!(commands_rs.contains("\"degraded\""));
     let overview_matrix = overview_screen
@@ -633,6 +666,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains(".memory-activity-wave"));
     assert!(styles.contains(".memory-activity-wave[data-active=\"true\"]"));
     assert!(styles.contains(".toast-wrap"));
+    assert!(styles.contains(".status-action-tile .status-segment-list"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
     assert!(!app_tsx.contains("role=\"dialog\""));
     assert!(!app_tsx.contains("aria-modal"));
@@ -1048,6 +1082,9 @@ fn codex_memory_badge_aligns_with_injection_status_strip() {
     assert!(codex_inject.contains("window.__claudeCodexProMemoryAssistRuntime"));
     assert!(codex_inject.contains("function codexMemoryExposeRuntime"));
     assert!(codex_inject.contains("function codexMemoryPulseActivity"));
+    assert!(codex_inject.contains("sendClaudeCodexProDiagnostic(\"memory_runtime\""));
+    assert!(codex_inject.contains("__claudeCodexProMemoryHeartbeatTimer"));
+    assert!(codex_inject.contains("window.setInterval(() =>"));
     assert!(codex_inject.contains("activeUntil"));
     assert!(codex_inject.contains("data-active"));
     assert!(codex_inject.contains("background: transparent;"));

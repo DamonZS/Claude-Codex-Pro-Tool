@@ -5,8 +5,9 @@ Verifies addendum requirements for `spec/overview-memory-injection-repair-regres
 ## Acceptance
 
 1. Repair actions do not report fake all-green success.
-   - Pass: payload exposes `codex_frontend_injected`, `claude_frontend_injected`, `codex_backend_online`, and `claude_backend_online`.
-   - Pass: full success requires both Codex and Claude sides, while partial recovery returns `degraded`.
+   - Pass: frontend repair payload exposes `codex_frontend_injected` and does not expose `claude_frontend_injected`.
+   - Pass: backend repair payload exposes `codex_backend_online` and `claude_backend_online`.
+   - Pass: frontend repair success is based on Codex injection only; backend partial recovery returns `degraded`.
    - Evidence: `cargo test -p claude-codex-pro-manager --test windows_subsystem -- --nocapture`.
 
 2. Helper port conflicts verify ownership.

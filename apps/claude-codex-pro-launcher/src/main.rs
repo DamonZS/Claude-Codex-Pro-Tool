@@ -4,6 +4,10 @@ use anyhow::{Context, Result};
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
+use claude_codex_pro_core::memory_assist::{
+    MemoryAssistStore, MemoryCandidateRequest, MemoryItemRequest, MemoryQueryRequest,
+    MemorySelfCheckRequest, MemorySessionRequest,
+};
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
 use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
 use claude_codex_pro_core::user_scripts::UserScriptManager;
@@ -515,6 +519,7 @@ struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
     websocket_url: Mutex<Option<String>>,
     user_scripts: UserScriptManager,
+    memory_store: MemoryAssistStore,
 }
 
 impl LauncherRuntimeService {
@@ -523,6 +528,7 @@ impl LauncherRuntimeService {
             debug_port: Mutex::new(debug_port),
             websocket_url: Mutex::new(None),
             user_scripts,
+            memory_store: MemoryAssistStore::default(),
         }
     }
 
@@ -665,6 +671,92 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         Ok(claude_codex_pro_core::upstream_worktree::create_response(
             &payload,
         ))
+    }
+
+    async fn memory_status(&self) -> anyhow::Result<Value> {
+        let mut value = serde_json::to_value(self.memory_store.status()?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_session(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemorySessionRequest =
+            serde_json::from_value(payload).unwrap_or(MemorySessionRequest {
+                workspace: String::new(),
+                query: String::new(),
+                max_items: 5,
+            });
+        let mut value = serde_json::to_value(self.memory_store.session_summary(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_search(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryQueryRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.query(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_learn(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryItemRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.learn_item(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_candidates(&self, payload: Value) -> anyhow::Result<Value> {
+        if payload
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false)
+        {
+            let request: MemoryCandidateRequest = serde_json::from_value(payload)?;
+            let mut value = serde_json::to_value(self.memory_store.create_candidate(request)?)?;
+            value["status"] = json!("ok");
+            return Ok(value);
+        }
+        let workspace = payload
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let include_global = payload
+            .get("includeGlobal")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        Ok(json!({
+            "status": "ok",
+            "candidates": self.memory_store.list_candidates(workspace, include_global)?
+        }))
+    }
+
+    async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut value = serde_json::to_value(self.memory_store.approve_candidate(id)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_reject(&self, payload: Value) -> anyhow::Result<Value> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut value = serde_json::to_value(self.memory_store.reject_candidate(id)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_selfcheck(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemorySelfCheckRequest =
+            serde_json::from_value(payload).unwrap_or(MemorySelfCheckRequest { repair: false });
+        let mut value = serde_json::to_value(self.memory_store.run_selfcheck(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
     }
 }
 

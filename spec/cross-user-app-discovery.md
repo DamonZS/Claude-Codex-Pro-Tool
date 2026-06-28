@@ -42,7 +42,7 @@
   - Windows AppX/MSIX 查询结果。
   - macOS `/Applications/Claude.app` 与 `~/Applications/Claude.app`。
 - 启动 Claude 时，如果没有运行中路径，也必须尝试候选可执行文件，然后再回退 Start menu / shell AppsFolder。
-- 修复前端连接自动重启 Codex 时，必须使用增强后的 Codex 路径发现。
+- 修复前端连接自动终止或重启 Codex 时，必须使用增强后的 Codex 路径发现。
 
 ## UI / 交互要求
 

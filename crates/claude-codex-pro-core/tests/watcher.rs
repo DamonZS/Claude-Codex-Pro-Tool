@@ -1,7 +1,7 @@
 use claude_codex_pro_core::watcher::{
     build_spawn_launcher_command, build_watcher_install_plan, cdp_listening, codex_process_ids,
     disable_watcher_at, enable_watcher_at, filter_killable_launcher_processes,
-    should_recover_stale_launcher, watcher_disabled_flag,
+    filter_restartable_launcher_processes, should_recover_stale_launcher, watcher_disabled_flag,
 };
 
 #[test]
@@ -94,6 +94,19 @@ fn launcher_process_filter_protects_current_process_ancestry() {
     ];
 
     assert_eq!(filter_killable_launcher_processes(processes, 30), vec![40]);
+}
+
+#[test]
+fn repair_restart_launcher_filter_only_protects_current_process() {
+    let processes = [
+        (10, "claude-codex-pro.exe"),
+        (20, "claude-codex-pro-manager.exe"),
+        (30, "claude-codex-pro.exe"),
+        (40, "codex.exe"),
+    ];
+
+    assert_eq!(filter_restartable_launcher_processes(processes, 20), vec![10, 30]);
+    assert_eq!(filter_restartable_launcher_processes(processes, 30), vec![10]);
 }
 
 #[test]

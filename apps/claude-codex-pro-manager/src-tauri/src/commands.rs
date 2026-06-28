@@ -59,7 +59,6 @@ struct ClaudeZhPatchCliResult {
 const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(15);
 const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
-const REPAIR_CLAUDE_FRONTEND_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,8 +94,6 @@ pub struct ClaudeDesktopPayload {
     pub executable_paths: Vec<String>,
     pub install_kind: String,
     pub cdp_status: String,
-    pub frontend_injected: bool,
-    pub frontend_status: String,
     pub cdp_blocker: String,
     pub debug_flags_present: bool,
     pub debug_ports: Vec<u16>,
@@ -529,6 +526,20 @@ struct MemoryAssistRuntimeSnapshot {
     source: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct DiagnosticLogRecord {
+    timestamp_ms: u64,
+    event: String,
+    detail: Value,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RendererRuntimeHeartbeat {
+    timestamp_ms: u64,
+    runtime: Option<MemoryAssistRuntimeSnapshot>,
+    runtime_reported: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryAssistQueryPayload {
@@ -714,8 +725,7 @@ pub async fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload>
         tauri::async_runtime::spawn_blocking(claude_codex_pro_core::claude_desktop::detect_status)
             .await
             .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    let frontend = detect_claude_frontend_marker(&status).await;
-    claude_desktop_status_result(status, "status", frontend)
+    claude_desktop_status_result(status, "status")
 }
 
 #[tauri::command]
@@ -725,24 +735,14 @@ pub async fn load_claude_desktop_status_light() -> CommandResult<ClaudeDesktopPa
     )
     .await
     .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    let frontend = detect_claude_frontend_marker(&status).await;
-    claude_desktop_status_result(status, "status_light", frontend)
+    claude_desktop_status_result(status, "status_light")
 }
 
 fn claude_desktop_status_result(
     status: claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
     log_action: &str,
-    frontend: ClaudeFrontendProbe,
 ) -> CommandResult<ClaudeDesktopPayload> {
     let message = status.message.clone();
-    let frontend_injected = frontend.injected;
-    let frontend_status = if frontend.injected {
-        "injected"
-    } else if !status.debug_ports.is_empty() || !status.inspector_ports.is_empty() {
-        "not_injected"
-    } else {
-        "not_available"
-    };
     let result = CommandResult {
         status: status.status.clone(),
         message,
@@ -751,18 +751,12 @@ fn claude_desktop_status_result(
             executable_paths: status.executable_paths,
             install_kind: status.install_kind,
             cdp_status: status.cdp_status,
-            frontend_injected,
-            frontend_status: frontend_status.to_string(),
             cdp_blocker: status.cdp_blocker,
             debug_flags_present: status.debug_flags_present,
             debug_ports: status.debug_ports,
             inspector_ports: status.inspector_ports,
             listening_ports: status.listening_ports,
-            debug_evidence: status
-                .debug_evidence
-                .into_iter()
-                .chain(frontend.details)
-                .collect(),
+            debug_evidence: status.debug_evidence,
             supported_integration: status.supported_integration,
             integrity_status: status.integrity_status,
             integrity_message: status.integrity_message,
@@ -1882,394 +1876,6 @@ where
     );
 }
 
-#[derive(Debug, Clone)]
-struct ClaudeFrontendProbe {
-    injected: bool,
-    details: Vec<String>,
-}
-
-fn claude_frontend_ports(
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> Vec<u16> {
-    let mut ports = status.debug_ports.clone();
-    ports.sort_unstable();
-    ports.dedup();
-    ports
-}
-
-async fn repair_claude_frontend_injection(
-    app: &tauri::AppHandle,
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> ClaudeFrontendProbe {
-    let ports = claude_frontend_ports(status);
-    let mut details = Vec::new();
-    if ports.is_empty() {
-        if status.inspector_ports.is_empty() {
-            let inspector_declared_but_not_ready = status.debug_evidence.iter().any(|line| {
-                line.contains("Node inspector flag was observed")
-                    && line.contains("did not respond")
-            });
-            if inspector_declared_but_not_ready {
-                details.push("Claude Inspector 端口已声明但未就绪，当前不能通过 Node Inspector 注入前端。请完全退出 Claude，点击“启动/重启Claude”重新建立调试端口后再试。".to_string());
-            } else if status.debug_flags_present || status.cdp_status == "observed_but_unverified" {
-                details.push("Claude 调试端口已被观察到但未通过连通性验证，当前不能注入前端。请点击“启动/重启Claude”后重新修复前端连接。".to_string());
-            } else {
-                details.push("Claude 前端 CDP 端口未检测到。".to_string());
-            }
-        } else {
-            return repair_claude_frontend_via_node_inspector(status).await;
-        }
-        return repair_claude_frontend_via_wrapped_window(app, status, details).await;
-    }
-
-    for port in ports {
-        match tokio::time::timeout(
-            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
-            inject_claude_frontend_on_port(port),
-        )
-        .await
-        {
-            Err(_) => details.push(format!("Claude 端口 127.0.0.1:{port} 注入超时。")),
-            Ok(Ok(true)) => {
-                details.push(format!("Claude 前端已通过 127.0.0.1:{port} 注入并确认。"));
-                return ClaudeFrontendProbe {
-                    injected: true,
-                    details,
-                };
-            }
-            Ok(Ok(false)) => details.push(format!(
-                "Claude 端口 127.0.0.1:{port} 已响应，但没有确认前端注入标识。"
-            )),
-            Ok(Err(error)) => {
-                details.push(format!("Claude 端口 127.0.0.1:{port} 注入失败：{error}"))
-            }
-        }
-    }
-    ClaudeFrontendProbe {
-        injected: false,
-        details,
-    }
-}
-
-async fn repair_claude_frontend_via_wrapped_window(
-    app: &tauri::AppHandle,
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-    mut details: Vec<String>,
-) -> ClaudeFrontendProbe {
-    details.push(format!(
-        "Claude 官方窗口当前为 {}，改用 Claude Codex Pro 中文包装窗口注入。",
-        status.cdp_status
-    ));
-    let result = open_claude_chinese_window(app.clone()).await;
-    if result.payload.open {
-        details.push("Claude 中文包装窗口已打开并注入。".to_string());
-        ClaudeFrontendProbe {
-            injected: true,
-            details,
-        }
-    } else {
-        details.push(format!(
-            "Claude 中文包装窗口打开失败：{}",
-            result.message
-        ));
-        ClaudeFrontendProbe {
-            injected: false,
-            details,
-        }
-    }
-}
-
-async fn detect_claude_frontend_marker(
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> ClaudeFrontendProbe {
-    let ports = claude_frontend_ports(status);
-    let mut details = Vec::new();
-    if ports.is_empty() && !status.inspector_ports.is_empty() {
-        return detect_claude_frontend_marker_via_node_inspector(status).await;
-    }
-    for port in ports {
-        match tokio::time::timeout(
-            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
-            claude_frontend_marker_present_on_port(port),
-        )
-        .await
-        {
-            Err(_) => details.push(format!("Claude 前端注入标识在 127.0.0.1:{port} 检查超时。")),
-            Ok(Ok(true)) => {
-                details.push(format!("Claude 前端注入标识已在 127.0.0.1:{port} 确认。"));
-                return ClaudeFrontendProbe {
-                    injected: true,
-                    details,
-                };
-            }
-            Ok(Ok(false)) => details.push(format!(
-                "Claude 调试端口 127.0.0.1:{port} 在线，但未检测到窗口注入标识。"
-            )),
-            Ok(Err(error)) => details.push(format!(
-                "Claude 前端注入标识在 127.0.0.1:{port} 检查失败：{error}"
-            )),
-        }
-    }
-    ClaudeFrontendProbe {
-        injected: false,
-        details,
-    }
-}
-
-async fn claude_frontend_marker_present_on_port(port: u16) -> anyhow::Result<bool> {
-    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
-    let target = pick_claude_page_target(&targets)?;
-    let websocket_url = target
-        .web_socket_debugger_url
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Claude page target is missing websocket URL"))?;
-    claude_frontend_marker_present(websocket_url).await
-}
-
-async fn inject_claude_frontend_on_port(port: u16) -> anyhow::Result<bool> {
-    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
-    let target = pick_claude_page_target(&targets)?;
-    let websocket_url = target
-        .web_socket_debugger_url
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Claude page target is missing websocket URL"))?;
-    claude_codex_pro_core::bridge::evaluate_script(
-        websocket_url,
-        claude_codex_pro_core::assets::claude_chinese_injection_script(),
-    )
-    .await?;
-    claude_frontend_marker_present(websocket_url).await
-}
-
-async fn repair_claude_frontend_via_node_inspector(
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> ClaudeFrontendProbe {
-    let mut details = Vec::new();
-    for port in claude_inspector_ports(status) {
-        details.push(format!(
-            "Claude 仅暴露 Node Inspector 端口 127.0.0.1:{port}，正在通过 Electron BrowserWindow 尝试前端注入。"
-        ));
-        match tokio::time::timeout(
-            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
-            inject_claude_frontend_via_node_inspector(port),
-        )
-        .await
-        {
-            Err(_) => details.push(format!(
-                "Claude Node Inspector 端口 127.0.0.1:{port} 注入超时。"
-            )),
-            Ok(Ok(true)) => {
-                details.push(format!(
-                    "Claude 前端已通过 Node Inspector 127.0.0.1:{port} 注入并确认。"
-                ));
-                return ClaudeFrontendProbe {
-                    injected: true,
-                    details,
-                };
-            }
-            Ok(Ok(false)) => details.push(format!(
-                "Claude Node Inspector 127.0.0.1:{port} 可用，但 BrowserWindow 注入标识未确认。"
-            )),
-            Ok(Err(error)) => details.push(format!(
-                "Claude Node Inspector 127.0.0.1:{port} 注入失败：{error}"
-            )),
-        }
-    }
-    ClaudeFrontendProbe {
-        injected: false,
-        details,
-    }
-}
-
-async fn detect_claude_frontend_marker_via_node_inspector(
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> ClaudeFrontendProbe {
-    let mut details = Vec::new();
-    for port in claude_inspector_ports(status) {
-        match tokio::time::timeout(
-            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
-            claude_frontend_marker_present_via_node_inspector(port),
-        )
-        .await
-        {
-            Err(_) => details.push(format!(
-                "Claude Node Inspector 127.0.0.1:{port} 前端标识检查超时。"
-            )),
-            Ok(Ok(true)) => {
-                details.push(format!(
-                    "Claude 前端注入标识已通过 Node Inspector 127.0.0.1:{port} 确认。"
-                ));
-                return ClaudeFrontendProbe {
-                    injected: true,
-                    details,
-                };
-            }
-            Ok(Ok(false)) => details.push(format!(
-                "Claude Node Inspector 127.0.0.1:{port} 在线，但未检测到前端注入标识。"
-            )),
-            Ok(Err(error)) => details.push(format!(
-                "Claude Node Inspector 127.0.0.1:{port} 前端标识检查失败：{error}"
-            )),
-        }
-    }
-    ClaudeFrontendProbe {
-        injected: false,
-        details,
-    }
-}
-
-fn claude_inspector_ports(
-    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
-) -> Vec<u16> {
-    let mut ports = status.inspector_ports.clone();
-    ports.sort_unstable();
-    ports.dedup();
-    ports
-}
-
-async fn inject_claude_frontend_via_node_inspector(port: u16) -> anyhow::Result<bool> {
-    let websocket_url = claude_node_inspector_websocket_url(port).await?;
-    let expression = claude_node_inspector_bridge_expression(
-        claude_codex_pro_core::assets::claude_chinese_injection_script(),
-        CLAUDE_FRONTEND_MARKER_SCRIPT,
-    )?;
-    let result = claude_codex_pro_core::bridge::evaluate_script_with_await_promise(
-        &websocket_url,
-        &expression,
-        true,
-    )
-    .await?;
-    Ok(runtime_evaluate_bool(&result))
-}
-
-async fn claude_frontend_marker_present_via_node_inspector(port: u16) -> anyhow::Result<bool> {
-    let websocket_url = claude_node_inspector_websocket_url(port).await?;
-    let expression = claude_node_inspector_bridge_expression("", CLAUDE_FRONTEND_MARKER_SCRIPT)?;
-    let result = claude_codex_pro_core::bridge::evaluate_script_with_await_promise(
-        &websocket_url,
-        &expression,
-        true,
-    )
-    .await?;
-    Ok(runtime_evaluate_bool(&result))
-}
-
-async fn claude_node_inspector_websocket_url(port: u16) -> anyhow::Result<String> {
-    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
-    let target = targets
-        .iter()
-        .find(|target| {
-            target
-                .web_socket_debugger_url
-                .as_deref()
-                .is_some_and(|url| !url.is_empty())
-                && (target.target_type == "node"
-                    || format!("{} {}", target.title, target.url)
-                        .to_ascii_lowercase()
-                        .contains("node"))
-        })
-        .or_else(|| {
-            targets.iter().find(|target| {
-                target
-                    .web_socket_debugger_url
-                    .as_deref()
-                    .is_some_and(|url| !url.is_empty())
-            })
-        })
-        .ok_or_else(|| anyhow::anyhow!("No Node Inspector websocket target was found"))?;
-    target
-        .web_socket_debugger_url
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Node Inspector target is missing websocket URL"))
-}
-
-fn claude_node_inspector_bridge_expression(
-    injection_script: &str,
-    marker_script: &str,
-) -> anyhow::Result<String> {
-    let injection_script = serde_json::to_string(injection_script)?;
-    let marker_script = serde_json::to_string(marker_script)?;
-    Ok(format!(
-        r#"(async () => {{
-  const injectionScript = {injection_script};
-  const markerScript = {marker_script};
-  const requireCandidates = [
-    typeof require === "function" ? require : null,
-    globalThis && typeof globalThis.require === "function" ? globalThis.require : null,
-    typeof module !== "undefined" && module && typeof module.require === "function" ? module.require.bind(module) : null,
-    typeof process !== "undefined" && process && process.mainModule && typeof process.mainModule.require === "function" ? process.mainModule.require.bind(process.mainModule) : null
-  ].filter(Boolean);
-  let electron = null;
-  for (const candidate of requireCandidates) {{
-    try {{
-      electron = candidate("electron");
-      if (electron && electron.BrowserWindow) break;
-    }} catch (_) {{}}
-  }}
-  if (!electron || !electron.BrowserWindow || typeof electron.BrowserWindow.getAllWindows !== "function") return false;
-  const windows = electron.BrowserWindow.getAllWindows().filter((win) => win && !win.isDestroyed?.() && win.webContents);
-  if (!windows.length) return false;
-  const results = await Promise.all(windows.map(async (win) => {{
-    try {{
-      if (injectionScript) await win.webContents.executeJavaScript(injectionScript, true);
-      return await win.webContents.executeJavaScript(markerScript, true);
-    }} catch (_) {{
-      return false;
-    }}
-  }}));
-  return results.some(Boolean);
-}})()"#
-    ))
-}
-
-const CLAUDE_FRONTEND_MARKER_SCRIPT: &str = r#"(() => !!(window.__CLAUDE_CODEX_PRO_CHINESE_INJECTED || document.documentElement?.dataset?.claudeCodexProChineseInjected === "true" || document.getElementById("ccp-claude-status-pill")))()"#;
-
-fn pick_claude_page_target(
-    targets: &[claude_codex_pro_core::cdp::CdpTarget],
-) -> anyhow::Result<&claude_codex_pro_core::cdp::CdpTarget> {
-    targets
-        .iter()
-        .find(|target| {
-            target.target_type == "page"
-                && target
-                    .web_socket_debugger_url
-                    .as_deref()
-                    .is_some_and(|url| !url.is_empty())
-                && {
-                    let haystack = format!("{} {}", target.title, target.url).to_ascii_lowercase();
-                    haystack.contains("claude") || haystack.contains("anthropic")
-                }
-        })
-        .or_else(|| {
-            targets.iter().find(|target| {
-                target.target_type == "page"
-                    && target
-                        .web_socket_debugger_url
-                        .as_deref()
-                        .is_some_and(|url| !url.is_empty())
-            })
-        })
-        .ok_or_else(|| anyhow::anyhow!("No injectable Claude page target was found"))
-}
-
-async fn claude_frontend_marker_present(websocket_url: &str) -> anyhow::Result<bool> {
-    let result = claude_codex_pro_core::bridge::evaluate_script(
-        websocket_url,
-        CLAUDE_FRONTEND_MARKER_SCRIPT,
-    )
-    .await?;
-    Ok(runtime_evaluate_bool(&result))
-}
-
-fn runtime_evaluate_bool(result: &Value) -> bool {
-    result
-        .get("result")
-        .and_then(|result| result.get("result"))
-        .and_then(|result| result.get("value"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepairConnectionPayload {
@@ -2277,7 +1883,6 @@ pub struct RepairConnectionPayload {
     pub frontend_injected: bool,
     pub backend_online: bool,
     pub codex_frontend_injected: bool,
-    pub claude_frontend_injected: bool,
     pub codex_backend_online: bool,
     pub claude_backend_online: bool,
     pub debug_port: Option<u16>,
@@ -2287,9 +1892,7 @@ pub struct RepairConnectionPayload {
 }
 
 #[tauri::command]
-pub async fn repair_frontend_connection(
-    app: tauri::AppHandle,
-) -> CommandResult<RepairConnectionPayload> {
+pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPayload> {
     let mut details = Vec::new();
     let mut latest = StatusStore::default()
         .load_latest()
@@ -2297,17 +1900,32 @@ pub async fn repair_frontend_connection(
         .flatten()
         .map(refresh_launch_port_status);
 
-    if latest
+    let initial_runtime_online = latest_renderer_runtime_heartbeat()
         .as_ref()
-        .is_some_and(|status| status.debug_port.is_some() && !status.debug_port_online)
-    {
+        .is_some_and(renderer_runtime_heartbeat_is_ready);
+
+    if latest.as_ref().is_some_and(|status| {
+        status.debug_port.is_some() && !status.debug_port_online && !initial_runtime_online
+    }) {
         latest = restart_codex_for_frontend_repair(&mut details).await;
     }
 
     let codex_backend_online = latest
         .as_ref()
         .is_some_and(|status| status.helper_port_online);
-    let codex_frontend_ok = if let Some(status) = latest.as_ref() {
+    let runtime_heartbeat = latest_renderer_runtime_heartbeat();
+    let runtime_online = runtime_heartbeat
+        .as_ref()
+        .is_some_and(renderer_runtime_heartbeat_is_ready);
+    let codex_frontend_ok = if runtime_online {
+        if let Some(heartbeat) = runtime_heartbeat.as_ref() {
+            details.push(format!(
+                "Codex 前端运行时心跳在线，最近上报于 {}。",
+                heartbeat.timestamp_ms
+            ));
+        }
+        true
+    } else if let Some(status) = latest.as_ref() {
         match (status.debug_port, status.helper_port) {
             (Some(debug_port), Some(helper_port)) => {
                 details.push(format!(
@@ -2357,39 +1975,23 @@ pub async fn repair_frontend_connection(
         false
     };
 
-    let claude = tauri::async_runtime::spawn_blocking(
-        claude_codex_pro_core::claude_desktop::detect_status_light,
-    )
-    .await
-    .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    let claude_probe = repair_claude_frontend_injection(&app, &claude).await;
-    details.extend(claude_probe.details.clone());
     let claude_proxy_port = cached_claude_desktop_proxy_port()
         .or_else(|| Some(current_claude_desktop_proxy_port_hint()));
     let claude_backend_online = claude_proxy_port.is_some_and(helper_backend_online);
 
-    let frontend_injected = codex_frontend_ok && claude_probe.injected;
-    let any_frontend_injected = codex_frontend_ok || claude_probe.injected;
-    let status = if frontend_injected {
-        "ok"
-    } else if any_frontend_injected {
-        "degraded"
-    } else {
-        "failed"
-    };
+    let frontend_injected = codex_frontend_ok;
+    let status = if frontend_injected { "ok" } else { "failed" };
     CommandResult {
         status: status.to_string(),
         message: match status {
-            "ok" => "前端连接已修复，Codex 和 Claude 注入均已确认。".to_string(),
-            "degraded" => "前端连接部分修复；仍未注入的一侧请查看详情。".to_string(),
-            _ => "前端连接修复未确认可注入的 Codex 或 Claude 前端。".to_string(),
+            "ok" => "Codex 前端连接已修复并确认注入。".to_string(),
+            _ => "Codex 前端连接修复未确认可注入，请查看详情。".to_string(),
         },
         payload: RepairConnectionPayload {
-            target: "codex_and_claude".to_string(),
+            target: "codex".to_string(),
             frontend_injected,
             backend_online: codex_backend_online && claude_backend_online,
             codex_frontend_injected: codex_frontend_ok,
-            claude_frontend_injected: claude_probe.injected,
             codex_backend_online,
             claude_backend_online,
             debug_port: latest.as_ref().and_then(|status| status.debug_port),
@@ -2411,7 +2013,7 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
             .map(refresh_launch_port_status);
     };
 
-    claude_codex_pro_core::watcher::stop_launcher_processes();
+    claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
     claude_codex_pro_core::watcher::stop_codex_processes();
 
     let request = LaunchRequest {
@@ -2455,6 +2057,7 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         .flatten()
         .map(refresh_launch_port_status)
 }
+
 #[tauri::command]
 pub async fn repair_backend_service() -> CommandResult<RepairConnectionPayload> {
     let mut details = Vec::new();
@@ -2521,11 +2124,10 @@ pub async fn repair_backend_service() -> CommandResult<RepairConnectionPayload> 
             _ => "Backend service repair failed; check diagnostic logs.".to_string(),
         },
         payload: RepairConnectionPayload {
-            target: "codex_and_claude".to_string(),
+            target: "local_backends".to_string(),
             frontend_injected: false,
             backend_online,
             codex_frontend_injected: false,
-            claude_frontend_injected: false,
             codex_backend_online: codex_helper,
             claude_backend_online: claude_helper,
             debug_port: None,
@@ -2620,22 +2222,20 @@ fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
 
 fn current_codex_app_path_for_launch() -> Option<PathBuf> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    claude_codex_pro_core::app_paths::find_running_codex_app_dir()
+    StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .and_then(|status| status.codex_app)
+        .and_then(|path| {
+            claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(&path))
+        })
+        .or_else(|| claude_codex_pro_core::app_paths::find_running_codex_app_dir())
         .or_else(|| {
             claude_codex_pro_core::app_paths::resolve_codex_app_dir_with_saved(
                 None,
                 Some(settings.codex_app_path.as_str()),
             )
-        })
-        .or_else(|| {
-            StatusStore::default()
-                .load_latest()
-                .ok()
-                .flatten()
-                .and_then(|status| status.codex_app)
-                .and_then(|path| {
-                    claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(&path))
-                })
         })
 }
 
@@ -3205,7 +2805,17 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
     memory.inject_enabled = settings.memory_assist_inject_enabled;
     memory.auto_suggest_enabled = settings.memory_assist_auto_suggest_enabled;
 
-    if let Some(runtime) = read_codex_memory_runtime_snapshot() {
+    let heartbeat = latest_renderer_runtime_heartbeat();
+    let heartbeat_is_fresh = heartbeat
+        .as_ref()
+        .is_some_and(|item| renderer_heartbeat_is_fresh(item.timestamp_ms));
+    let runtime_snapshot = read_codex_memory_runtime_snapshot().or_else(|| {
+        heartbeat
+            .filter(|_| heartbeat_is_fresh)
+            .and_then(|item| item.runtime)
+    });
+
+    if let Some(runtime) = runtime_snapshot {
         memory.runtime_status = if runtime.injected {
             runtime.status.clone()
         } else if memory.enabled && memory.inject_enabled {
@@ -3220,7 +2830,7 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
         };
         memory.codex_injected = runtime.injected;
         memory.codex_workspace = runtime.workspace.clone();
-        memory.active = runtime.active;
+        memory.active = runtime.active || heartbeat_is_fresh;
         memory.active_source = if runtime.source.trim().is_empty() {
             "codex".to_string()
         } else {
@@ -3247,6 +2857,66 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
 
     memory.claude_injected = false;
     memory
+}
+
+fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
+    let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
+    let text = fs::read_to_string(path).ok()?;
+    let mut fallback: Option<RendererRuntimeHeartbeat> = None;
+    for record in text
+        .lines()
+        .rev()
+        .take(240)
+        .filter_map(|line| serde_json::from_str::<DiagnosticLogRecord>(line).ok())
+        .filter(|record| {
+            record.event == "renderer.memory_runtime" || record.event == "renderer.script_loaded"
+        })
+    {
+        if record.event == "renderer.memory_runtime" {
+            let runtime = record
+                .detail
+                .get("detail")
+                .and_then(|detail| detail.get("runtime"))
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<MemoryAssistRuntimeSnapshot>(value).ok()
+                });
+            return Some(RendererRuntimeHeartbeat {
+                timestamp_ms: record.timestamp_ms,
+                runtime,
+                runtime_reported: true,
+            });
+        }
+        if fallback.is_none() {
+            fallback = Some(RendererRuntimeHeartbeat {
+                timestamp_ms: record.timestamp_ms,
+                runtime: None,
+                runtime_reported: false,
+            });
+        }
+    }
+    fallback
+}
+
+fn renderer_heartbeat_is_fresh(timestamp_ms: u64) -> bool {
+    current_time_ms().saturating_sub(timestamp_ms) <= 45_000
+}
+
+fn renderer_runtime_heartbeat_is_ready(heartbeat: &RendererRuntimeHeartbeat) -> bool {
+    heartbeat.runtime_reported
+        && renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)
+        && heartbeat
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.status != "failed")
+            .unwrap_or(true)
+}
+
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn read_codex_memory_runtime_snapshot() -> Option<MemoryAssistRuntimeSnapshot> {
@@ -4217,8 +3887,8 @@ pub fn open_ponytail_claude_desktop_marketplace_setup()
 }
 
 #[tauri::command]
-pub fn repair_claude_desktop_marketplaces()
--> CommandResult<ClaudeDesktopMarketplaceRepairPayload> {
+pub fn repair_claude_desktop_marketplaces() -> CommandResult<ClaudeDesktopMarketplaceRepairPayload>
+{
     match plugin_hub::repair_claude_desktop_marketplaces() {
         Ok(outcome) => {
             let status = plugin_hub::load_claude_desktop_marketplace_status();
@@ -6246,6 +5916,13 @@ fn refresh_launch_port_status(mut status: LaunchStatus) -> LaunchStatus {
     status.helper_port_online = status
         .helper_port
         .is_some_and(|port| helper_backend_online(port));
+    if let Some(heartbeat) = latest_renderer_runtime_heartbeat() {
+        status.frontend_runtime_online = renderer_heartbeat_is_fresh(heartbeat.timestamp_ms);
+        status.frontend_runtime_seen_at_ms = Some(heartbeat.timestamp_ms);
+    } else {
+        status.frontend_runtime_online = false;
+        status.frontend_runtime_seen_at_ms = None;
+    }
     status
 }
 

@@ -66,6 +66,8 @@ type LaunchStatus = {
   helper_port: number | null;
   debug_port_online: boolean;
   helper_port_online: boolean;
+  frontend_runtime_online: boolean;
+  frontend_runtime_seen_at_ms: number | null;
   codex_app: string | null;
 };
 
@@ -103,7 +105,6 @@ type RepairConnectionResult = CommandResult<{
   frontendInjected: boolean;
   backendOnline: boolean;
   codexFrontendInjected: boolean;
-  claudeFrontendInjected: boolean;
   codexBackendOnline: boolean;
   claudeBackendOnline: boolean;
   debugPort: number | null;
@@ -813,34 +814,36 @@ function codexOverviewStatus(overview: OverviewResult | null) {
   const launchStatus = launch?.status ?? "not_checked";
   const running = launchStatus === "running" || launchStatus === "degraded";
   const failed = statusFailed(launchStatus);
-  const frontendOnline = Boolean(launch?.debug_port_online);
+  const frontendOnline = Boolean(launch?.frontend_runtime_online || launch?.debug_port_online);
   const backendOnline = Boolean(launch?.helper_port_online);
   const items: StatusChip[] = [
     { label: failed ? "运行异常" : running ? "运行中" : "未运行", tone: failed ? "warn" : running ? "ok" : "muted" },
     { label: launchStatus === "degraded" || failed ? "注入异常" : running ? "注入成功" : "未注入", tone: launchStatus === "degraded" || failed ? "warn" : running ? "ok" : "muted" },
-    { label: frontendOnline ? "前端在线" : "前端离线", tone: frontendOnline ? "ok" : running ? "warn" : "muted" },
+    { label: frontendOnline ? "前端在线" : launch?.debug_port ? "CDP 离线" : "前端未检测", tone: frontendOnline ? "ok" : running ? "warn" : "muted" },
     { label: backendOnline ? "后端在线" : "后端离线", tone: backendOnline ? "ok" : running ? "warn" : "muted" },
   ];
   const status = items.some((item) => item.tone === "warn") ? "failed" : running ? "running" : "not_checked";
   return { status, items };
 }
 
-function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZhPatch: ClaudeZhPatchResult | null, claudeChinese: ClaudeChineseWindowResult | null) {
+function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZhPatch: ClaudeZhPatchResult | null) {
   const hasProcess = (claudeDesktop?.processCount ?? 0) > 0;
   const cdpStatus = claudeDesktop?.cdpStatus ?? "not_checked";
   const detectFailed = !!claudeDesktop && statusFailed(claudeDesktop.status);
   const injected = !!claudeZhPatch?.status.localeConfigured && !!claudeZhPatch?.status.frontendI18nPresent && !!claudeZhPatch?.status.chunkPatchPresent;
-  const wrappedInjected = !!claudeChinese?.open;
-  const frontendInjected = injected || wrappedInjected;
   const inspectorReady = cdpStatus === "node_inspector_ready" || (claudeDesktop?.inspectorPorts?.length ?? 0) > 0;
-  const cdpWarn = !frontendInjected && !inspectorReady && (cdpStatus === "blocked" || cdpStatus === "failed");
+  const cdpWarn = !inspectorReady && cdpStatus === "failed";
   const items: StatusChip[] = [
     { label: detectFailed ? "检测异常" : hasProcess ? "运行中" : "未运行", tone: detectFailed ? "warn" : hasProcess ? "ok" : "muted" },
-    { label: frontendInjected ? "前端已注入" : "前端未注入", tone: frontendInjected ? "ok" : "muted" },
-    { label: injected ? "汉化已注入" : wrappedInjected ? "包装窗口已注入" : "汉化未注入", tone: injected || wrappedInjected ? "ok" : "muted" },
-    { label: inspectorReady ? "Inspector 在线" : cdpStatus === "blocked" ? "CDP 受阻" : cdpStatus === "failed" ? "CDP 异常" : cdpStatus === "ok" ? "CDP 在线" : "CDP 未检测", tone: cdpWarn ? "warn" : inspectorReady || cdpStatus === "ok" ? "ok" : "muted" },
+    { label: injected ? "汉化已注入" : "汉化未注入", tone: injected ? "ok" : "muted" },
   ];
-  const status = items.some((item) => item.tone === "warn") ? "failed" : hasProcess ? "running" : "not_checked";
+  if (inspectorReady || cdpStatus === "ok" || cdpStatus === "failed") {
+    items.push({
+      label: inspectorReady ? "Inspector 在线" : cdpStatus === "failed" ? "CDP 异常" : "CDP 在线",
+      tone: cdpWarn ? "warn" : "ok",
+    });
+  }
+  const status = detectFailed ? "failed" : hasProcess ? "running" : "not_checked";
   return { status, items };
 }
 
@@ -859,7 +862,7 @@ function memoryOverviewStatus(memoryAssist: MemoryStatusResult | null, settings:
     { label: enabled ? "开关已开启" : "开关已关闭", tone: enabled ? "ok" : "muted" },
     { label: healthy ? "运行正常" : memoryAssist ? "运行异常" : "未检测", tone: healthy ? "ok" : memoryAssist ? "warn" : "muted" },
     { label: codexInjected ? "Codex 已注入" : injectEnabled ? "等待 Codex 注入" : "注入已关闭", tone: codexInjected ? "ok" : enabled && injectEnabled ? "warn" : "muted" },
-    { label: listening ? "对话监控运行中" : autoSuggest ? "监听待注入确认" : pending > 0 ? "有待确认" : "对话监控关闭", tone: listening ? "ok" : enabled && autoSuggest ? "warn" : pending > 0 ? "warn" : "muted" },
+    { label: listening ? "对话监控运行中" : codexInjected && autoSuggest ? "等待会话变化" : autoSuggest ? "监听待注入确认" : pending > 0 ? "有待确认" : "对话监控关闭", tone: listening || (codexInjected && autoSuggest) ? "ok" : enabled && autoSuggest ? "warn" : pending > 0 ? "warn" : "muted" },
     { label: hasDb ? "数据库在线" : "数据库未检测", tone: hasDb ? "ok" : enabled ? "warn" : "muted" },
   ];
   const status = items.some((item) => item.tone === "warn")
@@ -1519,13 +1522,16 @@ export function App() {
   };
 
   const repairFrontendConnection = async () => {
-    setNotice({ title: "修复前端连接", message: "正在重新检查并注入 Codex / Claude 前端连接...", status: "running" });
+    setNotice({ title: "修复前端连接", message: "正在重新检查并注入 Codex 前端连接...", status: "running" });
     await waitForPaint();
     const result = await run(() => call<RepairConnectionResult>("repair_frontend_connection"), "修复前端连接");
     if (result) {
       const details = result.details?.length ? `\n${result.details.join("\n")}` : "";
       setNotice({ title: "修复前端连接", message: `${result.message}${details}`, status: result.status });
       await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeZhPatch(true), refreshMemoryAssist(true)]);
+      window.setTimeout(() => {
+        void Promise.all([refreshOverview(true), refreshMemoryAssist(true)]);
+      }, 3500);
     }
   };
 
@@ -2069,7 +2075,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -2127,7 +2133,6 @@ export function App() {
 function OverviewScreen({
   actions,
   overview,
-  claudeChinese,
   claudeDesktop,
   claudeZhPatch,
   claudeDesktopDevMode,
@@ -2137,7 +2142,6 @@ function OverviewScreen({
 }: {
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
-  claudeChinese: ClaudeChineseWindowResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   claudeZhPatch: ClaudeZhPatchResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
@@ -2147,7 +2151,7 @@ function OverviewScreen({
 }) {
   const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
-  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese);
+  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
   const memoryStatus = memoryOverviewStatus(memoryAssist, settings);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
   const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";
@@ -2168,7 +2172,7 @@ function OverviewScreen({
         ? "等待会话变化"
         : "等待 Codex 注入"
       : "未监听";
-  const memoryMonitorStatus = memoryMonitorActive ? "running" : memoryEnabled && memoryAutoSuggestEnabled ? "running" : "not_checked";
+  const memoryMonitorStatus = memoryMonitorActive || (memoryCodexInjected && memoryAutoSuggestEnabled) ? "running" : memoryEnabled && memoryAutoSuggestEnabled ? "failed" : "not_checked";
   const memoryWorkspaceCount = memory?.workspaces?.length ?? 0;
   const toggleMemoryAssistEnabled = async (enabled: boolean) => {
     if (!settings) {
@@ -4132,7 +4136,9 @@ function StatusActionTile({ disabled, icon: Icon, label, value, status, onClick 
     <button className={`status-tile status-action-tile ${statusOk(status) ? "ok" : "warn"}`} disabled={disabled} onClick={onClick} type="button">
       <Icon className="h-4 w-4" />
       <span>{label}</span>
-      <strong>{value}</strong>
+      <div className="status-segment-list">
+        <b className={`status-segment ${statusOk(status) ? "ok" : "muted"}`}>{value}</b>
+      </div>
     </button>
   );
 }

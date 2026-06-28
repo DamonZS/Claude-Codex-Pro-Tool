@@ -2305,6 +2305,8 @@ fn launch_status(
         helper_port: Some(helper_port),
         debug_port_online: false,
         helper_port_online: false,
+        frontend_runtime_online: false,
+        frontend_runtime_seen_at_ms: None,
         codex_app: Some(app_dir.to_string_lossy().to_string()),
     }
 }

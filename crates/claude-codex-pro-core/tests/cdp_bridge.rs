@@ -48,7 +48,7 @@ fn injection_script_prefixes_helper_url() {
     assert!(script.contains("http://127.0.0.1:57321"));
     assert!(script.contains("window.__CLAUDE_CODEX_PRO_VERSION__"));
     assert!(script.contains(claude_codex_pro_core::version::VERSION));
-    assert!(script.contains("https://discord.gg/y96kX7A76v"));
+    assert!(script.contains("https://discord.gg/Q9cbMaWsb"));
     assert!(script.contains("data-claude-codex-pro-discord"));
 }
 

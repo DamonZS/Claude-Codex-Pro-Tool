@@ -2841,7 +2841,7 @@
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${claudeCodexProBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a></div></div>
+              <div><div class="claude-codex-pro-row-title">关于 Claude Codex Pro</div><div class="claude-codex-pro-about">Claude Codex Pro 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-claude-codex-pro-build="true">${claudeCodexProBuild}</span><br>GitHub: <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool" target="_blank" rel="noreferrer">https://github.com/DamonZS/Claude-Codex-Pro-Tool</a><br>Discord: <a href="https://discord.gg/Q9cbMaWsb" target="_blank" rel="noreferrer">https://discord.gg/Q9cbMaWsb</a></div></div>
             </div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Discord 社区</div><div class="claude-codex-pro-row-description">加入 Discord 获取更新消息、反馈问题或交流使用体验。</div></div>
@@ -2905,7 +2905,7 @@
         return;
       }
       if (target?.closest("[data-claude-codex-pro-discord]")) {
-        window.open("https://discord.gg/y96kX7A76v", "_blank");
+        window.open("https://discord.gg/Q9cbMaWsb", "_blank");
         return;
       }
       if (target?.closest("[data-codex-backend-repair]")) {
@@ -8996,11 +8996,30 @@
     activeUntil: 0,
     activeSource: "idle",
   };
+  let codexMemoryLastHeartbeatAt = 0;
+
+  function codexMemoryHeartbeat(force = false) {
+    const now = Date.now();
+    if (!force && now - codexMemoryLastHeartbeatAt < 10000) return;
+    codexMemoryLastHeartbeatAt = now;
+    sendClaudeCodexProDiagnostic("memory_runtime", {
+      runtime: window.__claudeCodexProMemoryAssistRuntime || null,
+    });
+  }
+
+  if (!window.__claudeCodexProMemoryHeartbeatTimer) {
+    window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval(() => {
+      try {
+        codexMemoryExposeRuntime();
+      } catch (_) {}
+    }, 10000);
+  }
 
   function codexMemoryPulseActivity(source = "stream", durationMs = 3200) {
     codexMemoryState.activeUntil = Date.now() + durationMs;
     codexMemoryState.activeSource = source || "stream";
     codexMemoryExposeRuntime();
+    codexMemoryHeartbeat(true);
     codexMemoryUpdateBadge();
   }
 
@@ -9018,6 +9037,7 @@
       summary: codexMemoryState.summary || "",
       source: active ? (codexMemoryState.activeSource || "stream") : "idle",
     };
+    codexMemoryHeartbeat();
   }
 
   function codexMemoryWorkspace() {
@@ -9121,6 +9141,7 @@
         summary: "盘古记忆当前未注入。",
         source: "idle",
       };
+      codexMemoryHeartbeat(true);
       return;
     }
     const node = badge || document.createElement("button");
@@ -9145,6 +9166,7 @@
       document.documentElement.appendChild(node);
     }
     codexMemoryExposeRuntime();
+    codexMemoryHeartbeat();
     updateCodexMemoryBadgePosition();
   }
 

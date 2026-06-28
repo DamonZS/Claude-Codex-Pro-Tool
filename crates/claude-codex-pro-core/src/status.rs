@@ -14,6 +14,10 @@ pub struct LaunchStatus {
     pub debug_port_online: bool,
     #[serde(default)]
     pub helper_port_online: bool,
+    #[serde(default)]
+    pub frontend_runtime_online: bool,
+    #[serde(default)]
+    pub frontend_runtime_seen_at_ms: Option<u64>,
     pub codex_app: Option<String>,
 }
 
@@ -82,6 +86,8 @@ mod tests {
             helper_port: Some(4545),
             debug_port_online: false,
             helper_port_online: false,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
             codex_app: Some("Codex".to_string()),
         };
 

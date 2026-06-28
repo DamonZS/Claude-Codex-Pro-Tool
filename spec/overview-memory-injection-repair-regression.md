@@ -10,7 +10,7 @@
 
 本次修复包含：
 
-- 概览页必须显示盘古记忆状态卡、盘古记忆开关、运行态、Codex/Claude 注入态、对话监控波形和数据库信息。
+- 概览页必须显示盘古记忆状态卡、盘古记忆开关、运行态、Codex 注入态、Claude 运行/汉化/CDP 状态、对话监控波形和数据库信息。
 - “修复前端连接”“修复后端服务”“刷新 Claude 第三方配置”点击后必须立即显示运行中反馈，并在命令完成后显示结果。
 - Codex 注入状态标识定位必须优先使用顶部菜单中的“帮助/help”作为锚点，避免优先选中左侧导航或对话标题。
 - 本地调试可执行文件使用的前端构建产物必须更新，避免运行旧前端导致页面看不到源码改动。
@@ -28,17 +28,21 @@
 ## 功能要求
 
 - `Codex 状态` 分段显示运行、注入、前端在线、后端在线。
-- `Claude 状态` 分段显示运行、汉化注入、前端注入、Inspector/CDP 状态。
+- `Codex 状态` 的“前端在线”不得只依赖 CDP `/json`；当 Codex 注入脚本能通过 helper 写入近期 `memory_runtime` 或 `script_loaded` 心跳时，即使旧 CDP 端口离线，也必须显示前端在线。
+- `Claude 状态` 分段显示运行、汉化补丁状态、Inspector/CDP 状态；不得显示或尝试修复 Claude 前端注入。
+- `Claude 状态` 中的 `CDP 受阻` 是诊断信息，不应在 Claude 进程正常运行时把整张 Claude 状态卡判定为失败或警告主状态。
 - `盘古记忆` 状态卡使用与 Codex/Claude 一致的分段状态。
 - `盘古记忆总览` 显示启用开关、运行消息、注入状态、对话监控波形、长期记忆、待确认、工作区、数据库和最近备份。
+- `盘古记忆` 必须优先使用注入脚本上报的近期运行时心跳判断 `codexInjected` 和监听状态；CDP 探测失败只能影响修复诊断，不能让已经注入的运行时显示为“等待 Codex 注入”。
+- `Claude 一键开发模式` 卡片中的 `已写入` 必须与其它状态卡片的分段标签垂直对齐，不能独立抬高一行。
 - 修复类按钮必须先渲染运行中 toast，再执行后端命令。
 - 后端命令结果必须通过 toast 显示，失败不能静默吞掉。
-- 修复前端连接命令必须有命令级硬超时；如果 Codex 或 Claude 注入探测卡住，必须在超时后返回 failed/degraded 结果和具体卡住原因，不能让概览页一直停留在“正在重新检查并注入”。
+- 修复前端连接命令只负责 Codex 前端注入，必须有命令级硬超时；如果 Codex 注入探测卡住，必须在超时后返回 failed 结果和具体卡住原因，不能让概览页一直停留在“正在重新检查并注入”。
 - Codex 注入定位必须先查找顶部菜单“帮助/help”，只在找不到时才回退到左侧导航或其他可见元素。
-- 修复前端连接与修复后端服务必须分别返回 Codex 和 Claude 的独立状态，不能用任意一侧成功冒充整体成功。
-- Claude Node Inspector 只能作为主进程 Inspector 状态，不能被当成前端页面 CDP 端口；但当没有页面 CDP、只有 Node Inspector 时，修复命令应尝试通过 Electron 主进程 `BrowserWindow.webContents.executeJavaScript` 注入 Claude 前端。
-- 当官方 Claude Desktop 因 MSIX/调试端口限制没有可用页面 CDP 或 Node Inspector 时，修复前端连接应复用现有 Claude 中文包装窗口作为安全前端注入通道；该兜底只允许打开/刷新包装窗口，不得修改 `assets/inject/claude-chinese-inject.js` 的中文注入、翻译表或 DOM 翻译逻辑。
-- 修复前端连接对 Codex 旧启动记录必须先验证 CDP `/json` 和 helper `/backend/status` 当前在线；CDP 离线时不能继续在旧端口上等待强制刷新超时，必须返回明确原因并提示需要重新启动 Codex 注入入口。
+- 修复前端连接与修复后端服务必须分别返回 Codex 和本地后端的独立状态，不能用任意一侧成功冒充整体成功。
+- Claude Node Inspector 只能作为主进程 Inspector 状态，不能被当成前端页面 CDP 端口；修复前端连接不得通过 Electron 主进程、页面 CDP 或中文包装窗口注入 Claude 前端。
+- 当官方 Claude Desktop 因 MSIX/调试端口限制没有可用页面 CDP 或 Node Inspector 时，只显示诊断状态；不得自动打开 `Claude localization` / Claude 中文包装窗口作为兜底。
+- 修复前端连接对 Codex 旧启动记录必须先验证 CDP `/json` 和 helper `/backend/status` 当前在线；CDP 离线时不能继续在旧端口上等待强制刷新超时，可以自动终止旧 Codex/launcher 并通过新版 Claude Codex Pro 启动器重启 Codex 注入入口，最终必须返回成功、降级或失败详情。
 - 本地 helper 端口被占用时必须验证 `/backend/status` 来自 Claude Codex Pro helper，不能把未知进程占用端口当作成功。
 - 修复后端服务遇到 helper 端口被旧 Claude Codex Pro 进程占用、但 `/backend/status` 没有响应时，必须尝试终止旧的本项目进程并重新启动 helper；若占用者不是本项目进程或无法恢复，必须保留失败并记录占用进程诊断信息。
 - Claude 一键开发模式写入完成后，必须同步启动并验证本地模型映射代理 `127.0.0.1:57331/backend/status`，不能在代理尚未监听时仅返回“已写入”。

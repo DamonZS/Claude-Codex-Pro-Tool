@@ -14,15 +14,19 @@
 
 3. 概览页盘古记忆总览已补回
    - 通过标准：源码中存在 `盘古记忆开关`、`对话监控`、`memory-activity-wave`、`toggleMemoryAssistEnabled`。
+   - 通过标准：Codex 前端在线状态同时支持 `frontend_runtime_online` 或 CDP 在线，不能只依赖 `debug_port_online`。
+   - 通过标准：盘古记忆状态读取近期 `renderer.memory_runtime` / `renderer.script_loaded` 心跳，并在 CDP 不可用但运行时心跳新鲜时显示 `Codex 已注入` 和 `等待会话变化` / `对话监控运行中`。
+   - 通过标准：Claude 状态中的 `CDP 受阻` 不会在 Claude 进程运行时把 Claude 状态卡主状态判定为失败。
+   - 通过标准：`StatusActionTile` 使用 `status-segment-list` / `status-segment` 渲染 `已写入`，与其它状态卡片标签对齐。
    - 验证证据：源码检查和前端类型检查。
 
 4. 修复按钮有即时反馈
    - 通过标准：修复类动作在调用 Tauri 命令前先设置 `running` toast，并等待一帧渲染。
-   - 通过标准：`repair_frontend_connection` 后端命令对 Codex 和 Claude 注入探测都有硬超时；超时必须返回 failed/degraded 和详情，不能让前端永久停留在 running toast。
-   - 通过标准：Codex CDP 端口离线时，`repair_frontend_connection` 不继续调用强制注入等待超时，而是返回旧端口已离线的详情。
-   - 通过标准：Claude 只有 Node Inspector 端口时，`repair_frontend_connection` 会尝试通过 Electron 主进程 `BrowserWindow.webContents.executeJavaScript` 注入前端，而不是直接判定不可注入。
-   - 通过标准：官方 Claude Desktop 没有页面 CDP 或 Node Inspector 时，`repair_frontend_connection` 会打开/刷新 Claude Codex Pro 中文包装窗口作为安全注入兜底，并返回“包装窗口已注入”一类可见状态。
-   - 通过标准：该兜底不得修改 `assets/inject/claude-chinese-inject.js` 的中文注入、翻译表或 DOM 翻译逻辑。
+   - 通过标准：`repair_frontend_connection` 后端命令只对 Codex 注入探测设置硬超时；超时必须返回 failed 和详情，不能让前端永久停留在 running toast。
+   - 通过标准：Codex CDP 端口离线时，`repair_frontend_connection` 不继续调用强制注入等待超时，可以自动终止旧 Codex/launcher 并通过新版启动器重启 Codex，随后返回成功、降级或失败详情。
+   - 通过标准：`repair_frontend_connection` 不再尝试通过 Claude 页面 CDP、Node Inspector 或中文包装窗口注入 Claude 前端。
+   - 通过标准：官方 Claude Desktop 没有可用前端调试端口时，只显示诊断状态；不得自动打开 `Claude localization` / Claude 中文包装窗口。
+   - 通过标准：不得修改 `assets/inject/claude-chinese-inject.js` 的中文注入、翻译表或 DOM 翻译逻辑。
    - 验证证据：源码检查和前端类型检查。
 
 5. Codex 注入锚点优先使用帮助菜单
@@ -71,3 +75,10 @@
 - 通过标准：概览页 `refreshRoute("overview")` 会调用 `refreshClaudeDesktopDevMode(true)`。
 - 通过标准：已写入 Claude 第三方配置时，概览页 Claude 一键开发模式卡片显示“已写入”。
 - 验证证据：`cargo test -p claude-codex-pro-manager --test windows_subsystem -- --nocapture`。
+
+## 补充验收：Codex 盘古记忆注入状态一致
+
+- 通过标准：`claude-codex-pro.exe` 注入到 Codex 的桥接运行时必须实现 `/memory/status`、`/memory/session`、`/memory/search`、`/memory/learn`、`/memory/candidates`、`/memory/approve`、`/memory/reject`、`/memory/selfcheck`，不能返回“盘古记忆尚未接线”的默认实现。
+- 通过标准：管理工具的“修复前端连接”不能把 `renderer.memory_runtime` 中 `runtime.status = "failed"` 的心跳当成前端修复成功；应继续执行 Codex bridge 强制重注入。
+- 通过标准：概览页状态卡片中的状态标签应与卡片标题同一行显示，`Claude 状态` 与 `Claude 一键开发模式` 不得把标签压到下一行。
+- 验证证据：`cargo check -p claude-codex-pro-launcher --manifest-path Cargo.toml`、`cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem -- --nocapture`、`npm --prefix apps/claude-codex-pro-manager run check`、`npm --prefix apps/claude-codex-pro-manager run vite:build`、`cargo build -p claude-codex-pro-launcher --manifest-path Cargo.toml`、`cargo build -p claude-codex-pro-manager --manifest-path Cargo.toml`。
