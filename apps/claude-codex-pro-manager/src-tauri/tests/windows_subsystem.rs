@@ -518,10 +518,10 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("function codexOverviewStatus"));
     assert!(app_tsx.contains("function claudeOverviewStatus"));
     assert!(app_tsx.contains("function memoryOverviewStatus"));
-    assert!(app_tsx.contains("loaded = await call<SettingsResult>(\"load_settings\");"));
-    assert!(app_tsx.contains("if (!statusOk(loaded?.status))"));
-    assert!(app_tsx.contains("正在开启盘古记忆..."));
-    assert!(app_tsx.contains("正在关闭盘古记忆..."));
+    assert!(app_tsx.contains("const result = await run(() => call<SettingsResult>(\"load_settings\"), \"设置\""));
+    assert!(app_tsx.contains("if (result) {\n      setSettings(result);"));
+    assert!(app_tsx.contains("const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });"));
+    assert!(app_tsx.contains("if (saved) await actions.refreshMemoryAssist();"));
     assert!(!app_tsx.contains("设置尚未加载，无法切换盘古记忆。"));
     assert!(app_tsx.contains("status-segment-list"));
     assert!(app_tsx.contains("status-segment"));
@@ -532,8 +532,11 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("后端在线"));
     assert!(app_tsx.contains("汉化已注入"));
     assert!(app_tsx.contains("前端已注入"));
+    assert!(app_tsx.contains("包装窗口已注入"));
+    assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
     assert!(app_tsx.contains("前端未注入"));
-    assert!(app_tsx.contains("Inspector 未就绪"));
+    assert!(app_tsx.contains("Inspector 在线"));
+    assert!(app_tsx.contains("CDP 未检测"));
     assert!(app_tsx.contains("CDP 受阻"));
     assert!(app_tsx.contains("注入异常"));
     assert!(!app_tsx.contains("inject ok"));
@@ -568,7 +571,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("claudeFrontendInjected"));
     assert!(app_tsx.contains("codexBackendOnline"));
     assert!(app_tsx.contains("claudeBackendOnline"));
-    assert!(app_tsx.contains("status === \"degraded\""));
+    assert!(app_tsx.contains("launchStatus === \"degraded\""));
     assert!(lib_rs.contains("commands::refresh_claude_third_party_config"));
     assert!(lib_rs.contains("commands::repair_frontend_connection"));
     assert!(lib_rs.contains("commands::repair_backend_service"));
@@ -578,11 +581,16 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("claude_backend_online"));
     assert!(commands_rs.contains("force_reinject_bridge"));
     assert!(commands_rs.contains("repair_claude_frontend_via_node_inspector"));
+    assert!(commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
+    assert!(commands_rs.contains("open_claude_chinese_window(app.clone()).await"));
+    assert!(commands_rs.contains("Claude 中文包装窗口已打开并注入。"));
+    assert!(commands_rs.contains("pub async fn repair_frontend_connection("));
+    assert!(commands_rs.contains("app: tauri::AppHandle"));
     assert!(commands_rs.contains("BrowserWindow.getAllWindows"));
     assert!(commands_rs.contains("Claude Inspector 端口已声明但未就绪"));
     assert!(commands_rs.contains("本地模型代理启动失败"));
     assert!(commands_rs.contains("if !status.debug_port_online"));
-    assert!(commands_rs.contains("Codex CDP 端口 127.0.0.1:{debug_port} 已离线"));
+    assert!(commands_rs.contains("Codex CDP 端口 127.0.0.1:{debug_port} 仍离线或 /json 不可用"));
     assert!(commands_rs.contains("强制刷新超时"));
     assert!(commands_rs.contains("codex_frontend_ok && claude_probe.injected"));
     assert!(commands_rs.contains("codex_helper && claude_helper"));
@@ -718,7 +726,7 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true)]);"
+        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);"
     ));
     assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy ? \"写入中...\" : devModeConfigured ? \"已写入\" : \"写入开发配置\";"));
     assert!(
@@ -787,7 +795,7 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
     assert!(core_claude.contains("let is_restart = !existing_process_ids.is_empty();"));
     assert!(core_claude.contains("terminate_claude_processes(&existing_process_ids)"));
     assert!(core_claude.contains("wait_for_claude_process_exit("));
-    assert!(core_claude.contains("Claude Desktop was closed and restart was requested"));
+    assert!(core_claude.contains("Claude Desktop 已关闭并重新启动。"));
     assert!(
         core_claude.contains("action: if is_restart { \"restart\" } else { \"open\" }.to_string()")
     );

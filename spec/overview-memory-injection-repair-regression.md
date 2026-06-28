@@ -37,6 +37,7 @@
 - Codex 注入定位必须先查找顶部菜单“帮助/help”，只在找不到时才回退到左侧导航或其他可见元素。
 - 修复前端连接与修复后端服务必须分别返回 Codex 和 Claude 的独立状态，不能用任意一侧成功冒充整体成功。
 - Claude Node Inspector 只能作为主进程 Inspector 状态，不能被当成前端页面 CDP 端口；但当没有页面 CDP、只有 Node Inspector 时，修复命令应尝试通过 Electron 主进程 `BrowserWindow.webContents.executeJavaScript` 注入 Claude 前端。
+- 当官方 Claude Desktop 因 MSIX/调试端口限制没有可用页面 CDP 或 Node Inspector 时，修复前端连接应复用现有 Claude 中文包装窗口作为安全前端注入通道；该兜底只允许打开/刷新包装窗口，不得修改 `assets/inject/claude-chinese-inject.js` 的中文注入、翻译表或 DOM 翻译逻辑。
 - 修复前端连接对 Codex 旧启动记录必须先验证 CDP `/json` 和 helper `/backend/status` 当前在线；CDP 离线时不能继续在旧端口上等待强制刷新超时，必须返回明确原因并提示需要重新启动 Codex 注入入口。
 - 本地 helper 端口被占用时必须验证 `/backend/status` 来自 Claude Codex Pro helper，不能把未知进程占用端口当作成功。
 - 修复后端服务遇到 helper 端口被旧 Claude Codex Pro 进程占用、但 `/backend/status` 没有响应时，必须尝试终止旧的本项目进程并重新启动 helper；若占用者不是本项目进程或无法恢复，必须保留失败并记录占用进程诊断信息。

@@ -473,7 +473,7 @@
       /* Dark theme overrides for delete-confirm and project-move dialogs.
          Triggered either by Codex applying a "dark" class / data-theme="dark"
          on its document root, or by the OS-level prefers-color-scheme hint.
-         Palette matches the existing Claude Codex Pro dark modal (.claude-codex-pro-modal-content). */
+         Keep these legacy dialogs readable when Codex itself is in dark mode. */
       html.dark .codex-delete-confirm-overlay,
       html[data-theme="dark"] .codex-delete-confirm-overlay,
       :root[data-theme="dark"] .codex-delete-confirm-overlay {
@@ -600,7 +600,7 @@
         transform: none;
         z-index: 2147483647;
         height: var(--claude-codex-pro-menu-height, 30px);
-        color: var(--claude-codex-pro-window-text-color, currentColor);
+        color: #a9a4a9;
         font: 13px system-ui, sans-serif;
         text-align: left;
         display: inline-flex;
@@ -672,7 +672,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(0,0,0,.45);
+        background: rgba(15,23,42,.32);
         pointer-events: auto;
         -webkit-app-region: no-drag;
       }
@@ -682,12 +682,12 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        border: 1px solid rgba(255,255,255,.12);
-        border-radius: 18px;
-        background: #2b2b2b;
-        color: #f3f4f6;
+        border: 1px solid #dce3ed;
+        border-radius: 8px;
+        background: #ffffff;
+        color: #172033;
         font: 14px system-ui, sans-serif;
-        box-shadow: 0 24px 80px rgba(0,0,0,.45);
+        box-shadow: 0 24px 80px rgba(15,23,42,.22);
         pointer-events: auto;
         -webkit-app-region: no-drag;
       }
@@ -701,14 +701,14 @@
         -webkit-app-region: no-drag;
       }
       .claude-codex-pro-modal-title { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 650; }
-      .claude-codex-pro-backend-indicator { width: 9px; height: 9px; border-radius: 999px; background: #a1a1aa; display: inline-block; }
+      .claude-codex-pro-backend-indicator { width: 9px; height: 9px; border-radius: 999px; background: #94a3b8; display: inline-block; }
       .claude-codex-pro-backend-indicator[data-status="ok"] { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,.75); }
       .claude-codex-pro-backend-indicator[data-status="failed"] { background: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,.75); }
       .claude-codex-pro-backend-indicator[data-status="checking"] { background: #fbbf24; }
       .claude-codex-pro-modal-close {
         border: 0;
         background: transparent;
-        color: #d1d5db;
+        color: #64748b;
         font-size: 20px;
         cursor: pointer;
         pointer-events: auto;
@@ -722,35 +722,35 @@
         scrollbar-gutter: stable;
         padding: 4px 20px 16px;
         scrollbar-width: thin;
-        scrollbar-color: rgba(255,255,255,.28) transparent;
+        scrollbar-color: rgba(100,116,139,.36) transparent;
       }
       .claude-codex-pro-modal-body::-webkit-scrollbar { width: 10px; }
       .claude-codex-pro-modal-body::-webkit-scrollbar-track { background: transparent; }
       .claude-codex-pro-modal-body::-webkit-scrollbar-thumb {
         border: 2px solid transparent;
         border-radius: 999px;
-        background: rgba(255,255,255,.28);
+        background: rgba(100,116,139,.36);
         background-clip: padding-box;
       }
-      .claude-codex-pro-modal-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.38); background-clip: padding-box; }
+      .claude-codex-pro-modal-body::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,.5); background-clip: padding-box; }
       .claude-codex-pro-row {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
         gap: 12px;
         padding: 10px 0;
-        border-top: 1px solid rgba(255,255,255,.1);
+        border-top: 1px solid #dce3ed;
       }
       .claude-codex-pro-row:first-child { border-top: 0; }
       .claude-codex-pro-row-title { font-weight: 550; line-height: 1.35; }
-      .claude-codex-pro-row-description { margin-top: 2px; color: #a1a1aa; font-size: 12px; line-height: 1.4; }
+      .claude-codex-pro-row-description { margin-top: 2px; color: #64748b; font-size: 12px; line-height: 1.4; }
       .claude-codex-pro-model-compat-warning { margin-top: 6px; color: #fbbf24; font-size: 12px; line-height: 1.45; }
       .claude-codex-pro-toggle {
         width: 42px;
         height: 24px;
         border: 0;
         border-radius: 999px;
-        background: #52525b;
+        background: #cbd5e1;
         padding: 2px;
       }
       .claude-codex-pro-toggle span {
@@ -768,9 +768,9 @@
         flex-shrink: 0;
         align-self: center;
       }
-      .claude-codex-pro-toggle[data-enabled="true"] { background: #10a37f; }
+      .claude-codex-pro-toggle[data-enabled="true"] { background: #0f766e; }
       .claude-codex-pro-toggle[data-enabled="true"] span { transform: translateX(18px); }
-      .claude-codex-pro-toggle[data-relay-unneeded="true"] { width: 72px; cursor: default; background: rgba(16,163,127,.16); color: #6ee7b7; }
+      .claude-codex-pro-toggle[data-relay-unneeded="true"] { width: 72px; cursor: default; background: #eef6f5; color: #0f766e; }
       .claude-codex-pro-toggle[data-relay-unneeded="true"] span { display: none; }
       .claude-codex-pro-toggle[data-relay-unneeded="true"]::after { content: "无需开启"; font-size: 12px; font-weight: 650; line-height: 1; }
       .claude-codex-pro-width-control { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 176px; align-self: center; }
@@ -778,24 +778,24 @@
         width: 78px;
         height: 26px;
         box-sizing: border-box;
-        border: 1px solid rgba(255,255,255,.18);
+        border: 1px solid #cbd5e1;
         border-radius: 7px;
-        background: rgba(255,255,255,.08);
-        color: #f3f4f6;
+        background: #ffffff;
+        color: #172033;
         font: 12px system-ui, sans-serif;
         padding: 0 8px;
       }
       .claude-codex-pro-width-input:disabled { opacity: .55; cursor: not-allowed; }
       .claude-codex-pro-service-tier-control { display: grid; gap: 6px; min-width: 316px; justify-items: end; align-self: center; }
-      .claude-codex-pro-service-tier-status { color: #a1a1aa; font-size: 12px; line-height: 1.3; text-align: right; }
-      .claude-codex-pro-service-tier-status[data-status="ok"] { color: #34d399; }
-      .claude-codex-pro-service-tier-status[data-status="failed"] { color: #f87171; }
-      .claude-codex-pro-service-tier-status[data-status="unsupported"] { color: #fbbf24; }
+      .claude-codex-pro-service-tier-status { color: #64748b; font-size: 12px; line-height: 1.3; text-align: right; }
+      .claude-codex-pro-service-tier-status[data-status="ok"] { color: #0f766e; }
+      .claude-codex-pro-service-tier-status[data-status="failed"] { color: #dc2626; }
+      .claude-codex-pro-service-tier-status[data-status="unsupported"] { color: #b45309; }
       .claude-codex-pro-service-tier-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
       .claude-codex-pro-service-tier-thread-actions { opacity: .88; align-items: center; }
-      .claude-codex-pro-service-tier-thread-label { color: #a1a1aa; font: 12px/1.2 system-ui, sans-serif; white-space: nowrap; }
-      .claude-codex-pro-service-tier-button { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 5px 8px; white-space: nowrap; }
-      .claude-codex-pro-service-tier-button[data-active="true"] { border-color: #10a37f; background: rgba(16,163,127,.22); color: #6ee7b7; }
+      .claude-codex-pro-service-tier-thread-label { color: #64748b; font: 12px/1.2 system-ui, sans-serif; white-space: nowrap; }
+      .claude-codex-pro-service-tier-button { border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 5px 8px; white-space: nowrap; }
+      .claude-codex-pro-service-tier-button[data-active="true"] { border-color: #0f766e; background: #eef6f5; color: #0f766e; }
       .claude-codex-pro-service-tier-button:disabled { opacity: .55; cursor: not-allowed; }
       .${codexServiceTierBadgeClass} {
         display: inline-flex;
@@ -835,15 +835,15 @@
         border: 0;
         border-radius: 0;
         background: transparent;
-        color: #dbeafe;
+        color: #a9a4a9;
         box-shadow: none;
         font: 600 12px/1 system-ui, sans-serif;
         padding: 0 4px;
         cursor: pointer;
         backdrop-filter: none;
       }
-      #${codexMemoryBadgeId}[data-status="ok"] { border-color: rgba(16,185,129,.44); color: #bbf7d0; }
-      #${codexMemoryBadgeId}[data-status="failed"] { border-color: rgba(248,113,113,.5); color: #fecaca; }
+      #${codexMemoryBadgeId}[data-status="ok"] { border-color: rgba(16,185,129,.44); color: #a9a4a9; }
+      #${codexMemoryBadgeId}[data-status="failed"] { border-color: rgba(248,113,113,.5); color: #a9a4a9; }
       #${codexMemoryBadgeId}[data-status="disabled"] { opacity: .75; cursor: default; }
       #${codexMemoryBadgeId} .codex-memory-dot {
         width: 8px;
@@ -854,7 +854,7 @@
       }
       #${codexMemoryBadgeId}[data-status="ok"] .codex-memory-dot { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,.75); }
       #${codexMemoryBadgeId}[data-status="failed"] .codex-memory-dot { background: #f87171; box-shadow: 0 0 10px rgba(248,113,113,.75); }
-      .codex-memory-count { color: #93c5fd; font-weight: 700; }
+      .codex-memory-count { color: inherit; font-weight: 700; }
       #${codexMemoryPanelId} {
         position: fixed;
         top: 50px;
@@ -937,13 +937,13 @@
       html.dark .codex-memory-card p,
       html[data-theme="dark"] .codex-memory-card p,
       :root[data-theme="dark"] .codex-memory-card p { color: #f4f4f5; }
-      .claude-codex-pro-about { color: #a1a1aa; line-height: 1.5; }
+      .claude-codex-pro-about { color: #64748b; line-height: 1.5; }
       .claude-codex-pro-tabs { display: flex; gap: 8px; padding: 0 20px 6px; flex: 0 0 auto; }
-      .claude-codex-pro-tab-button { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: transparent; color: #d1d5db; font: 12px system-ui, sans-serif; padding: 5px 10px; }
-      .claude-codex-pro-tab-button[data-active="true"] { background: #10a37f; color: white; border-color: #10a37f; }
+      .claude-codex-pro-tab-button { border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 5px 10px; }
+      .claude-codex-pro-tab-button[data-active="true"] { background: #0f766e; color: white; border-color: #0f766e; }
       .claude-codex-pro-panel[hidden] { display: none; }
       .claude-codex-pro-action-button,
-      .claude-codex-pro-issue-button { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
+      .claude-codex-pro-issue-button { border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 6px 8px; }
       .claude-codex-pro-worktree-actions {
         display: inline-flex;
         align-items: center;
@@ -953,61 +953,52 @@
         display: grid;
         gap: 4px;
         margin-top: 10px;
-        color: #d4d4d8;
+        color: #334155;
         font: 12px system-ui, sans-serif;
         text-align: left;
       }
       .claude-codex-pro-form-field input {
         width: min(520px, 72vw);
-        border: 1px solid rgba(255,255,255,.18);
+        border: 1px solid #cbd5e1;
         border-radius: 8px;
-        background: #18181b;
-        color: #f4f4f5;
+        background: #ffffff;
+        color: #172033;
         padding: 8px 10px;
         font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
       .claude-codex-pro-form-message {
         min-height: 18px;
         margin-top: 10px;
-        color: #a1a1aa;
+        color: #64748b;
         font: 12px system-ui, sans-serif;
         text-align: left;
       }
-      .claude-codex-pro-form-message[data-status="ok"] { color: #34d399; }
-      .claude-codex-pro-form-message[data-status="failed"] { color: #f87171; }
-      .claude-codex-pro-form-message[data-status="loading"] { color: #fbbf24; }
-      .claude-codex-pro-status-note { min-width: 132px; color: #a1a1aa; font-size: 12px; text-align: right; }
-      .claude-codex-pro-status-note[data-status="ok"] { color: #34d399; }
-      .claude-codex-pro-status-note[data-status="failed"] { color: #f87171; }
-      .claude-codex-pro-backend-repair { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
+      .claude-codex-pro-form-message[data-status="ok"] { color: #0f766e; }
+      .claude-codex-pro-form-message[data-status="failed"] { color: #dc2626; }
+      .claude-codex-pro-form-message[data-status="loading"] { color: #b45309; }
+      .claude-codex-pro-status-note { min-width: 132px; color: #64748b; font-size: 12px; text-align: right; }
+      .claude-codex-pro-status-note[data-status="ok"] { color: #0f766e; }
+      .claude-codex-pro-status-note[data-status="failed"] { color: #dc2626; }
+      .claude-codex-pro-backend-repair { border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 6px 8px; }
       .claude-codex-pro-backend-repair[hidden] { display: none; }
-      .claude-codex-pro-user-script-warning { margin-top: 4px; color: #fbbf24; font-size: 12px; }
-      .claude-codex-pro-user-script-dirs { margin-top: 6px; color: #a1a1aa; font-size: 11px; line-height: 1.4; word-break: break-all; }
-      .claude-codex-pro-user-script-list { margin-top: 8px; display: grid; gap: 6px; }
-      .claude-codex-pro-user-script-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 6px 8px; }
-      .claude-codex-pro-user-script-name { font-size: 12px; }
-      .claude-codex-pro-user-script-meta { margin-top: 2px; color: #a1a1aa; font-size: 11px; }
-      .claude-codex-pro-user-script-error { margin-top: 2px; color: #f87171; font-size: 11px; word-break: break-all; }
-      .claude-codex-pro-user-script-actions { display: grid; justify-items: end; gap: 8px; min-width: 120px; }
-      .claude-codex-pro-user-script-reload { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
       .claude-codex-pro-ad-section { display: grid; gap: 10px; margin-top: 12px; }
       .claude-codex-pro-ad-section:first-of-type { margin-top: 0; }
-      .claude-codex-pro-ad-section-title { color: #f8fafc; font-size: 15px; margin: 0; }
+      .claude-codex-pro-ad-section-title { color: #172033; font-size: 15px; margin: 0; }
       .claude-codex-pro-ad-list { display: grid; gap: 14px; }
-      .claude-codex-pro-ad-card { border: 1px solid rgba(96,165,250,.26); border-radius: 16px; background: linear-gradient(135deg, rgba(37,99,235,.18), rgba(255,255,255,.05)); box-shadow: 0 14px 36px rgba(0,0,0,.22); }
+      .claude-codex-pro-ad-card { border: 1px solid #dce3ed; border-radius: 8px; background: #ffffff; box-shadow: 0 10px 24px rgba(15,23,42,.05); }
       .claude-codex-pro-ad-content { padding: 14px; }
-      .claude-codex-pro-ad-title { margin: 0; color: #f8fafc; font-size: 17px; line-height: 1.35; }
-      .claude-codex-pro-ad-description { margin: 6px 0 10px; color: #dbeafe; font-size: 13px; line-height: 1.55; }
+      .claude-codex-pro-ad-title { margin: 0; color: #172033; font-size: 17px; line-height: 1.35; }
+      .claude-codex-pro-ad-description { margin: 6px 0 10px; color: #64748b; font-size: 13px; line-height: 1.55; }
       .claude-codex-pro-ad-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-      .claude-codex-pro-ad-highlights span { border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(255,255,255,.08); color: #f3f4f6; font-size: 12px; padding: 4px 8px; }
-      .claude-codex-pro-ad-link { display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; background: #2563eb; color: #ffffff; font-size: 13px; font-weight: 650; text-decoration: none; padding: 8px 12px; }
-      .claude-codex-pro-ad-empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; color: #9ca3af; font-size: 13px; padding: 12px; text-align: center; }
+      .claude-codex-pro-ad-highlights span { border: 1px solid #bfe4d2; border-radius: 999px; background: #f0fdf4; color: #166534; font-size: 12px; padding: 4px 8px; }
+      .claude-codex-pro-ad-link { display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: #0f766e; color: #ffffff; font-size: 13px; font-weight: 650; text-decoration: none; padding: 8px 12px; }
+      .claude-codex-pro-ad-empty { border: 1px dashed #cbd5e1; border-radius: 8px; color: #64748b; font-size: 13px; padding: 12px; text-align: center; }
       .claude-codex-pro-support-panel { display: grid; gap: 14px; justify-items: center; padding: 8px 0 4px; text-align: center; }
-      .claude-codex-pro-support-title { margin: 0; color: #f8fafc; font-size: 18px; line-height: 1.35; }
-      .claude-codex-pro-support-text { margin: 0; max-width: 520px; color: #cbd5e1; font-size: 13px; line-height: 1.55; }
-      .claude-codex-pro-support-qr-wrap { display: grid; gap: 10px; justify-items: center; width: min(360px, 100%); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(255,255,255,.05); padding: 14px; box-sizing: border-box; }
+      .claude-codex-pro-support-title { margin: 0; color: #172033; font-size: 18px; line-height: 1.35; }
+      .claude-codex-pro-support-text { margin: 0; max-width: 520px; color: #64748b; font-size: 13px; line-height: 1.55; }
+      .claude-codex-pro-support-qr-wrap { display: grid; gap: 10px; justify-items: center; width: min(360px, 100%); border: 1px solid #dce3ed; border-radius: 8px; background: #f8fafc; padding: 14px; box-sizing: border-box; }
       .claude-codex-pro-support-qr { display: block; width: min(320px, 100%); aspect-ratio: 1 / 1; border-radius: 8px; background: #ffffff; object-fit: contain; }
-      .claude-codex-pro-support-empty { border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; color: #9ca3af; font-size: 13px; padding: 12px; text-align: center; }
+      .claude-codex-pro-support-empty { border: 1px dashed #cbd5e1; border-radius: 8px; color: #64748b; font-size: 13px; padding: 12px; text-align: center; }
       .${timelineClass} {
         position: fixed;
         top: calc(72px + 12px);
@@ -2049,7 +2040,6 @@
     scan();
   }
 
-  let claudeCodexProUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
   let claudeCodexProBackendStatus = { status: "checking", message: "正在检查连接…" };
   let claudeCodexProBackendCheckSeq = 0;
   let claudeChineseOverlayObserver = null;
@@ -2606,41 +2596,6 @@
     checkBackendStatus();
   }
 
-  function userScriptStatusLabel(status) {
-    return { loaded: "已加载", failed: "失败", disabled: "已禁用", not_loaded: "未加载", loading: "加载中" }[status] || status || "未知";
-  }
-
-  function renderUserScripts() {
-    const enabledToggle = document.querySelector("[data-codex-user-scripts-enabled]");
-    if (enabledToggle) enabledToggle.dataset.enabled = String(!!claudeCodexProUserScripts.enabled);
-    const dirs = document.querySelector("[data-codex-user-script-dirs]");
-    if (dirs) dirs.textContent = `内置：${claudeCodexProUserScripts.builtin_dir || "未找到"}  用户：${claudeCodexProUserScripts.user_dir || "未找到"}`;
-    const list = document.querySelector("[data-codex-user-script-list]");
-    if (!list) return;
-    if (!claudeCodexProUserScripts.scripts?.length) {
-      list.textContent = "未发现用户脚本。";
-      return;
-    }
-    list.innerHTML = claudeCodexProUserScripts.scripts.map((script) => `
-      <div class="claude-codex-pro-user-script-item">
-        <div>
-          <div class="claude-codex-pro-user-script-name">${escapeHtml(script.name || script.key)}</div>
-          <div class="claude-codex-pro-user-script-meta">${script.source === "builtin" ? "内置" : "用户"} · ${userScriptStatusLabel(script.status)}</div>
-          ${script.error ? `<div class="claude-codex-pro-user-script-error">${escapeHtml(script.error)}</div>` : ""}
-        </div>
-        <button type="button" class="claude-codex-pro-toggle" data-codex-user-script-key="${escapeHtml(script.key)}" data-enabled="${String(!!script.enabled)}"><span></span></button>
-      </div>
-    `).join("");
-  }
-
-  async function loadUserScripts(path = "/user-scripts/list", payload = {}) {
-    const result = await postJson(path, payload);
-    if (result?.scripts) {
-      claudeCodexProUserScripts = result;
-      renderUserScripts();
-    }
-  }
-
   const claudeCodexProAdsUrl = "/ads";
   let claudeCodexProAds = [];
   let claudeCodexProAdsLoaded = false;
@@ -2765,7 +2720,6 @@
     document.querySelectorAll("[data-claude-codex-pro-panel]").forEach((panel) => {
       panel.hidden = panel.getAttribute("data-claude-codex-pro-panel") !== tab;
     });
-    if (tab === "userScripts") loadUserScripts();
   }
 
   function openClaudeCodexProModal() {
@@ -2781,7 +2735,6 @@
         </div>
         <div class="claude-codex-pro-tabs" role="tablist" aria-label="Claude Codex Pro">
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="home" data-active="true">主页</button>
-          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="userScripts" data-active="false">用户脚本</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">支持</button>
         </div>
@@ -2876,7 +2829,7 @@
               <button type="button" class="claude-codex-pro-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动、Timeline 和用户脚本，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动和 Timeline，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
               <button type="button" class="claude-codex-pro-action-button" data-codex-backend-repair="true">修复运行</button>
             </div>
             <div class="claude-codex-pro-row">
@@ -2884,7 +2837,7 @@
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="nativeMenuPlacement"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">打开 DevTools</div><div class="claude-codex-pro-row-description">打开当前 Codex 页面开发者工具，方便查看用户脚本报错。</div></div>
+              <div><div class="claude-codex-pro-row-title">打开 DevTools</div><div class="claude-codex-pro-row-description">打开当前 Codex 页面开发者工具，方便排查前端增强运行状态。</div></div>
               <button type="button" class="claude-codex-pro-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="claude-codex-pro-row">
@@ -2897,21 +2850,6 @@
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">提出问题</div><div class="claude-codex-pro-row-description">打开 GitHub Issues 反馈问题或建议。</div></div>
               <button type="button" class="claude-codex-pro-issue-button" data-claude-codex-pro-issue="true">提出问题</button>
-            </div>
-          </div>
-          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="userScripts" hidden>
-            <div class="claude-codex-pro-row" data-codex-user-scripts-section="true">
-              <div>
-                <div class="claude-codex-pro-row-title">用户脚本</div>
-                <div class="claude-codex-pro-row-description">启用用户脚本：自动加载内置目录和用户配置目录中的 .js 文件。</div>
-                <div class="claude-codex-pro-user-script-warning">禁用后需重载页面或重启 Claude Codex Pro 才能完全移除已执行效果。</div>
-                <div class="claude-codex-pro-user-script-dirs" data-codex-user-script-dirs="true">正在读取脚本目录…</div>
-                <div class="claude-codex-pro-user-script-list" data-codex-user-script-list="true">正在读取用户脚本…</div>
-              </div>
-              <div class="claude-codex-pro-user-script-actions">
-                <button type="button" class="claude-codex-pro-toggle" data-codex-user-scripts-enabled="true"><span></span></button>
-                <button type="button" class="claude-codex-pro-user-script-reload" data-codex-user-scripts-reload="true">重新加载用户脚本</button>
-              </div>
             </div>
           </div>
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="recommendations" hidden>
@@ -2980,11 +2918,6 @@
         window.open(issueUrl, "_blank");
         return;
       }
-      const userScriptsEnabled = target?.closest("[data-codex-user-scripts-enabled]");
-      if (userScriptsEnabled) {
-        loadUserScripts("/user-scripts/set-enabled", { enabled: userScriptsEnabled.dataset.enabled !== "true" });
-        return;
-      }
       if (target?.closest("[data-codex-service-tier-inherit]")) {
         setCodexServiceTierControlMode("inherit");
         return;
@@ -3011,15 +2944,6 @@
       }
       if (target?.closest("[data-codex-service-tier-thread-fast]")) {
         setCodexThreadServiceTierMode("fast");
-        return;
-      }
-      const userScriptToggle = target?.closest("[data-codex-user-script-key]");
-      if (userScriptToggle) {
-        loadUserScripts("/user-scripts/set-script-enabled", { key: userScriptToggle.getAttribute("data-codex-user-script-key"), enabled: userScriptToggle.dataset.enabled !== "true" });
-        return;
-      }
-      if (target?.closest("[data-codex-user-scripts-reload]")) {
-        loadUserScripts("/user-scripts/reload", {});
         return;
       }
       if (target?.closest("[data-codex-upstream-worktree-open]")) {
@@ -3051,7 +2975,6 @@
     refreshClaudeCodexProBackendToggles();
     renderBackendStatus();
     void loadCodexServiceTierState();
-    loadUserScripts();
   }
 
   function findNativeMenuInsertionPoint() {
@@ -3212,13 +3135,6 @@
     }
   }
 
-  function setWindowTextColorFromAnchor(menu, anchorNode) {
-    if (!menu) return;
-    const color = anchorNode instanceof Element ? getComputedStyle(anchorNode).color : "";
-    const nextColor = color && color !== "rgba(0, 0, 0, 0)" && color !== "transparent" ? color : "currentColor";
-    setCssPropIfChanged(menu, "--claude-codex-pro-window-text-color", nextColor);
-  }
-
   function headerTitleRegion(header) {
     const candidates = Array.from(header?.querySelectorAll?.('[data-state], [class*="truncate"], [class*="text-base"]') || []);
     return candidates.find((node) => {
@@ -3245,7 +3161,6 @@
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
-      setWindowTextColorFromAnchor(menu, null);
       return;
     }
     const headerRect = header.getBoundingClientRect();
@@ -3260,12 +3175,10 @@
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${headerRect.top}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${left}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${headerRect.height}px`);
-      setWindowTextColorFromAnchor(menu, anchor?.node || header);
     } else {
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
-      setWindowTextColorFromAnchor(menu, null);
     }
     updateCodexMemoryBadgePosition();
   }

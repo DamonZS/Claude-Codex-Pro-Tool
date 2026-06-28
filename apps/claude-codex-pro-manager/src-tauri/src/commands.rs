@@ -1898,6 +1898,7 @@ fn claude_frontend_ports(
 }
 
 async fn repair_claude_frontend_injection(
+    app: &tauri::AppHandle,
     status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
 ) -> ClaudeFrontendProbe {
     let ports = claude_frontend_ports(status);
@@ -1918,10 +1919,7 @@ async fn repair_claude_frontend_injection(
         } else {
             return repair_claude_frontend_via_node_inspector(status).await;
         }
-        return ClaudeFrontendProbe {
-            injected: false,
-            details,
-        };
+        return repair_claude_frontend_via_wrapped_window(app, status, details).await;
     }
 
     for port in ports {
@@ -1950,6 +1948,34 @@ async fn repair_claude_frontend_injection(
     ClaudeFrontendProbe {
         injected: false,
         details,
+    }
+}
+
+async fn repair_claude_frontend_via_wrapped_window(
+    app: &tauri::AppHandle,
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+    mut details: Vec<String>,
+) -> ClaudeFrontendProbe {
+    details.push(format!(
+        "Claude 官方窗口当前为 {}，改用 Claude Codex Pro 中文包装窗口注入。",
+        status.cdp_status
+    ));
+    let result = open_claude_chinese_window(app.clone()).await;
+    if result.payload.open {
+        details.push("Claude 中文包装窗口已打开并注入。".to_string());
+        ClaudeFrontendProbe {
+            injected: true,
+            details,
+        }
+    } else {
+        details.push(format!(
+            "Claude 中文包装窗口打开失败：{}",
+            result.message
+        ));
+        ClaudeFrontendProbe {
+            injected: false,
+            details,
+        }
     }
 }
 
@@ -2261,7 +2287,9 @@ pub struct RepairConnectionPayload {
 }
 
 #[tauri::command]
-pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPayload> {
+pub async fn repair_frontend_connection(
+    app: tauri::AppHandle,
+) -> CommandResult<RepairConnectionPayload> {
     let mut details = Vec::new();
     let mut latest = StatusStore::default()
         .load_latest()
@@ -2334,7 +2362,7 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
     )
     .await
     .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    let claude_probe = repair_claude_frontend_injection(&claude).await;
+    let claude_probe = repair_claude_frontend_injection(&app, &claude).await;
     details.extend(claude_probe.details.clone());
     let claude_proxy_port = cached_claude_desktop_proxy_port()
         .or_else(|| Some(current_claude_desktop_proxy_port_hint()));

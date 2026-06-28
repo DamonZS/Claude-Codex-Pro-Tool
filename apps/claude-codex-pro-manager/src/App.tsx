@@ -825,16 +825,19 @@ function codexOverviewStatus(overview: OverviewResult | null) {
   return { status, items };
 }
 
-function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZhPatch: ClaudeZhPatchResult | null) {
+function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZhPatch: ClaudeZhPatchResult | null, claudeChinese: ClaudeChineseWindowResult | null) {
   const hasProcess = (claudeDesktop?.processCount ?? 0) > 0;
   const cdpStatus = claudeDesktop?.cdpStatus ?? "not_checked";
   const detectFailed = !!claudeDesktop && statusFailed(claudeDesktop.status);
   const injected = !!claudeZhPatch?.status.localeConfigured && !!claudeZhPatch?.status.frontendI18nPresent && !!claudeZhPatch?.status.chunkPatchPresent;
+  const wrappedInjected = !!claudeChinese?.open;
+  const frontendInjected = injected || wrappedInjected;
   const inspectorReady = cdpStatus === "node_inspector_ready" || (claudeDesktop?.inspectorPorts?.length ?? 0) > 0;
-  const cdpWarn = !inspectorReady && (cdpStatus === "blocked" || cdpStatus === "failed");
+  const cdpWarn = !frontendInjected && !inspectorReady && (cdpStatus === "blocked" || cdpStatus === "failed");
   const items: StatusChip[] = [
     { label: detectFailed ? "检测异常" : hasProcess ? "运行中" : "未运行", tone: detectFailed ? "warn" : hasProcess ? "ok" : "muted" },
-    { label: injected ? "汉化已注入" : "汉化未注入", tone: injected ? "ok" : "muted" },
+    { label: frontendInjected ? "前端已注入" : "前端未注入", tone: frontendInjected ? "ok" : "muted" },
+    { label: injected ? "汉化已注入" : wrappedInjected ? "包装窗口已注入" : "汉化未注入", tone: injected || wrappedInjected ? "ok" : "muted" },
     { label: inspectorReady ? "Inspector 在线" : cdpStatus === "blocked" ? "CDP 受阻" : cdpStatus === "failed" ? "CDP 异常" : cdpStatus === "ok" ? "CDP 在线" : "CDP 未检测", tone: cdpWarn ? "warn" : inspectorReady || cdpStatus === "ok" ? "ok" : "muted" },
   ];
   const status = items.some((item) => item.tone === "warn") ? "failed" : hasProcess ? "running" : "not_checked";
@@ -2066,7 +2069,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeChinese={claudeChinese} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -2124,6 +2127,7 @@ export function App() {
 function OverviewScreen({
   actions,
   overview,
+  claudeChinese,
   claudeDesktop,
   claudeZhPatch,
   claudeDesktopDevMode,
@@ -2133,6 +2137,7 @@ function OverviewScreen({
 }: {
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
+  claudeChinese: ClaudeChineseWindowResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   claudeZhPatch: ClaudeZhPatchResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
@@ -2142,7 +2147,7 @@ function OverviewScreen({
 }) {
   const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
-  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
+  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese);
   const memoryStatus = memoryOverviewStatus(memoryAssist, settings);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
   const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";

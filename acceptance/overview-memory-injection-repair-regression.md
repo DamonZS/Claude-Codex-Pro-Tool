@@ -21,6 +21,8 @@
    - 通过标准：`repair_frontend_connection` 后端命令对 Codex 和 Claude 注入探测都有硬超时；超时必须返回 failed/degraded 和详情，不能让前端永久停留在 running toast。
    - 通过标准：Codex CDP 端口离线时，`repair_frontend_connection` 不继续调用强制注入等待超时，而是返回旧端口已离线的详情。
    - 通过标准：Claude 只有 Node Inspector 端口时，`repair_frontend_connection` 会尝试通过 Electron 主进程 `BrowserWindow.webContents.executeJavaScript` 注入前端，而不是直接判定不可注入。
+   - 通过标准：官方 Claude Desktop 没有页面 CDP 或 Node Inspector 时，`repair_frontend_connection` 会打开/刷新 Claude Codex Pro 中文包装窗口作为安全注入兜底，并返回“包装窗口已注入”一类可见状态。
+   - 通过标准：该兜底不得修改 `assets/inject/claude-chinese-inject.js` 的中文注入、翻译表或 DOM 翻译逻辑。
    - 验证证据：源码检查和前端类型检查。
 
 5. Codex 注入锚点优先使用帮助菜单
@@ -38,16 +40,22 @@
      - `cargo build -p claude-codex-pro-manager` 成功。
    - 验证证据：命令输出。
 
-8. 修复后端服务能处理 helper 端口冲突
+8. Codex 注入弹窗主题与管理工具一致且不显示用户脚本
+   - 通过标准：`assets/inject/renderer-inject.js` 中 CCP 弹窗使用管理工具同款浅色运维面板色系，包括 `#ffffff` 面板、`#172033` 主文字、`#64748b` 辅助文字、`#0f766e` 主按钮/开关色、`#dce3ed` 边框和 `8px` 圆角。
+   - 通过标准：CCP 弹窗不再渲染 `用户脚本` 标签、`data-claude-codex-pro-panel="userScripts"` 面板、`data-codex-user-scripts-*` 或 `data-codex-user-script-*` 控件，也不在打开弹窗时请求 `/user-scripts/list`。
+   - 通过标准：不删除后端用户脚本路由和本地用户脚本数据；本次只移除 Codex 注入弹窗中的用户脚本管理入口。
+   - 验证证据：`cargo test -p claude-codex-pro-core --test cdp_bridge -- --nocapture`。
+
+9. 修复后端服务能处理 helper 端口冲突
    - 通过标准：`ensure_detached_helper` 在端口已被可验证的本项目旧进程占用时会尝试恢复；无法验证为本项目 helper 时不能误报成功。
    - 通过标准：`/backend/status` 启动后能返回 `transport = "http-helper"`。
    - 验证证据：`cargo test -p claude-codex-pro-core --test launcher detached_helper -- --nocapture`。
 
-9. Claude 第三方代理写入后必须验证在线
+10. Claude 第三方代理写入后必须验证在线
    - 通过标准：`configure_claude_desktop_dev_mode` 是异步命令，并在写入 profile 前先启动或验证 Claude 本地模型映射代理，随后使用实际端口等待 `/backend/status`。
    - 通过标准：`wait_helper_backend_online` 使用异步 TCP 探测函数，不能直接调用阻塞版 `helper_backend_online`。
    - 验证证据：`cargo build -p claude-codex-pro-manager`。
-10. 本地端口冲突时必须避让并写入实际端口
+11. 本地端口冲突时必须避让并写入实际端口
    - 通过标准：Claude 本地模型映射代理首选 `57331`，但端口被未知本机服务占用时必须选择备用可用端口，不能把未知服务当成已在线 helper。
    - 通过标准：Claude 一键开发模式与供应商写入的 `inferenceGatewayBaseUrl` 必须使用实际代理端口，测试中可传入备用端口并断言 profile 写入该端口。
    - 通过标准：Codex Chat 协议代理启用时继续使用 `select_helper_port` 返回的实际端口，不能强制覆盖为 `57321`。

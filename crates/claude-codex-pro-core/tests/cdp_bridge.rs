@@ -121,14 +121,38 @@ fn injection_script_exposes_left_anchored_codex_status_entry() {
     assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));
     assert!(script.contains("background: transparent"));
     assert!(script.contains("color: inherit"));
-    assert!(script.contains("color: var(--claude-codex-pro-window-text-color, currentColor)"));
-    assert!(script.contains("function setWindowTextColorFromAnchor(menu, anchorNode)"));
-    assert!(script.contains("getComputedStyle(anchorNode).color"));
-    assert!(script.contains("setWindowTextColorFromAnchor(menu, anchor?.node || header)"));
+    assert!(script.contains("color: #a9a4a9"));
+    assert!(!script.contains("--claude-codex-pro-window-text-color"));
+    assert!(!script.contains("function setWindowTextColorFromAnchor"));
+    assert!(script.contains(".codex-memory-count { color: inherit; font-weight: 700; }"));
+    assert!(script.contains("border: 1px solid #dce3ed"));
+    assert!(script.contains("border-radius: 8px"));
+    assert!(script.contains("background: #ffffff"));
+    assert!(script.contains("color: #172033"));
+    assert!(script.contains("color: #64748b"));
+    assert!(script.contains("background: #0f766e"));
     assert!(!script.contains("html:not(.light):not([data-theme=\"light\"]) #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass}"));
     assert!(script.contains("updateCodexMemoryBadgePosition"));
     assert!(script.contains("openClaudeCodexProModal()"));
     assert!(script.contains("trigger.dataset.claudeCodexProTriggerLabel = \"ccp-status-v2\""));
+}
+
+#[test]
+fn injection_script_modal_hides_user_scripts_management() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("data-claude-codex-pro-tab=\"home\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"recommendations\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"support\""));
+    assert!(!script.contains("data-claude-codex-pro-tab=\"userScripts\""));
+    assert!(!script.contains("data-claude-codex-pro-panel=\"userScripts\""));
+    assert!(!script.contains("data-codex-user-scripts-enabled"));
+    assert!(!script.contains("data-codex-user-scripts-reload"));
+    assert!(!script.contains("data-codex-user-script-list"));
+    assert!(!script.contains("data-codex-user-script-key"));
+    assert!(!script.contains("if (tab === \"userScripts\") loadUserScripts();"));
+    assert!(!script.contains("loadUserScripts();"));
+    assert!(!script.contains("\"/user-scripts/list\""));
 }
 
 #[test]
