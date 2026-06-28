@@ -10,6 +10,12 @@ use serde_json::{Value, json};
 use crate::settings::{RelayProtocol, SettingsStore};
 
 pub const DEFAULT_PROTOCOL_PROXY_PORT: u16 = 57321;
+pub const DEFAULT_CLAUDE_DESKTOP_PROXY_PORT: u16 = 57331;
+pub const DEFAULT_CLAUDE_DESKTOP_UPSTREAM_BASE_URL: &str = "https://api.toporeduce.cn";
+const CLAUDE_DESKTOP_SAFE_FABLE_MODEL: &str = "claude-fable-5";
+const CLAUDE_DESKTOP_SAFE_SONNET_MODEL: &str = "claude-sonnet-4-6";
+const CLAUDE_DESKTOP_SAFE_OPUS_MODEL: &str = "claude-opus-4-8";
+const CLAUDE_DESKTOP_SAFE_HAIKU_MODEL: &str = "claude-haiku-4-5";
 const THINK_OPEN_TAG: &str = "<think>";
 const THINK_CLOSE_TAG: &str = "</think>";
 const EXTRA_CHAT_PASSTHROUGH_FIELDS: &[&str] = &[
@@ -122,6 +128,10 @@ impl CodexToolContext {
 
 pub fn local_responses_proxy_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/v1")
+}
+
+pub fn local_claude_desktop_proxy_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/claude-desktop")
 }
 
 pub fn responses_to_chat_completions(body: Value) -> anyhow::Result<Value> {
@@ -423,6 +433,121 @@ pub fn is_models_proxy_path(path: &str) -> bool {
     )
 }
 
+pub fn is_claude_desktop_models_proxy_path(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    matches!(
+        path,
+        "/claude-desktop/models" | "/claude-desktop/v1/models" | "/claude-desktop/v1/v1/models"
+    )
+}
+
+pub fn is_claude_desktop_messages_proxy_path(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    matches!(
+        path,
+        "/claude-desktop/messages"
+            | "/claude-desktop/v1/messages"
+            | "/claude-desktop/v1/v1/messages"
+    )
+}
+
+pub fn claude_desktop_safe_models() -> Vec<Value> {
+    claude_desktop_safe_models_with_labels("")
+}
+
+pub fn claude_desktop_default_model_list() -> String {
+    [
+        CLAUDE_DESKTOP_SAFE_FABLE_MODEL,
+        CLAUDE_DESKTOP_SAFE_HAIKU_MODEL,
+        CLAUDE_DESKTOP_SAFE_OPUS_MODEL,
+        CLAUDE_DESKTOP_SAFE_SONNET_MODEL,
+    ]
+    .join("\n")
+}
+
+pub fn claude_desktop_safe_models_with_labels(model_list: &str) -> Vec<Value> {
+    let models = non_empty_model_list_or_default(model_list);
+    let fallback = models.first().cloned();
+    let fable = pick_model_by_keyword(&models, "fable")
+        .or_else(|| models.first().cloned())
+        .or_else(|| fallback.clone());
+    let haiku = pick_model_by_keyword(&models, "haiku")
+        .or_else(|| models.get(1).cloned())
+        .or_else(|| fallback.clone());
+    let opus = pick_model_by_keyword(&models, "opus")
+        .or_else(|| models.get(2).cloned())
+        .or_else(|| fallback.clone());
+    let sonnet = pick_model_by_keyword(&models, "sonnet")
+        .or_else(|| models.get(3).cloned())
+        .or_else(|| fallback.clone());
+
+    let mut result = Vec::new();
+    result.push(claude_desktop_model_entry(
+        CLAUDE_DESKTOP_SAFE_FABLE_MODEL,
+        fable.as_deref(),
+        false,
+    ));
+    result.push(claude_desktop_model_entry(
+        CLAUDE_DESKTOP_SAFE_HAIKU_MODEL,
+        haiku.as_deref(),
+        false,
+    ));
+    result.push(claude_desktop_model_entry(
+        CLAUDE_DESKTOP_SAFE_OPUS_MODEL,
+        opus.as_deref(),
+        true,
+    ));
+    result.push(claude_desktop_model_entry(
+        CLAUDE_DESKTOP_SAFE_SONNET_MODEL,
+        sonnet.as_deref(),
+        false,
+    ));
+    result
+}
+
+pub fn claude_desktop_models_response(model_list: &str) -> Value {
+    let data = claude_desktop_safe_models_with_labels(model_list)
+        .into_iter()
+        .filter_map(|item| {
+            let object = item.as_object()?;
+            let id = object.get("name")?.as_str()?.to_string();
+            let mut model = json!({
+                "type": "model",
+                "id": id,
+                "created_at": 0,
+            });
+            if object
+                .get("supports1m")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                model["supports1m"] = json!(true);
+            }
+            if let Some(label) = object.get("labelOverride").and_then(Value::as_str) {
+                model["display_name"] = json!(label);
+            }
+            Some(model)
+        })
+        .collect::<Vec<_>>();
+    let first_id = data
+        .first()
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let last_id = data
+        .last()
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    json!({
+        "data": data,
+        "has_more": false,
+        "first_id": first_id,
+        "last_id": last_id,
+    })
+}
+
 pub async fn open_responses_proxy_request(body: &str) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = settings.active_relay_profile();
@@ -499,6 +624,247 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
         content_type,
         response: upstream,
     })
+}
+
+pub fn local_claude_desktop_models_proxy_response() -> anyhow::Result<ProxyHttpResponse> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let relay = settings.active_relay_profile();
+    let body = serde_json::to_vec(&claude_desktop_models_response(&relay.model_list))?;
+    Ok(ProxyHttpResponse {
+        status: "200 OK".to_string(),
+        content_type: "application/json; charset=utf-8".to_string(),
+        body,
+    })
+}
+
+pub async fn open_claude_desktop_messages_proxy_request(
+    body: &str,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let relay = settings.active_relay_profile();
+    let base_url = claude_desktop_resolved_upstream_base_url(&relay, &settings);
+    if base_url.trim().is_empty() {
+        anyhow::bail!("Claude Desktop 上游 Base URL 不能为空");
+    }
+    let api_key = claude_desktop_upstream_api_key(&relay, &settings);
+    if api_key.trim().is_empty() {
+        anyhow::bail!("Claude Desktop 上游 Key 不能为空");
+    }
+
+    let mut request_json: Value = serde_json::from_str(body)?;
+    map_claude_desktop_request_model(&mut request_json, &relay);
+    let is_stream = request_json
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let client = crate::http_client::proxied_client(&relay.user_agent)?;
+    let upstream = client
+        .post(claude_messages_url(&base_url))
+        .bearer_auth(api_key.trim())
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .json(&request_json)
+        .send()
+        .await?;
+    let status_code = upstream.status().as_u16();
+    let content_type = upstream
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(UpstreamProxyResponse {
+        status_code,
+        is_stream: is_stream || content_type.contains("text/event-stream"),
+        content_type,
+        response: upstream,
+    })
+}
+
+pub fn claude_desktop_resolved_upstream_base_url(
+    relay: &crate::settings::RelayProfile,
+    settings: &crate::settings::BackendSettings,
+) -> String {
+    provider_string_from_toml(&relay.config_contents, "base_url")
+        .or_else(|| non_empty_string(&relay.upstream_base_url))
+        .or_else(|| {
+            let value = non_empty_string(&relay.base_url)?;
+            if value == local_claude_desktop_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT) {
+                None
+            } else {
+                Some(value)
+            }
+        })
+        .or_else(|| non_empty_string(&settings.relay_base_url))
+        .unwrap_or_else(|| DEFAULT_CLAUDE_DESKTOP_UPSTREAM_BASE_URL.to_string())
+}
+
+fn claude_desktop_upstream_api_key(
+    relay: &crate::settings::RelayProfile,
+    settings: &crate::settings::BackendSettings,
+) -> String {
+    provider_string_from_toml(&relay.config_contents, "experimental_bearer_token")
+        .or_else(|| openai_api_key_from_json(&relay.auth_contents))
+        .or_else(|| non_empty_string(&relay.api_key))
+        .or_else(|| non_empty_string(&settings.relay_api_key))
+        .or_else(|| {
+            std::env::var("OPENAI_API_KEY")
+                .ok()
+                .and_then(|value| non_empty_string(&value))
+        })
+        .unwrap_or_default()
+}
+
+fn map_claude_desktop_request_model(body: &mut Value, relay: &crate::settings::RelayProfile) {
+    let Some(original) = body.get("model").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(mapped) = claude_desktop_model_mapping_for(original, relay) else {
+        return;
+    };
+    if mapped != original {
+        body["model"] = json!(mapped);
+    }
+}
+
+pub fn claude_desktop_model_mapping_for(
+    original_model: &str,
+    relay: &crate::settings::RelayProfile,
+) -> Option<String> {
+    let models = parse_plain_model_list(&relay.model_list);
+    let default_models = non_empty_model_list_or_default(&relay.model_list);
+    let fallback = relay_model_fallback(relay)
+        .or_else(|| models.first().cloned())
+        .or_else(|| default_models.first().cloned());
+    let lower_original = original_model.to_ascii_lowercase();
+    let mapped = if lower_original.contains("fable") {
+        pick_model_by_keyword(&models, "fable")
+            .or_else(|| models.first().cloned())
+            .or_else(|| pick_model_by_keyword(&default_models, "fable"))
+            .or_else(|| fallback.clone())
+    } else if lower_original.contains("haiku") {
+        pick_model_by_keyword(&models, "haiku")
+            .or_else(|| models.get(1).cloned())
+            .or_else(|| pick_model_by_keyword(&default_models, "haiku"))
+            .or_else(|| fallback.clone())
+    } else if lower_original.contains("opus") {
+        pick_model_by_keyword(&models, "opus")
+            .or_else(|| models.get(2).cloned())
+            .or_else(|| pick_model_by_keyword(&default_models, "opus"))
+            .or_else(|| fallback.clone())
+    } else if lower_original.contains("sonnet") {
+        pick_model_by_keyword(&models, "sonnet")
+            .or_else(|| models.get(3).cloned())
+            .or_else(|| pick_model_by_keyword(&default_models, "sonnet"))
+            .or_else(|| fallback.clone())
+    } else {
+        fallback
+    }?;
+    Some(strip_one_m_suffix(&mapped).to_string())
+}
+
+fn relay_model_fallback(relay: &crate::settings::RelayProfile) -> Option<String> {
+    non_empty_string(&relay.model)
+        .or_else(|| non_empty_string(&relay.test_model))
+        .or_else(|| root_string_from_toml(&relay.config_contents, "model"))
+}
+
+fn parse_plain_model_list(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(strip_one_m_suffix)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn non_empty_model_list_or_default(raw: &str) -> Vec<String> {
+    let models = parse_plain_model_list(raw);
+    if models.is_empty() {
+        parse_plain_model_list(&claude_desktop_default_model_list())
+    } else {
+        models
+    }
+}
+
+fn pick_model_by_keyword(models: &[String], keyword: &str) -> Option<String> {
+    models
+        .iter()
+        .find(|model| model.to_ascii_lowercase().contains(keyword))
+        .cloned()
+}
+
+fn strip_one_m_suffix(model: &str) -> &str {
+    let trimmed = model.trim();
+    trimmed
+        .strip_suffix("[1M]")
+        .or_else(|| trimmed.strip_suffix("[1m]"))
+        .map(str::trim)
+        .unwrap_or(trimmed)
+}
+
+fn claude_desktop_model_entry(
+    name: &str,
+    label_override: Option<&str>,
+    supports_1m: bool,
+) -> Value {
+    let mut item = json!({ "name": name });
+    if let Some(label) = label_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != name)
+    {
+        item["labelOverride"] = json!(label);
+    }
+    if supports_1m {
+        item["supports1m"] = json!(true);
+    }
+    item
+}
+
+fn provider_string_from_toml(contents: &str, key: &str) -> Option<String> {
+    let doc = contents.parse::<toml_edit::DocumentMut>().ok()?;
+    doc.get("model_providers")
+        .and_then(toml_edit::Item::as_table)
+        .and_then(|providers| {
+            providers.iter().find_map(|(_, item)| {
+                item.get(key)
+                    .and_then(toml_edit::Item::as_value)
+                    .and_then(toml_edit::Value::as_str)
+            })
+        })
+        .or_else(|| {
+            doc.get(key)
+                .and_then(toml_edit::Item::as_value)
+                .and_then(toml_edit::Value::as_str)
+        })
+        .and_then(non_empty_string)
+}
+
+fn root_string_from_toml(contents: &str, key: &str) -> Option<String> {
+    let doc = contents.parse::<toml_edit::DocumentMut>().ok()?;
+    doc.get(key)
+        .and_then(toml_edit::Item::as_value)
+        .and_then(toml_edit::Value::as_str)
+        .and_then(non_empty_string)
+}
+
+fn openai_api_key_from_json(contents: &str) -> Option<String> {
+    let auth: Value = serde_json::from_str(contents).ok()?;
+    auth.get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .and_then(non_empty_string)
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 pub async fn open_chat_completions_proxy_request(
@@ -620,6 +986,33 @@ pub fn models_url(base_url: &str) -> String {
         format!("{base}/models")
     } else {
         format!("{base}/v1/models")
+    };
+    while url.contains("/v1/v1") {
+        url = url.replace("/v1/v1", "/v1");
+    }
+    url
+}
+
+pub fn claude_messages_url(base_url: &str) -> String {
+    let skip_version_prefix = base_url.trim().ends_with('#');
+    let mut base = base_url
+        .trim()
+        .trim_end_matches('#')
+        .trim_end_matches('/')
+        .to_string();
+    if base.to_ascii_lowercase().ends_with("/messages") {
+        return base;
+    }
+    if base.to_ascii_lowercase().ends_with("/chat/completions") {
+        base.truncate(base.len() - "/chat/completions".len());
+    }
+    let origin_only = base
+        .split_once("://")
+        .map_or(!base.contains('/'), |(_, rest)| !rest.contains('/'));
+    let mut url = if skip_version_prefix || has_version_suffix(&base) || !origin_only {
+        format!("{base}/messages")
+    } else {
+        format!("{base}/v1/messages")
     };
     while url.contains("/v1/v1") {
         url = url.replace("/v1/v1", "/v1");

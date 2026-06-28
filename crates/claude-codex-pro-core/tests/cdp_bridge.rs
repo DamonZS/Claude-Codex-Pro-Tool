@@ -102,20 +102,63 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 fn injection_script_exposes_left_anchored_codex_status_entry() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("const claudeCodexProMenuVersion = \"8\""));
+    assert!(script.contains("const claudeCodexProMenuVersion = \"9\""));
     assert!(script.contains("findCodexStatusLeftAnchor"));
     assert!(script.contains("findCodexWindowLeftAnchor"));
+    assert!(script.contains("normalizeStatusAnchorText"));
+    assert!(script.contains("findCodexHelpAnchor"));
+    assert!(script.contains("const helpKeywords = new Set([\"帮助\", \"help\"])"));
+    assert!(script.contains("const topMenuAnchor = findCodexHelpAnchor(header, headerRect);"));
+    assert!(script.contains("if (topMenuAnchor) return topMenuAnchor;"));
     assert!(script.contains("document.querySelector(\"aside\")"));
     assert!(script.contains("--claude-codex-pro-menu-left"));
     assert!(script.contains("CCP ${claudeCodexProVersion}"));
-    assert!(script.contains("setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", \"44px\")"));
+    assert!(
+        script.contains("setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", \"44px\")")
+    );
     assert!(!script.contains("data-codex-frontend-indicator=\"true\""));
     assert!(script.contains("data-codex-backend-indicator=\"true\""));
     assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));
     assert!(script.contains("background: transparent"));
+    assert!(script.contains("color: inherit"));
+    assert!(script.contains("color: var(--claude-codex-pro-window-text-color, currentColor)"));
+    assert!(script.contains("function setWindowTextColorFromAnchor(menu, anchorNode)"));
+    assert!(script.contains("getComputedStyle(anchorNode).color"));
+    assert!(script.contains("setWindowTextColorFromAnchor(menu, anchor?.node || header)"));
+    assert!(!script.contains("html:not(.light):not([data-theme=\"light\"]) #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass}"));
     assert!(script.contains("updateCodexMemoryBadgePosition"));
     assert!(script.contains("openClaudeCodexProModal()"));
     assert!(script.contains("trigger.dataset.claudeCodexProTriggerLabel = \"ccp-status-v2\""));
+}
+
+#[test]
+fn injection_script_modal_close_does_not_toggle_settings() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function claudeCodexProConfiguredSettings()"));
+    assert!(script.contains("const settings = claudeCodexProConfiguredSettings();"));
+    assert!(script.contains("const configuredSettings = claudeCodexProConfiguredSettings();"));
+    assert!(script.contains("button.dataset.enabled = String(!!configuredSettings[key]);"));
+    assert!(script.contains("setClaudeCodexProSetting(key, !claudeCodexProConfiguredSettings()[key]);"));
+
+    let close_handler = script
+        .split("closeButton?.addEventListener(\"click\", (event) => {")
+        .nth(1)
+        .and_then(|tail| tail.split("}, true);").next())
+        .expect("close button handler should be present");
+    assert!(close_handler.contains("event.preventDefault();"));
+    assert!(close_handler.contains("event.stopPropagation();"));
+    assert!(close_handler.contains("overlay.remove();"));
+
+    let overlay_close_branch = script
+        .split("if (event.target === overlay || target?.closest(\".claude-codex-pro-modal-close\")) {")
+        .nth(1)
+        .and_then(|tail| tail.split("const tabButton = target?.closest").next())
+        .expect("overlay close branch should be before modal action handling");
+    assert!(overlay_close_branch.contains("overlay.remove();"));
+    assert!(overlay_close_branch.contains("return;"));
+    assert!(!overlay_close_branch.contains("setClaudeCodexProSetting("));
+    assert!(!overlay_close_branch.contains("setBackendSetting("));
 }
 
 #[test]

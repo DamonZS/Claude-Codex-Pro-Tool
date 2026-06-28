@@ -403,6 +403,16 @@ function previewMemoryStatus(message = "预览模式盘古记忆状态。") {
       pendingCandidates: 3,
       workspaces: [{ workspace: "global", itemCount: 4, pendingCount: 1 }],
       latestBackupPath: "~\\.claude-codex-pro\\backups\\memory-preview.json",
+      enabled: true,
+      injectEnabled: true,
+      autoSuggestEnabled: true,
+      runtimeStatus: "ok",
+      runtimeMessage: "预览模式：盘古记忆正在监听 Codex 对话。",
+      codexInjected: true,
+      claudeInjected: false,
+      codexWorkspace: "codex:repo:D:\\Project\\Claude-Codex-Pro-Tool",
+      active: true,
+      activeSource: "stream",
     },
   });
 }
@@ -535,6 +545,8 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         started_at_ms: Date.now(),
         debug_port: 57321,
         helper_port: 57322,
+        debug_port_online: true,
+        helper_port_online: true,
         codex_app: "preview",
       },
       current_version: "1.2.9-preview",
@@ -549,6 +561,8 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       executablePaths: [],
       installKind: "msix",
       cdpStatus: "blocked",
+      frontendInjected: false,
+      frontendStatus: "not_available",
       cdpBlocker: "官方 MSIX 窗口不可直接 DOM 注入",
       debugFlagsPresent: false,
       debugPorts: [],
@@ -701,14 +715,19 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "load_claude_desktop_marketplace_status") {
-    return ok("预览模式 Claude Desktop 官方插件仓库入口可用。", {
+    return ok("预览模式 Claude Desktop 插件仓库配置可用。", {
       marketplaceStatus: {
         supported: true,
-        marketplace: "DietrichGebert/ponytail",
+        marketplace: "anthropics/claude-plugins-official, DietrichGebert/ponytail",
         plugin: "ponytail",
         deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
-        canAutoWrite: false,
-        message: "预览模式：官方仓库入口仅作为可选方式；开发模式本地安装不依赖 Claude CLI 登录。",
+        canAutoWrite: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式：插件仓库已模拟写入 Claude-3p 开发配置。",
       },
     });
   }
@@ -749,8 +768,8 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       },
     });
   }
-  if (command === "configure_claude_desktop_dev_mode") {
-    return ok("预览模式已模拟配置 Claude Desktop 开发模式。", {
+  if (command === "configure_claude_desktop_dev_mode" || command === "refresh_claude_third_party_config") {
+    return ok(command === "refresh_claude_third_party_config" ? "预览模式已模拟刷新 Claude 第三方配置。" : "预览模式已模拟配置 Claude Desktop 开发模式。", {
       outcome: {
         configured: true,
         normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
@@ -772,20 +791,29 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       },
     });
   }
-  if (command === "open_ponytail_claude_desktop_marketplace_setup") {
-    return ok("预览模式不会打开 Claude Desktop 深链。", {
+  if (command === "open_ponytail_claude_desktop_marketplace_setup" || command === "repair_claude_desktop_marketplaces") {
+    return ok("预览模式已模拟修复 Claude 插件仓库。", {
       outcome: {
-        opened: true,
-        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
-        message: "预览模式不会修改 Claude Desktop；真实环境会本地写入组织插件 skills。",
+        repaired: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式不会修改 Claude Desktop；真实环境会写入 extraKnownMarketplaces。",
       },
       marketplaceStatus: {
         supported: true,
-        marketplace: "DietrichGebert/ponytail",
+        marketplace: "anthropics/claude-plugins-official, DietrichGebert/ponytail",
         plugin: "ponytail",
         deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
-        canAutoWrite: false,
-        message: "预览模式：打开 Claude 官方配置页后仍需在 Claude Desktop 内确认。",
+        canAutoWrite: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式：插件仓库已模拟写入 Claude-3p 开发配置。",
       },
     });
   }
@@ -1022,6 +1050,36 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "repair_backend") {
     return previewSettingsResult("预览模式已模拟修复后端。");
+  }
+  if (command === "repair_frontend_connection") {
+    return ok("预览模式已模拟修复前端连接。", {
+      target: "codex_and_claude",
+      frontendInjected: true,
+      backendOnline: false,
+      codexFrontendInjected: true,
+      claudeFrontendInjected: true,
+      codexBackendOnline: false,
+      claudeBackendOnline: false,
+      debugPort: 57321,
+      helperPort: 57322,
+      claudeProxyPort: 57331,
+      details: ["预览模式前端连接正常。"],
+    });
+  }
+  if (command === "repair_backend_service") {
+    return ok("预览模式已模拟修复后端服务。", {
+      target: "codex_and_claude",
+      frontendInjected: false,
+      backendOnline: true,
+      codexFrontendInjected: false,
+      claudeFrontendInjected: false,
+      codexBackendOnline: true,
+      claudeBackendOnline: true,
+      debugPort: 57321,
+      helperPort: 57322,
+      claudeProxyPort: 57331,
+      details: ["预览模式后端服务正常。"],
+    });
   }
   if (command === "reset_settings") {
     return previewSettingsResult("预览模式已模拟重置设置。");

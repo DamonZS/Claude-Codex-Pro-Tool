@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -344,21 +344,33 @@ pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
     }
 
     match launch_claude_desktop_app(executable_hint.as_deref()) {
-        Ok(()) => ClaudeDesktopActionResult {
-            status: "accepted".to_string(),
-            message: if is_restart {
-                "Claude Desktop was closed and restart was requested through the Windows app registry."
-                    .to_string()
+        Ok(()) => {
+            let readiness = wait_for_claude_launch_readiness(std::time::Duration::from_secs(8));
+            let action = if is_restart { "restart" } else { "open" }.to_string();
+            let process_id = claude_process_ids().first().copied();
+            let requested_message = if is_restart {
+                "Claude Desktop 已关闭并重新启动。"
             } else {
-                "Claude Desktop launch was requested through the Windows app registry.".to_string()
-            },
-            process_id: None,
-            action: if is_restart { "restart" } else { "open" }.to_string(),
-            foreground_verified: false,
-            foreground_process_id: None,
-            foreground_title: None,
-            observed_window_titles: Vec::new(),
-        },
+                "Claude Desktop 已启动。"
+            };
+            let status = if readiness.ready {
+                "ok"
+            } else if readiness.process_running {
+                "warning"
+            } else {
+                "failed"
+            };
+            ClaudeDesktopActionResult {
+                status: status.to_string(),
+                message: format!("{requested_message} {}", readiness.message),
+                process_id,
+                action,
+                foreground_verified: false,
+                foreground_process_id: None,
+                foreground_title: None,
+                observed_window_titles: Vec::new(),
+            }
+        }
         Err(error) => ClaudeDesktopActionResult {
             status: "failed".to_string(),
             message: if is_restart {
@@ -770,6 +782,73 @@ fn wait_for_claude_process_exit(process_ids: &[u32], timeout: std::time::Duratio
     }
 }
 
+fn wait_for_claude_launch_readiness(timeout: std::time::Duration) -> LaunchReadiness {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_status = detect_status_light();
+    loop {
+        let readiness = launch_readiness_from_status(&last_status);
+        if readiness.ready {
+            return readiness;
+        }
+        if std::time::Instant::now() >= deadline {
+            return readiness;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        last_status = detect_status_light();
+    }
+}
+
+fn launch_readiness_from_status(status: &ClaudeDesktopStatus) -> LaunchReadiness {
+    let process_running = status.process_count > 0;
+    let ready = process_running
+        && (status.cdp_status == "node_inspector_ready" || !status.debug_ports.is_empty());
+    let message = launch_readiness_message(status, ready, process_running);
+    LaunchReadiness {
+        ready,
+        process_running,
+        cdp_status: status.cdp_status.clone(),
+        debug_ports: status.debug_ports.clone(),
+        inspector_ports: status.inspector_ports.clone(),
+        debug_evidence: status.debug_evidence.clone(),
+        message,
+    }
+}
+
+fn launch_readiness_message(
+    status: &ClaudeDesktopStatus,
+    ready: bool,
+    process_running: bool,
+) -> String {
+    if !process_running {
+        return "未检测到 Claude 进程，启动请求没有形成可用窗口。".to_string();
+    }
+    if ready {
+        let mut ports = status.debug_ports.clone();
+        ports.extend(status.inspector_ports.iter().copied());
+        ports.sort_unstable();
+        ports.dedup();
+        return if ports.is_empty() {
+            "已检测到可用调试通道。".to_string()
+        } else {
+            format!(
+                "已检测到可用调试端口：{}。",
+                ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+    }
+    if status.cdp_status == "observed_but_unverified" || status.debug_flags_present {
+        return "Claude 已运行，但 Inspector/CDP 端口未就绪，当前不能注入窗口标识。已观察到调试参数但 HTTP 端点未响应，通常表示当前 Claude/Electron 构建不接受外部调试参数。".to_string();
+    }
+    format!(
+        "Claude 已运行，但未检测到可用 Inspector/CDP 端口，当前状态为 {}。{}",
+        status.cdp_status, status.cdp_blocker
+    )
+}
+
 #[cfg(windows)]
 fn activate_process_window(process_id: u32) -> bool {
     crate::windows_activate_process_window(process_id)
@@ -1020,39 +1099,73 @@ Start-Process ('shell:AppsFolder\' + $app.AppID)
 }
 
 #[cfg(windows)]
-fn claude_desktop_executable_path() -> Option<std::path::PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.extend([
-        std::env::var_os("LOCALAPPDATA")
-            .map(std::path::PathBuf::from)
-            .map(|path| path.join("Programs").join("Claude").join("Claude.exe")),
-        std::env::var_os("LOCALAPPDATA")
-            .map(std::path::PathBuf::from)
-            .map(|path| path.join("AnthropicClaude").join("Claude.exe")),
-        std::env::var_os("ProgramFiles")
-            .map(std::path::PathBuf::from)
-            .map(|path| path.join("Claude").join("Claude.exe")),
-    ]);
+fn claude_desktop_executable_path() -> Option<PathBuf> {
+    let mut candidates = claude_desktop_executable_candidates_default();
     candidates.extend(claude_desktop_appx_executable_paths());
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|path| path.is_file())
+    candidates.into_iter().flatten().find(|path| path.is_file())
 }
 
 #[cfg(windows)]
-fn claude_desktop_executable_path_from_inventory() -> Option<std::path::PathBuf> {
+fn claude_desktop_executable_path_from_inventory() -> Option<PathBuf> {
     let (_, paths) = claude_process_inventory();
-    paths.into_iter().map(std::path::PathBuf::from).find(|path| path.is_file())
+    paths
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 #[cfg(not(windows))]
-fn claude_desktop_executable_path_from_inventory() -> Option<std::path::PathBuf> {
+fn claude_desktop_executable_path_from_inventory() -> Option<PathBuf> {
     None
 }
 
 #[cfg(windows)]
-fn claude_desktop_appx_executable_paths() -> Vec<Option<std::path::PathBuf>> {
+fn claude_desktop_executable_candidates_default() -> Vec<Option<PathBuf>> {
+    claude_desktop_executable_candidates_from(
+        std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
+        std::env::var_os("APPDATA").as_deref().map(Path::new),
+        std::env::var_os("ProgramFiles").as_deref().map(Path::new),
+        std::env::var_os("ProgramFiles(x86)")
+            .as_deref()
+            .map(Path::new),
+        std::env::var_os("ProgramW6432").as_deref().map(Path::new),
+    )
+}
+
+#[cfg(windows)]
+fn claude_desktop_executable_candidates_from(
+    local_appdata: Option<&Path>,
+    appdata: Option<&Path>,
+    program_files: Option<&Path>,
+    program_files_x86: Option<&Path>,
+    program_w6432: Option<&Path>,
+) -> Vec<Option<PathBuf>> {
+    let mut candidates = Vec::new();
+    if let Some(local) = local_appdata {
+        candidates.push(local.join("Programs").join("Claude").join("Claude.exe"));
+        candidates.push(local.join("Programs").join("Claude Desktop").join("Claude.exe"));
+        candidates.push(local.join("AnthropicClaude").join("Claude.exe"));
+        candidates.push(local.join("Claude").join("Claude.exe"));
+    }
+    if let Some(roaming) = appdata {
+        candidates.push(roaming.join("Claude").join("Claude.exe"));
+        candidates.push(roaming.join("AnthropicClaude").join("Claude.exe"));
+    }
+    for root in [program_files, program_files_x86, program_w6432]
+        .into_iter()
+        .flatten()
+    {
+        candidates.push(root.join("Claude").join("Claude.exe"));
+        candidates.push(root.join("Claude Desktop").join("Claude.exe"));
+        candidates.push(root.join("Anthropic").join("Claude").join("Claude.exe"));
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates.into_iter().map(Some).collect()
+}
+
+#[cfg(windows)]
+fn claude_desktop_appx_executable_paths() -> Vec<Option<PathBuf>> {
     let script = r#"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
@@ -1071,16 +1184,53 @@ Get-AppxPackage |
         Value::Array(items) => items
             .iter()
             .filter_map(Value::as_str)
-            .map(|path| Some(std::path::PathBuf::from(path)))
+            .map(|path| Some(PathBuf::from(path)))
             .collect(),
-        Value::String(path) => vec![Some(std::path::PathBuf::from(path))],
+        Value::String(path) => vec![Some(PathBuf::from(path))],
         _ => Vec::new(),
     }
 }
 
 #[cfg(not(windows))]
-fn launch_claude_desktop_app(_executable_hint: Option<&Path>) -> anyhow::Result<()> {
-    anyhow::bail!("Claude Desktop launch is only supported on Windows")
+fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
+    if cfg!(target_os = "macos") {
+        let app = executable_hint
+            .map(Path::to_path_buf)
+            .or_else(claude_desktop_macos_app_path);
+        if let Some(app) = app {
+            std::process::Command::new("open").arg(app).spawn()?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Claude Desktop launch is only supported when a Claude app path is discoverable")
+}
+
+#[cfg(not(windows))]
+fn claude_desktop_macos_app_path() -> Option<PathBuf> {
+    claude_desktop_macos_app_candidates_from(
+        directories::BaseDirs::new()
+            .map(|dirs| dirs.home_dir().to_path_buf())
+            .as_deref(),
+    )
+    .into_iter()
+    .find(|path| path.is_dir())
+}
+
+#[cfg(not(windows))]
+fn claude_desktop_macos_app_candidates_from(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home {
+        roots.push(home.join("Applications"));
+    }
+    let mut candidates = Vec::new();
+    for root in roots {
+        candidates.push(root.join("Claude.app"));
+        candidates.push(root.join("Claude Desktop.app"));
+        candidates.push(root.join("Anthropic Claude.app"));
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
 }
 
 #[cfg(not(windows))]
@@ -1116,8 +1266,21 @@ fn detect_debug_probe(process_ids: &[u32]) -> DebugProbe {
     }
 
     let command_lines = windows_process_command_lines(process_ids);
+    let listening_ports = windows_listening_ports_for_pids(process_ids);
+    build_debug_probe(command_lines, listening_ports, local_inspector_http_ready)
+}
+
+fn build_debug_probe<F>(
+    command_lines: Vec<(u32, String)>,
+    mut listening_ports: Vec<u16>,
+    inspector_ready: F,
+) -> DebugProbe
+where
+    F: Fn(u16) -> bool,
+{
     let mut debug_flags_present = false;
     let mut debug_ports = Vec::new();
+    let mut observed_inspector_ports = Vec::new();
     let mut inspector_ports = Vec::new();
     let mut evidence = Vec::new();
 
@@ -1144,32 +1307,41 @@ fn detect_debug_probe(process_ids: &[u32]) -> DebugProbe {
         }
 
         if let Some(port) = extract_node_inspector_port(&command_line) {
-            inspector_ports.push(port);
+            debug_flags_present = true;
+            observed_inspector_ports.push(port);
             evidence.push(format!(
                 "pid {pid} command line includes Node inspector on port {port}"
             ));
         }
     }
 
-    let mut listening_ports = windows_listening_ports_for_pids(process_ids);
     listening_ports.sort_unstable();
     listening_ports.dedup();
     debug_ports.sort_unstable();
     debug_ports.dedup();
-    inspector_ports.sort_unstable();
-    inspector_ports.dedup();
+    observed_inspector_ports.sort_unstable();
+    observed_inspector_ports.dedup();
 
     for port in &listening_ports {
         evidence.push(format!("Claude pid is listening on local TCP port {port}"));
     }
-    for port in &inspector_ports {
-        if !listening_ports.contains(port) && local_inspector_http_ready(*port) {
-            listening_ports.push(*port);
+    for port in &observed_inspector_ports {
+        if inspector_ready(*port) {
+            inspector_ports.push(*port);
+            if !listening_ports.contains(port) {
+                listening_ports.push(*port);
+            }
             evidence.push(format!("Node inspector responded on 127.0.0.1:{port}"));
+        } else {
+            evidence.push(format!(
+                "Node inspector flag was observed for 127.0.0.1:{port}, but the inspector HTTP endpoint did not respond"
+            ));
         }
     }
     listening_ports.sort_unstable();
     listening_ports.dedup();
+    inspector_ports.sort_unstable();
+    inspector_ports.dedup();
 
     DebugProbe {
         debug_flags_present,
@@ -1334,7 +1506,10 @@ fn extract_flag_port(command_line: &str, flag: &str) -> Option<u16> {
         .chars()
         .take_while(|ch| !ch.is_whitespace() && *ch != '"' && *ch != '\'')
         .collect::<String>();
-    let port_text = token.rsplit_once(':').map(|(_, port)| port).unwrap_or(&token);
+    let port_text = token
+        .rsplit_once(':')
+        .map(|(_, port)| port)
+        .unwrap_or(&token);
     let digits = port_text
         .chars()
         .take_while(|ch| ch.is_ascii_digit())
@@ -1547,6 +1722,17 @@ struct DebugProbe {
     inspector_ports: Vec<u16>,
     listening_ports: Vec<u16>,
     evidence: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct LaunchReadiness {
+    ready: bool,
+    process_running: bool,
+    cdp_status: String,
+    debug_ports: Vec<u16>,
+    inspector_ports: Vec<u16>,
+    debug_evidence: Vec<String>,
+    message: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1814,6 +2000,70 @@ mod tests {
     }
 
     #[test]
+    fn launch_readiness_warns_when_inspector_flag_is_not_ready() {
+        let status = ClaudeDesktopStatus {
+            status: "ok".to_string(),
+            message: "Claude Desktop is running.".to_string(),
+            process_count: 1,
+            executable_paths: vec![
+                "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe".to_string(),
+            ],
+            install_kind: "msix".to_string(),
+            cdp_status: "observed_but_unverified".to_string(),
+            cdp_blocker: cdp_blocker_for_install_kind("msix"),
+            debug_flags_present: true,
+            debug_ports: Vec::new(),
+            inspector_ports: Vec::new(),
+            listening_ports: Vec::new(),
+            debug_evidence: vec![
+                "Node inspector flag was observed for 127.0.0.1:9229, but the inspector HTTP endpoint did not respond".to_string(),
+            ],
+            supported_integration: "external_automation".to_string(),
+            integrity_status: "not_checked".to_string(),
+            integrity_message: String::new(),
+            executable_audits: Vec::new(),
+        };
+
+        let readiness = launch_readiness_from_status(&status);
+
+        assert!(!readiness.ready);
+        assert!(readiness.process_running);
+        assert_eq!(readiness.cdp_status, "observed_but_unverified");
+        assert!(readiness.message.contains("Inspector/CDP 端口未就绪"));
+        assert!(readiness.message.contains("不能注入窗口标识"));
+    }
+
+    #[test]
+    fn launch_readiness_is_ready_only_with_verified_debug_port() {
+        let status = ClaudeDesktopStatus {
+            status: "ok".to_string(),
+            message: "Claude Desktop is running.".to_string(),
+            process_count: 1,
+            executable_paths: vec![
+                "C:\\Users\\me\\AppData\\Local\\Programs\\Claude\\Claude.exe".to_string(),
+            ],
+            install_kind: "desktop".to_string(),
+            cdp_status: "node_inspector_ready".to_string(),
+            cdp_blocker: cdp_blocker_for_install_kind("desktop"),
+            debug_flags_present: true,
+            debug_ports: Vec::new(),
+            inspector_ports: vec![9229],
+            listening_ports: vec![9229],
+            debug_evidence: vec!["Node inspector responded on 127.0.0.1:9229".to_string()],
+            supported_integration: "external_automation".to_string(),
+            integrity_status: "not_checked".to_string(),
+            integrity_message: String::new(),
+            executable_audits: Vec::new(),
+        };
+
+        let readiness = launch_readiness_from_status(&status);
+
+        assert!(readiness.ready);
+        assert_eq!(readiness.inspector_ports, vec![9229]);
+        assert!(readiness.message.contains("9229"));
+    }
+
+    #[test]
     fn extracts_node_inspector_ports_from_common_flags() {
         assert_eq!(
             extract_node_inspector_port(r#"Claude.exe --inspect=127.0.0.1:9229"#),
@@ -1826,6 +2076,44 @@ mod tests {
         assert_eq!(
             extract_node_inspector_port(r#"Claude.exe --inspect"#),
             Some(9229)
+        );
+    }
+
+    #[test]
+    fn inspector_flag_without_http_readiness_is_not_reported_online() {
+        let probe = build_debug_probe(
+            vec![(42, r#"Claude.exe --inspect=127.0.0.1:9229"#.to_string())],
+            Vec::new(),
+            |_| false,
+        );
+
+        assert!(probe.debug_flags_present);
+        assert!(probe.inspector_ports.is_empty());
+        assert!(probe.listening_ports.is_empty());
+        assert!(
+            probe
+                .evidence
+                .iter()
+                .any(|line| line.contains("inspector HTTP endpoint did not respond"))
+        );
+    }
+
+    #[test]
+    fn inspector_flag_with_http_readiness_is_reported_online() {
+        let probe = build_debug_probe(
+            vec![(42, r#"Claude.exe --inspect=127.0.0.1:9229"#.to_string())],
+            Vec::new(),
+            |port| port == 9229,
+        );
+
+        assert!(probe.debug_flags_present);
+        assert_eq!(probe.inspector_ports, vec![9229]);
+        assert_eq!(probe.listening_ports, vec![9229]);
+        assert!(
+            probe
+                .evidence
+                .iter()
+                .any(|line| line.contains("Node inspector responded on 127.0.0.1:9229"))
         );
     }
 
@@ -1957,6 +2245,50 @@ mod tests {
         assert_eq!(result.action, "paste_and_submit");
         assert_eq!(result.input_chars, 0);
         assert!(!result.auto_submitted);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn claude_desktop_candidate_paths_cover_multi_user_windows_roots() {
+        let local = std::path::PathBuf::from(r"C:\Users\me\AppData\Local");
+        let roaming = std::path::PathBuf::from(r"C:\Users\me\AppData\Roaming");
+        let program_files = std::path::PathBuf::from(r"C:\Program Files");
+        let program_files_x86 = std::path::PathBuf::from(r"C:\Program Files (x86)");
+        let program_w6432 = std::path::PathBuf::from(r"C:\Program Files");
+
+        let candidates = claude_desktop_executable_candidates_from(
+            Some(&local),
+            Some(&roaming),
+            Some(&program_files),
+            Some(&program_files_x86),
+            Some(&program_w6432),
+        )
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        assert!(candidates.contains(&local.join("Programs").join("Claude").join("Claude.exe")));
+        assert!(candidates.contains(&local.join("AnthropicClaude").join("Claude.exe")));
+        assert!(candidates.contains(&roaming.join("Claude").join("Claude.exe")));
+        assert!(candidates.contains(&program_files.join("Claude").join("Claude.exe")));
+        assert!(candidates.contains(
+            &program_files_x86
+                .join("Anthropic")
+                .join("Claude")
+                .join("Claude.exe")
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_desktop_candidate_paths_cover_macos_user_applications() {
+        let home = std::path::PathBuf::from("/Users/me");
+
+        let candidates = claude_desktop_macos_app_candidates_from(Some(&home));
+
+        assert!(candidates.contains(&std::path::PathBuf::from("/Applications/Claude.app")));
+        assert!(candidates.contains(&home.join("Applications").join("Claude.app")));
+        assert!(candidates.contains(&home.join("Applications").join("Claude Desktop.app")));
     }
 
     #[test]

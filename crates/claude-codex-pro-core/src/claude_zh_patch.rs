@@ -2,13 +2,18 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 
 const PATCH_MARKER: &str = "claude-codex-pro-zh-cn-patch";
 const LANGUAGE_MARKER: &str = "claude-codex-pro-zh-cn-language";
-const TEXT_MARKER: &str = "claude-codex-pro-zh-cn-text-v3";
+const TEXT_MARKER: &str = "claude-codex-pro-zh-cn-text-v6";
 const LEGACY_TEXT_MARKERS: &[&str] = &[
     "claude-codex-pro-zh-cn-text",
     "claude-codex-pro-zh-cn-text-v2",
+    "claude-codex-pro-zh-cn-text-v3",
+    "claude-codex-pro-zh-cn-text-v4",
+    "claude-codex-pro-zh-cn-text-v5",
 ];
 const BACKUP_DIR_NAME: &str = "Claude-zh-CN-official-backup";
 const OFFICIAL_LANGUAGE_LOCALES: &[&str] = &[
@@ -22,6 +27,7 @@ const EMBEDDED_DESKTOP_I18N: &str = include_str!("../../../assets/claude-zh/desk
 const EMBEDDED_FRONTEND_I18N: &str = include_str!("../../../assets/claude-zh/frontend-zh-CN.json");
 const EMBEDDED_STATSIG_I18N: &str = include_str!("../../../assets/claude-zh/statsig-zh-CN.json");
 const EMBEDDED_CHUNK_PATCHES: &str = include_str!("../../../assets/claude-zh/chunk-patches.json");
+const REMOTE_I18N_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,9 +152,7 @@ pub fn install_root_patch_needs_elevation(install_root: &Path) -> bool {
 
 pub async fn install_patch_with_remote_resources() -> anyhow::Result<ClaudeZhPatchOutcome> {
     let paths = detect_paths().ok_or_else(|| anyhow::anyhow!("未找到 Claude Desktop 安装目录"))?;
-    let resources = fetch_remote_i18n_resources()
-        .await
-        .unwrap_or_else(|_| embedded_i18n_resources());
+    let resources = i18n_resources_for_install().await;
     install_patch_at_with_resources(&paths, Some(&resources))
 }
 
@@ -161,9 +165,7 @@ pub async fn install_patch_with_remote_resources_elevated_for_user(
     target_user_sid: Option<&str>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let paths = detect_paths().ok_or_else(|| anyhow::anyhow!("未找到 Claude Desktop 安装目录"))?;
-    let resources = fetch_remote_i18n_resources()
-        .await
-        .unwrap_or_else(|_| embedded_i18n_resources());
+    let resources = i18n_resources_for_install().await;
     install_patch_at_with_resources_elevated_for_user(&paths, Some(&resources), target_user_sid)
 }
 
@@ -174,9 +176,7 @@ pub async fn install_patch_with_remote_resources_elevated_for_user_dirs(
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let paths = detect_paths_for_user_dirs(appdata, local_appdata)
         .ok_or_else(|| anyhow::anyhow!("未找到 Claude Desktop 安装目录"))?;
-    let resources = fetch_remote_i18n_resources()
-        .await
-        .unwrap_or_else(|_| embedded_i18n_resources());
+    let resources = i18n_resources_for_install().await;
     install_patch_at_with_resources_elevated_for_user(&paths, Some(&resources), target_user_sid)
 }
 
@@ -191,9 +191,7 @@ pub async fn install_patch_with_remote_resources_elevated_for_user_dirs_at_insta
             anyhow::anyhow!("未找到 Claude Desktop 安装目录：{}", install_root.display())
         })?
         .with_user_data_dirs(appdata, local_appdata);
-    let resources = fetch_remote_i18n_resources()
-        .await
-        .unwrap_or_else(|_| embedded_i18n_resources());
+    let resources = i18n_resources_for_install().await;
     install_patch_at_with_resources_elevated_for_user(&paths, Some(&resources), target_user_sid)
 }
 
@@ -206,10 +204,15 @@ pub async fn install_patch_at_install_root_with_remote_resources(
             install_root.display()
         )
     })?;
-    let resources = fetch_remote_i18n_resources()
-        .await
-        .unwrap_or_else(|_| embedded_i18n_resources());
+    let resources = i18n_resources_for_install().await;
     install_patch_at_with_resources(&paths, Some(&resources))
+}
+
+async fn i18n_resources_for_install() -> RemoteI18nResources {
+    match tokio::time::timeout(REMOTE_I18N_FETCH_TIMEOUT, fetch_remote_i18n_resources()).await {
+        Ok(Ok(resources)) => resources,
+        _ => embedded_i18n_resources(),
+    }
 }
 
 pub async fn fetch_remote_i18n_resources() -> anyhow::Result<RemoteI18nResources> {
@@ -390,15 +393,35 @@ fn install_patch_at_with_resources_impl(
     write_locale_config(&paths.locale_config_path)?;
     changed_files.push(paths.locale_config_path.to_string_lossy().to_string());
 
-    for chunk in find_patchable_chunks(&paths.app_root)? {
+    let chunks = find_patchable_chunks(&paths.app_root)?;
+    let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
+    for chunk in chunks {
         let before = std::fs::read_to_string(&chunk).unwrap_or_default();
         backup_file(&chunk, paths)?;
-        patch_chunk(&chunk)?;
+        patch_chunk(
+            &chunk,
+            runtime_patch_chunk.as_deref() == Some(chunk.as_path()),
+        )?;
+        if let Err(error) = validate_patched_javascript_chunk(&chunk) {
+            restore_official_backup_file(&chunk, paths).with_context(|| {
+                format!(
+                    "Claude 汉化 JS 校验失败后恢复官方备份也失败：{}",
+                    chunk.display()
+                )
+            })?;
+            return Err(error).with_context(|| {
+                format!(
+                    "Claude 汉化 JS 校验失败，已恢复官方备份：{}",
+                    chunk.display()
+                )
+            });
+        }
         let after = std::fs::read_to_string(&chunk).unwrap_or_default();
         if before != after {
             changed_files.push(chunk.to_string_lossy().to_string());
         }
     }
+    clear_claude_renderer_cache(paths, &mut changed_files);
 
     let outcome = ClaudeZhPatchOutcome {
         status: status_for_paths(paths),
@@ -578,6 +601,34 @@ fn remove_runtime_patch_script(text: String) -> String {
     text[..script_start].trim_end().to_string()
 }
 
+fn remove_legacy_runtime_residue(mut text: String) -> String {
+    text = remove_runtime_patch_script(text);
+    remove_legacy_language_patch_lines(text)
+}
+
+fn remove_legacy_language_patch_lines(text: String) -> String {
+    let mut output = Vec::new();
+    let mut skip_next_language_iife = false;
+    for line in text.lines() {
+        let is_language_marker = line.contains(LANGUAGE_MARKER);
+        let is_legacy_text_marker = LEGACY_TEXT_MARKERS
+            .iter()
+            .any(|marker| line.contains(marker));
+        let is_language_iife =
+            line.contains("__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__") && line.contains(LANGUAGE_MARKER);
+        if is_language_marker
+            || is_legacy_text_marker
+            || (skip_next_language_iife && is_language_iife)
+        {
+            skip_next_language_iife = is_legacy_text_marker;
+            continue;
+        }
+        skip_next_language_iife = false;
+        output.push(line);
+    }
+    output.join("\n")
+}
+
 pub fn status_for_paths(paths: &ClaudeZhPatchPaths) -> ClaudeZhPatchStatus {
     let root_i18n = paths.app_root.join("resources").join("zh-CN.json");
     let frontend_i18n = paths
@@ -603,9 +654,10 @@ pub fn status_for_paths(paths: &ClaudeZhPatchPaths) -> ClaudeZhPatchStatus {
         .filter(|text| chunk_needs_or_has_ui_patch(text))
         .collect::<Vec<_>>();
     let chunk_patch_present = !ui_chunk_texts.is_empty()
+        && ui_chunk_texts.iter().all(|text| text.contains(TEXT_MARKER))
         && ui_chunk_texts
             .iter()
-            .all(|text| text.contains(PATCH_MARKER) && text.contains(TEXT_MARKER));
+            .all(|text| !text.contains(PATCH_MARKER));
     let language_whitelist_patched = ui_chunk_texts
         .iter()
         .any(|text| text.contains(LANGUAGE_MARKER) || has_zh_cn_language_support(text));
@@ -660,7 +712,9 @@ fn detect_paths_for_user_dirs(
 
 impl ClaudeZhPatchPaths {
     fn with_user_data_dirs(mut self, appdata: Option<&Path>, local_appdata: Option<&Path>) -> Self {
-        if let Some(appdata) = appdata {
+        if let Some(local_appdata) = local_appdata {
+            self.locale_config_path = local_appdata.join("Claude-3p").join("config.json");
+        } else if let Some(appdata) = appdata {
             self.locale_config_path = appdata.join("Claude-3p").join("config.json");
         }
         if let Some(local_appdata) = local_appdata {
@@ -808,8 +862,9 @@ fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> 
 }
 
 fn default_locale_config_path() -> PathBuf {
-    std::env::var_os("APPDATA")
+    std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
+        .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Claude-3p")
         .join("config.json")
@@ -1156,20 +1211,96 @@ fn collect_patchable_chunks_recursive(dir: &Path, chunks: &mut Vec<PathBuf>) -> 
     Ok(())
 }
 
-fn patch_chunk(path: &Path) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path)?;
+fn patch_chunk(path: &Path, include_runtime_patch: bool) -> anyhow::Result<()> {
+    let mut text = std::fs::read_to_string(path)?;
+    if has_unsafe_window_runtime_patch(&text)
+        || (!include_runtime_patch && text.contains(PATCH_MARKER))
+        || text.contains(LANGUAGE_MARKER)
+    {
+        text = remove_legacy_runtime_residue(text);
+    }
     if text.contains(PATCH_MARKER)
         && has_zh_cn_language_support(&text)
         && text.contains(TEXT_MARKER)
+        && !has_unsafe_window_runtime_patch(&text)
     {
         return Ok(());
     }
     let mut patched = ensure_language_support(text);
     patched = replace_hardcoded_text(patched);
-    if !patched.contains(PATCH_MARKER) {
-        patched = format!("{patched}\n{}", runtime_patch_script());
-    }
     write_patch_file(path, patched.as_bytes())
+}
+
+fn select_runtime_patch_chunk(chunks: &[PathBuf]) -> Option<PathBuf> {
+    chunks
+        .iter()
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("index-"))
+                .unwrap_or(false)
+        })
+        .or_else(|| chunks.iter().find(|path| !is_worker_chunk(path)))
+        .or_else(|| chunks.first())
+        .cloned()
+}
+
+fn is_worker_chunk(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().contains("worker"))
+        .unwrap_or(false)
+}
+
+fn clear_claude_renderer_cache(paths: &ClaudeZhPatchPaths, changed_files: &mut Vec<String>) {
+    let Some(profile_root) = paths.locale_config_path.parent() else {
+        return;
+    };
+    for name in [
+        "Cache",
+        "Code Cache",
+        "GPUCache",
+        "DawnGraphiteCache",
+        "DawnWebGPUCache",
+    ] {
+        let path = profile_root.join(name);
+        if !path.exists() {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            changed_files.push(path.to_string_lossy().to_string());
+        }
+    }
+}
+
+fn validate_patched_javascript_chunk(path: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("read Claude JS chunk metadata {}", path.display()))?;
+    if metadata.len() == 0 {
+        anyhow::bail!("Claude JS chunk is empty: {}", path.display());
+    }
+    let mut command = Command::new("node");
+    command.arg("--check").arg(path);
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::null());
+    command.stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::windows_create_no_window());
+    }
+    let status = command.status();
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => anyhow::bail!(
+            "node --check failed for {} with exit status {}",
+            path.display(),
+            status
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("run node --check for Claude JS chunk {}", path.display())),
+    }
 }
 
 fn write_patch_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
@@ -1397,7 +1528,7 @@ fn ensure_language_support(text: String) -> String {
             return format!("{patched}\n/* {LANGUAGE_MARKER} */");
         }
     }
-    format!("{patched}\n;window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__ = \"{LANGUAGE_MARKER}\";")
+    patched
 }
 
 fn patch_locale_arrays(text: &str) -> (String, bool) {
@@ -1535,6 +1666,11 @@ fn has_zh_cn_language_support(text: &str) -> bool {
     text.contains("\"zh-CN\"") || text.contains("'zh-CN'") || text.contains(LANGUAGE_MARKER)
 }
 
+fn has_unsafe_window_runtime_patch(text: &str) -> bool {
+    text.contains(";window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__")
+        || text.contains("window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__")
+}
+
 fn chunk_needs_or_has_ui_patch(text: &str) -> bool {
     text.contains(PATCH_MARKER)
         || text.contains(TEXT_MARKER)
@@ -1554,33 +1690,28 @@ fn chunk_needs_or_has_ui_patch(text: &str) -> bool {
 }
 
 fn replace_hardcoded_text(mut text: String) -> String {
-    if text.contains(TEXT_MARKER) {
-        return text;
-    }
     for marker in LEGACY_TEXT_MARKERS {
         text = remove_marker_line(text, marker);
     }
-    for (needle, replacement) in embedded_chunk_patch_pairs() {
-        if text.contains(&needle) {
-            text = text.replace(&needle, &replacement);
-        }
-    }
-    for (english, chinese) in zh_text_pairs() {
-        let double_quoted = format!("\"{english}\"");
-        let single_quoted = format!("'{english}'");
-        if text.contains(&double_quoted) {
-            text = text.replace(&double_quoted, &format!("\"{chinese}\""));
-        }
-        if text.contains(&single_quoted) {
-            text = text.replace(&single_quoted, &format!("'{chinese}'"));
-        }
-    }
-    for (needle, replacement) in zh_raw_patch_pairs() {
-        if text.contains(needle) {
-            text = text.replace(needle, replacement);
-        }
+    text = restore_static_text_replacements(text);
+    if text.contains(TEXT_MARKER) {
+        return text;
     }
     format!("{text}\n/* {TEXT_MARKER} */")
+}
+
+fn restore_static_text_replacements(mut text: String) -> String {
+    for (english, chinese) in zh_raw_patch_pairs() {
+        text = text.replace(chinese, english);
+    }
+    for (english, chinese) in embedded_chunk_patch_pairs() {
+        text = text.replace(&chinese, &english);
+    }
+    for (english, chinese) in zh_text_pairs() {
+        text = text.replace(&format!("\"{chinese}\""), &format!("\"{english}\""));
+        text = text.replace(&format!("'{chinese}'"), &format!("'{english}'"));
+    }
+    text
 }
 
 fn embedded_chunk_patch_pairs() -> Vec<(String, String)> {
@@ -1718,35 +1849,6 @@ fn zh_raw_patch_pairs() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-fn runtime_patch_script() -> String {
-    let dict = serde_json::to_string(zh_text_pairs()).unwrap_or_else(|_| "[]".to_string());
-    r#";(() => {
-  if (window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__) return;
-  window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__ = "claude-codex-pro-zh-cn-patch";
-  const dict = new Map(__CLAUDE_CODEX_PRO_ZH_CN_DICT__);
-  const apply = (root = document.body) => {
-    if (!root) return;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const value = node.nodeValue && node.nodeValue.trim();
-      if (value && dict.has(value)) node.nodeValue = node.nodeValue.replace(value, dict.get(value));
-    }
-    root.querySelectorAll?.("[aria-label],[title],[placeholder]").forEach((el) => {
-      for (const attr of ["aria-label", "title", "placeholder"]) {
-        const value = el.getAttribute(attr);
-        if (value && dict.has(value.trim())) el.setAttribute(attr, dict.get(value.trim()));
-      }
-    });
-  };
-  apply();
-  new MutationObserver((changes) => {
-    for (const change of changes) change.addedNodes.forEach((node) => node.nodeType === 1 && apply(node));
-  }).observe(document.documentElement, { childList: true, subtree: true });
-})();"#
-    .replace("__CLAUDE_CODEX_PRO_ZH_CN_DICT__", &dict)
-}
-
 fn desktop_i18n_json() -> String {
     EMBEDDED_DESKTOP_I18N.to_string()
 }
@@ -1772,6 +1874,17 @@ fn backup_file(path: &Path, paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
     }
     std::fs::copy(path, backup)?;
     Ok(())
+}
+
+fn restore_official_backup_file(path: &Path, paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
+    let backup = paths.backup_dir.join(encode_backup_name(paths, path));
+    if !backup.exists() {
+        anyhow::bail!("Claude 官方备份不存在：{}", backup.display());
+    }
+    let bytes = std::fs::read(&backup)
+        .with_context(|| format!("读取 Claude 官方备份失败：{}", backup.display()))?;
+    write_patch_file(path, &bytes)
+        .with_context(|| format!("恢复 Claude 官方备份失败：{}", path.display()))
 }
 
 fn encode_backup_name(paths: &ClaudeZhPatchPaths, path: &Path) -> String {
@@ -1863,10 +1976,16 @@ mod tests {
     }
 
     #[test]
-    fn install_patch_writes_resources_locale_and_runtime_marker() {
+    fn install_patch_writes_resources_locale_and_safe_chunk_markers() {
         let temp = tempfile::tempdir().unwrap();
         let paths = sample_paths(temp.path());
         create_sample_install(&paths);
+        let cache_dir = paths
+            .locale_config_path
+            .parent()
+            .unwrap()
+            .join("Code Cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
 
         let outcome = install_patch_at(&paths).unwrap();
 
@@ -1877,6 +1996,7 @@ mod tests {
         assert!(outcome.status.locale_configured);
         assert!(outcome.status.chunk_patch_present);
         assert!(outcome.status.language_whitelist_patched);
+        assert!(!cache_dir.exists());
         assert!(
             std::fs::read_to_string(&paths.locale_config_path)
                 .unwrap()
@@ -1891,18 +2011,18 @@ mod tests {
                 .join("index-demo.js"),
         )
         .unwrap();
-        assert!(patched_chunk.contains(PATCH_MARKER));
+        assert!(!patched_chunk.contains(PATCH_MARKER));
         assert!(patched_chunk.contains(TEXT_MARKER));
         assert!(patched_chunk.contains("\"zh-CN\""));
-        assert!(patched_chunk.contains("'设置'"));
-        assert!(patched_chunk.contains("\"推理配置\""));
-        assert!(patched_chunk.contains("\"配置第三方推理\""));
-        assert!(patched_chunk.contains("\"第三方 URL\""));
-        assert!(patched_chunk.contains("\"打开设置向导\""));
-        assert!(patched_chunk.contains("\"新功能\""));
-        assert!(patched_chunk.contains("label:\"协作\""));
-        assert!(patched_chunk.contains("defaultMessage:\"配置第三方推理\""));
-        assert!(patched_chunk.contains("defaultMessage:\"新功能\""));
+        assert!(patched_chunk.contains("'Settings'"));
+        assert!(patched_chunk.contains("\"Inference configuration\""));
+        assert!(patched_chunk.contains("\"Configure third-party inference\""));
+        assert!(patched_chunk.contains("\"Gateway base URL\""));
+        assert!(patched_chunk.contains("\"Open Setup\""));
+        assert!(patched_chunk.contains("\"What's new\""));
+        assert!(patched_chunk.contains("label:\"Cowork\""));
+        assert!(patched_chunk.contains("defaultMessage:\"Configure third-party inference\""));
+        assert!(patched_chunk.contains("defaultMessage:\"What's new\""));
         let nested_chunk = std::fs::read_to_string(
             paths
                 .app_root
@@ -1913,10 +2033,10 @@ mod tests {
                 .join("index-real.js"),
         )
         .unwrap();
-        assert!(nested_chunk.contains(PATCH_MARKER));
+        assert!(!nested_chunk.contains(PATCH_MARKER));
         assert!(nested_chunk.contains(TEXT_MARKER));
         assert!(nested_chunk.contains("\"zh-CN\""));
-        assert!(nested_chunk.contains("'自定义'"));
+        assert!(nested_chunk.contains("'Customize'"));
         let lazy_provider_chunk = std::fs::read_to_string(
             paths
                 .app_root
@@ -1927,9 +2047,9 @@ mod tests {
                 .join("c71860c77-demo.js"),
         )
         .unwrap();
-        assert!(lazy_provider_chunk.contains(PATCH_MARKER));
+        assert!(!lazy_provider_chunk.contains(PATCH_MARKER));
         assert!(lazy_provider_chunk.contains(TEXT_MARKER));
-        assert!(lazy_provider_chunk.contains("defaultMessage:\"配置第三方推理\""));
+        assert!(lazy_provider_chunk.contains("defaultMessage:\"Configure third-party inference\""));
         let lazy_whats_new_chunk = std::fs::read_to_string(
             paths
                 .app_root
@@ -1940,9 +2060,9 @@ mod tests {
                 .join("c5610fbe3-demo.js"),
         )
         .unwrap();
-        assert!(lazy_whats_new_chunk.contains(PATCH_MARKER));
+        assert!(!lazy_whats_new_chunk.contains(PATCH_MARKER));
         assert!(lazy_whats_new_chunk.contains(TEXT_MARKER));
-        assert!(lazy_whats_new_chunk.contains("defaultMessage:\"新功能\""));
+        assert!(lazy_whats_new_chunk.contains("defaultMessage:\"What's new\""));
 
         let frontend_i18n = std::fs::read_to_string(
             paths
@@ -1977,17 +2097,23 @@ mod tests {
     }
 
     #[test]
-    fn status_requires_chunk_patch_marker() {
+    fn status_rejects_legacy_runtime_patch_marker() {
         let temp = tempfile::tempdir().unwrap();
         let paths = sample_paths(temp.path());
         create_sample_install(&paths);
         install_patch_at(&paths).unwrap();
-        for chunk in find_patchable_chunks(&paths.app_root).unwrap() {
-            let chunk_text = std::fs::read_to_string(&chunk)
-                .unwrap()
-                .replace(PATCH_MARKER, "missing-claude-zh-patch-marker");
-            std::fs::write(&chunk, chunk_text).unwrap();
-        }
+        let runtime_chunk = paths
+            .app_root
+            .join("resources")
+            .join("ion-dist")
+            .join("assets")
+            .join("index-demo.js");
+        let runtime_chunk_text = format!(
+            "{}\n{}",
+            std::fs::read_to_string(&runtime_chunk).unwrap(),
+            format!("/* {PATCH_MARKER} */")
+        );
+        std::fs::write(&runtime_chunk, runtime_chunk_text).unwrap();
 
         let status = status_for_paths(&paths);
 
@@ -2000,22 +2126,21 @@ mod tests {
     }
 
     #[test]
-    fn status_rejects_partially_patched_lazy_chunks() {
+    fn status_rejects_runtime_chunk_missing_text_marker() {
         let temp = tempfile::tempdir().unwrap();
         let paths = sample_paths(temp.path());
         create_sample_install(&paths);
         install_patch_at(&paths).unwrap();
-        let lazy_chunk = paths
+        let runtime_chunk = paths
             .app_root
             .join("resources")
             .join("ion-dist")
             .join("assets")
-            .join("v1")
-            .join("c71860c77-demo.js");
-        let lazy_chunk_text = std::fs::read_to_string(&lazy_chunk)
+            .join("index-demo.js");
+        let runtime_chunk_text = std::fs::read_to_string(&runtime_chunk)
             .unwrap()
-            .replace(PATCH_MARKER, "missing-claude-zh-patch-marker");
-        std::fs::write(&lazy_chunk, lazy_chunk_text).unwrap();
+            .replace(TEXT_MARKER, "missing-claude-zh-text-marker");
+        std::fs::write(&runtime_chunk, runtime_chunk_text).unwrap();
 
         let status = status_for_paths(&paths);
 
@@ -2100,7 +2225,7 @@ mod tests {
 
         assert_eq!(
             paths.locale_config_path,
-            appdata.join("Claude-3p").join("config.json")
+            local_appdata.join("Claude-3p").join("config.json")
         );
         assert_eq!(paths.backup_dir, local_appdata.join(BACKUP_DIR_NAME));
     }
@@ -2121,7 +2246,7 @@ mod tests {
         assert_eq!(paths.app_root, paths.install_root.join("app"));
         assert_eq!(
             paths.locale_config_path,
-            appdata.join("Claude-3p").join("config.json")
+            local_appdata.join("Claude-3p").join("config.json")
         );
         assert_eq!(paths.backup_dir, local_appdata.join(BACKUP_DIR_NAME));
     }
@@ -2359,6 +2484,33 @@ mod tests {
     }
 
     #[test]
+    fn javascript_chunk_validation_rejects_broken_chunks_when_node_is_available() {
+        if Command::new("node").arg("--version").output().is_err() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("broken.js");
+        std::fs::write(&target, "const broken = {").unwrap();
+
+        let error = validate_patched_javascript_chunk(&target)
+            .expect_err("broken JavaScript should fail node --check");
+
+        assert!(error.to_string().contains("node --check failed"));
+    }
+
+    #[test]
+    fn javascript_chunk_validation_rejects_empty_chunks() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("empty.js");
+        std::fs::write(&target, "").unwrap();
+
+        let error = validate_patched_javascript_chunk(&target)
+            .expect_err("empty JavaScript chunk should fail validation");
+
+        assert!(error.to_string().contains("Claude JS chunk is empty"));
+    }
+
+    #[test]
     fn patch_locale_arrays_inserts_zh_cn_into_official_locale_list() {
         let source = r#"const locales=["en-US","de-DE","fr-FR","ko-KR","ja-JP","es-419","es-ES","it-IT","hi-IN","pt-BR","id-ID"];"#;
 
@@ -2379,49 +2531,95 @@ mod tests {
     }
 
     #[test]
-    fn ensure_language_support_adds_runtime_marker_when_no_locale_array_exists() {
+    fn ensure_language_support_does_not_inject_script_when_no_locale_array_exists() {
         let source = r#"const countries=["AT","BE","FR","DE"]; console.log("Settings");"#;
 
         let patched = ensure_language_support(source.to_string());
 
-        assert!(patched.contains(LANGUAGE_MARKER));
-        assert!(patched.contains("__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__"));
+        assert!(!patched.contains(LANGUAGE_MARKER));
+        assert!(!patched.contains("__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__"));
+        assert!(!patched.contains(";window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__"));
         assert!(patched.contains(r#"["AT","BE","FR","DE"]"#));
+    }
+
+    #[test]
+    fn patch_chunk_replaces_legacy_window_runtime_patch() {
+        let temp = tempfile::tempdir().unwrap();
+        let chunk = temp.path().join("worker.js");
+        std::fs::write(
+            &chunk,
+            format!(
+                "console.log(\"Settings\");\n;window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__ = \"{LANGUAGE_MARKER}\";\n;(() => {{\n  if (window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__) return;\n  window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__ = \"{PATCH_MARKER}\";\n}})();\n/* {TEXT_MARKER} */"
+            ),
+        )
+        .unwrap();
+
+        patch_chunk(&chunk, true).unwrap();
+
+        let patched = std::fs::read_to_string(&chunk).unwrap();
+        assert!(!patched.contains("typeof window === \"undefined\""));
+        assert!(!patched.contains("g.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__"));
+        assert!(!patched.contains(PATCH_MARKER));
+        assert!(!patched.contains(";window.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__"));
+        assert!(!patched.contains("window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__"));
+    }
+
+    #[test]
+    fn patch_chunk_removes_legacy_language_residue_from_non_runtime_chunks() {
+        let temp = tempfile::tempdir().unwrap();
+        let chunk = temp.path().join("worker.js");
+        std::fs::write(
+            &chunk,
+            format!(
+                "console.log(\"Settings\");\n/* claude-codex-pro-zh-cn-text-v3 */\n;(() => {{ if (typeof globalThis !== \"undefined\" && typeof window !== \"undefined\") globalThis.__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__ = \"{LANGUAGE_MARKER}\"; }})();"
+            ),
+        )
+        .unwrap();
+
+        patch_chunk(&chunk, false).unwrap();
+
+        let patched = std::fs::read_to_string(&chunk).unwrap();
+        assert!(patched.contains("console.log(\"Settings\")"));
+        assert!(patched.contains(TEXT_MARKER));
+        assert!(!patched.contains("claude-codex-pro-zh-cn-text-v3"));
+        assert!(!patched.contains(LANGUAGE_MARKER));
+        assert!(!patched.contains("__CLAUDE_CODEX_PRO_ZH_CN_LANGUAGE__"));
     }
 
     #[test]
     fn replace_hardcoded_text_repatches_legacy_text_marker_with_new_provider_labels() {
         let source = format!(
             "{}\n/* claude-codex-pro-zh-cn-text */",
-            r#"console.log("Configure third-party inference"); console.log("Gateway base URL"); const tab={label:"Cowork"};"#
+            r#"console.log("配置第三方推理"); console.log("第三方 URL"); const tab={label:"协作"};"#
         );
 
         let patched = replace_hardcoded_text(source);
 
         assert!(patched.contains(TEXT_MARKER));
-        assert!(patched.contains("\"配置第三方推理\""));
-        assert!(patched.contains("\"第三方 URL\""));
-        assert!(patched.contains("label:\"协作\""));
+        assert!(!patched.contains("/* claude-codex-pro-zh-cn-text */"));
+        assert!(patched.contains("\"Configure third-party inference\""));
+        assert!(patched.contains("\"Gateway base URL\""));
+        assert!(patched.contains("label:\"Cowork\""));
     }
 
     #[test]
     fn replace_hardcoded_text_repatches_v2_text_marker_with_current_labels() {
         let source = format!(
             "{}\n/* claude-codex-pro-zh-cn-text-v2 */",
-            r#"console.log("Configure third-party inference"); console.log("Gateway base URL"); console.log("What's new");"#
+            r#"console.log("配置第三方推理"); console.log("第三方 URL"); console.log("新功能");"#
         );
 
         let patched = replace_hardcoded_text(source);
 
         assert!(patched.contains(TEXT_MARKER));
         assert!(!patched.contains("claude-codex-pro-zh-cn-text-v2"));
-        assert!(patched.contains("\"配置第三方推理\""));
-        assert!(patched.contains("\"第三方 URL\""));
-        assert!(patched.contains("\"新功能\""));
+        assert!(patched.contains("\"Configure third-party inference\""));
+        assert!(patched.contains("\"Gateway base URL\""));
+        assert!(patched.contains("\"What's new\""));
     }
 
     #[test]
-    fn embedded_chunk_patch_table_matches_reference_coverage() {
+    fn replace_hardcoded_text_preserves_bundle_code() {
         let pairs = embedded_chunk_patch_pairs();
         assert_eq!(pairs.len(), 301);
 
@@ -2439,15 +2637,18 @@ mod tests {
 
         let patched = replace_hardcoded_text(source.to_string());
 
-        assert!(patched.contains("\"配置第三方推理\""));
-        assert!(patched.contains("\"第三方 URL\""));
-        assert!(patched.contains("\"插件与技能\""));
-        assert!(patched.contains("\"打开设置向导\""));
-        assert!(patched.contains("\"新建任务\""));
-        assert!(patched.contains("\"协作\""));
-        assert!(patched.contains("label:\"已安排\""));
-        assert!(patched.contains("title:\"计划任务\",subheader"));
-        assert!(patched.contains("message:\"计划任务仅在计算机保持唤醒时运行。\""));
+        assert!(patched.contains(TEXT_MARKER));
+        assert!(patched.contains("\"Configure third-party inference\""));
+        assert!(patched.contains("\"Gateway base URL\""));
+        assert!(patched.contains("\"Plugins & skills\""));
+        assert!(patched.contains("\"Open Setup\""));
+        assert!(patched.contains("\"New task\""));
+        assert!(patched.contains("\"Cowork\""));
+        assert!(patched.contains("label:\"Scheduled\""));
+        assert!(patched.contains("title:\"Scheduled tasks\",subheader"));
+        assert!(
+            patched.contains("message:\"Scheduled tasks only run while your computer is awake.\"")
+        );
     }
 
     #[test]

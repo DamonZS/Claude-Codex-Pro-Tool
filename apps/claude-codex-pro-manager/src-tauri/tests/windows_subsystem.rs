@@ -23,9 +23,11 @@ fn manager_release_binary_uses_embedded_frontend_assets() {
 
 #[test]
 fn claude_chinese_window_can_call_manager_backend_commands() {
-    let capability =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities/default.json"))
-            .expect("read default capability");
+    let capability = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/capabilities/default.json"
+    ))
+    .expect("read default capability");
 
     assert!(capability.contains("\"main\""));
     assert!(capability.contains("\"claude-chinese\""));
@@ -243,6 +245,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("gh release create \"$TAG\""));
     assert!(workflow.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
     assert!(workflow.contains("npm run check"));
+    assert!(workflow.contains("run: npm run vite:build"));
     assert!(workflow.contains("cargo test --workspace"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
@@ -263,6 +266,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
 
     assert!(release_assets.contains("auto-release-installers-managed"));
     assert!(release_assets.contains("if: ${{ !contains(github.event.release.body"));
+    assert!(release_assets.contains("run: npm run vite:build"));
     assert!(release_assets.contains("version: tag"));
 
     assert!(version_script.contains("RELEASE_TAG_PATTERN = /^[vV](\\d+)\\.(\\d{2})$/"));
@@ -299,6 +303,21 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(commands_rs.contains("claude-codex-pro-navigate"));
     assert!(commands_rs.contains("window.eval(script)"));
     assert!(commands_rs.contains("find_running_codex_app_dir"));
+}
+
+#[test]
+fn pr_build_workflow_refreshes_manager_frontend_before_packaging() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let workflow = std::fs::read_to_string(repo_root.join(".github/workflows/pr-build.yml"))
+        .expect("read pr build workflow");
+
+    assert!(workflow.contains("run: npm run vite:build"));
+    assert!(workflow.contains("run: cargo build --release"));
 }
 
 #[test]
@@ -465,6 +484,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
     let lib_rs =
         std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read manager lib.rs");
+    let commands_rs = std::fs::read_to_string(manifest_dir.join("src/commands.rs"))
+        .expect("read manager commands.rs");
     let tauri_conf =
         std::fs::read_to_string(manifest_dir.join("tauri.conf.json")).expect("read tauri config");
 
@@ -496,6 +517,12 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("诊断与修复"));
     assert!(app_tsx.contains("function codexOverviewStatus"));
     assert!(app_tsx.contains("function claudeOverviewStatus"));
+    assert!(app_tsx.contains("function memoryOverviewStatus"));
+    assert!(app_tsx.contains("loaded = await call<SettingsResult>(\"load_settings\");"));
+    assert!(app_tsx.contains("if (!statusOk(loaded?.status))"));
+    assert!(app_tsx.contains("正在开启盘古记忆..."));
+    assert!(app_tsx.contains("正在关闭盘古记忆..."));
+    assert!(!app_tsx.contains("设置尚未加载，无法切换盘古记忆。"));
     assert!(app_tsx.contains("status-segment-list"));
     assert!(app_tsx.contains("status-segment"));
     assert!(app_tsx.contains("运行中"));
@@ -504,6 +531,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("前端在线"));
     assert!(app_tsx.contains("后端在线"));
     assert!(app_tsx.contains("汉化已注入"));
+    assert!(app_tsx.contains("前端已注入"));
+    assert!(app_tsx.contains("前端未注入"));
+    assert!(app_tsx.contains("Inspector 未就绪"));
     assert!(app_tsx.contains("CDP 受阻"));
     assert!(app_tsx.contains("注入异常"));
     assert!(!app_tsx.contains("inject ok"));
@@ -528,6 +558,35 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
+    assert!(overview_screen.contains("刷新 Claude 第三方配置"));
+    assert!(overview_screen.contains("修复前端连接"));
+    assert!(overview_screen.contains("修复后端服务"));
+    assert!(app_tsx.contains("refresh_claude_third_party_config"));
+    assert!(app_tsx.contains("repair_frontend_connection"));
+    assert!(app_tsx.contains("repair_backend_service"));
+    assert!(app_tsx.contains("codexFrontendInjected"));
+    assert!(app_tsx.contains("claudeFrontendInjected"));
+    assert!(app_tsx.contains("codexBackendOnline"));
+    assert!(app_tsx.contains("claudeBackendOnline"));
+    assert!(app_tsx.contains("status === \"degraded\""));
+    assert!(lib_rs.contains("commands::refresh_claude_third_party_config"));
+    assert!(lib_rs.contains("commands::repair_frontend_connection"));
+    assert!(lib_rs.contains("commands::repair_backend_service"));
+    assert!(commands_rs.contains("codex_frontend_injected"));
+    assert!(commands_rs.contains("claude_frontend_injected"));
+    assert!(commands_rs.contains("codex_backend_online"));
+    assert!(commands_rs.contains("claude_backend_online"));
+    assert!(commands_rs.contains("force_reinject_bridge"));
+    assert!(commands_rs.contains("repair_claude_frontend_via_node_inspector"));
+    assert!(commands_rs.contains("BrowserWindow.getAllWindows"));
+    assert!(commands_rs.contains("Claude Inspector 端口已声明但未就绪"));
+    assert!(commands_rs.contains("本地模型代理启动失败"));
+    assert!(commands_rs.contains("if !status.debug_port_online"));
+    assert!(commands_rs.contains("Codex CDP 端口 127.0.0.1:{debug_port} 已离线"));
+    assert!(commands_rs.contains("强制刷新超时"));
+    assert!(commands_rs.contains("codex_frontend_ok && claude_probe.injected"));
+    assert!(commands_rs.contains("codex_helper && claude_helper"));
+    assert!(commands_rs.contains("\"degraded\""));
     let overview_matrix = overview_screen
         .split("<div className=\"ops-matrix\">")
         .nth(1)
@@ -535,7 +594,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .expect("overview matrix source");
     assert!(!overview_matrix.contains("actions.installClaudeZhPatch()"));
     assert!(overview_matrix.contains("items={codexStatus.items}"));
+    assert!(!overview_matrix.contains("Codex 版本"));
     assert!(overview_matrix.contains("items={claudeStatus.items}"));
+    assert!(overview_matrix.contains("items={memoryStatus.items}"));
     assert!(overview_screen.contains("StatusActionTile"));
     assert!(overview_screen.contains("Claude 一键开发模式"));
     assert!(overview_screen.contains("已写入"));
@@ -560,6 +621,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains(".status-segment.ok"));
     assert!(styles.contains(".status-segment.warn"));
     assert!(styles.contains(".status-segment.muted"));
+    assert!(styles.contains(".memory-overview-header"));
+    assert!(styles.contains(".memory-activity-wave"));
+    assert!(styles.contains(".memory-activity-wave[data-active=\"true\"]"));
     assert!(styles.contains(".toast-wrap"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
     assert!(!app_tsx.contains("role=\"dialog\""));
@@ -573,6 +637,40 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(tauri_conf.contains("\"minWidth\": 960"));
     assert!(tauri_conf.contains("\"minHeight\": 720"));
     assert!(tauri_conf.contains("cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev"));
+}
+
+#[test]
+fn claude_launch_waits_for_real_debug_readiness() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let core_claude = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_desktop.rs");
+    let core_claude = std::fs::read_to_string(&core_claude).expect("read core claude desktop");
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let open_section = core_claude
+        .split("pub fn open_claude_desktop() -> ClaudeDesktopActionResult")
+        .nth(1)
+        .and_then(|rest| rest.split("pub fn enter_claude_desktop_devtools").next())
+        .expect("open_claude_desktop source");
+
+    assert!(open_section.contains("wait_for_claude_launch_readiness"));
+    assert!(open_section.contains("\"warning\""));
+    assert!(open_section.contains("Claude Desktop 已启动"));
+    assert!(core_claude.contains("struct LaunchReadiness"));
+    assert!(core_claude.contains("fn launch_readiness_from_status"));
+    assert!(core_claude.contains("Inspector/CDP 端口未就绪"));
+    assert!(core_claude.contains("当前 Claude/Electron 构建不接受外部调试参数"));
+    assert!(core_claude.contains("fn launch_readiness_warns_when_inspector_flag_is_not_ready"));
+    assert!(core_claude.contains("fn launch_readiness_is_ready_only_with_verified_debug_port"));
+    assert!(commands_rs.contains("\"warning\".to_string()"));
+    assert!(commands_rs.contains("本地模型代理已请求启动"));
 }
 
 #[test]
@@ -620,9 +718,12 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);"
+        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true)]);"
     ));
-    assert!(app_tsx.contains("afterFirstPaint(() => {\n        void refreshMemoryAssistStatus(true);"));
+    assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy ? \"写入中...\" : devModeConfigured ? \"已写入\" : \"写入开发配置\";"));
+    assert!(
+        app_tsx.contains("afterFirstPaint(() => {\n        void refreshMemoryAssistStatus(true);")
+    );
     assert!(app_tsx.contains("afterFirstPaint(() => {\n        void refreshClaudeZhPatch(true);"));
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
@@ -723,7 +824,10 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
     assert!(supplier_screen.contains("setDraft(null);"));
     assert!(supplier_screen.contains("saveDraft({ stayInEditor: true })"));
-    assert!(supplier_screen.contains("!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())"));
+    assert!(
+        supplier_screen
+            .contains("!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())")
+    );
     assert!(!supplier_screen.contains(
         "!normalized.name.trim() || !normalized.baseUrl.trim() || !normalized.apiKey.trim()"
     ));
@@ -806,15 +910,27 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("onDragStart"));
     assert!(supplier_screen.contains("onDragOver"));
     assert!(supplier_screen.contains("onDrop"));
-    assert!(supplier_screen.contains("const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);"));
+    assert!(
+        supplier_screen
+            .contains("const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);")
+    );
     assert!(supplier_screen.contains("useEffect(() => {\n    setSupplierOrderIds(profiles.map((profile) => profile.id));\n  }, [profileIdsKey]);"));
     assert!(supplier_screen.contains("const supplierOrderFromIds = (ids: string[]) => {"));
     assert!(supplier_screen.contains("const reorderSupplierIds = (sourceId: string, targetId: string, ids = supplierOrderIds) => {"));
-    assert!(supplier_screen.contains("const previewSupplierOrder = (sourceId: string, targetId: string) => {"));
+    assert!(
+        supplier_screen
+            .contains("const previewSupplierOrder = (sourceId: string, targetId: string) => {")
+    );
     assert!(supplier_screen.contains("setSupplierOrderIds((current) => reorderSupplierIds(sourceId, targetId, current) ?? current);"));
     assert!(supplier_screen.contains("saveSupplierOrder"));
-    assert!(supplier_screen.contains("saveSupplierSettings({ ...appSettings, relayProfiles: reordered })"));
-    assert!(supplier_screen.contains("setSupplierOrderIds(saved.relayProfiles.map((profile) => profile.id));"));
+    assert!(
+        supplier_screen
+            .contains("saveSupplierSettings({ ...appSettings, relayProfiles: reordered })")
+    );
+    assert!(
+        supplier_screen
+            .contains("setSupplierOrderIds(saved.relayProfiles.map((profile) => profile.id));")
+    );
     assert!(supplier_screen.contains("setSupplierOrderIds(previousIds);"));
     assert!(supplier_screen.contains("供应商顺序保存失败，已恢复原顺序。"));
     assert!(supplier_screen.contains("supplierOrderFromIds(supplierOrderIds).map((profile) => {"));
@@ -921,6 +1037,11 @@ fn codex_memory_badge_aligns_with_injection_status_strip() {
 
     assert!(codex_inject.contains("const left = Math.min(Math.max(8, statusRect.right + 8)"));
     assert!(codex_inject.contains("badge.style.height = `${statusRect.height}px`;"));
+    assert!(codex_inject.contains("window.__claudeCodexProMemoryAssistRuntime"));
+    assert!(codex_inject.contains("function codexMemoryExposeRuntime"));
+    assert!(codex_inject.contains("function codexMemoryPulseActivity"));
+    assert!(codex_inject.contains("activeUntil"));
+    assert!(codex_inject.contains("data-active"));
     assert!(codex_inject.contains("background: transparent;"));
     assert!(codex_inject.contains("<span>盘古记忆</span>"));
     assert!(codex_inject.contains("display: inline-flex;"));
@@ -1157,7 +1278,8 @@ fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
     assert!(
         core_zh_patch.contains("include_str!(\"../../../assets/claude-zh/frontend-zh-CN.json\")")
     );
-    assert!(core_zh_patch.contains("unwrap_or_else(|_| embedded_i18n_resources())"));
+    assert!(core_zh_patch.contains("i18n_resources_for_install().await"));
+    assert!(core_zh_patch.contains("_ => embedded_i18n_resources()"));
     assert!(core_zh_patch.contains("pub fn embedded_i18n_resources() -> RemoteI18nResources"));
     assert!(core_zh_patch.contains("remove_zh_cn_artifacts(paths, &mut changed_files)?;"));
     assert!(core_zh_patch.contains("remove_locale_config(paths, &mut changed_files)?;"));
@@ -1182,6 +1304,53 @@ fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
     assert!(core_zh_patch.contains("is_real_windows_apps_path(&paths.install_root)"));
     assert!(core_zh_patch.contains("takeown.exe"));
     assert!(core_zh_patch.contains("icacls.exe"));
+}
+
+#[test]
+fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let core_zh_patch = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch =
+        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let validation = core_zh_patch
+        .split("fn validate_patched_javascript_chunk")
+        .nth(1)
+        .and_then(|rest| rest.split("fn write_patch_file").next())
+        .expect("javascript validation source");
+
+    assert!(validation.contains("Command::new(\"node\")"));
+    assert!(validation.contains("command.stdin(std::process::Stdio::null())"));
+    assert!(validation.contains("command.stdout(std::process::Stdio::null())"));
+    assert!(validation.contains("command.stderr(std::process::Stdio::null())"));
+    assert!(validation.contains("command.creation_flags(crate::windows_create_no_window())"));
+}
+
+#[test]
+fn claude_zh_patch_remote_i18n_fetch_has_short_embedded_fallback() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let core_zh_patch = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch =
+        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+
+    assert!(core_zh_patch.contains("const REMOTE_I18N_FETCH_TIMEOUT"));
+    assert!(core_zh_patch.contains("Duration::from_secs(2)"));
+    assert!(core_zh_patch.contains("async fn i18n_resources_for_install()"));
+    assert!(core_zh_patch.contains("tokio::time::timeout"));
+    assert!(core_zh_patch.contains("_ => embedded_i18n_resources()"));
 }
 
 #[test]

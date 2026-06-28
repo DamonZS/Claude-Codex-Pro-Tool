@@ -230,7 +230,9 @@ pub fn relay_config_status_from_home(home: &Path) -> RelayConfigStatus {
     RelayConfigStatus {
         configured: root_provider.is_some()
             && requires_openai_auth
-            && (has_bearer_token || has_env_api_key || codex_auth_api_key(&auth_contents).is_some())
+            && (has_bearer_token
+                || has_env_api_key
+                || codex_auth_api_key(&auth_contents).is_some())
             && has_base_url,
         requires_openai_auth,
         has_bearer_token: has_bearer_token || has_env_api_key || auth_env_key.is_some(),
@@ -422,12 +424,10 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
             &profile.auth_contents,
             preserve_computer_use_guard,
         )?;
-        if let Some(token) = codex_auth_api_key(&profile.auth_contents)
-            .or_else(|| {
-                let api_key = relay_profile_api_key(profile);
-                (!api_key.trim().is_empty()).then_some(api_key)
-            })
-        {
+        if let Some(token) = codex_auth_api_key(&profile.auth_contents).or_else(|| {
+            let api_key = relay_profile_api_key(profile);
+            (!api_key.trim().is_empty()).then_some(api_key)
+        }) {
             set_codex_provider_auth_env_var(&token)?;
         }
         Ok(result)
@@ -1130,7 +1130,9 @@ fn active_or_default_provider_id(doc: &DocumentMut) -> String {
 }
 
 fn configured_custom_provider_id(doc: &DocumentMut) -> Option<String> {
-    if let Some(active_provider) = active_provider_id(doc).filter(|provider| is_custom_provider_id(provider)) {
+    if let Some(active_provider) =
+        active_provider_id(doc).filter(|provider| is_custom_provider_id(provider))
+    {
         return Some(active_provider);
     }
     doc.get("model_providers")

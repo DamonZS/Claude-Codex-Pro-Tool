@@ -16,6 +16,7 @@ import {
   MessageSquare,
   Network,
   PackageSearch,
+  Pencil,
   PencilRuler,
   Pin,
   Power,
@@ -63,6 +64,8 @@ type LaunchStatus = {
   started_at_ms: number;
   debug_port: number | null;
   helper_port: number | null;
+  debug_port_online: boolean;
+  helper_port_online: boolean;
   codex_app: string | null;
 };
 
@@ -93,6 +96,20 @@ type ClaudeDesktopResult = CommandResult<{
   integrityStatus: string;
   integrityMessage: string;
   executableAudits: Array<Record<string, unknown>>;
+}>;
+
+type RepairConnectionResult = CommandResult<{
+  target: string;
+  frontendInjected: boolean;
+  backendOnline: boolean;
+  codexFrontendInjected: boolean;
+  claudeFrontendInjected: boolean;
+  codexBackendOnline: boolean;
+  claudeBackendOnline: boolean;
+  debugPort: number | null;
+  helperPort: number | null;
+  claudeProxyPort: number | null;
+  details: string[];
 }>;
 
 type ClaudeChineseWindowResult = CommandResult<{
@@ -416,6 +433,16 @@ type MemoryCandidate = {
 type MemoryStatusResult = CommandResult<{
   memory: {
     status: string;
+    enabled: boolean;
+    injectEnabled: boolean;
+    autoSuggestEnabled: boolean;
+    runtimeStatus: string;
+    runtimeMessage: string;
+    codexInjected: boolean;
+    claudeInjected: boolean;
+    codexWorkspace: string;
+    active: boolean;
+    activeSource: string;
     dbPath: string;
     totalItems: number;
     pendingCandidates: number;
@@ -610,18 +637,28 @@ type ClaudeDesktopMarketplaceStatusResult = CommandResult<{
     plugin: string;
     deepLink: string;
     canAutoWrite: boolean;
+    configPath: string;
+    repositories: Array<{
+      label: string;
+      repository: string;
+      url: string;
+      configured: boolean;
+    }>;
     message: string;
   };
 }>;
 
 type ClaudeDesktopMarketplaceOpenResult = CommandResult<{
   outcome: {
-    opened: boolean;
-    deepLink: string;
+    repaired: boolean;
+    configPath: string;
+    repositories: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"]["repositories"];
     message: string;
   };
   marketplaceStatus: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"];
 }>;
+
+type ClaudeDesktopMarketplaceRepairResult = ClaudeDesktopMarketplaceOpenResult;
 
 type ClaudeDesktopDevModeStatusResult = CommandResult<{
   devModeStatus: {
@@ -776,11 +813,13 @@ function codexOverviewStatus(overview: OverviewResult | null) {
   const launchStatus = launch?.status ?? "not_checked";
   const running = launchStatus === "running" || launchStatus === "degraded";
   const failed = statusFailed(launchStatus);
+  const frontendOnline = Boolean(launch?.debug_port_online);
+  const backendOnline = Boolean(launch?.helper_port_online);
   const items: StatusChip[] = [
     { label: failed ? "运行异常" : running ? "运行中" : "未运行", tone: failed ? "warn" : running ? "ok" : "muted" },
     { label: launchStatus === "degraded" || failed ? "注入异常" : running ? "注入成功" : "未注入", tone: launchStatus === "degraded" || failed ? "warn" : running ? "ok" : "muted" },
-    { label: launch?.debug_port ? "前端在线" : "前端离线", tone: launch?.debug_port ? "ok" : running ? "warn" : "muted" },
-    { label: launch?.helper_port ? "后端在线" : "后端离线", tone: launch?.helper_port ? "ok" : running ? "warn" : "muted" },
+    { label: frontendOnline ? "前端在线" : "前端离线", tone: frontendOnline ? "ok" : running ? "warn" : "muted" },
+    { label: backendOnline ? "后端在线" : "后端离线", tone: backendOnline ? "ok" : running ? "warn" : "muted" },
   ];
   const status = items.some((item) => item.tone === "warn") ? "failed" : running ? "running" : "not_checked";
   return { status, items };
@@ -799,6 +838,32 @@ function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, claudeZ
     { label: inspectorReady ? "Inspector 在线" : cdpStatus === "blocked" ? "CDP 受阻" : cdpStatus === "failed" ? "CDP 异常" : cdpStatus === "ok" ? "CDP 在线" : "CDP 未检测", tone: cdpWarn ? "warn" : inspectorReady || cdpStatus === "ok" ? "ok" : "muted" },
   ];
   const status = items.some((item) => item.tone === "warn") ? "failed" : hasProcess ? "running" : "not_checked";
+  return { status, items };
+}
+
+function memoryOverviewStatus(memoryAssist: MemoryStatusResult | null, settings: BackendSettings | null) {
+  const memory = memoryAssist?.memory;
+  const enabled = memory?.enabled ?? Boolean(settings?.memoryAssistEnabled);
+  const injectEnabled = memory?.injectEnabled ?? Boolean(settings?.memoryAssistInjectEnabled);
+  const autoSuggest = memory?.autoSuggestEnabled ?? Boolean(settings?.memoryAssistAutoSuggestEnabled);
+  const healthy = memory?.status === "ok";
+  const hasDb = Boolean(memory?.dbPath);
+  const pending = memory?.pendingCandidates ?? 0;
+  const runtimeStatus = memory?.runtimeStatus ?? "not_checked";
+  const codexInjected = Boolean(memory?.codexInjected);
+  const listening = Boolean(memory?.active);
+  const items: StatusChip[] = [
+    { label: enabled ? "开关已开启" : "开关已关闭", tone: enabled ? "ok" : "muted" },
+    { label: healthy ? "运行正常" : memoryAssist ? "运行异常" : "未检测", tone: healthy ? "ok" : memoryAssist ? "warn" : "muted" },
+    { label: codexInjected ? "Codex 已注入" : injectEnabled ? "等待 Codex 注入" : "注入已关闭", tone: codexInjected ? "ok" : enabled && injectEnabled ? "warn" : "muted" },
+    { label: listening ? "对话监控运行中" : autoSuggest ? "监听待注入确认" : pending > 0 ? "有待确认" : "对话监控关闭", tone: listening ? "ok" : enabled && autoSuggest ? "warn" : pending > 0 ? "warn" : "muted" },
+    { label: hasDb ? "数据库在线" : "数据库未检测", tone: hasDb ? "ok" : enabled ? "warn" : "muted" },
+  ];
+  const status = items.some((item) => item.tone === "warn")
+    ? "failed"
+    : enabled && healthy && (codexInjected || runtimeStatus === "disabled")
+      ? "running"
+      : "not_checked";
   return { status, items };
 }
 
@@ -1378,6 +1443,18 @@ export function App() {
     }
   };
 
+  const repairClaudeDesktopMarketplaces = async () => {
+    const result = await run(() => call<ClaudeDesktopMarketplaceRepairResult>("repair_claude_desktop_marketplaces"), "修复 Claude 插件仓库");
+    if (result) {
+      setClaudeDesktopMarketplace({
+        status: result.status,
+        message: result.message,
+        marketplaceStatus: result.marketplaceStatus,
+      });
+      notifyIfNeedsAttention({ title: "Claude 插件仓库", message: result.message || result.outcome.message, status: result.status });
+      await refreshClaudeDesktopDevMode(true);
+    }
+  };
   const configureClaudeDesktopDevMode = async () => {
     const request = claudeDesktopProviderDraft.baseUrl.trim()
       ? { request: claudeDesktopProviderDraft }
@@ -1395,6 +1472,7 @@ export function App() {
         setNotice({ title: "Claude 一键开发模式", message: result.message || result.outcome.message, status: result.status });
         await refreshClaudeDesktopDevMode(true);
         await refreshClaudeDesktopOrgPlugin(true);
+        await refreshClaudeDesktopMarketplace(true);
       }
     } finally {
       setClaudeDevModeBusy(false);
@@ -1419,6 +1497,43 @@ export function App() {
       });
       notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message || result.repair.message, status: result.status });
       await refreshPluginHub(true);
+    }
+  };
+
+  const refreshClaudeThirdPartyConfig = async () => {
+    setNotice({ title: "刷新 Claude 第三方配置", message: "正在刷新 Claude Desktop 第三方开发配置...", status: "running" });
+    await waitForPaint();
+    const result = await run(() => call<ClaudeDesktopDevModeConfigureResult>("refresh_claude_third_party_config"), "刷新 Claude 第三方配置");
+    if (result) {
+      setClaudeDesktopDevMode({
+        status: result.status,
+        message: result.message,
+        devModeStatus: result.devModeStatus,
+      });
+      setNotice({ title: "刷新 Claude 第三方配置", message: result.message || result.outcome.message, status: result.status });
+      await Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeDesktopMarketplace(true), refreshPluginHub(true)]);
+    }
+  };
+
+  const repairFrontendConnection = async () => {
+    setNotice({ title: "修复前端连接", message: "正在重新检查并注入 Codex / Claude 前端连接...", status: "running" });
+    await waitForPaint();
+    const result = await run(() => call<RepairConnectionResult>("repair_frontend_connection"), "修复前端连接");
+    if (result) {
+      const details = result.details?.length ? `\n${result.details.join("\n")}` : "";
+      setNotice({ title: "修复前端连接", message: `${result.message}${details}`, status: result.status });
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeZhPatch(true), refreshMemoryAssist(true)]);
+    }
+  };
+
+  const repairBackendService = async () => {
+    setNotice({ title: "修复后端服务", message: "正在检查并恢复 Codex / Claude 本地后端服务...", status: "running" });
+    await waitForPaint();
+    const result = await run(() => call<RepairConnectionResult>("repair_backend_service"), "修复后端服务");
+    if (result) {
+      const details = result.details?.length ? `\n${result.details.join("\n")}` : "";
+      setNotice({ title: "修复后端服务", message: `${result.message}${details}`, status: result.status });
+      await Promise.all([refreshOverview(true), refreshClaudeDesktopDevMode(true)]);
     }
   };
 
@@ -1739,7 +1854,7 @@ export function App() {
 
   const refreshRoute = async (target = route) => {
     if (target === "overview") {
-      await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
       afterFirstPaint(() => {
         void refreshMemoryAssistStatus(true);
       }, 250);
@@ -1826,10 +1941,14 @@ export function App() {
       installPonytailClaudeDesktopLocalBundle,
       openClaudeDesktopOrgPluginsDir,
       openPonytailClaudeDesktopMarketplaceSetup,
+      repairClaudeDesktopMarketplaces,
       configureClaudeDesktopDevMode,
       installMarketScript,
       refreshCodexPluginMarketplace,
       repairCodexPluginMarketplace,
+      refreshClaudeThirdPartyConfig,
+      repairFrontendConnection,
+      repairBackendService,
       refreshPluginHub,
       refreshClaudeDesktopOrgPlugin,
       refreshClaudeDesktopMarketplace,
@@ -1947,7 +2066,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -2010,6 +2129,7 @@ function OverviewScreen({
   claudeDesktopDevMode,
   claudeDevModeBusy,
   memoryAssist,
+  settings,
 }: {
   actions: ReturnType<typeof createActionsShape>;
   overview: OverviewResult | null;
@@ -2018,13 +2138,41 @@ function OverviewScreen({
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDevModeBusy: boolean;
   memoryAssist: MemoryStatusResult | null;
+  settings: BackendSettings | null;
 }) {
   const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
   const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
+  const memoryStatus = memoryOverviewStatus(memoryAssist, settings);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
   const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";
   const devModeValue = claudeDevModeBusy ? "写入中..." : devModeConfigured ? "已写入" : "写入开发配置";
+  const memoryEnabled = memory?.enabled ?? Boolean(settings?.memoryAssistEnabled);
+  const memoryInjectEnabled = memory?.injectEnabled ?? Boolean(settings?.memoryAssistInjectEnabled);
+  const memoryAutoSuggestEnabled = memory?.autoSuggestEnabled ?? Boolean(settings?.memoryAssistAutoSuggestEnabled);
+  const memoryCodexInjected = Boolean(memory?.codexInjected);
+  const memoryMonitorActive = Boolean(memory?.active);
+  const memoryRuntimeStatus = memory?.runtimeStatus ?? "not_checked";
+  const memoryRuntimeMessage = memory?.runtimeMessage || "尚未检测到 Codex 记忆运行时。";
+  const memoryInjectStatus = memoryCodexInjected ? "ok" : memoryEnabled && memoryInjectEnabled ? "running" : memoryEnabled ? "failed" : "not_checked";
+  const memoryInjectValue = memoryCodexInjected ? "已注入" : memoryEnabled && memoryInjectEnabled ? "等待 Codex 注入" : "未开启";
+  const memoryMonitorValue = memoryMonitorActive
+    ? "监听待确认学习"
+    : memoryEnabled && memoryAutoSuggestEnabled
+      ? memoryCodexInjected
+        ? "等待会话变化"
+        : "等待 Codex 注入"
+      : "未监听";
+  const memoryMonitorStatus = memoryMonitorActive ? "running" : memoryEnabled && memoryAutoSuggestEnabled ? "running" : "not_checked";
+  const memoryWorkspaceCount = memory?.workspaces?.length ?? 0;
+  const toggleMemoryAssistEnabled = async (enabled: boolean) => {
+    if (!settings) {
+      actions.showNotice({ title: "盘古记忆开关", message: "设置尚未加载，请先刷新概览。", status: "failed" });
+      return;
+    }
+    const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });
+    if (saved) await actions.refreshMemoryAssist();
+  };
   return (
     <div className="ops-dashboard">
       <section className="relay-banner">
@@ -2041,23 +2189,51 @@ function OverviewScreen({
       </section>
       <div className="ops-matrix">
         <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
-        <StatusTile icon={Activity} label="Codex 版本" status={overview?.codex_version ? "ok" : "not_checked"} value={overview?.codex_version ?? "未检测"} />
         <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />
         <StatusActionTile disabled={claudeDevModeBusy} icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} status={devModeStatus} value={devModeValue} />
-        <StatusTile icon={ShieldCheck} label="盘古记忆" status={memory?.status ?? "not_checked"} value={`${memory?.totalItems ?? 0} 条 / 待确认 ${memory?.pendingCandidates ?? 0}`} />
+        <StatusTile icon={ShieldCheck} items={memoryStatus.items} label="盘古记忆" status={memoryStatus.status} />
       </div>
       <div className="ops-overview-grid">
         <Panel title="盘古记忆总览" detail="本地长期记忆、待确认学习、工作区隔离和备份状态。">
-          <InfoRow label="状态" value={memory?.status ?? "未检测"} />
-          <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
-          <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
-          <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
-          <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
+          <div className="memory-overview-header">
+            <div>
+              <strong>盘古记忆开关</strong>
+              <p>{memoryEnabled ? "已允许 Codex 使用本地长期记忆与会话摘要。" : "当前不会向 Codex 注入盘古记忆。可在这里直接开启。"}</p>
+            </div>
+            <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
+          </div>
+          <div className="ops-status-list">
+            <StatusRow label="运行状态" status={memoryRuntimeStatus} value={memoryRuntimeMessage} />
+            <StatusRow label="Codex 注入" status={memoryInjectStatus} value={memoryInjectValue} />
+            <StatusRow label="对话监控" status={memoryMonitorStatus} value={memoryMonitorValue} />
+          </div>
+          <div className="ops-note">
+            <Activity className="h-4 w-4" />
+            <span>对话监控</span>
+            <span className="memory-activity-wave" data-active={memoryMonitorActive}>
+              <span />
+              <span />
+              <span />
+              <span />
+            </span>
+          </div>
+          <div className="info-grid compact">
+            <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
+            <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
+            <InfoRow label="工作区" value={`${memoryWorkspaceCount} 个`} />
+            <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
+            <InfoRow label="最近备份" value={compactPath(memory?.latestBackupPath)} />
+          </div>
+          <div className="action-row">
+            <ActionButton icon={RefreshCw} label="刷新盘古记忆" onClick={() => void actions.refreshMemoryAssist()} />
+            <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
+          </div>
         </Panel>
-        <Panel title="诊断与修复" detail="检查和修复入口集中在这里；不会自动改写配置。">
+        <Panel title="诊断与修复" detail="检查和修复入口集中在这里；修复动作会先显示运行反馈，再调用后端命令。">
           <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
-          <ActionButton icon={Wrench} label="修复入口" onClick={() => void actions.repairEntrypoints()} />
-          <ActionButton icon={Wrench} label="修复后端" onClick={() => void actions.repairBackend()} />
+          <ActionButton icon={RefreshCw} label="刷新 Claude 第三方配置" onClick={() => void actions.refreshClaudeThirdPartyConfig()} />
+          <ActionButton icon={Wrench} label="修复前端连接" onClick={() => void actions.repairFrontendConnection()} />
+          <ActionButton icon={Wrench} label="修复后端服务" onClick={() => void actions.repairBackendService()} />
         </Panel>
       </div>
     </div>
@@ -2636,6 +2812,10 @@ function ToolsAndPluginsScreen({
 }) {
   return (
     <div className="stack">
+      <div className="repository-status-grid">
+        <CodexPluginRepositoryPanel actions={actions} marketplace={codexPluginMarketplace} />
+        <ClaudePluginRepositoryPanel actions={actions} marketplace={claudeDesktopMarketplace} />
+      </div>
       <ContextManagerPanel
         actions={actions}
         entries={codexContextEntries?.entries ?? emptyContextEntries()}
@@ -2657,6 +2837,72 @@ function ToolsAndPluginsScreen({
   );
 }
 
+function CodexPluginRepositoryPanel({
+  actions,
+  marketplace,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  marketplace: CodexPluginMarketplaceStatusResult | null;
+}) {
+  const status = marketplace?.marketplace;
+  const health: Status = !marketplace ? "not_checked" : status?.needsRepair ? "needs_review" : statusOk(marketplace.status) ? "ok" : marketplace.status;
+  return (
+    <Panel title="Codex 插件仓库" detail="自动下载、校验并把 OpenAI 插件仓库注册到 Codex 配置；具体插件安装仍在 Codex 内确认。">
+      <div className="ops-status-list">
+        <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Codex 插件仓库"} />
+        <StatusRow label="注册状态" status={status?.configRegistered ? "ok" : status?.needsRepair ? "needs_review" : "not_checked"} value={status?.configRegistered ? "已注册到 Codex 配置" : "未注册或待检测"} />
+        <StatusRow label="仓库列表" status={status?.marketplaceRoot ? "found" : "not_checked"} value="openai-curated / https://github.com/openai/plugins" />
+        <StatusRow label="本地目录" status={status?.marketplaceRoot ? "found" : "not_checked"} value={compactPath(status?.marketplaceRoot)} />
+      </div>
+      <div className="action-row">
+        <Button onClick={() => void actions.refreshCodexPluginMarketplace()} variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新 Codex 插件仓库
+        </Button>
+        <Button onClick={() => void actions.repairCodexPluginMarketplace()}>
+          <Download className="h-4 w-4" />
+          修复 Codex 插件仓库
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
+function ClaudePluginRepositoryPanel({
+  actions,
+  marketplace,
+}: {
+  actions: ReturnType<typeof createActionsShape>;
+  marketplace: ClaudeDesktopMarketplaceStatusResult | null;
+}) {
+  const status = marketplace?.marketplaceStatus;
+  const repositories = status?.repositories ?? [];
+  const allConfigured = repositories.length > 0 && repositories.every((repository) => repository.configured);
+  const health: Status = !marketplace ? "not_checked" : allConfigured ? "ok" : status?.supported ? "needs_review" : statusOk(marketplace.status) ? "ok" : marketplace.status;
+  const repositorySummary = repositories.length
+    ? repositories.map((repository) => `${repository.label}: ${repository.repository}`).join("；")
+    : "尚未检测";
+  return (
+    <Panel title="Claude 插件仓库" detail="自动写入 Claude 开发配置中的已知插件仓库；具体插件安装仍由 Claude 官方流程确认。">
+      <div className="ops-status-list">
+        <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Claude 插件仓库"} />
+        <StatusRow label="配置方式" status={status?.canAutoWrite ? "ok" : status?.supported ? "needs_review" : "not_checked"} value={status?.canAutoWrite ? "可自动写入" : status?.supported ? "待修复" : "未检测"} />
+        <StatusRow label="仓库列表" status={repositories.length ? (allConfigured ? "ok" : "needs_review") : "not_checked"} value={repositorySummary} />
+        <StatusRow label="配置路径" status={status?.configPath ? "found" : "not_checked"} value={compactPath(status?.configPath)} />
+      </div>
+      <div className="action-row">
+        <Button onClick={() => void actions.refreshClaudeDesktopMarketplace()} variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新 Claude 插件仓库
+        </Button>
+        <Button onClick={() => void actions.repairClaudeDesktopMarketplaces()}>
+          <Wrench className="h-4 w-4" />
+          修复 Claude 插件仓库
+        </Button>
+      </div>
+    </Panel>
+  );
+}
 function ContextManagerPanel({
   actions,
   claudeDesktopDevMode,
@@ -2811,10 +3057,10 @@ function ContextManagerPanel({
               {entry.summary ? <span>{entry.summary}</span> : null}
             </div>
             <ToggleSwitch checked={entry.enabled} disabled={!canEditCurrentTab || (isCodex && !settings)} onChange={() => void toggleEntry(entry)} />
-            <button disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
-              <PencilRuler className="h-4 w-4" />
+            <button className="context-entry-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
+              <Pencil className="h-4 w-4 tilted-pen-icon" />
             </button>
-            <button className="danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
+            <button className="context-entry-icon-button danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
               <Trash2 className="h-4 w-4" />
             </button>
           </div>
@@ -4485,10 +4731,14 @@ function createActionsShape() {
     installPonytailClaudeDesktopLocalBundle: async () => {},
     openClaudeDesktopOrgPluginsDir: async () => {},
     openPonytailClaudeDesktopMarketplaceSetup: async () => {},
+    repairClaudeDesktopMarketplaces: async () => {},
     configureClaudeDesktopDevMode: async () => {},
     installMarketScript: async (_id: string) => {},
     refreshCodexPluginMarketplace: async () => null as CodexPluginMarketplaceStatusResult | null,
     repairCodexPluginMarketplace: async () => {},
+    refreshClaudeThirdPartyConfig: async () => {},
+    repairFrontendConnection: async () => {},
+    repairBackendService: async () => {},
     refreshPluginHub: async () => null as PluginHubResult | null,
     refreshClaudeDesktopOrgPlugin: async () => null as ClaudeDesktopOrgPluginStatusResult | null,
     refreshClaudeDesktopMarketplace: async () => null as ClaudeDesktopMarketplaceStatusResult | null,

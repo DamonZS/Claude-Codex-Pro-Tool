@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 use claude_codex_pro_core::app_paths::{
     build_codex_executable, codex_app_version, find_latest_codex_app_dir,
     find_latest_codex_app_dir_from_roots, find_macos_codex_app, normalize_codex_app_path,
-    packaged_app_user_model_id, resolve_codex_app_dir_with_saved, user_data_candidates_from,
+    packaged_app_user_model_id, resolve_codex_app_dir_with_saved,
+    standalone_codex_candidates_from, user_data_candidates_from,
 };
 use claude_codex_pro_core::launcher::{
     CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,
     build_codex_arguments, build_codex_command, build_macos_cleanup_command,
-    build_macos_open_command, build_packaged_activation, launch_and_inject_with_hooks,
+    build_macos_open_command, build_packaged_activation, ensure_detached_helper,
+    launch_and_inject_with_hooks,
 };
 #[cfg(windows)]
 use claude_codex_pro_core::launcher::{
@@ -147,6 +149,29 @@ fn app_paths_user_data_candidates_include_local_and_roaming_variants() {
             roaming.join("Codex"),
         ]
     );
+}
+
+#[test]
+fn app_paths_standalone_candidates_cover_multi_user_install_roots() {
+    let local = PathBuf::from(r"C:\Users\me\AppData\Local");
+    let roaming = PathBuf::from(r"C:\Users\me\AppData\Roaming");
+    let program_files = PathBuf::from(r"C:\Program Files");
+    let program_files_x86 = PathBuf::from(r"C:\Program Files (x86)");
+    let program_w6432 = PathBuf::from(r"C:\Program Files");
+
+    let candidates = standalone_codex_candidates_from(
+        Some(&local),
+        Some(&roaming),
+        Some(&program_files),
+        Some(&program_files_x86),
+        Some(&program_w6432),
+    );
+
+    assert!(candidates.contains(&local.join("OpenAI").join("Codex").join("bin")));
+    assert!(candidates.contains(&local.join("Programs").join("OpenAI").join("Codex")));
+    assert!(candidates.contains(&roaming.join("OpenAI").join("Codex")));
+    assert!(candidates.contains(&program_files.join("OpenAI").join("Codex")));
+    assert!(candidates.contains(&program_files_x86.join("Codex")));
 }
 
 #[test]
@@ -438,6 +463,41 @@ async fn default_helper_serves_backend_status_over_http() {
     assert_eq!(repair_payload["transport"], "http-helper");
 
     hooks.shutdown_helper(port).await;
+}
+
+#[tokio::test]
+async fn detached_helper_rejects_unverified_port_conflict() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let error = ensure_detached_helper(port).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("did not answer Claude Codex Pro backend status")
+    );
+    drop(listener);
+}
+
+#[tokio::test]
+async fn detached_helper_accepts_status_after_port_was_previously_busy() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    ensure_detached_helper(port).await.unwrap();
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let response = client
+        .post(format!("http://127.0.0.1:{port}/backend/status"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let payload: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(payload["transport"], "http-helper");
 }
 
 #[tokio::test]
@@ -915,7 +975,7 @@ async fn launch_lifecycle_cleans_helper_when_launch_fails_after_helper_started()
 }
 
 #[tokio::test]
-async fn launch_starts_helper_when_chat_protocol_proxy_is_enabled() {
+async fn protocol_proxy_port_uses_selected_helper_port_when_default_is_busy() {
     let temp = tempfile::tempdir().unwrap();
     let app_dir = temp.path().join("Codex.app");
     std::fs::create_dir_all(&app_dir).unwrap();
@@ -949,13 +1009,15 @@ async fn launch_starts_helper_when_chat_protocol_proxy_is_enabled() {
         active_relay_id: "relay-chat".to_string(),
         ..BackendSettings::default()
     };
-    let hooks = FakeHooks::new(events.clone()).with_settings(settings);
+    let hooks = FakeHooks::new(events.clone())
+        .with_settings(settings)
+        .with_selected_helper_port(58434);
 
     let handle = launch_and_inject_with_hooks(
         LaunchOptions {
             app_dir: Some(app_dir),
             debug_port: 9229,
-            helper_port: 58000,
+            helper_port: 57321,
             status_store,
         },
         &hooks,
@@ -964,15 +1026,17 @@ async fn launch_starts_helper_when_chat_protocol_proxy_is_enabled() {
     .unwrap();
 
     let before_stop = events.lock().unwrap().clone();
-    assert!(before_stop.contains(&"select-helper:58000".to_string()));
-    assert!(before_stop.contains(&"start-helper:57321".to_string()));
-    assert!(!before_stop.contains(&"inject:9229:57321".to_string()));
+    assert_eq!(handle.helper_port, 58434);
+    assert!(before_stop.contains(&"select-helper:57321".to_string()));
+    assert!(before_stop.contains(&"start-helper:58434".to_string()));
+    assert!(!before_stop.contains(&"start-helper:57321".to_string()));
+    assert!(!before_stop.contains(&"inject:9229:58434".to_string()));
 
     handle.wait_for_codex_exit().await.unwrap();
 
     let after_stop = events.lock().unwrap().clone();
     assert!(after_stop.contains(&"wait-codex".to_string()));
-    assert!(after_stop.contains(&"shutdown-helper:57321".to_string()));
+    assert!(after_stop.contains(&"shutdown-helper:58434".to_string()));
 }
 
 #[tokio::test]
@@ -1121,6 +1185,7 @@ struct FakeHooks {
     launch_error: Option<String>,
     inject_error: Option<String>,
     provider_sync_unsupported: bool,
+    selected_helper_port: Option<u16>,
 }
 
 impl FakeHooks {
@@ -1136,6 +1201,7 @@ impl FakeHooks {
             launch_error: None,
             inject_error: None,
             provider_sync_unsupported: false,
+            selected_helper_port: None,
         }
     }
 
@@ -1164,6 +1230,11 @@ impl FakeHooks {
         self
     }
 
+    fn with_selected_helper_port(mut self, helper_port: u16) -> Self {
+        self.selected_helper_port = Some(helper_port);
+        self
+    }
+
     fn event(&self, event: impl Into<String>) {
         self.events.lock().unwrap().push(event.into());
     }
@@ -1188,7 +1259,7 @@ impl LaunchHooks for FakeHooks {
 
     fn select_helper_port(&self, requested: u16) -> u16 {
         self.event(format!("select-helper:{requested}"));
-        requested
+        self.selected_helper_port.unwrap_or(requested)
     }
 
     async fn load_settings(&self) -> anyhow::Result<BackendSettings> {

@@ -1,0 +1,135 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic "Claude Codex Pro" [ref=e5]:
+      - generic [ref=e6]: CCP
+    - navigation [ref=e7]:
+      - button "概览" [ref=e8] [cursor=pointer]:
+        - img [ref=e9]
+        - generic [ref=e14]: 概览
+      - button "供应商" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - generic [ref=e21]: 供应商
+      - button "工具与插件" [ref=e22] [cursor=pointer]:
+        - img [ref=e23]
+        - generic [ref=e29]: 工具与插件
+      - button "会话管理" [ref=e30] [cursor=pointer]:
+        - img [ref=e31]
+        - generic [ref=e33]: 会话管理
+      - button "维护" [ref=e34] [cursor=pointer]:
+        - img [ref=e35]
+        - generic [ref=e37]: 维护
+      - button "设置" [ref=e38] [cursor=pointer]:
+        - img [ref=e39]
+        - generic [ref=e42]: 设置
+      - button "关于" [ref=e43] [cursor=pointer]:
+        - img [ref=e44]
+        - generic [ref=e46]: 关于
+  - main [ref=e47]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - heading "概览" [level=1] [ref=e50]
+        - paragraph [ref=e51]: 运行状态、启动动作和 Claude 一键汉化诊断。
+      - generic [ref=e52]:
+        - button "启动/重启Codex" [ref=e53]:
+          - img [ref=e54]
+          - generic [ref=e59]: 启动/重启Codex
+        - button "启动/重启Claude" [ref=e60]:
+          - img [ref=e61]
+          - generic [ref=e63]: 启动/重启Claude
+        - button "Claude 一键汉化" [ref=e64]:
+          - img [ref=e65]
+          - generic [ref=e69]: Claude 一键汉化
+        - button [ref=e70]:
+          - img [ref=e71]
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - img [ref=e79]
+        - generic [ref=e84]:
+          - generic [ref=e85]: 官方中转站
+          - strong [ref=e86]: 拓扑熵减API
+          - paragraph [ref=e87]: ClaudeCodexPro 官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。
+        - button "打开" [ref=e88]:
+          - img [ref=e89]
+          - text: 打开
+      - generic [ref=e93]:
+        - generic [ref=e94]:
+          - img [ref=e95]
+          - generic [ref=e97]: Codex 状态
+          - generic [ref=e98]:
+            - generic [ref=e99]: 运行中
+            - generic [ref=e100]: 注入成功
+            - generic [ref=e101]: 前端在线
+            - generic [ref=e102]: 后端在线
+        - generic [ref=e103]:
+          - img [ref=e104]
+          - generic [ref=e106]: Claude 状态
+          - generic [ref=e107]:
+            - generic [ref=e108]: 检测异常
+            - generic [ref=e109]: 汉化未注入
+            - generic [ref=e110]: 前端未检测
+            - generic [ref=e111]: CDP 未检测
+        - button "Claude 一键开发模式 写入开发配置" [ref=e112] [cursor=pointer]:
+          - img [ref=e113]
+          - generic [ref=e115]: Claude 一键开发模式
+          - strong [ref=e116]: 写入开发配置
+        - generic [ref=e117]:
+          - img [ref=e118]
+          - generic [ref=e121]: 盘古记忆
+          - generic [ref=e122]:
+            - generic [ref=e123]: 已禁用
+            - generic [ref=e124]: 待检测
+            - generic [ref=e125]: Codex 未启用
+            - generic [ref=e126]: Claude 未启用
+            - generic [ref=e127]: 监控已停用
+      - generic [ref=e128]:
+        - generic [ref=e129]:
+          - generic [ref=e131]:
+            - heading "盘古记忆总览" [level=2] [ref=e132]
+            - paragraph [ref=e133]: 本地长期记忆、待确认学习、工作区隔离和备份状态。
+          - generic [ref=e134]:
+            - generic [ref=e135]:
+              - generic [ref=e136]:
+                - strong [ref=e137]: 盘古记忆开关
+                - paragraph [ref=e138]: 尚未检测盘古记忆运行态。
+              - button [ref=e139]
+            - generic [ref=e141]:
+              - generic [ref=e142]: 已禁用
+              - generic [ref=e143]: 待检测
+              - generic [ref=e144]: Codex 未启用
+              - generic [ref=e145]: Claude 未启用
+              - generic [ref=e146]: 监控已停用
+            - generic [ref=e148]:
+              - strong [ref=e149]: 对话监控
+              - paragraph [ref=e150]: 当前没有检测到对话流式输出。
+            - generic [ref=e156]:
+              - generic [ref=e157]: 长期记忆
+              - strong [ref=e158]: 0 条
+            - generic [ref=e159]:
+              - generic [ref=e160]: 待确认
+              - strong [ref=e161]: 0 条
+            - generic [ref=e162]:
+              - generic [ref=e163]: Codex 工作区
+              - strong [ref=e164]: 未检测
+            - generic [ref=e165]:
+              - generic [ref=e166]: 数据库
+              - strong [ref=e167]: 未设置
+            - generic [ref=e168]:
+              - generic [ref=e169]: 最近备份
+              - strong [ref=e170]: 暂无
+            - button "盘古记忆自检并备份" [ref=e171] [cursor=pointer]:
+              - img [ref=e172]
+              - generic [ref=e175]: 盘古记忆自检并备份
+        - generic [ref=e176]:
+          - generic [ref=e178]:
+            - heading "诊断与修复" [level=2] [ref=e179]
+            - paragraph [ref=e180]: 检查和修复入口集中在这里；不会自动改写配置。
+          - generic [ref=e181]:
+            - button "刷新 Claude 第三方配置" [ref=e182] [cursor=pointer]:
+              - img [ref=e183]
+              - generic [ref=e188]: 刷新 Claude 第三方配置
+            - button "修复前端连接" [ref=e189] [cursor=pointer]:
+              - img [ref=e190]
+              - generic [ref=e192]: 修复前端连接
+            - button "修复后端服务" [ref=e193] [cursor=pointer]:
+              - img [ref=e194]
+              - generic [ref=e196]: 修复后端服务

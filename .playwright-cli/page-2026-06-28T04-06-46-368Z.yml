@@ -1,0 +1,276 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic "Claude Codex Pro" [ref=e5]:
+      - generic [ref=e6]: CCP
+    - navigation [ref=e7]:
+      - button "概览" [ref=e8] [cursor=pointer]:
+        - img [ref=e9]
+        - generic [ref=e14]: 概览
+      - button "供应商" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - generic [ref=e21]: 供应商
+      - button "工具与插件" [active] [ref=e22] [cursor=pointer]:
+        - img [ref=e23]
+        - generic [ref=e29]: 工具与插件
+      - button "会话管理" [ref=e30] [cursor=pointer]:
+        - img [ref=e31]
+        - generic [ref=e33]: 会话管理
+      - button "维护" [ref=e34] [cursor=pointer]:
+        - img [ref=e35]
+        - generic [ref=e37]: 维护
+      - button "设置" [ref=e38] [cursor=pointer]:
+        - img [ref=e39]
+        - generic [ref=e42]: 设置
+      - button "关于" [ref=e43] [cursor=pointer]:
+        - img [ref=e44]
+        - generic [ref=e46]: 关于
+  - main [ref=e47]:
+    - generic [ref=e48]:
+      - generic [ref=e49]:
+        - heading "工具与插件" [level=1] [ref=e212]
+        - paragraph [ref=e51]: 插件目录、MCP 配置和启动入口。
+      - generic [ref=e213]:
+        - generic [ref=e214]: 后端链接
+        - strong [ref=e215]: 127.0.0.1:57322
+      - generic [ref=e52]:
+        - button "启动/重启Codex" [ref=e53]:
+          - img [ref=e54]
+          - generic [ref=e59]: 启动/重启Codex
+        - button "启动/重启Claude" [ref=e60]:
+          - img [ref=e61]
+          - generic [ref=e63]: 启动/重启Claude
+        - button "Claude 一键汉化" [ref=e64]:
+          - img [ref=e65]
+          - generic [ref=e69]: Claude 一键汉化
+        - button [ref=e70]:
+          - img [ref=e71]
+    - generic [ref=e216]:
+      - generic [ref=e217]:
+        - generic [ref=e219]:
+          - heading "第三方插件仓库" [level=2] [ref=e220]
+          - paragraph [ref=e221]: Codex OpenAI 插件仓库与社区插件资源入口；安装前仍需人工审查 plugin.json、skills、MCP、commands 和 hooks。
+        - generic [ref=e222]:
+          - generic [ref=e223]:
+            - generic [ref=e224]:
+              - generic [ref=e225]: 仓库状态
+              - strong [ref=e226]: 预览模式：本地 openai-curated marketplace 已模拟下载并注册。
+            - generic [ref=e227]:
+              - generic [ref=e228]: 注册状态
+              - strong [ref=e229]: 已注册到 Codex 配置
+            - generic [ref=e230]:
+              - generic [ref=e231]: 本地目录
+              - strong [ref=e232]: ~\.codex\.tmp\plugins
+          - generic [ref=e233]:
+            - button "刷新第三方插件仓库" [ref=e234]:
+              - img [ref=e235]
+              - text: 刷新第三方插件仓库
+            - button "下载并注册仓库" [ref=e240]:
+              - img [ref=e241]
+              - text: 下载并注册仓库
+            - button "打开 OpenAI 插件仓库" [ref=e244]:
+              - img [ref=e245]
+              - text: 打开 OpenAI 插件仓库
+      - generic [ref=e250]:
+        - generic [ref=e251]:
+          - generic [ref=e253]:
+            - heading "插件目录" [level=2] [ref=e254]
+            - paragraph [ref=e255]: Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。
+          - generic [ref=e256]:
+            - generic [ref=e257]:
+              - button "全部" [ref=e258] [cursor=pointer]
+              - button "官方插件" [ref=e259] [cursor=pointer]
+              - button "Codex 插件" [ref=e260] [cursor=pointer]
+              - button "MCP" [ref=e261] [cursor=pointer]
+              - button "Skills" [ref=e262] [cursor=pointer]
+              - button "已安装" [ref=e263] [cursor=pointer]
+              - button "需审查" [ref=e264] [cursor=pointer]
+              - button "Ponytail" [ref=e265] [cursor=pointer]
+              - button "刷新" [ref=e266] [cursor=pointer]:
+                - img [ref=e267]
+                - text: 刷新
+            - generic [ref=e272]:
+              - generic [ref=e273]:
+                - strong [ref=e274]: Claude 官方插件
+                - generic [ref=e275]: 2 项 · 预览数据
+              - generic [ref=e276]:
+                - strong [ref=e277]: Codex 插件仓库
+                - generic [ref=e278]: 2 项 · 预览数据
+              - generic [ref=e279]:
+                - strong [ref=e280]: Ponytail 多工具插件
+                - generic [ref=e281]: 6 项 · 预览数据
+              - generic [ref=e282]:
+                - strong [ref=e283]: awesome-claude-code
+                - generic [ref=e284]: 1 项 · 预览数据
+            - generic [ref=e285]:
+              - button "Files Claude 官方文件能力插件示例。 未安装" [ref=e286] [cursor=pointer]:
+                - generic [ref=e287]:
+                  - strong [ref=e288]: Files
+                  - paragraph [ref=e289]: Claude 官方文件能力插件示例。
+                - generic [ref=e290]: 未安装
+              - button "Codex GitHub Tools Codex 插件仓库中的 GitHub 工作流能力示例。 需审查" [ref=e291] [cursor=pointer]:
+                - generic [ref=e292]:
+                  - strong [ref=e293]: Codex GitHub Tools
+                  - paragraph [ref=e294]: Codex 插件仓库中的 GitHub 工作流能力示例。
+                - generic [ref=e295]: 需审查
+              - button "Filesystem MCP 可审查安装到 Claude Desktop 的 MCP 文件系统能力。 未安装" [ref=e296] [cursor=pointer]:
+                - generic [ref=e297]:
+                  - strong [ref=e298]: Filesystem MCP
+                  - paragraph [ref=e299]: 可审查安装到 Claude Desktop 的 MCP 文件系统能力。
+                - generic [ref=e300]: 未安装
+              - button "Ponytail for Codex Ponytail lazy senior dev 模式，添加到 Codex 插件 marketplace 后在 /plugins 中安装并审查 hooks。 未安装" [ref=e301] [cursor=pointer]:
+                - generic [ref=e302]:
+                  - strong [ref=e303]: Ponytail for Codex
+                  - paragraph [ref=e304]: Ponytail lazy senior dev 模式，添加到 Codex 插件 marketplace 后在 /plugins 中安装并审查 hooks。
+                - generic [ref=e305]: 未安装
+              - button "Ponytail for Claude Code Ponytail lazy senior dev 模式，安装到 Claude Code 插件市场。 未安装" [ref=e306] [cursor=pointer]:
+                - generic [ref=e307]:
+                  - strong [ref=e308]: Ponytail for Claude Code
+                  - paragraph [ref=e309]: Ponytail lazy senior dev 模式，安装到 Claude Code 插件市场。
+                - generic [ref=e310]: 未安装
+              - button "Ponytail for GitHub Copilot CLI Ponytail lazy senior dev 模式，安装到 GitHub Copilot CLI 插件系统。 未安装" [ref=e311] [cursor=pointer]:
+                - generic [ref=e312]:
+                  - strong [ref=e313]: Ponytail for GitHub Copilot CLI
+                  - paragraph [ref=e314]: Ponytail lazy senior dev 模式，安装到 GitHub Copilot CLI 插件系统。
+                - generic [ref=e315]: 未安装
+              - button "Ponytail MCP for Claude Desktop 把 Ponytail MCP server 注册到 Claude Desktop mcpServers。 未安装" [ref=e316] [cursor=pointer]:
+                - generic [ref=e317]:
+                  - strong [ref=e318]: Ponytail MCP for Claude Desktop
+                  - paragraph [ref=e319]: 把 Ponytail MCP server 注册到 Claude Desktop mcpServers。
+                - generic [ref=e320]: 未安装
+              - button "Ponytail Organization Plugin for Claude Desktop 安装为 Claude Desktop 开发模式可读取的组织插件目录。 未安装" [ref=e321] [cursor=pointer]:
+                - generic [ref=e322]:
+                  - strong [ref=e323]: Ponytail Organization Plugin for Claude Desktop
+                  - paragraph [ref=e324]: 安装为 Claude Desktop 开发模式可读取的组织插件目录。
+                - generic [ref=e325]: 未安装
+              - button "Ponytail Skills for Codex 复制 Ponytail skills 到 Codex 用户技能目录。 未安装" [ref=e326] [cursor=pointer]:
+                - generic [ref=e327]:
+                  - strong [ref=e328]: Ponytail Skills for Codex
+                  - paragraph [ref=e329]: 复制 Ponytail skills 到 Codex 用户技能目录。
+                - generic [ref=e330]: 未安装
+        - generic [ref=e331]:
+          - generic [ref=e333]:
+            - heading "Files" [level=2] [ref=e334]
+            - paragraph [ref=e335]: Claude 官方插件
+          - generic [ref=e337]:
+            - paragraph [ref=e338]: Claude 官方文件能力插件示例。
+            - generic [ref=e339]:
+              - generic [ref=e340]:
+                - generic [ref=e341]: 类型
+                - strong [ref=e342]: Claude Code 插件
+              - generic [ref=e343]:
+                - generic [ref=e344]: 状态
+                - strong [ref=e345]: 未安装
+              - generic [ref=e346]:
+                - generic [ref=e347]: 分类
+                - strong [ref=e348]: claude
+              - generic [ref=e349]:
+                - generic [ref=e350]: 作者
+                - strong [ref=e351]: Anthropic
+              - generic [ref=e352]:
+                - generic [ref=e353]: 许可证
+                - strong [ref=e354]: unknown
+            - generic [ref=e355]:
+              - generic [ref=e356]: claude CLI
+              - generic [ref=e357]: official
+              - generic [ref=e358]: claude
+            - generic [ref=e359]: 安装前应查看官方 marketplace 命令。
+            - generic [ref=e360]:
+              - button "预览安装" [ref=e361]:
+                - img [ref=e362]
+                - text: 预览安装
+              - button "Install with Claude CLI" [ref=e365]:
+                - img [ref=e366]
+                - generic [ref=e369]: Install with Claude CLI
+              - button "来源" [ref=e370]:
+                - img [ref=e371]
+                - text: 来源
+      - generic [ref=e375]:
+        - generic [ref=e376]:
+          - generic [ref=e377]:
+            - heading "Codex 工具与插件" [level=2] [ref=e378]
+            - paragraph [ref=e379]: 独立管理 Codex 的 MCP、Skills、Plugins；切换任意供应商都会带上。
+          - generic [ref=e380]:
+            - button "检测" [ref=e381]:
+              - img [ref=e382]
+              - text: 检测
+            - button "同步到当前 Codex" [ref=e387]:
+              - img [ref=e388]
+              - text: 同步到当前 Codex
+            - button "新增MCP" [ref=e393]:
+              - img [ref=e394]
+              - text: 新增MCP
+        - generic [ref=e395]:
+          - button "MCP 2" [ref=e396] [cursor=pointer]:
+            - strong [ref=e397]: MCP
+            - generic [ref=e398]: "2"
+          - button "Skills 0" [ref=e399] [cursor=pointer]:
+            - strong [ref=e400]: Skills
+            - generic [ref=e401]: "0"
+          - button "插件 9" [ref=e402] [cursor=pointer]:
+            - strong [ref=e403]: 插件
+            - generic [ref=e404]: "9"
+        - paragraph [ref=e405]: 当前共有 2 个MCP；这些条目独立于供应商保存，会写入所有供应商切换后的 config.toml。
+        - generic [ref=e406]:
+          - generic [ref=e407]:
+            - generic [ref=e408]:
+              - strong [ref=e409]: codegraph
+              - generic [ref=e410]: command = "codegraph"
+            - button [pressed] [ref=e411] [cursor=pointer]
+            - button "编辑" [ref=e413] [cursor=pointer]:
+              - img [ref=e414]
+            - button "删除" [ref=e421] [cursor=pointer]:
+              - img [ref=e422]
+          - generic [ref=e425]:
+            - generic [ref=e426]:
+              - strong [ref=e427]: node_repl
+              - generic [ref=e428]: command = "node"
+            - button [pressed] [ref=e429] [cursor=pointer]
+            - button "编辑" [ref=e431] [cursor=pointer]:
+              - img [ref=e432]
+            - button "删除" [ref=e439] [cursor=pointer]:
+              - img [ref=e440]
+      - generic [ref=e443]:
+        - generic [ref=e444]:
+          - generic [ref=e445]:
+            - heading "Claude 工具与插件" [level=2] [ref=e446]
+            - paragraph [ref=e447]: 管理 Claude Desktop 的 MCP；Skills 和插件显示当前本地写入/官方入口状态。
+          - generic [ref=e448]:
+            - button "检测" [ref=e449]:
+              - img [ref=e450]
+              - text: 检测
+            - button "新增MCP" [ref=e455]:
+              - img [ref=e456]
+              - text: 新增MCP
+            - button "写入 Claude 本地插件" [ref=e457]:
+              - img [ref=e458]
+              - text: 写入 Claude 本地插件
+        - generic [ref=e459]:
+          - button "MCP 2" [ref=e460] [cursor=pointer]:
+            - strong [ref=e461]: MCP
+            - generic [ref=e462]: "2"
+          - button "Skills 1" [ref=e463] [cursor=pointer]:
+            - strong [ref=e464]: Skills
+            - generic [ref=e465]: "1"
+          - button "插件 1" [ref=e466] [cursor=pointer]:
+            - strong [ref=e467]: 插件
+            - generic [ref=e468]: "1"
+        - paragraph [ref=e469]: 开发模式未配置；组织插件未安装；官方插件入口可用。 MCP 配置：~\AppData\Roaming\Claude\claude_desktop_config.json。
+        - generic [ref=e470]:
+          - generic [ref=e471]:
+            - generic [ref=e472]:
+              - strong [ref=e473]: claude-codex-pro-codex
+              - generic [ref=e474]: claude-codex-pro mcp
+            - button [pressed] [ref=e475] [cursor=pointer]
+            - button "编辑" [ref=e477] [cursor=pointer]:
+              - img [ref=e478]
+            - button "删除" [ref=e485] [cursor=pointer]:
+              - img [ref=e486]
+          - generic [ref=e489]:
+            - generic [ref=e490]:
+              - strong [ref=e491]: Ponytail MCP
+              - generic [ref=e492]: 可通过一键写入本地插件安装
+            - button [ref=e493] [cursor=pointer]
+            - button "编辑" [ref=e495] [cursor=pointer]:
+              - img [ref=e496]
+            - button "删除" [ref=e503] [cursor=pointer]:
+              - img [ref=e504]

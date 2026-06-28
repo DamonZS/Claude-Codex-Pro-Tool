@@ -20,6 +20,7 @@ docs/superpowers/
 *.log
 .DS_Store
 Thumbs.db
+/Files/
 
 # Local scratch docs and standalone launcher experiments
 /CLAUDE_LAUNCHER_README.md

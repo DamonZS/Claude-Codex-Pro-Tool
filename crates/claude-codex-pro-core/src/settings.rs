@@ -1419,8 +1419,16 @@ experimental_bearer_token = "sk-existing"
         let profile = &updated.relay_profiles[0];
         assert_eq!(profile.api_key, "sk-existing");
         assert!(!profile.config_contents.contains("sk-other"));
-        assert!(profile.config_contents.contains(r#"experimental_bearer_token = "sk-existing""#));
-        assert!(profile.config_contents.contains(r#"base_url = "https://relay.example/v1""#));
+        assert!(
+            profile
+                .config_contents
+                .contains(r#"experimental_bearer_token = "sk-existing""#)
+        );
+        assert!(
+            profile
+                .config_contents
+                .contains(r#"base_url = "https://relay.example/v1""#)
+        );
     }
 
     #[test]
@@ -1726,7 +1734,10 @@ experimental_bearer_token = "sk-existing"
             saved["relayProfiles"][1]["aggregateStrategy"],
             json!("failover")
         );
-        assert_eq!(saved["relayProfiles"][1]["aggregateMembers"], json!(["relay-a"]));
+        assert_eq!(
+            saved["relayProfiles"][1]["aggregateMembers"],
+            json!(["relay-a"])
+        );
     }
 
     #[test]

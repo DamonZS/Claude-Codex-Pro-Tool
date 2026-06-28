@@ -1,8 +1,10 @@
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::io::{ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
@@ -22,6 +24,7 @@ const POST_LAUNCH_COMPUTER_USE_GUARD_SECONDS: &[u64] = &[0, 5, 15, 30, 60, 120, 
 const POST_LAUNCH_COMPUTER_USE_GUARD_STABLE_ATTEMPTS: usize = 3;
 const PACKAGED_CDP_READY_ATTEMPTS: usize = 10;
 const PACKAGED_CDP_READY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+static DETACHED_HELPER_PORT: OnceLock<u16> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexLaunch {
@@ -230,6 +233,226 @@ pub async fn launch_and_inject(options: LaunchOptions) -> anyhow::Result<LaunchH
     launch_and_inject_with_hooks(options, DefaultLaunchHooks::shared()).await
 }
 
+pub async fn ensure_detached_helper(helper_port: u16) -> anyhow::Result<()> {
+    if DETACHED_HELPER_PORT.get().copied() == Some(helper_port)
+        && helper_backend_online_blocking(helper_port)
+    {
+        return Ok(());
+    }
+    let mut recovered_once = false;
+    loop {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", helper_port)).await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == ErrorKind::AddrInUse => {
+                if helper_backend_online_blocking(helper_port) {
+                    let _ = crate::diagnostic_log::append_diagnostic_log(
+                        "helper.detached_already_bound",
+                        serde_json::json!({ "helper_port": helper_port, "verified": true }),
+                    );
+                    return Ok(());
+                }
+                if !recovered_once && recover_detached_helper_port_conflict(helper_port).await? {
+                    recovered_once = true;
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    continue;
+                }
+                let conflict = detached_helper_port_conflict_details(helper_port).await;
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "helper.detached_port_conflict",
+                    serde_json::json!({
+                        "helper_port": helper_port,
+                        "verified": false,
+                        "conflict": conflict
+                    }),
+                );
+                anyhow::bail!(
+                    "127.0.0.1:{helper_port} is already in use but did not answer Claude Codex Pro backend status"
+                );
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to bind detached helper on 127.0.0.1:{helper_port}")
+                });
+            }
+        };
+        let _ = DETACHED_HELPER_PORT.set(helper_port);
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "helper.detached_listening",
+            serde_json::json!({
+                "helper_port": helper_port,
+                "address": format!("http://127.0.0.1:{helper_port}")
+            }),
+        );
+        tokio::spawn(async move {
+            loop {
+                if let Ok((stream, addr)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        let _ = handle_helper_connection(stream, Some(addr)).await;
+                    });
+                }
+            }
+        });
+        return Ok(());
+    }
+}
+
+async fn recover_detached_helper_port_conflict(helper_port: u16) -> anyhow::Result<bool> {
+    #[cfg(windows)]
+    {
+        let current_process_id = std::process::id();
+        let listening_processes = windows_processes_listening_on_port(helper_port)?;
+        let mut terminated_any = false;
+        for process_id in listening_processes {
+            if process_id == current_process_id {
+                continue;
+            }
+            if windows_process_looks_like_claude_codex_pro(process_id) {
+                let terminated = crate::windows_integration::terminate_process(process_id);
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "helper.detached_port_conflict_terminated",
+                    serde_json::json!({
+                        "helper_port": helper_port,
+                        "process_id": process_id,
+                        "terminated": terminated
+                    }),
+                );
+                terminated_any |= terminated;
+            }
+        }
+        Ok(terminated_any)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = helper_port;
+        Ok(false)
+    }
+}
+
+async fn detached_helper_port_conflict_details(helper_port: u16) -> serde_json::Value {
+    #[cfg(windows)]
+    {
+        let current_process_id = std::process::id();
+        let listening_processes =
+            windows_processes_listening_on_port(helper_port).unwrap_or_default();
+        let processes = crate::windows_integration::enumerate_processes();
+        let conflict_processes: Vec<_> = listening_processes
+            .into_iter()
+            .filter_map(|process_id| {
+                processes
+                    .iter()
+                    .find(|process| process.process_id == process_id)
+                    .map(|process| {
+                        serde_json::json!({
+                            "processId": process.process_id,
+                            "currentProcess": process.process_id == current_process_id,
+                            "exeFile": process.exe_file,
+                            "executablePath": process.executable_path.as_ref().map(|path| path.to_string_lossy().to_string()),
+                        })
+                    })
+            })
+            .collect();
+        serde_json::json!({
+            "helperPort": helper_port,
+            "processes": conflict_processes,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        serde_json::json!({ "helperPort": helper_port })
+    }
+}
+
+#[cfg(windows)]
+fn windows_processes_listening_on_port(helper_port: u16) -> anyhow::Result<Vec<u32>> {
+    let script = format!(
+        r#"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+$port = {helper_port}
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.LocalPort -eq $port }} |
+  Select-Object OwningProcess, LocalPort |
+  ConvertTo-Json -Depth 3 -Compress
+"#
+    );
+    let Some(value) = powershell_json(&script)? else {
+        return Ok(Vec::new());
+    };
+    Ok(match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("OwningProcess")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .filter_map(|pid| u32::try_from(pid).ok())
+            .collect(),
+        serde_json::Value::Object(_) => value
+            .get("OwningProcess")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+#[cfg(windows)]
+fn windows_process_looks_like_claude_codex_pro(process_id: u32) -> bool {
+    crate::windows_integration::enumerate_processes()
+        .into_iter()
+        .find(|process| process.process_id == process_id)
+        .is_some_and(|process| {
+            let exe_file = process.exe_file.to_ascii_lowercase();
+            let executable_path = process
+                .executable_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            exe_file.contains("claude-codex-pro") || executable_path.contains("claude-codex-pro")
+        })
+}
+
+#[cfg(windows)]
+fn powershell_json(script: &str) -> anyhow::Result<Option<serde_json::Value>> {
+    let mut command = std::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-Command", script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::windows_create_no_window());
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(None);
+    }
+    Ok(serde_json::from_str::<serde_json::Value>(&stdout).ok())
+}
+
+fn helper_backend_online_blocking(port: u16) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&address, std::time::Duration::from_millis(250))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+    let request = b"POST /backend/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && response.starts_with("HTTP/1.1 200")
+        && response.contains("\"transport\":\"http-helper\"")
+        && response.contains("\"version\":")
+}
+
 pub async fn launch_and_inject_with_hooks<H>(
     options: LaunchOptions,
     hooks: H,
@@ -239,7 +462,7 @@ where
 {
     let hooks = hooks.into_launch_hooks();
     let debug_port = hooks.select_debug_port(options.debug_port);
-    let mut helper_port = hooks.select_helper_port(options.helper_port);
+    let helper_port = hooks.select_helper_port(options.helper_port);
     let settings = hooks.load_settings().await?;
     let app_dir = hooks.resolve_app_dir(options.app_dir.as_deref(), &settings)?;
     let status_store = options.status_store.clone();
@@ -255,9 +478,6 @@ where
             hooks.ensure_computer_use_config(&settings).await?;
         }
         let protocol_proxy_enabled = relay_protocol_proxy_enabled(&settings);
-        if protocol_proxy_enabled {
-            helper_port = crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT;
-        }
         if settings.enhancements_enabled || protocol_proxy_enabled {
             hooks.start_helper(helper_port).await?;
             helper_started = true;
@@ -738,6 +958,29 @@ async fn handle_helper_connection(
         )
         .await;
     }
+    if crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
+        && matches!(method, "POST" | "OPTIONS")
+    {
+        return handle_claude_desktop_messages_proxy_connection(
+            &mut stream,
+            request_body,
+            method,
+            path,
+            remote_addr_text,
+        )
+        .await;
+    }
+    if crate::protocol_proxy::is_claude_desktop_models_proxy_path(path)
+        && matches!(method, "GET" | "OPTIONS")
+    {
+        return handle_claude_desktop_models_proxy_connection(
+            &mut stream,
+            method,
+            path,
+            remote_addr_text,
+        )
+        .await;
+    }
     if crate::protocol_proxy::is_models_proxy_path(path) && matches!(method, "GET" | "OPTIONS") {
         return handle_models_proxy_connection(&mut stream, method, path, remote_addr_text).await;
     }
@@ -957,6 +1200,71 @@ async fn handle_models_proxy_connection(
     Ok(())
 }
 
+async fn handle_claude_desktop_models_proxy_connection(
+    stream: &mut tokio::net::TcpStream,
+    method: &str,
+    path: &str,
+    remote_addr_text: Option<String>,
+) -> anyhow::Result<()> {
+    if method == "OPTIONS" {
+        write_http_response(
+            stream,
+            "204 No Content",
+            "application/json; charset=utf-8",
+            &[],
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    let response = match crate::protocol_proxy::local_claude_desktop_models_proxy_response() {
+        Ok(response) => response,
+        Err(error) => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "claude_desktop_models_proxy_error",
+                    "message": error.to_string()
+                }
+            }))?;
+            write_http_response(
+                stream,
+                "502 Bad Gateway",
+                "application/json; charset=utf-8",
+                &body,
+            )
+            .await?;
+            log_helper_response(
+                "helper.claude_desktop_models_proxy_failed",
+                method,
+                path,
+                "502 Bad Gateway",
+                remote_addr_text,
+            );
+            stream.shutdown().await?;
+            return Ok(());
+        }
+    };
+
+    write_http_response(
+        stream,
+        &response.status,
+        &response.content_type,
+        &response.body,
+    )
+    .await?;
+    log_helper_response(
+        "helper.claude_desktop_models_proxy_ok",
+        method,
+        path,
+        &response.status,
+        remote_addr_text,
+    );
+    stream.shutdown().await?;
+    Ok(())
+}
+
 async fn handle_protocol_proxy_connection(
     stream: &mut tokio::net::TcpStream,
     request_body: &str,
@@ -1147,6 +1455,98 @@ async fn handle_chat_completions_proxy_connection(
             "helper.chat_completions_proxy_ok"
         } else {
             "helper.chat_completions_proxy_upstream_error"
+        },
+        method,
+        path,
+        &status,
+        remote_addr_text,
+    );
+    stream.shutdown().await?;
+    Ok(())
+}
+
+async fn handle_claude_desktop_messages_proxy_connection(
+    stream: &mut tokio::net::TcpStream,
+    request_body: &str,
+    method: &str,
+    path: &str,
+    remote_addr_text: Option<String>,
+) -> anyhow::Result<()> {
+    if method == "OPTIONS" {
+        write_http_response(
+            stream,
+            "204 No Content",
+            "application/json; charset=utf-8",
+            &[],
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    let upstream =
+        match crate::protocol_proxy::open_claude_desktop_messages_proxy_request(request_body).await
+        {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "type": "error",
+                    "error": {
+                        "type": "claude_desktop_proxy_error",
+                        "message": error.to_string()
+                    }
+                }))?;
+                write_http_response(
+                    stream,
+                    "502 Bad Gateway",
+                    "application/json; charset=utf-8",
+                    &body,
+                )
+                .await?;
+                log_helper_response(
+                    "helper.claude_desktop_messages_proxy_failed",
+                    method,
+                    path,
+                    "502 Bad Gateway",
+                    remote_addr_text,
+                );
+                stream.shutdown().await?;
+                return Ok(());
+            }
+        };
+
+    let status = upstream.status();
+    let is_success = upstream.is_success();
+    let content_type = if upstream.content_type.is_empty() {
+        "application/json; charset=utf-8".to_string()
+    } else {
+        upstream.content_type.clone()
+    };
+
+    if upstream.is_stream && is_success {
+        write_http_stream_headers(stream, &status, &content_type).await?;
+        let mut bytes_stream = upstream.response.bytes_stream();
+        while let Some(chunk) = bytes_stream.next().await {
+            stream.write_all(&chunk?).await?;
+        }
+        log_helper_response(
+            "helper.claude_desktop_messages_proxy_stream_ok",
+            method,
+            path,
+            &status,
+            remote_addr_text,
+        );
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    let body = upstream.response.bytes().await?.to_vec();
+    write_http_response(stream, &status, &content_type, &body).await?;
+    log_helper_response(
+        if is_success {
+            "helper.claude_desktop_messages_proxy_ok"
+        } else {
+            "helper.claude_desktop_messages_proxy_upstream_error"
         },
         method,
         path,
@@ -1532,7 +1932,40 @@ pub async fn check_and_reinject_bridge(debug_port: u16, helper_port: u16) -> boo
     }
 }
 
-async fn bridge_health_ok(debug_port: u16) -> anyhow::Result<bool> {
+pub async fn force_reinject_bridge(debug_port: u16, helper_port: u16) -> bool {
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        "bridge.force_reinject_start",
+        serde_json::json!({
+            "debug_port": debug_port,
+            "helper_port": helper_port
+        }),
+    );
+    match retry_injection(debug_port, helper_port).await {
+        Ok(()) => {
+            let _ = crate::diagnostic_log::append_diagnostic_log(
+                "bridge.force_reinject_ok",
+                serde_json::json!({
+                    "debug_port": debug_port,
+                    "helper_port": helper_port
+                }),
+            );
+            true
+        }
+        Err(error) => {
+            let _ = crate::diagnostic_log::append_diagnostic_log(
+                "bridge.force_reinject_failed",
+                serde_json::json!({
+                    "debug_port": debug_port,
+                    "helper_port": helper_port,
+                    "message": error.to_string()
+                }),
+            );
+            false
+        }
+    }
+}
+
+pub async fn bridge_health_ok(debug_port: u16) -> anyhow::Result<bool> {
     let targets = crate::cdp::list_targets(debug_port).await?;
     let target = crate::cdp::pick_injectable_codex_page_target(&targets)?;
     let websocket_url = target
@@ -1870,6 +2303,8 @@ fn launch_status(
         started_at_ms: now_ms(),
         debug_port: Some(debug_port),
         helper_port: Some(helper_port),
+        debug_port_online: false,
+        helper_port_online: false,
         codex_app: Some(app_dir.to_string_lossy().to_string()),
     }
 }

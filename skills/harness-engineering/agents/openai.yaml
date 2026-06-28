@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Engineering"
+  short_description: "面向AI代理协作的规格文档验收标准验证与交付工作流"
+  default_prompt: "Use $harness-engineering to turn this task into a spec-driven, acceptance-verified workflow."

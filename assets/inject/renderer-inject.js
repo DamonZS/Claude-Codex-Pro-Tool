@@ -43,7 +43,7 @@
   const codexDeleteStyleVersion = "13";
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
-  const claudeCodexProMenuVersion = "8";
+  const claudeCodexProMenuVersion = "9";
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
@@ -600,7 +600,7 @@
         transform: none;
         z-index: 2147483647;
         height: var(--claude-codex-pro-menu-height, 30px);
-        color: #ffffff;
+        color: var(--claude-codex-pro-window-text-color, currentColor);
         font: 13px system-ui, sans-serif;
         text-align: left;
         display: inline-flex;
@@ -646,7 +646,7 @@
       }
       .claude-codex-pro-window-status-title {
         margin-right: 2px;
-        color: #f4f4f5;
+        color: inherit;
         font-weight: 650;
       }
       .claude-codex-pro-window-status-dot {
@@ -1125,10 +1125,20 @@
     return settings;
   }
 
+  function claudeCodexProConfiguredSettings() {
+    try {
+      return { ...defaultClaudeCodexProSettings(), ...JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}"), ...backendClaudeCodexProSettings() };
+    } catch {
+      return { ...defaultClaudeCodexProSettings(), ...backendClaudeCodexProSettings() };
+    }
+  }
+
   function claudeCodexProSettings() {
     const relayPatchDisabled = claudeCodexProBackendSettings.launchMode === "relay";
+    const settings = claudeCodexProConfiguredSettings();
     if (claudeCodexProBackendSettings.enhancementsEnabled === false) {
       return {
+        ...settings,
         pluginEntryUnlock: false,
         pluginMarketplaceUnlock: false,
         forcePluginInstall: false,
@@ -1145,25 +1155,17 @@
         nativeMenuPlacement: false,
         chineseOverlayEnabled: false,
         serviceTierControls: false,
+        memoryAssistEnabled: false,
+        memoryAssistInjectEnabled: false,
+        memoryAssistAutoSuggestEnabled: false,
       };
     }
-    try {
-      const settings = { ...defaultClaudeCodexProSettings(), ...JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}"), ...backendClaudeCodexProSettings() };
-      if (relayPatchDisabled) {
-        settings.pluginEntryUnlock = false;
-        settings.pluginMarketplaceUnlock = false;
-        settings.forcePluginInstall = false;
-      }
-      return settings;
-    } catch {
-      const settings = { ...defaultClaudeCodexProSettings(), ...backendClaudeCodexProSettings() };
-      if (relayPatchDisabled) {
-        settings.pluginEntryUnlock = false;
-        settings.pluginMarketplaceUnlock = false;
-        settings.forcePluginInstall = false;
-      }
-      return settings;
+    if (relayPatchDisabled) {
+      settings.pluginEntryUnlock = false;
+      settings.pluginMarketplaceUnlock = false;
+      settings.forcePluginInstall = false;
     }
+    return settings;
   }
 
   function setClaudeCodexProSetting(key, value) {
@@ -1238,9 +1240,10 @@
   }
 
   function renderClaudeCodexProMenu() {
+    const configuredSettings = claudeCodexProConfiguredSettings();
     document.querySelectorAll(".claude-codex-pro-toggle[data-claude-codex-pro-setting]").forEach((button) => {
       const key = button.getAttribute("data-claude-codex-pro-setting");
-      button.dataset.enabled = String(!!claudeCodexProSettings()[key]);
+      button.dataset.enabled = String(!!configuredSettings[key]);
     });
     refreshConversationViewControls();
     refreshCodexServiceTierControls();
@@ -3031,7 +3034,7 @@
       if (toggle) {
         if (toggle.disabled) return;
         const key = toggle.getAttribute("data-claude-codex-pro-setting");
-        setClaudeCodexProSetting(key, !claudeCodexProSettings()[key]);
+        setClaudeCodexProSetting(key, !claudeCodexProConfiguredSettings()[key]);
         return;
       }
       const backendToggle = target?.closest("[data-codex-backend-setting]");
@@ -3113,7 +3116,45 @@
     return rect;
   }
 
+  function normalizeStatusAnchorText(node) {
+    if (!(node instanceof Element)) return "";
+    const raw = [
+      node.textContent,
+      node.getAttribute?.("aria-label"),
+      node.getAttribute?.("title"),
+      node.getAttribute?.("data-testid"),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return String(raw || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function findCodexHelpAnchor(header, headerRect) {
+    const helpKeywords = new Set(["帮助", "help"]);
+    const selector = [
+      "button",
+      "a",
+      '[role="button"]',
+      '[aria-label]',
+      '[title]',
+      '[data-testid]',
+      '[class*="truncate"]',
+      '[class*="text-sm"]',
+      '[class*="text-base"]',
+    ].join(",");
+    const candidates = Array.from(header?.querySelectorAll?.(selector) || []);
+    return candidates
+      .map((node) => ({ node, rect: visibleRectForCodexStatusAnchor(node, headerRect), text: normalizeStatusAnchorText(node) }))
+      .filter((entry) => entry.rect && [...helpKeywords].some((keyword) => entry.text === keyword || entry.text.startsWith(`${keyword} `) || entry.text.endsWith(` ${keyword}`) || entry.text.includes(` ${keyword} `)))
+      .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top)[0] || null;
+  }
+
   function findCodexStatusLeftAnchor(header, headerRect) {
+    const helpAnchor = findCodexHelpAnchor(header, headerRect);
+    if (helpAnchor) return helpAnchor;
     const selector = [
       "button",
       "a",
@@ -3130,12 +3171,14 @@
     ].join(",");
     const candidates = Array.from(header?.querySelectorAll?.(selector) || []);
     return candidates
-      .map((node) => visibleRectForCodexStatusAnchor(node, headerRect))
-      .filter(Boolean)
-      .sort((a, b) => a.left - b.left || a.top - b.top)[0] || null;
+      .map((node) => ({ node, rect: visibleRectForCodexStatusAnchor(node, headerRect) }))
+      .filter((entry) => entry.rect)
+      .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top)[0] || null;
   }
 
   function findCodexWindowLeftAnchor(header, headerRect) {
+    const topMenuAnchor = findCodexHelpAnchor(header, headerRect);
+    if (topMenuAnchor) return topMenuAnchor;
     const leftRoots = [
       document.querySelector("aside"),
       document.querySelector("nav"),
@@ -3169,6 +3212,13 @@
     }
   }
 
+  function setWindowTextColorFromAnchor(menu, anchorNode) {
+    if (!menu) return;
+    const color = anchorNode instanceof Element ? getComputedStyle(anchorNode).color : "";
+    const nextColor = color && color !== "rgba(0, 0, 0, 0)" && color !== "transparent" ? color : "currentColor";
+    setCssPropIfChanged(menu, "--claude-codex-pro-window-text-color", nextColor);
+  }
+
   function headerTitleRegion(header) {
     const candidates = Array.from(header?.querySelectorAll?.('[data-state], [class*="truncate"], [class*="text-base"]') || []);
     return candidates.find((node) => {
@@ -3195,11 +3245,13 @@
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
+      setWindowTextColorFromAnchor(menu, null);
       return;
     }
     const headerRect = header.getBoundingClientRect();
     if (headerRect.height) {
-      const anchorRect = findCodexWindowLeftAnchor(header, headerRect);
+      const anchor = findCodexWindowLeftAnchor(header, headerRect);
+      const anchorRect = anchor?.rect || null;
       const menuWidth = menu.getBoundingClientRect().width || 168;
       const minLeft = Math.max(8, headerRect.left + 8);
       const maxLeft = Math.max(minLeft, Math.min(window.innerWidth - menuWidth - 8, headerRect.right - menuWidth - 8));
@@ -3208,10 +3260,12 @@
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${headerRect.top}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${left}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${headerRect.height}px`);
+      setWindowTextColorFromAnchor(menu, anchor?.node || header);
     } else {
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
+      setWindowTextColorFromAnchor(menu, null);
     }
     updateCodexMemoryBadgePosition();
   }
@@ -9026,7 +9080,32 @@
     lastLoadedAt: 0,
     lastSuggestionHash: "",
     lastSuggestionAt: 0,
+    activeUntil: 0,
+    activeSource: "idle",
   };
+
+  function codexMemoryPulseActivity(source = "stream", durationMs = 3200) {
+    codexMemoryState.activeUntil = Date.now() + durationMs;
+    codexMemoryState.activeSource = source || "stream";
+    codexMemoryExposeRuntime();
+    codexMemoryUpdateBadge();
+  }
+
+  function codexMemoryExposeRuntime() {
+    const settings = claudeCodexProSettings();
+    const active = Date.now() < Number(codexMemoryState.activeUntil || 0);
+    window.__claudeCodexProMemoryAssistRuntime = {
+      enabled: !!settings.memoryAssistEnabled,
+      injected: !!settings.memoryAssistEnabled && !!settings.memoryAssistInjectEnabled,
+      status: codexMemoryState.status,
+      active,
+      workspace: codexMemoryState.workspace,
+      totalItems: Number(codexMemoryState.totalItems || 0),
+      pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
+      summary: codexMemoryState.summary || "",
+      source: active ? (codexMemoryState.activeSource || "stream") : "idle",
+    };
+  }
 
   function codexMemoryWorkspace() {
     const project = currentProjectContext?.();
@@ -9118,6 +9197,17 @@
     if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled) {
       badge?.remove();
       document.getElementById(codexMemoryPanelId)?.remove();
+      window.__claudeCodexProMemoryAssistRuntime = {
+        enabled: !!settings.memoryAssistEnabled,
+        injected: false,
+        status: "disabled",
+        active: false,
+        workspace: codexMemoryState.workspace,
+        totalItems: Number(codexMemoryState.totalItems || 0),
+        pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
+        summary: "盘古记忆当前未注入。",
+        source: "idle",
+      };
       return;
     }
     const node = badge || document.createElement("button");
@@ -9125,6 +9215,7 @@
     node.type = "button";
     node.dataset.codexMemoryAssistVersion = codexMemoryAssistVersion;
     node.dataset.status = codexMemoryState.status;
+    node.dataset.active = Date.now() < Number(codexMemoryState.activeUntil || 0) ? "true" : "false";
     node.innerHTML = `
       <span class="codex-memory-dot"></span>
       <span>盘古记忆</span>
@@ -9140,6 +9231,7 @@
       });
       document.documentElement.appendChild(node);
     }
+    codexMemoryExposeRuntime();
     updateCodexMemoryBadgePosition();
   }
 
@@ -9154,6 +9246,7 @@
       codexMemoryUpdateBadge();
       return;
     }
+    codexMemoryPulseActivity("session");
     codexMemoryState.lastLoadedAt = now;
     codexMemoryState.workspace = codexMemoryWorkspace();
     try {
@@ -9173,6 +9266,7 @@
       codexMemoryState.status = "failed";
       codexMemoryState.summary = `盘古记忆不可用：${error?.message || error}`;
     }
+    codexMemoryExposeRuntime();
     codexMemoryUpdateBadge();
   }
 
@@ -9186,6 +9280,7 @@
     if (!force && hash === codexMemoryState.lastSuggestionHash && now - codexMemoryState.lastSuggestionAt < 120000) return;
     codexMemoryState.lastSuggestionHash = hash;
     codexMemoryState.lastSuggestionAt = now;
+    codexMemoryPulseActivity("candidate");
     try {
       const result = await postJson("/memory/candidates", {
         workspace: codexMemoryWorkspace(),
@@ -9198,6 +9293,7 @@
       if (result?.status === "ok") {
         codexMemoryState.pendingCandidates = Math.max(1, Number(codexMemoryState.pendingCandidates || 0) + 1);
         codexMemoryState.summary = "已生成待确认记忆，需确认后才会写入长期记忆。";
+        codexMemoryExposeRuntime();
         codexMemoryUpdateBadge();
       }
     } catch (_error) {
@@ -9269,6 +9365,7 @@
     if (input && selected && !input.value) input.value = selected.slice(0, 4000);
     panel.querySelector("[data-codex-memory-summary]").textContent = codexMemoryState.summary || "";
     panel.hidden = !panel.hidden;
+    codexMemoryPulseActivity("panel");
     codexMemoryRenderList(codexMemoryState.injectedItems);
   }
 
@@ -9281,6 +9378,7 @@
       return;
     }
     codexMemorySetMessage("正在保存记忆…", "");
+    codexMemoryPulseActivity("learn");
     try {
       const result = await postJson("/memory/learn", {
         workspace: codexMemoryWorkspace(),
@@ -9303,6 +9401,7 @@
     const input = panel.querySelector("[data-codex-memory-input]");
     const query = String(input?.value || codexMemoryCurrentText()).trim();
     codexMemorySetMessage("正在检索记忆…", "");
+    codexMemoryPulseActivity("search");
     try {
       const result = await postJson("/memory/search", {
         workspace: codexMemoryWorkspace(),
@@ -9320,6 +9419,7 @@
 
   async function codexMemoryLoadCandidates() {
     codexMemorySetMessage("正在读取待确认记忆…", "");
+    codexMemoryPulseActivity("candidate-list");
     try {
       const result = await postJson("/memory/candidates", {
         workspace: codexMemoryWorkspace(),
@@ -9354,6 +9454,7 @@
 
   async function codexMemoryReviewCandidate(id, approve) {
     if (!id) return;
+    codexMemoryPulseActivity(approve ? "approve" : "reject");
     try {
       const result = await postJson(approve ? "/memory/approve" : "/memory/reject", { id });
       if (result?.status !== "ok") throw new Error(result?.message || "review failed");

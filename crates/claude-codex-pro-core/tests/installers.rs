@@ -99,9 +99,7 @@ fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
 
     assert_eq!(
         companion,
-        std::path::PathBuf::from(
-            "/Applications/Claude Code Pro.app/Contents/MacOS/ClaudeCodexPro"
-        )
+        std::path::PathBuf::from("/Applications/Claude Code Pro.app/Contents/MacOS/ClaudeCodexPro")
     );
     assert_ne!(
         companion,

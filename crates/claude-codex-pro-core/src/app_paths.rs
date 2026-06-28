@@ -84,11 +84,7 @@ pub fn find_macos_codex_app(search_roots: &[PathBuf]) -> Option<PathBuf> {
 }
 
 pub fn find_macos_codex_app_default() -> Option<PathBuf> {
-    let mut roots = vec![PathBuf::from("/Applications")];
-    if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
-        roots.push(home.join("Applications"));
-    }
-    find_macos_codex_app(&roots)
+    find_macos_codex_app(&macos_codex_search_roots_default())
 }
 
 pub fn resolve_codex_app_dir(app_dir: Option<&Path>) -> Option<PathBuf> {
@@ -109,28 +105,61 @@ pub fn resolve_codex_app_dir(app_dir: Option<&Path>) -> Option<PathBuf> {
 /// - %LOCALAPPDATA%\OpenAI\Codex\      (user data root)
 /// - %LOCALAPPDATA%\Programs\OpenAI\Codex\ (alternative)
 pub fn find_standalone_codex_app_dir() -> Option<PathBuf> {
-    let local_appdata = std::env::var_os("LOCALAPPDATA")?;
-
-    let candidates: &[PathBuf] = &[
-        PathBuf::from(&local_appdata)
-            .join("OpenAI")
-            .join("Codex")
-            .join("bin"),
-        PathBuf::from(&local_appdata).join("OpenAI").join("Codex"),
-        PathBuf::from(&local_appdata)
-            .join("Programs")
-            .join("OpenAI")
-            .join("Codex"),
-    ];
-
-    for candidate in candidates {
-        if let Some(path) = normalize_codex_app_path(candidate) {
+    for candidate in standalone_codex_candidates_default() {
+        if let Some(path) = normalize_codex_app_path(&candidate) {
             if build_codex_executable(&path).exists() {
                 return Some(path);
             }
         }
     }
     None
+}
+
+pub fn standalone_codex_candidates_from(
+    local_appdata: Option<&Path>,
+    appdata: Option<&Path>,
+    program_files: Option<&Path>,
+    program_files_x86: Option<&Path>,
+    program_w6432: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut bases = Vec::new();
+    if let Some(local) = local_appdata {
+        bases.push(local.join("OpenAI").join("Codex").join("bin"));
+        bases.push(local.join("OpenAI").join("Codex"));
+        bases.push(local.join("OpenAI.Codex"));
+        bases.push(local.join("Codex"));
+        bases.push(local.join("Programs").join("OpenAI").join("Codex"));
+        bases.push(local.join("Programs").join("Codex"));
+    }
+    if let Some(roaming) = appdata {
+        bases.push(roaming.join("OpenAI").join("Codex").join("bin"));
+        bases.push(roaming.join("OpenAI").join("Codex"));
+        bases.push(roaming.join("OpenAI.Codex"));
+        bases.push(roaming.join("Codex"));
+    }
+    for root in [program_files, program_files_x86, program_w6432]
+        .into_iter()
+        .flatten()
+    {
+        bases.push(root.join("OpenAI").join("Codex"));
+        bases.push(root.join("OpenAI Codex"));
+        bases.push(root.join("Codex"));
+    }
+    bases.sort();
+    bases.dedup();
+    bases
+}
+
+pub fn standalone_codex_candidates_default() -> Vec<PathBuf> {
+    standalone_codex_candidates_from(
+        std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
+        std::env::var_os("APPDATA").as_deref().map(Path::new),
+        std::env::var_os("ProgramFiles").as_deref().map(Path::new),
+        std::env::var_os("ProgramFiles(x86)")
+            .as_deref()
+            .map(Path::new),
+        std::env::var_os("ProgramW6432").as_deref().map(Path::new),
+    )
 }
 
 pub fn resolve_codex_app_dir_with_saved(
@@ -290,6 +319,24 @@ fn append_user_data_variants(candidates: &mut Vec<PathBuf>, base: &Path) {
     candidates.push(base.join("OpenAI").join("Codex"));
     candidates.push(base.join("OpenAI.Codex"));
     candidates.push(base.join("Codex"));
+}
+
+pub fn macos_codex_search_roots_default() -> Vec<PathBuf> {
+    macos_codex_search_roots_from(
+        directories::BaseDirs::new()
+            .map(|dirs| dirs.home_dir().to_path_buf())
+            .as_deref(),
+    )
+}
+
+pub fn macos_codex_search_roots_from(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home {
+        roots.push(home.join("Applications"));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn macos_app_candidates(root: &Path) -> Vec<PathBuf> {

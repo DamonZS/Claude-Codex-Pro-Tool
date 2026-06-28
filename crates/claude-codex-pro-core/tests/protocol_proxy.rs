@@ -1,10 +1,14 @@
 use claude_codex_pro_core::protocol_proxy::{
     ChatSseToResponsesConverter, chat_completion_to_response,
     chat_completion_to_response_with_request, chat_completions_url, chat_sse_to_responses_sse,
-    chat_sse_to_responses_sse_with_request, is_chat_completions_proxy_path, is_models_proxy_path,
-    is_responses_proxy_path, models_url, responses_error_from_upstream,
+    chat_sse_to_responses_sse_with_request, claude_desktop_default_model_list,
+    claude_desktop_model_mapping_for, claude_desktop_models_response,
+    claude_desktop_resolved_upstream_base_url, claude_messages_url, is_chat_completions_proxy_path,
+    is_claude_desktop_messages_proxy_path, is_claude_desktop_models_proxy_path,
+    is_models_proxy_path, is_responses_proxy_path, models_url, responses_error_from_upstream,
     responses_to_chat_completions,
 };
+use claude_codex_pro_core::settings::{BackendSettings, RelayProfile};
 use serde_json::json;
 
 #[test]
@@ -119,6 +123,111 @@ fn proxy_route_matchers_accept_ccswitch_codex_aliases() {
     for path in ["/models", "/v1/models", "/v1/v1/models", "/codex/v1/models"] {
         assert!(is_models_proxy_path(path), "{path}");
     }
+
+    for path in [
+        "/claude-desktop/messages",
+        "/claude-desktop/v1/messages",
+        "/claude-desktop/v1/v1/messages",
+    ] {
+        assert!(is_claude_desktop_messages_proxy_path(path), "{path}");
+    }
+
+    for path in [
+        "/claude-desktop/models",
+        "/claude-desktop/v1/models",
+        "/claude-desktop/v1/v1/models",
+    ] {
+        assert!(is_claude_desktop_models_proxy_path(path), "{path}");
+    }
+}
+
+#[test]
+fn claude_desktop_model_mapping_maps_safe_roles_to_upstream_models() {
+    let relay = RelayProfile {
+        model: "deepseek-v4-pro".to_string(),
+        test_model: "deepseek-v4-pro".to_string(),
+        model_list: "deepseek-v4-pro\nkimi-k2\nqwen3-coder [1M]\nmoonshot-v1".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
+        Some("deepseek-v4-pro")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
+        Some("moonshot-v1")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-opus-4-8", &relay).as_deref(),
+        Some("qwen3-coder")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
+        Some("kimi-k2")
+    );
+}
+
+#[test]
+fn claude_desktop_model_mapping_uses_single_model_for_all_roles() {
+    let relay = RelayProfile {
+        model_list: "gpt-5.5".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
+        Some("gpt-5.5")
+    );
+}
+
+#[test]
+fn claude_desktop_model_mapping_has_default_safe_models_when_empty() {
+    let relay = RelayProfile::default();
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
+        Some("claude-fable-5")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
+        Some("claude-haiku-4-5")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-opus-4-8", &relay).as_deref(),
+        Some("claude-opus-4-8")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
+        Some("claude-sonnet-4-6")
+    );
+}
+
+#[test]
+fn claude_desktop_default_model_list_matches_expected_ui_order() {
+    assert_eq!(
+        claude_desktop_default_model_list(),
+        "claude-fable-5\nclaude-haiku-4-5\nclaude-opus-4-8\nclaude-sonnet-4-6"
+    );
+}
+
+#[test]
+fn claude_desktop_upstream_base_url_falls_back_to_toporeduce() {
+    let relay = RelayProfile {
+        base_url: String::new(),
+        upstream_base_url: String::new(),
+        config_contents: String::new(),
+        ..Default::default()
+    };
+    let settings = BackendSettings {
+        relay_base_url: String::new(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_resolved_upstream_base_url(&relay, &settings),
+        "https://api.toporeduce.cn"
+    );
 }
 
 #[test]
@@ -1233,9 +1342,52 @@ fn models_url_normalizes_common_base_urls() {
 }
 
 #[test]
+fn claude_messages_url_normalizes_common_base_urls() {
+    assert_eq!(
+        claude_messages_url("https://api.example.test"),
+        "https://api.example.test/v1/messages"
+    );
+    assert_eq!(
+        claude_messages_url("https://api.example.test/v1"),
+        "https://api.example.test/v1/messages"
+    );
+    assert_eq!(
+        claude_messages_url("https://api.example.test/v1/messages"),
+        "https://api.example.test/v1/messages"
+    );
+    assert_eq!(
+        claude_messages_url("https://api.example.test/openai#"),
+        "https://api.example.test/openai/messages"
+    );
+}
+
+#[test]
 fn models_proxy_path_matches_v1_models() {
     assert!(is_models_proxy_path("/models"));
     assert!(is_models_proxy_path("/v1/models"));
     assert!(is_models_proxy_path("/v1/models?limit=10"));
     assert!(!is_models_proxy_path("/v1/responses"));
+}
+
+#[test]
+fn claude_desktop_models_proxy_response_uses_safe_ids_and_upstream_labels() {
+    let body = claude_desktop_models_response("fable-v1\nhaiku-v1\nopus-v1 [1M]\nsonnet-v1");
+    assert_eq!(body["data"][0]["id"], json!("claude-fable-5"));
+    assert_eq!(body["data"][0]["display_name"], json!("fable-v1"));
+    assert_eq!(body["data"][1]["id"], json!("claude-haiku-4-5"));
+    assert_eq!(body["data"][1]["display_name"], json!("haiku-v1"));
+    assert_eq!(body["data"][2]["id"], json!("claude-opus-4-8"));
+    assert_eq!(body["data"][2]["display_name"], json!("opus-v1"));
+    assert_eq!(body["data"][2]["supports1m"], json!(true));
+    assert_eq!(body["data"][3]["id"], json!("claude-sonnet-4-6"));
+    assert_eq!(body["data"][3]["display_name"], json!("sonnet-v1"));
+}
+
+#[test]
+fn claude_desktop_models_proxy_response_uses_default_four_models_when_empty() {
+    let body = claude_desktop_models_response("");
+    assert_eq!(body["data"][0]["id"], json!("claude-fable-5"));
+    assert_eq!(body["data"][1]["id"], json!("claude-haiku-4-5"));
+    assert_eq!(body["data"][2]["id"], json!("claude-opus-4-8"));
+    assert_eq!(body["data"][3]["id"], json!("claude-sonnet-4-6"));
 }

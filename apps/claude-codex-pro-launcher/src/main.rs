@@ -260,7 +260,6 @@ fn log_launcher_already_running(debug_port: u16) {
     );
 }
 
-
 fn parse_launch_options<I, S>(args: I) -> LaunchOptions
 where
     I: IntoIterator<Item = S>,

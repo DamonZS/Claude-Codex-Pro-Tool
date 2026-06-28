@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -29,9 +31,12 @@ use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::Manager;
+use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt as TokioAsyncWriteExt};
 use toml_edit::DocumentMut;
 
 use crate::install::{self, InstallActionResult, InstallOptions};
+
+static CLAUDE_DESKTOP_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandResult<T>
@@ -52,6 +57,9 @@ struct ClaudeZhPatchCliResult {
 }
 
 const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
+const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(15);
+const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
+const REPAIR_CLAUDE_FRONTEND_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +95,8 @@ pub struct ClaudeDesktopPayload {
     pub executable_paths: Vec<String>,
     pub install_kind: String,
     pub cdp_status: String,
+    pub frontend_injected: bool,
+    pub frontend_status: String,
     pub cdp_blocker: String,
     pub debug_flags_present: bool,
     pub debug_ports: Vec<u16>,
@@ -505,6 +515,20 @@ pub struct MemoryAssistStatusPayload {
     pub memory: MemoryAssistStatus,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryAssistRuntimeSnapshot {
+    enabled: bool,
+    injected: bool,
+    status: String,
+    active: bool,
+    workspace: String,
+    total_items: i64,
+    pending_candidates: i64,
+    summary: String,
+    source: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryAssistQueryPayload {
@@ -584,7 +608,7 @@ pub struct StartupPayload {
 #[tauri::command]
 pub fn backend_version() -> CommandResult<VersionPayload> {
     ok(
-        "后端版本已读取。",
+        "Backend version loaded.",
         VersionPayload {
             version: claude_codex_pro_core::version::VERSION.to_string(),
             exe_path: current_exe_path_string(),
@@ -596,7 +620,7 @@ pub fn backend_version() -> CommandResult<VersionPayload> {
 #[tauri::command]
 pub fn startup_options() -> CommandResult<StartupPayload> {
     ok(
-        "启动参数已读取。",
+        "Startup options loaded.",
         StartupPayload {
             show_update: startup_should_show_update(),
         },
@@ -644,7 +668,7 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
     let payload = tauri::async_runtime::spawn_blocking(load_overview_payload).await;
     let Ok((codex_app_path, entrypoints, latest_launch)) = payload else {
         return failed(
-            "概览后台任务失败。",
+            "Overview background task failed.",
             OverviewPayload {
                 codex_app: path_state(None),
                 codex_version: None,
@@ -663,7 +687,7 @@ pub async fn load_overview() -> CommandResult<OverviewPayload> {
         );
     };
     ok(
-        "概览已加载。",
+        "Overview loaded.",
         OverviewPayload {
             codex_version: codex_app_path
                 .as_deref()
@@ -690,7 +714,8 @@ pub async fn load_claude_desktop_status() -> CommandResult<ClaudeDesktopPayload>
         tauri::async_runtime::spawn_blocking(claude_codex_pro_core::claude_desktop::detect_status)
             .await
             .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    claude_desktop_status_result(status, "status")
+    let frontend = detect_claude_frontend_marker(&status).await;
+    claude_desktop_status_result(status, "status", frontend)
 }
 
 #[tauri::command]
@@ -700,14 +725,24 @@ pub async fn load_claude_desktop_status_light() -> CommandResult<ClaudeDesktopPa
     )
     .await
     .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    claude_desktop_status_result(status, "status_light")
+    let frontend = detect_claude_frontend_marker(&status).await;
+    claude_desktop_status_result(status, "status_light", frontend)
 }
 
 fn claude_desktop_status_result(
     status: claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
     log_action: &str,
+    frontend: ClaudeFrontendProbe,
 ) -> CommandResult<ClaudeDesktopPayload> {
     let message = status.message.clone();
+    let frontend_injected = frontend.injected;
+    let frontend_status = if frontend.injected {
+        "injected"
+    } else if !status.debug_ports.is_empty() || !status.inspector_ports.is_empty() {
+        "not_injected"
+    } else {
+        "not_available"
+    };
     let result = CommandResult {
         status: status.status.clone(),
         message,
@@ -716,12 +751,18 @@ fn claude_desktop_status_result(
             executable_paths: status.executable_paths,
             install_kind: status.install_kind,
             cdp_status: status.cdp_status,
+            frontend_injected,
+            frontend_status: frontend_status.to_string(),
             cdp_blocker: status.cdp_blocker,
             debug_flags_present: status.debug_flags_present,
             debug_ports: status.debug_ports,
             inspector_ports: status.inspector_ports,
             listening_ports: status.listening_ports,
-            debug_evidence: status.debug_evidence,
+            debug_evidence: status
+                .debug_evidence
+                .into_iter()
+                .chain(frontend.details)
+                .collect(),
             supported_integration: status.supported_integration,
             integrity_status: status.integrity_status,
             integrity_message: status.integrity_message,
@@ -816,8 +857,40 @@ pub fn open_claude_desktop_devtools() -> CommandResult<ClaudeDesktopActionPayloa
 }
 
 #[tauri::command]
-pub fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
+pub async fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
+    let helper_status = ensure_claude_desktop_proxy_helper().await;
+    let proxy_port = helper_status
+        .as_ref()
+        .copied()
+        .unwrap_or_else(|_| current_claude_desktop_proxy_port_hint());
+    let helper_online = helper_status.is_ok() && wait_helper_backend_online(proxy_port).await;
     let result = claude_codex_pro_core::claude_desktop::open_claude_desktop();
+    let result = if let Err(error) = helper_status {
+        claude_codex_pro_core::claude_desktop::ClaudeDesktopActionResult {
+            status: if result.status == "ok" {
+                "warning".to_string()
+            } else {
+                result.status.clone()
+            },
+            message: format!("{} 本地模型代理启动失败：{error}", result.message),
+            ..result
+        }
+    } else if !helper_online {
+        claude_codex_pro_core::claude_desktop::ClaudeDesktopActionResult {
+            status: if result.status == "ok" {
+                "warning".to_string()
+            } else {
+                result.status.clone()
+            },
+            message: format!(
+                "{} 本地模型代理已请求启动，但 127.0.0.1:{proxy_port}/backend/status 尚未响应。",
+                result.message
+            ),
+            ..result
+        }
+    } else {
+        result
+    };
     let command_result = CommandResult {
         status: result.status,
         message: result.message,
@@ -834,6 +907,77 @@ pub fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> {
     command_result
 }
 
+async fn ensure_claude_desktop_proxy_helper() -> anyhow::Result<u16> {
+    if let Some(port) = cached_claude_desktop_proxy_port() {
+        if claude_codex_pro_core::launcher::ensure_detached_helper(port)
+            .await
+            .is_ok()
+        {
+            return Ok(port);
+        }
+    }
+    let preferred = claude_codex_pro_core::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_PROXY_PORT;
+    match claude_codex_pro_core::launcher::ensure_detached_helper(preferred).await {
+        Ok(()) => {
+            set_cached_claude_desktop_proxy_port(preferred);
+            Ok(preferred)
+        }
+        Err(first_error) => {
+            let fallback = claude_codex_pro_core::ports::find_available_loopback_port();
+            if fallback == 0 || fallback == preferred {
+                return Err(first_error);
+            }
+            claude_codex_pro_core::launcher::ensure_detached_helper(fallback)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Claude Desktop proxy fallback port {fallback} failed after preferred port {preferred} failed: {first_error}"
+                    )
+                })?;
+            set_cached_claude_desktop_proxy_port(fallback);
+            log_manager_event(
+                "manager.claude_proxy.fallback_port",
+                json!({
+                    "preferredPort": preferred,
+                    "fallbackPort": fallback,
+                    "reason": first_error.to_string()
+                }),
+            );
+            Ok(fallback)
+        }
+    }
+}
+
+fn current_claude_desktop_proxy_port_hint() -> u16 {
+    cached_claude_desktop_proxy_port().unwrap_or_else(|| {
+        let preferred = claude_codex_pro_core::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_PROXY_PORT;
+        if claude_codex_pro_core::ports::can_bind_loopback_port(preferred)
+            || helper_backend_online(preferred)
+        {
+            preferred
+        } else {
+            claude_codex_pro_core::ports::find_available_loopback_port()
+        }
+    })
+}
+
+fn cached_claude_desktop_proxy_port() -> Option<u16> {
+    CLAUDE_DESKTOP_PROXY_PORT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
+fn set_cached_claude_desktop_proxy_port(port: u16) {
+    if let Ok(mut guard) = CLAUDE_DESKTOP_PROXY_PORT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *guard = Some(port);
+    }
+}
+
 #[tauri::command]
 pub async fn open_claude_chinese_window(
     app: tauri::AppHandle,
@@ -848,7 +992,7 @@ pub async fn open_claude_chinese_window(
         let _ = window.set_focus();
         let _ = window.eval(script);
         return ok(
-            "Claude 一键汉化已聚焦。",
+            "Claude localization window focused.",
             claude_chinese_window_payload(&app, &status),
         );
     }
@@ -857,7 +1001,7 @@ pub async fn open_claude_chinese_window(
         Ok(url) => url,
         Err(error) => {
             return failed(
-                &format!("Claude 一键汉化 URL 无效：{error}"),
+                &format!("Claude localization URL is invalid: {error}"),
                 claude_chinese_window_payload(&app, &status),
             );
         }
@@ -866,7 +1010,7 @@ pub async fn open_claude_chinese_window(
     let nav_handle = app.clone();
     let build_result = tauri::async_runtime::spawn_blocking(move || {
         tauri::WebviewWindowBuilder::new(&handle, label, tauri::WebviewUrl::External(url))
-            .title("Claude 一键汉化")
+            .title("Claude localization")
             .inner_size(1220.0, 860.0)
             .min_inner_size(980.0, 720.0)
             .initialization_script(script)
@@ -889,16 +1033,16 @@ pub async fn open_claude_chinese_window(
             let _ = window.set_focus();
             let _ = window.eval(script);
             ok(
-                "Claude 一键汉化已打开。",
+                "Claude localization window opened.",
                 claude_chinese_window_payload(&app, &status),
             )
         }
         Ok(Err(error)) => failed(
-            &format!("Claude 一键汉化打开失败：{error}"),
+            &format!("Claude localization window failed to open: {error}"),
             claude_chinese_window_payload(&app, &status),
         ),
         Err(error) => failed(
-            &format!("Claude 一键汉化后台任务失败：{error}"),
+            &format!("Claude localization background task failed: {error}"),
             claude_chinese_window_payload(&app, &status),
         ),
     }
@@ -910,14 +1054,14 @@ pub async fn open_plugin_hub_window(
 ) -> CommandResult<PluginHubWindowPayload> {
     match route_main_window_to_plugin_hub(&app) {
         Ok(()) => ok(
-            "插件中心已在管理工具内打开。",
+            "Plugin hub opened in manager.",
             PluginHubWindowPayload {
                 open: true,
                 label: "main".to_string(),
             },
         ),
         Err(error) => failed(
-            &format!("插件中心无法在管理工具内打开：{error}"),
+            &format!("Plugin hub failed to open in manager: {error}"),
             PluginHubWindowPayload {
                 open: false,
                 label: "main".to_string(),
@@ -938,8 +1082,11 @@ pub async fn open_prompt_optimizer_window(
     }
     let payload = prompt_optimizer_window_payload(false);
     match open_url(&payload.default_url) {
-        Ok(()) => ok("提示词优化已在系统浏览器打开。", payload),
-        Err(error) => failed(&format!("提示词优化打开失败：{error}"), payload),
+        Ok(()) => ok("Prompt optimizer opened in the system browser.", payload),
+        Err(error) => failed(
+            &format!("Prompt optimizer failed to open: {error}"),
+            payload,
+        ),
     }
 }
 
@@ -949,7 +1096,7 @@ pub fn load_claude_chinese_window_status(
 ) -> CommandResult<ClaudeChineseWindowPayload> {
     let status = claude_codex_pro_core::claude_desktop::detect_status_light();
     ok(
-        "Claude 一键汉化状态已读取。",
+        "Claude localization status loaded.",
         claude_chinese_window_payload(&app, &status),
     )
 }
@@ -1073,7 +1220,7 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
             }
             let status = claude_codex_pro_core::claude_zh_patch::detect_status();
             failed(
-                &format!("Claude 本机汉化失败：{error}"),
+                &format!("Claude manual Chinese patch failed: {error}"),
                 claude_zh_patch_payload(status, Vec::new()),
             )
         }
@@ -1647,13 +1794,13 @@ pub fn restore_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
     log_manager_event("manager.claude_zh_patch.restore.direct.start", json!({}));
     match claude_codex_pro_core::claude_zh_patch::restore_patch() {
         Ok(outcome) => ok(
-            "Claude 官方文件已从备份恢复。",
+            "Claude official files restored from backup.",
             claude_zh_patch_payload(outcome.status, outcome.changed_files),
         ),
         Err(error) => {
             let status = claude_codex_pro_core::claude_zh_patch::detect_status();
             failed(
-                &format!("Claude 汉化恢复失败：{error}"),
+                &format!("Claude localization restore failed: {error}"),
                 claude_zh_patch_payload(status, Vec::new()),
             )
         }
@@ -1735,10 +1882,695 @@ where
     );
 }
 
+#[derive(Debug, Clone)]
+struct ClaudeFrontendProbe {
+    injected: bool,
+    details: Vec<String>,
+}
+
+fn claude_frontend_ports(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> Vec<u16> {
+    let mut ports = status.debug_ports.clone();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+async fn repair_claude_frontend_injection(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> ClaudeFrontendProbe {
+    let ports = claude_frontend_ports(status);
+    let mut details = Vec::new();
+    if ports.is_empty() {
+        if status.inspector_ports.is_empty() {
+            let inspector_declared_but_not_ready = status.debug_evidence.iter().any(|line| {
+                line.contains("Node inspector flag was observed")
+                    && line.contains("did not respond")
+            });
+            if inspector_declared_but_not_ready {
+                details.push("Claude Inspector 端口已声明但未就绪，当前不能通过 Node Inspector 注入前端。请完全退出 Claude，点击“启动/重启Claude”重新建立调试端口后再试。".to_string());
+            } else if status.debug_flags_present || status.cdp_status == "observed_but_unverified" {
+                details.push("Claude 调试端口已被观察到但未通过连通性验证，当前不能注入前端。请点击“启动/重启Claude”后重新修复前端连接。".to_string());
+            } else {
+                details.push("Claude 前端 CDP 端口未检测到。".to_string());
+            }
+        } else {
+            return repair_claude_frontend_via_node_inspector(status).await;
+        }
+        return ClaudeFrontendProbe {
+            injected: false,
+            details,
+        };
+    }
+
+    for port in ports {
+        match tokio::time::timeout(
+            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
+            inject_claude_frontend_on_port(port),
+        )
+        .await
+        {
+            Err(_) => details.push(format!("Claude 端口 127.0.0.1:{port} 注入超时。")),
+            Ok(Ok(true)) => {
+                details.push(format!("Claude 前端已通过 127.0.0.1:{port} 注入并确认。"));
+                return ClaudeFrontendProbe {
+                    injected: true,
+                    details,
+                };
+            }
+            Ok(Ok(false)) => details.push(format!(
+                "Claude 端口 127.0.0.1:{port} 已响应，但没有确认前端注入标识。"
+            )),
+            Ok(Err(error)) => {
+                details.push(format!("Claude 端口 127.0.0.1:{port} 注入失败：{error}"))
+            }
+        }
+    }
+    ClaudeFrontendProbe {
+        injected: false,
+        details,
+    }
+}
+
+async fn detect_claude_frontend_marker(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> ClaudeFrontendProbe {
+    let ports = claude_frontend_ports(status);
+    let mut details = Vec::new();
+    if ports.is_empty() && !status.inspector_ports.is_empty() {
+        return detect_claude_frontend_marker_via_node_inspector(status).await;
+    }
+    for port in ports {
+        match tokio::time::timeout(
+            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
+            claude_frontend_marker_present_on_port(port),
+        )
+        .await
+        {
+            Err(_) => details.push(format!("Claude 前端注入标识在 127.0.0.1:{port} 检查超时。")),
+            Ok(Ok(true)) => {
+                details.push(format!("Claude 前端注入标识已在 127.0.0.1:{port} 确认。"));
+                return ClaudeFrontendProbe {
+                    injected: true,
+                    details,
+                };
+            }
+            Ok(Ok(false)) => details.push(format!(
+                "Claude 调试端口 127.0.0.1:{port} 在线，但未检测到窗口注入标识。"
+            )),
+            Ok(Err(error)) => details.push(format!(
+                "Claude 前端注入标识在 127.0.0.1:{port} 检查失败：{error}"
+            )),
+        }
+    }
+    ClaudeFrontendProbe {
+        injected: false,
+        details,
+    }
+}
+
+async fn claude_frontend_marker_present_on_port(port: u16) -> anyhow::Result<bool> {
+    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
+    let target = pick_claude_page_target(&targets)?;
+    let websocket_url = target
+        .web_socket_debugger_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Claude page target is missing websocket URL"))?;
+    claude_frontend_marker_present(websocket_url).await
+}
+
+async fn inject_claude_frontend_on_port(port: u16) -> anyhow::Result<bool> {
+    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
+    let target = pick_claude_page_target(&targets)?;
+    let websocket_url = target
+        .web_socket_debugger_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Claude page target is missing websocket URL"))?;
+    claude_codex_pro_core::bridge::evaluate_script(
+        websocket_url,
+        claude_codex_pro_core::assets::claude_chinese_injection_script(),
+    )
+    .await?;
+    claude_frontend_marker_present(websocket_url).await
+}
+
+async fn repair_claude_frontend_via_node_inspector(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> ClaudeFrontendProbe {
+    let mut details = Vec::new();
+    for port in claude_inspector_ports(status) {
+        details.push(format!(
+            "Claude 仅暴露 Node Inspector 端口 127.0.0.1:{port}，正在通过 Electron BrowserWindow 尝试前端注入。"
+        ));
+        match tokio::time::timeout(
+            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
+            inject_claude_frontend_via_node_inspector(port),
+        )
+        .await
+        {
+            Err(_) => details.push(format!(
+                "Claude Node Inspector 端口 127.0.0.1:{port} 注入超时。"
+            )),
+            Ok(Ok(true)) => {
+                details.push(format!(
+                    "Claude 前端已通过 Node Inspector 127.0.0.1:{port} 注入并确认。"
+                ));
+                return ClaudeFrontendProbe {
+                    injected: true,
+                    details,
+                };
+            }
+            Ok(Ok(false)) => details.push(format!(
+                "Claude Node Inspector 127.0.0.1:{port} 可用，但 BrowserWindow 注入标识未确认。"
+            )),
+            Ok(Err(error)) => details.push(format!(
+                "Claude Node Inspector 127.0.0.1:{port} 注入失败：{error}"
+            )),
+        }
+    }
+    ClaudeFrontendProbe {
+        injected: false,
+        details,
+    }
+}
+
+async fn detect_claude_frontend_marker_via_node_inspector(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> ClaudeFrontendProbe {
+    let mut details = Vec::new();
+    for port in claude_inspector_ports(status) {
+        match tokio::time::timeout(
+            REPAIR_CLAUDE_FRONTEND_TIMEOUT,
+            claude_frontend_marker_present_via_node_inspector(port),
+        )
+        .await
+        {
+            Err(_) => details.push(format!(
+                "Claude Node Inspector 127.0.0.1:{port} 前端标识检查超时。"
+            )),
+            Ok(Ok(true)) => {
+                details.push(format!(
+                    "Claude 前端注入标识已通过 Node Inspector 127.0.0.1:{port} 确认。"
+                ));
+                return ClaudeFrontendProbe {
+                    injected: true,
+                    details,
+                };
+            }
+            Ok(Ok(false)) => details.push(format!(
+                "Claude Node Inspector 127.0.0.1:{port} 在线，但未检测到前端注入标识。"
+            )),
+            Ok(Err(error)) => details.push(format!(
+                "Claude Node Inspector 127.0.0.1:{port} 前端标识检查失败：{error}"
+            )),
+        }
+    }
+    ClaudeFrontendProbe {
+        injected: false,
+        details,
+    }
+}
+
+fn claude_inspector_ports(
+    status: &claude_codex_pro_core::claude_desktop::ClaudeDesktopStatus,
+) -> Vec<u16> {
+    let mut ports = status.inspector_ports.clone();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+async fn inject_claude_frontend_via_node_inspector(port: u16) -> anyhow::Result<bool> {
+    let websocket_url = claude_node_inspector_websocket_url(port).await?;
+    let expression = claude_node_inspector_bridge_expression(
+        claude_codex_pro_core::assets::claude_chinese_injection_script(),
+        CLAUDE_FRONTEND_MARKER_SCRIPT,
+    )?;
+    let result = claude_codex_pro_core::bridge::evaluate_script_with_await_promise(
+        &websocket_url,
+        &expression,
+        true,
+    )
+    .await?;
+    Ok(runtime_evaluate_bool(&result))
+}
+
+async fn claude_frontend_marker_present_via_node_inspector(port: u16) -> anyhow::Result<bool> {
+    let websocket_url = claude_node_inspector_websocket_url(port).await?;
+    let expression = claude_node_inspector_bridge_expression("", CLAUDE_FRONTEND_MARKER_SCRIPT)?;
+    let result = claude_codex_pro_core::bridge::evaluate_script_with_await_promise(
+        &websocket_url,
+        &expression,
+        true,
+    )
+    .await?;
+    Ok(runtime_evaluate_bool(&result))
+}
+
+async fn claude_node_inspector_websocket_url(port: u16) -> anyhow::Result<String> {
+    let targets = claude_codex_pro_core::cdp::list_targets(port).await?;
+    let target = targets
+        .iter()
+        .find(|target| {
+            target
+                .web_socket_debugger_url
+                .as_deref()
+                .is_some_and(|url| !url.is_empty())
+                && (target.target_type == "node"
+                    || format!("{} {}", target.title, target.url)
+                        .to_ascii_lowercase()
+                        .contains("node"))
+        })
+        .or_else(|| {
+            targets.iter().find(|target| {
+                target
+                    .web_socket_debugger_url
+                    .as_deref()
+                    .is_some_and(|url| !url.is_empty())
+            })
+        })
+        .ok_or_else(|| anyhow::anyhow!("No Node Inspector websocket target was found"))?;
+    target
+        .web_socket_debugger_url
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Node Inspector target is missing websocket URL"))
+}
+
+fn claude_node_inspector_bridge_expression(
+    injection_script: &str,
+    marker_script: &str,
+) -> anyhow::Result<String> {
+    let injection_script = serde_json::to_string(injection_script)?;
+    let marker_script = serde_json::to_string(marker_script)?;
+    Ok(format!(
+        r#"(async () => {{
+  const injectionScript = {injection_script};
+  const markerScript = {marker_script};
+  const requireCandidates = [
+    typeof require === "function" ? require : null,
+    globalThis && typeof globalThis.require === "function" ? globalThis.require : null,
+    typeof module !== "undefined" && module && typeof module.require === "function" ? module.require.bind(module) : null,
+    typeof process !== "undefined" && process && process.mainModule && typeof process.mainModule.require === "function" ? process.mainModule.require.bind(process.mainModule) : null
+  ].filter(Boolean);
+  let electron = null;
+  for (const candidate of requireCandidates) {{
+    try {{
+      electron = candidate("electron");
+      if (electron && electron.BrowserWindow) break;
+    }} catch (_) {{}}
+  }}
+  if (!electron || !electron.BrowserWindow || typeof electron.BrowserWindow.getAllWindows !== "function") return false;
+  const windows = electron.BrowserWindow.getAllWindows().filter((win) => win && !win.isDestroyed?.() && win.webContents);
+  if (!windows.length) return false;
+  const results = await Promise.all(windows.map(async (win) => {{
+    try {{
+      if (injectionScript) await win.webContents.executeJavaScript(injectionScript, true);
+      return await win.webContents.executeJavaScript(markerScript, true);
+    }} catch (_) {{
+      return false;
+    }}
+  }}));
+  return results.some(Boolean);
+}})()"#
+    ))
+}
+
+const CLAUDE_FRONTEND_MARKER_SCRIPT: &str = r#"(() => !!(window.__CLAUDE_CODEX_PRO_CHINESE_INJECTED || document.documentElement?.dataset?.claudeCodexProChineseInjected === "true" || document.getElementById("ccp-claude-status-pill")))()"#;
+
+fn pick_claude_page_target(
+    targets: &[claude_codex_pro_core::cdp::CdpTarget],
+) -> anyhow::Result<&claude_codex_pro_core::cdp::CdpTarget> {
+    targets
+        .iter()
+        .find(|target| {
+            target.target_type == "page"
+                && target
+                    .web_socket_debugger_url
+                    .as_deref()
+                    .is_some_and(|url| !url.is_empty())
+                && {
+                    let haystack = format!("{} {}", target.title, target.url).to_ascii_lowercase();
+                    haystack.contains("claude") || haystack.contains("anthropic")
+                }
+        })
+        .or_else(|| {
+            targets.iter().find(|target| {
+                target.target_type == "page"
+                    && target
+                        .web_socket_debugger_url
+                        .as_deref()
+                        .is_some_and(|url| !url.is_empty())
+            })
+        })
+        .ok_or_else(|| anyhow::anyhow!("No injectable Claude page target was found"))
+}
+
+async fn claude_frontend_marker_present(websocket_url: &str) -> anyhow::Result<bool> {
+    let result = claude_codex_pro_core::bridge::evaluate_script(
+        websocket_url,
+        CLAUDE_FRONTEND_MARKER_SCRIPT,
+    )
+    .await?;
+    Ok(runtime_evaluate_bool(&result))
+}
+
+fn runtime_evaluate_bool(result: &Value) -> bool {
+    result
+        .get("result")
+        .and_then(|result| result.get("result"))
+        .and_then(|result| result.get("value"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairConnectionPayload {
+    pub target: String,
+    pub frontend_injected: bool,
+    pub backend_online: bool,
+    pub codex_frontend_injected: bool,
+    pub claude_frontend_injected: bool,
+    pub codex_backend_online: bool,
+    pub claude_backend_online: bool,
+    pub debug_port: Option<u16>,
+    pub helper_port: Option<u16>,
+    pub claude_proxy_port: Option<u16>,
+    pub details: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPayload> {
+    let mut details = Vec::new();
+    let mut latest = StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .map(refresh_launch_port_status);
+
+    if latest
+        .as_ref()
+        .is_some_and(|status| status.debug_port.is_some() && !status.debug_port_online)
+    {
+        latest = restart_codex_for_frontend_repair(&mut details).await;
+    }
+
+    let codex_backend_online = latest
+        .as_ref()
+        .is_some_and(|status| status.helper_port_online);
+    let codex_frontend_ok = if let Some(status) = latest.as_ref() {
+        match (status.debug_port, status.helper_port) {
+            (Some(debug_port), Some(helper_port)) => {
+                details.push(format!(
+                    "Codex CDP 端口：{debug_port}，后端端口：{helper_port}"
+                ));
+                if !status.debug_port_online {
+                    details.push(format!(
+                        "Codex CDP 端口 127.0.0.1:{debug_port} 仍离线或 /json 不可用；已尝试自动重启，请确认 Codex 安装路径可用。"
+                    ));
+                    false
+                } else if !status.helper_port_online {
+                    details.push(format!(
+                        "Codex 后端 127.0.0.1:{helper_port}/backend/status 未在线；请先点击“修复后端服务”。"
+                    ));
+                    false
+                } else {
+                    let reinjected = match tokio::time::timeout(
+                        REPAIR_CODEX_FRONTEND_TIMEOUT,
+                        claude_codex_pro_core::launcher::force_reinject_bridge(
+                            debug_port,
+                            helper_port,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(value) => value,
+                        Err(_) => {
+                            details.push("Codex 前端桥接强制刷新超时。".to_string());
+                            false
+                        }
+                    };
+                    if reinjected {
+                        details.push("Codex 前端桥接已刷新并注入最新脚本。".to_string());
+                    } else {
+                        details.push("Codex 前端桥接刷新未确认。".to_string());
+                    }
+                    reinjected
+                }
+            }
+            _ => {
+                details.push("最近一次 Codex 启动记录缺少 CDP 或后端端口。".to_string());
+                false
+            }
+        }
+    } else {
+        details.push("未找到最近一次 Codex 启动记录。".to_string());
+        false
+    };
+
+    let claude = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::claude_desktop::detect_status_light,
+    )
+    .await
+    .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
+    let claude_probe = repair_claude_frontend_injection(&claude).await;
+    details.extend(claude_probe.details.clone());
+    let claude_proxy_port = cached_claude_desktop_proxy_port()
+        .or_else(|| Some(current_claude_desktop_proxy_port_hint()));
+    let claude_backend_online = claude_proxy_port.is_some_and(helper_backend_online);
+
+    let frontend_injected = codex_frontend_ok && claude_probe.injected;
+    let any_frontend_injected = codex_frontend_ok || claude_probe.injected;
+    let status = if frontend_injected {
+        "ok"
+    } else if any_frontend_injected {
+        "degraded"
+    } else {
+        "failed"
+    };
+    CommandResult {
+        status: status.to_string(),
+        message: match status {
+            "ok" => "前端连接已修复，Codex 和 Claude 注入均已确认。".to_string(),
+            "degraded" => "前端连接部分修复；仍未注入的一侧请查看详情。".to_string(),
+            _ => "前端连接修复未确认可注入的 Codex 或 Claude 前端。".to_string(),
+        },
+        payload: RepairConnectionPayload {
+            target: "codex_and_claude".to_string(),
+            frontend_injected,
+            backend_online: codex_backend_online && claude_backend_online,
+            codex_frontend_injected: codex_frontend_ok,
+            claude_frontend_injected: claude_probe.injected,
+            codex_backend_online,
+            claude_backend_online,
+            debug_port: latest.as_ref().and_then(|status| status.debug_port),
+            helper_port: latest.as_ref().and_then(|status| status.helper_port),
+            claude_proxy_port,
+            details,
+        },
+    }
+}
+
+async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
+    details.push("检测到旧 Codex CDP 端口离线，正在自动重启 Codex 注入入口。".to_string());
+    let Some(app_path) = current_codex_app_path_for_launch() else {
+        details.push("未找到 Codex 应用路径，无法自动重启 Codex。".to_string());
+        return StatusStore::default()
+            .load_latest()
+            .ok()
+            .flatten()
+            .map(refresh_launch_port_status);
+    };
+
+    claude_codex_pro_core::watcher::stop_launcher_processes();
+    claude_codex_pro_core::watcher::stop_codex_processes();
+
+    let request = LaunchRequest {
+        app_path: app_path.to_string_lossy().to_string(),
+        debug_port: default_debug_port(),
+        helper_port: default_helper_port(),
+    };
+    if let Err(error) = spawn_silent_launcher(&request) {
+        details.push(format!("自动重启 Codex 失败：{error}"));
+        return StatusStore::default()
+            .load_latest()
+            .ok()
+            .flatten()
+            .map(refresh_launch_port_status);
+    }
+
+    let started = Instant::now();
+    while started.elapsed() < REPAIR_CODEX_RESTART_TIMEOUT {
+        if let Some(status) = StatusStore::default()
+            .load_latest()
+            .ok()
+            .flatten()
+            .map(refresh_launch_port_status)
+        {
+            if status.debug_port_online && status.helper_port_online {
+                details.push(format!(
+                    "已自动重启 Codex，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
+                    debug_port = status.debug_port.unwrap_or(request.debug_port),
+                    helper_port = status.helper_port.unwrap_or(request.helper_port)
+                ));
+                return Some(status);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    details.push("已发起 Codex 自动重启，但等待新 CDP / 后端端口上线超时。".to_string());
+    StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .map(refresh_launch_port_status)
+}
+#[tauri::command]
+pub async fn repair_backend_service() -> CommandResult<RepairConnectionPayload> {
+    let mut details = Vec::new();
+    let helper_port = StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .and_then(|status| status.helper_port)
+        .unwrap_or_else(default_helper_port);
+    let codex_helper = match claude_codex_pro_core::launcher::ensure_detached_helper(helper_port)
+        .await
+    {
+        Ok(()) => {
+            let online = wait_helper_backend_online(helper_port).await;
+            details.push(if online {
+                format!("Codex backend verified at 127.0.0.1:{helper_port}/backend/status.")
+            } else {
+                format!(
+                    "Codex backend was requested, but 127.0.0.1:{helper_port}/backend/status did not respond yet."
+                )
+            });
+            online
+        }
+        Err(error) => {
+            details.push(format!("Codex backend failed to start: {error}"));
+            false
+        }
+    };
+    let mut claude_proxy_port = current_claude_desktop_proxy_port_hint();
+    let claude_helper = match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => {
+            claude_proxy_port = port;
+            let online = wait_helper_backend_online(port).await;
+            details.push(if online {
+                format!("Claude local model proxy verified at 127.0.0.1:{port}/backend/status.")
+            } else {
+                format!("Claude local model proxy was requested, but 127.0.0.1:{port}/backend/status did not respond yet.")
+            });
+            online
+        }
+        Err(error) => {
+            details.push(format!("Claude local model proxy failed to start: {error}"));
+            false
+        }
+    };
+    let backend_online = codex_helper && claude_helper;
+    let any_backend_online = codex_helper || claude_helper;
+    let status = if backend_online {
+        "ok"
+    } else if any_backend_online {
+        "degraded"
+    } else {
+        "failed"
+    };
+    CommandResult {
+        status: status.to_string(),
+        message: match status {
+            "ok" => "Backend services are repaired; Codex and Claude frontends can reconnect."
+                .to_string(),
+            "degraded" => {
+                "Backend services are partially repaired; check details for the offline side."
+                    .to_string()
+            }
+            _ => "Backend service repair failed; check diagnostic logs.".to_string(),
+        },
+        payload: RepairConnectionPayload {
+            target: "codex_and_claude".to_string(),
+            frontend_injected: false,
+            backend_online,
+            codex_frontend_injected: false,
+            claude_frontend_injected: false,
+            codex_backend_online: codex_helper,
+            claude_backend_online: claude_helper,
+            debug_port: None,
+            helper_port: Some(helper_port),
+            claude_proxy_port: Some(claude_proxy_port),
+            details,
+        },
+    }
+}
+
+#[tauri::command]
+pub async fn refresh_claude_third_party_config()
+-> CommandResult<ClaudeDesktopDevModeConfigurePayload> {
+    let proxy_port = match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => port,
+        Err(error) => {
+            return failed(
+                &format!("刷新 Claude 第三方配置失败：本地模型代理启动失败：{error}"),
+                ClaudeDesktopDevModeConfigurePayload {
+                    outcome: ClaudeDesktopDevModeOutcome {
+                        configured: false,
+                        normal_config_path: String::new(),
+                        threep_config_path: String::new(),
+                        profile_path: String::new(),
+                        profile_meta_path: String::new(),
+                        backup_paths: Vec::new(),
+                        message: error.to_string(),
+                    },
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            );
+        }
+    };
+    match plugin_hub::configure_claude_desktop_dev_mode_with_proxy_port(None, proxy_port) {
+        Ok(outcome) => {
+            let helper_message = if wait_helper_backend_online(proxy_port).await {
+                format!("本地模型代理 127.0.0.1:{proxy_port} 已验证在线。")
+            } else {
+                format!(
+                    "本地模型代理已请求使用 127.0.0.1:{proxy_port}，但 /backend/status 暂未响应。"
+                )
+            };
+            let status = plugin_hub::load_claude_desktop_dev_mode_status();
+            ok(
+                &format!("Claude 第三方配置已刷新；{helper_message}"),
+                ClaudeDesktopDevModeConfigurePayload {
+                    outcome,
+                    dev_mode_status: status,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("刷新 Claude 第三方配置失败：{error}"),
+            ClaudeDesktopDevModeConfigurePayload {
+                outcome: ClaudeDesktopDevModeOutcome {
+                    configured: false,
+                    normal_config_path: String::new(),
+                    threep_config_path: String::new(),
+                    profile_path: String::new(),
+                    profile_meta_path: String::new(),
+                    backup_paths: Vec::new(),
+                    message: error.to_string(),
+                },
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+            },
+        ),
+    }
+}
+
 #[tauri::command]
 pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
     let request = normalize_launch_request(request);
-    spawn_claude_codex_pro_launch(request, "启动任务已在后台开始，可稍后查看概览状态。")
+    spawn_claude_codex_pro_launch(request, "Launch task started in the background.")
 }
 
 #[tauri::command]
@@ -1746,7 +2578,7 @@ pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> 
     let request = normalize_launch_request(request);
     claude_codex_pro_core::watcher::stop_launcher_processes();
     claude_codex_pro_core::watcher::stop_codex_processes();
-    spawn_claude_codex_pro_launch(request, "Codex 已请求重启，启动任务正在后台运行。")
+    spawn_claude_codex_pro_launch(request, "Codex restart task is running in the background.")
 }
 
 fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
@@ -1803,7 +2635,7 @@ fn spawn_claude_codex_pro_launch(
             }),
         },
         Err(error) => failed(
-            &format!("启动静默入口失败：{error}"),
+            &format!("找不到静默启动器或启动失败：{error}"),
             json!({
                 "debugPort": debug_port,
                 "helperPort": helper_port
@@ -1831,7 +2663,7 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
     command
         .spawn()
         .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("无法启动 {}：{error}", launcher.to_string_lossy()))
+        .map_err(|error| anyhow::anyhow!("Failed to start {}: {error}", launcher.to_string_lossy()))
 }
 
 pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
@@ -1871,12 +2703,12 @@ pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
         .map(|path| path.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join("; ");
-    bail!("找不到静默启动器 {launcher_name}，已检查：{searched}")
+    bail!("Silent launcher {launcher_name} was not found; searched: {searched}")
 }
 
 #[tauri::command]
 pub fn load_settings() -> CommandResult<SettingsPayload> {
-    settings_payload("设置已加载。", "设置读取失败")
+    settings_payload("Settings loaded.", "Failed to load settings.")
 }
 
 #[tauri::command]
@@ -1886,12 +2718,12 @@ pub fn save_settings(settings: BackendSettings) -> CommandResult<SettingsPayload
         Ok(()) => {
             let wrapper_message = refresh_cli_wrapper_after_settings_save(&settings);
             settings_payload(
-                &format!("设置已保存。{wrapper_message}"),
-                "设置保存后重新读取失败",
+                &format!("Settings saved.{wrapper_message}"),
+                "Failed to reload settings after save.",
             )
         }
         Err(error) => failed(
-            &format!("保存设置失败：{error}"),
+            &format!("Failed to save settings: {error}"),
             SettingsPayload {
                 settings,
                 settings_path: claude_codex_pro_core::paths::default_settings_path()
@@ -1940,12 +2772,12 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
     };
     if errors.is_empty() {
         ok(
-            &format!("已读取 {} 个本地会话。", payload.sessions.len()),
+            &format!("Loaded {} local sessions.", payload.sessions.len()),
             payload,
         )
     } else {
         failed(
-            &format!("读取部分本地会话失败：{}", errors.join("; ")),
+            &format!("Failed to read some local sessions: {}", errors.join("; ")),
             payload,
         )
     }
@@ -1954,9 +2786,14 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
 #[tauri::command]
 pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
     match MemoryAssistStore::default().status() {
-        Ok(memory) => ok("盘古记忆状态已加载。", MemoryAssistStatusPayload { memory }),
+        Ok(memory) => ok(
+            "Pangu memory status loaded.",
+            MemoryAssistStatusPayload {
+                memory: enrich_memory_status(memory),
+            },
+        ),
         Err(error) => failed(
-            &format!("盘古记忆状态读取失败：{error}"),
+            &format!("Failed to load Pangu memory status: {error}"),
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },
@@ -1967,9 +2804,12 @@ pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
 #[tauri::command]
 pub fn query_memory_assist(request: MemoryQueryRequest) -> CommandResult<MemoryAssistQueryPayload> {
     match MemoryAssistStore::default().query(request.clone()) {
-        Ok(memory) => ok("记忆检索完成。", MemoryAssistQueryPayload { memory }),
+        Ok(memory) => ok(
+            "Memory query completed.",
+            MemoryAssistQueryPayload { memory },
+        ),
         Err(error) => failed(
-            &format!("记忆检索失败：{error}"),
+            &format!("Memory query failed: {error}"),
             MemoryAssistQueryPayload {
                 memory: MemoryQueryResult {
                     query: request.query,
@@ -1987,11 +2827,11 @@ pub fn list_memory_assist_items(
 ) -> CommandResult<MemoryAssistItemsPayload> {
     match MemoryAssistStore::default().list_items(request) {
         Ok(items) => ok(
-            &format!("已读取 {} 条记忆。", items.len()),
+            &format!("Loaded {} memory items.", items.len()),
             MemoryAssistItemsPayload { items },
         ),
         Err(error) => failed(
-            &format!("记忆列表读取失败：{error}"),
+            &format!("Failed to load memory list: {error}"),
             MemoryAssistItemsPayload { items: Vec::new() },
         ),
     }
@@ -2003,16 +2843,16 @@ pub fn learn_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
         );
     }
     match MemoryAssistStore::default().learn_item(request) {
-        Ok(item) => ok("记忆已保存。", MemoryAssistItemPayload { item }),
+        Ok(item) => ok("Memory saved.", MemoryAssistItemPayload { item }),
         Err(error) => failed(
-            &format!("记忆保存失败：{error}"),
+            &format!("Failed to save memory: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2026,16 +2866,16 @@ pub fn update_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
         );
     }
     match MemoryAssistStore::default().update_item(&request.id, request.item) {
-        Ok(item) => ok("记忆已更新。", MemoryAssistItemPayload { item }),
+        Ok(item) => ok("Memory updated.", MemoryAssistItemPayload { item }),
         Err(error) => failed(
-            &format!("记忆更新失败：{error}"),
+            &format!("Failed to update memory: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2049,16 +2889,16 @@ pub fn delete_memory_assist_item(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
         );
     }
     match MemoryAssistStore::default().delete_item(&request.id) {
-        Ok(item) => ok("记忆已删除。", MemoryAssistItemPayload { item }),
+        Ok(item) => ok("Memory deleted.", MemoryAssistItemPayload { item }),
         Err(error) => failed(
-            &format!("记忆删除失败：{error}"),
+            &format!("Failed to delete memory: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2072,7 +2912,7 @@ pub fn create_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_candidate_enabled() {
         return failed(
-            "盘古记忆自动学习已禁用",
+            "Pangu memory auto learning is disabled.",
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2080,11 +2920,11 @@ pub fn create_memory_assist_candidate(
     }
     match MemoryAssistStore::default().create_candidate(request) {
         Ok(candidate) => ok(
-            "待确认记忆已创建。",
+            "Pending memory created.",
             MemoryAssistCandidatePayload { candidate },
         ),
         Err(error) => failed(
-            &format!("待确认记忆创建失败：{error}"),
+            &format!("Failed to create pending memory: {error}"),
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2098,11 +2938,11 @@ pub fn list_memory_assist_candidates(
 ) -> CommandResult<MemoryAssistCandidatesPayload> {
     match MemoryAssistStore::default().list_candidates(&request.workspace, request.include_global) {
         Ok(candidates) => ok(
-            &format!("已读取 {} 条待确认记忆。", candidates.len()),
+            &format!("Loaded {} pending memories.", candidates.len()),
             MemoryAssistCandidatesPayload { candidates },
         ),
         Err(error) => failed(
-            &format!("待确认记忆读取失败：{error}"),
+            &format!("Failed to load pending memories: {error}"),
             MemoryAssistCandidatesPayload {
                 candidates: Vec::new(),
             },
@@ -2116,19 +2956,16 @@ pub fn approve_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
         );
     }
     match MemoryAssistStore::default().approve_candidate(&request.id) {
-        Ok(item) => ok(
-            "待确认记忆已写入长期记忆。",
-            MemoryAssistItemPayload { item },
-        ),
+        Ok(item) => ok("Pending memory approved.", MemoryAssistItemPayload { item }),
         Err(error) => failed(
-            &format!("待确认记忆确认失败：{error}"),
+            &format!("Failed to approve pending memory: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2142,7 +2979,7 @@ pub fn reject_memory_assist_candidate(
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2150,11 +2987,11 @@ pub fn reject_memory_assist_candidate(
     }
     match MemoryAssistStore::default().reject_candidate(&request.id) {
         Ok(candidate) => ok(
-            "待确认记忆已忽略。",
+            "Pending memory rejected.",
             MemoryAssistCandidatePayload { candidate },
         ),
         Err(error) => failed(
-            &format!("待确认记忆忽略失败：{error}"),
+            &format!("Failed to reject pending memory: {error}"),
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2168,11 +3005,11 @@ pub fn load_memory_assist_session(
 ) -> CommandResult<MemoryAssistSessionPayload> {
     match MemoryAssistStore::default().session_summary(request) {
         Ok(summary) => ok(
-            "会话记忆摘要已加载。",
+            "Memory session summary loaded.",
             MemoryAssistSessionPayload { summary },
         ),
         Err(error) => failed(
-            &format!("会话记忆摘要读取失败：{error}"),
+            &format!("Failed to load memory session summary: {error}"),
             MemoryAssistSessionPayload {
                 summary: MemorySessionSummary {
                     workspace: String::new(),
@@ -2192,7 +3029,7 @@ pub fn run_memory_assist_selfcheck(
 ) -> CommandResult<MemoryAssistSelfCheckPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistSelfCheckPayload {
                 report: MemorySelfCheckResult {
                     status: "failed".to_string(),
@@ -2205,11 +3042,11 @@ pub fn run_memory_assist_selfcheck(
     }
     match MemoryAssistStore::default().run_selfcheck(request) {
         Ok(report) => ok(
-            "盘古记忆自检完成。",
+            "Pangu memory self-check completed.",
             MemoryAssistSelfCheckPayload { report },
         ),
         Err(error) => failed(
-            &format!("盘古记忆自检失败：{error}"),
+            &format!("Pangu memory self-check failed: {error}"),
             MemoryAssistSelfCheckPayload {
                 report: MemorySelfCheckResult {
                     status: "failed".to_string(),
@@ -2225,9 +3062,12 @@ pub fn run_memory_assist_selfcheck(
 #[tauri::command]
 pub fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
     match MemoryAssistStore::default().export_json() {
-        Ok(data) => ok("盘古记忆数据已导出。", MemoryAssistExportPayload { data }),
+        Ok(data) => ok(
+            "Pangu memory data exported.",
+            MemoryAssistExportPayload { data },
+        ),
         Err(error) => failed(
-            &format!("盘古记忆导出失败：{error}"),
+            &format!("Pangu memory export failed: {error}"),
             MemoryAssistExportPayload {
                 data: MemoryExport {
                     schema_version: "memory-assist/v1".to_string(),
@@ -2246,16 +3086,19 @@ pub fn import_memory_assist(
 ) -> CommandResult<MemoryAssistStatusPayload> {
     if !memory_assist_write_enabled() {
         return failed(
-            "盘古记忆已禁用",
+            "Pangu memory is disabled.",
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },
         );
     }
     match MemoryAssistStore::default().import_json(request) {
-        Ok(memory) => ok("盘古记忆数据已导入。", MemoryAssistStatusPayload { memory }),
+        Ok(memory) => ok(
+            "Pangu memory data imported.",
+            MemoryAssistStatusPayload { memory },
+        ),
         Err(error) => failed(
-            &format!("盘古记忆导入失败：{error}"),
+            &format!("Pangu memory import failed: {error}"),
             MemoryAssistStatusPayload {
                 memory: empty_memory_status(),
             },
@@ -2273,6 +3116,16 @@ fn empty_memory_status() -> MemoryAssistStatus {
         pending_candidates: 0,
         workspaces: Vec::new(),
         latest_backup_path: None,
+        enabled: false,
+        inject_enabled: false,
+        auto_suggest_enabled: false,
+        runtime_status: "failed".to_string(),
+        runtime_message: "Pangu memory is unavailable.".to_string(),
+        codex_injected: false,
+        claude_injected: false,
+        codex_workspace: String::new(),
+        active: false,
+        active_source: "idle".to_string(),
     }
 }
 
@@ -2318,6 +3171,77 @@ fn memory_assist_candidate_enabled() -> bool {
     settings.memory_assist_enabled && settings.memory_assist_auto_suggest_enabled
 }
 
+fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    memory.enabled = settings.memory_assist_enabled;
+    memory.inject_enabled = settings.memory_assist_inject_enabled;
+    memory.auto_suggest_enabled = settings.memory_assist_auto_suggest_enabled;
+
+    if let Some(runtime) = read_codex_memory_runtime_snapshot() {
+        memory.runtime_status = if runtime.injected {
+            runtime.status.clone()
+        } else if memory.enabled && memory.inject_enabled {
+            "waiting".to_string()
+        } else {
+            "disabled".to_string()
+        };
+        memory.runtime_message = if runtime.summary.trim().is_empty() {
+            "Pangu memory runtime synchronized.".to_string()
+        } else {
+            runtime.summary.clone()
+        };
+        memory.codex_injected = runtime.injected;
+        memory.codex_workspace = runtime.workspace.clone();
+        memory.active = runtime.active;
+        memory.active_source = if runtime.source.trim().is_empty() {
+            "codex".to_string()
+        } else {
+            runtime.source.clone()
+        };
+        if runtime.total_items > 0 {
+            memory.total_items = runtime.total_items;
+        }
+        if runtime.pending_candidates > 0 {
+            memory.pending_candidates = runtime.pending_candidates;
+        }
+    } else {
+        memory.runtime_status = if memory.enabled && memory.inject_enabled {
+            "not_checked".to_string()
+        } else {
+            "disabled".to_string()
+        };
+        memory.runtime_message = if memory.enabled && memory.inject_enabled {
+            "Waiting for Codex memory runtime injection.".to_string()
+        } else {
+            "Pangu memory is currently disabled.".to_string()
+        };
+    }
+
+    memory.claude_injected = false;
+    memory
+}
+
+fn read_codex_memory_runtime_snapshot() -> Option<MemoryAssistRuntimeSnapshot> {
+    let latest = StatusStore::default().load_latest().ok().flatten()?;
+    let debug_port = latest.debug_port?;
+    let targets =
+        tauri::async_runtime::block_on(claude_codex_pro_core::cdp::list_targets(debug_port))
+            .ok()?;
+    let target = claude_codex_pro_core::cdp::pick_injectable_codex_page_target(&targets).ok()?;
+    let websocket_url = target.web_socket_debugger_url.as_deref()?;
+    let result = tauri::async_runtime::block_on(claude_codex_pro_core::bridge::evaluate_script(
+        websocket_url,
+        r#"(() => window.__claudeCodexProMemoryAssistRuntime || null)()"#,
+    ))
+    .ok()?;
+    let value = result
+        .get("result")
+        .and_then(|result| result.get("result"))
+        .and_then(|result| result.get("value"))?
+        .clone();
+    serde_json::from_value::<MemoryAssistRuntimeSnapshot>(value).ok()
+}
+
 #[tauri::command]
 pub fn list_zed_remote_projects() -> CommandResult<ZedRemoteProjectsPayload> {
     let result = claude_codex_pro_core::zed_remote::list_zed_remote_projects_response(&json!({}));
@@ -2330,7 +3254,7 @@ pub fn list_zed_remote_projects() -> CommandResult<ZedRemoteProjectsPayload> {
         )
         .unwrap_or_default();
         return ok(
-            &format!("已读取 {} 个 Zed 远程项目。", projects.len()),
+            &format!("Loaded {} Zed remote projects.", projects.len()),
             ZedRemoteProjectsPayload { projects },
         );
     }
@@ -2338,7 +3262,7 @@ pub fn list_zed_remote_projects() -> CommandResult<ZedRemoteProjectsPayload> {
         result
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("读取 Zed 远程项目失败。"),
+            .unwrap_or("Failed to load Zed remote projects."),
         ZedRemoteProjectsPayload {
             projects: Vec::new(),
         },
@@ -2360,7 +3284,7 @@ pub fn open_zed_remote(payload: Value) -> CommandResult<ZedRemoteOpenPayload> {
         .to_string();
     if result.get("status").and_then(Value::as_str) == Some("ok") {
         return ok(
-            "已在 Zed Remote 打开项目。",
+            "Zed Remote link opened.",
             ZedRemoteOpenPayload { url, strategy },
         );
     }
@@ -2368,7 +3292,7 @@ pub fn open_zed_remote(payload: Value) -> CommandResult<ZedRemoteOpenPayload> {
         result
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("无法在 Zed Remote 打开项目。"),
+            .unwrap_or("Failed to open Zed Remote link."),
         ZedRemoteOpenPayload { url, strategy },
     )
 }
@@ -2382,7 +3306,7 @@ pub fn forget_zed_remote_project(id: String) -> CommandResult<ZedRemoteProjectsP
             result
                 .get("message")
                 .and_then(Value::as_str)
-                .unwrap_or("移除 Zed 远程项目失败。"),
+                .unwrap_or("Failed to forget Zed remote project."),
             ZedRemoteProjectsPayload {
                 projects: Vec::new(),
             },
@@ -2396,11 +3320,11 @@ pub fn delete_local_session(request: DeleteLocalSessionRequest) -> CommandResult
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return failed(
-            "会话 ID 不能为空。",
+            "Session ID cannot be empty.",
             DeleteResult {
                 status: claude_codex_pro_core::models::DeleteStatus::Failed,
                 session_id: String::new(),
-                message: "会话 ID 不能为空。".to_string(),
+                message: "Session ID cannot be empty.".to_string(),
                 undo_token: None,
                 backup_path: None,
             },
@@ -2716,11 +3640,14 @@ pub async fn load_provider_sync_targets() -> CommandResult<Value> {
                 .collect::<Vec<_>>();
             merge_manual_provider_sync_targets(&mut targets, &manual, &settings);
             ok(
-                "Provider 同步目标已加载。",
+                "Provider sync targets loaded.",
                 serde_json::to_value(targets).unwrap_or_else(|_| json!({})),
             )
         }
-        Err(error) => failed(&format!("Provider 同步目标加载失败：{error}"), json!({})),
+        Err(error) => failed(
+            &format!("Provider sync targets failed to load: {error}"),
+            json!({}),
+        ),
     }
 }
 
@@ -2784,7 +3711,7 @@ pub async fn sync_providers_now(target_provider: Option<String>) -> CommandResul
             }
             ok(
                 &format!(
-                    "供应商已同步一次：{} 个会话文件，{} 行索引，跳过 {} 个占用文件。",
+                    "Provider synced once: {} session files, {} sqlite rows, {} locked files skipped.",
                     sync.changed_session_files,
                     sync.sqlite_rows_updated,
                     sync.skipped_locked_rollout_files.len()
@@ -2805,7 +3732,7 @@ pub async fn sync_providers_now(target_provider: Option<String>) -> CommandResul
                 }),
             )
         }
-        Err(error) => failed(&format!("供应商同步失败：{error}"), json!({})),
+        Err(error) => failed(&format!("Provider sync failed: {error}"), json!({})),
     }
 }
 
@@ -2838,9 +3765,9 @@ fn persist_provider_sync_selection(provider: &str) {
 #[tauri::command]
 pub async fn load_ads() -> CommandResult<AdsPayload> {
     match claude_codex_pro_core::ads::fetch_ad_list().await {
-        Ok(payload) => ok("推荐内容已加载。", ads_payload(payload)),
+        Ok(payload) => ok("Recommendations loaded.", ads_payload(payload)),
         Err(error) => failed(
-            &format!("推荐内容加载失败：{error}"),
+            &format!("Recommendations failed to load: {error}"),
             AdsPayload {
                 version: 1,
                 ads: Vec::new(),
@@ -2853,12 +3780,12 @@ pub async fn load_ads() -> CommandResult<AdsPayload> {
 pub async fn refresh_script_market() -> CommandResult<ScriptMarketPayload> {
     match script_market::fetch_market_manifest(script_market::DEFAULT_MARKET_INDEX_URL).await {
         Ok(manifest) => ok(
-            "脚本市场已刷新。",
-            script_market_payload_from_manifest(&manifest, "ok", "脚本市场已刷新。"),
+            "Script market refreshed.",
+            script_market_payload_from_manifest(&manifest, "ok", "Script market refreshed."),
         ),
         Err(error) => failed(
-            &format!("脚本市场加载失败：{error}"),
-            failed_script_market_payload(&format!("脚本市场加载失败：{error}")),
+            &format!("Script market failed to load: {error}"),
+            failed_script_market_payload(&format!("Script market failed to load: {error}")),
         ),
     }
 }
@@ -2868,8 +3795,8 @@ pub async fn install_market_script(id: String) -> CommandResult<ScriptMarketPayl
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return failed(
-            "脚本 id 不能为空。",
-            failed_script_market_payload("脚本 id 不能为空。"),
+            "Script id cannot be empty.",
+            failed_script_market_payload("Script id cannot be empty."),
         );
     }
     let manifest =
@@ -2877,29 +3804,33 @@ pub async fn install_market_script(id: String) -> CommandResult<ScriptMarketPayl
             Ok(manifest) => manifest,
             Err(error) => {
                 return failed(
-                    &format!("脚本市场加载失败：{error}"),
-                    failed_script_market_payload(&format!("脚本市场加载失败：{error}")),
+                    &format!("Script market failed to load: {error}"),
+                    failed_script_market_payload(&format!("Script market failed to load: {error}")),
                 );
             }
         };
     let Some(script) = manifest.scripts.iter().find(|script| script.id == trimmed) else {
         return failed(
-            "市场清单中未找到该脚本。",
-            script_market_payload_from_manifest(&manifest, "failed", "市场清单中未找到该脚本。"),
+            "Script was not found in the market manifest.",
+            script_market_payload_from_manifest(
+                &manifest,
+                "failed",
+                "Script was not found in the market manifest.",
+            ),
         );
     };
     let manager = default_user_script_manager();
     match script_market::install_market_script(&manager, script).await {
         Ok(()) => ok(
-            "脚本已安装。",
-            script_market_payload_from_manifest(&manifest, "ok", "脚本已安装。"),
+            "Script installed.",
+            script_market_payload_from_manifest(&manifest, "ok", "Script installed."),
         ),
         Err(error) => failed(
-            &format!("安装脚本失败：{error}"),
+            &format!("Script installation failed: {error}"),
             script_market_payload_from_manifest(
                 &manifest,
                 "failed",
-                &format!("安装脚本失败：{error}"),
+                &format!("Script installation failed: {error}"),
             ),
         ),
     }
@@ -2933,7 +3864,7 @@ pub async fn repair_codex_plugin_marketplace() -> CommandResult<CodexPluginMarke
         Err(error) => {
             let marketplace = claude_codex_pro_core::codex_plugin_marketplace::status();
             failed(
-                &format!("Codex OpenAI 插件仓库修复失败：{error}"),
+                &format!("Codex OpenAI plugin marketplace repair failed: {error}"),
                 CodexPluginMarketplaceRepairPayload {
                     repair: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceRepair {
                         codex_home: marketplace.codex_home.clone(),
@@ -2954,13 +3885,16 @@ pub async fn repair_codex_plugin_marketplace() -> CommandResult<CodexPluginMarke
 #[tauri::command]
 pub async fn refresh_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
     let catalog = plugin_hub::fetch_catalog().await;
-    ok("插件中心目录已刷新。", PluginHubPayload { catalog })
+    ok(
+        "Plugin hub catalog refreshed.",
+        PluginHubPayload { catalog },
+    )
 }
 
 #[tauri::command]
 pub async fn get_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
     let catalog = plugin_hub::fetch_catalog().await;
-    ok("插件中心目录已读取。", PluginHubPayload { catalog })
+    ok("Plugin hub catalog loaded.", PluginHubPayload { catalog })
 }
 
 #[tauri::command]
@@ -2968,9 +3902,9 @@ pub async fn preview_plugin_hub_install(
     request: PluginHubItemRequest,
 ) -> CommandResult<PluginInstallPreview> {
     match plugin_hub::preview_install(request.id.trim()).await {
-        Ok(preview) => ok("安装预览已生成。", preview),
+        Ok(preview) => ok("Plugin install preview loaded.", preview),
         Err(error) => failed(
-            &format!("安装预览失败：{error}"),
+            &format!("Plugin install preview failed: {error}"),
             empty_plugin_install_preview(request.id),
         ),
     }
@@ -2990,7 +3924,7 @@ pub async fn install_plugin_hub_item(
             }
         }
         Err(error) => {
-            let message = format!("插件安装失败：{error}");
+            let message = format!("Plugin install failed: {error}");
             CommandResult {
                 status: "failed".to_string(),
                 message: message.clone(),
@@ -3008,14 +3942,14 @@ pub async fn uninstall_plugin_hub_item(
         Ok(_) => {
             let catalog = plugin_hub::fetch_catalog().await;
             ok(
-                "插件中心托管配置已撤销，安装记录已更新。",
+                "Plugin removed. Restart Codex or Claude if needed.",
                 PluginHubPayload { catalog },
             )
         }
         Err(error) => {
             let catalog = plugin_hub::fetch_catalog().await;
             failed(
-                &format!("插件中心卸载失败：{error}"),
+                &format!("Plugin removal failed: {error}"),
                 PluginHubPayload { catalog },
             )
         }
@@ -3110,6 +4044,13 @@ pub struct ClaudeDesktopMarketplaceOpenPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ClaudeDesktopMarketplaceRepairPayload {
+    pub outcome: ClaudeDesktopMarketplaceOutcome,
+    #[serde(rename = "marketplaceStatus")]
+    pub marketplace_status: ClaudeDesktopMarketplaceStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ClaudeDesktopDevModePayload {
     #[serde(rename = "devModeStatus")]
     pub dev_mode_status: ClaudeDesktopDevModeStatus,
@@ -3156,14 +4097,44 @@ pub fn load_claude_desktop_dev_mode_status() -> CommandResult<ClaudeDesktopDevMo
 }
 
 #[tauri::command]
-pub fn configure_claude_desktop_dev_mode(
+pub async fn configure_claude_desktop_dev_mode(
     request: Option<ClaudeDesktopProviderRequest>,
 ) -> CommandResult<ClaudeDesktopDevModeConfigurePayload> {
-    match plugin_hub::configure_claude_desktop_dev_mode(request.as_ref()) {
+    let proxy_port = match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => port,
+        Err(error) => {
+            return failed(
+                &format!("Claude local proxy failed to start before writing dev mode: {error}"),
+                ClaudeDesktopDevModeConfigurePayload {
+                    outcome: ClaudeDesktopDevModeOutcome {
+                        configured: false,
+                        normal_config_path: String::new(),
+                        threep_config_path: String::new(),
+                        profile_path: String::new(),
+                        profile_meta_path: String::new(),
+                        backup_paths: Vec::new(),
+                        message: error.to_string(),
+                    },
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            );
+        }
+    };
+    match plugin_hub::configure_claude_desktop_dev_mode_with_proxy_port(
+        request.as_ref(),
+        proxy_port,
+    ) {
         Ok(outcome) => {
+            let helper_message = if wait_helper_backend_online(proxy_port).await {
+                format!(" Local model proxy verified on 127.0.0.1:{proxy_port}.")
+            } else {
+                format!(
+                    " Local model proxy requested on 127.0.0.1:{proxy_port}, but /backend/status did not respond yet."
+                )
+            };
             let status = plugin_hub::load_claude_desktop_dev_mode_status();
             ok(
-                &outcome.message.clone(),
+                &format!("{}{}", outcome.message, helper_message),
                 ClaudeDesktopDevModeConfigurePayload {
                     outcome,
                     dev_mode_status: status,
@@ -3206,8 +4177,38 @@ pub fn open_ponytail_claude_desktop_marketplace_setup()
             &format!("Open Claude Desktop plugin marketplace setup failed: {error}"),
             ClaudeDesktopMarketplaceOpenPayload {
                 outcome: ClaudeDesktopMarketplaceOutcome {
-                    opened: false,
-                    deep_link: String::new(),
+                    repaired: false,
+                    config_path: String::new(),
+                    repositories: Vec::new(),
+                    message: error.to_string(),
+                },
+                marketplace_status: plugin_hub::load_claude_desktop_marketplace_status(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn repair_claude_desktop_marketplaces()
+-> CommandResult<ClaudeDesktopMarketplaceRepairPayload> {
+    match plugin_hub::repair_claude_desktop_marketplaces() {
+        Ok(outcome) => {
+            let status = plugin_hub::load_claude_desktop_marketplace_status();
+            ok(
+                &outcome.message.clone(),
+                ClaudeDesktopMarketplaceRepairPayload {
+                    outcome,
+                    marketplace_status: status,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("Repair Claude Desktop plugin marketplaces failed: {error}"),
+            ClaudeDesktopMarketplaceRepairPayload {
+                outcome: ClaudeDesktopMarketplaceOutcome {
+                    repaired: false,
+                    config_path: String::new(),
+                    repositories: Vec::new(),
                     message: error.to_string(),
                 },
                 marketplace_status: plugin_hub::load_claude_desktop_marketplace_status(),
@@ -3323,20 +4324,20 @@ pub async fn install_ponytail_claude_desktop_local_bundle()
 pub fn set_user_script_enabled(key: String, enabled: bool) -> CommandResult<SettingsPayload> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
-        return failed("脚本 key 不能为空。", fallback_settings_payload());
+        return failed("Script key cannot be empty.", fallback_settings_payload());
     }
     let manager = default_user_script_manager();
     match manager.set_script_enabled(trimmed, enabled) {
         Ok(_) => settings_payload(
             if enabled {
-                "脚本已启用。"
+                "Script enabled."
             } else {
-                "脚本已禁用。"
+                "Script disabled."
             },
-            "脚本启停失败",
+            "Script setting update failed",
         ),
         Err(error) => failed(
-            &format!("脚本启停失败：{error}"),
+            &format!("Script setting update failed: {error}"),
             fallback_settings_payload(),
         ),
     }
@@ -3346,13 +4347,13 @@ pub fn set_user_script_enabled(key: String, enabled: bool) -> CommandResult<Sett
 pub fn delete_user_script(key: String) -> CommandResult<SettingsPayload> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
-        return failed("脚本 key 不能为空。", fallback_settings_payload());
+        return failed("Script key cannot be empty.", fallback_settings_payload());
     }
     let manager = default_user_script_manager();
     match manager.delete_user_script(trimmed) {
-        Ok(_) => settings_payload("脚本已删除。", "脚本删除失败"),
+        Ok(_) => settings_payload("Script deleted.", "Script deletion failed"),
         Err(error) => failed(
-            &format!("脚本删除失败：{error}"),
+            &format!("Script deletion failed: {error}"),
             fallback_settings_payload(),
         ),
     }
@@ -3362,11 +4363,17 @@ pub fn delete_user_script(key: String) -> CommandResult<SettingsPayload> {
 pub fn open_external_url(url: String) -> CommandResult<Value> {
     let trimmed = url.trim();
     if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
-        return failed("只允许打开 http 或 https 链接。", json!({}));
+        return failed("Only http or https links can be opened.", json!({}));
     }
     match open_url(trimmed) {
-        Ok(()) => ok("已在系统浏览器打开链接。", json!({ "url": trimmed })),
-        Err(error) => failed(&format!("打开链接失败：{error}"), json!({ "url": trimmed })),
+        Ok(()) => ok(
+            "Link opened in the system browser.",
+            json!({ "url": trimmed }),
+        ),
+        Err(error) => failed(
+            &format!("Failed to open link: {error}"),
+            json!({ "url": trimmed }),
+        ),
     }
 }
 
@@ -3374,21 +4381,21 @@ pub fn open_external_url(url: String) -> CommandResult<Value> {
 pub async fn install_entrypoints() -> InstallActionResult {
     tauri::async_runtime::spawn_blocking(install::install_entrypoints)
         .await
-        .unwrap_or_else(|error| install_background_failure("安装入口", error))
+        .unwrap_or_else(|error| install_background_failure("Install entrypoints", error))
 }
 
 #[tauri::command]
 pub async fn uninstall_entrypoints(options: InstallOptions) -> InstallActionResult {
     tauri::async_runtime::spawn_blocking(move || install::uninstall_entrypoints(options))
         .await
-        .unwrap_or_else(|error| install_background_failure("卸载入口", error))
+        .unwrap_or_else(|error| install_background_failure("Uninstall entrypoints", error))
 }
 
 #[tauri::command]
 pub async fn repair_shortcuts() -> InstallActionResult {
     tauri::async_runtime::spawn_blocking(install::repair_shortcuts)
         .await
-        .unwrap_or_else(|error| install_background_failure("修复快捷方式", error))
+        .unwrap_or_else(|error| install_background_failure("Repair shortcuts", error))
 }
 
 #[tauri::command]
@@ -3396,13 +4403,13 @@ pub fn repair_backend() -> CommandResult<SettingsPayload> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let message = match claude_codex_pro_core::cli_wrapper::ensure_cli_wrapper(&settings) {
         Ok(Some(install)) => format!(
-            "后端已修复，命令包装器已指向 {}。",
+            "Command wrapper updated: {}.",
             install.real_codex.to_string_lossy()
         ),
-        Ok(None) => "后端已修复，命令包装器当前未启用。".to_string(),
-        Err(error) => format!("后端修复部分失败：{error}"),
+        Ok(None) => "Command wrapper is already up to date.".to_string(),
+        Err(error) => format!("Command wrapper update failed: {error}"),
     };
-    settings_payload(&message, "修复后重新读取设置失败")
+    settings_payload(&message, "Backend repair failed")
 }
 
 #[tauri::command]
@@ -3419,9 +4426,9 @@ pub async fn check_update() -> CommandResult<Value> {
             CommandResult {
                 status: status.to_string(),
                 message: if update.update_available {
-                    "发现可用更新。".to_string()
+                    "Update is available.".to_string()
                 } else {
-                    "当前已是最新版本。".to_string()
+                    "You are already on the latest version.".to_string()
                 },
                 payload: json!({
                     "currentVersion": update.current_version,
@@ -3435,7 +4442,7 @@ pub async fn check_update() -> CommandResult<Value> {
             }
         }
         Err(error) => failed(
-            &format!("检查更新失败：{error}"),
+            &format!("Update check failed: {error}"),
             json!({
                 "currentVersion": claude_codex_pro_core::version::VERSION,
                 "latestVersion": Value::Null,
@@ -3455,7 +4462,7 @@ pub async fn perform_update(
 ) -> CommandResult<Value> {
     let Some(release) = release else {
         return failed(
-            "请先检查更新并选择可下载的 Release asset。",
+            "Please check for updates before installing; no release asset is selected.",
             json!({
                 "currentVersion": claude_codex_pro_core::version::VERSION,
                 "progress": 0
@@ -3465,7 +4472,7 @@ pub async fn perform_update(
     let download_dir = claude_codex_pro_core::paths::default_app_state_dir().join("updates");
     match claude_codex_pro_core::update::perform_update(&release, &download_dir).await {
         Ok(result) => ok(
-            "安装包已下载并启动，请按安装向导完成更新。",
+            "Installer downloaded and started. Follow the installer prompts to finish updating.",
             json!({
                 "currentVersion": claude_codex_pro_core::version::VERSION,
                 "latestVersion": result.release.version,
@@ -3476,7 +4483,7 @@ pub async fn perform_update(
             }),
         ),
         Err(error) => failed(
-            &format!("安装更新失败：{error}"),
+            &format!("Update installation failed: {error}"),
             json!({
                 "currentVersion": claude_codex_pro_core::version::VERSION,
                 "latestVersion": release.version,
@@ -3489,42 +4496,59 @@ pub async fn perform_update(
 
 #[tauri::command]
 pub fn load_watcher_state() -> CommandResult<WatcherPayload> {
-    ok("watcher 状态已加载。", watcher_payload())
+    ok("Watcher state loaded.", watcher_payload())
 }
 
 #[tauri::command]
 pub fn install_watcher() -> CommandResult<WatcherPayload> {
     let launcher_path = match resolve_silent_launcher_path() {
         Ok(path) => path,
-        Err(error) => return failed(&format!("安装 watcher 失败：{error}"), watcher_payload()),
+        Err(error) => {
+            return failed(
+                &format!("Install watcher failed: {error}"),
+                watcher_payload(),
+            );
+        }
     };
     match claude_codex_pro_core::watcher::install_watcher(&launcher_path, default_debug_port()) {
-        Ok(()) => ok("watcher 已安装。", watcher_payload()),
-        Err(error) => failed(&format!("安装 watcher 失败：{error}"), watcher_payload()),
+        Ok(()) => ok("Watcher installed.", watcher_payload()),
+        Err(error) => failed(
+            &format!("Install watcher failed: {error}"),
+            watcher_payload(),
+        ),
     }
 }
 
 #[tauri::command]
 pub fn uninstall_watcher() -> CommandResult<WatcherPayload> {
     match claude_codex_pro_core::watcher::uninstall_watcher() {
-        Ok(()) => ok("watcher 已移除。", watcher_payload()),
-        Err(error) => failed(&format!("移除 watcher 失败：{error}"), watcher_payload()),
+        Ok(()) => ok("Watcher uninstalled.", watcher_payload()),
+        Err(error) => failed(
+            &format!("Uninstall watcher failed: {error}"),
+            watcher_payload(),
+        ),
     }
 }
 
 #[tauri::command]
 pub fn enable_watcher() -> CommandResult<WatcherPayload> {
     match claude_codex_pro_core::watcher::enable_watcher() {
-        Ok(()) => ok("watcher 已启用。", watcher_payload()),
-        Err(error) => failed(&format!("启用 watcher 失败：{error}"), watcher_payload()),
+        Ok(()) => ok("Watcher enabled.", watcher_payload()),
+        Err(error) => failed(
+            &format!("Enable watcher failed: {error}"),
+            watcher_payload(),
+        ),
     }
 }
 
 #[tauri::command]
 pub fn disable_watcher() -> CommandResult<WatcherPayload> {
     match claude_codex_pro_core::watcher::disable_watcher() {
-        Ok(()) => ok("watcher 已禁用。", watcher_payload()),
-        Err(error) => failed(&format!("禁用 watcher 失败：{error}"), watcher_payload()),
+        Ok(()) => ok("Watcher disabled.", watcher_payload()),
+        Err(error) => failed(
+            &format!("Disable watcher failed: {error}"),
+            watcher_payload(),
+        ),
     }
 }
 
@@ -3533,7 +4557,7 @@ pub fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
     let path = claude_codex_pro_core::paths::default_diagnostic_log_path();
     match read_tail(&path, request.lines) {
         Ok(text) => ok(
-            "日志已读取。",
+            "Logs loaded.",
             LogsPayload {
                 path: path.to_string_lossy().to_string(),
                 text,
@@ -3541,7 +4565,7 @@ pub fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
             },
         ),
         Err(error) => failed(
-            &format!("读取日志失败：{error}"),
+            &format!("Failed to read logs: {error}"),
             LogsPayload {
                 path: path.to_string_lossy().to_string(),
                 text: String::new(),
@@ -3554,7 +4578,7 @@ pub fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
 #[tauri::command]
 pub fn copy_diagnostics() -> CommandResult<DiagnosticsPayload> {
     ok(
-        "诊断报告已生成。",
+        "Diagnostics report generated.",
         DiagnosticsPayload {
             report: diagnostics_report(),
         },
@@ -3565,9 +4589,9 @@ pub fn copy_diagnostics() -> CommandResult<DiagnosticsPayload> {
 pub fn reset_settings() -> CommandResult<SettingsPayload> {
     let settings = BackendSettings::default();
     match SettingsStore::default().save(&settings) {
-        Ok(()) => settings_payload("设置已重置为默认值。", "设置重置后重新读取失败"),
+        Ok(()) => settings_payload("Settings reset to defaults.", "Settings reset failed"),
         Err(error) => failed(
-            &format!("重置设置失败：{error}"),
+            &format!("Settings reset failed: {error}"),
             SettingsPayload {
                 settings,
                 settings_path: claude_codex_pro_core::paths::default_settings_path()
@@ -3589,9 +4613,12 @@ pub fn reset_image_overlay_settings() -> CommandResult<SettingsPayload> {
     settings.codex_app_image_overlay_opacity = defaults.codex_app_image_overlay_opacity;
     let settings = normalize_settings_before_save(settings);
     match store.save(&settings) {
-        Ok(()) => settings_payload("图片覆盖层设置已重置。", "图片覆盖层重置后重新读取失败"),
+        Ok(()) => settings_payload(
+            "Image overlay settings reset.",
+            "Image overlay reset failed",
+        ),
         Err(error) => failed(
-            &format!("重置图片覆盖层失败：{error}"),
+            &format!("Image overlay reset failed: {error}"),
             SettingsPayload {
                 settings,
                 settings_path: claude_codex_pro_core::paths::default_settings_path()
@@ -3607,9 +4634,9 @@ pub fn reset_image_overlay_settings() -> CommandResult<SettingsPayload> {
 pub fn relay_status() -> CommandResult<RelayPayload> {
     let status = claude_codex_pro_core::relay_config::default_relay_status();
     let message = if status.authenticated {
-        "已检测到 ChatGPT 登录状态。"
+        "ChatGPT login status detected."
     } else {
-        "未检测到 ChatGPT 登录状态，请先在 Codex/ChatGPT 中正常登录。"
+        "ChatGPT login status was not detected. You can still configure Codex API mode."
     };
     ok(message, relay_payload(status, None))
 }
@@ -3618,9 +4645,9 @@ pub fn relay_status() -> CommandResult<RelayPayload> {
 pub fn read_relay_files() -> CommandResult<RelayFilesPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     match relay_files_payload_from_home(&home) {
-        Ok(payload) => ok("配置文件内容已读取。", payload),
+        Ok(payload) => ok("Relay files loaded.", payload),
         Err(error) => failed(
-            &format!("读取配置文件失败：{error}"),
+            &format!("Failed to read relay files: {error}"),
             RelayFilesPayload {
                 config_path: home.join("config.toml").to_string_lossy().to_string(),
                 auth_path: home.join("auth.json").to_string_lossy().to_string(),
@@ -3637,9 +4664,9 @@ pub fn save_relay_file(request: SaveRelayFileRequest) -> CommandResult<RelayFile
     match save_relay_file_in_home(&home, &request.kind, &request.contents)
         .and_then(|_| relay_files_payload_from_home(&home))
     {
-        Ok(payload) => ok("配置文件已保存。", payload),
+        Ok(payload) => ok("Relay file saved.", payload),
         Err(error) => failed(
-            &format!("保存配置文件失败：{error}"),
+            &format!("Failed to save relay file: {error}"),
             relay_files_payload_from_home(&home).unwrap_or_else(|_| RelayFilesPayload {
                 config_path: home.join("config.toml").to_string_lossy().to_string(),
                 auth_path: home.join("auth.json").to_string_lossy().to_string(),
@@ -3670,7 +4697,7 @@ pub struct CcswitchImportPayload {
 pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload> {
     let Some(db_path) = default_ccswitch_db_path() else {
         return failed(
-            "未找到 cc-switch 数据库：~/.cc-switch/cc-switch.db。",
+            "cc-switch database was not found at ~/.cc-switch/cc-switch.db.",
             CcswitchImportPayload {
                 db_path: String::new(),
                 profiles: Vec::new(),
@@ -3682,7 +4709,7 @@ pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload>
         Ok((profiles, scanned)) => {
             let count = profiles.len();
             ok(
-                &format!("已从 cc-switch 导入供应商配置：{count} 个。"),
+                &format!("Imported {count} Codex provider profiles from cc-switch."),
                 CcswitchImportPayload {
                     db_path: db_path.to_string_lossy().to_string(),
                     profiles,
@@ -3691,7 +4718,7 @@ pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload>
             )
         }
         Err(error) => failed(
-            &format!("读取 cc-switch 供应商失败：{error}"),
+            &format!("Failed to read cc-switch providers: {error}"),
             CcswitchImportPayload {
                 db_path: db_path.to_string_lossy().to_string(),
                 profiles: Vec::new(),
@@ -3708,7 +4735,7 @@ pub fn switch_relay_profile(
     let Ok(_guard) = relay_switch_mutex().lock() else {
         let status = claude_codex_pro_core::relay_config::default_relay_status();
         return failed(
-            "供应商切换锁已损坏，请重启管理器后再试。",
+            "Provider switching is already running. Please try again later.",
             relay_switch_payload(
                 SettingsStore::default().load().unwrap_or_default(),
                 status,
@@ -3744,7 +4771,7 @@ pub fn switch_relay_profile(
                 }),
             );
             ok(
-                "供应商已切换。",
+                "Provider profile switched.",
                 relay_switch_payload(result.settings, status, result.backup_path),
             )
         }
@@ -3760,7 +4787,7 @@ pub fn switch_relay_profile(
                 }),
             );
             failed(
-                &format!("供应商切换失败：{error}"),
+                &format!("Provider profile switch failed: {error}"),
                 relay_switch_payload(settings, status, None),
             )
         }
@@ -3778,14 +4805,17 @@ pub fn preview_claude_desktop_provider(
             "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
         }),
     );
-    match claude_codex_pro_core::claude_desktop_provider::preview_claude_desktop_provider(&request)
-    {
+    let proxy_port = current_claude_desktop_proxy_port_hint();
+    match claude_codex_pro_core::claude_desktop_provider::preview_claude_desktop_provider_with_proxy_port(
+        &request,
+        proxy_port,
+    ) {
         Ok(preview) => ok(
-            "Claude Desktop 供应商写入预览已生成。",
+            &format!("Claude Desktop provider preview generated for local proxy port {proxy_port}."),
             ClaudeDesktopProviderPreviewPayload { preview },
         ),
         Err(error) => failed(
-            &format!("Claude Desktop 供应商预览失败：{error}"),
+            &format!("Claude Desktop provider preview failed: {error}"),
             ClaudeDesktopProviderPreviewPayload {
                 preview: empty_claude_desktop_provider_preview(),
             },
@@ -3794,7 +4824,7 @@ pub fn preview_claude_desktop_provider(
 }
 
 #[tauri::command]
-pub fn apply_claude_desktop_provider(
+pub async fn apply_claude_desktop_provider(
     request: ClaudeDesktopProviderRequest,
 ) -> CommandResult<ClaudeDesktopProviderApplyPayload> {
     log_manager_event(
@@ -3804,13 +4834,34 @@ pub fn apply_claude_desktop_provider(
             "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
         }),
     );
-    match claude_codex_pro_core::claude_desktop_provider::apply_claude_desktop_provider(&request) {
+    let _ = plugin_hub::persist_claude_desktop_provider_request_to_settings(&request);
+    let proxy_port = match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => port,
+        Err(error) => {
+            log_manager_event(
+                "manager.claude_desktop_provider.apply.proxy_failed",
+                json!({ "error": error.to_string() }),
+            );
+            return failed(
+                &format!("Claude local proxy failed to start before provider write: {error}"),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            );
+        }
+    };
+    match claude_codex_pro_core::claude_desktop_provider::apply_claude_desktop_provider_with_proxy_port(
+        &request,
+        proxy_port,
+    ) {
         Ok(outcome) => {
             log_manager_event(
                 "manager.claude_desktop_provider.apply.ok",
                 json!({
                     "normalConfigPath": outcome.normal_config_path,
                     "threepConfigPath": outcome.threep_config_path,
+                    "proxyPort": proxy_port,
                     "backupCount": outcome.backup_paths.len()
                 }),
             );
@@ -3828,7 +4879,7 @@ pub fn apply_claude_desktop_provider(
                 json!({ "error": error.to_string() }),
             );
             failed(
-                &format!("Claude Desktop 供应商写入失败：{error}"),
+                &format!("Claude Desktop provider apply failed: {error}"),
                 ClaudeDesktopProviderApplyPayload {
                     outcome: empty_claude_desktop_provider_outcome(error.to_string()),
                     dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
@@ -3863,7 +4914,7 @@ pub fn restore_claude_desktop_provider_official() -> CommandResult<ClaudeDesktop
                 json!({ "error": error.to_string() }),
             );
             failed(
-                &format!("Claude Desktop 官方模式恢复失败：{error}"),
+                &format!("Claude Desktop provider restore failed: {error}"),
                 ClaudeDesktopProviderApplyPayload {
                     outcome: empty_claude_desktop_provider_outcome(error.to_string()),
                     dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
@@ -3877,8 +4928,11 @@ pub fn restore_claude_desktop_provider_official() -> CommandResult<ClaudeDesktop
 pub fn write_diagnostic_event(event: String, detail: Value) -> CommandResult<Value> {
     let event = sanitize_manager_event(&event);
     match claude_codex_pro_core::diagnostic_log::append_diagnostic_log(&event, detail) {
-        Ok(()) => ok("诊断日志已写入。", json!({})),
-        Err(error) => failed(&format!("写入诊断日志失败：{error}"), json!({})),
+        Ok(()) => ok("Diagnostic event written.", json!({})),
+        Err(error) => failed(
+            &format!("Failed to write diagnostic event: {error}"),
+            json!({}),
+        ),
     }
 }
 
@@ -3908,7 +4962,7 @@ pub fn backfill_relay_profile_from_live(
             }),
         );
         return failed(
-            "当前供应商已不在配置列表中，已停止切换以避免覆盖用户改动。",
+            "The selected provider profile was not found. Save it first and try again.",
             SettingsBackfillPayload { settings },
         );
     };
@@ -3926,7 +4980,7 @@ pub fn backfill_relay_profile_from_live(
                 }),
             );
             ok(
-                "当前供应商配置已从 live 文件回填。",
+                "Provider profile backfilled from live relay files.",
                 SettingsBackfillPayload { settings },
             )
         }
@@ -3939,7 +4993,7 @@ pub fn backfill_relay_profile_from_live(
                 }),
             );
             failed(
-                &format!("回填当前供应商配置失败：{error}"),
+                &format!("Failed to backfill provider profile from live relay files: {error}"),
                 SettingsBackfillPayload { settings },
             )
         }
@@ -3954,14 +5008,14 @@ pub fn list_context_entries(
         &request.settings.relay_context_config_contents,
     ) {
         Ok(entries) => ok(
-            "工具与插件列表已读取。",
+            "Context entries loaded.",
             ContextEntriesPayload {
                 settings: request.settings,
                 entries,
             },
         ),
         Err(error) => failed(
-            &format!("读取工具与插件列表失败：{error}"),
+            &format!("Failed to load context entries: {error}"),
             ContextEntriesPayload {
                 settings: request.settings,
                 entries: empty_context_entries(),
@@ -3977,11 +5031,11 @@ pub fn read_live_context_entries() -> CommandResult<LiveContextEntriesPayload> {
     let config = read_optional_text_file(&config_path).unwrap_or_default();
     match claude_codex_pro_core::relay_config::list_context_entries_from_common_config(&config) {
         Ok(entries) => ok(
-            "live 工具与插件已读取。",
+            "Live context entries loaded.",
             LiveContextEntriesPayload { entries },
         ),
         Err(error) => failed(
-            &format!("读取 live 工具与插件失败：{error}"),
+            &format!("Failed to load live context entries: {error}"),
             LiveContextEntriesPayload {
                 entries: empty_context_entries(),
             },
@@ -4003,7 +5057,7 @@ pub fn upsert_context_entry(request: ContextEntryRequest) -> CommandResult<Conte
             list_context_entries(ContextSettingsRequest { settings })
         }
         Err(error) => failed(
-            &format!("保存工具与插件失败：{error}"),
+            &format!("Failed to save context entry: {error}"),
             ContextEntriesPayload {
                 settings,
                 entries: empty_context_entries(),
@@ -4022,7 +5076,7 @@ pub fn sync_live_context_entries(
         Ok(config) => config,
         Err(error) => {
             return failed(
-                &format!("读取 live config.toml 失败：{error}"),
+                &format!("Failed to read live config.toml: {error}"),
                 LiveContextEntriesPayload {
                     entries: empty_context_entries(),
                 },
@@ -4036,7 +5090,7 @@ pub fn sync_live_context_entries(
         Ok(config) => config,
         Err(error) => {
             return failed(
-                &format!("同步 live 工具与插件失败：{error}"),
+                &format!("Failed to sync live context entries: {error}"),
                 LiveContextEntriesPayload {
                     entries: empty_context_entries(),
                 },
@@ -4046,7 +5100,7 @@ pub fn sync_live_context_entries(
     if let Some(parent) = config_path.parent() {
         if let Err(error) = std::fs::create_dir_all(parent) {
             return failed(
-                &format!("创建 Codex 配置目录失败：{error}"),
+                &format!("Failed to create Codex config directory: {error}"),
                 LiveContextEntriesPayload {
                     entries: empty_context_entries(),
                 },
@@ -4055,7 +5109,7 @@ pub fn sync_live_context_entries(
     }
     if let Err(error) = std::fs::write(&config_path, &updated_config) {
         return failed(
-            &format!("写入 live config.toml 失败：{error}"),
+            &format!("Failed to write live config.toml: {error}"),
             LiveContextEntriesPayload {
                 entries: empty_context_entries(),
             },
@@ -4065,11 +5119,11 @@ pub fn sync_live_context_entries(
         &updated_config,
     ) {
         Ok(entries) => ok(
-            "live 工具与插件已同步。",
+            "Live context entries synchronized.",
             LiveContextEntriesPayload { entries },
         ),
         Err(error) => failed(
-            &format!("读取同步后的 live 工具与插件失败：{error}"),
+            &format!("Failed to read synchronized live context entries: {error}"),
             LiveContextEntriesPayload {
                 entries: empty_context_entries(),
             },
@@ -4090,7 +5144,7 @@ pub fn delete_context_entry(request: ContextDeleteRequest) -> CommandResult<Cont
             list_context_entries(ContextSettingsRequest { settings })
         }
         Err(error) => failed(
-            &format!("删除工具与插件失败：{error}"),
+            &format!("Failed to delete context entry: {error}"),
             ContextEntriesPayload {
                 settings,
                 entries: empty_context_entries(),
@@ -4106,7 +5160,7 @@ pub fn list_claude_context_entries() -> CommandResult<ClaudeContextEntriesPayloa
             let org = plugin_hub::load_claude_desktop_org_plugin_status();
             let market = plugin_hub::load_claude_desktop_marketplace_status();
             ok(
-                "Claude 工具与插件列表已读取。",
+                "Claude context entries loaded.",
                 ClaudeContextEntriesPayload {
                     config_path: mcp.config_path,
                     entries: claude_entries_from_status(mcp.entries, org, market),
@@ -4114,7 +5168,7 @@ pub fn list_claude_context_entries() -> CommandResult<ClaudeContextEntriesPayloa
             )
         }
         Err(error) => failed(
-            &format!("读取 Claude 工具与插件列表失败：{error}"),
+            &format!("Failed to load Claude context entries: {error}"),
             ClaudeContextEntriesPayload {
                 config_path: String::new(),
                 entries: empty_context_entries(),
@@ -4129,7 +5183,7 @@ pub fn upsert_claude_context_entry(
 ) -> CommandResult<ClaudeContextEntriesPayload> {
     if request.kind != "mcp" {
         return failed(
-            "Claude 当前仅支持直接编辑 MCP；Skills/插件请使用本地插件写入或 Claude 官方插件入口。",
+            "Claude currently supports only MCP context entries; skills and plugins are managed by Claude plugin flows.",
             ClaudeContextEntriesPayload {
                 config_path: String::new(),
                 entries: empty_context_entries(),
@@ -4141,7 +5195,7 @@ pub fn upsert_claude_context_entry(
             let org = plugin_hub::load_claude_desktop_org_plugin_status();
             let market = plugin_hub::load_claude_desktop_marketplace_status();
             ok(
-                "Claude MCP 已保存。",
+                "Claude MCP entry saved.",
                 ClaudeContextEntriesPayload {
                     config_path: mcp.config_path,
                     entries: claude_entries_from_status(mcp.entries, org, market),
@@ -4149,7 +5203,7 @@ pub fn upsert_claude_context_entry(
             )
         }
         Err(error) => failed(
-            &format!("保存 Claude MCP 失败：{error}"),
+            &format!("Failed to save Claude MCP entry: {error}"),
             ClaudeContextEntriesPayload {
                 config_path: String::new(),
                 entries: empty_context_entries(),
@@ -4164,7 +5218,7 @@ pub fn delete_claude_context_entry(
 ) -> CommandResult<ClaudeContextEntriesPayload> {
     if request.kind != "mcp" {
         return failed(
-            "Claude 当前仅支持直接删除 MCP；Skills/插件请使用本地插件写入或 Claude 官方插件入口。",
+            "Claude currently supports deleting only MCP context entries.",
             ClaudeContextEntriesPayload {
                 config_path: String::new(),
                 entries: empty_context_entries(),
@@ -4176,7 +5230,7 @@ pub fn delete_claude_context_entry(
             let org = plugin_hub::load_claude_desktop_org_plugin_status();
             let market = plugin_hub::load_claude_desktop_marketplace_status();
             ok(
-                "Claude MCP 已删除。",
+                "Claude MCP entry deleted.",
                 ClaudeContextEntriesPayload {
                     config_path: mcp.config_path,
                     entries: claude_entries_from_status(mcp.entries, org, market),
@@ -4184,7 +5238,7 @@ pub fn delete_claude_context_entry(
             )
         }
         Err(error) => failed(
-            &format!("删除 Claude MCP 失败：{error}"),
+            &format!("Failed to delete Claude MCP entry: {error}"),
             ClaudeContextEntriesPayload {
                 config_path: String::new(),
                 entries: empty_context_entries(),
@@ -4211,9 +5265,9 @@ pub fn extract_relay_common_config(
             profile_config_contents,
         })
     }) {
-        Ok(payload) => ok("通用配置已按兼容切换规则提取。", payload),
+        Ok(payload) => ok("Common relay config extracted.", payload),
         Err(error) => failed(
-            &format!("提取通用配置失败：{error}"),
+            &format!("Failed to extract common relay config: {error}"),
             ExtractRelayCommonConfigPayload {
                 common_config_contents: String::new(),
                 profile_config_contents: request.config_contents,
@@ -4225,19 +5279,16 @@ pub fn extract_relay_common_config(
 #[tauri::command]
 pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayProfileTestPayload> {
     let profile_name = if profile.name.trim().is_empty() {
-        "未命名供应商"
+        "Unnamed provider"
     } else {
         profile.name.trim()
     };
     let settings = SettingsStore::default().load().unwrap_or_default();
     let test_model: String = if !profile.test_model.trim().is_empty() {
-        // 1. 使用者在該供應商明確填的測試模型
         profile.test_model.trim().to_string()
     } else {
-        // 2. 該供應商自己 config.toml 裡的 model（避免串味）
         let from_profile = claude_codex_pro_core::relay_config::relay_profile_model(&profile);
         if from_profile.trim().is_empty() {
-            // 3. 最後才用全域預設
             settings.relay_test_model.trim().to_string()
         } else {
             from_profile
@@ -4252,14 +5303,14 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
             };
             let preview = result.response_preview.trim();
             let detail = if preview.is_empty() {
-                "响应内容为空".to_string()
+                "No response preview.".to_string()
             } else {
-                format!("响应：{preview}")
+                format!("Preview: {preview}")
             };
             CommandResult {
                 status: status.to_string(),
                 message: format!(
-                    "已向「{profile_name}」用模型「{test_model}」发送 hi，HTTP {}。{detail}",
+                    "Provider {profile_name} tested with model {test_model}; HTTP {}; {detail}",
                     result.http_status
                 ),
                 payload: RelayProfileTestPayload {
@@ -4270,7 +5321,7 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
             }
         }
         Err(error) => failed(
-            &format!("测试「{profile_name}」失败：{error}"),
+            &format!("Provider {profile_name} test failed: {error}"),
             RelayProfileTestPayload {
                 http_status: 0,
                 endpoint: String::new(),
@@ -4285,17 +5336,20 @@ pub async fn fetch_relay_profile_models(
     profile: RelayProfile,
 ) -> CommandResult<RelayProfileModelsPayload> {
     let profile_name = if profile.name.trim().is_empty() {
-        "未命名供应商"
+        "Unnamed provider"
     } else {
         profile.name.trim()
     };
     match claude_codex_pro_core::model_catalog::fetch_relay_profile_model_ids(&profile).await {
         Ok((models, endpoint)) => ok(
-            &format!("已从「{profile_name}」获取 {} 个模型。", models.len()),
+            &format!(
+                "Loaded {} models for provider {profile_name}.",
+                models.len()
+            ),
             RelayProfileModelsPayload { models, endpoint },
         ),
         Err(error) => failed(
-            &format!("从「{profile_name}」获取模型失败：{error}"),
+            &format!("Failed to load models for provider {profile_name}: {error}"),
             RelayProfileModelsPayload {
                 models: Vec::new(),
                 endpoint: String::new(),
@@ -4311,7 +5365,7 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
     if !settings.relay_profiles_enabled {
         let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
         return failed(
-            "供应商配置总开关已关闭，未写入 config.toml / auth.json。",
+            "Provider profiles are disabled; config.toml and auth.json were not written.",
             relay_payload(status, None),
         );
     }
@@ -4334,7 +5388,7 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                     None,
                 );
                 ok(
-                    "已按兼容切换规则切换供应商。",
+                    "Provider switched using compatibility rules.",
                     relay_payload(status, result.backup_path),
                 )
             }
@@ -4348,7 +5402,7 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                     Some(error.to_string()),
                 );
                 failed(
-                    &format!("切换完整中转配置失败：{error}"),
+                    &format!("Full relay profile switch failed: {error}"),
                     relay_payload(status, None),
                 )
             }
@@ -4363,10 +5417,10 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
             &relay,
             &status,
             None,
-            Some("未检测到 ChatGPT 登录状态".to_string()),
+            Some("ChatGPT login status was not detected".to_string()),
         );
         return failed(
-            "未检测到 ChatGPT 登录状态，已停止写入中转配置。",
+            "ChatGPT login status was not detected, so relay configuration was not written.",
             relay_payload(status, None),
         );
     }
@@ -4388,7 +5442,7 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                 None,
             );
             ok(
-                "中转配置已写入，密钥未在界面明文显示。",
+                "Relay configuration written. The API key is not shown in the UI.",
                 relay_payload(status, result.backup_path),
             )
         }
@@ -4402,7 +5456,7 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                 Some(error.to_string()),
             );
             failed(
-                &format!("写入中转配置失败：{error}"),
+                &format!("Failed to write relay configuration: {error}"),
                 relay_payload(status, None),
             )
         }
@@ -4416,7 +5470,7 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
     if !settings.relay_profiles_enabled {
         let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
         return failed(
-            "供应商配置总开关已关闭，未写入 config.toml / auth.json。",
+            "Provider profiles are disabled; config.toml and auth.json were not written.",
             relay_payload(status, None),
         );
     }
@@ -4440,12 +5494,12 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
                 );
                 if !status.configured {
                     return failed(
-                        "纯 API 配置写入后未检测到完整 custom provider，请检查 config.toml 和供应商 API Key。",
+                        "Pure API config was written, but no complete custom provider was detected. Check config.toml and the provider API key.",
                         relay_payload(status, result.backup_path),
                     );
                 }
                 ok(
-                    "已按兼容切换规则切换供应商。",
+                    "Provider switched using compatibility rules.",
                     relay_payload(status, result.backup_path),
                 )
             }
@@ -4459,7 +5513,7 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
                     Some(error.to_string()),
                 );
                 failed(
-                    &format!("切换纯 API 配置失败：{error}"),
+                    &format!("Pure API profile switch failed: {error}"),
                     relay_payload(status, None),
                 )
             }
@@ -4484,12 +5538,12 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
             );
             if !status.configured {
                 return failed(
-                    "纯 API 配置写入后未检测到完整 custom provider，请检查 config.toml 和供应商 API Key。",
+                    "Pure API config was written, but no complete custom provider was detected. Check config.toml and the provider API key.",
                     relay_payload(status, result.backup_path),
                 );
             }
             ok(
-                "纯 API 模式已写入：config.toml 已写入 custom provider，auth.json 已切换为当前供应商。",
+                "Pure API mode written: config.toml uses the custom provider and auth.json uses the selected provider.",
                 relay_payload(status, result.backup_path),
             )
         }
@@ -4503,7 +5557,7 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
                 Some(error.to_string()),
             );
             failed(
-                &format!("写入纯 API 模式失败：{error}"),
+                &format!("Failed to write pure API mode: {error}"),
                 relay_payload(status, None),
             )
         }
@@ -4534,7 +5588,7 @@ pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
                 }),
             );
             ok(
-                "已清除 custom 中转 API 模式，并切换到官方 ChatGPT 登录模式。",
+                "Custom relay API mode cleared and switched back to official ChatGPT login mode.",
                 relay_payload(status, result.backup_path),
             )
         }
@@ -4548,7 +5602,7 @@ pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
                 }),
             );
             failed(
-                &format!("清除中转配置失败：{error}"),
+                &format!("Failed to clear relay configuration: {error}"),
                 relay_payload(status, None),
             )
         }
@@ -4637,11 +5691,11 @@ fn sanitize_manager_event(event: &str) -> String {
 fn refresh_cli_wrapper_after_settings_save(settings: &BackendSettings) -> String {
     match claude_codex_pro_core::cli_wrapper::ensure_cli_wrapper(settings) {
         Ok(Some(install)) => format!(
-            " 命令包装器已更新：{}。",
+            " Command wrapper updated: {}.",
             install.real_codex.to_string_lossy()
         ),
         Ok(None) => String::new(),
-        Err(error) => format!(" 但命令包装器更新失败：{error}。"),
+        Err(error) => format!(" Command wrapper update failed: {error}."),
     }
 }
 
@@ -4723,44 +5777,52 @@ fn claude_entries_from_status(
     let mut entries = empty_context_entries();
     entries.mcp_servers = mcp_entries
         .into_iter()
-        .map(|entry| claude_codex_pro_core::relay_config::CodexContextEntry {
-            id: entry.id,
-            kind: "mcp".to_string(),
-            title: entry.title,
-            summary: entry.summary,
-            toml_body: entry.json_body,
-            enabled: entry.enabled,
-        })
+        .map(
+            |entry| claude_codex_pro_core::relay_config::CodexContextEntry {
+                id: entry.id,
+                kind: "mcp".to_string(),
+                title: entry.title,
+                summary: entry.summary,
+                toml_body: entry.json_body,
+                enabled: entry.enabled,
+            },
+        )
         .collect();
-    entries.skills.push(claude_codex_pro_core::relay_config::CodexContextEntry {
-        id: "ponytail".to_string(),
-        kind: "skill".to_string(),
-        title: "Ponytail Skills".to_string(),
-        summary: if org.ponytail_installed {
-            format!("已写入：{}", org.ponytail_plugin_dir)
-        } else {
-            format!("未写入：{}", org.org_plugins_dir)
-        },
-        toml_body: serde_json::to_string_pretty(&json!({
-            "pluginDir": org.ponytail_plugin_dir,
-            "orgPluginsDir": org.org_plugins_dir,
-            "writable": org.writable
-        }))
-        .unwrap_or_else(|_| "{}".to_string()),
-        enabled: org.ponytail_installed,
-    });
-    entries.plugins.push(claude_codex_pro_core::relay_config::CodexContextEntry {
-        id: market.plugin,
-        kind: "plugin".to_string(),
-        title: market.marketplace,
-        summary: market.message,
-        toml_body: serde_json::to_string_pretty(&json!({
-            "deepLink": market.deep_link,
-            "canAutoWrite": market.can_auto_write
-        }))
-        .unwrap_or_else(|_| "{}".to_string()),
-        enabled: market.supported,
-    });
+    entries
+        .skills
+        .push(claude_codex_pro_core::relay_config::CodexContextEntry {
+            id: "ponytail".to_string(),
+            kind: "skill".to_string(),
+            title: "Ponytail Skills".to_string(),
+            summary: if org.ponytail_installed {
+                format!("Installed: {}", org.ponytail_plugin_dir)
+            } else {
+                format!("Not installed: {}", org.org_plugins_dir)
+            },
+            toml_body: serde_json::to_string_pretty(&json!({
+                "pluginDir": org.ponytail_plugin_dir,
+                "orgPluginsDir": org.org_plugins_dir,
+                "writable": org.writable
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+            enabled: org.ponytail_installed,
+        });
+    entries
+        .plugins
+        .push(claude_codex_pro_core::relay_config::CodexContextEntry {
+            id: market.plugin,
+            kind: "plugin".to_string(),
+            title: market.marketplace,
+            summary: market.message,
+            toml_body: serde_json::to_string_pretty(&json!({
+                "deepLink": market.deep_link,
+                "canAutoWrite": market.can_auto_write,
+                "configPath": market.config_path,
+                "repositories": market.repositories
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+            enabled: market.supported,
+        });
     entries
 }
 
@@ -4783,7 +5845,7 @@ fn save_relay_file_in_home(
     let path = match kind {
         "config" => home.join("config.toml"),
         "auth" => home.join("auth.json"),
-        other => anyhow::bail!("未知配置文件类型：{other}"),
+        other => anyhow::bail!("Unknown relay file type: {other}"),
     };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -4822,14 +5884,14 @@ fn open_url(url: &str) -> anyhow::Result<()> {
             .arg(url)
             .spawn()
             .map(|_| ())
-            .map_err(|error| anyhow::anyhow!("启动系统浏览器失败：{error}"))
+            .map_err(|error| anyhow::anyhow!("Failed to launch system browser: {error}"))
     }
 }
 
 fn settings_payload(message: &str, failure_context: &str) -> CommandResult<SettingsPayload> {
     match settings_payload_value() {
         Ok(payload) => ok(message, payload),
-        Err((error, payload)) => failed(&format!("{failure_context}：{error}"), payload),
+        Err((error, payload)) => failed(&format!("{failure_context}: {error}"), payload),
     }
 }
 
@@ -5085,7 +6147,7 @@ fn builtin_user_scripts_dir() -> PathBuf {
 fn diagnostics_report() -> String {
     let (codex_app_path, entrypoints, latest_launch) = load_overview_payload();
     let overview = ok(
-        "概览已加载。",
+        "Overview loaded.",
         OverviewPayload {
             codex_version: codex_app_path
                 .as_deref()
@@ -5125,7 +6187,7 @@ fn diagnostics_report() -> String {
             "arch": std::env::consts::ARCH
         }
     }))
-    .unwrap_or_else(|error| format!("诊断报告序列化失败：{error}"))
+    .unwrap_or_else(|error| format!("Diagnostics report serialization failed: {error}"))
 }
 
 fn load_overview_payload() -> (
@@ -5134,6 +6196,10 @@ fn load_overview_payload() -> (
     Option<LaunchStatus>,
 ) {
     let settings = SettingsStore::default().load().unwrap_or_default();
+    let latest_launch = StatusStore::default()
+        .load_latest()
+        .unwrap_or(None)
+        .map(refresh_launch_port_status);
     (
         claude_codex_pro_core::app_paths::resolve_codex_app_dir_with_saved(
             None,
@@ -5141,15 +6207,114 @@ fn load_overview_payload() -> (
         )
         .or_else(claude_codex_pro_core::app_paths::find_running_codex_app_dir),
         install::inspect_entrypoints(),
-        StatusStore::default().load_latest().unwrap_or(None),
+        latest_launch,
     )
+}
+
+fn refresh_launch_port_status(mut status: LaunchStatus) -> LaunchStatus {
+    status.debug_port_online = status
+        .debug_port
+        .is_some_and(|port| codex_debug_port_online(port));
+    status.helper_port_online = status
+        .helper_port
+        .is_some_and(|port| helper_backend_online(port));
+    status
+}
+
+fn codex_debug_port_online(port: u16) -> bool {
+    tcp_port_open(port) && codex_debug_json_ready(port)
+}
+
+fn helper_backend_online(port: u16) -> bool {
+    if !tcp_port_open(port) {
+        return false;
+    }
+    let Ok(mut stream) = connect_loopback(port) else {
+        return false;
+    };
+    let request = b"POST /backend/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && response.starts_with("HTTP/1.1 200")
+        && response.contains("\"status\":\"ok\"")
+        && response.contains("\"transport\":\"http-helper\"")
+        && response.contains("\"version\":")
+}
+
+async fn wait_helper_backend_online(port: u16) -> bool {
+    for _ in 0..12 {
+        if async_helper_backend_online(port).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    false
+}
+
+async fn async_helper_backend_online(port: u16) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        Duration::from_millis(500),
+        tokio::net::TcpStream::connect(address),
+    )
+    .await
+    else {
+        return false;
+    };
+    let request = b"POST /backend/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}";
+    if tokio::time::timeout(Duration::from_millis(500), stream.write_all(request))
+        .await
+        .map_or(true, |result| result.is_err())
+    {
+        return false;
+    }
+    let mut response = String::new();
+    tokio::time::timeout(
+        Duration::from_millis(800),
+        stream.read_to_string(&mut response),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
+        && response.starts_with("HTTP/1.1 200")
+        && response.contains("\"status\":\"ok\"")
+        && response.contains("\"transport\":\"http-helper\"")
+        && response.contains("\"version\":")
+}
+
+fn codex_debug_json_ready(port: u16) -> bool {
+    let Ok(mut stream) = connect_loopback(port) else {
+        return false;
+    };
+    let request = b"GET /json HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && response.starts_with("HTTP/1.1 200")
+        && response.contains("webSocketDebuggerUrl")
+}
+
+fn tcp_port_open(port: u16) -> bool {
+    connect_loopback(port).is_ok()
+}
+
+fn connect_loopback(port: u16) -> std::io::Result<TcpStream> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect_timeout(&address, Duration::from_millis(250))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    Ok(stream)
 }
 
 fn install_background_failure(action: &str, error: impl std::fmt::Display) -> InstallActionResult {
     let state = install::inspect_entrypoints();
     InstallActionResult {
         status: "failed".to_string(),
-        message: format!("{action}后台任务失败：{error}"),
+        message: format!("{action} background task failed: {error}"),
         silent_shortcut: state.silent_shortcut,
         management_shortcut: state.management_shortcut,
     }
@@ -5205,7 +6370,7 @@ fn read_ccswitch_codex_profiles(db_path: &Path) -> anyhow::Result<(Vec<RelayProf
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .with_context(|| format!("打开 {}", db_path.display()))?;
+    .with_context(|| format!("闁瑰灚鎸哥槐?{}", db_path.display()))?;
     let mut statement = conn.prepare(
         "SELECT id, name, settings_config, COALESCE(sort_index, 0)
          FROM providers
@@ -5238,7 +6403,10 @@ fn ccswitch_codex_profile_from_settings(
     settings: &str,
 ) -> Option<RelayProfile> {
     let parsed = serde_json::from_str::<Value>(settings).ok()?;
-    let config = parsed.get("config").and_then(Value::as_str).unwrap_or_default();
+    let config = parsed
+        .get("config")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let auth = parsed.get("auth").unwrap_or(&Value::Null);
     let base_url = codex_config_base_url(config)
         .or_else(|| string_at(&parsed, &["base_url", "baseUrl", "apiBaseUrl"]))
@@ -5461,23 +6629,24 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn plugin_install_failure_serializes_non_empty_top_level_message() {
         let result = failed(
-            "插件安装失败：请先登录 Claude Code CLI。",
+            "Plugin install failed: please sign in to Claude Code CLI.",
             empty_plugin_install_outcome_with_message(
                 "official:test".to_string(),
-                "请先登录 Claude Code CLI。".to_string(),
+                "Please sign in to Claude Code CLI.".to_string(),
             ),
         );
         let serialized = serde_json::to_value(&result).unwrap();
 
         assert_eq!(
             serialized["message"],
-            serde_json::json!("插件安装失败：请先登录 Claude Code CLI。")
+            serde_json::json!("Plugin install failed: please sign in to Claude Code CLI.")
         );
         assert_eq!(
             serialized["installMessage"],
-            serde_json::json!("请先登录 Claude Code CLI。")
+            serde_json::json!("Please sign in to Claude Code CLI.")
         );
     }
 
@@ -5509,8 +6678,7 @@ mod tests {
     fn update_install_requires_release_payload() {
         let result = tauri::async_runtime::block_on(perform_update(None));
 
-        assert_eq!(result.status, "failed");
-        assert!(result.message.contains("请先检查更新"));
+        assert!(result.message.contains("Please check for updates"));
     }
 
     #[test]
@@ -5572,7 +6740,7 @@ mod tests {
             name: "TopoReduce".to_string(),
             base_url: "https://api.toporeduce.cn".to_string(),
             api_key: "sk-manager-secret".to_string(),
-            model_list: "claude-sonnet-4-6".to_string(),
+            model_list: claude_codex_pro_core::protocol_proxy::claude_desktop_default_model_list(),
         });
 
         assert_eq!(result.status, "ok");
@@ -5993,7 +7161,7 @@ mod tests {
             active_relay_id: "supplier-a".to_string(),
             relay_profiles: vec![RelayProfile {
                 id: "supplier-a".to_string(),
-                name: "供应商 A".to_string(),
+                name: "濞撴碍绋戠花鏌ュ疮?A".to_string(),
                 relay_mode: claude_codex_pro_core::settings::RelayMode::PureApi,
                 api_key: "sk-test".to_string(),
                 ..RelayProfile::default()
@@ -6300,6 +7468,6 @@ model_reasoning_effort = "high"
         let result = open_external_url("file:///C:/Windows/win.ini".to_string());
 
         assert_eq!(result.status, "failed");
-        assert!(result.message.contains("只允许打开 http 或 https 链接"));
+        assert!(result.message.contains("Only http or https"));
     }
 }

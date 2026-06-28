@@ -80,6 +80,16 @@ pub struct MemoryAssistStatus {
     pub pending_candidates: i64,
     pub workspaces: Vec<MemoryWorkspaceSummary>,
     pub latest_backup_path: Option<String>,
+    pub enabled: bool,
+    pub inject_enabled: bool,
+    pub auto_suggest_enabled: bool,
+    pub runtime_status: String,
+    pub runtime_message: String,
+    pub codex_injected: bool,
+    pub claude_injected: bool,
+    pub codex_workspace: String,
+    pub active: bool,
+    pub active_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -230,6 +240,16 @@ impl MemoryAssistStore {
             pending_candidates,
             workspaces,
             latest_backup_path,
+            enabled: true,
+            inject_enabled: true,
+            auto_suggest_enabled: true,
+            runtime_status: "not_checked".to_string(),
+            runtime_message: "盘古记忆运行态尚未检测。".to_string(),
+            codex_injected: false,
+            claude_injected: false,
+            codex_workspace: String::new(),
+            active: false,
+            active_source: "idle".to_string(),
         })
     }
 

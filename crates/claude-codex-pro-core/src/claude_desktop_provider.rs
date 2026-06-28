@@ -141,13 +141,36 @@ pub fn preview_claude_desktop_provider(
     preview_claude_desktop_provider_at_paths(&default_claude_desktop_provider_paths(), request)
 }
 
+pub fn preview_claude_desktop_provider_with_proxy_port(
+    request: &ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopProviderPreview> {
+    preview_claude_desktop_provider_at_paths_with_proxy_port(
+        &default_claude_desktop_provider_paths(),
+        request,
+        proxy_port,
+    )
+}
+
 pub fn preview_claude_desktop_provider_at_paths(
     paths: &ClaudeDesktopProviderPaths,
     request: &ClaudeDesktopProviderRequest,
 ) -> anyhow::Result<ClaudeDesktopProviderPreview> {
+    preview_claude_desktop_provider_at_paths_with_proxy_port(
+        paths,
+        request,
+        crate::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_PROXY_PORT,
+    )
+}
+
+pub fn preview_claude_desktop_provider_at_paths_with_proxy_port(
+    paths: &ClaudeDesktopProviderPaths,
+    request: &ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopProviderPreview> {
     validate_request(request)?;
     let profile_name = display_provider_name(request);
-    let profile = build_gateway_profile(request);
+    let profile = build_gateway_profile(request, proxy_port);
     let redacted_profile = redact_profile(profile.clone());
     let redacted_profile_text =
         serde_json::to_string_pretty(&redacted_profile).context("serialize redacted profile")?;
@@ -178,13 +201,36 @@ pub fn apply_claude_desktop_provider(
     apply_claude_desktop_provider_at_paths(&default_claude_desktop_provider_paths(), request)
 }
 
+pub fn apply_claude_desktop_provider_with_proxy_port(
+    request: &ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopProviderOutcome> {
+    apply_claude_desktop_provider_at_paths_with_proxy_port(
+        &default_claude_desktop_provider_paths(),
+        request,
+        proxy_port,
+    )
+}
+
 pub fn apply_claude_desktop_provider_at_paths(
     paths: &ClaudeDesktopProviderPaths,
     request: &ClaudeDesktopProviderRequest,
 ) -> anyhow::Result<ClaudeDesktopProviderOutcome> {
+    apply_claude_desktop_provider_at_paths_with_proxy_port(
+        paths,
+        request,
+        crate::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_PROXY_PORT,
+    )
+}
+
+pub fn apply_claude_desktop_provider_at_paths_with_proxy_port(
+    paths: &ClaudeDesktopProviderPaths,
+    request: &ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopProviderOutcome> {
     validate_request(request)?;
     let profile_name = display_provider_name(request);
-    let profile = build_gateway_profile(request);
+    let profile = build_gateway_profile(request, proxy_port);
     let snapshots = snapshot_files(paths)?;
     let backup_paths = backup_existing_files(paths)?;
     let result = (|| {
@@ -280,41 +326,22 @@ fn validate_request(request: &ClaudeDesktopProviderRequest) -> anyhow::Result<()
     Ok(())
 }
 
-fn build_gateway_profile(request: &ClaudeDesktopProviderRequest) -> Value {
+fn build_gateway_profile(request: &ClaudeDesktopProviderRequest, proxy_port: u16) -> Value {
     let mut profile = json!({
         "coworkEgressAllowedHosts": ["*"],
         "disableDeploymentModeChooser": true,
         "inferenceGatewayApiKey": request.api_key.trim(),
         "inferenceGatewayAuthScheme": "bearer",
-        "inferenceGatewayBaseUrl": request.base_url.trim().trim_end_matches('/'),
+        "inferenceGatewayBaseUrl": crate::protocol_proxy::local_claude_desktop_proxy_base_url(
+            proxy_port
+        ),
         "inferenceProvider": "gateway"
     });
 
-    let models = parse_model_list(&request.model_list);
-    if !models.is_empty() {
-        profile["inferenceModels"] = Value::Array(models);
-    }
+    profile["inferenceModels"] = Value::Array(
+        crate::protocol_proxy::claude_desktop_safe_models_with_labels(&request.model_list),
+    );
     profile
-}
-
-fn parse_model_list(raw: &str) -> Vec<Value> {
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            let supports_1m = line.to_ascii_lowercase().contains("[1m]");
-            let name = line
-                .replace("[1M]", "")
-                .replace("[1m]", "")
-                .trim()
-                .to_string();
-            if supports_1m {
-                json!({ "name": name, "supports1m": true })
-            } else {
-                json!({ "name": name })
-            }
-        })
-        .collect()
 }
 
 fn redact_profile(mut profile: Value) -> Value {
@@ -394,10 +421,17 @@ fn write_meta(
 }
 
 fn read_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
+    read_json_object_or_empty_recovering(path)
+}
+
+fn read_json_object_or_empty_recovering(path: &Path) -> anyhow::Result<Value> {
     if !path.exists() {
         return Ok(json!({}));
     }
-    let value: Value = serde_json::from_str(&fs::read_to_string(path)?)
+    if let Some(value) = recover_invalid_json_object(path)? {
+        return Ok(value);
+    }
+    let value: Value = serde_json::from_str(strip_json_bom(&fs::read_to_string(path)?))
         .with_context(|| format!("读取 JSON 失败：{}", path.display()))?;
     if value.is_object() {
         Ok(value)
@@ -407,7 +441,45 @@ fn read_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
 }
 
 fn write_json(path: &Path, value: &Value) -> anyhow::Result<()> {
-    crate::settings::atomic_write(path, serde_json::to_string_pretty(value)?.as_bytes())
+    let text = serde_json::to_string_pretty(value)?;
+    crate::settings::atomic_write(path, text.as_bytes())?;
+    let written = fs::read_to_string(path)
+        .with_context(|| format!("read JSON file after write failed: {}", path.display()))?;
+    serde_json::from_str::<Value>(strip_json_bom(&written))
+        .with_context(|| format!("written JSON validation failed: {}", path.display()))?;
+    Ok(())
+}
+
+fn recover_invalid_json_object(path: &Path) -> anyhow::Result<Option<Value>> {
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read JSON file failed: {}", path.display()))?;
+    if serde_json::from_str::<Value>(strip_json_bom(&raw)).is_ok() {
+        return Ok(None);
+    }
+    backup_invalid_json_file(path)?;
+    Ok(Some(json!({})))
+}
+
+fn strip_json_bom(raw: &str) -> &str {
+    raw.strip_prefix('\u{feff}').unwrap_or(raw)
+}
+
+fn backup_invalid_json_file(path: &Path) -> anyhow::Result<()> {
+    let backup_path = path.with_extension(format!(
+        "{}.invalid.{}",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("json"),
+        timestamp_millis()
+    ));
+    fs::copy(path, &backup_path).with_context(|| {
+        format!(
+            "backup invalid JSON {} to {} failed",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn snapshot_files(paths: &ClaudeDesktopProviderPaths) -> anyhow::Result<Vec<FileSnapshot>> {
