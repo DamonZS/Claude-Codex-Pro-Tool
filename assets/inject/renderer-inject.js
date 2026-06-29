@@ -69,7 +69,7 @@
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
   const codexAppServerModelRequestPatchVersion = "1";
-  const codexPluginMarketplaceUnlockVersion = "11";
+  const codexPluginMarketplaceUnlockVersion = "13";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -3259,6 +3259,7 @@
   function pluginMarketplaceAliasForName(name) {
     if (name === "openai-bundled") return "";
     if (name === "openai-curated") return "claude-codex-pro-openai-curated";
+    if (name === "openai-api-curated") return "claude-codex-pro-openai-api-curated";
     if (name === "openai-primary-runtime") return "claude-codex-pro-openai-primary-runtime";
     return "";
   }
@@ -3266,6 +3267,7 @@
   function displayNameForPluginMarketplaceName(name, fallback) {
     if (name === "openai-bundled" || name === "claude-codex-pro-openai-bundled") return "OpenAI插件1(Claude Codex Pro)";
     if (name === "openai-curated" || name === "claude-codex-pro-openai-curated") return "OpenAI插件2(Claude Codex Pro)";
+    if (name === "openai-api-curated" || name === "claude-codex-pro-openai-api-curated") return "OpenAI插件2(Claude Codex Pro)";
     if (name === "openai-primary-runtime" || name === "claude-codex-pro-openai-primary-runtime") return "OpenAI插件3(Claude Codex Pro)";
     return fallback;
   }
@@ -3297,13 +3299,14 @@
   function restorePluginMarketplaceName(name) {
     if (name === "claude-codex-pro-openai-bundled") return "openai-bundled";
     if (name === "claude-codex-pro-openai-curated") return "openai-curated";
+    if (name === "claude-codex-pro-openai-api-curated") return "openai-api-curated";
     if (name === "claude-codex-pro-openai-primary-runtime") return "openai-primary-runtime";
     return name;
   }
 
   function codexPluginOfficialMarketplaceName(name) {
     const restored = restorePluginMarketplaceName(name);
-    return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-primary-runtime";
+    return restored === "openai-bundled" || restored === "openai-curated" || restored === "openai-api-curated" || restored === "openai-primary-runtime";
   }
 
   function codexPluginMarketplaceRequestPatchStrategy() {
@@ -3333,7 +3336,9 @@
   }
 
   function pluginKey(plugin, marketplaceName) {
-    return String(plugin?.id || plugin?.pluginId || plugin?.name || "") + "@" + restorePluginMarketplaceName(String(plugin?.marketplaceName || marketplaceName || ""));
+    const rawId = String(plugin?.id || plugin?.pluginId || plugin?.name || "");
+    const pluginName = rawId.includes("@") ? rawId.split("@")[0] : rawId;
+    return pluginName + "@" + restorePluginMarketplaceName(String(plugin?.marketplaceName || marketplaceName || ""));
   }
 
   function prepareLocalPluginMarketplace(marketplace) {
@@ -3383,6 +3388,55 @@
       });
     }
     return mergedCount;
+  }
+
+  function pluginMarketplaceMatchesQuery(plugin, query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    if (!normalizedQuery) return true;
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    const haystack = [
+      plugin?.name,
+      plugin?.title,
+      plugin?.displayName,
+      plugin?.description,
+      plugin?.shortDescription,
+      plugin?.id,
+      plugin?.pluginId,
+      plugin?.category,
+      plugin?.marketplaceName,
+      plugin?.interface?.displayName,
+      plugin?.interface?.name,
+      plugin?.interface?.title,
+      plugin?.interface?.shortDescription,
+      plugin?.interface?.longDescription,
+      plugin?.interface?.description,
+      plugin?.interface?.category,
+      ...(Array.isArray(plugin?.keywords) ? plugin.keywords : []),
+    ].map((value) => String(value || "").toLowerCase()).join(" ");
+    return tokens.every((token) => haystack.includes(token));
+  }
+
+  function expandVisibleOfficialMarketplacePlugins(result) {
+    if (!result || typeof result !== "object" || !Array.isArray(result.marketplaces)) return 0;
+    if (!Array.isArray(result.plugins)) result.plugins = [];
+    const query = String(result.query || result.search || result.filter || "").trim();
+    const existing = new Set(result.plugins.map((plugin) => pluginKey(plugin, plugin?.marketplaceName)));
+    let added = 0;
+    result.marketplaces.forEach((marketplace) => {
+      const marketplaceName = restorePluginMarketplaceName(String(marketplace?.name || ""));
+      if (!codexPluginOfficialMarketplaceName(marketplaceName) || !Array.isArray(marketplace?.plugins)) return;
+      marketplace.plugins.forEach((plugin) => {
+        if (!plugin || typeof plugin !== "object") return;
+        if (!plugin.marketplaceName) plugin.marketplaceName = marketplaceName;
+        if (!pluginMarketplaceMatchesQuery(plugin, query)) return;
+        const key = pluginKey(plugin, marketplaceName);
+        if (!key || existing.has(key)) return;
+        result.plugins.push(plugin);
+        existing.add(key);
+        added += 1;
+      });
+    });
+    return added;
   }
 
   function isCodexPluginBuildFlavorFilter(callback, sample) {
@@ -3475,6 +3529,7 @@
       const pluginMarketplaceCounts = {};
       if (Array.isArray(result?.marketplaces)) {
         patchedCount += mergeLocalPluginMarketplaces(result);
+        patchedCount += expandVisibleOfficialMarketplacePlugins(result);
         result.marketplaces.forEach((marketplace) => {
           if (Array.isArray(marketplace?.plugins)) {
             marketplace.plugins.forEach((plugin) => {
@@ -9045,28 +9100,68 @@
     if (project?.repoPath) return `codex:repo:${project.repoPath}`;
     if (project?.projectId) return `codex:project:${project.projectId}`;
     const pathParts = String(location.pathname || "").split("/").filter(Boolean);
-    const thread = pathParts.find((part) => /^[a-z0-9_-]{8,}$/i.test(part)) || "";
-    const title = document.querySelector("[data-thread-title]")?.textContent?.trim() || document.title || "";
-    const base = thread || title || "codex";
-    return `codex:${String(base).slice(0, 80)}`;
+    const thread = pathParts.find((part) => /^[a-z0-9][a-z0-9_-]{7,}$/i.test(part)) || "";
+    if (thread) return `codex:thread:${thread.slice(0, 80)}`;
+    const pathKey = `${location.origin || ""}${location.pathname || ""}`;
+    if (pathKey.trim()) return `codex:path:${codexMemoryHash(pathKey).slice(0, 16)}`;
+    return "codex";
+  }
+
+  function codexMemoryConversationRoot() {
+    return document.querySelector(".thread-scroll-container")
+      || document.querySelector('[data-testid="conversation"]')
+      || document.querySelector('main [data-testid="conversation-turn"]')?.closest("main")
+      || document.querySelector('[role="main"] [data-message-author-role]')?.closest('[role="main"]')
+      || document.querySelector("main");
+  }
+
+  function codexMemoryNodeIsInsideConversation(node) {
+    if (!node || isExtensionUiNode(node)) return false;
+    if (node.closest?.('[data-app-action-sidebar-thread-id], [data-app-action-sidebar-section-heading], nav, aside, header, [role="navigation"], [aria-label*="sidebar" i], [aria-label*="侧边" i]')) return false;
+    const root = codexMemoryConversationRoot();
+    return !!root && root.contains(node);
+  }
+
+  function codexMemoryNormalizeMessageText(text) {
+    return String(text || "")
+      .replace(/\s+/g, " ")
+      .replace(/^(user|assistant|codex|你|我|用户|助手)\s*[:：]\s*/i, "")
+      .trim();
+  }
+
+  function codexMemoryConversationMessages(role = "") {
+    const root = codexMemoryConversationRoot();
+    if (!root) return [];
+    const selectors = role
+      ? [`[data-message-author-role="${role}"]`, `[data-testid="conversation-turn"][data-message-author-role="${role}"]`]
+      : ['[data-message-author-role="user"]', '[data-message-author-role="assistant"]', '[data-testid="conversation-turn"]'];
+    const seen = new Set();
+    return selectors
+      .flatMap((selector) => Array.from(root.querySelectorAll(selector)))
+      .filter((node) => codexMemoryNodeIsInsideConversation(node))
+      .map((node) => {
+        const textNode = node.querySelector?.(".prose, [data-message-content], [data-testid='message-content']") || node;
+        const text = codexMemoryNormalizeMessageText(textNode.textContent || "");
+        const key = `${node.getAttribute?.("data-message-author-role") || ""}:${text}`;
+        if (!text || seen.has(key)) return "";
+        seen.add(key);
+        return text;
+      })
+      .filter((text) => text.length >= 2 && text.length <= 4000);
   }
 
   function codexMemoryCurrentText() {
     const selection = String(window.getSelection?.() || "").trim();
-    if (selection) return selection;
+    if (selection && document.activeElement?.closest?.("main, [role='main'], .thread-scroll-container")) return selection;
     const composer = document.querySelector("textarea, [contenteditable='true']");
     const composerText = composer?.value || composer?.textContent || "";
     if (String(composerText).trim()) return String(composerText).trim();
-    const messages = Array.from(document.querySelectorAll('[data-message-author-role="user"], [data-testid="conversation-turn"], main .prose'))
-      .map((node) => node.textContent?.trim() || "")
-      .filter(Boolean);
+    const messages = codexMemoryConversationMessages();
     return messages.slice(-2).join("\n\n").trim();
   }
 
   function codexMemoryLatestUserText() {
-    const nodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
-    const texts = nodes
-      .map((node) => node.textContent?.trim() || "")
+    const texts = codexMemoryConversationMessages("user")
       .filter((text) => text.length >= 8 && text.length <= 2400);
     return texts[texts.length - 1] || "";
   }
@@ -9184,10 +9279,18 @@
     codexMemoryPulseActivity("session");
     codexMemoryState.lastLoadedAt = now;
     codexMemoryState.workspace = codexMemoryWorkspace();
+    const query = codexMemoryCurrentText();
+    if (!query) {
+      codexMemoryState.status = "idle";
+      codexMemoryState.summary = "等待真实对话消息后写入盘古记忆。";
+      codexMemoryExposeRuntime();
+      codexMemoryUpdateBadge();
+      return;
+    }
     try {
       const result = await postJson("/memory/session", {
         workspace: codexMemoryState.workspace,
-        query: codexMemoryCurrentText().slice(0, 1600),
+        query: query.slice(0, 1600),
         maxItems: settings.memoryAssistMaxInjectedItems || 5,
       });
       if (result?.status !== "ok") throw new Error(result?.message || "memory session failed");

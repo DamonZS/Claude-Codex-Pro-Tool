@@ -2206,7 +2206,7 @@ pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
 #[tauri::command]
 pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
     let request = normalize_launch_request(request);
-    claude_codex_pro_core::watcher::stop_launcher_processes();
+    claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
     claude_codex_pro_core::watcher::stop_codex_processes();
     spawn_claude_codex_pro_launch(request, "Codex restart task is running in the background.")
 }

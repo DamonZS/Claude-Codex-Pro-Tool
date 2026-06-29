@@ -32,13 +32,23 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
+import { type Dispatch, type DragEvent, type SetStateAction, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
 
 const PONYTAIL_REPOSITORY_URL = "https://github.com/DietrichGebert/ponytail";
+const CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME = "awesome-codex-plugins";
+const CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL =
+  "https://github.com/hashgraph-online/awesome-codex-plugins.git";
+const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_NAME = "codex-skills-alternative";
+const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE =
+  "https://github.com/DKeken/codex-skills-alternative";
+const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE =
+  "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace";
+const PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX = "tools-plugin-repository-repair";
+const SUPPLIER_DRAG_MIME_TYPE = "application/x-claude-codex-pro-supplier-id";
 
 type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
@@ -367,6 +377,13 @@ type CodexPluginMarketplaceStatus = {
   configRegistered: boolean;
   needsRepair: boolean;
   message: string;
+  repositories?: Array<{
+    label: string;
+    name: string;
+    sourceType: string;
+    source: string;
+    configured: boolean;
+  }>;
 };
 
 type CodexPluginMarketplaceStatusResult = CommandResult<{
@@ -402,6 +419,13 @@ type LocalSessionsResult = CommandResult<{
   dbPaths: string[];
   sessions: LocalSession[];
 }>;
+
+type LocalSessionProjectGroup = {
+  key: string;
+  label: string;
+  subtitle: string;
+  sessions: LocalSession[];
+};
 
 type MemoryItem = {
   id: string;
@@ -796,6 +820,108 @@ function compactPath(path?: string | null) {
   return `${path.slice(0, 24)}...${path.slice(-28)}`;
 }
 
+function pathTail(path?: string | null) {
+  const value = (path || "").trim().replace(/[\\/]+$/, "");
+  if (!value) return "";
+  const parts = value.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || value;
+}
+
+function localSessionProjectLabel(session: LocalSession) {
+  return pathTail(session.cwd) || pathTail(session.rolloutPath) || pathTail(session.dbPath) || "未归类项目";
+}
+
+function formatSessionRelativeTime(updatedAtMs?: number | null) {
+  if (!updatedAtMs) return "未知";
+  const diffMs = Math.max(0, Date.now() - updatedAtMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const week = 7 * day;
+  if (diffMs < minute) return "刚刚";
+  if (diffMs < hour) return `${Math.max(1, Math.floor(diffMs / minute))} 分钟`;
+  if (diffMs < day) return `${Math.max(1, Math.floor(diffMs / hour))} 小时`;
+  if (diffMs < week) return `${Math.max(1, Math.floor(diffMs / day))} 天`;
+  return `${Math.max(1, Math.floor(diffMs / week))} 周`;
+}
+
+function groupLocalSessionsByProject(sessions: LocalSession[]) {
+  const groups = new Map<string, LocalSessionProjectGroup>();
+  for (const session of sessions) {
+    const label = localSessionProjectLabel(session);
+    const key = (session.cwd || session.rolloutPath || session.dbPath || label).toLowerCase();
+    const group = groups.get(key) ?? {
+      key,
+      label,
+      subtitle: session.cwd || session.rolloutPath || session.dbPath || "",
+      sessions: [],
+    };
+    group.sessions.push(session);
+    groups.set(key, group);
+  }
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      sessions: group.sessions
+        .slice()
+        .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
+    }))
+    .sort((left, right) => (right.sessions[0]?.updatedAtMs ?? 0) - (left.sessions[0]?.updatedAtMs ?? 0));
+}
+
+function codexPluginMarketplaceNeedsRepair(result?: CodexPluginMarketplaceStatusResult | null) {
+  const status = result?.marketplace;
+  return Boolean(result && (status?.needsRepair || !status?.configRegistered || !status?.marketplaceRoot));
+}
+
+function claudeDesktopMarketplaceNeedsRepair(result?: ClaudeDesktopMarketplaceStatusResult | null) {
+  const status = result?.marketplaceStatus;
+  const repositories = status?.repositories ?? [];
+  return Boolean(
+    result &&
+      status?.canAutoWrite &&
+      (repositories.length === 0 || repositories.some((repository) => !repository.configured)),
+  );
+}
+
+function pluginRepositoryRepairPromptKey(
+  codex: CodexPluginMarketplaceStatusResult | null,
+  claude: ClaudeDesktopMarketplaceStatusResult | null,
+) {
+  const codexStatus = codex?.marketplace;
+  const claudeStatus = claude?.marketplaceStatus;
+  const claudeMissing = (claudeStatus?.repositories ?? [])
+    .filter((repository) => !repository.configured)
+    .map((repository) => repository.repository)
+    .join(",");
+  return [
+    PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX,
+    codexStatus?.needsRepair ? "codex-needs-repair" : "codex-ok",
+    codexStatus?.marketplaceRoot ?? "codex-no-root",
+    codexStatus?.configRegistered ? "codex-registered" : "codex-unregistered",
+    claudeMissing || "claude-ok",
+    claudeStatus?.configPath ?? "claude-no-config",
+  ].join("|");
+}
+
+function pluginRepositoryRepairPromptMessage(
+  codex: CodexPluginMarketplaceStatusResult | null,
+  claude: ClaudeDesktopMarketplaceStatusResult | null,
+) {
+  const items: string[] = [];
+  if (codexPluginMarketplaceNeedsRepair(codex)) {
+    items.push("Codex OpenAI 插件仓库未下载、未注册或配置异常。");
+  }
+  if (claudeDesktopMarketplaceNeedsRepair(claude)) {
+    const missing = (claude?.marketplaceStatus.repositories ?? [])
+      .filter((repository) => !repository.configured)
+      .map((repository) => repository.label || repository.repository)
+      .join("、");
+    items.push(`Claude 插件仓库配置缺失${missing ? `：${missing}` : ""}。`);
+  }
+  return `检测到插件仓库配置异常，是否立即修复？\n\n${items.join("\n")}`;
+}
+
 function displayProductPath(path?: string | null) {
   if (!path) return "";
   return path
@@ -941,6 +1067,8 @@ export function App() {
   const [codexContextEntries, setCodexContextEntries] = useState<ContextEntriesResult | null>(null);
   const [liveCodexContextEntries, setLiveCodexContextEntries] = useState<LiveContextEntriesResult | null>(null);
   const [claudeContextEntries, setClaudeContextEntries] = useState<ClaudeContextEntriesResult | null>(null);
+  const codexMarketplaceAutoRegisterRef = useRef(false);
+  const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invokeCommand<T>(command, args);
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
@@ -978,7 +1106,6 @@ export function App() {
       setOverview(result);
       if (!silent) notifyIfNeedsAttention({ title: "概览", message: result.message, status: result.status });
     }
-    return result;
   };
 
   const refreshClaude = async (silent = false) => {
@@ -1006,7 +1133,6 @@ export function App() {
   const refreshClaudeZhPatch = async (silent = false) => {
     const result = await run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化", { trackBusy: !silent, notify: !silent });
     if (result) setClaudeZhPatch(result);
-    return result;
   };
 
   const refreshSettings = async (silent = false) => {
@@ -1038,9 +1164,14 @@ export function App() {
   };
 
   const refreshClaudeDesktopMarketplace = async (silent = false) => {
+    if (!silent) {
+      setNotice({ title: "刷新 Claude 插件仓库", message: "正在检测 Claude 插件仓库配置...", status: "running" });
+      await waitForPaint();
+    }
     const result = await run(() => call<ClaudeDesktopMarketplaceStatusResult>("load_claude_desktop_marketplace_status"), "Claude Desktop 插件仓库", { trackBusy: !silent, notify: !silent });
     if (result) {
       setClaudeDesktopMarketplace(result);
+      if (!silent) setNotice({ title: "刷新 Claude 插件仓库", message: result.message, status: result.status });
       if (!silent) notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message, status: result.status });
     }
     return result;
@@ -1065,9 +1196,14 @@ export function App() {
   };
 
   const refreshCodexPluginMarketplace = async (silent = false) => {
+    if (!silent) {
+      setNotice({ title: "刷新 Codex 插件仓库", message: "正在检测 Codex OpenAI 插件仓库配置...", status: "running" });
+      await waitForPaint();
+    }
     const result = await run(() => call<CodexPluginMarketplaceStatusResult>("load_codex_plugin_marketplace_status"), "Codex OpenAI 插件仓库", { trackBusy: !silent, notify: !silent });
     if (result) {
       setCodexPluginMarketplace(result);
+      if (!silent) setNotice({ title: "刷新 Codex 插件仓库", message: result.message, status: result.status });
       if (!silent) notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message, status: result.status });
     }
     return result;
@@ -1450,6 +1586,8 @@ export function App() {
   };
 
   const repairClaudeDesktopMarketplaces = async () => {
+    setNotice({ title: "修复 Claude 插件仓库", message: "正在写入 Claude 官方与 Ponytail 插件仓库配置...", status: "running" });
+    await waitForPaint();
     const result = await run(() => call<ClaudeDesktopMarketplaceRepairResult>("repair_claude_desktop_marketplaces"), "修复 Claude 插件仓库");
     if (result) {
       setClaudeDesktopMarketplace({
@@ -1493,17 +1631,52 @@ export function App() {
     }
   };
 
-  const repairCodexPluginMarketplace = async () => {
-    const result = await run(() => call<CodexPluginMarketplaceRepairResult>("repair_codex_plugin_marketplace"), "下载并注册 Codex 插件仓库");
+  const repairCodexPluginMarketplace = async (silent = false) => {
+    if (!silent) {
+      setNotice({ title: "修复 Codex 插件仓库", message: "正在下载、校验并注册 Codex OpenAI 与第三方插件仓库...", status: "running" });
+      await waitForPaint();
+    }
+    const result = await run(
+      () => call<CodexPluginMarketplaceRepairResult>("repair_codex_plugin_marketplace"),
+      "下载并注册 Codex 插件仓库",
+      { trackBusy: !silent, notify: !silent },
+    );
     if (result) {
       setCodexPluginMarketplace({
         status: result.status,
         message: result.message,
         marketplace: result.marketplace,
       });
-      notifyIfNeedsAttention({ title: "Codex OpenAI 插件仓库", message: result.message || result.repair.message, status: result.status });
+      if (!silent) setNotice({ title: "Codex 插件仓库", message: result.message || result.repair.message, status: result.status });
       await refreshPluginHub(true);
     }
+  };
+
+  const promptAndRepairPluginRepositories = async (
+    codex: CodexPluginMarketplaceStatusResult | null,
+    claude: ClaudeDesktopMarketplaceStatusResult | null,
+  ) => {
+    const codexNeedsRepair = codexPluginMarketplaceNeedsRepair(codex);
+    const claudeNeedsRepair = claudeDesktopMarketplaceNeedsRepair(claude);
+    if (!codexNeedsRepair && !claudeNeedsRepair) return;
+
+    const promptKey = pluginRepositoryRepairPromptKey(codex, claude);
+    if (pluginRepositoryRepairPromptKeyRef.current === promptKey) return;
+    pluginRepositoryRepairPromptKeyRef.current = promptKey;
+
+    setNotice({
+      title: "插件仓库需要修复",
+      message: "检测到 Codex 或 Claude 插件仓库配置异常，等待确认修复。",
+      status: "needs_review",
+    });
+    await waitForPaint();
+    if (!window.confirm(pluginRepositoryRepairPromptMessage(codex, claude))) return;
+
+    setNotice({ title: "修复插件仓库", message: "正在修复 Codex/Claude 插件仓库配置...", status: "running" });
+    await waitForPaint();
+    if (codexNeedsRepair) await repairCodexPluginMarketplace();
+    if (claudeNeedsRepair) await repairClaudeDesktopMarketplaces();
+    await Promise.all([refreshCodexPluginMarketplace(true), refreshClaudeDesktopMarketplace(true), refreshPluginHub(true)]);
   };
 
   const refreshClaudeThirdPartyConfig = async () => {
@@ -1876,7 +2049,12 @@ export function App() {
       await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
     } else if (target === "tools") {
       const loadedSettings = await refreshSettings(true);
-      await Promise.all([
+      const [
+        ,
+        codexMarketplaceStatus,
+        ,
+        claudeMarketplaceStatus,
+      ] = await Promise.all([
         refreshPluginHub(true),
         refreshCodexPluginMarketplace(true),
         refreshClaudeDesktopOrgPlugin(true),
@@ -1889,6 +2067,7 @@ export function App() {
       ]);
       const sourceSettings = loadedSettings?.settings ?? settings?.settings ?? settingsDraft;
       if (sourceSettings) await refreshContextEntries(true, sourceSettings);
+      await promptAndRepairPluginRepositories(codexMarketplaceStatus, claudeMarketplaceStatus);
     } else if (target === "sessions") {
       await Promise.all([
         refreshLocalSessions(true),
@@ -1917,6 +2096,18 @@ export function App() {
   useEffect(() => {
     void refreshRoute(route);
   }, [route]);
+
+  useEffect(() => {
+    if (codexMarketplaceAutoRegisterRef.current) return;
+    codexMarketplaceAutoRegisterRef.current = true;
+    void (async () => {
+      const status = await refreshCodexPluginMarketplace(true);
+      if (codexPluginMarketplaceNeedsRepair(status)) {
+        await repairCodexPluginMarketplace(true);
+        await refreshCodexPluginMarketplace(true);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -2041,18 +2232,6 @@ export function App() {
             <h1>{routeLabel(route)}</h1>
             <p>{routeSubtitle(route)}</p>
           </div>
-          {route !== "overview" ? (
-            <div className="ops-topbar-pill">
-              <span>后端链接</span>
-              <strong>
-                {overview?.latest_launch?.helper_port
-                  ? `127.0.0.1:${overview.latest_launch.helper_port}`
-                  : overview?.latest_launch?.debug_port
-                    ? `127.0.0.1:${overview.latest_launch.debug_port}`
-                    : "Bridge ready"}
-              </strong>
-            </div>
-          ) : null}
           <div className="ops-commandbar">
             <Button aria-label="启动/重启Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
               <Rocket className="h-4 w-4" />
@@ -2499,6 +2678,21 @@ function SupplierScreen({
     setDragOverId(targetId);
     setSupplierOrderIds((current) => reorderSupplierIds(sourceId, targetId, current) ?? current);
   };
+  const beginSupplierDrag = (event: DragEvent<HTMLElement>, profileId: string) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(SUPPLIER_DRAG_MIME_TYPE, profileId);
+    event.dataTransfer.setData("text/plain", profileId);
+    setDraggedId(profileId);
+    setDragOverId(null);
+  };
+  const supplierDragSourceId = (event: DragEvent<HTMLElement>) =>
+    event.dataTransfer.getData(SUPPLIER_DRAG_MIME_TYPE) || event.dataTransfer.getData("text/plain") || draggedId;
+  const previewSupplierDrag = (event: DragEvent<HTMLElement>, targetId: string) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const sourceId = supplierDragSourceId(event);
+    if (sourceId) previewSupplierOrder(sourceId, targetId);
+  };
   const saveSupplierOrder = async (orderedIds: string[]) => {
     if (!appSettings) return;
     const reordered = supplierOrderFromIds(orderedIds);
@@ -2628,11 +2822,13 @@ function SupplierScreen({
           const selected = profile.id === appSettings?.activeRelayId;
           const aggregate = !!profile.aggregateEnabled;
           return (
-            <div className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""}`} draggable key={profile.id} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDragOver={(event) => { event.preventDefault(); if (draggedId) previewSupplierOrder(draggedId, profile.id); }} onDragStart={() => { setDraggedId(profile.id); setDragOverId(null); }} onDrop={(event) => { event.preventDefault(); const nextIds = draggedId && !dragOverId ? reorderSupplierIds(draggedId, profile.id) ?? supplierOrderIds : supplierOrderIds; setDraggedId(null); setDragOverId(null); setSupplierOrderIds(nextIds); void saveSupplierOrder(nextIds); }}>
-              <GripVertical className="supplier-drag-handle h-4 w-4" />
+            <div className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""}`} draggable key={profile.id} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDragEnter={(event) => previewSupplierDrag(event, profile.id)} onDragOver={(event) => previewSupplierDrag(event, profile.id)} onDragStart={(event) => beginSupplierDrag(event, profile.id)} onDrop={(event) => { event.preventDefault(); const sourceId = supplierDragSourceId(event); const nextIds = sourceId && sourceId !== profile.id && !dragOverId ? reorderSupplierIds(sourceId, profile.id) ?? supplierOrderIds : supplierOrderIds; setDraggedId(null); setDragOverId(null); setSupplierOrderIds(nextIds); void saveSupplierOrder(nextIds); }}>
+              <span aria-label="拖拽排序" className="supplier-drag-handle" title="拖拽排序">
+                <GripVertical className="h-4 w-4" focusable="false" />
+              </span>
               <div className="supplier-avatar">{aggregate ? "聚" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
               <div className="supplier-card-main"><div className="supplier-title-line"><strong>{profile.name || profile.id}</strong>{selected ? <span className="supplier-badge">当前</span> : null}{aggregate ? <span className="supplier-badge">聚合</span> : null}</div><span>{aggregate ? `${aggregateStrategyLabel(profile.aggregateStrategy)} · ${profile.aggregateMembers?.length ?? 0} 个成员` : `${supplierRelayModeLabel(profile.relayMode)} · ${supplierProtocolLabel(profile.protocol)} · ${profile.baseUrl || "不写 API 文件"}`}</span></div>
-              <div className="supplier-card-actions"><Button disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">{selected ? "使用中" : "使用"}</Button><Button onClick={() => pinSupplierToTop(profile.id)} size="sm" variant="outline" title="置顶"><Pin className="h-4 w-4" /></Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="编辑"><PencilRuler className="h-4 w-4" /></Button><Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制"><Copy className="h-4 w-4" /></Button><Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商"><Trash2 className="h-4 w-4" /></Button></div>
+              <div className="supplier-card-actions"><Button disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">{selected ? "使用中" : "使用"}</Button><Button onClick={() => pinSupplierToTop(profile.id)} size="sm" variant="outline" title="置顶"><Pin className="h-4 w-4" /></Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="编辑"><Pencil className="h-4 w-4 tilted-pen-icon" /></Button><Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制"><Copy className="h-4 w-4" /></Button><Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商"><Trash2 className="h-4 w-4" /></Button></div>
             </div>
           );
         }) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
@@ -2855,12 +3051,39 @@ function CodexPluginRepositoryPanel({
 }) {
   const status = marketplace?.marketplace;
   const health: Status = !marketplace ? "not_checked" : status?.needsRepair ? "needs_review" : statusOk(marketplace.status) ? "ok" : marketplace.status;
+  const repositories = status?.repositories?.length
+    ? status.repositories
+    : status
+      ? [
+          {
+            label: "第三方插件仓库",
+            name: CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME,
+            sourceType: "git",
+            source: CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL,
+            configured: false,
+          },
+          {
+            label: "Product Design Skill 仓库",
+            name: CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_NAME,
+            sourceType: "local",
+            source: `${CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE} / ${CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE}`,
+            configured: false,
+          },
+        ]
+      : [];
   return (
-    <Panel title="Codex 插件仓库" detail="自动下载、校验并把 OpenAI 插件仓库注册到 Codex 配置；具体插件安装仍在 Codex 内确认。">
+    <Panel title="Codex 插件仓库" detail="自动下载、校验并把 OpenAI 与第三方插件仓库注册到 Codex 配置；具体插件安装仍在 Codex 内确认。">
       <div className="ops-status-list">
         <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Codex 插件仓库"} />
         <StatusRow label="注册状态" status={status?.configRegistered ? "ok" : status?.needsRepair ? "needs_review" : "not_checked"} value={status?.configRegistered ? "已注册到 Codex 配置" : "未注册或待检测"} />
-        <StatusRow label="仓库列表" status={status?.marketplaceRoot ? "found" : "not_checked"} value="openai-curated / https://github.com/openai/plugins" />
+        {repositories.map((repository) => (
+          <StatusRow
+            key={`${repository.name}:${repository.source}`}
+            label={repository.label}
+            status={repository.configured ? "ok" : "needs_review"}
+            value={`${repository.name} / ${repository.sourceType} / ${repository.configured ? "已注册" : "未注册"} / ${repository.source}`}
+          />
+        ))}
         <StatusRow label="本地目录" status={status?.marketplaceRoot ? "found" : "not_checked"} value={compactPath(status?.marketplaceRoot)} />
       </div>
       <div className="action-row">
@@ -2897,6 +3120,14 @@ function ClaudePluginRepositoryPanel({
         <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Claude 插件仓库"} />
         <StatusRow label="配置方式" status={status?.canAutoWrite ? "ok" : status?.supported ? "needs_review" : "not_checked"} value={status?.canAutoWrite ? "可自动写入" : status?.supported ? "待修复" : "未检测"} />
         <StatusRow label="仓库列表" status={repositories.length ? (allConfigured ? "ok" : "needs_review") : "not_checked"} value={repositorySummary} />
+        {repositories.map((repository) => (
+          <StatusRow
+            key={repository.repository}
+            label={repository.label}
+            status={repository.configured ? "ok" : "needs_review"}
+            value={`${repository.repository} / ${repository.configured ? "已写入" : "未写入"}`}
+          />
+        ))}
         <StatusRow label="配置路径" status={status?.configPath ? "found" : "not_checked"} value={compactPath(status?.configPath)} />
       </div>
       <div className="action-row">
@@ -3065,13 +3296,15 @@ function ContextManagerPanel({
               <strong>{entry.title || entry.id}</strong>
               {entry.summary ? <span>{entry.summary}</span> : null}
             </div>
-            <ToggleSwitch checked={entry.enabled} disabled={!canEditCurrentTab || (isCodex && !settings)} onChange={() => void toggleEntry(entry)} />
-            <button className="context-entry-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
-              <Pencil className="h-4 w-4 tilted-pen-icon" />
-            </button>
-            <button className="context-entry-icon-button danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <div className="context-entry-actions">
+              <ToggleSwitch checked={entry.enabled} disabled={!canEditCurrentTab || (isCodex && !settings)} onChange={() => void toggleEntry(entry)} />
+              <button className="context-entry-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
+                <Pencil className="h-4 w-4 tilted-pen-icon" />
+              </button>
+              <button className="context-entry-icon-button danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         )) : <Empty text={`暂无${contextKindLabel(tab)}，可以从通用配置文件或这里新增。`} />}
       </div>
@@ -3305,7 +3538,7 @@ function SessionManagementScreen({
   settings: SettingsResult | null;
 }) {
   const sessions = localSessions?.sessions ?? [];
-  const latestSessions = sessions.slice(0, 8);
+  const sessionProjectGroups = groupLocalSessionsByProject(sessions);
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
@@ -3344,23 +3577,51 @@ function SessionManagementScreen({
             ) : null}
           </Panel>
           <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
-            <div className="ops-status-list">
-              <StatusRow label="数据库" status={localSessions?.dbPath ? "found" : "not_checked"} value={compactPath(localSessions?.dbPath)} />
-              <StatusRow label="候选库" status={(localSessions?.dbPaths.length ?? 0) > 0 ? "found" : "not_checked"} value={`${localSessions?.dbPaths.length ?? 0} 个`} />
-              <StatusRow label="会话数" status={sessions.length ? "ok" : "not_checked"} value={`${sessions.length} 个`} />
+            <div className="codex-session-toolbar">
+              <div>
+                <span>数据库</span>
+                <strong>{compactPath(localSessions?.dbPath)}</strong>
+              </div>
+              <div>
+                <span>候选库</span>
+                <strong>{localSessions?.dbPaths.length ?? 0} 个</strong>
+              </div>
+              <div>
+                <span>会话数</span>
+                <strong>{sessions.length} 个</strong>
+              </div>
+              <Button onClick={() => void actions.refreshLocalSessions()} size="sm" variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                刷新
+              </Button>
             </div>
-            <div className="session-list">
-              {latestSessions.length ? latestSessions.map((session) => (
-                <div className="session-row" key={`${session.dbPath}:${session.id}`}>
-                  <div>
-                    <strong>{session.title || "未命名会话"}</strong>
-                    <span>{session.modelProvider || "unknown"} · {compactPath(session.cwd || session.rolloutPath || session.id)}</span>
+            <div className="codex-session-browser" aria-label="Codex 本地会话项目列表">
+              <div className="codex-session-browser-title">项目</div>
+              {sessionProjectGroups.length ? sessionProjectGroups.map((group) => (
+                <section className="codex-session-project" key={group.key}>
+                  <div className="codex-session-project-header" title={group.subtitle || group.label}>
+                    <FileCode2 className="h-4 w-4" />
+                    <strong>{group.label}</strong>
                   </div>
-                  <Button onClick={() => void actions.deleteLocalSession(session)} size="sm" variant="outline">
-                    <Trash2 className="h-4 w-4" />
-                    删除
-                  </Button>
-                </div>
+                  <div className="codex-session-project-list">
+                    {group.sessions.map((session) => (
+                      <div className="codex-session-row" key={`${session.dbPath}:${session.id}`}>
+                        <button className="codex-session-main" title={session.title || session.id} type="button">
+                          <span>{session.title || "未命名会话"}</span>
+                          <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
+                        </button>
+                        <button
+                          className="codex-session-delete"
+                          onClick={() => void actions.deleteLocalSession(session)}
+                          title="删除会话"
+                          type="button"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               )) : <Empty text="暂未读取到 Codex 本地会话。" />}
             </div>
           </Panel>
@@ -3605,9 +3866,9 @@ function ClaudeDesktopOrgPluginPanel({
           <ExternalLink className="h-4 w-4" />
           打开组织目录
         </Button>
-        <Button onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()} variant="outline">
-          <ExternalLink className="h-4 w-4" />
-          可选官方仓库
+        <Button onClick={() => void actions.repairClaudeDesktopMarketplaces()} variant="outline">
+          <Wrench className="h-4 w-4" />
+          修复 Claude 插件仓库
         </Button>
         <Button onClick={() => void actions.openExternalUrl(PONYTAIL_REPOSITORY_URL)} variant="outline">
           <ExternalLink className="h-4 w-4" />
@@ -3906,16 +4167,6 @@ function SettingsScreen({
             <Button disabled={!s} onClick={() => void saveDraft()}>保存增强矩阵</Button>
           </div>
         </Panel>
-        <Panel title="Codex 启动参数" detail="每行一个参数，保存后下次启动 Codex 生效。">
-          <textarea
-            className="ops-textarea"
-            disabled={!s}
-            onChange={(event) => updateDraft("codexExtraArgs", event.currentTarget.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))}
-            placeholder="--force_high_performance_gpu"
-            value={s?.codexExtraArgs.join("\n") ?? ""}
-          />
-          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存启动参数</Button>
-        </Panel>
       </div>
       <div className="stack">
         <Panel title="Claude 一键汉化" detail="一键汉化目标是本机 zh-CN 资源补丁；MSIX/WindowsApps 不可写时会提示选择可写安装目录。">
@@ -3974,64 +4225,6 @@ function SettingsScreen({
             <InfoRow label="依赖" value="需要本机可执行 Codex CLI" />
           </div>
           <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI Wrapper</Button>
-        </Panel>
-        <Panel title="图片覆盖" detail="应用 Logo / 背景覆盖相关设置，保存后下次注入生效。">
-          <div className="ops-toggle-line">
-            <span>启用图片覆盖</span>
-            <ToggleSwitch checked={Boolean(s?.codexAppImageOverlayEnabled)} disabled={!s} onChange={(value) => updateDraft("codexAppImageOverlayEnabled", value)} />
-          </div>
-          <label className="ops-form-field">
-            <span>图片路径</span>
-            <input disabled={!s} onChange={(event) => updateDraft("codexAppImageOverlayPath", event.currentTarget.value)} placeholder="C:\\Users\\Damon\\Pictures\\拓扑.jpg" value={s?.codexAppImageOverlayPath ?? ""} />
-          </label>
-          <label className="ops-form-field">
-            <span>透明度：{s?.codexAppImageOverlayOpacity ?? 0}%</span>
-            <input disabled={!s} max={100} min={0} onChange={(event) => updateDraft("codexAppImageOverlayOpacity", Number(event.currentTarget.value))} type="range" value={s?.codexAppImageOverlayOpacity ?? 0} />
-          </label>
-          <div className="info-grid compact">
-            <InfoRow label="生效方式" value="保存后下次 Codex 注入生效" />
-            <InfoRow label="启用条件" value={s?.codexAppImageOverlayPath?.trim() ? "已设置图片路径" : "路径为空，不会注入"} />
-          </div>
-          <div className="action-row">
-            <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存图片覆盖</Button>
-            <Button onClick={() => void actions.resetImageOverlaySettings()} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              重置图片覆盖
-            </Button>
-          </div>
-        </Panel>
-        <Panel title="盘古记忆" detail="控制 Codex 页面顶部盘古记忆标识、会话摘要注入和待确认学习。">
-          <div className="ops-toggle-line">
-            <span>启用盘古记忆</span>
-            <ToggleSwitch checked={Boolean(s?.memoryAssistEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistEnabled", value)} />
-          </div>
-          <div className="ops-toggle-line">
-            <span>显示 DOM 注入标识</span>
-            <ToggleSwitch checked={Boolean(s?.memoryAssistInjectEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistInjectEnabled", value)} />
-          </div>
-          <div className="ops-toggle-line">
-            <span>启用待确认学习</span>
-            <ToggleSwitch checked={Boolean(s?.memoryAssistAutoSuggestEnabled)} disabled={!s} onChange={(value) => updateDraft("memoryAssistAutoSuggestEnabled", value)} />
-          </div>
-          <label className="ops-form-field">
-            <span>每次最多注入：{s?.memoryAssistMaxInjectedItems ?? 5} 条</span>
-            <input disabled={!s} max={20} min={1} onChange={(event) => updateDraft("memoryAssistMaxInjectedItems", Number(event.currentTarget.value))} type="range" value={s?.memoryAssistMaxInjectedItems ?? 5} />
-          </label>
-          <div className="info-grid compact">
-            <InfoRow label="工作区模式" value={s?.memoryAssistWorkspaceMode || "project_plus_global"} />
-            <InfoRow label="存储位置" value="~/.claude-codex-pro/memory_assist.sqlite" />
-          </div>
-          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存盘古记忆设置</Button>
-        </Panel>
-        <Panel title="安全边界" detail="这些操作只改本工具配置，不静默改写官方 Claude 包。">
-          <div className="ops-danger-zone">
-            <ShieldCheck className="h-4 w-4" />
-            <span>如需清空配置，可重置设置；第三方接口和 token 不会显示明文。</span>
-          </div>
-          <Button onClick={() => void actions.resetSettings()} variant="outline">
-            <Trash2 className="h-4 w-4" />
-            重置设置
-          </Button>
         </Panel>
         <LogsScreen actions={actions} logs={logs} />
       </div>

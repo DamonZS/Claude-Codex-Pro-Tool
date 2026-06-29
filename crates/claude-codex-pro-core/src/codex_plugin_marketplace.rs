@@ -1,15 +1,32 @@
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table};
 
 pub const OPENAI_CURATED_MARKETPLACE: &str = "openai-curated";
+pub const OPENAI_API_CURATED_MARKETPLACE: &str = "openai-api-curated";
 pub const OPENAI_PLUGINS_ZIP_URL: &str =
     "https://codeload.github.com/openai/plugins/zip/refs/heads/main";
+pub const HASHGRAPH_AWESOME_CODEX_MARKETPLACE: &str = "awesome-codex-plugins";
+pub const HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE: &str =
+    "https://github.com/hashgraph-online/awesome-codex-plugins.git";
+pub const HASHGRAPH_AWESOME_CODEX_MARKETPLACE_REF: &str = "main";
+const HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SPARSE_PATHS: [&str; 2] = [".agents/plugins", "plugins"];
+pub const CODEX_SKILLS_ALTERNATIVE_MARKETPLACE: &str = "codex-skills-alternative";
+pub const CODEX_SKILLS_ALTERNATIVE_MARKETPLACE_SOURCE: &str =
+    "https://github.com/DKeken/codex-skills-alternative";
+pub const CODEX_SKILLS_ALTERNATIVE_ZIP_URL: &str =
+    "https://codeload.github.com/DKeken/codex-skills-alternative/zip/refs/heads/main";
 const OPENAI_PLUGINS_DOWNLOAD_LIMIT_BYTES: usize = 128 * 1024 * 1024;
+const OPENAI_PLUGINS_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
+const CODEX_SKILLS_ALTERNATIVE_DOWNLOAD_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME: &str = "codex-skills-alternative";
+const OPENAI_CURATED_MARKETPLACE_ALIASES: [&str; 2] =
+    [OPENAI_CURATED_MARKETPLACE, OPENAI_API_CURATED_MARKETPLACE];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +36,7 @@ pub struct CodexPluginMarketplaceStatus {
     pub config_registered: bool,
     pub needs_repair: bool,
     pub message: String,
+    pub repositories: Vec<CodexPluginMarketplaceRepositoryStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,22 +51,101 @@ pub struct CodexPluginMarketplaceRepair {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexPluginMarketplaceRepositoryStatus {
+    pub label: String,
+    pub name: String,
+    pub source_type: String,
+    pub source: String,
+    pub configured: bool,
+}
+
 pub fn status() -> CodexPluginMarketplaceStatus {
     status_from_home(&crate::relay_config::default_codex_home_dir())
 }
 
 pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
     let marketplace_root = local_openai_curated_marketplace_root(home).ok().flatten();
-    let config_registered = marketplace_root
+    let openai_config_registered = marketplace_root
         .as_deref()
-        .map(|root| marketplace_config_points_to_root(home, OPENAI_CURATED_MARKETPLACE, root))
+        .map(|root| {
+            OPENAI_CURATED_MARKETPLACE_ALIASES
+                .iter()
+                .all(|name| marketplace_config_points_to_root(home, name, root))
+        })
         .unwrap_or(false);
+    let hashgraph_config_registered = git_marketplace_config_registered(
+        home,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_REF,
+        &HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SPARSE_PATHS,
+    );
+    let product_design_marketplace_root =
+        local_product_design_marketplace_root(home).ok().flatten();
+    let product_design_config_registered = product_design_marketplace_root
+        .as_deref()
+        .map(|root| {
+            marketplace_config_points_to_root(home, CODEX_SKILLS_ALTERNATIVE_MARKETPLACE, root)
+        })
+        .unwrap_or(false);
+    let config_registered =
+        openai_config_registered && hashgraph_config_registered && product_design_config_registered;
     let needs_repair = marketplace_root.is_none() || !config_registered;
-    let message = match (marketplace_root.is_some(), config_registered) {
-        (true, true) => "Codex OpenAI 插件仓库已下载并注册到 config.toml。".to_string(),
-        (true, false) => "Codex OpenAI 插件仓库已下载，但尚未注册到 config.toml。".to_string(),
-        (false, _) => "Codex OpenAI 插件仓库尚未下载。".to_string(),
+    let message = match (
+        marketplace_root.is_some(),
+        openai_config_registered,
+        hashgraph_config_registered,
+    ) {
+        (true, true, true) => "Codex OpenAI 与第三方插件仓库已注册到 config.toml。".to_string(),
+        (true, false, true) => {
+            "Codex OpenAI 插件仓库已下载，但尚未完整注册到 config.toml。".to_string()
+        }
+        (true, true, false) => "Codex OpenAI 插件仓库已注册，第三方插件仓库尚未注册。".to_string(),
+        (true, false, false) => {
+            "Codex OpenAI 插件仓库已下载，但官方与第三方仓库尚未完整注册。".to_string()
+        }
+        (false, _, true) => "Codex OpenAI 插件仓库尚未下载。".to_string(),
+        (false, _, false) => "Codex OpenAI 与第三方插件仓库尚未完整配置。".to_string(),
     };
+    let message = if !product_design_config_registered
+        && openai_config_registered
+        && hashgraph_config_registered
+    {
+        "Codex Product Design Skill 插件仓库尚未注册到 config.toml。".to_string()
+    } else {
+        message
+    };
+    let repositories = vec![
+        CodexPluginMarketplaceRepositoryStatus {
+            label: "OpenAI 官方仓库".to_string(),
+            name: format!("{OPENAI_CURATED_MARKETPLACE} + {OPENAI_API_CURATED_MARKETPLACE}"),
+            source_type: "local".to_string(),
+            source: marketplace_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| OPENAI_PLUGINS_ZIP_URL.to_string()),
+            configured: openai_config_registered,
+        },
+        CodexPluginMarketplaceRepositoryStatus {
+            label: "第三方插件仓库".to_string(),
+            name: HASHGRAPH_AWESOME_CODEX_MARKETPLACE.to_string(),
+            source_type: "git".to_string(),
+            source: HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE.to_string(),
+            configured: hashgraph_config_registered,
+        },
+        CodexPluginMarketplaceRepositoryStatus {
+            label: "Product Design Skill 仓库".to_string(),
+            name: CODEX_SKILLS_ALTERNATIVE_MARKETPLACE.to_string(),
+            source_type: "local".to_string(),
+            source: product_design_marketplace_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| CODEX_SKILLS_ALTERNATIVE_MARKETPLACE_SOURCE.to_string()),
+            configured: product_design_config_registered,
+        },
+    ];
 
     CodexPluginMarketplaceStatus {
         codex_home: home.to_string_lossy().to_string(),
@@ -56,6 +153,7 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
         config_registered,
         needs_repair,
         message,
+        repositories,
     }
 }
 
@@ -69,7 +167,13 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
         initialize_openai_curated_marketplace_from_github(home).await?;
         initialized = true;
     }
-    let configured = ensure_openai_curated_marketplace_config(home)?;
+    if local_product_design_marketplace_root(home)?.is_none() {
+        initialize_product_design_marketplace_from_github(home).await?;
+        initialized = true;
+    }
+    let configured = ensure_openai_curated_marketplace_config(home)?
+        | ensure_hashgraph_awesome_codex_marketplace_config(home)?
+        | ensure_product_design_skill_marketplace_config(home)?;
     let next = status_from_home(home);
     Ok(CodexPluginMarketplaceRepair {
         codex_home: next.codex_home,
@@ -79,11 +183,11 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
         config_registered: next.config_registered,
         needs_repair: next.needs_repair,
         message: if next.needs_repair {
-            "Codex OpenAI 插件仓库修复后仍未通过状态检查。".to_string()
+            "Codex 插件仓库修复后仍未通过状态检查。".to_string()
         } else if initialized || configured {
-            "Codex OpenAI 插件仓库已下载并注册。重启 Codex 后插件页会重新读取。".to_string()
+            "Codex OpenAI 与第三方插件仓库已注册。重启 Codex 后插件页会重新读取。".to_string()
         } else {
-            "Codex OpenAI 插件仓库已是最新状态。".to_string()
+            "Codex 插件仓库已是最新状态。".to_string()
         },
     })
 }
@@ -105,14 +209,44 @@ pub fn local_plugin_marketplaces_from_home(home: &Path) -> serde_json::Value {
         .filter_map(|path| {
             let text = std::fs::read_to_string(path).ok()?;
             let mut marketplace: serde_json::Value = serde_json::from_str(&text).ok()?;
-            expand_local_plugin_marketplace(&mut marketplace, path, home, &installed_plugins);
+            expand_local_plugin_marketplace(
+                &mut marketplace,
+                path,
+                home,
+                &installed_plugins,
+                OPENAI_CURATED_MARKETPLACE,
+            );
             if let Some(object) = marketplace.as_object_mut() {
                 object.entry("path").or_insert_with(|| {
                     serde_json::Value::String(path.to_string_lossy().to_string())
                 });
             }
-            Some(marketplace)
+            let mut marketplaces = Vec::with_capacity(OPENAI_CURATED_MARKETPLACE_ALIASES.len());
+            marketplaces.push(marketplace.clone());
+            let original_name = marketplace
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if original_name == OPENAI_CURATED_MARKETPLACE {
+                let mut alias = marketplace;
+                if let Some(object) = alias.as_object_mut() {
+                    object.insert(
+                        "name".to_string(),
+                        serde_json::Value::String(OPENAI_API_CURATED_MARKETPLACE.to_string()),
+                    );
+                }
+                expand_local_plugin_marketplace(
+                    &mut alias,
+                    path,
+                    home,
+                    &installed_plugins,
+                    OPENAI_API_CURATED_MARKETPLACE,
+                );
+                marketplaces.push(alias);
+            }
+            Some(marketplaces)
         })
+        .flatten()
         .collect::<Vec<_>>();
     serde_json::Value::Array(marketplaces)
 }
@@ -121,16 +255,58 @@ pub fn ensure_openai_curated_marketplace_config(home: &Path) -> anyhow::Result<b
     let Some(marketplace_root) = local_openai_curated_marketplace_root(home)? else {
         return Ok(false);
     };
-    ensure_marketplace_config(home, OPENAI_CURATED_MARKETPLACE, &marketplace_root)
+    let mut changed = false;
+    for marketplace_name in OPENAI_CURATED_MARKETPLACE_ALIASES {
+        changed |= ensure_marketplace_config(home, marketplace_name, &marketplace_root)?;
+    }
+    Ok(changed)
+}
+
+pub fn ensure_hashgraph_awesome_codex_marketplace_config(home: &Path) -> anyhow::Result<bool> {
+    ensure_git_marketplace_config(
+        home,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_REF,
+        &HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SPARSE_PATHS,
+    )
+}
+
+pub fn ensure_product_design_skill_marketplace_config(home: &Path) -> anyhow::Result<bool> {
+    let Some(marketplace_root) = local_product_design_marketplace_root(home)? else {
+        return Ok(false);
+    };
+    ensure_marketplace_config(
+        home,
+        CODEX_SKILLS_ALTERNATIVE_MARKETPLACE,
+        &marketplace_root,
+    )
 }
 
 fn local_openai_curated_marketplace_root(home: &Path) -> anyhow::Result<Option<PathBuf>> {
     local_openai_curated_marketplace_root_from_root(&home.join(".tmp").join("plugins"))
 }
 
+fn local_product_design_marketplace_root(home: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let root = home
+        .join("plugins")
+        .join("cache")
+        .join("codex-skills-alternative-marketplace");
+    if validate_product_design_marketplace_root(&root).is_ok() {
+        Ok(Some(root))
+    } else {
+        Ok(None)
+    }
+}
+
 async fn initialize_openai_curated_marketplace_from_github(home: &Path) -> anyhow::Result<()> {
     let bytes = download_openai_plugins_zip().await?;
     install_openai_plugins_zip(home, &bytes)
+}
+
+async fn initialize_product_design_marketplace_from_github(home: &Path) -> anyhow::Result<()> {
+    let bytes = download_codex_skills_alternative_zip().await?;
+    install_product_design_marketplace_zip(home, &bytes)
 }
 
 async fn download_openai_plugins_zip() -> anyhow::Result<Vec<u8>> {
@@ -139,6 +315,7 @@ async fn download_openai_plugins_zip() -> anyhow::Result<Vec<u8>> {
     let bytes = client
         .get(OPENAI_PLUGINS_ZIP_URL)
         .header(reqwest::header::ACCEPT, "application/zip")
+        .timeout(OPENAI_PLUGINS_DOWNLOAD_TIMEOUT)
         .send()
         .await
         .context("failed to download openai/plugins marketplace")?
@@ -150,6 +327,30 @@ async fn download_openai_plugins_zip() -> anyhow::Result<Vec<u8>> {
     if bytes.len() > OPENAI_PLUGINS_DOWNLOAD_LIMIT_BYTES {
         anyhow::bail!(
             "openai/plugins marketplace download is too large: {} bytes",
+            bytes.len()
+        );
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn download_codex_skills_alternative_zip() -> anyhow::Result<Vec<u8>> {
+    let client =
+        crate::http_client::proxied_client(&format!("ClaudeCodexPro/{}", crate::version::VERSION))?;
+    let bytes = client
+        .get(CODEX_SKILLS_ALTERNATIVE_ZIP_URL)
+        .header(reqwest::header::ACCEPT, "application/zip")
+        .timeout(OPENAI_PLUGINS_DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+        .context("failed to download DKeken/codex-skills-alternative marketplace")?
+        .error_for_status()
+        .context("DKeken/codex-skills-alternative marketplace download returned an error status")?
+        .bytes()
+        .await
+        .context("failed to read DKeken/codex-skills-alternative download body")?;
+    if bytes.len() > CODEX_SKILLS_ALTERNATIVE_DOWNLOAD_LIMIT_BYTES {
+        anyhow::bail!(
+            "DKeken/codex-skills-alternative download is too large: {} bytes",
             bytes.len()
         );
     }
@@ -182,6 +383,210 @@ fn install_openai_plugins_zip(home: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         let _ = std::fs::remove_dir_all(&staging);
     }
     result
+}
+
+fn install_product_design_marketplace_zip(home: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let destination = home
+        .join("plugins")
+        .join("cache")
+        .join("codex-skills-alternative-marketplace");
+    let staging_parent = home.join(".tmp");
+    std::fs::create_dir_all(&staging_parent)
+        .with_context(|| format!("failed to create {}", staging_parent.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let source_staging = staging_parent.join(format!("codex-skills-alternative-source-{stamp}"));
+    let marketplace_staging =
+        staging_parent.join(format!("codex-skills-alternative-marketplace-{stamp}"));
+    for path in [&source_staging, &marketplace_staging] {
+        if path.exists() {
+            std::fs::remove_dir_all(path)
+                .with_context(|| format!("failed to remove stale {}", path.display()))?;
+        }
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+    }
+
+    let result = extract_openai_plugins_zip(bytes, &source_staging)
+        .and_then(|_| validate_codex_skills_alternative_source_root(&source_staging))
+        .and_then(|_| {
+            build_product_design_marketplace_snapshot(&source_staging, &marketplace_staging)
+        })
+        .and_then(|_| validate_product_design_marketplace_root(&marketplace_staging))
+        .and_then(|_| {
+            replace_directory_with_backup_name(
+                &marketplace_staging,
+                &destination,
+                "codex-skills-alternative.previous-claude-codex-pro",
+            )
+        });
+    let _ = std::fs::remove_dir_all(&source_staging);
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&marketplace_staging);
+    }
+    result
+}
+
+fn validate_codex_skills_alternative_source_root(root: &Path) -> anyhow::Result<()> {
+    let manifest = root.join(".codex-plugin").join("plugin.json");
+    if !manifest.is_file() {
+        anyhow::bail!(
+            "DKeken/codex-skills-alternative missing Codex plugin manifest: {}",
+            manifest.display()
+        );
+    }
+    let product_design = root.join("skills").join("product-design").join("SKILL.md");
+    if !product_design.is_file() {
+        anyhow::bail!(
+            "DKeken/codex-skills-alternative missing product-design skill: {}",
+            product_design.display()
+        );
+    }
+    Ok(())
+}
+
+fn build_product_design_marketplace_snapshot(
+    source: &Path,
+    destination: &Path,
+) -> anyhow::Result<()> {
+    let plugin_root = destination
+        .join("plugins")
+        .join(CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME);
+    std::fs::create_dir_all(destination.join(".agents").join("plugins"))
+        .with_context(|| format!("failed to create {}", destination.display()))?;
+    std::fs::create_dir_all(&plugin_root)
+        .with_context(|| format!("failed to create {}", plugin_root.display()))?;
+    copy_directory_recursive(
+        &source.join(".codex-plugin"),
+        &plugin_root.join(".codex-plugin"),
+    )?;
+    copy_directory_recursive(&source.join("skills"), &plugin_root.join("skills"))?;
+    for file_name in ["README.md", "LICENSE"] {
+        let source_file = source.join(file_name);
+        if source_file.is_file() {
+            std::fs::copy(&source_file, plugin_root.join(file_name)).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source_file.display(),
+                    plugin_root.join(file_name).display()
+                )
+            })?;
+        }
+    }
+    let marketplace = serde_json::json!({
+        "name": CODEX_SKILLS_ALTERNATIVE_MARKETPLACE,
+        "interface": {
+            "displayName": "Creative + Product Design Skills"
+        },
+        "plugins": [
+            {
+                "name": CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME,
+                "source": {
+                    "source": "local",
+                    "path": "./plugins/codex-skills-alternative"
+                },
+                "policy": {
+                    "installation": "AVAILABLE",
+                    "authentication": "ON_INSTALL"
+                },
+                "category": "Design"
+            }
+        ]
+    });
+    let marketplace_path = destination
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    let text = serde_json::to_string_pretty(&marketplace)?;
+    std::fs::write(&marketplace_path, ensure_trailing_newline(text))
+        .with_context(|| format!("failed to write {}", marketplace_path.display()))?;
+    Ok(())
+}
+
+fn validate_product_design_marketplace_root(root: &Path) -> anyhow::Result<()> {
+    let marketplace_path = root
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    let text = std::fs::read_to_string(&marketplace_path)
+        .with_context(|| format!("failed to read {}", marketplace_path.display()))?;
+    let marketplace: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse {}", marketplace_path.display()))?;
+    if marketplace.get("name").and_then(serde_json::Value::as_str)
+        != Some(CODEX_SKILLS_ALTERNATIVE_MARKETPLACE)
+    {
+        anyhow::bail!("Product Design Skill marketplace name mismatch");
+    }
+    let plugin = marketplace
+        .get("plugins")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|plugins| plugins.first())
+        .ok_or_else(|| anyhow::anyhow!("Product Design Skill marketplace has no plugins"))?;
+    let authentication = plugin
+        .get("policy")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|policy| policy.get("authentication"))
+        .and_then(serde_json::Value::as_str);
+    if authentication != Some("ON_INSTALL") {
+        anyhow::bail!("Product Design Skill marketplace authentication policy must be ON_INSTALL");
+    }
+    let plugin_root = root
+        .join("plugins")
+        .join(CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME);
+    let manifest = plugin_root.join(".codex-plugin").join("plugin.json");
+    if !manifest.is_file() {
+        anyhow::bail!(
+            "Product Design Skill marketplace missing plugin manifest: {}",
+            manifest.display()
+        );
+    }
+    let product_design = plugin_root
+        .join("skills")
+        .join("product-design")
+        .join("SKILL.md");
+    if !product_design.is_file() {
+        anyhow::bail!(
+            "Product Design Skill marketplace missing product-design skill: {}",
+            product_design.display()
+        );
+    }
+    Ok(())
+}
+
+fn copy_directory_recursive(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    if !source.is_dir() {
+        anyhow::bail!("source directory does not exist: {}", source.display());
+    }
+    if destination.exists() {
+        std::fs::remove_dir_all(destination)
+            .with_context(|| format!("failed to remove {}", destination.display()))?;
+    }
+    std::fs::create_dir_all(destination)
+        .with_context(|| format!("failed to create {}", destination.display()))?;
+    for entry in
+        std::fs::read_dir(source).with_context(|| format!("failed to read {}", source.display()))?
+    {
+        let entry = entry.with_context(|| format!("failed to read {}", source.display()))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("failed to stat {}", source_path.display()))?;
+        if file_type.is_dir() {
+            copy_directory_recursive(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source_path, &destination_path).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn extract_openai_plugins_zip(bytes: &[u8], destination: &Path) -> anyhow::Result<()> {
@@ -343,7 +748,15 @@ fn plugin_marketplace_entry_path(root: &Path, value: &str) -> Option<PathBuf> {
 }
 
 fn replace_directory(source: &Path, destination: &Path) -> anyhow::Result<()> {
-    let backup = destination.with_file_name("plugins.previous-claude-codex-pro");
+    replace_directory_with_backup_name(source, destination, "plugins.previous-claude-codex-pro")
+}
+
+fn replace_directory_with_backup_name(
+    source: &Path,
+    destination: &Path,
+    backup_name: &str,
+) -> anyhow::Result<()> {
+    let backup = destination.with_file_name(backup_name);
     if backup.exists() {
         std::fs::remove_dir_all(&backup)
             .with_context(|| format!("failed to remove {}", backup.display()))?;
@@ -415,6 +828,49 @@ fn ensure_marketplace_config(
     Ok(true)
 }
 
+fn ensure_git_marketplace_config(
+    home: &Path,
+    marketplace_name: &str,
+    source: &str,
+    reference: &str,
+    sparse_paths: &[&str],
+) -> anyhow::Result<bool> {
+    let config_path = home.join("config.toml");
+    let existing = match std::fs::read(&config_path) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .with_context(|| format!("failed to read UTF-8 {}", config_path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config_path.display()));
+        }
+    };
+    let without_bom = existing.trim_start_matches('\u{feff}');
+    let mut doc = parse_toml_document(without_bom)?;
+    let marketplaces = table_mut_or_insert(&mut doc, "marketplaces")?;
+    if marketplaces
+        .get(marketplace_name)
+        .and_then(Item::as_table)
+        .is_none()
+    {
+        marketplaces[marketplace_name] = toml_edit::table();
+    }
+    marketplaces[marketplace_name]["source_type"] = toml_edit::value("git");
+    marketplaces[marketplace_name]["source"] = toml_edit::value(source);
+    marketplaces[marketplace_name]["ref"] = toml_edit::value(reference);
+    let mut sparse = toml_edit::Array::default();
+    for path in sparse_paths {
+        sparse.push(*path);
+    }
+    marketplaces[marketplace_name]["sparse_paths"] = toml_edit::value(sparse);
+
+    let updated = ensure_trailing_newline(doc.to_string());
+    if updated.as_bytes() == without_bom.as_bytes() {
+        return Ok(false);
+    }
+    crate::settings::atomic_write(&config_path, updated.as_bytes())?;
+    Ok(true)
+}
+
 fn marketplace_config_points_to_root(home: &Path, marketplace_name: &str, root: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
         return false;
@@ -441,17 +897,65 @@ fn marketplace_config_points_to_root(home: &Path, marketplace_name: &str, root: 
     source_type == "local" && normalize_windows_extended_path(source) == root.to_string_lossy()
 }
 
+fn git_marketplace_config_registered(
+    home: &Path,
+    marketplace_name: &str,
+    source: &str,
+    reference: &str,
+    sparse_paths: &[&str],
+) -> bool {
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
+        return false;
+    };
+    let Ok(doc) = text.trim_start_matches('\u{feff}').parse::<DocumentMut>() else {
+        return false;
+    };
+    let Some(table) = doc
+        .get("marketplaces")
+        .and_then(Item::as_table)
+        .and_then(|marketplaces| marketplaces.get(marketplace_name))
+        .and_then(Item::as_table)
+    else {
+        return false;
+    };
+    let source_type = table
+        .get("source_type")
+        .and_then(Item::as_str)
+        .unwrap_or_default();
+    let configured_source = table
+        .get("source")
+        .and_then(Item::as_str)
+        .unwrap_or_default();
+    let configured_ref = table.get("ref").and_then(Item::as_str).unwrap_or_default();
+    let configured_sparse = table
+        .get("sparse_paths")
+        .and_then(Item::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(toml_edit::Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    source_type == "git"
+        && configured_source == source
+        && configured_ref == reference
+        && configured_sparse == sparse_paths
+}
+
 fn expand_local_plugin_marketplace(
     marketplace: &mut serde_json::Value,
     marketplace_path: &Path,
     home: &Path,
     installed_plugins: &std::collections::BTreeSet<String>,
+    marketplace_name_override: &str,
 ) {
-    let marketplace_name = marketplace
+    let original_marketplace_name = marketplace
         .get("name")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let marketplace_name = marketplace_name_override.to_string();
     let Some(plugins) = marketplace
         .get_mut("plugins")
         .and_then(serde_json::Value::as_array_mut)
@@ -495,19 +999,44 @@ fn expand_local_plugin_marketplace(
         plugin_object
             .entry("name".to_string())
             .or_insert_with(|| serde_json::Value::String(plugin_name.clone()));
-        plugin_object.entry("id".to_string()).or_insert_with(|| {
-            serde_json::Value::String(format!("{plugin_name}@{marketplace_name}"))
-        });
+        plugin_object.insert(
+            "id".to_string(),
+            serde_json::Value::String(format!("{plugin_name}@{marketplace_name}")),
+        );
+        plugin_object.insert(
+            "pluginId".to_string(),
+            serde_json::Value::String(format!("{plugin_name}@{marketplace_name}")),
+        );
+        plugin_object.insert(
+            "marketplaceName".to_string(),
+            serde_json::Value::String(marketplace_name.clone()),
+        );
         plugin_object
             .entry("keywords".to_string())
             .or_insert_with(|| serde_json::Value::Array(Vec::new()));
         plugin_object.insert(
             "installed".to_string(),
-            serde_json::Value::Bool(
-                installed_plugins.contains(&format!("{plugin_name}@{marketplace_name}")),
-            ),
+            serde_json::Value::Bool(plugin_installed_under_any_openai_curated_alias(
+                installed_plugins,
+                &plugin_name,
+                &marketplace_name,
+                &original_marketplace_name,
+            )),
         );
     }
+}
+
+fn plugin_installed_under_any_openai_curated_alias(
+    installed_plugins: &BTreeSet<String>,
+    plugin_name: &str,
+    marketplace_name: &str,
+    original_marketplace_name: &str,
+) -> bool {
+    installed_plugins.contains(&format!("{plugin_name}@{marketplace_name}"))
+        || installed_plugins.contains(&format!("{plugin_name}@{original_marketplace_name}"))
+        || OPENAI_CURATED_MARKETPLACE_ALIASES
+            .iter()
+            .any(|name| installed_plugins.contains(&format!("{plugin_name}@{name}")))
 }
 
 fn absolutize_plugin_icon_paths(
@@ -659,6 +1188,32 @@ mod tests {
         .unwrap();
     }
 
+    fn write_product_design_marketplace(home: &Path) {
+        let source = home.join("product-design-source");
+        std::fs::create_dir_all(source.join(".codex-plugin")).unwrap();
+        std::fs::create_dir_all(source.join("skills").join("product-design")).unwrap();
+        std::fs::write(
+            source.join(".codex-plugin").join("plugin.json"),
+            r#"{"name":"codex-skills-alternative","version":"0.1.0","skills":"./skills/"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source
+                .join("skills")
+                .join("product-design")
+                .join("SKILL.md"),
+            "---\nname: product-design\n---\n# Product Design\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("README.md"), "# codex-skills-alternative\n").unwrap();
+        let destination = home
+            .join("plugins")
+            .join("cache")
+            .join("codex-skills-alternative-marketplace");
+        build_product_design_marketplace_snapshot(&source, &destination).unwrap();
+        validate_product_design_marketplace_root(&destination).unwrap();
+    }
+
     #[test]
     fn status_detects_missing_snapshot() {
         let temp = tempfile::tempdir().unwrap();
@@ -674,13 +1229,156 @@ mod tests {
     fn ensure_config_registers_local_marketplace() {
         let temp = tempfile::tempdir().unwrap();
         write_marketplace(temp.path());
+        write_product_design_marketplace(temp.path());
 
         let changed = ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+        let third_party_changed =
+            ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+        let product_design_changed =
+            ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
 
         assert!(changed);
+        assert!(third_party_changed);
+        assert!(product_design_changed);
         let status = status_from_home(temp.path());
         assert!(!status.needs_repair);
         assert!(status.config_registered);
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(config.contains("[marketplaces.openai-curated]"));
+        assert!(config.contains("[marketplaces.openai-api-curated]"));
+        assert!(config.contains("[marketplaces.awesome-codex-plugins]"));
+        assert!(config.contains("[marketplaces.codex-skills-alternative]"));
+        assert!(config.contains("source_type = \"git\""));
+        assert!(config.contains(
+            "source = \"https://github.com/hashgraph-online/awesome-codex-plugins.git\""
+        ));
+        assert!(config.contains("source_type = \"local\""));
+        assert!(config.contains("codex-skills-alternative-marketplace"));
+        assert!(config.contains("ref = \"main\""));
+        assert!(config.contains("sparse_paths = [\".agents/plugins\", \"plugins\"]"));
+        assert_eq!(status.repositories.len(), 3);
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == HASHGRAPH_AWESOME_CODEX_MARKETPLACE && repository.configured
+        }));
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == CODEX_SKILLS_ALTERNATIVE_MARKETPLACE && repository.configured
+        }));
+        assert!(!config.contains("[plugins."));
+    }
+
+    #[test]
+    fn status_requires_both_openai_curated_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        let marketplace_root = local_openai_curated_marketplace_root(temp.path())
+            .unwrap()
+            .unwrap();
+        ensure_marketplace_config(temp.path(), OPENAI_CURATED_MARKETPLACE, &marketplace_root)
+            .unwrap();
+
+        let status = status_from_home(temp.path());
+
+        assert!(status.needs_repair);
+        assert!(!status.config_registered);
+    }
+
+    #[test]
+    fn status_requires_hashgraph_third_party_marketplace() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+
+        let status = status_from_home(temp.path());
+
+        assert!(status.needs_repair);
+        assert!(!status.config_registered);
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == HASHGRAPH_AWESOME_CODEX_MARKETPLACE && !repository.configured
+        }));
+    }
+
+    #[test]
+    fn status_requires_product_design_skill_marketplace() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+        ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+
+        let status = status_from_home(temp.path());
+
+        assert!(status.needs_repair);
+        assert!(!status.config_registered);
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == CODEX_SKILLS_ALTERNATIVE_MARKETPLACE && !repository.configured
+        }));
+    }
+
+    #[test]
+    fn ensure_hashgraph_marketplace_config_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let first = ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+        let second = ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+
+        assert!(first);
+        assert!(!second);
+        assert!(git_marketplace_config_registered(
+            temp.path(),
+            HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+            HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE,
+            HASHGRAPH_AWESOME_CODEX_MARKETPLACE_REF,
+            &HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SPARSE_PATHS,
+        ));
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(!config.contains("[plugins."));
+    }
+
+    #[test]
+    fn product_design_skill_marketplace_snapshot_is_valid_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        write_product_design_marketplace(temp.path());
+
+        let first = ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+        let second = ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+
+        assert!(first);
+        assert!(!second);
+        let root = local_product_design_marketplace_root(temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(
+            root.join(".agents")
+                .join("plugins")
+                .join("marketplace.json")
+                .is_file()
+        );
+        assert!(
+            root.join("plugins")
+                .join(CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME)
+                .join(".codex-plugin")
+                .join("plugin.json")
+                .is_file()
+        );
+        assert!(
+            root.join("plugins")
+                .join(CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME)
+                .join("skills")
+                .join("product-design")
+                .join("SKILL.md")
+                .is_file()
+        );
+        let marketplace = std::fs::read_to_string(
+            root.join(".agents")
+                .join("plugins")
+                .join("marketplace.json"),
+        )
+        .unwrap();
+        assert!(marketplace.contains(r#""authentication": "ON_INSTALL""#));
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(config.contains("[marketplaces.codex-skills-alternative]"));
+        assert!(config.contains("source_type = \"local\""));
+        assert!(config.contains("codex-skills-alternative-marketplace"));
+        assert!(!config.contains("[plugins."));
     }
 
     #[test]
@@ -720,7 +1418,10 @@ mod tests {
         }
 
         install_openai_plugins_zip(temp.path(), bytes.get_ref()).unwrap();
+        write_product_design_marketplace(temp.path());
         ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+        ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+        ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
         let status = status_from_home(temp.path());
 
         assert!(!status.needs_repair);
@@ -786,6 +1487,16 @@ mod tests {
         let marketplaces = local_plugin_marketplaces_from_home(temp.path());
 
         assert_eq!(marketplaces[0]["plugins"][0]["description"], "Gmail plugin");
+        assert_eq!(marketplaces[0]["name"], OPENAI_CURATED_MARKETPLACE);
+        assert_eq!(marketplaces[1]["name"], OPENAI_API_CURATED_MARKETPLACE);
+        assert_eq!(
+            marketplaces[1]["plugins"][0]["marketplaceName"],
+            OPENAI_API_CURATED_MARKETPLACE
+        );
+        assert_eq!(
+            marketplaces[1]["plugins"][0]["id"],
+            format!("gmail@{OPENAI_API_CURATED_MARKETPLACE}")
+        );
         assert!(
             marketplaces[0]["plugins"][0]["logoPath"]
                 .as_str()
@@ -827,5 +1538,23 @@ mod tests {
             marketplaces[0]["plugins"][0]["description"],
             "Nested source path plugin"
         );
+    }
+
+    #[test]
+    fn local_marketplaces_mark_installed_for_either_official_alias() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        std::fs::write(
+            temp.path().join("config.toml"),
+            r#"[plugins."gmail@openai-api-curated"]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let marketplaces = local_plugin_marketplaces_from_home(temp.path());
+
+        assert_eq!(marketplaces[0]["plugins"][0]["installed"], true);
+        assert_eq!(marketplaces[1]["plugins"][0]["installed"], true);
     }
 }

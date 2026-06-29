@@ -407,6 +407,114 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
 }
 
 #[test]
+fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedback() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx_path = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx_path).expect("read manager App.tsx");
+
+    assert!(app_tsx.contains("PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX"));
+    assert!(app_tsx.contains("function codexPluginMarketplaceNeedsRepair"));
+    assert!(app_tsx.contains("function claudeDesktopMarketplaceNeedsRepair"));
+    assert!(app_tsx.contains("const promptAndRepairPluginRepositories = async"));
+    assert!(app_tsx.contains("window.confirm(pluginRepositoryRepairPromptMessage(codex, claude))"));
+    assert!(app_tsx.contains(
+        "await promptAndRepairPluginRepositories(codexMarketplaceStatus, claudeMarketplaceStatus)"
+    ));
+
+    let tools_route = app_tsx
+        .split("} else if (target === \"tools\")")
+        .nth(1)
+        .and_then(|rest| rest.split("} else if (target === \"sessions\")").next())
+        .expect("tools route refresh source");
+    assert!(tools_route.contains("refreshCodexPluginMarketplace(true)"));
+    assert!(tools_route.contains("refreshClaudeDesktopMarketplace(true)"));
+    assert!(tools_route.contains("codexMarketplaceStatus"));
+    assert!(tools_route.contains("claudeMarketplaceStatus"));
+    assert!(tools_route.contains("promptAndRepairPluginRepositories"));
+
+    let codex_refresh = app_tsx
+        .split("const refreshCodexPluginMarketplace = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const refreshLocalSessions").next())
+        .expect("codex marketplace refresh source");
+    assert!(codex_refresh.contains("status: \"running\""));
+    assert!(codex_refresh.contains("load_codex_plugin_marketplace_status"));
+    assert!(codex_refresh.contains("setNotice({ title:"));
+
+    let claude_refresh = app_tsx
+        .split("const refreshClaudeDesktopMarketplace = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const refreshClaudeDesktopDevMode").next())
+        .expect("claude marketplace refresh source");
+    assert!(claude_refresh.contains("status: \"running\""));
+    assert!(claude_refresh.contains("load_claude_desktop_marketplace_status"));
+    assert!(claude_refresh.contains("setNotice({ title:"));
+
+    let codex_repair = app_tsx
+        .split("const repairCodexPluginMarketplace = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const promptAndRepairPluginRepositories").next())
+        .expect("codex marketplace repair source");
+    assert!(codex_repair.contains("status: \"running\""));
+    assert!(codex_repair.contains("repair_codex_plugin_marketplace"));
+
+    let claude_repair = app_tsx
+        .split("const repairClaudeDesktopMarketplaces = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const configureClaudeDesktopDevMode").next())
+        .expect("claude marketplace repair source");
+    assert!(claude_repair.contains("status: \"running\""));
+    assert!(claude_repair.contains("repair_claude_desktop_marketplaces"));
+
+    assert!(
+        !app_tsx
+            .contains("onClick={() => void actions.openPonytailClaudeDesktopMarketplaceSetup()}")
+    );
+    assert!(!app_tsx.contains("可选官方仓库"));
+}
+
+#[test]
+fn plugin_memory_tools_ui_regression_is_locked_down() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_tsx_path = manifest_dir.parent().unwrap().join("src/App.tsx");
+    let app_tsx = std::fs::read_to_string(&app_tsx_path).expect("read manager App.tsx");
+    let styles_path = manifest_dir.parent().unwrap().join("src/styles.css");
+    let styles = std::fs::read_to_string(&styles_path).expect("read manager styles.css");
+
+    assert!(!app_tsx.contains("<span>后端链接</span>"));
+    assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
+    assert!(styles.contains("grid-template-columns: minmax(220px, 1fr) auto;"));
+
+    assert!(!app_tsx.contains("label=\"Codex 官方仓库\""));
+    assert!(app_tsx.contains("repositories.map((repository) => ("));
+    assert!(app_tsx.contains("awesome-codex-plugins"));
+    assert!(app_tsx.contains("https://github.com/hashgraph-online/awesome-codex-plugins.git"));
+    assert!(app_tsx.contains("Product Design Skill 仓库"));
+    assert!(app_tsx.contains("codex-skills-alternative"));
+    assert!(app_tsx.contains("codex-skills-alternative-marketplace"));
+    assert!(app_tsx.contains("codexMarketplaceAutoRegisterRef"));
+    assert!(app_tsx.contains("repairCodexPluginMarketplace(true)"));
+    assert!(app_tsx.contains("repository.configured ? \"已写入\" : \"未写入\""));
+
+    assert!(app_tsx.contains("className=\"context-entry-actions\""));
+    assert!(styles.contains(".context-entry-actions"));
+    assert!(styles.contains("grid-template-columns: 48px 32px 32px;"));
+    assert!(styles.contains(".context-entry-actions .toggle-switch"));
+    assert!(styles.contains("grid-column: 1;"));
+    assert!(styles.contains("width: 48px;"));
+    assert!(styles.contains("height: 26px;"));
+    assert!(styles.contains("align-items: center;"));
+    assert!(styles.contains("flex: 0 0 20px;"));
+    assert!(styles.contains("margin-left: auto;"));
+    assert!(!styles.contains(".context-entry-actions .toggle-switch.checked .toggle-switch-thumb"));
+    assert!(!styles.contains(".context-entry-actions .toggle-switch-thumb"));
+    assert!(styles.contains("grid-template-columns: minmax(0, 1fr) 124px;"));
+    assert!(app_tsx.contains("setNotice({ title: \"Codex 插件仓库\", message: result.message || result.repair.message, status: result.status })"));
+    assert!(styles.contains("overflow-wrap: anywhere;"));
+    assert!(styles.contains("white-space: normal;"));
+}
+
+#[test]
 fn session_management_route_contains_history_memory_and_diagnostics() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
@@ -427,11 +535,24 @@ fn session_management_route_contains_history_memory_and_diagnostics() {
     assert!(session_section.contains("Claude 会话诊断"));
     assert!(session_section.contains("refreshLocalSessions"));
     assert!(session_section.contains("deleteLocalSession"));
+    assert!(session_section.contains("groupLocalSessionsByProject(sessions)"));
+    assert!(session_section.contains("className=\"codex-session-browser\""));
+    assert!(session_section.contains("Codex 本地会话项目列表"));
+    assert!(session_section.contains("className=\"codex-session-project-header\""));
+    assert!(session_section.contains("className=\"codex-session-main\""));
+    assert!(session_section.contains("formatSessionRelativeTime(session.updatedAtMs)"));
+    assert!(session_section.contains("actions.deleteLocalSession(session)"));
     assert!(session_section.contains("repairHistorySessions"));
     assert!(session_section.contains("launchClaudeDesktop"));
     assert!(session_section.contains("installClaudeZhPatch"));
     assert!(!session_section.contains("openClaudeChinese"));
     assert!(styles.contains(".ops-two-column"));
+    assert!(styles.contains(".codex-session-browser"));
+    assert!(!styles.contains("background: #f3eeee;"));
+    assert!(styles.contains("rgba(8, 9, 12, 0.72);"));
+    assert!(styles.contains(".codex-session-project-header"));
+    assert!(styles.contains(".codex-session-main time"));
+    assert!(styles.contains(".codex-session-delete"));
 }
 
 #[test]
@@ -515,8 +636,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!app_tsx.contains("const actions = useMemo("));
     assert!(app_tsx.contains("relay-banner"));
     assert!(app_tsx.contains("relay-banner-open"));
-    assert!(app_tsx.contains("route !== \"overview\""));
-    assert!(app_tsx.contains("<span>后端链接</span>"));
+    assert!(!app_tsx.contains("route !== \"overview\""));
+    assert!(!app_tsx.contains("<span>后端链接</span>"));
+    assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
     assert!(app_tsx.contains("https://api.toporeduce.cn"));
     assert!(app_tsx.contains("打开"));
     assert!(app_tsx.contains("Codex 状态"));
@@ -789,6 +911,15 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(commands_rs.contains("fn normalize_launch_request"));
     assert!(commands_rs.contains("find_running_codex_app_dir()"));
     assert!(commands_rs.contains("current_codex_app_path_for_launch"));
+    let restart_command = commands_rs
+        .split("pub fn restart_claude_codex_pro")
+        .nth(1)
+        .and_then(|rest| rest.split("fn normalize_launch_request").next())
+        .expect("restart_claude_codex_pro source");
+    assert!(restart_command.contains("stop_launcher_processes_for_codex_restart()"));
+    assert!(!restart_command.contains("stop_launcher_processes();"));
+    assert!(restart_command.contains("stop_codex_processes();"));
+    assert!(restart_command.contains("spawn_claude_codex_pro_launch(request"));
     assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
     assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
 }
@@ -947,11 +1078,27 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("添加聚合供应商"));
     assert!(supplier_screen.contains("从第三方导入"));
     assert!(supplier_screen.contains("ccswitch"));
+    assert!(supplier_screen.contains("<Pencil className=\"h-4 w-4 tilted-pen-icon\" />"));
+    assert!(!supplier_screen.contains("<PencilRuler className=\"h-4 w-4\" />"));
     assert!(supplier_screen.contains("发现"));
     assert!(supplier_screen.contains("刷新列表"));
     assert!(supplier_screen.contains("onDragStart"));
+    assert!(supplier_screen.contains("onDragEnter"));
     assert!(supplier_screen.contains("onDragOver"));
     assert!(supplier_screen.contains("onDrop"));
+    assert!(supplier_screen.contains("SUPPLIER_DRAG_MIME_TYPE"));
+    assert!(
+        supplier_screen.contains("event.dataTransfer.setData(SUPPLIER_DRAG_MIME_TYPE, profileId);")
+    );
+    assert!(supplier_screen.contains("event.dataTransfer.setData(\"text/plain\", profileId);"));
+    assert!(supplier_screen.contains("event.dataTransfer.dropEffect = \"move\";"));
+    assert!(supplier_screen.contains("event.dataTransfer.getData(SUPPLIER_DRAG_MIME_TYPE)"));
+    assert!(supplier_screen.contains(
+        "const beginSupplierDrag = (event: DragEvent<HTMLElement>, profileId: string) => {"
+    ));
+    assert!(
+        supplier_screen.contains("const supplierDragSourceId = (event: DragEvent<HTMLElement>) =>")
+    );
     assert!(
         supplier_screen
             .contains("const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);")
@@ -976,7 +1123,13 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("setSupplierOrderIds(previousIds);"));
     assert!(supplier_screen.contains("供应商顺序保存失败，已恢复原顺序。"));
     assert!(supplier_screen.contains("supplierOrderFromIds(supplierOrderIds).map((profile) => {"));
-    assert!(supplier_screen.contains("previewSupplierOrder(draggedId, profile.id);"));
+    assert!(
+        supplier_screen.contains("onDragStart={(event) => beginSupplierDrag(event, profile.id)}")
+    );
+    assert!(
+        supplier_screen.contains("onDragOver={(event) => previewSupplierDrag(event, profile.id)}")
+    );
+    assert!(supplier_screen.contains("title=\"拖拽排序\""));
 
     assert!(supplier_screen.contains("从预设模板创建"));
     assert!(supplier_screen.contains("接入模式"));
@@ -1695,6 +1848,11 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("设置文件位置"));
     assert!(app_tsx.contains("Codex 增强矩阵"));
     assert!(app_tsx.contains("Claude 一键汉化"));
+    let settings_screen = app_tsx
+        .split("function SettingsScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("function AboutScreen").next())
+        .expect("settings screen source");
     let zh_settings_panel = app_tsx
         .split("<Panel title=\"Claude 一键汉化\"")
         .nth(1)
@@ -1709,10 +1867,16 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(!zh_settings_panel.contains("入口 URL"));
     assert!(!zh_settings_panel.contains("wrapped_webview"));
     assert!(app_tsx.contains("CLI Wrapper"));
-    assert!(app_tsx.contains("Codex 启动参数"));
-    assert!(app_tsx.contains("安全边界"));
-    assert!(app_tsx.contains("reset_settings"));
-    assert!(app_tsx.contains("reset_image_overlay_settings"));
+    assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
+    assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
+    assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
+    assert!(!settings_screen.contains("<Panel title=\"盘古记忆\""));
+    assert!(!settings_screen.contains("<Panel title=\"安全边界\""));
+    assert!(!settings_screen.contains("保存启动参数"));
+    assert!(!settings_screen.contains("保存图片覆盖"));
+    assert!(!settings_screen.contains("保存盘古记忆设置"));
+    assert!(!settings_screen.contains("重置图片覆盖"));
+    assert!(!settings_screen.contains("重置设置"));
     assert!(app_tsx.contains("saveSettings"));
     assert!(app_tsx.contains("logsPath: string;"));
     assert!(app_tsx.contains("function zhPatchNoticeMessage"));

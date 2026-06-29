@@ -343,7 +343,8 @@ fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
         .expect("memory suggestion function follows latest-user function");
     let function_body = &script[start..end];
 
-    assert!(function_body.contains("[data-message-author-role=\"user\"]"));
+    assert!(function_body.contains("codexMemoryConversationMessages(\"user\")"));
+    assert!(script.contains("[data-message-author-role=\"user\"]"));
     assert!(
         !function_body.contains("[data-testid=\"conversation-turn\"]"),
         "auto-suggest fallback must not read generic conversation turns"
@@ -351,6 +352,38 @@ fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
     assert!(
         !function_body.contains("main [class*=\"user\"]"),
         "auto-suggest fallback must not infer user role from class substring"
+    );
+}
+
+#[test]
+fn injection_script_memory_session_uses_conversation_root_not_sidebar_titles() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function codexMemoryConversationRoot"));
+    assert!(script.contains("function codexMemoryConversationMessages"));
+    assert!(script.contains("codexMemoryNodeIsInsideConversation"));
+    assert!(script.contains("[data-app-action-sidebar-thread-id]"));
+    assert!(script.contains("[role=\"navigation\"]"));
+    assert!(script.contains("if (!query) {"));
+    assert!(script.contains("等待真实对话消息后写入盘古记忆"));
+    assert!(!script.contains("document.querySelectorAll('[data-message-author-role=\"user\"], [data-testid=\"conversation-turn\"], main .prose')"));
+    let workspace_start = script
+        .find("function codexMemoryWorkspace()")
+        .expect("memory workspace function exists");
+    let workspace_end = script[workspace_start..]
+        .find("function codexMemoryConversationRoot")
+        .map(|offset| workspace_start + offset)
+        .expect("memory conversation root follows workspace function");
+    let workspace_body = &script[workspace_start..workspace_end];
+    assert!(workspace_body.contains("codex:thread:"));
+    assert!(workspace_body.contains("codex:path:"));
+    assert!(
+        !workspace_body.contains("document.title"),
+        "memory workspace must not use conversation titles such as codex:你好"
+    );
+    assert!(
+        !workspace_body.contains("[data-thread-title]"),
+        "memory workspace must not use sidebar/thread title text"
     );
 }
 
@@ -371,7 +404,7 @@ fn injection_script_unlocks_nested_disabled_plugin_install_buttons() {
 fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"11\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
     assert!(script.contains("if (name === \"openai-bundled\") return \"\""));
     assert!(
         !script.contains(
@@ -385,7 +418,7 @@ fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
 fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"11\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
     assert!(script.contains("isCodexPluginBuildFlavorFilter"));
     assert!(script.contains("source.includes(\"!u(e.marketplaceName)||e.marketplaceName===r\")"));
     assert!(script.contains("source.includes(\"!ne(e.marketplaceName)||e.marketplaceName===n\")"));
@@ -398,7 +431,7 @@ fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
 fn injection_script_expands_api_key_plugin_marketplace_requests() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"11\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
     assert!(script.contains("installPluginMarketplaceRequestPatch"));
     assert!(script.contains("installPluginBuildFlavorFilterPatch"));
     assert!(script.contains("Array.prototype.filter"));
@@ -417,6 +450,9 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     assert!(script.contains("method === \"plugin/list\""));
     assert!(script.contains("delete next.marketplaceKinds"));
     assert!(script.contains("patchPluginMarketplaceResult"));
+    assert!(script.contains("expandVisibleOfficialMarketplacePlugins"));
+    assert!(script.contains("pluginMarketplaceMatchesQuery"));
+    assert!(script.contains("result.plugins.push(plugin)"));
     assert!(script.contains("pluginMarketplaceAliasForName"));
     assert!(script.contains("marketplace.name = alias"));
     assert!(script.contains("restorePluginMarketplaceName"));
@@ -429,6 +465,18 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
             "if (name === \"openai-curated\") return \"claude-codex-pro-openai-curated\""
         )
     );
+    assert!(
+        script.contains(
+            "if (name === \"openai-api-curated\") return \"claude-codex-pro-openai-api-curated\""
+        )
+    );
+    assert!(script.contains("restored === \"openai-api-curated\""));
+    assert!(script.contains("pluginName + \"@\" + restorePluginMarketplaceName"));
+    assert!(script.contains("const tokens = normalizedQuery.split(/\\s+/).filter(Boolean);"));
+    assert!(script.contains("plugin?.interface?.displayName"));
+    assert!(script.contains("plugin?.interface?.longDescription"));
+    assert!(script.contains("...(Array.isArray(plugin?.keywords) ? plugin.keywords : [])"));
+    assert!(script.contains("return tokens.every((token) => haystack.includes(token));"));
     assert!(script.contains(
         "if (name === \"openai-primary-runtime\") return \"claude-codex-pro-openai-primary-runtime\""
     ));

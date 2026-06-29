@@ -2124,7 +2124,21 @@ pub fn open_ponytail_claude_desktop_marketplace_setup()
 
 pub fn repair_claude_desktop_marketplaces()
 -> anyhow::Result<ClaudeDesktopMarketplaceOutcome> {
-    open_ponytail_claude_desktop_marketplace_setup()
+    let status = load_claude_desktop_marketplace_status();
+    if !status.supported {
+        anyhow::bail!("{}", status.message);
+    }
+    let threep_paths = claude_desktop_threep_paths();
+    for threep in &threep_paths {
+        ensure_claude_desktop_marketplaces_config(&threep.config_path)?;
+    }
+    let next = load_claude_desktop_marketplace_status();
+    Ok(ClaudeDesktopMarketplaceOutcome {
+        repaired: next.repositories.iter().all(|repository| repository.configured),
+        config_path: next.config_path,
+        repositories: next.repositories,
+        message: "已写入 Claude 官方与 Ponytail 插件仓库配置。".to_string(),
+    })
 }
 
 pub fn load_claude_desktop_dev_mode_status() -> ClaudeDesktopDevModeStatus {
@@ -4188,6 +4202,19 @@ mod tests {
         let repositories = claude_desktop_marketplace_repository_statuses(&path);
         assert_eq!(repositories.len(), 2);
         assert!(repositories.iter().all(|repository| repository.configured));
+    }
+
+    #[test]
+    fn claude_desktop_marketplace_repair_writes_config_directly() {
+        let source = include_str!("plugin_hub.rs");
+        let repair = source
+            .split("pub fn repair_claude_desktop_marketplaces()")
+            .nth(1)
+            .and_then(|rest| rest.split("pub fn load_claude_desktop_dev_mode_status").next())
+            .expect("repair_claude_desktop_marketplaces source");
+
+        assert!(repair.contains("ensure_claude_desktop_marketplaces_config"));
+        assert!(!repair.contains("open_ponytail_claude_desktop_marketplace_setup()"));
     }
 
     #[test]
