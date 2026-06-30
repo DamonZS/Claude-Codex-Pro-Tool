@@ -2363,18 +2363,6 @@ function OverviewScreen({
   };
   return (
     <div className="ops-dashboard">
-      <section className="relay-banner">
-        <Network className="h-5 w-5" />
-        <div>
-          <span>官方中转站</span>
-          <strong>拓扑熵减API</strong>
-          <p>ClaudeCodexPro 官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。</p>
-        </div>
-        <Button className="relay-banner-open" onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} variant="outline">
-          <ExternalLink className="h-4 w-4" />
-          打开
-        </Button>
-      </section>
       <div className="ops-matrix">
         <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
         <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />

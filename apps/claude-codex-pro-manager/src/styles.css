@@ -6199,3 +6199,606 @@ body {
     grid-template-columns: minmax(0, 1fr) 28px;
   }
 }
+
+/* Latest manager UI: visual-only layer, no feature or route changes. */
+.ops-shell {
+  color-scheme: dark;
+  grid-template-columns: 96px minmax(0, 1fr);
+  background:
+    linear-gradient(135deg, rgba(124, 140, 255, 0.16) 0, rgba(124, 140, 255, 0) 22%),
+    linear-gradient(215deg, rgba(45, 212, 191, 0.08) 0, rgba(45, 212, 191, 0) 28%),
+    linear-gradient(180deg, #07080d 0%, #0a0c12 44%, #050609 100%);
+  color: #f5f7fb;
+  --ops-canvas: #07080d;
+  --ops-surface-0: #0d0f16;
+  --ops-surface-1: #12151e;
+  --ops-surface-2: #171b27;
+  --ops-surface-3: #202638;
+  --ops-hairline: rgba(148, 163, 184, 0.2);
+  --ops-hairline-strong: rgba(176, 188, 220, 0.36);
+  --ops-primary: #7c8cff;
+  --ops-primary-hover: #a3adff;
+  --ops-primary-soft: rgba(124, 140, 255, 0.16);
+  --ops-cyan: #2dd4bf;
+  --ops-amber: #f7c56b;
+  --ops-danger: #ff6b81;
+  --ops-ink: #f5f7fb;
+  --ops-soft: #d7deea;
+  --ops-muted: #96a1b5;
+  --ops-faint: #687286;
+  --ops-radius: 8px;
+}
+
+.ops-workspace {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 280px);
+  background-size: 42px 42px, 42px 42px, auto;
+}
+
+.ops-rail {
+  min-height: 0;
+  border-right: 1px solid var(--ops-hairline);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.012) 38%, transparent),
+    rgba(7, 9, 14, 0.96);
+  padding: 14px 10px;
+}
+
+.ops-rail nav {
+  min-height: 0;
+  overflow-y: auto;
+  gap: 8px;
+  padding: 2px 0 12px;
+}
+
+.ops-brand {
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(124, 140, 255, 0.4);
+  border-radius: var(--ops-radius);
+  background:
+    linear-gradient(135deg, rgba(124, 140, 255, 0.32), rgba(45, 212, 191, 0.1)),
+    #111521;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.ops-rail nav button {
+  min-height: 58px;
+  border-radius: var(--ops-radius);
+  color: #9ba6ba;
+  padding: 8px 4px;
+}
+
+.ops-rail nav button:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.055);
+  color: #f5f7fb;
+}
+
+.ops-rail nav button.active {
+  border-color: rgba(163, 173, 255, 0.78);
+  background:
+    linear-gradient(180deg, rgba(124, 140, 255, 0.26), rgba(124, 140, 255, 0.11)),
+    rgba(18, 22, 34, 0.98);
+  color: #ffffff;
+  box-shadow:
+    inset 3px 0 0 #a3adff,
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.ops-rail nav span {
+  max-width: 68px;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.ops-topbar {
+  min-height: 80px;
+  border-bottom: 1px solid var(--ops-hairline);
+  background: rgba(8, 10, 16, 0.84);
+  padding: 14px 20px;
+  backdrop-filter: blur(22px);
+}
+
+.ops-topbar h1 {
+  color: var(--ops-ink);
+  font-size: 22px;
+  font-weight: 760;
+  line-height: 1.15;
+}
+
+.ops-topbar p {
+  color: var(--ops-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ops-commandbar {
+  gap: 6px;
+  border: 1px solid var(--ops-hairline);
+  border-radius: var(--ops-radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 80%),
+    rgba(16, 19, 29, 0.94);
+  padding: 6px;
+}
+
+.ops-commandbar > button,
+.action-row button,
+.toolbar button,
+.supplier-toolbar button,
+.supplier-editor-toolbar button,
+.filter-row button {
+  min-height: 34px;
+  border-radius: 7px;
+  font-weight: 680;
+}
+
+.ops-commandbar > button,
+.ops-shell button[class*="bg-secondary"],
+.action-row button[class*="border"],
+.toolbar button[class*="border"],
+.supplier-toolbar button[class*="border"],
+.supplier-editor-toolbar button[class*="border"],
+.filter-row button {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+  color: #dce4f2;
+}
+
+.ops-commandbar > button:not(:disabled):hover,
+.ops-shell button[class*="bg-secondary"]:not(:disabled):hover,
+.action-row button[class*="border"]:not(:disabled):hover,
+.toolbar button[class*="border"]:not(:disabled):hover,
+.supplier-toolbar button[class*="border"]:not(:disabled):hover,
+.supplier-editor-toolbar button[class*="border"]:not(:disabled):hover,
+.filter-row button:not(:disabled):hover {
+  border-color: rgba(163, 173, 255, 0.68);
+  background: rgba(124, 140, 255, 0.15);
+  color: #ffffff;
+}
+
+.ops-commandbar > .ops-primary-command:not(:disabled),
+.ops-shell button[class*="bg-primary"] {
+  border-color: rgba(163, 173, 255, 0.78);
+  background: linear-gradient(180deg, #9aa6ff, #6f7dff);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 12px 30px rgba(124, 140, 255, 0.22);
+}
+
+.ops-screen {
+  padding: 20px 20px 36px;
+}
+
+.ops-dashboard,
+.stack,
+.detail-stack,
+.ops-tools-hero,
+.ops-tools-column,
+.ops-panel-body {
+  gap: 14px;
+}
+
+.ops-matrix {
+  gap: 12px;
+}
+
+.ops-overview-grid,
+.ops-columns,
+.ops-two-column,
+.ops-tools-command-deck,
+.ops-tools-columns,
+.plugin-layout,
+.supplier-layout,
+.supplier-editor-layout,
+.repository-status-grid {
+  gap: 16px;
+}
+
+.ops-panel,
+.status-tile,
+.status-action-tile,
+.market-card,
+.plugin-list > button,
+.plugin-hub-row,
+.script-market-card,
+.session-row,
+.codex-session-row,
+.relay-profile-card,
+.supplier-card,
+.supplier-editor-card,
+.supplier-env-card,
+.context-manager-card,
+.context-entry-row,
+.memory-assist-row,
+.ops-setting-card,
+.action-button,
+.source-pill,
+.empty-state,
+.info-row,
+.ops-status-row {
+  border-color: var(--ops-hairline);
+  border-radius: var(--ops-radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012) 78px),
+    rgba(18, 21, 30, 0.94);
+  color: var(--ops-ink);
+  box-shadow: none;
+}
+
+.ops-panel {
+  overflow: hidden;
+}
+
+.ops-panel > header {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+  padding-bottom: 12px;
+}
+
+.ops-panel h2,
+.context-manager-head h2,
+.supplier-page-heading h2 {
+  color: var(--ops-ink);
+  font-size: 16px;
+  font-weight: 760;
+}
+
+.ops-panel header p,
+.ops-panel p,
+.ops-panel span,
+.context-manager-head p,
+.context-manager-note,
+.supplier-page-heading p {
+  color: var(--ops-muted);
+}
+
+.status-tile {
+  min-height: 118px;
+  border-left-width: 1px;
+  padding: 16px;
+}
+
+.status-tile.ok,
+.source-pill.ok,
+.plugin-status.installed,
+.status-chip.installed,
+.ops-status-row.ok {
+  border-color: rgba(45, 212, 191, 0.38);
+}
+
+.status-tile.warn,
+.plugin-status.needsReview,
+.status-chip.needsReview,
+.ops-status-row.warn {
+  border-color: rgba(247, 197, 107, 0.36);
+}
+
+.status-tile svg,
+.action-button svg,
+.source-pill svg,
+.supplier-env-card svg {
+  color: #bcc5ff;
+}
+
+.status-tile span {
+  color: var(--ops-muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.status-tile strong {
+  color: var(--ops-ink);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.status-segment-list {
+  gap: 6px;
+  transform: none;
+}
+
+.status-segment,
+.status-chip,
+.plugin-status,
+.supplier-badge,
+.supplier-env-chip,
+.script-market-tag,
+.tag-row span,
+.plugin-tags span {
+  min-height: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #cad4e6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-segment.ok,
+.status-chip.installed,
+.plugin-status.installed {
+  border-color: rgba(45, 212, 191, 0.34);
+  background: rgba(45, 212, 191, 0.12);
+  color: #90f5e8;
+}
+
+.status-segment.warn,
+.status-chip.needsReview,
+.plugin-status.needsReview {
+  border-color: rgba(247, 197, 107, 0.36);
+  background: rgba(247, 197, 107, 0.12);
+  color: #ffe1a0;
+}
+
+.status-segment.muted {
+  border-color: rgba(148, 163, 184, 0.18);
+  background: rgba(148, 163, 184, 0.08);
+  color: #aab4c5;
+}
+
+.ops-status-row {
+  grid-template-columns: minmax(120px, 0.36fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px 10px 34px;
+}
+
+.ops-status-row strong,
+.info-row strong,
+.metric-list strong,
+.table-row strong,
+.plugin-list strong,
+.plugin-hub-row strong,
+.session-row strong,
+.script-market-title strong,
+.supplier-card-main strong,
+.context-entry-row strong,
+.memory-assist-list > strong,
+.memory-assist-row p {
+  color: var(--ops-ink);
+}
+
+.ops-status-row span,
+.info-row span,
+.metric-list span,
+.table-row span,
+.plugin-list p,
+.plugin-hub-row p,
+.detail-stack > p,
+.market-card p,
+.source-pill span,
+.session-row span,
+.session-main small,
+.session-meta span,
+.script-market-description,
+.supplier-card-main span,
+.supplier-card-main small,
+.context-entry-row span,
+.memory-assist-row span,
+.memory-assist-row em {
+  color: var(--ops-muted);
+}
+
+.plugin-list,
+.plugin-hub-list,
+.session-list,
+.memory-assist-list,
+.context-entry-list,
+.supplier-card-list {
+  gap: 10px;
+}
+
+.plugin-list > button:hover,
+.plugin-list > button.active,
+.plugin-hub-row:hover,
+.plugin-hub-row.active,
+.session-row:hover,
+.script-market-card:hover,
+.supplier-card.selected,
+.supplier-card:hover,
+.context-entry-row:hover,
+.memory-assist-row:hover {
+  border-color: rgba(163, 173, 255, 0.62);
+  background:
+    linear-gradient(180deg, rgba(124, 140, 255, 0.13), rgba(124, 140, 255, 0.045)),
+    rgba(23, 27, 39, 0.97);
+}
+
+.ops-form-field input,
+.ops-textarea,
+.field-select,
+.select-input,
+.relay-file-textarea,
+.context-editor-textarea,
+.context-toml-editor,
+.launch-args-input,
+.log-view,
+.log-lines,
+.preset-search-input {
+  border-color: rgba(148, 163, 184, 0.24);
+  border-radius: var(--ops-radius);
+  background: rgba(8, 10, 16, 0.76);
+  color: var(--ops-ink);
+}
+
+.ops-form-field input:focus,
+.ops-textarea:focus,
+.field-select:focus-visible,
+.select-input:focus-visible,
+.relay-file-textarea:focus-visible,
+.context-editor-textarea:focus-visible,
+.context-toml-editor:focus-visible,
+.launch-args-input:focus-visible,
+.preset-search-input:focus {
+  border-color: rgba(163, 173, 255, 0.74);
+  outline: 2px solid rgba(124, 140, 255, 0.24);
+  outline-offset: 1px;
+}
+
+.toggle-switch {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 26px;
+  min-width: 48px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #303543, #232833);
+  padding: 0;
+  overflow: hidden;
+}
+
+.toggle-switch.checked {
+  border-color: rgba(163, 173, 255, 0.82);
+  background: linear-gradient(180deg, #96a2ff, #6f7dff);
+}
+
+.toggle-switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
+  transform: translate(0, -50%);
+  transition: transform 140ms ease;
+}
+
+.toggle-switch.checked .toggle-switch-thumb {
+  margin-left: 0;
+  transform: translate(22px, -50%);
+}
+
+.context-entry-actions {
+  grid-template-columns: 48px 32px 32px;
+  width: 124px;
+  justify-items: center;
+}
+
+.context-entry-actions .toggle-switch {
+  align-self: center;
+  justify-self: center;
+}
+
+.context-entry-icon-button {
+  border-radius: 7px;
+  color: #c7d0df;
+}
+
+.context-entry-icon-button:hover:not(:disabled) {
+  background: rgba(124, 140, 255, 0.18);
+  color: #ffffff;
+}
+
+.supplier-card {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  min-height: 64px;
+  padding: 12px;
+}
+
+.supplier-card-actions {
+  align-items: center;
+}
+
+.supplier-card.drag-over,
+.supplier-card.selected,
+.supplier-aggregate-grid button.selected {
+  border-color: rgba(163, 173, 255, 0.74);
+  background: rgba(124, 140, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.18);
+}
+
+.supplier-avatar {
+  background: rgba(124, 140, 255, 0.16);
+  color: #dce2ff;
+}
+
+.memory-activity-wave span {
+  background: #9aa6ff;
+}
+
+.toast-card {
+  border-color: rgba(148, 163, 184, 0.26);
+  border-radius: var(--ops-radius);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 80px),
+    rgba(16, 19, 29, 0.98);
+  color: var(--ops-ink);
+}
+
+@media (max-width: 1040px) {
+  .ops-shell {
+    grid-template-columns: 88px minmax(0, 1fr);
+  }
+
+  .ops-matrix,
+  .ops-overview-grid,
+  .ops-columns,
+  .ops-tools-command-deck,
+  .ops-tools-columns,
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plugin-layout,
+  .supplier-layout,
+  .supplier-editor-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .ops-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .ops-rail {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: 1fr;
+    height: auto;
+    padding: 8px;
+  }
+
+  .ops-rail nav {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0;
+  }
+
+  .ops-rail nav button {
+    min-width: 58px;
+  }
+
+  .ops-topbar,
+  .ops-screen {
+    padding-inline: 12px;
+  }
+
+  .ops-matrix,
+  .ops-overview-grid,
+  .ops-columns,
+  .ops-tools-command-deck,
+  .ops-tools-columns,
+  .card-grid,
+  .repository-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .context-entry-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .context-entry-actions {
+    justify-self: start;
+  }
+}

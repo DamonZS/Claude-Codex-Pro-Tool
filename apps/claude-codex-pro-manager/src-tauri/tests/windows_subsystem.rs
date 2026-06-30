@@ -624,6 +624,17 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("ops-commandbar"));
     assert!(app_tsx.contains("id: \"supplier\""));
     assert!(app_tsx.contains("label: \"供应商\""));
+    let route_source = app_tsx
+        .split("const routes")
+        .nth(1)
+        .and_then(|rest| rest.split("function isRoute").next())
+        .expect("manager route source");
+    assert!(route_source.contains("id: \"maintenance\""));
+    assert!(route_source.contains("label: \"维护\""));
+    assert!(route_source.contains("id: \"about\""));
+    assert!(route_source.contains("label: \"关于\""));
+    assert!(!route_source.contains("label: \"脚本\""));
+    assert!(!route_source.contains("label: \"日志\""));
     assert!(app_tsx.contains("function SupplierScreen"));
     assert!(app_tsx.contains("switch_relay_profile"));
     assert!(app_tsx.contains("preview_claude_desktop_provider"));
@@ -634,13 +645,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::apply_claude_desktop_provider"));
     assert!(lib_rs.contains("commands::restore_claude_desktop_provider_official"));
     assert!(!app_tsx.contains("const actions = useMemo("));
-    assert!(app_tsx.contains("relay-banner"));
-    assert!(app_tsx.contains("relay-banner-open"));
     assert!(!app_tsx.contains("route !== \"overview\""));
     assert!(!app_tsx.contains("<span>后端链接</span>"));
     assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
-    assert!(app_tsx.contains("https://api.toporeduce.cn"));
-    assert!(app_tsx.contains("打开"));
     assert!(app_tsx.contains("Codex 状态"));
     assert!(app_tsx.contains("Claude 状态"));
     assert!(app_tsx.contains("盘古记忆"));
@@ -690,6 +697,10 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .nth(1)
         .and_then(|rest| rest.split("function SupplierScreen").next())
         .expect("overview screen source");
+    assert!(!overview_screen.contains("relay-banner"));
+    assert!(!overview_screen.contains("官方中转站"));
+    assert!(!overview_screen.contains("拓扑熵减API"));
+    assert!(!overview_screen.contains("https://api.toporeduce.cn"));
     assert!(!overview_screen.contains("Codex 诊断"));
     assert!(!overview_screen.contains("Claude 诊断"));
     assert!(!overview_screen.contains("installKind ?? \"unknown\""));
@@ -777,8 +788,6 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains("overflow-y: auto;"));
     assert!(styles.contains("padding-bottom: 32px;"));
     assert!(styles.contains(".ops-commandbar"));
-    assert!(styles.contains(".relay-banner"));
-    assert!(styles.contains(".relay-banner-open"));
     assert!(styles.contains(".status-tile"));
     assert!(styles.contains(".status-segment-list"));
     assert!(styles.contains(".status-segment.ok"));

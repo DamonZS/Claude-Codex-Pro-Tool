@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Codex Pro 未来空间 UI V2 评审原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --void: #0b0c0d;
+      --deck: #121417;
+      --deck-2: #191d20;
+      --ink: #f4fbff;
+      --soft: #d9e6ee;
+      --muted: #a9b8c1;
+      --dim: #70808b;
+      --line: rgba(229, 247, 255, 0.2);
+      --line-strong: rgba(229, 247, 255, 0.36);
+      --glass: rgba(238, 248, 255, 0.1);
+      --glass-strong: rgba(238, 248, 255, 0.16);
+      --cyan: #25e7ff;
+      --mint: #87ffb2;
+      --amber: #ffc85c;
+      --coral: #ff607a;
+      --violet: #b69aff;
+      --shadow: rgba(0, 0, 0, 0.34);
+      --radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+      letter-spacing: 0;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--void);
+      color: var(--ink);
+      font-family:
+        "Microsoft YaHei UI",
+        "Segoe UI Variable",
+        "PingFang SC",
+        system-ui,
+        sans-serif;
+    }
+
+    body {
+      overflow-x: hidden;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    .app {
+      position: relative;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        linear-gradient(120deg, rgba(255, 96, 122, 0.1), transparent 28%),
+        linear-gradient(242deg, rgba(37, 231, 255, 0.12), transparent 30%),
+        linear-gradient(180deg, #17191d 0%, #101215 45%, #070809 100%);
+      isolation: isolate;
+    }
+
+    .app::before {
+      content: "";
+      position: fixed;
+      left: -8vw;
+      right: -8vw;
+      bottom: -24vh;
+      height: 66vh;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 72px 72px;
+      border-top: 1px solid rgba(135, 255, 178, 0.18);
+      box-shadow: 0 -32px 110px rgba(37, 231, 255, 0.08);
+      transform: perspective(900px) rotateX(67deg);
+      transform-origin: bottom center;
+      opacity: 0.58;
+      z-index: -3;
+    }
+
+    .app::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(115deg, transparent 0 82px, rgba(255, 255, 255, 0.035) 83px, transparent 84px),
+        linear-gradient(90deg, transparent 0 13%, rgba(255, 200, 92, 0.1) 18%, transparent 24% 74%, rgba(37, 231, 255, 0.11) 80%, transparent 87%);
+      opacity: 0.68;
+      z-index: -2;
+    }
+
+    .scene-line {
+      position: fixed;
+      pointer-events: none;
+      border: 1px solid rgba(229, 247, 255, 0.12);
+      transform-style: preserve-3d;
+      z-index: -1;
+    }
+
+    .scene-line.one {
+      left: 8vw;
+      top: 10vh;
+      width: 34vw;
+      height: 20vh;
+      transform: skewX(-18deg) rotate(-4deg);
+      border-right-color: rgba(37, 231, 255, 0.34);
+    }
+
+    .scene-line.two {
+      right: 5vw;
+      top: 18vh;
+      width: 28vw;
+      height: 34vh;
+      transform: skewX(14deg) rotate(6deg);
+      border-left-color: rgba(255, 200, 92, 0.34);
+    }
+
+    .scene-line.three {
+      left: 20vw;
+      bottom: 14vh;
+      width: 54vw;
+      height: 18vh;
+      transform: perspective(700px) rotateX(58deg);
+      border-top-color: rgba(135, 255, 178, 0.28);
+    }
+
+    .shell {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 254px minmax(0, 1fr);
+      gap: 18px;
+      width: min(1680px, calc(100vw - 32px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 18px 0;
+    }
+
+    .rail,
+    .topbar,
+    .panel,
+    .card,
+    .list-row,
+    .mini-card,
+    .notice {
+      border: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.055)),
+        rgba(14, 17, 20, 0.64);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 22px 70px var(--shadow);
+      backdrop-filter: blur(24px) saturate(1.18);
+    }
+
+    .rail {
+      position: sticky;
+      top: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 16px;
+      height: calc(100vh - 36px);
+      padding: 16px;
+      border-radius: 24px;
+      transform: translateZ(28px);
+    }
+
+    .brand {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid rgba(229, 247, 255, 0.17);
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(37, 231, 255, 0.16), rgba(255, 200, 92, 0.1)),
+        rgba(255, 255, 255, 0.045);
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 15px;
+      background:
+        linear-gradient(135deg, #25e7ff, #87ffb2 52%, #ffc85c);
+      color: #060809;
+      font-size: 14px;
+      font-weight: 950;
+      box-shadow: 0 18px 40px rgba(37, 231, 255, 0.22);
+    }
+
+    .brand h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .brand p,
+    .rail-foot {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .nav {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .nav button {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 52px;
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 16px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 9px 10px;
+      text-align: left;
+      transition: 160ms ease;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      border-color: rgba(229, 247, 255, 0.22);
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--ink);
+      transform: translateX(2px);
+    }
+
+    .nav button.active {
+      border-color: rgba(37, 231, 255, 0.38);
+      background:
+        linear-gradient(90deg, rgba(37, 231, 255, 0.18), rgba(255, 255, 255, 0.07)),
+        rgba(255, 255, 255, 0.04);
+      box-shadow: inset 3px 0 0 var(--cyan);
+    }
+
+    .nav-icon {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid currentColor;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 900;
+      opacity: 0.9;
+    }
+
+    .nav b {
+      display: block;
+      color: currentColor;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .nav span {
+      display: block;
+      margin-top: 2px;
+      color: var(--dim);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 18px;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      min-height: 104px;
+      margin-bottom: 18px;
+      padding: 18px 20px;
+      border-radius: 24px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--mint);
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 24px;
+      height: 2px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--mint), var(--cyan));
+      box-shadow: 0 0 16px rgba(37, 231, 255, 0.42);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      margin-top: 8px;
+      color: var(--ink);
+      font-size: clamp(26px, 3vw, 40px);
+      line-height: 1.08;
+      font-weight: 950;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 9px;
+      max-width: 430px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 38px;
+      border: 1px solid rgba(229, 247, 255, 0.22);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.075);
+      color: #edf8ff;
+      cursor: pointer;
+      padding: 9px 13px;
+      font-size: 13px;
+      font-weight: 850;
+      text-decoration: none;
+      transition: 160ms ease;
+      white-space: nowrap;
+    }
+
+    .btn::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 3px;
+      background: currentColor;
+      opacity: 0.7;
+    }
+
+    .btn:hover {
+      border-color: rgba(37, 231, 255, 0.48);
+      background: rgba(37, 231, 255, 0.1);
+      transform: translateY(-1px);
+    }
+
+    .btn.primary {
+      border-color: rgba(135, 255, 178, 0.54);
+      background: linear-gradient(135deg, #25e7ff, #87ffb2);
+      color: #07100d;
+      box-shadow: 0 16px 42px rgba(37, 231, 255, 0.22);
+    }
+
+    .stage {
+      position: relative;
+      min-height: calc(100vh - 158px);
+      padding-bottom: 26px;
+    }
+
+    .stage::before {
+      content: "";
+      position: absolute;
+      inset: 18px 18px auto;
+      height: 180px;
+      pointer-events: none;
+      border: 1px solid rgba(255, 200, 92, 0.16);
+      border-bottom: 0;
+      border-radius: 30px 30px 0 0;
+      transform: translateY(24px) skewX(-5deg);
+      opacity: 0.6;
+    }
+
+    .page {
+      position: relative;
+      display: none;
+      gap: 16px;
+      animation: rise 260ms ease both;
+    }
+
+    .page.active {
+      display: grid;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .cols-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .wide-2 {
+      grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+    }
+
+    .wide-3 {
+      grid-template-columns: minmax(270px, 0.8fr) minmax(0, 1.2fr) minmax(300px, 0.85fr);
+    }
+
+    .panel,
+    .card,
+    .mini-card {
+      border-radius: var(--radius);
+    }
+
+    .panel {
+      position: relative;
+      min-width: 0;
+      padding: 16px;
+      transform: translateZ(22px);
+    }
+
+    .panel.lift {
+      border-color: var(--line-strong);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.07)),
+        rgba(18, 22, 26, 0.7);
+      transform: translateZ(46px);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(229, 247, 255, 0.13);
+    }
+
+    .panel h2 {
+      color: var(--ink);
+      font-size: 16px;
+      line-height: 1.25;
+      font-weight: 950;
+    }
+
+    .panel .desc {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .tag,
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid rgba(229, 247, 255, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #e3f1f8;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .chip.ok {
+      border-color: rgba(135, 255, 178, 0.38);
+      background: rgba(135, 255, 178, 0.1);
+      color: #caffdd;
+    }
+
+    .chip.warn {
+      border-color: rgba(255, 200, 92, 0.38);
+      background: rgba(255, 200, 92, 0.12);
+      color: #ffe4a4;
+    }
+
+    .chip.hot {
+      border-color: rgba(255, 96, 122, 0.4);
+      background: rgba(255, 96, 122, 0.13);
+      color: #ffc8d1;
+    }
+
+    .kpi-card {
+      position: relative;
+      min-height: 126px;
+      overflow: hidden;
+      padding: 15px;
+      border-radius: 18px;
+      border: 1px solid rgba(229, 247, 255, 0.18);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.045)),
+        rgba(13, 16, 18, 0.66);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.16),
+        0 18px 52px rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(20px);
+    }
+
+    .kpi-card::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--cyan), transparent 45%, var(--amber));
+      opacity: 0.75;
+    }
+
+    .kpi-card small,
+    .list-row small,
+    .metric small {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .kpi-card strong {
+      display: block;
+      margin-top: 9px;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1.18;
+      font-weight: 950;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .rows {
+      display: grid;
+      gap: 9px;
+    }
+
+    .list-row {
+      display: grid;
+      grid-template-columns: minmax(138px, 0.34fr) minmax(0, 1fr) max-content;
+      gap: 12px;
+      align-items: center;
+      min-height: 54px;
+      padding: 12px 13px;
+      border-radius: 15px;
+    }
+
+    .list-row b {
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .list-row span {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      flex: 0 0 auto;
+      width: 46px;
+      height: 26px;
+      margin: 0;
+      border: 1px solid rgba(229, 247, 255, 0.25);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      cursor: pointer;
+      padding: 2px;
+      line-height: 0;
+      vertical-align: middle;
+      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.22);
+    }
+
+    .toggle span {
+      display: block;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: #ffffff;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.42);
+      transform: translateX(0);
+      transition: transform 160ms ease;
+    }
+
+    .toggle.is-on {
+      border-color: rgba(135, 255, 178, 0.56);
+      background: linear-gradient(135deg, rgba(37, 231, 255, 0.9), rgba(135, 255, 178, 0.9));
+    }
+
+    .toggle.is-on span {
+      transform: translateX(20px);
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-card {
+      min-height: 112px;
+      padding: 13px;
+    }
+
+    .mini-card b {
+      display: block;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .mini-card p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 11px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      border: 1px solid rgba(229, 247, 255, 0.2);
+      border-radius: 13px;
+      background: rgba(5, 7, 8, 0.46);
+      color: var(--ink);
+      outline: none;
+      padding: 10px 11px;
+    }
+
+    .field textarea {
+      min-height: 92px;
+      resize: vertical;
+    }
+
+    .command-map {
+      position: relative;
+      min-height: 340px;
+      overflow: hidden;
+      border-radius: 24px;
+      border: 1px solid rgba(229, 247, 255, 0.16);
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035)),
+        linear-gradient(90deg, rgba(37, 231, 255, 0.12), transparent 44%, rgba(255, 200, 92, 0.1)),
+        rgba(9, 11, 13, 0.45);
+    }
+
+    .command-map::before {
+      content: "";
+      position: absolute;
+      left: 12%;
+      right: 12%;
+      top: 50%;
+      height: 42%;
+      border: 1px solid rgba(37, 231, 255, 0.28);
+      border-radius: 50%;
+      transform: translateY(-50%) perspective(640px) rotateX(62deg);
+      box-shadow:
+        inset 0 0 36px rgba(37, 231, 255, 0.12),
+        0 0 44px rgba(37, 231, 255, 0.08);
+    }
+
+    .command-core {
+      position: absolute;
+      left: 50%;
+      top: 48%;
+      display: grid;
+      place-items: center;
+      width: 136px;
+      height: 136px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 28px;
+      background:
+        linear-gradient(135deg, rgba(37, 231, 255, 0.34), rgba(135, 255, 178, 0.18), rgba(255, 200, 92, 0.16)),
+        rgba(255, 255, 255, 0.09);
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 950;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.38);
+      transform: translate(-50%, -50%) rotateX(56deg) rotateZ(45deg);
+    }
+
+    .node {
+      position: absolute;
+      width: 132px;
+      border: 1px solid rgba(229, 247, 255, 0.18);
+      border-radius: 16px;
+      background: rgba(14, 17, 20, 0.7);
+      padding: 10px;
+      backdrop-filter: blur(18px);
+    }
+
+    .node b {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .node span {
+      display: block;
+      margin-top: 4px;
+      color: var(--mint);
+      font-size: 11px;
+      font-weight: 850;
+    }
+
+    .node.n1 { left: 7%; top: 16%; }
+    .node.n2 { right: 7%; top: 18%; }
+    .node.n3 { left: 12%; bottom: 18%; }
+    .node.n4 { right: 12%; bottom: 17%; }
+
+    .session-layout {
+      display: grid;
+      grid-template-columns: 310px minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .session-item {
+      border: 1px solid rgba(229, 247, 255, 0.16);
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.065);
+      padding: 12px;
+    }
+
+    .session-item.active {
+      border-color: rgba(37, 231, 255, 0.4);
+      background: rgba(37, 231, 255, 0.1);
+      box-shadow: inset 3px 0 0 var(--cyan);
+    }
+
+    .session-item b {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.3;
+    }
+
+    .session-item span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      padding-left: 10px;
+      border-left: 1px solid rgba(37, 231, 255, 0.28);
+    }
+
+    .timeline .list-row {
+      grid-template-columns: minmax(110px, 0.26fr) minmax(0, 1fr) max-content;
+    }
+
+    .notice {
+      position: fixed;
+      right: 20px;
+      bottom: 18px;
+      z-index: 20;
+      max-width: 380px;
+      border-color: rgba(255, 200, 92, 0.32);
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(255, 200, 92, 0.15), rgba(255, 255, 255, 0.06)),
+        rgba(15, 13, 10, 0.76);
+      color: #ffe4aa;
+      padding: 12px 14px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1220px) {
+      .cols-4,
+      .cols-3,
+      .wide-2,
+      .wide-3 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .quick-actions {
+        justify-content: flex-start;
+        max-width: none;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .shell {
+        grid-template-columns: 1fr;
+        width: min(100% - 20px, 760px);
+        padding: 10px 0;
+      }
+
+      .rail {
+        position: relative;
+        top: 0;
+        height: auto;
+      }
+
+      .nav {
+        display: flex;
+        overflow-x: auto;
+      }
+
+      .nav button {
+        min-width: 138px;
+      }
+
+      .cols-4,
+      .cols-3,
+      .cols-2,
+      .wide-2,
+      .wide-3,
+      .field-grid,
+      .mini-grid,
+      .session-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .list-row {
+        grid-template-columns: 1fr;
+      }
+
+      .notice {
+        position: static;
+        margin: 0 auto 12px;
+        width: min(100% - 20px, 760px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="scene-line one"></div>
+    <div class="scene-line two"></div>
+    <div class="scene-line three"></div>
+    <div class="shell">
+      <aside class="rail">
+        <section class="brand">
+          <div class="brand-mark">CCP</div>
+          <div>
+            <h2>Claude Codex Pro 管理工具</h2>
+            <p>未来空间 UI V2 评审稿</p>
+          </div>
+        </section>
+        <nav class="nav" id="nav"></nav>
+        <p class="rail-foot">静态预览，不连接真实 Codex、Claude、插件仓库或本地配置。</p>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">智能管理工具空间工作台</div>
+            <h1 id="page-title">概览</h1>
+            <p class="subtitle" id="page-subtitle">运行状态、启动动作和关键修复入口。</p>
+          </div>
+          <div class="quick-actions">
+            <button class="btn" type="button">启动 Codex</button>
+            <button class="btn" type="button">启动 Claude</button>
+            <button class="btn primary" type="button">一键汉化</button>
+          </div>
+        </header>
+        <section class="stage" id="stage"></section>
+      </main>
+    </div>
+    <div class="notice">评审原型：只用于确认视觉、布局和页面覆盖；你确认后才会进入真实前端应用阶段。</div>
+  </div>
+
+  <script>
+    const routes = [
+      ["overview", "概览", "运行状态、启动动作和关键修复入口。", "OV"],
+      ["supplier", "供应商", "Codex API、中转和官方混合配置。", "PV"],
+      ["tools", "工具与插件", "Codex / Claude 插件仓库、MCP、Skills 与插件状态。", "TL"],
+      ["sessions", "会话管理", "历史会话、盘古记忆与会话修复。", "SS"],
+      ["maintenance", "维护", "入口、快捷方式、后端与 Watcher 维护。", "MT"],
+      ["settings", "设置", "全局开关、配置摘要和运行日志。", "ST"],
+      ["about", "关于", "版本信息、项目地址和 Release 更新。", "AB"]
+    ];
+
+    const state = {
+      route: routeFromHash()
+    };
+
+    const nav = document.getElementById("nav");
+    const stage = document.getElementById("stage");
+    const pageTitle = document.getElementById("page-title");
+    const pageSubtitle = document.getElementById("page-subtitle");
+
+    function routeFromHash() {
+      const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+      return routes.some(([id]) => id === hash) ? hash : "overview";
+    }
+
+    function chip(label, tone = "") {
+      return `<span class="chip ${tone}">${label}</span>`;
+    }
+
+    function button(label, primary = false) {
+      return `<button class="btn ${primary ? "primary" : ""}" type="button">${label}</button>`;
+    }
+
+    function toggle(on = true) {
+      return `<button class="toggle ${on ? "is-on" : ""}" type="button"><span></span></button>`;
+    }
+
+    function kpi(label, value, chips = []) {
+      return `<article class="kpi-card"><small>${label}</small><strong>${value}</strong><div class="chips">${chips.map(([text, tone]) => chip(text, tone)).join("")}</div></article>`;
+    }
+
+    function row(label, value, tone = "ok") {
+      const status = tone === "ok" ? "已就绪" : tone === "warn" ? "待确认" : tone === "hot" ? "需关注" : "离线";
+      return `<div class="list-row"><b>${label}</b><span>${value}</span>${chip(status, tone)}</div>`;
+    }
+
+    function panel(title, desc, body, lift = false) {
+      return `<section class="panel ${lift ? "lift" : ""}"><div class="panel-head"><div><h2>${title}</h2><p class="desc">${desc}</p></div></div>${body}</section>`;
+    }
+
+    function mini(title, desc, tone = "ok") {
+      return `<article class="mini-card"><b>${title}</b><p>${desc}</p><div class="chips">${chip(tone === "ok" ? "可用" : tone === "warn" ? "待审查" : "需处理", tone)}</div></article>`;
+    }
+
+    const pages = {
+      overview: () => `
+        <div class="page active">
+          <div class="grid cols-4">
+            ${kpi("Codex 前端", "注入在线", [["绿色标识", "ok"], ["后端连接", "ok"]])}
+            ${kpi("Claude 状态", "本地可启动", [["中文资源", "ok"], ["CDP 诊断", "warn"]])}
+            ${kpi("盘古记忆", "对话监控中", [["SQLite", "ok"], ["待确认 0", ""]])}
+            ${kpi("插件仓库", "官方仓库已注册", [["Codex", "ok"], ["Claude", "ok"]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("空间状态舱", "把 Codex、Claude、插件和记忆放在同一个控制场景里，但信息面板保持前景优先。", `
+              <div class="command-map">
+                <div class="command-core">Control</div>
+                <div class="node n1"><b>Codex</b><span>前端在线</span></div>
+                <div class="node n2"><b>Claude</b><span>可启动</span></div>
+                <div class="node n3"><b>插件仓库</b><span>已注册</span></div>
+                <div class="node n4"><b>盘古记忆</b><span>监控中</span></div>
+              </div>
+            `, true)}
+            ${panel("修复与诊断", "常用修复动作放在稳定列表中，避免按钮散落。", `
+              <div class="rows">
+                ${row("刷新概览", "重新读取 Codex、Claude、插件和记忆状态")}
+                ${row("修复前端连接", "重连 Codex CDP、helper 和注入桥")}
+                ${row("刷新 Claude 第三方配置", "读取开发模式配置、组织插件和 MCP 状态", "warn")}
+                ${row("盘古记忆自检", "检查数据库、监听状态和待确认队列")}
+              </div>
+              <div class="actions" style="margin-top:14px">${button("刷新状态", true)}${button("查看日志")}${button("复制诊断")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      supplier: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${kpi("当前 Profile", "官方混合 API", [["Responses", "ok"], ["Provider Sync", "ok"]])}
+            ${kpi("密钥策略", "隐藏保存", [["不写日志", "ok"], ["可测试", "ok"]])}
+            ${kpi("上下文窗口", "128K", [["自动压缩", "ok"], ["User-Agent", ""]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("供应商轨道", "供应商卡片可拖拽、测试、编辑和切换；这里只展示评审布局。", `
+              <div class="rows">
+                ${row("官方登录", "保留 Codex 官方登录，不覆盖 auth.json")}
+                ${row("拓扑熵减 API", "Responses / GPT-5.5 / Claude Opus / 自定义 Base URL", "warn")}
+                ${row("本地兼容网关", "Chat Completions / 本地代理 / 模型映射")}
+                ${row("聚合供应商", "多 Profile 回退，保留独立上下文配置")}
+              </div>
+            `, true)}
+            ${panel("供应商编辑舱", "编辑区域保持两列结构，长 URL 和模型字段不挤压操作按钮。", `
+              <div class="field-grid">
+                <div class="field"><label>供应商名称</label><input value="拓扑熵减 API" /></div>
+                <div class="field"><label>Wire API</label><select><option>Responses</option><option>Chat Completions</option></select></div>
+                <div class="field"><label>Base URL</label><input value="https://api.example/v1" /></div>
+                <div class="field"><label>默认模型</label><input value="gpt-5.5" /></div>
+                <div class="field"><label>上下文窗口</label><input value="128000" /></div>
+                <div class="field"><label>自动压缩阈值</label><input value="90000" /></div>
+              </div>
+              <div class="actions" style="margin-top:14px">${button("测试连通性")}${button("保存供应商", true)}${button("设为当前")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      tools: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${kpi("Codex 官方仓库", "openai/plugins 已解锁", [["自动注册", "ok"], ["可修复", "ok"]])}
+            ${kpi("Codex 第三方仓库", "2 个已注册", [["awesome-codex", "ok"], ["alternative", "ok"]])}
+            ${kpi("Claude 仓库状态", "开发配置可见", [["MCP", "ok"], ["插件目录", "ok"]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("Codex 工具与插件", "开关采用盘古记忆同款结构，圆球在胶囊上下居中。", `
+              <div class="rows">
+                <div class="list-row"><b>MCP Registry</b><span>GitHub MCP Registry / 已启用</span>${toggle(true)}</div>
+                <div class="list-row"><b>Product Design Skill</b><span>product-design / 设计编排器</span>${toggle(true)}</div>
+                <div class="list-row"><b>OpenAI 官方插件仓库</b><span>openai/plugins / marketplace 已注册</span>${toggle(true)}</div>
+                <div class="list-row"><b>社区插件仓库</b><span>hashgraph-online/awesome-codex-plugins 与 DKeken/codex-skills-alternative</span>${toggle(true)}</div>
+                <div class="list-row"><b>Ponytail Hooks</b><span>待信任 hooks，默认不自动执行</span>${toggle(false)}</div>
+              </div>
+            `, true)}
+            ${panel("Claude 工具与插件", "只展示状态和修复入口，不在应用中展示插件目录安装路径。", `
+              <div class="rows">
+                <div class="list-row"><b>Claude 官方插件</b><span>CLI 市场状态可刷新</span>${toggle(true)}</div>
+                <div class="list-row"><b>Claude MCP</b><span>claude_desktop_config.json 写入前备份</span>${toggle(true)}</div>
+                <div class="list-row"><b>组织插件仓库</b><span>开发模式配置已写入仓库引用</span>${toggle(true)}</div>
+                <div class="list-row"><b>社区 MCP</b><span>默认展示风险，不自动执行脚本</span>${toggle(false)}</div>
+              </div>
+              <div class="actions" style="margin-top:14px">${button("修复 Codex 仓库", true)}${button("修复 Claude 仓库")}${button("刷新状态")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      sessions: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${kpi("Codex 会话", "42 个", [["sqlite", "ok"], ["可导出", "ok"]])}
+            ${kpi("Provider Sync", "历史可见", [["已开启", "ok"]])}
+            ${kpi("记忆记录", "0 条待确认", [["监控中", "ok"], ["长期 0", ""]])}
+          </div>
+          <div class="grid session-layout">
+            ${panel("项目会话", "左侧结构接近 Codex 会话列表，保留项目、时间和标题。", `
+              <div class="session-list">
+                <div class="session-item active"><b>Claude-Codex-Pro-Tool</b><span>修复插件仓库状态 / 12 分钟前</span></div>
+                <div class="session-item"><b>桌面脚本整理</b><span>下载 Product Design Skill / 昨天</span></div>
+                <div class="session-item"><b>global</b><span>盘古记忆长期规则 / 3 天前</span></div>
+                <div class="session-item"><b>release-worktree</b><span>Windows 安装包检查 / 5 天前</span></div>
+              </div>
+            `, true)}
+            ${panel("会话详情与修复", "右侧展示时间线、导出和归属移动，避免把会话管理做成普通表格。", `
+              <div class="timeline">
+                ${row("10:24", "用户要求：Codex 官方插件仓库仍未显示全")}
+                ${row("10:27", "系统记录：检查 marketplace 注册状态")}
+                ${row("10:31", "盘古记忆：暂无可写入长期记忆", "warn")}
+              </div>
+              <div class="actions" style="margin-top:14px">${button("修复历史会话", true)}${button("导出 Markdown")}${button("移动项目归属")}${button("打开数据库位置")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      maintenance: () => `
+        <div class="page active">
+          <div class="grid cols-4">
+            ${kpi("入口", "已安装", [["桌面", "ok"], ["开始菜单", "ok"]])}
+            ${kpi("后端服务", "在线", [["helper", "ok"], ["bridge", "ok"]])}
+            ${kpi("Watcher", "运行中", [["自恢复", "ok"]])}
+            ${kpi("更新", "可检查", [["Release", "warn"]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("维护入口", "安装、卸载、快捷方式、后端和日志维护用分组卡承载。", `
+              <div class="mini-grid">
+                ${mini("安装入口", "修复启动器和管理工具入口。")}
+                ${mini("修复快捷方式", "重写桌面和开始菜单快捷方式。")}
+                ${mini("修复后端配置", "恢复 helper、bridge 和端口配置。")}
+                ${mini("重置设置", "用户确认后恢复管理工具设置。", "warn")}
+              </div>
+            `, true)}
+            ${panel("Watcher 与日志", "高风险动作保留明确状态，不和普通按钮混在一起。", `
+              <div class="rows">
+                ${row("安装 Watcher", "创建 Windows 自恢复守护任务")}
+                ${row("启用 Watcher", "监控 launcher、Codex 进程和 CDP 端口")}
+                ${row("禁用 Watcher", "停止自恢复但保留配置", "warn")}
+                ${row("最新日志", "~/.claude-codex-pro/logs")}
+              </div>
+              <div class="actions" style="margin-top:14px">${button("检查更新", true)}${button("复制诊断")}${button("打开日志")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      settings: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${kpi("设置文件", "settings.json", [["可读取", "ok"]])}
+            ${kpi("增强矩阵", "核心项启用", [["Codex", "ok"], ["Zed", "ok"]])}
+            ${kpi("运行日志", "最近 200 行", [["可复制", "ok"]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("全局开关", "保留当前需要的设置入口，不恢复已删除的旧卡片。", `
+              <div class="rows">
+                <div class="list-row"><b>Provider Sync</b><span>切换供应商后修复历史会话可见性</span>${toggle(true)}</div>
+                <div class="list-row"><b>Zed Remote</b><span>识别远程项目并构造 zed:// 链接</span>${toggle(true)}</div>
+                <div class="list-row"><b>Watcher 自恢复</b><span>监控 launcher 与 Codex 连接</span>${toggle(true)}</div>
+                <div class="list-row"><b>CLI Wrapper</b><span>为命令行入口写入包装配置</span>${toggle(true)}</div>
+              </div>
+            `, true)}
+            ${panel("Claude 一键汉化", "中文包装窗口与资源补丁仍是独立维护入口，不尝试伪装原生注入。", `
+              <div class="rows">
+                ${row("补丁状态", "已写入中文资源，支持还原")}
+                ${row("安装方式", "用户触发，本机备份")}
+                ${row("诊断", "显示 MSIX / CDP / 资源目录状态", "warn")}
+              </div>
+              <div class="actions" style="margin-top:14px">${button("一键汉化", true)}${button("从目录安装")}${button("还原")}${button("启动 Claude")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      about: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${kpi("产品", "本地 AI 运维控制台", [["Tauri", "ok"], ["React", "ok"]])}
+            ${kpi("版本", "V2 视觉预览", [["未应用", "warn"]])}
+            ${kpi("社区", "Discord 已配置", [["Q9cbMaWsb", "ok"]])}
+          </div>
+          <div class="grid wide-2">
+            ${panel("项目说明", "Claude Codex Pro Tool 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。", `
+              <div class="command-map">
+                <div class="command-core">CCP</div>
+                <div class="node n1"><b>Codex</b><span>增强</span></div>
+                <div class="node n2"><b>Claude</b><span>本地集成</span></div>
+                <div class="node n3"><b>插件</b><span>仓库</span></div>
+                <div class="node n4"><b>记忆</b><span>SQLite</span></div>
+              </div>
+            `, true)}
+            ${panel("链接与 Release", "保留仓库、Release、社区和维护者信息。", `
+              <div class="rows">
+                ${row("仓库", "https://github.com/DamonZS/Claude-Codex-Pro-Tool")}
+                ${row("Release", "GitHub Releases")}
+                ${row("Discord", "https://discord.gg/Q9cbMaWsb")}
+                ${row("维护者", "DamonZS")}
+              </div>
+              <div class="actions" style="margin-top:14px">${button("打开仓库")}${button("检查更新", true)}${button("下载 Release")}</div>
+            `)}
+          </div>
+        </div>
+      `
+    };
+
+    function renderNav() {
+      nav.innerHTML = routes.map(([id, label, desc, icon]) => `
+        <button class="${state.route === id ? "active" : ""}" data-route="${id}" type="button" title="${label}">
+          <span class="nav-icon">${icon}</span>
+          <span><b>${label}</b><span>${desc}</span></span>
+        </button>
+      `).join("");
+      nav.querySelectorAll("button").forEach((buttonEl) => {
+        buttonEl.addEventListener("click", () => {
+          state.route = buttonEl.dataset.route;
+          window.history.replaceState(null, "", `#${state.route}`);
+          render();
+        });
+      });
+    }
+
+    function render() {
+      const route = routes.find(([id]) => id === state.route) || routes[0];
+      pageTitle.textContent = route[1];
+      pageSubtitle.textContent = route[2];
+      renderNav();
+      stage.innerHTML = pages[state.route]();
+      stage.querySelectorAll(".toggle").forEach((toggleEl) => {
+        toggleEl.addEventListener("click", () => toggleEl.classList.toggle("is-on"));
+      });
+    }
+
+    render();
+
+    window.addEventListener("hashchange", () => {
+      state.route = routeFromHash();
+      render();
+    });
+  </script>
+</body>
+</html>
