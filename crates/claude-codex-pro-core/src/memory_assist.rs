@@ -2200,6 +2200,10 @@ fn duplicate_memory_score(existing: &str, incoming: &str) -> Option<usize> {
     }
     let existing_keywords = keywords_for(&existing);
     let incoming_keywords = keywords_for(&incoming);
+    let simhash_distance = simhash_hamming_distance(&existing_keywords, &incoming_keywords);
+    if simhash_distance <= 2 {
+        return Some(existing_keywords.len().min(incoming_keywords.len()));
+    }
     let overlap = existing_keywords.intersection(&incoming_keywords).count();
     let min_len = existing_keywords.len().min(incoming_keywords.len());
     let max_len = existing_keywords.len().max(incoming_keywords.len());
@@ -2208,6 +2212,44 @@ fn duplicate_memory_score(existing: &str, incoming: &str) -> Option<usize> {
         return Some(overlap);
     }
     None
+}
+
+fn simhash_hamming_distance(left: &BTreeSet<String>, right: &BTreeSet<String>) -> u32 {
+    if left.is_empty() || right.is_empty() {
+        return u32::MAX;
+    }
+    (simhash64(left) ^ simhash64(right)).count_ones()
+}
+
+fn simhash64(tokens: &BTreeSet<String>) -> u64 {
+    let mut weights = [0_i32; 64];
+    for token in tokens {
+        let hash = stable_token_hash64(token);
+        for (bit, weight) in weights.iter_mut().enumerate() {
+            if ((hash >> bit) & 1) == 1 {
+                *weight += 1;
+            } else {
+                *weight -= 1;
+            }
+        }
+    }
+    weights
+        .iter()
+        .enumerate()
+        .fold(0_u64, |acc, (bit, weight)| {
+            if *weight >= 0 {
+                acc | (1_u64 << bit)
+            } else {
+                acc
+            }
+        })
+}
+
+fn stable_token_hash64(token: &str) -> u64 {
+    let digest = Sha256::digest(token.as_bytes());
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(bytes)
 }
 
 fn score_item(
@@ -2714,4 +2756,28 @@ fn redact_bearer_tokens(input: &str) -> String {
     }
     out.push_str(&input[i..]);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simhash_similarity_is_stable_for_reordered_memory_rules() {
+        let left = keywords_for(
+            "project rule: always read spec acceptance and run verification before delivery",
+        );
+        let right = keywords_for(
+            "before delivery always run verification and read acceptance spec project rule",
+        );
+
+        assert_eq!(simhash_hamming_distance(&left, &right), 0);
+        assert!(
+            duplicate_memory_score(
+                "project rule: always read spec acceptance and run verification before delivery",
+                "before delivery always run verification and read acceptance spec project rule",
+            )
+            .is_some()
+        );
+    }
 }

@@ -1,11 +1,11 @@
-﻿use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use claude_codex_pro_core::app_paths::{
     build_codex_executable, codex_app_version, find_latest_codex_app_dir,
     find_latest_codex_app_dir_from_roots, find_macos_codex_app, normalize_codex_app_path,
-    packaged_app_user_model_id, resolve_codex_app_dir_with_saved,
-    standalone_codex_candidates_from, user_data_candidates_from,
+    packaged_app_user_model_id, resolve_codex_app_dir_with_saved, standalone_codex_candidates_from,
+    user_data_candidates_from,
 };
 use claude_codex_pro_core::launcher::{
     CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,

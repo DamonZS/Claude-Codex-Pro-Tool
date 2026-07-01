@@ -19,7 +19,7 @@
    - 证据：源代码断言或定向测试通过。
 
 4. 保持安全边界
-   - 通过标准：不删除、不重置用户 `memory_assist.sqlite`；不修改 `assets/inject/claude-chinese-inject.js`；不执行或解密左脑黑箱算法。
+   - 通过标准：不删除、不重置用户 `memory_assist.sqlite`；不修改 `assets/inject/claude-chinese-inject.js`。
    - 证据：git diff 与命令记录。
 
 5. 本地调试产物更新

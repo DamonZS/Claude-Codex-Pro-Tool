@@ -2082,13 +2082,11 @@ pub fn load_claude_desktop_marketplace_status() -> ClaudeDesktopMarketplaceStatu
         .first()
         .cloned()
         .unwrap_or_else(|| ClaudeDesktopThreepPaths::from_root(PathBuf::from("Claude-3p")));
-    let repositories =
-        claude_desktop_marketplace_repository_statuses(&primary_threep.config_path);
+    let repositories = claude_desktop_marketplace_repository_statuses(&primary_threep.config_path);
     let message = if supported {
         "Claude Desktop 插件仓库由 Claude 官方账户或组织界面管理；此入口会打开 Ponytail 插件仓库添加页，仍需在 Claude Desktop 中确认。".to_string()
     } else {
-        "Claude Desktop 插件仓库深链目前支持 Windows 和 macOS。"
-            .to_string()
+        "Claude Desktop 插件仓库深链目前支持 Windows 和 macOS。".to_string()
     };
 
     ClaudeDesktopMarketplaceStatus {
@@ -2122,8 +2120,7 @@ pub fn open_ponytail_claude_desktop_marketplace_setup()
     })
 }
 
-pub fn repair_claude_desktop_marketplaces()
--> anyhow::Result<ClaudeDesktopMarketplaceOutcome> {
+pub fn repair_claude_desktop_marketplaces() -> anyhow::Result<ClaudeDesktopMarketplaceOutcome> {
     let status = load_claude_desktop_marketplace_status();
     if !status.supported {
         anyhow::bail!("{}", status.message);
@@ -2134,7 +2131,10 @@ pub fn repair_claude_desktop_marketplaces()
     }
     let next = load_claude_desktop_marketplace_status();
     Ok(ClaudeDesktopMarketplaceOutcome {
-        repaired: next.repositories.iter().all(|repository| repository.configured),
+        repaired: next
+            .repositories
+            .iter()
+            .all(|repository| repository.configured),
         config_path: next.config_path,
         repositories: next.repositories,
         message: "已写入 Claude 官方与 Ponytail 插件仓库配置。".to_string(),
@@ -3017,20 +3017,18 @@ fn claude_desktop_marketplace_repository_statuses(
         .unwrap_or_else(|| json!({}));
     desired_claude_desktop_marketplaces()
         .into_iter()
-        .map(|(name, label, repository)| ClaudeDesktopMarketplaceRepositoryStatus {
-            label: label.to_string(),
-            repository: repository.to_string(),
-            url: claude_desktop_marketplace_url(repository),
-            configured: claude_desktop_marketplace_is_configured(&raw, name, repository),
-        })
+        .map(
+            |(name, label, repository)| ClaudeDesktopMarketplaceRepositoryStatus {
+                label: label.to_string(),
+                repository: repository.to_string(),
+                url: claude_desktop_marketplace_url(repository),
+                configured: claude_desktop_marketplace_is_configured(&raw, name, repository),
+            },
+        )
         .collect()
 }
 
-fn claude_desktop_marketplace_is_configured(
-    raw: &Value,
-    name: &str,
-    repository: &str,
-) -> bool {
+fn claude_desktop_marketplace_is_configured(raw: &Value, name: &str, repository: &str) -> bool {
     let Some(marketplaces) = raw.get("extraKnownMarketplaces").and_then(Value::as_object) else {
         return false;
     };
@@ -4182,10 +4180,16 @@ mod tests {
     #[test]
     fn claude_desktop_marketplace_config_writes_known_repositories() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Claude-3p").join("claude_desktop_config.json");
+        let path = dir
+            .path()
+            .join("Claude-3p")
+            .join("claude_desktop_config.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"deploymentMode":"3p","windowBounds":{"width":1200}}"#)
-            .unwrap();
+        std::fs::write(
+            &path,
+            r#"{"deploymentMode":"3p","windowBounds":{"width":1200}}"#,
+        )
+        .unwrap();
 
         ensure_claude_desktop_marketplaces_config(&path).unwrap();
 
@@ -4210,7 +4214,10 @@ mod tests {
         let repair = source
             .split("pub fn repair_claude_desktop_marketplaces()")
             .nth(1)
-            .and_then(|rest| rest.split("pub fn load_claude_desktop_dev_mode_status").next())
+            .and_then(|rest| {
+                rest.split("pub fn load_claude_desktop_dev_mode_status")
+                    .next()
+            })
             .expect("repair_claude_desktop_marketplaces source");
 
         assert!(repair.contains("ensure_claude_desktop_marketplaces_config"));
@@ -4636,14 +4643,18 @@ mod tests {
         assert_eq!(status.plugin, PONYTAIL_MARKETPLACE_NAME);
         assert!(status.can_auto_write);
         assert_eq!(status.repositories.len(), 2);
-        assert!(status
-            .repositories
-            .iter()
-            .any(|repository| repository.repository == OFFICIAL_MARKETPLACE_REPOSITORY));
-        assert!(status
-            .repositories
-            .iter()
-            .any(|repository| repository.repository == PONYTAIL_MARKETPLACE));
+        assert!(
+            status
+                .repositories
+                .iter()
+                .any(|repository| repository.repository == OFFICIAL_MARKETPLACE_REPOSITORY)
+        );
+        assert!(
+            status
+                .repositories
+                .iter()
+                .any(|repository| repository.repository == PONYTAIL_MARKETPLACE)
+        );
     }
 
     #[test]

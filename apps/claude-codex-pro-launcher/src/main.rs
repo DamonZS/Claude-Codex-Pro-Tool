@@ -739,9 +739,7 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 
     async fn memory_resolve_workspace(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(claude_codex_pro_core::routes::resolve_codex_memory_workspace_response(
-            &payload,
-        ))
+        Ok(claude_codex_pro_core::routes::resolve_codex_memory_workspace_response(&payload))
     }
 
     async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
