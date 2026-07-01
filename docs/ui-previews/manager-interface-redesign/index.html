@@ -1,0 +1,1268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Codex Pro Pearl Command Deck</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f4ed;
+      --paper-2: #fbfaf7;
+      --pearl: rgba(255, 255, 255, 0.78);
+      --ink: #152033;
+      --muted: #667084;
+      --faint: #9aa3b1;
+      --line: rgba(36, 48, 70, 0.12);
+      --line-strong: rgba(36, 48, 70, 0.2);
+      --navy: #13192a;
+      --navy-2: #1b2440;
+      --blue: #2563eb;
+      --cyan: #08b6ce;
+      --green: #17a673;
+      --amber: #d68b00;
+      --rose: #e14b68;
+      --lavender: #7067ff;
+      --shadow: 0 24px 80px rgba(29, 37, 57, 0.16);
+      --soft-shadow: 0 12px 36px rgba(29, 37, 57, 0.1);
+      --radius: 16px;
+      --small: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+      letter-spacing: 0;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family:
+        "SF Pro Display",
+        "Microsoft YaHei UI",
+        "Segoe UI Variable",
+        system-ui,
+        sans-serif;
+    }
+
+    body {
+      overflow-x: hidden;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    .deck {
+      position: relative;
+      min-height: 100vh;
+      padding: 18px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(255, 221, 164, 0.8), transparent 28%),
+        radial-gradient(circle at 72% 6%, rgba(112, 103, 255, 0.22), transparent 27%),
+        radial-gradient(circle at 96% 40%, rgba(8, 182, 206, 0.2), transparent 24%),
+        linear-gradient(180deg, #fbf8f0 0%, #f6f4ef 46%, #edeff5 100%);
+    }
+
+    .deck::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(120deg, transparent 0 18%, rgba(255, 255, 255, 0.72) 22%, transparent 36%),
+        linear-gradient(90deg, rgba(21, 32, 51, 0.045) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(21, 32, 51, 0.035) 1px, transparent 1px);
+      background-size: auto, 64px 64px, 64px 64px;
+      mask-image: linear-gradient(180deg, black, transparent 88%);
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      gap: 18px;
+      width: min(1720px, 100%);
+      min-height: calc(100vh - 36px);
+      margin: 0 auto;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 18px;
+      height: calc(100vh - 36px);
+      padding: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 28px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.55)),
+        rgba(255, 255, 255, 0.62);
+      box-shadow: var(--soft-shadow);
+      backdrop-filter: blur(26px) saturate(1.15);
+    }
+
+    .brand {
+      display: grid;
+      gap: 16px;
+      padding: 16px;
+      border-radius: 22px;
+      background:
+        linear-gradient(145deg, rgba(19, 25, 42, 0.98), rgba(31, 44, 76, 0.95)),
+        var(--navy);
+      color: #fff;
+      box-shadow: 0 22px 54px rgba(19, 25, 42, 0.22);
+    }
+
+    .mark-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 15px;
+      background: linear-gradient(135deg, #ffffff, #c9f8ff 46%, #bcb7ff);
+      color: var(--navy);
+      font-size: 13px;
+      font-weight: 900;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    .live-pill,
+    .chip,
+    .stage {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .live-pill {
+      background: rgba(8, 182, 206, 0.18);
+      color: #dffbff;
+    }
+
+    .brand h2 {
+      margin: 0;
+      font-size: 19px;
+      line-height: 1.14;
+      font-weight: 820;
+    }
+
+    .brand p {
+      margin: 6px 0 0;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 13px;
+      line-height: 1.46;
+    }
+
+    .nav {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .nav button {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 11px;
+      align-items: center;
+      min-height: 58px;
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 18px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 10px 11px;
+      text-align: left;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      border-color: rgba(37, 99, 235, 0.22);
+      background: rgba(255, 255, 255, 0.76);
+      color: var(--ink);
+      box-shadow: 0 10px 28px rgba(37, 99, 235, 0.08);
+    }
+
+    .nav button.active {
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(8, 182, 206, 0.08)),
+        rgba(255, 255, 255, 0.86);
+    }
+
+    .nav-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      background: rgba(21, 32, 51, 0.06);
+      color: var(--navy);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .nav b,
+    .nav small {
+      display: block;
+      min-width: 0;
+    }
+
+    .nav b {
+      font-size: 14px;
+      line-height: 1.22;
+      font-weight: 800;
+    }
+
+    .nav small {
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 11px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .side-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.62);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+      gap: 16px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      min-height: 112px;
+      padding: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 30px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.58)),
+        rgba(255, 255, 255, 0.72);
+      box-shadow: var(--soft-shadow);
+      backdrop-filter: blur(24px) saturate(1.1);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 860;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 26px;
+      height: 2px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--blue), var(--cyan));
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      margin-top: 6px;
+      font-size: clamp(34px, 4vw, 56px);
+      line-height: 0.98;
+      font-weight: 820;
+      letter-spacing: -0.04em;
+      color: var(--ink);
+    }
+
+    .subtitle {
+      max-width: 780px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 9px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      border: 1px solid rgba(21, 32, 51, 0.1);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.7);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 10px 24px rgba(21, 32, 51, 0.08);
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      color: #fff;
+      box-shadow: 0 18px 38px rgba(37, 99, 235, 0.24);
+    }
+
+    .btn.dark {
+      background: var(--navy);
+      color: #fff;
+    }
+
+    .btn.danger {
+      color: #b42645;
+      background: #fff4f6;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.72;
+    }
+
+    .stage-area,
+    .page {
+      min-width: 0;
+    }
+
+    .page {
+      display: none;
+      gap: 16px;
+      animation: lift 220ms ease both;
+    }
+
+    .page.active {
+      display: grid;
+    }
+
+    @keyframes lift {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .cols-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .cols-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .cols-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .split {
+      grid-template-columns: minmax(0, 1.12fr) minmax(420px, 0.88fr);
+    }
+
+    .metric,
+    .panel,
+    .row,
+    .mini,
+    .session-item {
+      border: 1px solid rgba(255, 255, 255, 0.78);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.62)),
+        var(--pearl);
+      box-shadow: var(--soft-shadow);
+      backdrop-filter: blur(18px) saturate(1.06);
+    }
+
+    .metric {
+      position: relative;
+      min-height: 132px;
+      overflow: hidden;
+      border-radius: 24px;
+      padding: 18px;
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      right: -24px;
+      top: -34px;
+      width: 118px;
+      height: 118px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(8, 182, 206, 0.22), transparent 67%);
+    }
+
+    .metric small,
+    .row small {
+      position: relative;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 780;
+    }
+
+    .metric strong {
+      position: relative;
+      display: block;
+      margin-top: 11px;
+      color: var(--ink);
+      font-size: 25px;
+      line-height: 1.05;
+      font-weight: 840;
+      letter-spacing: -0.03em;
+    }
+
+    .chips {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 14px;
+    }
+
+    .chip {
+      border: 1px solid rgba(21, 32, 51, 0.08);
+      background: rgba(255, 255, 255, 0.76);
+      color: var(--muted);
+    }
+
+    .chip.ok {
+      color: #087653;
+      background: rgba(23, 166, 115, 0.1);
+      border-color: rgba(23, 166, 115, 0.18);
+    }
+
+    .chip.warn {
+      color: #8b5d00;
+      background: rgba(214, 139, 0, 0.12);
+      border-color: rgba(214, 139, 0, 0.18);
+    }
+
+    .chip.hot {
+      color: #b42645;
+      background: rgba(225, 75, 104, 0.1);
+      border-color: rgba(225, 75, 104, 0.18);
+    }
+
+    .chip.info {
+      color: #244bd8;
+      background: rgba(37, 99, 235, 0.09);
+      border-color: rgba(37, 99, 235, 0.16);
+    }
+
+    .panel {
+      border-radius: 26px;
+      padding: 18px;
+      min-width: 0;
+    }
+
+    .panel.dark {
+      border-color: rgba(255, 255, 255, 0.14);
+      background:
+        radial-gradient(circle at 82% 10%, rgba(8, 182, 206, 0.22), transparent 34%),
+        linear-gradient(145deg, var(--navy), var(--navy-2));
+      color: #fff;
+      box-shadow: 0 28px 80px rgba(19, 25, 42, 0.26);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(21, 32, 51, 0.08);
+    }
+
+    .panel.dark .panel-head {
+      border-bottom-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .panel h2 {
+      font-size: 18px;
+      line-height: 1.18;
+      font-weight: 850;
+      letter-spacing: -0.02em;
+    }
+
+    .panel .desc {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .panel.dark .desc,
+    .panel.dark .row span,
+    .panel.dark .stage span {
+      color: rgba(255, 255, 255, 0.68);
+    }
+
+    .rows {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: minmax(140px, 0.32fr) minmax(0, 1fr) max-content;
+      gap: 12px;
+      align-items: center;
+      min-height: 56px;
+      padding: 12px 14px;
+      border-radius: 18px;
+    }
+
+    .panel.dark .row {
+      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.07);
+      box-shadow: none;
+    }
+
+    .row b {
+      color: inherit;
+      font-size: 13px;
+      line-height: 1.3;
+      font-weight: 830;
+    }
+
+    .row span {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      width: 48px;
+      height: 28px;
+      border: 1px solid rgba(21, 32, 51, 0.12);
+      border-radius: 999px;
+      background: rgba(21, 32, 51, 0.14);
+      cursor: pointer;
+      padding: 3px;
+    }
+
+    .toggle span {
+      display: block;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 3px 10px rgba(21, 32, 51, 0.28);
+      transform: translateX(0);
+      transition: transform 160ms ease;
+    }
+
+    .toggle.on {
+      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      border-color: transparent;
+    }
+
+    .toggle.on span {
+      transform: translateX(20px);
+    }
+
+    .tool-row {
+      grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr) 112px;
+    }
+
+    .tool-actions {
+      display: grid;
+      grid-template-columns: 48px 28px 28px;
+      gap: 7px;
+      justify-content: end;
+      align-items: center;
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid rgba(21, 32, 51, 0.1);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.68);
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .pen {
+      width: 12px;
+      height: 3px;
+      border-radius: 2px;
+      background: currentColor;
+      transform: rotate(-34deg);
+      box-shadow: 6px 0 0 -1px currentColor;
+    }
+
+    .trash {
+      position: relative;
+      width: 11px;
+      height: 12px;
+      border: 2px solid currentColor;
+      border-top: 0;
+      border-radius: 0 0 3px 3px;
+    }
+
+    .trash::before {
+      content: "";
+      position: absolute;
+      left: -2px;
+      right: -2px;
+      top: -5px;
+      height: 2px;
+      background: currentColor;
+    }
+
+    .command-map {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .status-ring {
+      position: relative;
+      min-height: 300px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(8, 182, 206, 0.22), transparent 34%),
+        rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+    }
+
+    .status-ring::before,
+    .status-ring::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 50%;
+      transform: translate(-50%, -50%) rotateX(64deg);
+    }
+
+    .status-ring::before {
+      width: 72%;
+      height: 38%;
+    }
+
+    .status-ring::after {
+      width: 48%;
+      height: 26%;
+      border-color: rgba(8, 182, 206, 0.4);
+    }
+
+    .core {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      display: grid;
+      place-items: center;
+      width: 116px;
+      height: 116px;
+      border-radius: 28px;
+      background: linear-gradient(135deg, #fff, #b9f3ff 54%, #c5c0ff);
+      color: var(--navy);
+      font-weight: 900;
+      transform: translate(-50%, -50%) rotate(45deg);
+      box-shadow: 0 24px 60px rgba(8, 182, 206, 0.28);
+    }
+
+    .core span {
+      transform: rotate(-45deg);
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .mini {
+      min-height: 120px;
+      border-radius: 22px;
+      padding: 16px;
+    }
+
+    .mini b {
+      display: block;
+      font-size: 15px;
+      line-height: 1.3;
+      font-weight: 850;
+    }
+
+    .mini p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.48;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .field input,
+    .field select,
+    .field textarea {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid rgba(21, 32, 51, 0.12);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.78);
+      color: var(--ink);
+      outline: none;
+      padding: 10px 12px;
+    }
+
+    .field textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    .session-layout {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .session-item {
+      border-radius: 18px;
+      padding: 14px;
+    }
+
+    .session-item.active {
+      border-color: rgba(37, 99, 235, 0.2);
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(8, 182, 206, 0.08)), rgba(255, 255, 255, 0.75);
+    }
+
+    .session-item b {
+      display: block;
+      font-size: 14px;
+      line-height: 1.3;
+      font-weight: 850;
+    }
+
+    .session-item span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .stage-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .stage {
+      justify-content: space-between;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 16px;
+      min-height: 46px;
+    }
+
+    .stage b {
+      font-size: 13px;
+      min-width: 62px;
+    }
+
+    .note {
+      position: fixed;
+      right: 20px;
+      bottom: 16px;
+      z-index: 20;
+      max-width: 410px;
+      padding: 12px 14px;
+      border: 1px solid rgba(214, 139, 0, 0.18);
+      border-radius: 18px;
+      background: rgba(255, 250, 236, 0.86);
+      color: #7b5410;
+      box-shadow: var(--soft-shadow);
+      backdrop-filter: blur(18px);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 1220px) {
+      .cols-4,
+      .cols-3,
+      .split,
+      .command-map {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+      .actions {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .deck {
+        padding: 10px;
+      }
+      .shell {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: relative;
+        top: 0;
+        height: auto;
+      }
+      .nav {
+        display: flex;
+        overflow-x: auto;
+      }
+      .nav button {
+        min-width: 148px;
+      }
+      .cols-4,
+      .cols-3,
+      .cols-2,
+      .split,
+      .command-map,
+      .mini-grid,
+      .field-grid,
+      .session-layout {
+        grid-template-columns: 1fr;
+      }
+      .row,
+      .tool-row {
+        grid-template-columns: 1fr;
+      }
+      .tool-actions {
+        justify-content: start;
+      }
+      .note {
+        position: static;
+        margin: 0 0 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <div class="shell">
+      <aside class="sidebar">
+        <section class="brand">
+          <div class="mark-row">
+            <div class="mark">CCP</div>
+            <span class="live-pill"><span class="dot"></span>Preview V3</span>
+          </div>
+          <div>
+            <h2>Claude Codex Pro</h2>
+            <p>Pearl Command Deck，偏高级产品控制台，不连接真实后端。</p>
+          </div>
+        </section>
+        <nav class="nav" id="nav"></nav>
+        <div class="side-card">静态评审稿：保留 7 个页面，不恢复旧设置卡片，不调用 Codex / Claude / 插件 / 记忆操作。</div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">Pearl Command Deck</div>
+            <h1 id="page-title">概览</h1>
+            <p class="subtitle" id="page-subtitle">高级智能管理控制室，保留真实功能入口的评审原型。</p>
+          </div>
+          <div class="actions">
+            <button class="btn dark" type="button"><span class="dot"></span>启动 Codex</button>
+            <button class="btn" type="button"><span class="dot"></span>启动 Claude</button>
+            <button class="btn primary" type="button"><span class="dot"></span>一键汉化</button>
+          </div>
+        </header>
+        <section class="stage-area" id="stage"></section>
+      </main>
+    </div>
+    <div class="note">只用于评审视觉与布局。你确认后，才进入真实前端应用或结构拆分阶段。</div>
+  </div>
+
+  <script>
+    const routes = [
+      ["overview", "概览", "运行状态、诊断动作和智能控制室。", "OV"],
+      ["supplier", "供应商", "Profile、API、中转和官方混合配置。", "PV"],
+      ["tools", "工具与插件", "Codex / Claude 仓库、MCP、Skills 和插件。", "TL"],
+      ["sessions", "会话管理", "Codex 会话、Provider Sync、导出和记忆。", "SS"],
+      ["maintenance", "维护", "入口、快捷方式、Watcher、后端和更新。", "MT"],
+      ["settings", "设置", "设置文件、增强矩阵、Claude 汉化和日志。", "ST"],
+      ["about", "关于", "版本、仓库、Release 和社区。", "AB"]
+    ];
+
+    const state = { route: routeFromHash() };
+    const nav = document.getElementById("nav");
+    const stage = document.getElementById("stage");
+    const title = document.getElementById("page-title");
+    const subtitle = document.getElementById("page-subtitle");
+
+    function routeFromHash() {
+      const hash = decodeURIComponent(window.location.hash.replace(/^#/, ""));
+      return routes.some(([id]) => id === hash) ? hash : "overview";
+    }
+
+    function chip(text, tone = "") {
+      return `<span class="chip ${tone}">${text}</span>`;
+    }
+
+    function btn(text, tone = "") {
+      return `<button class="btn ${tone}" type="button"><span class="dot"></span>${text}</button>`;
+    }
+
+    function toggle(on = true) {
+      return `<button class="toggle ${on ? "on" : ""}" type="button"><span></span></button>`;
+    }
+
+    function metric(label, value, chips = []) {
+      return `<article class="metric"><small>${label}</small><strong>${value}</strong><div class="chips">${chips.map(([text, tone]) => chip(text, tone)).join("")}</div></article>`;
+    }
+
+    function panel(title, desc, body, dark = false) {
+      return `<section class="panel ${dark ? "dark" : ""}"><div class="panel-head"><div><h2>${title}</h2><p class="desc">${desc}</p></div></div>${body}</section>`;
+    }
+
+    function row(label, value, tone = "ok") {
+      const status = tone === "ok" ? "已就绪" : tone === "warn" ? "待确认" : tone === "hot" ? "需处理" : "已记录";
+      return `<div class="row"><b>${label}</b><span>${value}</span>${chip(status, tone)}</div>`;
+    }
+
+    function toolRow(label, value, on = true) {
+      return `<div class="row tool-row"><b>${label}</b><span>${value}</span><div class="tool-actions">${toggle(on)}<button class="icon-btn" type="button"><i class="pen"></i></button><button class="icon-btn" type="button"><i class="trash"></i></button></div></div>`;
+    }
+
+    function mini(title, desc, tone = "ok") {
+      return `<article class="mini"><b>${title}</b><p>${desc}</p><div class="chips">${chip(tone === "ok" ? "可用" : tone === "warn" ? "待审查" : "需处理", tone)}</div></article>`;
+    }
+
+    function stageItem(time, text, tone = "reading") {
+      const map = { reading: "READ", thinking: "PLAN", editing: "PATCH", done: "DONE" };
+      return `<div class="stage"><b>${time}</b><span>${text}</span>${chip(map[tone] || tone, tone === "done" ? "ok" : "info")}</div>`;
+    }
+
+    const pages = {
+      overview: () => `
+        <div class="page active">
+          <div class="grid cols-4">
+            ${metric("Codex 前端", "注入在线", [["CDP", "ok"], ["后端连接", "ok"]])}
+            ${metric("Claude", "可启动", [["中文资源", "ok"], ["CDP 诊断", "warn"]])}
+            ${metric("盘古记忆", "监控中", [["SQLite", "ok"], ["待确认 0", "info"]])}
+            ${metric("插件仓库", "3 个仓库", [["官方", "ok"], ["第三方", "ok"]])}
+          </div>
+          <div class="grid split">
+            ${panel("智能控制室", "用产品级指挥舱承载状态，而不是普通后台表格。", `
+              <div class="command-map">
+                <div class="status-ring"><div class="core"><span>CCP</span></div></div>
+                <div class="stage-list">
+                  ${stageItem("10:24", "读取 Codex 注入状态与 helper 端口", "reading")}
+                  ${stageItem("10:25", "检查 openai-curated / awesome-codex 仓库注册", "thinking")}
+                  ${stageItem("10:26", "盘古记忆监听在线，暂无可写入长期记忆", "done")}
+                  ${stageItem("10:27", "Claude 开发配置存在，CDP 仍需确认", "editing")}
+                </div>
+              </div>
+            `, true)}
+            ${panel("修复与诊断", "常用动作清晰集中，不显示顶部后端链接胶囊。", `
+              <div class="rows">
+                ${row("刷新概览", "重新读取 Codex、Claude、插件和记忆状态")}
+                ${row("修复前端连接", "重连 Codex CDP、helper 和注入桥")}
+                ${row("刷新 Claude 第三方配置", "读取开发配置、组织插件和 MCP 状态", "warn")}
+                ${row("复制诊断信息", "脱敏后复制版本、路径和最近日志")}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("刷新状态", "primary")}${btn("查看日志")}${btn("复制诊断")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      supplier: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${metric("当前模式", "官方混合 API", [["Responses", "ok"], ["Provider Sync", "ok"]])}
+            ${metric("供应商", "4 个 Profile", [["可拖拽", "ok"], ["密钥隐藏", "ok"]])}
+            ${metric("上下文", "128K", [["自动压缩", "ok"], ["模型映射", "info"]])}
+          </div>
+          <div class="grid split">
+            ${panel("供应商轨道", "卡片保留拖拽手柄和单只倾斜笔编辑按钮。", `
+              <div class="rows">
+                ${row("官方登录", "保留 Codex 原生登录状态，不覆盖 auth.json")}
+                ${row("拓扑熵减 API", "Responses / GPT-5.5 / Claude Opus / 自定义 Base URL", "warn")}
+                ${row("本地兼容网关", "Chat Completions / 本地代理 / 模型映射")}
+                ${row("聚合供应商", "多 Profile 回退，保留独立上下文配置")}
+              </div>
+            `, true)}
+            ${panel("Profile 编辑", "两列表单，长 URL 不遮挡操作按钮。", `
+              <div class="field-grid">
+                <div class="field"><label>供应商名称</label><input value="拓扑熵减 API" /></div>
+                <div class="field"><label>Wire API</label><select><option>Responses</option><option>Chat Completions</option></select></div>
+                <div class="field"><label>Base URL</label><input value="https://api.example/v1" /></div>
+                <div class="field"><label>默认模型</label><input value="gpt-5.5" /></div>
+                <div class="field"><label>上下文窗口</label><input value="128000" /></div>
+                <div class="field"><label>自动压缩阈值</label><input value="90000" /></div>
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("测试连通性")}${btn("保存供应商", "primary")}${btn("设为当前")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      tools: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${metric("Codex 官方仓库", "openai-curated", [["configured", "ok"], ["自动注册", "ok"]])}
+            ${metric("Codex 第三方", "2 个仓库", [["awesome-codex", "ok"], ["alternative", "ok"]])}
+            ${metric("Claude 仓库", "状态可见", [["official", "ok"], ["ponytail", "ok"]])}
+          </div>
+          <div class="grid split">
+            ${panel("Codex 工具与插件", "右侧操作槽固定，开关圆球在胶囊上下中间。", `
+              <div class="rows">
+                ${toolRow("MCP Registry", "GitHub MCP Registry / 已启用", true)}
+                ${toolRow("Product Design Skill", "product-design / 设计编排器", true)}
+                ${toolRow("OpenAI 官方插件仓库", "openai/plugins / marketplace 已注册", true)}
+                ${toolRow("社区插件仓库", "hashgraph-online/awesome-codex-plugins 与 DKeken/codex-skills-alternative", true)}
+                ${toolRow("Ponytail Hooks", "待信任 hooks，默认不自动执行", false)}
+              </div>
+            `)}
+            ${panel("Claude 工具与插件", "不展示插件目录安装路径，只展示仓库配置状态和修复入口。", `
+              <div class="rows">
+                ${toolRow("Claude 官方插件", "CLI 市场状态可刷新", true)}
+                ${toolRow("Claude MCP", "claude_desktop_config.json 写入前备份", true)}
+                ${toolRow("组织插件仓库", "开发模式配置已写入仓库引用", true)}
+                ${toolRow("社区 MCP", "默认展示风险，不自动执行脚本", false)}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("修复 Codex 仓库", "primary")}${btn("修复 Claude 仓库")}${btn("刷新状态")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      sessions: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${metric("本地会话", "42 个", [["sqlite", "ok"], ["可导出", "ok"]])}
+            ${metric("Provider Sync", "历史可见", [["已启用", "ok"]])}
+            ${metric("盘古记忆", "0 条待确认", [["监控中", "ok"], ["长期 0", "info"]])}
+          </div>
+          <div class="session-layout">
+            ${panel("Codex 会话列表", "接近 Codex 原生左侧会话结构，保留项目和时间。", `
+              <div class="session-list">
+                <div class="session-item active"><b>Claude-Codex-Pro-Tool</b><span>修复插件仓库状态 / 12 分钟前</span></div>
+                <div class="session-item"><b>UI redesign preview</b><span>重做管理工具界面 / 今天</span></div>
+                <div class="session-item"><b>global</b><span>盘古记忆长期规则 / 3 天前</span></div>
+                <div class="session-item"><b>release-worktree</b><span>Windows 安装包检查 / 5 天前</span></div>
+              </div>
+            `)}
+            ${panel("会话时间线", "右侧保留修复、导出、移动归属和记忆摘要。", `
+              <div class="stage-list">
+                ${stageItem("10:24", "用户要求：Codex 官方插件仓库仍未显示全", "reading")}
+                ${stageItem("10:27", "系统记录：检查 marketplace 注册状态", "thinking")}
+                ${stageItem("10:31", "盘古记忆：暂无可写入长期记忆", "done")}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("修复历史会话", "primary")}${btn("导出 Markdown")}${btn("移动项目归属")}${btn("打开数据库位置")}</div>
+            `, true)}
+          </div>
+        </div>
+      `,
+      maintenance: () => `
+        <div class="page active">
+          <div class="grid cols-4">
+            ${metric("入口", "已安装", [["桌面", "ok"], ["开始菜单", "ok"]])}
+            ${metric("后端", "在线", [["helper", "ok"], ["bridge", "ok"]])}
+            ${metric("Watcher", "运行中", [["自恢复", "ok"]])}
+            ${metric("更新", "待检查", [["Release", "warn"]])}
+          </div>
+          <div class="grid split">
+            ${panel("维护动作", "入口、快捷方式、后端和更新用明确分组承载。", `
+              <div class="mini-grid">
+                ${mini("安装入口", "修复启动器和管理工具入口。")}
+                ${mini("修复快捷方式", "重写桌面和开始菜单快捷方式。")}
+                ${mini("修复后端配置", "恢复 helper、bridge 和端口配置。")}
+                ${mini("重置设置", "用户确认后恢复管理工具设置。", "warn")}
+              </div>
+            `)}
+            ${panel("Watcher 与日志", "高风险动作和普通日志操作分开呈现。", `
+              <div class="rows">
+                ${row("安装 Watcher", "创建 Windows 自恢复守护任务")}
+                ${row("启用 Watcher", "监控 launcher、Codex 进程和 CDP 端口")}
+                ${row("禁用 Watcher", "停止自恢复但保留配置", "warn")}
+                ${row("最新日志", "~/.claude-codex-pro/logs")}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("检查更新", "primary")}${btn("复制诊断")}${btn("打开日志")}</div>
+            `)}
+          </div>
+        </div>
+      `,
+      settings: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${metric("设置文件", "settings.json", [["可读取", "ok"]])}
+            ${metric("增强矩阵", "核心项启用", [["Codex", "ok"], ["Zed", "ok"]])}
+            ${metric("运行日志", "最近 200 行", [["可复制", "ok"]])}
+          </div>
+          <div class="grid split">
+            ${panel("全局开关", "只保留当前需要的设置入口，不恢复已删除旧卡片。", `
+              <div class="rows">
+                ${toolRow("Provider Sync", "切换供应商后修复历史会话可见性", true)}
+                ${toolRow("Zed Remote", "识别远程项目并构造 zed:// 链接", true)}
+                ${toolRow("Watcher 自恢复", "监控 launcher 与 Codex 连接", true)}
+                ${toolRow("CLI Wrapper", "为命令行入口写入包装配置", true)}
+              </div>
+            `)}
+            ${panel("Claude 一键汉化", "中文包装窗口与资源补丁仍是独立维护入口，不伪装原生注入。", `
+              <div class="rows">
+                ${row("补丁状态", "已写入中文资源，支持还原")}
+                ${row("安装方式", "用户触发，本机备份")}
+                ${row("诊断", "显示 MSIX / CDP / 资源目录状态", "warn")}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("一键汉化", "primary")}${btn("从目录安装")}${btn("还原")}${btn("启动 Claude")}</div>
+            `, true)}
+          </div>
+        </div>
+      `,
+      about: () => `
+        <div class="page active">
+          <div class="grid cols-3">
+            ${metric("产品", "本地 AI 运维控制台", [["Tauri", "ok"], ["React", "ok"]])}
+            ${metric("版本", "Pearl V3", [["未应用", "warn"]])}
+            ${metric("社区", "Discord 已配置", [["Q9cbMaWsb", "ok"]])}
+          </div>
+          <div class="grid split">
+            ${panel("项目说明", "Claude Codex Pro Tool 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。", `
+              <div class="mini-grid">
+                ${mini("Codex 增强", "启动、注入、插件仓库和会话修复。")}
+                ${mini("Claude 本地集成", "启动、汉化、MCP 和开发模式。")}
+                ${mini("盘古记忆", "SQLite、本地优先、用户确认。")}
+                ${mini("安装维护", "更新、快捷方式、Watcher 和日志。")}
+              </div>
+            `)}
+            ${panel("链接与 Release", "保留仓库、Release、社区和维护者信息。", `
+              <div class="rows">
+                ${row("仓库", "https://github.com/DamonZS/Claude-Codex-Pro-Tool")}
+                ${row("Release", "GitHub Releases")}
+                ${row("Discord", "https://discord.gg/Q9cbMaWsb")}
+                ${row("维护者", "DamonZS")}
+              </div>
+              <div class="actions" style="margin-top:14px">${btn("打开仓库")}${btn("检查更新", "primary")}${btn("下载 Release")}</div>
+            `, true)}
+          </div>
+        </div>
+      `
+    };
+
+    function renderNav() {
+      nav.innerHTML = routes.map(([id, label, desc, icon]) => `
+        <button class="${state.route === id ? "active" : ""}" data-route="${id}" type="button">
+          <span class="nav-icon">${icon}</span>
+          <span><b>${label}</b><small>${desc}</small></span>
+        </button>
+      `).join("");
+      nav.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.route = button.dataset.route;
+          window.history.replaceState(null, "", `#${state.route}`);
+          render();
+        });
+      });
+    }
+
+    function render() {
+      const route = routes.find(([id]) => id === state.route) || routes[0];
+      title.textContent = route[1];
+      subtitle.textContent = route[2];
+      renderNav();
+      stage.innerHTML = pages[state.route]();
+      stage.querySelectorAll(".toggle").forEach((button) => {
+        button.addEventListener("click", () => button.classList.toggle("on"));
+      });
+    }
+
+    render();
+
+    window.addEventListener("hashchange", () => {
+      state.route = routeFromHash();
+      render();
+    });
+  </script>
+</body>
+</html>

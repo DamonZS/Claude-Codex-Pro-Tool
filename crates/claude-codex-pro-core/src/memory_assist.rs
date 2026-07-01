@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,13 +8,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
 const ALL_WORKSPACES: &str = "__all__";
+const CAPTURE_USER_EVIDENCE_SQL: &str = "summary NOT LIKE '<environment_context%'
+    AND summary NOT LIKE '<codex_internal_context%'
+    AND summary NOT LIKE '<system%'
+    AND summary NOT LIKE '<developer%'
+    AND summary NOT LIKE '<image %'
+    AND summary NOT LIKE '<attachment %'
+    AND summary NOT LIKE 'Another language model started to solve this problem%'";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +57,23 @@ pub struct MemoryCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureRecord {
+    pub id: String,
+    pub workspace: String,
+    pub source: String,
+    pub source_session_id: String,
+    pub text_length: i64,
+    pub text_hash: String,
+    pub summary: String,
+    pub candidate_triggered: bool,
+    pub candidate_reason: String,
+    pub skip_reason: String,
+    pub captured_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryQueryMatch {
     pub item: MemoryItem,
     pub score: f64,
@@ -69,6 +94,9 @@ pub struct MemoryWorkspaceSummary {
     pub workspace: String,
     pub item_count: i64,
     pub pending_count: i64,
+    pub capture_count: i64,
+    pub session_count: i64,
+    pub latest_capture_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -76,8 +104,10 @@ pub struct MemoryWorkspaceSummary {
 pub struct MemoryAssistStatus {
     pub status: String,
     pub db_path: String,
+    pub inject_summary_cache_path: String,
     pub total_items: i64,
     pub pending_candidates: i64,
+    pub total_captures: i64,
     pub workspaces: Vec<MemoryWorkspaceSummary>,
     pub latest_backup_path: Option<String>,
     pub enabled: bool,
@@ -96,9 +126,12 @@ pub struct MemoryAssistStatus {
 #[serde(rename_all = "camelCase")]
 pub struct MemorySessionSummary {
     pub workspace: String,
+    pub inject_summary_cache_path: String,
     pub total_items: i64,
     pub pending_candidates: i64,
     pub injected_items: Vec<MemoryQueryMatch>,
+    pub recent_captures: Vec<MemoryCaptureRecord>,
+    pub capture_summary: String,
     pub summary: String,
 }
 
@@ -164,6 +197,37 @@ pub struct MemoryCandidateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureRequest {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_session_id: String,
+    #[serde(default)]
+    pub candidate_triggered: bool,
+    #[serde(default)]
+    pub candidate_reason: String,
+    #[serde(default)]
+    pub skip_reason: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryHistoryCaptureReport {
+    pub db_paths_checked: usize,
+    pub rollout_files_checked: usize,
+    pub user_messages_seen: usize,
+    pub captures_recorded: usize,
+    pub candidates_created: usize,
+    pub items_learned: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryQueryRequest {
     #[serde(default)]
     pub query: String,
@@ -221,11 +285,28 @@ impl MemoryAssistStore {
         &self.db_path
     }
 
+    pub fn inject_summary_cache_path(&self) -> PathBuf {
+        self.db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("pangu_memory_inject.md")
+    }
+
     pub fn status(&self) -> anyhow::Result<MemoryAssistStatus> {
+        let codex_home = crate::codex_sqlite::default_codex_home_dir();
+        self.status_from_codex_home(&codex_home)
+    }
+
+    pub fn status_from_codex_home(&self, codex_home: &Path) -> anyhow::Result<MemoryAssistStatus> {
+        let _history_report = self.backfill_codex_history_from_home(codex_home, "", 50, false);
         let conn = self.open()?;
         let total_items = count_items(&conn)?;
         let pending_candidates = count_pending_candidates(&conn)?;
-        let workspaces = workspace_summaries(&conn)?;
+        let total_captures = count_captures(&conn)?;
+        let session_counts =
+            codex_session_workspace_counts_from_home(codex_home, 500).unwrap_or_default();
+        let workspaces = workspace_summaries(&conn, &session_counts)?;
+        let _ = self.sync_inject_summary_cache(&conn, "");
         let latest_backup_path = conn
             .query_row(
                 "SELECT path FROM memory_backups ORDER BY created_at DESC LIMIT 1",
@@ -236,8 +317,13 @@ impl MemoryAssistStore {
         Ok(MemoryAssistStatus {
             status: "ok".to_string(),
             db_path: self.db_path.to_string_lossy().to_string(),
+            inject_summary_cache_path: self
+                .inject_summary_cache_path()
+                .to_string_lossy()
+                .to_string(),
             total_items,
             pending_candidates,
+            total_captures,
             workspaces,
             latest_backup_path,
             enabled: true,
@@ -255,7 +341,9 @@ impl MemoryAssistStore {
 
     pub fn learn_item(&self, request: MemoryItemRequest) -> anyhow::Result<MemoryItem> {
         let conn = self.open()?;
-        learn_item_with_conn(&conn, request)
+        let item = learn_item_with_conn(&conn, request)?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
+        Ok(item)
     }
 
     pub fn update_item(&self, id: &str, request: MemoryItemRequest) -> anyhow::Result<MemoryItem> {
@@ -300,6 +388,7 @@ impl MemoryAssistStore {
             &item.workspace,
             &json!({}),
         )?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
 
@@ -315,6 +404,7 @@ impl MemoryAssistStore {
             &item.workspace,
             &json!({}),
         )?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
 
@@ -447,6 +537,7 @@ impl MemoryAssistStore {
                 &candidate.workspace,
                 &json!({"source": candidate.source, "reason": candidate.reason}),
             )?;
+            let _ = self.sync_inject_summary_cache(&conn, &candidate.workspace);
             return Ok(candidate);
         }
         let id = stable_id("cand", &[&workspace, &text, &now.to_string()]);
@@ -477,7 +568,237 @@ impl MemoryAssistStore {
             &candidate.workspace,
             &json!({"source": candidate.source, "reason": candidate.reason}),
         )?;
+        let _ = self.sync_inject_summary_cache(&conn, &candidate.workspace);
         Ok(candidate)
+    }
+
+    pub fn record_capture(
+        &self,
+        request: MemoryCaptureRequest,
+    ) -> anyhow::Result<MemoryCaptureRecord> {
+        let conn = self.open()?;
+        let now = now_unix();
+        let redacted = redact_secrets(&request.text);
+        let normalized = normalize_memory_text(&redacted);
+        let text_length = normalized.chars().count() as i64;
+        if text_length == 0 {
+            anyhow::bail!("capture text is empty");
+        }
+        let workspace = normalize_workspace(&request.workspace);
+        let source = normalize_redacted_label(&request.source, "codex-capture");
+        let source_session_id = redact_secrets(&request.source_session_id);
+        let text_hash = capture_text_hash(&workspace, &normalized);
+        let summary = capture_summary(&normalized);
+        let candidate_reason = normalize_redacted_label(&request.candidate_reason, "");
+        let skip_reason = normalize_redacted_label(&request.skip_reason, "");
+        let id = stable_id("cap", &[&workspace, &text_hash]);
+        conn.execute(
+            "INSERT INTO memory_captures
+             (id, workspace, source, source_session_id, text_length, text_hash, summary,
+              candidate_triggered, candidate_reason, skip_reason, captured_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+             ON CONFLICT(workspace, text_hash) DO UPDATE SET
+                source = excluded.source,
+                source_session_id = excluded.source_session_id,
+                text_length = excluded.text_length,
+                summary = excluded.summary,
+                candidate_triggered = excluded.candidate_triggered,
+                candidate_reason = excluded.candidate_reason,
+                skip_reason = excluded.skip_reason,
+                updated_at = CASE
+                    WHEN memory_captures.source <> excluded.source
+                      OR memory_captures.source_session_id <> excluded.source_session_id
+                      OR memory_captures.text_length <> excluded.text_length
+                      OR memory_captures.summary <> excluded.summary
+                      OR memory_captures.candidate_triggered <> excluded.candidate_triggered
+                      OR memory_captures.candidate_reason <> excluded.candidate_reason
+                      OR memory_captures.skip_reason <> excluded.skip_reason
+                    THEN excluded.updated_at
+                    ELSE memory_captures.updated_at
+                END",
+            params![
+                id,
+                workspace,
+                source,
+                source_session_id,
+                text_length,
+                text_hash,
+                summary,
+                if request.candidate_triggered { 1 } else { 0 },
+                candidate_reason,
+                skip_reason,
+                now,
+            ],
+        )?;
+        let capture = capture_by_workspace_hash(&conn, &workspace, &text_hash)?;
+        record_event(
+            &conn,
+            "capture_recorded",
+            None,
+            None,
+            &capture.workspace,
+            &json!({
+                "source": capture.source,
+                "text_length": capture.text_length,
+                "candidate_triggered": capture.candidate_triggered,
+                "candidate_reason": capture.candidate_reason,
+                "skip_reason": capture.skip_reason,
+            }),
+        )?;
+        let _ = self.sync_inject_summary_cache(&conn, &capture.workspace);
+        Ok(capture)
+    }
+
+    pub fn backfill_codex_history(
+        &self,
+        workspace_hint: &str,
+        max_messages: usize,
+        generate_candidates: bool,
+    ) -> MemoryHistoryCaptureReport {
+        let home = crate::codex_sqlite::default_codex_home_dir();
+        self.backfill_codex_history_from_home(
+            &home,
+            workspace_hint,
+            max_messages,
+            generate_candidates,
+        )
+    }
+
+    pub fn backfill_codex_history_from_home(
+        &self,
+        codex_home: &Path,
+        workspace_hint: &str,
+        max_messages: usize,
+        generate_candidates: bool,
+    ) -> MemoryHistoryCaptureReport {
+        let mut report = MemoryHistoryCaptureReport::default();
+        let limit = max_messages.clamp(1, 50);
+        let mut remaining = limit;
+        for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(codex_home) {
+            if remaining == 0 {
+                break;
+            }
+            if !db_path.is_file() {
+                continue;
+            }
+            report.db_paths_checked += 1;
+            let db = match Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ) {
+                Ok(db) => db,
+                Err(error) => {
+                    report.errors.push(format!(
+                        "open codex db {} failed: {error}",
+                        db_path.display()
+                    ));
+                    continue;
+                }
+            };
+            let rows = match recent_codex_rollout_rows(&db, remaining) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    report.errors.push(format!(
+                        "read codex db {} failed: {error}",
+                        db_path.display()
+                    ));
+                    continue;
+                }
+            };
+            for row in rows {
+                if remaining == 0 {
+                    break;
+                }
+                let rollout_path = PathBuf::from(&row.rollout_path);
+                if !rollout_path.is_file() {
+                    report.errors.push(format!(
+                        "rollout file not found for {}: {}",
+                        row.thread_id,
+                        rollout_path.display()
+                    ));
+                    continue;
+                }
+                report.rollout_files_checked += 1;
+                let messages = match read_codex_rollout_user_messages(&rollout_path, remaining) {
+                    Ok(messages) => messages,
+                    Err(error) => {
+                        report.errors.push(format!(
+                            "read rollout {} failed: {error}",
+                            rollout_path.display()
+                        ));
+                        continue;
+                    }
+                };
+                for text in messages {
+                    if remaining == 0 {
+                        break;
+                    }
+                    if !memory_capture_text_is_user_evidence(&text) {
+                        continue;
+                    }
+                    remaining -= 1;
+                    report.user_messages_seen += 1;
+                    let workspace = if !row.cwd.trim().is_empty() {
+                        row.cwd.as_str()
+                    } else {
+                        workspace_hint
+                    };
+                    let extraction = if generate_candidates {
+                        extract_learnable_memory(&text)
+                    } else {
+                        None
+                    };
+                    let learn_result = extraction.as_ref().map(|memory| {
+                        self.learn_item(MemoryItemRequest {
+                            text: memory.text.clone(),
+                            workspace: workspace.to_string(),
+                            category: memory.category.clone(),
+                            tags: memory.tags.clone(),
+                            source: "codex-history-auto".to_string(),
+                            source_session_id: row.thread_id.clone(),
+                        })
+                    });
+                    let (candidate_triggered, candidate_reason, skip_reason) = match learn_result {
+                        Some(Ok(_)) => {
+                            report.items_learned += 1;
+                            (
+                                true,
+                                extraction
+                                    .as_ref()
+                                    .map(|memory| format!("auto_learned: {}", memory.reason))
+                                    .unwrap_or_default(),
+                                String::new(),
+                            )
+                        }
+                        Some(Err(error)) => (
+                            false,
+                            extraction
+                                .as_ref()
+                                .map(|memory| memory.reason.clone())
+                                .unwrap_or_default(),
+                            format!("learn_failed: {error}"),
+                        ),
+                        None => (false, String::new(), "history_not_learnable".to_string()),
+                    };
+                    match self.record_capture(MemoryCaptureRequest {
+                        text,
+                        workspace: workspace.to_string(),
+                        source: "codex-history-rollout".to_string(),
+                        source_session_id: row.thread_id.clone(),
+                        candidate_triggered,
+                        candidate_reason,
+                        skip_reason,
+                    }) {
+                        Ok(_) => report.captures_recorded += 1,
+                        Err(error) => report.errors.push(format!(
+                            "record history capture for {} failed: {error}",
+                            row.thread_id
+                        )),
+                    }
+                }
+            }
+        }
+        report
     }
 
     pub fn list_candidates(
@@ -537,6 +858,8 @@ impl MemoryAssistStore {
             &json!({}),
         )?;
         tx.commit()?;
+        let conn = self.open()?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
 
@@ -563,6 +886,7 @@ impl MemoryAssistStore {
             &candidate.workspace,
             &json!({}),
         )?;
+        let _ = self.sync_inject_summary_cache(&conn, &candidate.workspace);
         Ok(candidate)
     }
 
@@ -572,6 +896,7 @@ impl MemoryAssistStore {
     ) -> anyhow::Result<MemorySessionSummary> {
         let workspace = normalize_workspace(&request.workspace);
         let max_items = clamp_limit(request.max_items);
+        let history_report = self.backfill_codex_history(&workspace, 8, true);
         let status = self.status()?;
         let query = self.query(MemoryQueryRequest {
             query: request.query,
@@ -579,8 +904,20 @@ impl MemoryAssistStore {
             include_global: true,
             limit: max_items,
         })?;
+        let conn = self.open()?;
+        let _ = self.sync_inject_summary_cache(&conn, &workspace);
+        let recent_captures = recent_captures(&conn, &workspace, 5)?;
+        let capture_summary = summarize_recent_captures(&recent_captures);
+        let learned_suffix = if history_report.items_learned > 0 {
+            format!(
+                "；本次启动从历史会话自动学习 {} 条",
+                history_report.items_learned
+            )
+        } else {
+            String::new()
+        };
         let summary = if query.results.is_empty() {
-            format!("盘古记忆已启用：{workspace} 暂无匹配记忆。")
+            format!("盘古记忆已启用：{workspace} 暂无匹配记忆{learned_suffix}。")
         } else {
             let joined = query
                 .results
@@ -589,15 +926,21 @@ impl MemoryAssistStore {
                 .collect::<Vec<_>>()
                 .join("；");
             format!(
-                "盘古记忆已启用：{workspace} 命中 {} 条：{joined}",
+                "盘古记忆已启用：{workspace} 命中 {} 条：{joined}{learned_suffix}",
                 query.results.len()
             )
         };
         Ok(MemorySessionSummary {
             workspace,
+            inject_summary_cache_path: self
+                .inject_summary_cache_path()
+                .to_string_lossy()
+                .to_string(),
             total_items: status.total_items,
             pending_candidates: status.pending_candidates,
             injected_items: query.results,
+            recent_captures,
+            capture_summary,
             summary,
         })
     }
@@ -680,6 +1023,8 @@ impl MemoryAssistStore {
             )?;
         }
         tx.commit()?;
+        let conn = self.open()?;
+        let _ = self.sync_inject_summary_cache(&conn, "");
         self.status()
     }
 
@@ -688,6 +1033,7 @@ impl MemoryAssistStore {
         request: MemorySelfCheckRequest,
     ) -> anyhow::Result<MemorySelfCheckResult> {
         let mut checks = Vec::new();
+        let history_report = self.backfill_codex_history("", 20, request.repair);
         {
             let conn = self.open()?;
             let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -711,9 +1057,95 @@ impl MemoryAssistStore {
                 message: format!("{} pending candidates", count_pending_candidates(&conn)?),
             });
             checks.push(MemorySelfCheckItem {
+                name: "history".to_string(),
+                status: if history_report.errors.is_empty() {
+                    "ok".to_string()
+                } else if history_report.user_messages_seen > 0 {
+                    "warning".to_string()
+                } else {
+                    "failed".to_string()
+                },
+                message: format!(
+                    "{} dbs, {} rollout files, {} user messages, {} captures, {} learned items, {} candidates{}",
+                    history_report.db_paths_checked,
+                    history_report.rollout_files_checked,
+                    history_report.user_messages_seen,
+                    history_report.captures_recorded,
+                    history_report.items_learned,
+                    history_report.candidates_created,
+                    if history_report.errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", errors: {}", history_report.errors.join(" | "))
+                    }
+                ),
+            });
+            checks.push(MemorySelfCheckItem {
+                name: "capture".to_string(),
+                status: "ok".to_string(),
+                message: format!("{} captured user messages", count_captures(&conn)?),
+            });
+            let latest_capture = latest_capture(&conn)?;
+            checks.push(MemorySelfCheckItem {
+                name: "candidate".to_string(),
+                status: if latest_capture
+                    .as_ref()
+                    .map(|capture| {
+                        capture.candidate_triggered || !capture.skip_reason.trim().is_empty()
+                    })
+                    .unwrap_or(false)
+                {
+                    "ok".to_string()
+                } else {
+                    "warning".to_string()
+                },
+                message: latest_capture
+                    .as_ref()
+                    .map(|capture| {
+                        if capture.candidate_triggered {
+                            format!(
+                                "latest capture triggered candidate: {}",
+                                capture.candidate_reason
+                            )
+                        } else {
+                            format!("latest capture skipped candidate: {}", capture.skip_reason)
+                        }
+                    })
+                    .unwrap_or_else(|| "no captured user messages yet".to_string()),
+            });
+            checks.push(MemorySelfCheckItem {
+                name: "database".to_string(),
+                status: "ok".to_string(),
+                message: format!(
+                    "{} items, {} pending candidates, {} captures",
+                    count_items(&conn)?,
+                    count_pending_candidates(&conn)?,
+                    count_captures(&conn)?
+                ),
+            });
+            checks.push(MemorySelfCheckItem {
                 name: "workspace".to_string(),
                 status: "ok".to_string(),
-                message: format!("{} workspaces", workspace_summaries(&conn)?.len()),
+                message: format!(
+                    "{} workspaces",
+                    workspace_summaries(&conn, &BTreeMap::new())?.len()
+                ),
+            });
+            checks.push(MemorySelfCheckItem {
+                name: "injection".to_string(),
+                status: "warning".to_string(),
+                message: "injection heartbeat is checked by manager runtime diagnostics"
+                    .to_string(),
+            });
+            checks.push(MemorySelfCheckItem {
+                name: "runtime".to_string(),
+                status: "warning".to_string(),
+                message: "renderer runtime snapshot is checked by manager status sync".to_string(),
+            });
+            checks.push(MemorySelfCheckItem {
+                name: "manager".to_string(),
+                status: "warning".to_string(),
+                message: "manager status sync is checked by Tauri command layer".to_string(),
             });
         }
 
@@ -722,6 +1154,9 @@ impl MemoryAssistStore {
         } else {
             None
         };
+        if let Ok(conn) = self.open() {
+            let _ = self.sync_inject_summary_cache(&conn, "");
+        }
         Ok(MemorySelfCheckResult {
             status: if checks.iter().any(|check| check.status == "failed") {
                 "failed".to_string()
@@ -778,6 +1213,20 @@ impl MemoryAssistStore {
             ],
         )?;
         Ok(backup_path)
+    }
+
+    fn sync_inject_summary_cache(
+        &self,
+        conn: &Connection,
+        workspace_hint: &str,
+    ) -> anyhow::Result<PathBuf> {
+        let path = self.inject_summary_cache_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let content = build_inject_summary_cache(conn, workspace_hint, &self.db_path)?;
+        fs::write(&path, content)?;
+        Ok(path)
     }
 }
 
@@ -942,6 +1391,24 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_memory_events_workspace ON memory_events(workspace);
 
+        CREATE TABLE IF NOT EXISTS memory_captures (
+            id TEXT PRIMARY KEY,
+            workspace TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_session_id TEXT NOT NULL,
+            text_length INTEGER NOT NULL,
+            text_hash TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            candidate_triggered INTEGER NOT NULL DEFAULT 0,
+            candidate_reason TEXT NOT NULL,
+            skip_reason TEXT NOT NULL,
+            captured_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(workspace, text_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_captures_workspace ON memory_captures(workspace);
+        CREATE INDEX IF NOT EXISTS idx_memory_captures_updated_at ON memory_captures(updated_at);
+
         CREATE TABLE IF NOT EXISTS memory_backups (
             id TEXT PRIMARY KEY,
             path TEXT NOT NULL,
@@ -949,7 +1416,7 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             item_count INTEGER NOT NULL,
             candidate_count INTEGER NOT NULL
         );
-        PRAGMA user_version = 1;
+        PRAGMA user_version = 2;
         ",
     )?;
     Ok(())
@@ -1011,6 +1478,23 @@ fn row_to_candidate(row: &Row<'_>) -> rusqlite::Result<MemoryCandidate> {
     })
 }
 
+fn row_to_capture(row: &Row<'_>) -> rusqlite::Result<MemoryCaptureRecord> {
+    Ok(MemoryCaptureRecord {
+        id: row.get(0)?,
+        workspace: row.get(1)?,
+        source: row.get(2)?,
+        source_session_id: row.get(3)?,
+        text_length: row.get(4)?,
+        text_hash: row.get(5)?,
+        summary: row.get(6)?,
+        candidate_triggered: row.get::<_, i64>(7)? != 0,
+        candidate_reason: row.get(8)?,
+        skip_reason: row.get(9)?,
+        captured_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
 fn select_items(conn: &Connection) -> anyhow::Result<Vec<MemoryItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
@@ -1033,6 +1517,534 @@ fn select_candidates(conn: &Connection) -> anyhow::Result<Vec<MemoryCandidate>> 
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+fn capture_by_workspace_hash(
+    conn: &Connection,
+    workspace: &str,
+    text_hash: &str,
+) -> anyhow::Result<MemoryCaptureRecord> {
+    conn.query_row(
+        "SELECT id, workspace, source, source_session_id, text_length, text_hash,
+                summary, candidate_triggered, candidate_reason, skip_reason,
+                captured_at, updated_at
+         FROM memory_captures WHERE workspace = ?1 AND text_hash = ?2",
+        params![workspace, text_hash],
+        row_to_capture,
+    )
+    .with_context(|| format!("memory capture not found: {workspace}/{text_hash}"))
+}
+
+fn latest_capture(conn: &Connection) -> anyhow::Result<Option<MemoryCaptureRecord>> {
+    let sql = format!(
+        "SELECT id, workspace, source, source_session_id, text_length, text_hash,
+                summary, candidate_triggered, candidate_reason, skip_reason,
+                captured_at, updated_at
+         FROM memory_captures
+         WHERE {CAPTURE_USER_EVIDENCE_SQL}
+         ORDER BY updated_at DESC, id DESC LIMIT 1",
+    );
+    conn.query_row(&sql, [], row_to_capture)
+        .optional()
+        .map_err(Into::into)
+}
+
+fn recent_captures(
+    conn: &Connection,
+    workspace: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<MemoryCaptureRecord>> {
+    let workspace = normalize_workspace(workspace);
+    let limit = clamp_limit(limit) as i64;
+    let sql = format!(
+        "SELECT id, workspace, source, source_session_id, text_length, text_hash,
+                summary, candidate_triggered, candidate_reason, skip_reason,
+                captured_at, updated_at
+         FROM memory_captures
+         WHERE (workspace = ?1 OR workspace = ?2)
+           AND {CAPTURE_USER_EVIDENCE_SQL}
+         ORDER BY updated_at DESC, id DESC
+         LIMIT ?3",
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    Ok(stmt
+        .query_map(params![workspace, GLOBAL_WORKSPACE, limit], row_to_capture)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+#[derive(Debug, Clone)]
+struct CodexRolloutRow {
+    thread_id: String,
+    cwd: String,
+    rollout_path: String,
+}
+
+fn codex_session_workspace_counts_from_home(
+    codex_home: &Path,
+    limit: usize,
+) -> anyhow::Result<BTreeMap<String, i64>> {
+    let mut counts = BTreeMap::<String, i64>::new();
+    let limit = limit.clamp(1, 1000);
+    for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(codex_home) {
+        if !db_path.is_file() {
+            continue;
+        }
+        let db =
+            match Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            {
+                Ok(db) => db,
+                Err(_) => continue,
+            };
+        for workspace in codex_thread_workspaces(&db, limit)? {
+            *counts.entry(workspace).or_insert(0) += 1;
+        }
+        for workspace in codex_catalog_workspaces(&db, limit)? {
+            *counts.entry(workspace).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
+}
+
+fn codex_thread_workspaces(db: &Connection, limit: usize) -> anyhow::Result<Vec<String>> {
+    if !sqlite_has_table(db, "threads")? {
+        return Ok(Vec::new());
+    }
+    let columns = sqlite_table_columns(db, "threads")?;
+    if !columns.contains(&"cwd".to_string()) {
+        return Ok(Vec::new());
+    }
+    let updated = if columns.contains(&"updated_at_ms".to_string()) {
+        "updated_at_ms"
+    } else if columns.contains(&"updated_at".to_string()) {
+        "updated_at * 1000"
+    } else if columns.contains(&"created_at_ms".to_string()) {
+        "created_at_ms"
+    } else {
+        "0"
+    };
+    let sql = format!(
+        "SELECT cwd FROM threads
+         WHERE COALESCE(cwd, '') <> ''
+         ORDER BY COALESCE({updated}, 0) DESC
+         LIMIT ?1"
+    );
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map([limit as i64], |row| {
+        let workspace = normalize_workspace(&row.get::<_, Option<String>>(0)?.unwrap_or_default());
+        Ok(workspace)
+    })?;
+    Ok(rows
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|workspace| !workspace.trim().is_empty())
+        .collect())
+}
+
+fn codex_catalog_workspaces(db: &Connection, limit: usize) -> anyhow::Result<Vec<String>> {
+    if !sqlite_has_table(db, "local_thread_catalog")? {
+        return Ok(Vec::new());
+    }
+    let columns = sqlite_table_columns(db, "local_thread_catalog")?;
+    if !columns.contains(&"path".to_string()) {
+        return Ok(Vec::new());
+    }
+    let updated = if columns.contains(&"updated_at_ms".to_string()) {
+        "updated_at_ms"
+    } else if columns.contains(&"updated_at".to_string()) {
+        "updated_at * 1000"
+    } else {
+        "0"
+    };
+    let sql = format!(
+        "SELECT path FROM local_thread_catalog
+         WHERE COALESCE(path, '') <> ''
+         ORDER BY COALESCE({updated}, 0) DESC
+         LIMIT ?1"
+    );
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map([limit as i64], |row| {
+        let workspace = normalize_workspace(&row.get::<_, Option<String>>(0)?.unwrap_or_default());
+        Ok(workspace)
+    })?;
+    Ok(rows
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|workspace| !workspace.trim().is_empty())
+        .collect())
+}
+
+fn recent_codex_rollout_rows(
+    db: &Connection,
+    limit: usize,
+) -> anyhow::Result<Vec<CodexRolloutRow>> {
+    if !sqlite_has_table(db, "threads")? {
+        return Ok(Vec::new());
+    }
+    let columns = sqlite_table_columns(db, "threads")?;
+    if !columns.contains(&"id".to_string()) || !columns.contains(&"rollout_path".to_string()) {
+        return Ok(Vec::new());
+    }
+    let cwd = sqlite_optional_column_expression(&columns, "cwd", "''");
+    let updated = if columns.contains(&"updated_at_ms".to_string()) {
+        "updated_at_ms"
+    } else if columns.contains(&"updated_at".to_string()) {
+        "updated_at * 1000"
+    } else if columns.contains(&"created_at_ms".to_string()) {
+        "created_at_ms"
+    } else {
+        "0"
+    };
+    let sql = format!(
+        "SELECT id, {cwd}, rollout_path FROM threads
+         WHERE COALESCE(rollout_path, '') <> ''
+         ORDER BY COALESCE({updated}, 0) DESC, id DESC
+         LIMIT ?1"
+    );
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map([limit as i64], |row| {
+        Ok(CodexRolloutRow {
+            thread_id: row.get::<_, String>(0)?,
+            cwd: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            rollout_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn read_codex_rollout_user_messages(path: &Path, limit: usize) -> anyhow::Result<Vec<String>> {
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut messages = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if event.get("type").and_then(Value::as_str) != Some("response_item") {
+            continue;
+        }
+        let payload = &event["payload"];
+        if payload.get("type").and_then(Value::as_str) != Some("message")
+            || payload.get("role").and_then(Value::as_str) != Some("user")
+        {
+            continue;
+        }
+        let body = codex_message_content_text(&payload["content"]);
+        if body.trim().is_empty() {
+            continue;
+        }
+        messages.push(body);
+        if messages.len() >= limit {
+            break;
+        }
+    }
+    Ok(messages)
+}
+
+fn codex_message_content_text(content: &Value) -> String {
+    let Some(items) = content.as_array() else {
+        return String::new();
+    };
+    items
+        .iter()
+        .filter_map(|block| {
+            let block_type = block.get("type").and_then(Value::as_str)?;
+            match block_type {
+                "input_text" => block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .and_then(codex_visible_user_text_block),
+                _ => None,
+            }
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn codex_visible_user_text_block(text: &str) -> Option<String> {
+    let mut raw = text.trim().replace("\r\n", "\n").replace('\r', "\n");
+    if raw.contains("## My request for Codex:") {
+        if let Some((_, request)) = raw.split_once("## My request for Codex:") {
+            raw = request.trim().to_string();
+        }
+    } else if raw.starts_with("# Context from my IDE setup:") {
+        return None;
+    }
+
+    let filtered = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("# Files mentioned by the user:"))
+        .filter(|line| !line.starts_with("## "))
+        .filter(|line| !line.starts_with("<image "))
+        .filter(|line| !line.starts_with("<attachment "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let normalized = normalize_memory_text(&filtered);
+    memory_capture_text_is_user_evidence(&normalized).then_some(normalized)
+}
+
+fn memory_capture_text_is_user_evidence(text: &str) -> bool {
+    let normalized = normalize_memory_text(text);
+    if normalized.is_empty() {
+        return false;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    let internal_prefixes = [
+        "<environment_context",
+        "<codex_internal_context",
+        "<system",
+        "<developer",
+        "<image ",
+        "<attachment ",
+        "another language model started to solve this problem",
+    ];
+    !internal_prefixes
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+#[derive(Debug, Clone)]
+struct LearnableMemory {
+    text: String,
+    category: String,
+    tags: Vec<String>,
+    reason: String,
+}
+
+fn extract_learnable_memory(text: &str) -> Option<LearnableMemory> {
+    let normalized = normalize_memory_text(&redact_secrets(text));
+    let classification = classify_learnable_memory(&normalized)?;
+    Some(LearnableMemory {
+        text: normalized.chars().take(2000).collect(),
+        category: classification.category,
+        tags: classification.tags,
+        reason: classification.reason,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct LearnableClassification {
+    category: String,
+    tags: Vec<String>,
+    reason: String,
+}
+
+fn classify_learnable_memory(text: &str) -> Option<LearnableClassification> {
+    let normalized = normalize_memory_text(text);
+    if normalized.chars().count() < 16 {
+        return None;
+    }
+
+    let signals = learnable_signal_scores(&normalized);
+    let confidence: i32 = signals.iter().map(|(_, score)| *score).sum();
+    if confidence < 3 {
+        return None;
+    }
+
+    let has_scope = contains_any_case_insensitive(&normalized, PROJECT_CONTEXT_WORDS)
+        || contains_any_case_insensitive(&normalized, WORKFLOW_CONTEXT_WORDS)
+        || contains_any_case_insensitive(&normalized, PREFERENCE_CONTEXT_WORDS);
+    if !has_scope {
+        return None;
+    }
+
+    let (category, reason_base) = if contains_any_case_insensitive(&normalized, SAFETY_WORDS) {
+        ("safety-rule", "history safety boundary")
+    } else if contains_any_case_insensitive(&normalized, PREFERENCE_CONTEXT_WORDS) {
+        ("preference", "history user preference")
+    } else if contains_any_case_insensitive(&normalized, WORKFLOW_WORDS)
+        || contains_any_case_insensitive(&normalized, WORKFLOW_CONTEXT_WORDS)
+    {
+        ("workflow-rule", "history workflow rule")
+    } else if contains_any_case_insensitive(&normalized, UI_WORDS) {
+        ("ui-rule", "history ui requirement")
+    } else {
+        ("project-rule", "history project requirement")
+    };
+
+    let mut tags = vec![
+        "history".to_string(),
+        "codex".to_string(),
+        "auto-learned".to_string(),
+        category.to_string(),
+    ];
+    for (tag, _) in signals {
+        if !tags.iter().any(|existing| existing == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+
+    Some(LearnableClassification {
+        category: category.to_string(),
+        tags,
+        reason: format!("{reason_base}; confidence={confidence}"),
+    })
+}
+
+fn contains_any_case_insensitive(text: &str, needles: &[&str]) -> bool {
+    let lower = text.to_lowercase();
+    needles
+        .iter()
+        .any(|needle| lower.contains(&needle.to_lowercase()))
+}
+
+fn learnable_signal_scores(text: &str) -> Vec<(&'static str, i32)> {
+    let mut signals = Vec::new();
+    if contains_any_case_insensitive(text, RULE_WORDS) {
+        signals.push(("rule", 2));
+    }
+    if contains_any_case_insensitive(text, PROJECT_CONTEXT_WORDS) {
+        signals.push(("project", 2));
+    }
+    if contains_any_case_insensitive(text, WORKFLOW_CONTEXT_WORDS) {
+        signals.push(("workflow", 2));
+    }
+    if contains_any_case_insensitive(text, UI_WORDS) {
+        signals.push(("ui", 1));
+    }
+    if contains_any_case_insensitive(text, MEMORY_WORDS) {
+        signals.push(("memory", 1));
+    }
+    if contains_any_case_insensitive(text, SAFETY_WORDS) {
+        signals.push(("safety", 2));
+    }
+    if contains_any_case_insensitive(text, PREFERENCE_CONTEXT_WORDS) {
+        signals.push(("preference", 2));
+    }
+    signals
+}
+
+const RULE_WORDS: &[&str] = &[
+    "必须", "不要", "不能", "需要", "保持", "保留", "删除", "改成", "修复", "默认", "统一", "优先",
+    "禁止", "避免", "先", "always", "never", "must", "should", "prefer", "default", "keep",
+    "remove", "fix",
+];
+
+const PROJECT_CONTEXT_WORDS: &[&str] = &[
+    "这个项目",
+    "本项目",
+    "当前项目",
+    "这个仓库",
+    "本仓库",
+    "仓库",
+    "项目",
+    "codex",
+    "claude",
+    "manager",
+    "盘古记忆",
+];
+
+const WORKFLOW_CONTEXT_WORDS: &[&str] = &[
+    "构建",
+    "测试",
+    "验证",
+    "提交",
+    "spec",
+    "acceptance",
+    "agents.md",
+    "workflow",
+    "工作流",
+    "规格",
+    "验收",
+];
+
+const WORKFLOW_WORDS: &[&str] = &[
+    "先读",
+    "先写",
+    "再开发",
+    "验证后",
+    "交付",
+    "构建新版",
+    "重新构建",
+    "提交摘要",
+];
+
+const UI_WORDS: &[&str] = &[
+    "UI",
+    "界面",
+    "前端",
+    "布局",
+    "样式",
+    "主题",
+    "按钮",
+    "开关",
+    "卡片",
+    "页面",
+    "供应商",
+    "工具与插件",
+];
+
+const MEMORY_WORDS: &[&str] = &[
+    "记忆",
+    "盘古",
+    "长期记忆",
+    "会话",
+    "注入",
+    "摘要",
+    "采集",
+    "监听",
+];
+
+const SAFETY_WORDS: &[&str] = &[
+    "不能杀",
+    "不要杀",
+    "不能破坏",
+    "不要删除",
+    "不重置",
+    "不执行",
+    "不接入",
+    "敏感",
+    "api key",
+    "bearer",
+    "sk-",
+];
+
+const PREFERENCE_CONTEXT_WORDS: &[&str] = &[
+    "我喜欢",
+    "我偏好",
+    "我习惯",
+    "我的偏好",
+    "按我",
+    "以后",
+    "注意",
+    "记得",
+];
+
+fn sqlite_has_table(db: &Connection, table: &str) -> anyhow::Result<bool> {
+    Ok(db
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+            [table],
+            |_| Ok(()),
+        )
+        .is_ok())
+}
+
+fn sqlite_table_columns(db: &Connection, table: &str) -> anyhow::Result<Vec<String>> {
+    let mut stmt = db.prepare(&format!(
+        "PRAGMA table_info(\"{}\")",
+        table.replace('"', "\"\"")
+    ))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn sqlite_optional_column_expression<'a>(
+    columns: &[String],
+    column: &'a str,
+    fallback: &'a str,
+) -> &'a str {
+    if columns.iter().any(|existing| existing == column) {
+        column
+    } else {
+        fallback
+    }
+}
+
 fn count_items(conn: &Connection) -> anyhow::Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM memory_items", [], |row| row.get(0))?)
 }
@@ -1053,7 +2065,15 @@ fn count_pending_candidates(conn: &Connection) -> anyhow::Result<i64> {
     )?)
 }
 
-fn workspace_summaries(conn: &Connection) -> anyhow::Result<Vec<MemoryWorkspaceSummary>> {
+fn count_captures(conn: &Connection) -> anyhow::Result<i64> {
+    let sql = format!("SELECT COUNT(*) FROM memory_captures WHERE {CAPTURE_USER_EVIDENCE_SQL}");
+    Ok(conn.query_row(&sql, [], |row| row.get(0))?)
+}
+
+fn workspace_summaries(
+    conn: &Connection,
+    session_counts: &BTreeMap<String, i64>,
+) -> anyhow::Result<Vec<MemoryWorkspaceSummary>> {
     let mut item_counts = BTreeMap::<String, i64>::new();
     let mut stmt =
         conn.prepare("SELECT workspace, COUNT(*) FROM memory_items GROUP BY workspace")?;
@@ -1075,9 +2095,31 @@ fn workspace_summaries(conn: &Connection) -> anyhow::Result<Vec<MemoryWorkspaceS
         let (workspace, count) = row?;
         pending_counts.insert(workspace, count);
     }
+    let mut capture_counts = BTreeMap::<String, i64>::new();
+    let mut latest_capture_at = BTreeMap::<String, i64>::new();
+    let sql = format!(
+        "SELECT workspace, COUNT(*), MAX(updated_at)
+         FROM memory_captures
+         WHERE {CAPTURE_USER_EVIDENCE_SQL}
+         GROUP BY workspace",
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    for row in stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+        ))
+    })? {
+        let (workspace, count, latest) = row?;
+        capture_counts.insert(workspace.clone(), count);
+        latest_capture_at.insert(workspace, latest);
+    }
     let mut workspaces = item_counts
         .keys()
         .chain(pending_counts.keys())
+        .chain(capture_counts.keys())
+        .chain(session_counts.keys())
         .cloned()
         .collect::<BTreeSet<_>>();
     if workspaces.is_empty() {
@@ -1088,6 +2130,9 @@ fn workspace_summaries(conn: &Connection) -> anyhow::Result<Vec<MemoryWorkspaceS
         .map(|workspace| MemoryWorkspaceSummary {
             item_count: item_counts.get(&workspace).copied().unwrap_or(0),
             pending_count: pending_counts.get(&workspace).copied().unwrap_or(0),
+            capture_count: capture_counts.get(&workspace).copied().unwrap_or(0),
+            session_count: session_counts.get(&workspace).copied().unwrap_or(0),
+            latest_capture_at: latest_capture_at.get(&workspace).copied().unwrap_or(0),
             workspace,
         })
         .collect())
@@ -1186,6 +2231,28 @@ fn score_item(
     if item.text.contains(raw_query.trim()) {
         score += 0.35;
     }
+    let raw_query_lower = raw_query.trim().to_lowercase();
+    if !raw_query_lower.is_empty() {
+        if item.category.to_lowercase().contains(&raw_query_lower) {
+            score += 0.12;
+        }
+        if item
+            .tags
+            .iter()
+            .any(|tag| tag.to_lowercase().contains(&raw_query_lower))
+        {
+            score += 0.12;
+        }
+        if item
+            .text
+            .to_lowercase()
+            .split(['。', '，', ',', '.', ';', '；', '\n'])
+            .any(|part| part.trim() == raw_query_lower)
+        {
+            score += 0.18;
+        }
+    }
+    score += (item.access_count.min(20) as f64) * 0.005;
     if item.workspace == GLOBAL_WORKSPACE {
         score += 0.03;
     }
@@ -1251,6 +2318,208 @@ fn is_cjk(ch: char) -> bool {
 fn keywords_json(keywords: &BTreeSet<String>) -> String {
     serde_json::to_string(&keywords.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_else(|_| "[]".to_string())
+}
+
+fn capture_text_hash(workspace: &str, text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(workspace.as_bytes());
+    hasher.update([0]);
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn capture_summary(text: &str) -> String {
+    let normalized = normalize_memory_text(&redact_secrets(text));
+    let chars = normalized.chars().collect::<Vec<_>>();
+    if chars.len() <= 160 {
+        normalized
+    } else {
+        format!("{}…", chars.into_iter().take(160).collect::<String>())
+    }
+}
+
+fn summarize_recent_captures(captures: &[MemoryCaptureRecord]) -> String {
+    if captures.is_empty() {
+        return "暂无最近用户消息采集。".to_string();
+    }
+    let latest = &captures[0];
+    let reason = if latest.candidate_triggered {
+        format!("候选：{}", latest.candidate_reason)
+    } else if latest.skip_reason.trim().is_empty() {
+        "未生成候选：原因待诊断".to_string()
+    } else {
+        format!("未生成候选：{}", latest.skip_reason)
+    };
+    format!(
+        "最近采集 {} 条；最新 {} 字，{}。",
+        captures.len(),
+        latest.text_length,
+        reason
+    )
+}
+
+fn build_inject_summary_cache(
+    conn: &Connection,
+    workspace_hint: &str,
+    db_path: &Path,
+) -> anyhow::Result<String> {
+    let workspace = normalize_workspace(workspace_hint);
+    let total_items = count_items(conn)?;
+    let pending_candidates = count_pending_candidates(conn)?;
+    let total_captures = count_captures(conn)?;
+    let captures = recent_captures(conn, &workspace, 5)?;
+    let context_query = inject_context_query(&workspace, &captures);
+    let items = ranked_items_for_inject_cache(conn, &workspace, &context_query, 8)?;
+    let hot_items = high_frequency_items_for_inject_cache(conn, &workspace, 5)?;
+    let mut lines = vec![
+        "# 盘古记忆会话启动摘要".to_string(),
+        String::new(),
+        "> 该文件由 Claude Codex Pro Tool 自动生成。内容只来自 memory_assist.sqlite 与真实 Codex 会话采集结果。".to_string(),
+        String::new(),
+        format!("- 数据库: {}", db_path.display()),
+        format!("- 工作区: {workspace}"),
+        format!("- 长期记忆: {total_items} 条"),
+        format!("- 待确认候选: {pending_candidates} 条"),
+        format!("- 采集证据: {total_captures} 条"),
+        String::new(),
+        "## 相关长期记忆".to_string(),
+    ];
+    if items.is_empty() {
+        lines.push("- 暂无可注入长期记忆。".to_string());
+    } else {
+        for item in items {
+            lines.push(format!(
+                "- [{} | {}] {}",
+                item.workspace, item.category, item.text
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("## 高频长期记忆".to_string());
+    if hot_items.is_empty() {
+        lines.push("- 暂无高频长期记忆。".to_string());
+    } else {
+        for item in hot_items {
+            lines.push(format!(
+                "- [{} | 访问{}次 | {}] {}",
+                item.workspace, item.access_count, item.category, item.text
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("## 最近采集证据".to_string());
+    if captures.is_empty() {
+        lines.push("- 暂无最近用户消息采集。".to_string());
+    } else {
+        for capture in captures {
+            let reason = if capture.candidate_triggered {
+                format!("学习: {}", capture.candidate_reason)
+            } else if capture.skip_reason.trim().is_empty() {
+                "未学习: 原因待诊断".to_string()
+            } else {
+                format!("未学习: {}", capture.skip_reason)
+            };
+            lines.push(format!(
+                "- [{} | {}字] {}；摘要: {}",
+                capture.workspace, capture.text_length, reason, capture.summary
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("## 使用规则".to_string());
+    lines.push("- 新会话开始时应先读取本摘要，再结合当前用户请求回答。".to_string());
+    lines.push(
+        "- 本摘要不包含 API key、Bearer token、sk- 原文；如发现敏感信息应忽略并报告。".to_string(),
+    );
+    Ok(lines.join("\n"))
+}
+
+fn inject_context_query(workspace: &str, captures: &[MemoryCaptureRecord]) -> String {
+    let mut parts = vec![workspace.to_string()];
+    for capture in captures.iter().take(3) {
+        parts.push(capture.summary.clone());
+        if capture.candidate_triggered {
+            parts.push(capture.candidate_reason.clone());
+        } else {
+            parts.push(capture.skip_reason.clone());
+        }
+    }
+    normalize_memory_text(&parts.join("\n"))
+}
+
+fn ranked_items_for_inject_cache(
+    conn: &Connection,
+    workspace: &str,
+    query: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<MemoryItem>> {
+    let workspace = normalize_workspace(workspace);
+    let limit = clamp_limit(limit);
+    let all_workspaces = is_all_workspaces(&workspace);
+    let scope = workspace_scope(&workspace, true);
+    let query_keywords = keywords_for(query);
+    let mut stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, source_session_id,
+                created_at, updated_at, last_accessed_at, access_count
+         FROM memory_items
+         ORDER BY updated_at DESC, access_count DESC, id DESC",
+    )?;
+    let mut matches = Vec::new();
+    for row in stmt.query_map([], row_to_item)? {
+        let item = row?;
+        if all_workspaces || scope.contains(&item.workspace.as_str()) {
+            let (score, _) = score_item(&query_keywords, query, &item);
+            matches.push((score, item));
+        }
+    }
+    matches.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.1.access_count.cmp(&left.1.access_count))
+            .then_with(|| right.1.updated_at.cmp(&left.1.updated_at))
+    });
+    let items = matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, item)| item)
+        .collect::<Vec<_>>();
+    Ok(items)
+}
+
+fn high_frequency_items_for_inject_cache(
+    conn: &Connection,
+    workspace: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<MemoryItem>> {
+    let workspace = normalize_workspace(workspace);
+    let limit = clamp_limit(limit);
+    let all_workspaces = is_all_workspaces(&workspace);
+    let scope = workspace_scope(&workspace, true);
+    let mut stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, source_session_id,
+                created_at, updated_at, last_accessed_at, access_count
+         FROM memory_items
+         WHERE access_count > 0
+         ORDER BY access_count DESC, last_accessed_at DESC, updated_at DESC, id DESC",
+    )?;
+    let mut items = Vec::new();
+    for row in stmt.query_map([], row_to_item)? {
+        let item = row?;
+        if all_workspaces || scope.contains(&item.workspace.as_str()) {
+            items.push(item);
+        }
+        if items.len() >= limit {
+            break;
+        }
+    }
+    Ok(items)
 }
 
 fn record_event(

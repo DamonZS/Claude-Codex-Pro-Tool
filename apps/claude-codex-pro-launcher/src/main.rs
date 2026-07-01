@@ -5,8 +5,8 @@ use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
 use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStore, MemoryCandidateRequest, MemoryItemRequest, MemoryQueryRequest,
-    MemorySelfCheckRequest, MemorySessionRequest,
+    MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryItemRequest,
+    MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
 use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
@@ -729,6 +729,19 @@ impl BridgeRuntimeService for LauncherRuntimeService {
             "status": "ok",
             "candidates": self.memory_store.list_candidates(workspace, include_global)?
         }))
+    }
+
+    async fn memory_capture(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryCaptureRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.record_capture(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_resolve_workspace(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(claude_codex_pro_core::routes::resolve_codex_memory_workspace_response(
+            &payload,
+        ))
     }
 
     async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {

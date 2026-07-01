@@ -3,11 +3,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use crate::memory_assist::{
-    MemoryAssistStore, MemoryCandidateRequest, MemoryItemRequest, MemoryQueryRequest,
-    MemorySelfCheckRequest, MemorySessionRequest,
+    MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryItemRequest,
+    MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
@@ -136,6 +137,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     }
     async fn memory_candidates(&self, _payload: Value) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线", "candidates": []}))
+    }
+    async fn memory_capture(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "盘古记忆采集尚未接线"}))
+    }
+    async fn memory_resolve_workspace(&self, _payload: Value) -> anyhow::Result<Value> {
+        Ok(json!({"status": "failed", "message": "盘古记忆 workspace 解析尚未接线"}))
     }
     async fn memory_approve(&self, _payload: Value) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
@@ -279,6 +286,14 @@ pub async fn handle_bridge_request(
         },
         "/memory/candidates" => match ensure_memory_candidates_allowed(&ctx, &payload).await {
             Ok(()) => ctx.runtime.memory_candidates(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/capture" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_capture(payload.clone()).await,
+            Err(err) => Err(err),
+        },
+        "/memory/resolve-workspace" => match ensure_memory_enabled(&ctx).await {
+            Ok(()) => ctx.runtime.memory_resolve_workspace(payload.clone()).await,
             Err(err) => Err(err),
         },
         "/memory/approve" => match ensure_memory_enabled(&ctx).await {
@@ -748,6 +763,17 @@ impl BridgeRuntimeService for CoreRuntimeService {
         }))
     }
 
+    async fn memory_capture(&self, payload: Value) -> anyhow::Result<Value> {
+        let request: MemoryCaptureRequest = serde_json::from_value(payload)?;
+        let mut value = serde_json::to_value(self.memory_store.record_capture(request)?)?;
+        value["status"] = json!("ok");
+        Ok(value)
+    }
+
+    async fn memory_resolve_workspace(&self, payload: Value) -> anyhow::Result<Value> {
+        Ok(resolve_codex_memory_workspace_response(&payload))
+    }
+
     async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
         let id = payload
             .get("id")
@@ -775,6 +801,212 @@ impl BridgeRuntimeService for CoreRuntimeService {
         value["status"] = json!("ok");
         Ok(value)
     }
+}
+
+pub fn resolve_codex_memory_workspace_response(payload: &Value) -> Value {
+    let current_workspace = payload
+        .get("workspace")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if !current_workspace.is_empty() && !current_workspace.starts_with("codex:path:") {
+        return json!({
+            "status": "ok",
+            "resolved": false,
+            "workspace": current_workspace,
+            "source": "already_stable"
+        });
+    }
+
+    let project_label = payload
+        .get("projectLabel")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let thread_title = payload
+        .get("threadTitle")
+        .or_else(|| payload.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let url = payload
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match resolve_codex_workspace_from_local_sessions(project_label, thread_title, url) {
+        Some((workspace, source)) => json!({
+            "status": "ok",
+            "resolved": true,
+            "workspace": workspace,
+            "source": source
+        }),
+        None => json!({
+            "status": "ok",
+            "resolved": false,
+            "workspace": current_workspace,
+            "source": "unresolved"
+        }),
+    }
+}
+
+fn resolve_codex_workspace_from_local_sessions(
+    project_label: &str,
+    thread_title: &str,
+    url: &str,
+) -> Option<(String, String)> {
+    let project_label = normalize_match_text(project_label);
+    let thread_title = normalize_match_text(thread_title);
+    let thread_id = extract_uuidish(url);
+    let codex_home = crate::codex_sqlite::default_codex_home_dir();
+    for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(&codex_home) {
+        if !db_path.is_file() {
+            continue;
+        }
+        let Ok(db) =
+            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            continue;
+        };
+        if let Some(workspace) =
+            resolve_workspace_from_threads(&db, &project_label, &thread_title, &thread_id)
+        {
+            return Some((workspace, "codex_threads".to_string()));
+        }
+        if let Some(workspace) = resolve_workspace_from_local_catalog(&db, &project_label) {
+            return Some((workspace, "codex_local_thread_catalog".to_string()));
+        }
+    }
+    None
+}
+
+fn resolve_workspace_from_threads(
+    db: &Connection,
+    project_label: &str,
+    thread_title: &str,
+    thread_id: &str,
+) -> Option<String> {
+    if !sqlite_table_has_columns(db, "threads", &["id", "cwd"]).ok()? {
+        return None;
+    }
+    let columns = sqlite_columns(db, "threads").ok()?;
+    let title_expr = if columns.iter().any(|column| column == "title") {
+        "title"
+    } else {
+        "''"
+    };
+    let updated = if columns.iter().any(|column| column == "updated_at_ms") {
+        "updated_at_ms"
+    } else if columns.iter().any(|column| column == "updated_at") {
+        "updated_at * 1000"
+    } else {
+        "0"
+    };
+    let sql = format!(
+        "SELECT id, {title_expr}, cwd FROM threads
+         WHERE COALESCE(cwd, '') <> ''
+         ORDER BY COALESCE({updated}, 0) DESC, id DESC
+         LIMIT 500"
+    );
+    let mut stmt = db.prepare(&sql).ok()?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            ))
+        })
+        .ok()?;
+    let mut fallback_by_label = None;
+    for row in rows.flatten() {
+        let (id, title, cwd) = row;
+        let cwd = cwd.trim().to_string();
+        if cwd.is_empty() {
+            continue;
+        }
+        let cwd_label = normalize_match_text(
+            Path::new(&cwd)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&cwd),
+        );
+        let normalized_title = normalize_match_text(&title);
+        if !thread_id.is_empty() && normalize_match_text(&id).contains(thread_id) {
+            return Some(cwd);
+        }
+        if !thread_title.is_empty()
+            && (!normalized_title.is_empty()
+                && (normalized_title.contains(&thread_title)
+                    || thread_title.contains(&normalized_title)))
+        {
+            return Some(cwd);
+        }
+        if !project_label.is_empty()
+            && !cwd_label.is_empty()
+            && (cwd_label == project_label
+                || cwd_label.contains(project_label)
+                || project_label.contains(&cwd_label))
+        {
+            fallback_by_label.get_or_insert(cwd);
+        }
+    }
+    fallback_by_label
+}
+
+fn resolve_workspace_from_local_catalog(db: &Connection, project_label: &str) -> Option<String> {
+    if project_label.is_empty()
+        || !sqlite_table_has_columns(db, "local_thread_catalog", &["path"]).ok()?
+    {
+        return None;
+    }
+    let mut stmt = db
+        .prepare("SELECT path FROM local_thread_catalog WHERE COALESCE(path, '') <> '' LIMIT 500")
+        .ok()?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, Option<String>>(0))
+        .ok()?;
+    for path in rows.flatten().flatten() {
+        let label = normalize_match_text(
+            Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&path),
+        );
+        if label == project_label || label.contains(project_label) || project_label.contains(&label)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn sqlite_table_has_columns(
+    db: &Connection,
+    table: &str,
+    required: &[&str],
+) -> rusqlite::Result<bool> {
+    let columns = sqlite_columns(db, table)?;
+    Ok(required
+        .iter()
+        .all(|required| columns.iter().any(|column| column == required)))
+}
+
+fn sqlite_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = db.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect()
+}
+
+fn normalize_match_text(text: &str) -> String {
+    text.chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn extract_uuidish(text: &str) -> String {
+    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
+        .find(|part| part.len() >= 16 && part.contains('-'))
+        .map(normalize_match_text)
+        .unwrap_or_default()
 }
 
 struct UnavailableDataService;

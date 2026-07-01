@@ -163,7 +163,9 @@ fn injection_script_modal_close_does_not_toggle_settings() {
     assert!(script.contains("const settings = claudeCodexProConfiguredSettings();"));
     assert!(script.contains("const configuredSettings = claudeCodexProConfiguredSettings();"));
     assert!(script.contains("button.dataset.enabled = String(!!configuredSettings[key]);"));
-    assert!(script.contains("setClaudeCodexProSetting(key, !claudeCodexProConfiguredSettings()[key]);"));
+    assert!(
+        script.contains("setClaudeCodexProSetting(key, !claudeCodexProConfiguredSettings()[key]);")
+    );
 
     let close_handler = script
         .split("closeButton?.addEventListener(\"click\", (event) => {")
@@ -175,7 +177,9 @@ fn injection_script_modal_close_does_not_toggle_settings() {
     assert!(close_handler.contains("overlay.remove();"));
 
     let overlay_close_branch = script
-        .split("if (event.target === overlay || target?.closest(\".claude-codex-pro-modal-close\")) {")
+        .split(
+            "if (event.target === overlay || target?.closest(\".claude-codex-pro-modal-close\")) {",
+        )
         .nth(1)
         .and_then(|tail| tail.split("const tabButton = target?.closest").next())
         .expect("overlay close branch should be before modal action handling");
@@ -332,6 +336,33 @@ fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
 }
 
 #[test]
+fn injection_script_memory_auto_suggest_recognizes_project_requirements() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function codexMemoryLooksLearnableText"));
+    assert!(script.contains("project requirement phrase"));
+    assert!(script.contains("ui workflow requirement"));
+    assert!(script.contains("workflow requirement"));
+    assert!(script.contains("function codexMemoryLooksLikeChatter"));
+    assert!(script.contains("function codexMemoryLooksLikeTitleOnly"));
+    assert!(script.contains("codexMemoryLooksLikeChatter(text)"));
+    assert!(script.contains("codexMemoryLooksLikeTitleOnly(text)"));
+    assert!(script.contains("async function codexMemoryRecordCapture"));
+    assert!(script.contains("postJson(\"/memory/capture\""));
+    assert!(script.contains("skipReason: \"not_learnable\""));
+    assert!(script.contains("skipReason: \"duplicate_recent_memory\""));
+    assert!(script.contains("skipReason: \"learn_failed\""));
+    assert!(script.contains("postJson(\"/memory/learn\""));
+    assert!(script.contains("memory_auto_learned"));
+    assert!(script.contains("database_failed"));
+    assert!(script.contains("await codexMemoryLoadSession(true);"));
+    assert!(
+        !script.contains("Math.max(1, Number(codexMemoryState.pendingCandidates || 0) + 1)"),
+        "candidate count must be synchronized from backend state instead of optimistic +1"
+    );
+}
+
+#[test]
 fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
     let script = assets::injection_script(57321);
     let start = script
@@ -345,6 +376,9 @@ fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
 
     assert!(function_body.contains("codexMemoryConversationMessages(\"user\")"));
     assert!(script.contains("[data-message-author-role=\"user\"]"));
+    assert!(script.contains("function codexMemoryUserMessageCandidates"));
+    assert!(script.contains("nodeOrAncestorLooksLikeCodexUserBubble(child)"));
+    assert!(script.contains(".group.flex.w-full.flex-col.items-end.justify-end.gap-1"));
     assert!(
         !function_body.contains("[data-testid=\"conversation-turn\"]"),
         "auto-suggest fallback must not read generic conversation turns"
@@ -364,19 +398,21 @@ fn injection_script_memory_session_uses_conversation_root_not_sidebar_titles() {
     assert!(script.contains("codexMemoryNodeIsInsideConversation"));
     assert!(script.contains("[data-app-action-sidebar-thread-id]"));
     assert!(script.contains("[role=\"navigation\"]"));
-    assert!(script.contains("if (!query) {"));
-    assert!(script.contains("等待真实对话消息后写入盘古记忆"));
+    assert!(!script.contains("等待真实对话消息后写入盘古记忆"));
     assert!(!script.contains("document.querySelectorAll('[data-message-author-role=\"user\"], [data-testid=\"conversation-turn\"], main .prose')"));
     let workspace_start = script
         .find("function codexMemoryWorkspace()")
         .expect("memory workspace function exists");
     let workspace_end = script[workspace_start..]
-        .find("function codexMemoryConversationRoot")
+        .find("function codexMemoryWorkspaceIsPathFallback")
         .map(|offset| workspace_start + offset)
-        .expect("memory conversation root follows workspace function");
+        .expect("memory workspace fallback helper follows workspace function");
     let workspace_body = &script[workspace_start..workspace_end];
     assert!(workspace_body.contains("codex:thread:"));
     assert!(workspace_body.contains("codex:path:"));
+    assert!(workspace_body.contains("rememberCodexMemoryProjectContext(project)"));
+    assert!(workspace_body.contains("readCodexMemoryProjectContext()"));
+    assert!(script.contains("/memory/resolve-workspace"));
     assert!(
         !workspace_body.contains("document.title"),
         "memory workspace must not use conversation titles such as codex:你好"
@@ -465,11 +501,9 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
             "if (name === \"openai-curated\") return \"claude-codex-pro-openai-curated\""
         )
     );
-    assert!(
-        script.contains(
-            "if (name === \"openai-api-curated\") return \"claude-codex-pro-openai-api-curated\""
-        )
-    );
+    assert!(script.contains(
+        "if (name === \"openai-api-curated\") return \"claude-codex-pro-openai-api-curated\""
+    ));
     assert!(script.contains("restored === \"openai-api-curated\""));
     assert!(script.contains("pluginName + \"@\" + restorePluginMarketplaceName"));
     assert!(script.contains("const tokens = normalizedQuery.split(/\\s+/).filter(Boolean);"));

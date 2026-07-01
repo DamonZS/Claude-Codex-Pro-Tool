@@ -25,6 +25,7 @@
   const upstreamBranchOptionAttribute = "data-codex-upstream-branch-option";
   const upstreamBranchSelectionKey = "codexUpstreamBranchSelection";
   const upstreamProjectContextKey = "codexUpstreamProjectContext";
+  const codexMemoryProjectContextKey = "claudeCodexProMemoryProjectContext";
   const zedRemoteOpenVersion = "1";
   const zedRemoteOpenInMenuVersion = "1";
   const zedRemoteOpenInMenuActivationWindowMs = 600;
@@ -6289,6 +6290,34 @@
     }
   }
 
+  function readCodexMemoryProjectContext() {
+    try {
+      const context = JSON.parse(sessionStorage.getItem(codexMemoryProjectContextKey) || "null");
+      if (!context || typeof context !== "object") return null;
+      if (typeof context.at === "number" && Date.now() - context.at > upstreamProjectContextTtlMs) return null;
+      if (!context.repoPath && !context.projectId) return null;
+      return context;
+    } catch {
+      return null;
+    }
+  }
+
+  function rememberCodexMemoryProjectContext(context) {
+    if (!context?.repoPath && !context?.projectId) return context || null;
+    const next = {
+      repoPath: context.repoPath || "",
+      projectId: context.projectId || "",
+      label: context.label || "",
+      at: Date.now(),
+    };
+    try {
+      sessionStorage.setItem(codexMemoryProjectContextKey, JSON.stringify(next));
+      writeUpstreamProjectContext(next);
+    } catch {
+    }
+    return next;
+  }
+
   function projectContextFromStartButton(button) {
     const row = button?.closest?.('[data-app-action-sidebar-project-row][data-app-action-sidebar-project-id]');
     return projectContextFromRow(row);
@@ -9044,10 +9073,13 @@
     totalItems: 0,
     pendingCandidates: 0,
     injectedItems: [],
+    injectSummaryCachePath: "",
     summary: "正在读取盘古记忆…",
     lastLoadedAt: 0,
     lastSuggestionHash: "",
     lastSuggestionAt: 0,
+    lastAutoSuggestDiagnosticHash: "",
+    lastAutoSuggestDiagnosticAt: 0,
     activeUntil: 0,
     activeSource: "idle",
   };
@@ -9089,6 +9121,7 @@
       workspace: codexMemoryState.workspace,
       totalItems: Number(codexMemoryState.totalItems || 0),
       pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
+      injectSummaryCachePath: codexMemoryState.injectSummaryCachePath || "",
       summary: codexMemoryState.summary || "",
       source: active ? (codexMemoryState.activeSource || "stream") : "idle",
     };
@@ -9097,14 +9130,92 @@
 
   function codexMemoryWorkspace() {
     const project = currentProjectContext?.();
-    if (project?.repoPath) return `codex:repo:${project.repoPath}`;
-    if (project?.projectId) return `codex:project:${project.projectId}`;
+    if (project?.repoPath || project?.projectId) {
+      const remembered = rememberCodexMemoryProjectContext(project);
+      if (remembered?.repoPath) return `codex:repo:${remembered.repoPath}`;
+      if (remembered?.projectId) return `codex:project:${remembered.projectId}`;
+    }
+    const cachedProject = readCodexMemoryProjectContext();
+    if (cachedProject?.repoPath) return `codex:repo:${cachedProject.repoPath}`;
+    if (cachedProject?.projectId) return `codex:project:${cachedProject.projectId}`;
     const pathParts = String(location.pathname || "").split("/").filter(Boolean);
     const thread = pathParts.find((part) => /^[a-z0-9][a-z0-9_-]{7,}$/i.test(part)) || "";
     if (thread) return `codex:thread:${thread.slice(0, 80)}`;
     const pathKey = `${location.origin || ""}${location.pathname || ""}`;
     if (pathKey.trim()) return `codex:path:${codexMemoryHash(pathKey).slice(0, 16)}`;
     return "codex";
+  }
+
+  function codexMemoryWorkspaceIsPathFallback(workspace) {
+    return /^codex:path:/i.test(String(workspace || ""));
+  }
+
+  function codexMemoryVisibleThreadTitle() {
+    const candidates = [
+      document.querySelector('[data-testid="thread-title"]'),
+      document.querySelector('[data-thread-title]'),
+      document.querySelector("main h1"),
+      document.querySelector("header h1"),
+      document.querySelector('[role="main"] h1'),
+    ].filter(Boolean);
+    for (const node of candidates) {
+      const text = normalizedElementText(node);
+      if (text) return text;
+    }
+    return String(document.title || "").replace(/\s+-\s+Codex.*$/i, "").trim();
+  }
+
+  function codexMemoryVisibleProjectLabel() {
+    const project = currentProjectContext?.();
+    if (project?.label) return project.label;
+    const rows = [...document.querySelectorAll("aside *, nav *")]
+      .filter((node) => node instanceof HTMLElement && visibleElement(node))
+      .map((node) => normalizedElementText(node))
+      .filter((text) => text && text.length <= 80);
+    const title = codexMemoryVisibleThreadTitle();
+    const titleIndex = rows.findIndex((text) => title && (text === title || title.includes(text) || text.includes(title)));
+    if (titleIndex > 0) {
+      for (let index = titleIndex - 1; index >= 0; index -= 1) {
+        const text = rows[index];
+        if (/^(项目|搜索|新对话|已安排|插件|设置|账户)$/i.test(text)) continue;
+        if (/^\d+\s*(分钟|小时|天|周|月|年|min|hour|day|week)/i.test(text)) continue;
+        if (text !== title) return text;
+      }
+    }
+    const expanded = visibleProjectRows?.().find((row) => row.getAttribute("data-app-action-sidebar-project-collapsed") === "false");
+    return normalizeProjectLabel(expanded?.getAttribute?.("data-app-action-sidebar-project-label") || normalizedElementText(expanded));
+  }
+
+  async function codexMemoryResolvedWorkspace() {
+    const workspace = codexMemoryWorkspace();
+    if (!codexMemoryWorkspaceIsPathFallback(workspace)) {
+      codexMemoryState.workspace = workspace;
+      return workspace;
+    }
+    try {
+      const result = await postJson("/memory/resolve-workspace", {
+        workspace,
+        url: location.href,
+        title: document.title || "",
+        threadTitle: codexMemoryVisibleThreadTitle(),
+        projectLabel: codexMemoryVisibleProjectLabel(),
+      });
+      const resolved = String(result?.workspace || "").trim();
+      if (result?.status === "ok" && result?.resolved && resolved && !codexMemoryWorkspaceIsPathFallback(resolved)) {
+        const context = resolved.startsWith("codex:repo:")
+          ? { repoPath: resolved.slice("codex:repo:".length), projectId: "", label: "", at: Date.now() }
+          : { repoPath: resolved, projectId: "", label: "", at: Date.now() };
+        rememberCodexMemoryProjectContext(context);
+        codexMemoryState.workspace = resolved.startsWith("codex:") ? resolved : `codex:repo:${resolved}`;
+        return codexMemoryState.workspace;
+      }
+    } catch (error) {
+      codexMemoryAutoSuggestDiagnostic("workspace_resolve_failed", {
+        message: String(error?.message || error).slice(0, 240),
+      });
+    }
+    codexMemoryState.workspace = workspace;
+    return workspace;
   }
 
   function codexMemoryConversationRoot() {
@@ -9122,6 +9233,58 @@
     return !!root && root.contains(node);
   }
 
+  function codexMemoryMessageTarget(node) {
+    return node?.closest?.('[data-testid="conversation-turn"]') || node;
+  }
+
+  function codexMemoryUserMessageCandidates(root) {
+    if (!root) return [];
+    const explicitCandidates = Array.from(root.querySelectorAll([
+      '[data-message-author-role="user"]',
+      '[data-testid="conversation-turn"][data-message-author-role="user"]',
+      '[data-testid="conversation-turn"] [data-message-author-role="user"]',
+      '[class*="user-message"]',
+      '[class*="UserMessage"]',
+    ].join(", ")));
+    const codexUserBubbles = Array.from(root.querySelectorAll(".group.flex.w-full.flex-col.items-end.justify-end.gap-1")).flatMap((group) => {
+      return Array.from(group.children).filter((child) => nodeOrAncestorLooksLikeCodexUserBubble(child));
+    });
+    return [...explicitCandidates, ...codexUserBubbles];
+  }
+
+  function codexMemoryAssistantMessageCandidates(root) {
+    if (!root) return [];
+    return Array.from(root.querySelectorAll([
+      '[data-message-author-role="assistant"]',
+      '[data-testid="conversation-turn"][data-message-author-role="assistant"]',
+      '[data-testid="conversation-turn"] [data-message-author-role="assistant"]',
+    ].join(", ")));
+  }
+
+  function codexMemoryOrderedMessageCandidates(root, role = "") {
+    const candidates = role === "user"
+      ? codexMemoryUserMessageCandidates(root)
+      : role === "assistant"
+        ? codexMemoryAssistantMessageCandidates(root)
+        : [...codexMemoryUserMessageCandidates(root), ...codexMemoryAssistantMessageCandidates(root)];
+    return candidates.sort((left, right) => {
+      if (left === right) return 0;
+      const position = left.compareDocumentPosition?.(right) || 0;
+      if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      return 0;
+    });
+  }
+
+  function codexMemoryMessageText(node) {
+    const textNode = node.querySelector?.(".prose, [data-message-content], [data-testid='message-content']") || node;
+    const clone = textNode.cloneNode?.(true);
+    if (clone?.querySelectorAll) {
+      clone.querySelectorAll("button, svg, [aria-hidden='true'], .sr-only, textarea, input").forEach((child) => child.remove());
+    }
+    return codexMemoryNormalizeMessageText((clone?.textContent || textNode.textContent || ""));
+  }
+
   function codexMemoryNormalizeMessageText(text) {
     return String(text || "")
       .replace(/\s+/g, " ")
@@ -9132,17 +9295,13 @@
   function codexMemoryConversationMessages(role = "") {
     const root = codexMemoryConversationRoot();
     if (!root) return [];
-    const selectors = role
-      ? [`[data-message-author-role="${role}"]`, `[data-testid="conversation-turn"][data-message-author-role="${role}"]`]
-      : ['[data-message-author-role="user"]', '[data-message-author-role="assistant"]', '[data-testid="conversation-turn"]'];
     const seen = new Set();
-    return selectors
-      .flatMap((selector) => Array.from(root.querySelectorAll(selector)))
+    return codexMemoryOrderedMessageCandidates(root, role)
       .filter((node) => codexMemoryNodeIsInsideConversation(node))
       .map((node) => {
-        const textNode = node.querySelector?.(".prose, [data-message-content], [data-testid='message-content']") || node;
-        const text = codexMemoryNormalizeMessageText(textNode.textContent || "");
-        const key = `${node.getAttribute?.("data-message-author-role") || ""}:${text}`;
+        const target = codexMemoryMessageTarget(node);
+        const text = codexMemoryMessageText(node);
+        const key = `${role || target.getAttribute?.("data-message-author-role") || ""}:${text}`;
         if (!text || seen.has(key)) return "";
         seen.add(key);
         return text;
@@ -9169,11 +9328,18 @@
   function codexMemorySuggestionFromText(rawText) {
     const text = String(rawText || "").replace(/\s+/g, " ").trim();
     if (!text || text.length < 8) return null;
+    if (codexMemoryLooksLikeChatter(text) || codexMemoryLooksLikeTitleOnly(text)) return null;
     const patterns = [
+      { re: /(?:\u76d8\u53e4\u8bb0\u5fc6|\u8bb0\u5fc6).*(?:\u662f\u5426|\u6709\u6ca1\u6709|\u6ca1\u6709|\u539f\u56e0|\u4fee\u590d|\u8bb0\u5f55|\u5019\u9009|\u76d1\u542c|\u5bf9\u8bdd|\u4f1a\u8bdd)|(?:\u8fd9\u6761\u5bf9\u8bdd|\u5f53\u524d\u5bf9\u8bdd|\u672c\u6761\u5bf9\u8bdd).*(?:\u8bb0\u5fc6|\u8bb0\u5f55|\u5019\u9009|\u76d8\u53e4)|(?:pangu|memory).*(?:candidate|record|remember|debug|fix|session)/i, reason: "memory self-check phrase" },
       { re: /(?:帮我|请|以后)?记住[:：]?\s*(.+)$/i, reason: "explicit remember phrase" },
       { re: /(?:以后都这样|以后按这个|以后统一|以后默认)[:：]?\s*(.+)$/i, reason: "future preference phrase" },
       { re: /(?:这个项目约定|项目约定|仓库约定|本项目约定)[:：]?\s*(.+)$/i, reason: "project convention phrase" },
       { re: /(?:以后.*(?:先|必须|不要|不能|需要).*)$/i, reason: "future rule phrase" },
+      { re: /(?:我(?:喜欢|偏好|习惯)|我的(?:偏好|习惯)|默认用|统一用|优先用)[:：]?\s*(.+)$/i, reason: "user preference phrase" },
+      { re: /(?:这个项目|本项目|当前项目|这个仓库|本仓库).*(?:必须|不要|不能|需要|保持|禁止|默认|统一|优先|遵守|保留|删除|改成|修复).*/i, reason: "project requirement phrase" },
+      { re: /(?:注意|记得|以后注意)[:：]?\s*(?:要|必须|不要|不能|需要|保持|保留|避免|先|优先).*/i, reason: "attention rule phrase" },
+      { re: /(?:UI|界面|前端|布局|样式|主题|按钮|开关|卡片|页面).*(?:改成|保持|删除|不要|不能|需要|对齐|一致|修复).*/i, reason: "ui workflow requirement" },
+      { re: /(?:构建|测试|验证|提交|仓库|插件|skill|mcp|codex|claude).*(?:必须|不要|不能|需要|保持|默认|自动|修复|删除|改成).*/i, reason: "workflow requirement" },
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern.re);
@@ -9185,7 +9351,57 @@
         };
       }
     }
+    if (codexMemoryLooksLearnableText(text)) {
+      return {
+        text: text.slice(0, 2000),
+        reason: "learnable user instruction",
+      };
+    }
     return null;
+  }
+
+  function codexMemoryLooksLearnableText(text) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    if (normalized.length < 16 || normalized.length > 2400) return false;
+    if (codexMemoryLooksMemorySelfCheckText(normalized)) return true;
+    const ruleWords = /(?:必须|不要|不能|需要|保持|保留|删除|改成|修复|默认|统一|优先|禁止|避免|先|always|never|must|should|prefer|default|keep|remove|fix)/i;
+    if (!ruleWords.test(normalized)) return false;
+    const contextWords = /(?:这个项目|本项目|当前项目|这个仓库|本仓库|UI|界面|前端|布局|样式|主题|按钮|开关|卡片|页面|构建|测试|验证|提交|仓库|插件|skill|mcp|codex|claude|manager|workflow)/i;
+    const userPreference = /(?:我(?:喜欢|偏好|习惯)|我的(?:偏好|习惯)|按我|给我|以后|注意|记得)/i;
+    return contextWords.test(normalized) || userPreference.test(normalized);
+  }
+
+  function codexMemoryLooksMemorySelfCheckText(text) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    return /(?:\u76d8\u53e4\u8bb0\u5fc6|\u8bb0\u5fc6).*(?:\u662f\u5426|\u6709\u6ca1\u6709|\u6ca1\u6709|\u539f\u56e0|\u4fee\u590d|\u8bb0\u5f55|\u5019\u9009|\u76d1\u542c|\u5bf9\u8bdd|\u4f1a\u8bdd)|(?:\u8fd9\u6761\u5bf9\u8bdd|\u5f53\u524d\u5bf9\u8bdd|\u672c\u6761\u5bf9\u8bdd).*(?:\u8bb0\u5fc6|\u8bb0\u5f55|\u5019\u9009|\u76d8\u53e4)|(?:pangu|memory).*(?:candidate|record|remember|debug|fix|session)/i.test(normalized);
+  }
+
+  function codexMemoryLooksLikeChatter(text) {
+    const normalized = String(text || "").replace(/[。！？!?.,，\s]/g, "").toLowerCase();
+    if (!normalized) return true;
+    const chatter = new Set([
+      "你好",
+      "您好",
+      "嗨",
+      "hi",
+      "hello",
+      "hey",
+      "谢谢",
+      "感谢",
+      "好的",
+      "好",
+      "可以",
+      "继续",
+      "再来",
+    ]);
+    return chatter.has(normalized);
+  }
+
+  function codexMemoryLooksLikeTitleOnly(text) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    if (/^codex[:：].{1,40}$/i.test(normalized)) return true;
+    if (/^(new chat|new conversation|untitled|无标题|新建对话)$/i.test(normalized)) return true;
+    return normalized.length < 10 && !/[，。；：,.!?！？]/.test(normalized);
   }
 
   function codexMemoryHash(text) {
@@ -9195,6 +9411,46 @@
       hash = Math.imul(hash, 16777619);
     }
     return String(hash >>> 0);
+  }
+
+  function codexMemoryAutoSuggestDiagnostic(reason, detail = {}) {
+    const payload = {
+      reason,
+      workspace: codexMemoryState.workspace || codexMemoryWorkspace(),
+      ...detail,
+    };
+    const hash = codexMemoryHash(JSON.stringify(payload));
+    const now = Date.now();
+    if (hash === codexMemoryState.lastAutoSuggestDiagnosticHash && now - codexMemoryState.lastAutoSuggestDiagnosticAt < 60000) return;
+    codexMemoryState.lastAutoSuggestDiagnosticHash = hash;
+    codexMemoryState.lastAutoSuggestDiagnosticAt = now;
+    sendClaudeCodexProDiagnostic("memory_auto_suggest", payload);
+  }
+
+  async function codexMemoryRecordCapture(text, detail = {}) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return null;
+    try {
+      const workspace = await codexMemoryResolvedWorkspace();
+      const result = await postJson("/memory/capture", {
+        workspace,
+        text: normalized.slice(0, 4000),
+        source: "codex-dom-capture",
+        sourceSessionId: location.href,
+        candidateTriggered: !!detail.candidateTriggered,
+        candidateReason: detail.candidateReason || "",
+        skipReason: detail.skipReason || "",
+      });
+      if (result?.status !== "ok") throw new Error(result?.message || "capture failed");
+      return result;
+    } catch (error) {
+      codexMemoryAutoSuggestDiagnostic("database_failed", {
+        operation: "capture",
+        message: String(error?.message || error).slice(0, 240),
+        textLength: normalized.length,
+      });
+      return null;
+    }
   }
 
   function codexMemorySetMessage(message, status = "") {
@@ -9233,6 +9489,7 @@
         workspace: codexMemoryState.workspace,
         totalItems: Number(codexMemoryState.totalItems || 0),
         pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
+        injectSummaryCachePath: codexMemoryState.injectSummaryCachePath || "",
         summary: "盘古记忆当前未注入。",
         source: "idle",
       };
@@ -9278,15 +9535,8 @@
     }
     codexMemoryPulseActivity("session");
     codexMemoryState.lastLoadedAt = now;
-    codexMemoryState.workspace = codexMemoryWorkspace();
+    codexMemoryState.workspace = await codexMemoryResolvedWorkspace();
     const query = codexMemoryCurrentText();
-    if (!query) {
-      codexMemoryState.status = "idle";
-      codexMemoryState.summary = "等待真实对话消息后写入盘古记忆。";
-      codexMemoryExposeRuntime();
-      codexMemoryUpdateBadge();
-      return;
-    }
     try {
       const result = await postJson("/memory/session", {
         workspace: codexMemoryState.workspace,
@@ -9297,6 +9547,7 @@
       codexMemoryState.status = "ok";
       codexMemoryState.totalItems = Number(result.totalItems || 0);
       codexMemoryState.pendingCandidates = Number(result.pendingCandidates || 0);
+      codexMemoryState.injectSummaryCachePath = String(result.injectSummaryCachePath || "");
       codexMemoryState.injectedItems = Array.isArray(result.injectedItems) ? result.injectedItems : [];
       codexMemoryState.summary = result.summary || "盘古记忆已启用。";
       codexMemoryRenderList(codexMemoryState.injectedItems);
@@ -9311,31 +9562,79 @@
   async function codexMemoryMaybeSuggestCandidate(force = false) {
     const settings = claudeCodexProSettings();
     if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled || !settings.memoryAssistAutoSuggestEnabled) return;
-    const suggestion = codexMemorySuggestionFromText(codexMemoryLatestUserText());
-    if (!suggestion) return;
-    const hash = codexMemoryHash(`${codexMemoryWorkspace()}\n${suggestion.text}`);
+    const latestUserText = codexMemoryLatestUserText();
+    if (!latestUserText) {
+      codexMemoryAutoSuggestDiagnostic("no_latest_user_text", { force: !!force });
+      return;
+    }
+    const suggestion = codexMemorySuggestionFromText(latestUserText);
+    if (!suggestion) {
+      await codexMemoryRecordCapture(latestUserText, {
+        candidateTriggered: false,
+        skipReason: "not_learnable",
+      });
+      codexMemoryAutoSuggestDiagnostic("not_learnable", {
+        textLength: latestUserText.length,
+        memorySelfCheck: codexMemoryLooksMemorySelfCheckText(latestUserText),
+        force: !!force,
+      });
+      return;
+    }
+    const workspace = await codexMemoryResolvedWorkspace();
+    const hash = codexMemoryHash(`${workspace}\n${suggestion.text}`);
     const now = Date.now();
-    if (!force && hash === codexMemoryState.lastSuggestionHash && now - codexMemoryState.lastSuggestionAt < 120000) return;
+    if (!force && hash === codexMemoryState.lastSuggestionHash && now - codexMemoryState.lastSuggestionAt < 120000) {
+      await codexMemoryRecordCapture(latestUserText, {
+        candidateTriggered: false,
+        candidateReason: suggestion.reason,
+        skipReason: "duplicate_recent_memory",
+      });
+      codexMemoryAutoSuggestDiagnostic("duplicate_recent_memory", {
+        reason: suggestion.reason,
+        textLength: suggestion.text.length,
+      });
+      return;
+    }
     codexMemoryState.lastSuggestionHash = hash;
     codexMemoryState.lastSuggestionAt = now;
     codexMemoryPulseActivity("candidate");
     try {
-      const result = await postJson("/memory/candidates", {
-        workspace: codexMemoryWorkspace(),
+      const result = await postJson("/memory/learn", {
+        workspace,
         text: suggestion.text,
         category: "preference",
         source: "codex-dom-auto",
-        reason: suggestion.reason,
         sourceSessionId: location.href,
       });
       if (result?.status === "ok") {
-        codexMemoryState.pendingCandidates = Math.max(1, Number(codexMemoryState.pendingCandidates || 0) + 1);
-        codexMemoryState.summary = "已生成待确认记忆，需确认后才会写入长期记忆。";
+        await codexMemoryRecordCapture(latestUserText, {
+          candidateTriggered: true,
+          candidateReason: `auto_learned: ${suggestion.reason}`,
+          skipReason: "",
+        });
+        codexMemoryAutoSuggestDiagnostic("memory_auto_learned", {
+          reason: suggestion.reason,
+          textLength: suggestion.text.length,
+          itemId: result.id || "",
+        });
+        await codexMemoryLoadSession(true);
+        codexMemoryState.summary = "已自动写入长期记忆。";
         codexMemoryExposeRuntime();
         codexMemoryUpdateBadge();
+      } else {
+        throw new Error(result?.message || "learn failed");
       }
-    } catch (_error) {
-      // Candidate creation is opportunistic; the visible badge/session loader reports hard failures.
+    } catch (error) {
+      await codexMemoryRecordCapture(latestUserText, {
+        candidateTriggered: false,
+        candidateReason: suggestion.reason,
+        skipReason: "learn_failed",
+      });
+      codexMemoryAutoSuggestDiagnostic("learn_failed", {
+        reason: suggestion.reason,
+        message: String(error?.message || error).slice(0, 240),
+      });
+      // Auto learning is opportunistic; the visible badge/session loader reports hard failures.
     }
   }
 
@@ -9418,8 +9717,9 @@
     codexMemorySetMessage("正在保存记忆…", "");
     codexMemoryPulseActivity("learn");
     try {
+      const workspace = await codexMemoryResolvedWorkspace();
       const result = await postJson("/memory/learn", {
-        workspace: codexMemoryWorkspace(),
+        workspace,
         text,
         category: "codex",
         source: "codex-dom",
@@ -9441,8 +9741,9 @@
     codexMemorySetMessage("正在检索记忆…", "");
     codexMemoryPulseActivity("search");
     try {
+      const workspace = await codexMemoryResolvedWorkspace();
       const result = await postJson("/memory/search", {
-        workspace: codexMemoryWorkspace(),
+        workspace,
         query,
         includeGlobal: true,
         limit: 12,
@@ -9459,8 +9760,9 @@
     codexMemorySetMessage("正在读取待确认记忆…", "");
     codexMemoryPulseActivity("candidate-list");
     try {
+      const workspace = await codexMemoryResolvedWorkspace();
       const result = await postJson("/memory/candidates", {
-        workspace: codexMemoryWorkspace(),
+        workspace,
         includeGlobal: true,
       });
       if (result?.status !== "ok") throw new Error(result?.message || "candidates failed");

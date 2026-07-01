@@ -2,7 +2,7 @@ use claude_codex_pro_core::memory_assist::{
     MemoryAssistStore, MemoryCandidateRequest, MemoryImportRequest, MemoryItemRequest,
     MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 fn store_at(path: &std::path::Path) -> MemoryAssistStore {
     MemoryAssistStore::new(path.to_path_buf())
@@ -130,6 +130,260 @@ fn all_workspaces_scope_lists_and_searches_every_workspace() {
 
     let candidates = store.list_candidates("__all__", true).unwrap();
     assert_eq!(candidates.len(), 3);
+}
+
+#[test]
+fn status_includes_capture_and_codex_session_workspaces_without_auto_approving() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let codex_home = temp.path().join("codex-home");
+    let sqlite_dir = codex_home.join("sqlite");
+    std::fs::create_dir_all(&sqlite_dir).unwrap();
+    let rollout_path = codex_home.join("rollout.jsonl");
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "这个项目必须保留 Harness Engineering 工作流。"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "收到"}]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let db_path = sqlite_dir.join("codex-dev.db");
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            cwd TEXT,
+            rollout_path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "CREATE TABLE local_thread_catalog (
+            id TEXT PRIMARY KEY,
+            path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads (id, title, cwd, rollout_path, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            "thread-1",
+            "history",
+            "D:\\Project\\Claude-Codex-Pro-Tool",
+            rollout_path.to_string_lossy().to_string(),
+            1000_i64,
+        ),
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO local_thread_catalog (id, path, updated_at_ms)
+         VALUES (?1, ?2, ?3)",
+        ("catalog-1", "D:\\Project\\toporeduce", 999_i64),
+    )
+    .unwrap();
+    drop(db);
+
+    let status = store.status_from_codex_home(&codex_home).unwrap();
+
+    assert_eq!(status.total_items, 0);
+    assert_eq!(
+        status.pending_candidates, 0,
+        "status refresh may backfill captures but must not generate candidates"
+    );
+    assert_eq!(status.total_captures, 1);
+    let repo = status
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace == "D:\\Project\\Claude-Codex-Pro-Tool")
+        .expect("thread cwd workspace should be visible");
+    assert_eq!(repo.capture_count, 1);
+    assert_eq!(repo.session_count, 1);
+    assert!(repo.latest_capture_at > 0);
+    let catalog = status
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace == "D:\\Project\\toporeduce")
+        .expect("catalog workspace should be visible");
+    assert_eq!(catalog.capture_count, 0);
+    assert_eq!(catalog.session_count, 1);
+}
+
+#[test]
+fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let codex_home = temp.path().join("codex-home");
+    let sqlite_dir = codex_home.join("sqlite");
+    std::fs::create_dir_all(&sqlite_dir).unwrap();
+    let rollout_path = codex_home.join("rollout.jsonl");
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n{}\n{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<environment_context><cwd>D:\\Project\\Claude-Codex-Pro-Tool</cwd></environment_context>"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<codex_internal_context source=\"goal\">Continue working toward the active thread goal.</codex_internal_context>"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "# Files mentioned by the user:\n\n## screenshot.png: C:/tmp/screenshot.png\n\n## My request for Codex:\nThis project must keep Pangu memory capture evidence even when no candidate is generated."
+                    }, {
+                        "type": "input_text",
+                        "text": "<image name=[Image #1] path=\"C:\\tmp\\screenshot.png\">"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let db_path = sqlite_dir.join("codex-dev.db");
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            cwd TEXT,
+            rollout_path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads (id, title, cwd, rollout_path, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            "thread-filter",
+            "history",
+            "repo-filter",
+            rollout_path.to_string_lossy().to_string(),
+            1000_i64,
+        ),
+    )
+    .unwrap();
+    drop(db);
+
+    let first = store.status_from_codex_home(&codex_home).unwrap();
+    assert_eq!(first.total_captures, 1);
+
+    let conn = Connection::open(store.db_path()).unwrap();
+    conn.execute(
+        "INSERT INTO memory_captures
+         (id, workspace, source, source_session_id, text_length, text_hash, summary,
+          candidate_triggered, candidate_reason, skip_reason, captured_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, '', 'history_not_learnable', ?8, ?8)",
+        params![
+            "cap_internal_old",
+            "repo-filter",
+            "codex-history-rollout",
+            "thread-filter",
+            80_i64,
+            "internal-old-hash",
+            "<codex_internal_context source=\"goal\">Continue working toward the active thread goal.</codex_internal_context>",
+            9_999_999_i64,
+        ],
+    )
+    .unwrap();
+    let (summary, first_updated_at): (String, i64) = conn
+        .query_row(
+            "SELECT summary, updated_at FROM memory_captures
+             WHERE workspace = 'repo-filter' AND summary NOT LIKE '<codex_internal_context%'
+             ORDER BY updated_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(summary.contains("Pangu memory capture evidence"));
+    assert!(!summary.contains("environment_context"));
+    assert!(!summary.contains("codex_internal_context"));
+    assert!(!summary.contains("<image"));
+    drop(conn);
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let second = store.status_from_codex_home(&codex_home).unwrap();
+    assert_eq!(second.total_captures, 1);
+    let workspace = second
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace == "repo-filter")
+        .expect("valid capture workspace");
+    assert_eq!(workspace.capture_count, 1);
+    let conn = Connection::open(store.db_path()).unwrap();
+    let second_updated_at: i64 = conn
+        .query_row(
+            "SELECT updated_at FROM memory_captures
+             WHERE workspace = 'repo-filter' AND summary NOT LIKE '<codex_internal_context%'
+             ORDER BY updated_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(first_updated_at, second_updated_at);
+    let session = store
+        .session_summary(MemorySessionRequest {
+            workspace: "repo-filter".into(),
+            query: "Pangu memory capture evidence".into(),
+            max_items: 5,
+        })
+        .unwrap();
+    assert_eq!(session.recent_captures.len(), 1);
+    assert!(!session.capture_summary.contains("codex_internal_context"));
 }
 
 #[test]
@@ -526,6 +780,181 @@ fn session_summary_limits_injected_items_and_reports_workspace_counts() {
     assert_eq!(summary.workspace, "repo-a");
     assert_eq!(summary.total_items, 8);
     assert!(summary.summary.contains("repo-a"));
+    let inject_cache = store.inject_summary_cache_path();
+    assert!(inject_cache.exists());
+    let inject_cache_content = std::fs::read_to_string(inject_cache).unwrap();
+    assert!(inject_cache_content.contains("盘古记忆会话启动摘要"));
+    assert!(inject_cache_content.contains("Codex 插件中心"));
+}
+
+#[test]
+fn codex_history_backfill_records_captures_and_pending_candidates() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let codex_home = temp.path().join("codex-home");
+    let sqlite_dir = codex_home.join("sqlite");
+    std::fs::create_dir_all(&sqlite_dir).unwrap();
+    let rollout_path = codex_home.join("rollout.jsonl");
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "这个项目必须先写规格再开发，并且验证后再交付。"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "收到"}]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let db_path = sqlite_dir.join("codex-dev.db");
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            cwd TEXT,
+            rollout_path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads (id, title, cwd, rollout_path, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            "thread-1",
+            "history",
+            "repo-history",
+            rollout_path.to_string_lossy().to_string(),
+            1000_i64,
+        ),
+    )
+    .unwrap();
+    drop(db);
+
+    let report = store.backfill_codex_history_from_home(&codex_home, "", 5, true);
+    assert_eq!(report.db_paths_checked, 1);
+    assert_eq!(report.rollout_files_checked, 1);
+    assert_eq!(report.user_messages_seen, 1);
+    assert_eq!(report.captures_recorded, 1);
+    assert_eq!(report.items_learned, 1);
+    assert_eq!(report.candidates_created, 0);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+    let status = store.status().unwrap();
+    assert_eq!(status.total_items, 1);
+    assert_eq!(status.pending_candidates, 0);
+    assert!(std::path::Path::new(&status.inject_summary_cache_path).exists());
+    let summary = store
+        .session_summary(MemorySessionRequest {
+            workspace: "repo-history".into(),
+            query: "规格".into(),
+            max_items: 5,
+        })
+        .unwrap();
+    assert_eq!(summary.recent_captures.len(), 1);
+    assert_eq!(summary.injected_items.len(), 1);
+    assert!(
+        summary
+            .capture_summary
+            .contains("auto_learned: history workflow rule")
+    );
+}
+
+#[test]
+fn session_summary_auto_learns_high_confidence_history_from_codex_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let codex_home = temp.path().join("codex-home");
+    let sqlite_dir = codex_home.join("sqlite");
+    std::fs::create_dir_all(&sqlite_dir).unwrap();
+    let rollout_path = codex_home.join("rollout.jsonl");
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "盘古记忆必须从真实 Codex 历史会话读取，并自动写入高置信长期记忆。"
+                    }]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let db_path = sqlite_dir.join("codex-dev.db");
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            cwd TEXT,
+            rollout_path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads (id, title, cwd, rollout_path, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            "thread-session",
+            "history",
+            "repo-session",
+            rollout_path.to_string_lossy().to_string(),
+            1000_i64,
+        ),
+    )
+    .unwrap();
+    drop(db);
+
+    let previous_codex_home = std::env::var_os("CODEX_HOME");
+    unsafe {
+        std::env::set_var("CODEX_HOME", &codex_home);
+    }
+    let summary = store
+        .session_summary(MemorySessionRequest {
+            workspace: "repo-session".into(),
+            query: "盘古记忆 历史会话".into(),
+            max_items: 5,
+        })
+        .unwrap();
+    if let Some(value) = previous_codex_home {
+        unsafe {
+            std::env::set_var("CODEX_HOME", value);
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("CODEX_HOME");
+        }
+    }
+
+    assert_eq!(summary.total_items, 1);
+    assert_eq!(summary.injected_items.len(), 1);
+    assert!(summary.summary.contains("本次启动从历史会话自动学习 1 条"));
+    assert!(std::path::Path::new(&summary.inject_summary_cache_path).exists());
 }
 
 #[test]

@@ -471,7 +471,8 @@ type MemoryStatusResult = CommandResult<{
     dbPath: string;
     totalItems: number;
     pendingCandidates: number;
-    workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number }>;
+    totalCaptures: number;
+    workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number; captureCount: number; sessionCount: number; latestCaptureAt: number }>;
     latestBackupPath: string | null;
   };
 }>;
@@ -807,7 +808,7 @@ function isRoute(value: unknown): value is Route {
 }
 
 function statusOk(status?: string | null) {
-  return status === "ok" || status === "accepted" || status === "found" || status === "installed" || status === "running";
+  return status === "ok" || status === "accepted" || status === "found" || status === "installed" || status === "running" || status === "idle";
 }
 
 function statusFailed(status?: string | null) {
@@ -1891,7 +1892,7 @@ export function App() {
       return;
     }
     const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);
-    if (targetProfile && !targetProfile.apiKey.trim()) {
+    if (targetProfile && !supplierProfileHasApiKey(targetProfile)) {
       setNotice({ title: "供应商切换", message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
       return;
     }
@@ -2353,6 +2354,7 @@ function OverviewScreen({
       : "未监听";
   const memoryMonitorStatus = memoryMonitorActive || (memoryCodexInjected && memoryAutoSuggestEnabled) ? "running" : memoryEnabled && memoryAutoSuggestEnabled ? "failed" : "not_checked";
   const memoryWorkspaceCount = memory?.workspaces?.length ?? 0;
+  const memoryCaptureCount = memory?.totalCaptures ?? memory?.workspaces?.reduce((total, workspace) => total + (workspace.captureCount || 0), 0) ?? 0;
   const toggleMemoryAssistEnabled = async (enabled: boolean) => {
     if (!settings) {
       actions.showNotice({ title: "盘古记忆开关", message: "设置尚未加载，请先刷新概览。", status: "failed" });
@@ -2396,6 +2398,7 @@ function OverviewScreen({
           <div className="info-grid compact">
             <InfoRow label="长期记忆" value={`${memory?.totalItems ?? 0} 条`} />
             <InfoRow label="待确认" value={`${memory?.pendingCandidates ?? 0} 条`} />
+            <InfoRow label="采集记录" value={`${memoryCaptureCount} 条`} />
             <InfoRow label="工作区" value={`${memoryWorkspaceCount} 个`} />
             <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
             <InfoRow label="最近备份" value={compactPath(memory?.latestBackupPath)} />
@@ -2584,7 +2587,7 @@ function SupplierScreen({
     const saved = await saveDraft({ stayInEditor: true });
     if (saved) {
       const savedProfile = normalizeSupplierProfile(saved.profile);
-      if (!savedProfile.apiKey.trim()) {
+      if (!supplierProfileHasApiKey(savedProfile)) {
         actions.showNotice({ title: "供应商切换", message: "供应商已保存。请先补入 API Key，再写入为当前供应商。", status: "failed" });
         return;
       }
@@ -2711,13 +2714,29 @@ function SupplierScreen({
     const result = await actions.importCcswitchCodexProviders();
     if (!result || statusFailed(result.status)) return;
     const imported = result.profiles.map((profile) => normalizeSupplierProfile(withSupplierGeneratedFiles(profile)));
-    const existingIds = new Set(appSettings.relayProfiles.map((profile) => profile.id));
-    const nextImported = imported.map((profile) => {
-      if (!existingIds.has(profile.id)) return profile;
-      return { ...profile, id: uniqueSupplierProfileId(appSettings.relayProfiles, profile.id) };
+    const importedById = new Map(imported.map((profile) => [profile.id, profile]));
+    let updatedCount = 0;
+    const nextProfiles = appSettings.relayProfiles.map((profile) => {
+      const importedProfile = importedById.get(profile.id);
+      if (importedProfile && supplierProfileIsCcswitch(profile)) {
+        importedById.delete(profile.id);
+        updatedCount += 1;
+        return importedProfile;
+      }
+      return profile;
     });
-    await saveSupplierSettings({ ...appSettings, relayProfiles: [...appSettings.relayProfiles, ...nextImported] });
-    actions.showNotice({ title: "CC-switch 导入", message: `已从 cc-switch 导入供应商配置：${nextImported.length} 个。`, status: "ok" });
+    const existingIds = new Set(nextProfiles.map((profile) => profile.id));
+    let addedCount = 0;
+    for (const profile of importedById.values()) {
+      const nextProfile = existingIds.has(profile.id)
+        ? normalizeSupplierProfile(withSupplierGeneratedFiles({ ...profile, id: uniqueSupplierProfileId(nextProfiles, profile.id) }))
+        : profile;
+      existingIds.add(nextProfile.id);
+      nextProfiles.push(nextProfile);
+      addedCount += 1;
+    }
+    await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+    actions.showNotice({ title: "CC-switch 导入", message: `已从 cc-switch 更新 ${updatedCount} 个、新增 ${addedCount} 个供应商配置。`, status: "ok" });
   };
 
   if (draft?.aggregateEnabled) {
@@ -4671,7 +4690,7 @@ function createAggregateSupplierProfile(settings: BackendSettings): RelayProfile
 
 function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
   const modelList = profile.modelList ?? "";
-  const apiKey = profile.apiKey ?? "";
+  const apiKey = supplierProfileResolvedApiKey(profile);
   const baseUrl = profile.baseUrl || profile.upstreamBaseUrl || "";
   const model = profile.model || profile.testModel || firstSupplierModel(modelList) || "gpt-5.5";
   return {
@@ -4699,16 +4718,50 @@ function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
 }
 
 function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile {
-  const normalized = normalizeSupplierProfile({
-    ...profile,
-    configContents: "",
-    authContents: "",
-  });
+  const normalized = normalizeSupplierProfile(profile);
+  const apiKey = supplierProfileResolvedApiKey(normalized);
+  const generated = { ...normalized, apiKey };
   return {
-    ...normalized,
-    configContents: buildSupplierConfigToml(normalized),
-    authContents: `${JSON.stringify({ OPENAI_API_KEY: normalized.apiKey.trim() }, null, 2)}\n`,
+    ...generated,
+    configContents: buildSupplierConfigToml(generated),
+    authContents: `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n`,
   };
+}
+
+function supplierProfileHasApiKey(profile: RelayProfile) {
+  return !!supplierProfileResolvedApiKey(profile);
+}
+
+function supplierProfileIsCcswitch(profile: RelayProfile) {
+  const name = profile.name.toLowerCase();
+  return profile.userAgent === "ccswitch" || name.includes("ccswitch") || name.includes("cc-switch");
+}
+
+function supplierProfileResolvedApiKey(profile: RelayProfile) {
+  return (profile.apiKey || "").trim()
+    || supplierApiKeyFromAuthContents(profile.authContents)
+    || supplierApiKeyFromConfigContents(profile.configContents);
+}
+
+function supplierApiKeyFromAuthContents(contents: string) {
+  const text = String(contents || "").trim();
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    for (const key of ["OPENAI_API_KEY", "api_key", "apiKey"]) {
+      const value = parsed[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  } catch {
+    const match = text.match(/"(?:OPENAI_API_KEY|api_key|apiKey)"\s*:\s*"([^"]+)"/);
+    if (match?.[1]?.trim()) return match[1].trim();
+  }
+  return "";
+}
+
+function supplierApiKeyFromConfigContents(contents: string) {
+  const match = String(contents || "").match(/experimental_bearer_token\s*=\s*["']([^"']+)["']/);
+  return match?.[1]?.trim() || "";
 }
 
 function buildSupplierConfigToml(profile: RelayProfile) {

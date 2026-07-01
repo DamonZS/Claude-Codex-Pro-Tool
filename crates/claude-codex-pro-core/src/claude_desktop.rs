@@ -1049,6 +1049,7 @@ fn ensure_claude_foreground(process_id: Option<u32>) -> anyhow::Result<()> {
 #[cfg(windows)]
 fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
     if let Some(path) = executable_hint
+        .filter(|path| path.is_file())
         .map(Path::to_path_buf)
         .or_else(claude_desktop_executable_path)
     {
@@ -1102,7 +1103,12 @@ Start-Process ('shell:AppsFolder\' + $app.AppID)
 fn claude_desktop_executable_path() -> Option<PathBuf> {
     let mut candidates = claude_desktop_executable_candidates_default();
     candidates.extend(claude_desktop_appx_executable_paths());
-    candidates.into_iter().flatten().find(|path| path.is_file())
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .flatten()
+        .filter(|path| seen.insert(path.clone()))
+        .find(|path| path.is_file())
 }
 
 #[cfg(windows)]
@@ -1143,7 +1149,12 @@ fn claude_desktop_executable_candidates_from(
     let mut candidates = Vec::new();
     if let Some(local) = local_appdata {
         candidates.push(local.join("Programs").join("Claude").join("Claude.exe"));
-        candidates.push(local.join("Programs").join("Claude Desktop").join("Claude.exe"));
+        candidates.push(
+            local
+                .join("Programs")
+                .join("Claude Desktop")
+                .join("Claude.exe"),
+        );
         candidates.push(local.join("AnthropicClaude").join("Claude.exe"));
         candidates.push(local.join("Claude").join("Claude.exe"));
     }
@@ -1181,12 +1192,21 @@ Get-AppxPackage |
         return Vec::new();
     };
     match value {
-        Value::Array(items) => items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|path| Some(PathBuf::from(path)))
-            .collect(),
-        Value::String(path) => vec![Some(PathBuf::from(path))],
+        Value::Array(items) => {
+            let mut paths = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            paths.sort_by(|left, right| right.cmp(left));
+            paths.dedup();
+            paths.into_iter().map(Some).collect()
+        }
+        Value::String(path) => {
+            let path = PathBuf::from(path);
+            path.is_file().then_some(Some(path)).into_iter().collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -2271,12 +2291,14 @@ mod tests {
         assert!(candidates.contains(&local.join("AnthropicClaude").join("Claude.exe")));
         assert!(candidates.contains(&roaming.join("Claude").join("Claude.exe")));
         assert!(candidates.contains(&program_files.join("Claude").join("Claude.exe")));
-        assert!(candidates.contains(
-            &program_files_x86
-                .join("Anthropic")
-                .join("Claude")
-                .join("Claude.exe")
-        ));
+        assert!(
+            candidates.contains(
+                &program_files_x86
+                    .join("Anthropic")
+                    .join("Claude")
+                    .join("Claude.exe")
+            )
+        );
     }
 
     #[cfg(not(windows))]

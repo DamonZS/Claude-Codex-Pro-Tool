@@ -57,8 +57,8 @@ struct ClaudeZhPatchCliResult {
 }
 
 const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
-const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(15);
-const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(20);
+const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);
+const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -514,6 +514,7 @@ pub struct MemoryAssistStatusPayload {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(default)]
 struct MemoryAssistRuntimeSnapshot {
     enabled: bool,
     injected: bool,
@@ -1894,38 +1895,14 @@ pub struct RepairConnectionPayload {
 #[tauri::command]
 pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPayload> {
     let mut details = Vec::new();
-    let mut latest = StatusStore::default()
-        .load_latest()
-        .ok()
-        .flatten()
-        .map(refresh_launch_port_status);
-
-    let initial_runtime_online = latest_renderer_runtime_heartbeat()
-        .as_ref()
-        .is_some_and(renderer_runtime_heartbeat_is_ready);
-
-    if latest.as_ref().is_some_and(|status| {
-        status.debug_port.is_some() && !status.debug_port_online && !initial_runtime_online
-    }) {
-        latest = restart_codex_for_frontend_repair(&mut details).await;
-    }
+    let repair_started_ms = current_time_ms();
+    details.push("已请求重启 Codex 注入入口，旧前端心跳不会作为本次修复成功依据。".to_string());
+    let latest = restart_codex_for_frontend_repair(&mut details).await;
 
     let codex_backend_online = latest
         .as_ref()
         .is_some_and(|status| status.helper_port_online);
-    let runtime_heartbeat = latest_renderer_runtime_heartbeat();
-    let runtime_online = runtime_heartbeat
-        .as_ref()
-        .is_some_and(renderer_runtime_heartbeat_is_ready);
-    let codex_frontend_ok = if runtime_online {
-        if let Some(heartbeat) = runtime_heartbeat.as_ref() {
-            details.push(format!(
-                "Codex 前端运行时心跳在线，最近上报于 {}。",
-                heartbeat.timestamp_ms
-            ));
-        }
-        true
-    } else if let Some(status) = latest.as_ref() {
+    let codex_frontend_ok = if let Some(status) = latest.as_ref() {
         match (status.debug_port, status.helper_port) {
             (Some(debug_port), Some(helper_port)) => {
                 details.push(format!(
@@ -1962,7 +1939,23 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
                     } else {
                         details.push("Codex 前端桥接刷新未确认。".to_string());
                     }
-                    reinjected
+                    if !reinjected {
+                        false
+                    } else if let Some(heartbeat) = wait_for_renderer_runtime_after(
+                        repair_started_ms,
+                        REPAIR_CODEX_FRONTEND_TIMEOUT,
+                    )
+                    .await
+                    {
+                        details.push(format!(
+                            "Codex 前端运行时已在本次修复后重新上报，时间戳 {}。",
+                            heartbeat.timestamp_ms
+                        ));
+                        true
+                    } else {
+                        details.push("未等到本次修复后的 Codex 前端 runtime 新心跳；旧注入状态不会被判定为成功。".to_string());
+                        false
+                    }
                 }
             }
             _ => {
@@ -2003,7 +1996,7 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
 }
 
 async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
-    details.push("检测到旧 Codex CDP 端口离线，正在自动重启 Codex 注入入口。".to_string());
+    details.push("正在关闭旧 Codex 与 claude-codex-pro.exe 启动器进程。".to_string());
     let Some(app_path) = current_codex_app_path_for_launch() else {
         details.push("未找到 Codex 应用路径，无法自动重启 Codex。".to_string());
         return StatusStore::default()
@@ -2013,8 +2006,13 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
             .map(refresh_launch_port_status);
     };
 
-    claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
-    claude_codex_pro_core::watcher::stop_codex_processes();
+    let stopped_launchers =
+        claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
+    let stopped_codex = claude_codex_pro_core::watcher::stop_codex_processes();
+    details.push(format!(
+        "已请求结束 {stopped_codex} 个 Codex 进程、{stopped_launchers} 个启动器进程。"
+    ));
+    tokio::time::sleep(Duration::from_millis(800)).await;
 
     let request = LaunchRequest {
         app_path: app_path.to_string_lossy().to_string(),
@@ -2030,32 +2028,77 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
             .map(refresh_launch_port_status);
     }
 
-    let started = Instant::now();
-    while started.elapsed() < REPAIR_CODEX_RESTART_TIMEOUT {
-        if let Some(status) = StatusStore::default()
-            .load_latest()
-            .ok()
-            .flatten()
-            .map(refresh_launch_port_status)
-        {
-            if status.debug_port_online && status.helper_port_online {
-                details.push(format!(
-                    "已自动重启 Codex，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
-                    debug_port = status.debug_port.unwrap_or(request.debug_port),
-                    helper_port = status.helper_port.unwrap_or(request.helper_port)
-                ));
-                return Some(status);
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    details.push("已启动 Codex，正在等待 Codex 自启完成、CDP 与后端端口上线。".to_string());
+    if let Some(status) = wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await
+    {
+        details.push(format!(
+            "Codex 自启完成，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
+            debug_port = status.debug_port.unwrap_or(request.debug_port),
+            helper_port = status.helper_port.unwrap_or(request.helper_port)
+        ));
+        return Some(status);
     }
 
-    details.push("已发起 Codex 自动重启，但等待新 CDP / 后端端口上线超时。".to_string());
+    details.push("已发起 Codex 自动重启，但等待自启完成、CDP / 后端端口上线超时。".to_string());
     StatusStore::default()
         .load_latest()
         .ok()
         .flatten()
         .map(refresh_launch_port_status)
+}
+
+async fn wait_for_codex_launch_ports(
+    request: &LaunchRequest,
+    timeout: Duration,
+) -> Option<LaunchStatus> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let latest = StatusStore::default()
+            .load_latest()
+            .ok()
+            .flatten()
+            .map(refresh_launch_port_status);
+        if let Some(status) = latest {
+            if status.debug_port_online && status.helper_port_online {
+                return Some(status);
+            }
+        } else if codex_debug_port_online(request.debug_port)
+            && helper_backend_online(request.helper_port)
+        {
+            return Some(LaunchStatus {
+                status: "ok".to_string(),
+                message: "Codex launch ports detected during frontend repair.".to_string(),
+                started_at_ms: current_time_ms(),
+                codex_app: Some(request.app_path.clone()),
+                debug_port: Some(request.debug_port),
+                helper_port: Some(request.helper_port),
+                debug_port_online: true,
+                helper_port_online: true,
+                frontend_runtime_online: false,
+                frontend_runtime_seen_at_ms: None,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+    None
+}
+
+async fn wait_for_renderer_runtime_after(
+    min_timestamp_ms: u64,
+    timeout: Duration,
+) -> Option<RendererRuntimeHeartbeat> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if let Some(heartbeat) = latest_renderer_runtime_heartbeat() {
+            if heartbeat.timestamp_ms >= min_timestamp_ms
+                && renderer_runtime_heartbeat_is_ready(&heartbeat)
+            {
+                return Some(heartbeat);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
 }
 
 #[tauri::command]
@@ -2212,31 +2255,51 @@ pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> 
 }
 
 fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
-    if request.app_path.trim().is_empty() {
-        if let Some(path) = current_codex_app_path_for_launch() {
+    let requested = request.app_path.trim().to_string();
+    if !requested.is_empty() {
+        if let Some(path) = codex_launch_app_path_from_candidate(Path::new(&requested)) {
             request.app_path = path.to_string_lossy().to_string();
+            return request;
         }
+        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            "manager.launch_path_stale",
+            json!({ "app_path": requested }),
+        );
+    }
+    if let Some(path) = current_codex_app_path_for_launch() {
+        request.app_path = path.to_string_lossy().to_string();
     }
     request
 }
 
 fn current_codex_app_path_for_launch() -> Option<PathBuf> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    StatusStore::default()
-        .load_latest()
-        .ok()
-        .flatten()
-        .and_then(|status| status.codex_app)
-        .and_then(|path| {
-            claude_codex_pro_core::app_paths::normalize_codex_app_path(Path::new(&path))
-        })
-        .or_else(|| claude_codex_pro_core::app_paths::find_running_codex_app_dir())
+    claude_codex_pro_core::app_paths::find_running_codex_app_dir()
+        .and_then(|path| codex_launch_app_path_from_candidate(&path))
         .or_else(|| {
-            claude_codex_pro_core::app_paths::resolve_codex_app_dir_with_saved(
-                None,
-                Some(settings.codex_app_path.as_str()),
-            )
+            StatusStore::default()
+                .load_latest()
+                .ok()
+                .flatten()
+                .and_then(|status| status.codex_app)
+                .and_then(|path| codex_launch_app_path_from_candidate(Path::new(&path)))
         })
+        .or_else(|| {
+            let saved = settings.codex_app_path.trim();
+            (!saved.is_empty())
+                .then(|| codex_launch_app_path_from_candidate(Path::new(saved)))
+                .flatten()
+        })
+        .or_else(|| {
+            claude_codex_pro_core::app_paths::resolve_codex_app_dir(None)
+                .and_then(|path| codex_launch_app_path_from_candidate(&path))
+        })
+}
+
+fn codex_launch_app_path_from_candidate(path: &Path) -> Option<PathBuf> {
+    let normalized = claude_codex_pro_core::app_paths::normalize_codex_app_path(path)?;
+    let executable = claude_codex_pro_core::app_paths::build_codex_executable(&normalized);
+    executable.exists().then_some(normalized)
 }
 
 fn spawn_claude_codex_pro_launch(
@@ -2641,9 +2704,15 @@ pub fn load_memory_assist_session(
             MemoryAssistSessionPayload {
                 summary: MemorySessionSummary {
                     workspace: String::new(),
+                    inject_summary_cache_path: MemoryAssistStore::default()
+                        .inject_summary_cache_path()
+                        .to_string_lossy()
+                        .to_string(),
                     total_items: 0,
                     pending_candidates: 0,
                     injected_items: Vec::new(),
+                    recent_captures: Vec::new(),
+                    capture_summary: String::new(),
                     summary: String::new(),
                 },
             },
@@ -2740,8 +2809,13 @@ fn empty_memory_status() -> MemoryAssistStatus {
         db_path: claude_codex_pro_core::memory_assist::default_memory_assist_db_path()
             .to_string_lossy()
             .to_string(),
+        inject_summary_cache_path: MemoryAssistStore::default()
+            .inject_summary_cache_path()
+            .to_string_lossy()
+            .to_string(),
         total_items: 0,
         pending_candidates: 0,
+        total_captures: 0,
         workspaces: Vec::new(),
         latest_backup_path: None,
         enabled: false,
@@ -2816,8 +2890,9 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
     });
 
     if let Some(runtime) = runtime_snapshot {
+        let normalized_runtime_status = normalize_memory_runtime_status(&runtime);
         memory.runtime_status = if runtime.injected {
-            runtime.status.clone()
+            normalized_runtime_status
         } else if memory.enabled && memory.inject_enabled {
             "waiting".to_string()
         } else {
@@ -2825,6 +2900,8 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
         };
         memory.runtime_message = if runtime.summary.trim().is_empty() {
             "Pangu memory runtime synchronized.".to_string()
+        } else if runtime.injected && runtime.status == "idle" {
+            "等待真实对话消息后写入盘古记忆。".to_string()
         } else {
             runtime.summary.clone()
         };
@@ -2859,6 +2936,14 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
     memory
 }
 
+fn normalize_memory_runtime_status(runtime: &MemoryAssistRuntimeSnapshot) -> String {
+    match runtime.status.as_str() {
+        "idle" => "ok".to_string(),
+        "" if runtime.injected => "ok".to_string(),
+        value => value.to_string(),
+    }
+}
+
 fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
     let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
     let text = fs::read_to_string(path).ok()?;
@@ -2866,7 +2951,7 @@ fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
     for record in text
         .lines()
         .rev()
-        .take(240)
+        .take(2_000)
         .filter_map(|line| serde_json::from_str::<DiagnosticLogRecord>(line).ok())
         .filter(|record| {
             record.event == "renderer.memory_runtime" || record.event == "renderer.script_loaded"
@@ -6121,6 +6206,7 @@ fn ccswitch_codex_profile_from_settings(
     }
     let api_key = codex_auth_api_key(auth)
         .or_else(|| string_at(&parsed, &["apiKey", "api_key", "OPENAI_API_KEY"]))
+        .or_else(|| codex_config_api_key(config))
         .unwrap_or_default();
     let model = codex_config_model(config)
         .or_else(|| string_at(&parsed, &["model", "testModel"]))
@@ -6187,6 +6273,26 @@ fn codex_config_base_url(config: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn codex_config_api_key(config: &str) -> Option<String> {
+    let doc = config.parse::<DocumentMut>().ok()?;
+    if let Some(provider_id) = doc.get("model_provider").and_then(|item| item.as_str()) {
+        if let Some(value) = doc
+            .get("model_providers")
+            .and_then(|item| item.as_table())
+            .and_then(|providers| providers.get(provider_id))
+            .and_then(|item| item.as_table())
+            .and_then(|provider| provider.get("experimental_bearer_token"))
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
@@ -6334,7 +6440,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn plugin_install_failure_serializes_non_empty_top_level_message() {
         let result = failed(
             "Plugin install failed: please sign in to Claude Code CLI.",
@@ -6353,6 +6458,35 @@ mod tests {
             serialized["installMessage"],
             serde_json::json!("Please sign in to Claude Code CLI.")
         );
+    }
+
+    #[test]
+    fn ccswitch_import_reads_api_key_from_config_bearer_token() {
+        let settings = json!({
+            "config": r#"
+model = "gpt-5.5"
+model_provider = "relay"
+
+[model_providers.relay]
+name = "relay"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-from-config"
+"#,
+            "auth": {}
+        });
+
+        let profile = ccswitch_codex_profile_from_settings(
+            "Relay Provider",
+            "Relay Provider",
+            &settings.to_string(),
+        )
+        .expect("profile imported from config token");
+
+        assert_eq!(profile.base_url, "https://relay.example/v1");
+        assert_eq!(profile.api_key, "sk-from-config");
+        assert!(profile.auth_contents.contains("sk-from-config"));
     }
 
     #[test]
@@ -6991,6 +7125,20 @@ mod tests {
         assert!(!candidate.message.is_empty());
         assert_eq!(status.payload.memory.total_items, 1);
         assert_eq!(status.payload.memory.pending_candidates, 0);
+    }
+
+    #[test]
+    fn memory_runtime_idle_status_is_treated_as_available() {
+        let runtime = MemoryAssistRuntimeSnapshot {
+            enabled: true,
+            injected: true,
+            status: "idle".to_string(),
+            workspace: "codex:path:test".to_string(),
+            summary: "waiting".to_string(),
+            ..MemoryAssistRuntimeSnapshot::default()
+        };
+
+        assert_eq!(normalize_memory_runtime_status(&runtime), "ok");
     }
 
     #[test]

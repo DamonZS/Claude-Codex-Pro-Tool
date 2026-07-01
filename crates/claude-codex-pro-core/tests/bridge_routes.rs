@@ -764,6 +764,51 @@ async fn memory_bridge_routes_learn_search_and_review_candidates() {
     assert_eq!(search["status"], "ok");
     assert_eq!(search["results"].as_array().unwrap().len(), 1);
 
+    let capture = handle_bridge_request(
+        ctx.clone(),
+        "/memory/capture",
+        json!({
+            "workspace": "repo-a",
+            "source": "codex-dom-capture",
+            "sourceSessionId": "Bearer secret-token",
+            "text": "当前对话需要留下采集证据，API key sk-test123 不能入库",
+            "candidateTriggered": false,
+            "skipReason": "not_learnable"
+        }),
+    )
+    .await;
+    assert_eq!(capture["status"], "ok");
+    assert_eq!(capture["workspace"], "repo-a");
+    assert_eq!(capture["candidateTriggered"], false);
+    assert_eq!(capture["skipReason"], "not_learnable");
+    assert!(!capture.to_string().contains("sk-test123"));
+    assert!(!capture.to_string().contains("secret-token"));
+
+    let session = handle_bridge_request(
+        ctx.clone(),
+        "/memory/session",
+        json!({"workspace": "repo-a", "query": "采集证据", "maxItems": 5}),
+    )
+    .await;
+    assert_eq!(session["status"], "ok");
+    assert_eq!(session["totalItems"], json!(1));
+    assert_eq!(session["pendingCandidates"], json!(0));
+    assert!(
+        std::path::Path::new(
+            session["injectSummaryCachePath"]
+                .as_str()
+                .unwrap_or_default()
+        )
+        .exists()
+    );
+    assert_eq!(session["recentCaptures"].as_array().unwrap().len(), 1);
+    assert!(
+        session["captureSummary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not_learnable")
+    );
+
     let candidate = handle_bridge_request(
         ctx.clone(),
         "/memory/candidates",
@@ -792,6 +837,20 @@ async fn memory_bridge_routes_learn_search_and_review_candidates() {
     let selfcheck = handle_bridge_request(ctx, "/memory/selfcheck", json!({"repair": true})).await;
     assert_eq!(selfcheck["status"], "ok");
     assert!(selfcheck["backupPath"].as_str().is_some());
+    let checks = selfcheck["checks"].as_array().unwrap();
+    for name in [
+        "capture",
+        "candidate",
+        "database",
+        "injection",
+        "runtime",
+        "manager",
+    ] {
+        assert!(
+            checks.iter().any(|check| check["name"] == name),
+            "selfcheck should include {name} layer"
+        );
+    }
 }
 
 #[tokio::test]

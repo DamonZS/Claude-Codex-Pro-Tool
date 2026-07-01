@@ -87,9 +87,10 @@ pub fn codex_process_ids<'a>(processes: impl IntoIterator<Item = (u32, &'a str)>
         .into_iter()
         .filter_map(|(process_id, executable)| {
             let executable = executable.to_ascii_lowercase();
-            executable
-                .contains("\\windowsapps\\openai.codex_")
-                .then_some(process_id)
+            (executable.contains("\\windowsapps\\openai.codex_")
+                || executable.ends_with("\\codex.exe")
+                || executable.ends_with("/codex.exe"))
+            .then_some(process_id)
         })
         .collect()
 }
@@ -124,7 +125,8 @@ pub fn filter_restartable_launcher_processes<'a>(
     processes
         .into_iter()
         .filter(|(process_id, exe_file)| {
-            *process_id != current_process_id && exe_file.eq_ignore_ascii_case("claude-codex-pro.exe")
+            *process_id != current_process_id
+                && exe_file.eq_ignore_ascii_case("claude-codex-pro.exe")
         })
         .map(|(process_id, _)| process_id)
         .collect()
@@ -170,20 +172,21 @@ pub fn uninstall_watcher() -> anyhow::Result<()> {
 
 #[cfg(windows)]
 pub fn find_codex_processes() -> Vec<u32> {
-    codex_process_ids(
-        crate::windows_integration::enumerate_processes()
-            .into_iter()
-            .filter(|process| process.exe_file.eq_ignore_ascii_case("codex.exe"))
-            .filter_map(|process| {
-                process
-                    .executable_path
-                    .as_deref()
-                    .map(|path| (process.process_id, path.to_string_lossy().to_string()))
-            })
-            .collect::<Vec<_>>()
-            .iter()
-            .map(|(pid, path)| (*pid, path.as_str())),
-    )
+    crate::windows_integration::enumerate_processes()
+        .into_iter()
+        .filter(|process| process.exe_file.eq_ignore_ascii_case("codex.exe"))
+        .filter(|process| {
+            process
+                .executable_path
+                .as_deref()
+                .map(|path| {
+                    let path = path.to_string_lossy().to_string();
+                    !codex_process_ids([(process.process_id, path.as_str())]).is_empty()
+                })
+                .unwrap_or(true)
+        })
+        .map(|process| process.process_id)
+        .collect()
 }
 
 #[cfg(not(windows))]
@@ -192,7 +195,7 @@ pub fn find_codex_processes() -> Vec<u32> {
 }
 
 #[cfg(windows)]
-pub fn stop_launcher_processes() {
+pub fn stop_launcher_processes() -> usize {
     let processes = crate::windows_integration::enumerate_processes();
     let killable = filter_killable_launcher_processes(
         processes.iter().map(|process| {
@@ -204,16 +207,22 @@ pub fn stop_launcher_processes() {
         }),
         std::process::id(),
     );
+    let mut stopped = 0;
     for process_id in killable {
-        let _ = crate::windows_integration::terminate_process(process_id);
+        if crate::windows_integration::terminate_process(process_id) {
+            stopped += 1;
+        }
     }
+    stopped
 }
 
 #[cfg(not(windows))]
-pub fn stop_launcher_processes() {}
+pub fn stop_launcher_processes() -> usize {
+    0
+}
 
 #[cfg(windows)]
-pub fn stop_launcher_processes_for_codex_restart() {
+pub fn stop_launcher_processes_for_codex_restart() -> usize {
     let processes = crate::windows_integration::enumerate_processes();
     let killable = filter_restartable_launcher_processes(
         processes
@@ -221,23 +230,35 @@ pub fn stop_launcher_processes_for_codex_restart() {
             .map(|process| (process.process_id, process.exe_file.as_str())),
         std::process::id(),
     );
+    let mut stopped = 0;
     for process_id in killable {
-        let _ = crate::windows_integration::terminate_process(process_id);
+        if crate::windows_integration::terminate_process(process_id) {
+            stopped += 1;
+        }
     }
+    stopped
 }
 
 #[cfg(not(windows))]
-pub fn stop_launcher_processes_for_codex_restart() {}
+pub fn stop_launcher_processes_for_codex_restart() -> usize {
+    0
+}
 
 #[cfg(windows)]
-pub fn stop_codex_processes() {
+pub fn stop_codex_processes() -> usize {
+    let mut stopped = 0;
     for process_id in find_codex_processes() {
-        let _ = crate::windows_integration::terminate_process(process_id);
+        if crate::windows_integration::terminate_process(process_id) {
+            stopped += 1;
+        }
     }
+    stopped
 }
 
 #[cfg(not(windows))]
-pub fn stop_codex_processes() {}
+pub fn stop_codex_processes() -> usize {
+    0
+}
 
 #[cfg(windows)]
 fn create_startup_shortcut(launcher_path: &Path, arguments: &str) -> anyhow::Result<()> {

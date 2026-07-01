@@ -67,7 +67,7 @@ fn spawn_launcher_command_points_to_silent_binary_only() {
 }
 
 #[test]
-fn codex_process_filter_keeps_only_windowsapps_codex_processes() {
+fn codex_process_filter_keeps_windowsapps_and_normal_codex_processes() {
     let processes = [
         (
             11,
@@ -78,9 +78,10 @@ fn codex_process_filter_keeps_only_windowsapps_codex_processes() {
             13,
             r"C:\Program Files\WindowsApps\Other.App_1.0.0.0_x64__abc\app\Codex.exe",
         ),
+        (14, r"C:\Tools\not-codex.exe"),
     ];
 
-    assert_eq!(codex_process_ids(processes), vec![11]);
+    assert_eq!(codex_process_ids(processes), vec![11, 12, 13]);
 }
 
 #[test]
@@ -105,8 +106,14 @@ fn repair_restart_launcher_filter_only_protects_current_process() {
         (40, "codex.exe"),
     ];
 
-    assert_eq!(filter_restartable_launcher_processes(processes, 20), vec![10, 30]);
-    assert_eq!(filter_restartable_launcher_processes(processes, 30), vec![10]);
+    assert_eq!(
+        filter_restartable_launcher_processes(processes, 20),
+        vec![10, 30]
+    );
+    assert_eq!(
+        filter_restartable_launcher_processes(processes, 30),
+        vec![10]
+    );
 }
 
 #[test]

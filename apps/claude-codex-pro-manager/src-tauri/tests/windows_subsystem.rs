@@ -740,11 +740,22 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)"));
     assert!(commands_rs.contains(".map(|runtime| runtime.status != \"failed\")"));
     assert!(commands_rs.contains("renderer.memory_runtime"));
+    assert!(commands_rs.contains("#[serde(default)]"));
+    assert!(commands_rs.contains("fn normalize_memory_runtime_status"));
+    assert!(commands_rs.contains("\"idle\" => \"ok\".to_string()"));
+    assert!(commands_rs.contains(".take(2_000)"));
+    assert!(commands_rs.contains("等待真实对话消息后写入盘古记忆。"));
+    assert!(app_tsx.contains("status === \"idle\""));
     assert!(commands_rs.contains("force_reinject_bridge"));
     assert!(commands_rs.contains("stop_launcher_processes_for_codex_restart"));
     assert!(launcher_main.contains("MemoryAssistStore"));
+    assert!(launcher_main.contains("MemoryCaptureRequest"));
     assert!(launcher_main.contains("async fn memory_session(&self, payload: Value)"));
     assert!(launcher_main.contains("self.memory_store.session_summary(request)"));
+    assert!(launcher_main.contains("async fn memory_capture(&self, payload: Value)"));
+    assert!(launcher_main.contains("self.memory_store.record_capture(request)"));
+    assert!(launcher_main.contains("async fn memory_resolve_workspace(&self, payload: Value)"));
+    assert!(launcher_main.contains("resolve_codex_memory_workspace_response"));
     assert!(launcher_main.contains("async fn memory_status(&self)"));
     assert!(!commands_rs.contains("repair_claude_frontend_via_node_inspector"));
     assert!(!commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
@@ -918,8 +929,25 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(app_tsx.contains("restart_claude_codex_pro\", { request }"));
     assert!(app_tsx.contains("launch_claude_codex_pro\", { request }"));
     assert!(commands_rs.contains("fn normalize_launch_request"));
+    assert!(commands_rs.contains("fn codex_launch_app_path_from_candidate"));
+    assert!(commands_rs.contains("codex_launch_app_path_from_candidate(Path::new(&requested))"));
+    assert!(commands_rs.contains("\"manager.launch_path_stale\""));
+    assert!(commands_rs.contains("build_codex_executable(&normalized)"));
     assert!(commands_rs.contains("find_running_codex_app_dir()"));
     assert!(commands_rs.contains("current_codex_app_path_for_launch"));
+    let launch_path_helper = commands_rs
+        .split("fn current_codex_app_path_for_launch")
+        .nth(1)
+        .and_then(|rest| rest.split("fn spawn_claude_codex_pro_launch").next())
+        .expect("current codex app path helper source");
+    assert!(
+        launch_path_helper
+            .find("find_running_codex_app_dir()")
+            .expect("running codex path lookup")
+            < launch_path_helper
+                .find("StatusStore::default()")
+                .expect("latest status path lookup")
+    );
     let restart_command = commands_rs
         .split("pub fn restart_claude_codex_pro")
         .nth(1)
@@ -969,6 +997,10 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
     assert!(core_claude.contains("let is_restart = !existing_process_ids.is_empty();"));
     assert!(core_claude.contains("terminate_claude_processes(&existing_process_ids)"));
     assert!(core_claude.contains("wait_for_claude_process_exit("));
+    assert!(core_claude.contains(".filter(|path| path.is_file())"));
+    assert!(core_claude.contains(".or_else(claude_desktop_executable_path)"));
+    assert!(core_claude.contains("let mut seen = std::collections::HashSet::new();"));
+    assert!(core_claude.contains("paths.sort_by(|left, right| right.cmp(left));"));
     assert!(core_claude.contains("Claude Desktop 已关闭并重新启动。"));
     assert!(
         core_claude.contains("action: if is_restart { \"restart\" } else { \"open\" }.to_string()")
@@ -1050,7 +1082,27 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(app_tsx.contains("OPENAI_API_KEY"));
     assert!(app_tsx.contains("fetch_relay_profile_models"));
     assert!(app_tsx.contains("const modelList = profile.modelList ?? \"\";"));
-    assert!(app_tsx.contains("const apiKey = profile.apiKey ?? \"\";"));
+    assert!(app_tsx.contains("const apiKey = supplierProfileResolvedApiKey(profile);"));
+    assert!(app_tsx.contains("function supplierProfileResolvedApiKey(profile: RelayProfile)"));
+    assert!(app_tsx.contains("function supplierApiKeyFromAuthContents(contents: string)"));
+    assert!(app_tsx.contains("function supplierApiKeyFromConfigContents(contents: string)"));
+    assert!(app_tsx.contains("supplierProfileHasApiKey(targetProfile)"));
+    assert!(app_tsx.contains("supplierProfileHasApiKey(savedProfile)"));
+    assert!(app_tsx.contains("function supplierProfileIsCcswitch(profile: RelayProfile)"));
+    assert!(app_tsx.contains(
+        "const importedById = new Map(imported.map((profile) => [profile.id, profile]));"
+    ));
+    assert!(app_tsx.contains("if (importedProfile && supplierProfileIsCcswitch(profile))"));
+    assert!(app_tsx.contains("importedById.delete(profile.id);"));
+    assert!(app_tsx.contains("id: uniqueSupplierProfileId(nextProfiles, profile.id)"));
+    assert!(
+        app_tsx
+            .contains("已从 cc-switch 更新 ${updatedCount} 个、新增 ${addedCount} 个供应商配置。")
+    );
+    assert!(!app_tsx.contains("const nextImported = imported.map((profile) => {"));
+    assert!(!app_tsx.contains("const normalized = normalizeSupplierProfile({\n    ...profile,\n    configContents: \"\",\n    authContents: \"\",\n  });"));
+    assert!(!app_tsx.contains("targetProfile && !targetProfile.apiKey.trim()"));
+    assert!(!app_tsx.contains("if (!savedProfile.apiKey.trim())"));
     assert!(app_tsx.contains("configContents: profile.configContents ?? \"\""));
     assert!(app_tsx.contains("authContents: profile.authContents ?? \"\""));
     assert!(styles.contains(".supplier-card"));
@@ -1826,6 +1878,71 @@ fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
     assert!(commands_rs.contains("Elevated child did not write result file"));
     assert!(commands_rs.contains("child.kill()"));
     assert!(commands_rs.contains("Elevated Claude Chinese patch timed out"));
+}
+
+#[test]
+fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    let repair = commands_rs
+        .split("pub async fn repair_frontend_connection()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("async fn restart_codex_for_frontend_repair")
+                .next()
+        })
+        .expect("repair_frontend_connection source");
+    assert!(repair.contains("let repair_started_ms = current_time_ms();"));
+    assert!(repair.contains("restart_codex_for_frontend_repair(&mut details).await"));
+    assert!(!repair.contains("let initial_runtime_online"));
+    assert!(repair.contains("wait_for_renderer_runtime_after("));
+    assert!(repair.contains("旧注入状态不会被判定为成功"));
+    assert!(
+        commands_rs
+            .contains("const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);")
+    );
+    assert!(
+        commands_rs
+            .contains("const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);")
+    );
+
+    let restart = commands_rs
+        .split("async fn restart_codex_for_frontend_repair")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("async fn wait_for_renderer_runtime_after")
+                .next()
+        })
+        .expect("restart_codex_for_frontend_repair source");
+    assert!(restart.contains("stop_launcher_processes_for_codex_restart()"));
+    assert!(restart.contains("stop_codex_processes()"));
+    assert!(restart.contains("tokio::time::sleep(Duration::from_millis(800)).await"));
+    assert!(
+        restart
+            .contains("wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await")
+    );
+    assert!(restart.contains("正在等待 Codex 自启完成"));
+
+    let wait_ports = commands_rs
+        .split("async fn wait_for_codex_launch_ports")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("async fn wait_for_renderer_runtime_after")
+                .next()
+        })
+        .expect("wait_for_codex_launch_ports source");
+    assert!(wait_ports.contains("status.debug_port_online && status.helper_port_online"));
+    assert!(wait_ports.contains("codex_debug_port_online(request.debug_port)"));
+    assert!(wait_ports.contains("helper_backend_online(request.helper_port)"));
+
+    let wait = commands_rs
+        .split("async fn wait_for_renderer_runtime_after")
+        .nth(1)
+        .expect("wait_for_renderer_runtime_after source");
+    assert!(wait.contains("heartbeat.timestamp_ms >= min_timestamp_ms"));
+    assert!(wait.contains("renderer_runtime_heartbeat_is_ready(&heartbeat)"));
 }
 
 #[test]
