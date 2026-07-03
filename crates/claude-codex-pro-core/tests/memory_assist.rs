@@ -878,6 +878,90 @@ fn codex_history_backfill_records_captures_and_pending_candidates() {
 }
 
 #[test]
+fn codex_history_backfill_compacts_lessons_into_single_manual() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let codex_home = temp.path().join("codex-home");
+    let sqlite_dir = codex_home.join("sqlite");
+    std::fs::create_dir_all(&sqlite_dir).unwrap();
+    let rollout_path = codex_home.join("rollout.jsonl");
+    std::fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "经验教训：盘古记忆提炼后必须合成一条精简手册，不要生成很多条散乱卡片。"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "以后前端 UI 改动后必须重新构建 debug manager 并验证，否则用户看到的还是旧版。"
+                    }]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let db_path = sqlite_dir.join("codex-dev.db");
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            cwd TEXT,
+            rollout_path TEXT,
+            updated_at_ms INTEGER
+        )",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads (id, title, cwd, rollout_path, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        (
+            "thread-manual",
+            "manual",
+            "repo-history",
+            rollout_path.to_string_lossy().to_string(),
+            1000_i64,
+        ),
+    )
+    .unwrap();
+    drop(db);
+
+    let report = store.backfill_codex_history_from_home(&codex_home, "", 20, true);
+    assert_eq!(report.user_messages_seen, 2);
+    assert_eq!(report.items_learned, 1);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+    let items = store
+        .list_items(MemoryQueryRequest {
+            query: String::new(),
+            workspace: "__all__".into(),
+            include_global: true,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].category, "lesson-manual");
+    assert!(items[0].text.starts_with("经验教训手册："));
+    assert!(items[0].text.contains("合成一条精简手册"));
+    assert!(items[0].text.contains("重新构建 debug manager"));
+}
+
+#[test]
 fn session_summary_auto_learns_high_confidence_history_from_codex_home() {
     let temp = tempfile::tempdir().unwrap();
     let store = store_at(&temp.path().join("memory.sqlite"));

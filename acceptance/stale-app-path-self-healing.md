@@ -21,7 +21,7 @@
    - 证据：`windows_subsystem` 定向测试与 `claude_desktop_candidate` 测试通过。
 
 5. 修复前端连接真实重启 Codex
-   - 通过标准：`repair_frontend_connection` 不再用旧 runtime 心跳直接判成功；必须调用 `restart_codex_for_frontend_repair`，等待 Codex CDP 与 helper 后端自启完成，再等待不早于本次修复开始时间的新 runtime 心跳或明确返回失败。
+   - 通过标准：`repair_frontend_connection` 不再用旧 runtime 心跳直接判成功；必须调用 `restart_codex_for_frontend_repair`，等待 Codex CDP 与 helper 后端自启完成，再等待不早于本次修复开始时间的新 `renderer.script_loaded` 或 `renderer.memory_runtime` 心跳，或明确返回失败。
    - 证据：`windows_subsystem` 定向测试通过。
 
 6. Codex 进程识别覆盖非 WindowsApps 安装

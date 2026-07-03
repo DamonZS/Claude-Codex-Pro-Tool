@@ -15,6 +15,8 @@ const SCHEMA_VERSION: i64 = 2;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
 const ALL_WORKSPACES: &str = "__all__";
+const LESSON_MANUAL_CATEGORY: &str = "lesson-manual";
+const LESSON_MANUAL_SOURCE: &str = "lesson-manual-compiler";
 const CAPTURE_USER_EVIDENCE_SQL: &str = "summary NOT LIKE '<environment_context%'
     AND summary NOT LIKE '<codex_internal_context%'
     AND summary NOT LIKE '<system%'
@@ -298,7 +300,28 @@ impl MemoryAssistStore {
     }
 
     pub fn status_from_codex_home(&self, codex_home: &Path) -> anyhow::Result<MemoryAssistStatus> {
-        let _history_report = self.backfill_codex_history_from_home(codex_home, "", 50, false);
+        // The status panel polls this on a timer. Re-scanning every Codex SQLite
+        // DB and rollout file on every poll was the dominant lag source, so only
+        // backfill when a cheap metadata fingerprint shows the Codex history
+        // actually changed since our last poll (keyed by memory-db path).
+        let fingerprint = codex_history_fingerprint(codex_home);
+        let should_backfill = {
+            let cache = STATUS_BACKFILL_FINGERPRINT.get_or_init(|| Mutex::new(BTreeMap::new()));
+            match cache.lock() {
+                Ok(guard) => guard.get(&self.db_path).copied() != Some(fingerprint),
+                // A poisoned lock should not silently disable backfill forever.
+                Err(_) => true,
+            }
+        };
+        if should_backfill {
+            let _history_report = self.backfill_codex_history_from_home(codex_home, "", 50, false);
+            if let Ok(mut guard) = STATUS_BACKFILL_FINGERPRINT
+                .get_or_init(|| Mutex::new(BTreeMap::new()))
+                .lock()
+            {
+                guard.insert(self.db_path.clone(), fingerprint);
+            }
+        }
         let conn = self.open()?;
         let total_items = count_items(&conn)?;
         let pending_candidates = count_pending_candidates(&conn)?;
@@ -672,7 +695,7 @@ impl MemoryAssistStore {
         generate_candidates: bool,
     ) -> MemoryHistoryCaptureReport {
         let mut report = MemoryHistoryCaptureReport::default();
-        let limit = max_messages.clamp(1, 50);
+        let limit = max_messages.max(1);
         let mut remaining = limit;
         for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(codex_home) {
             if remaining == 0 {
@@ -796,6 +819,19 @@ impl MemoryAssistStore {
                         )),
                     }
                 }
+            }
+        }
+        if generate_candidates && report.items_learned > 0 {
+            match self.open().and_then(|mut conn| {
+                let manual = consolidate_items_into_lesson_manual(&mut conn)?;
+                let _ = self.sync_inject_summary_cache(&conn, "");
+                Ok(manual)
+            }) {
+                Ok(Some(_)) => report.items_learned = 1,
+                Ok(None) => {}
+                Err(error) => report
+                    .errors
+                    .push(format!("compact learned items into manual failed: {error}")),
             }
         }
         report
@@ -1033,9 +1069,13 @@ impl MemoryAssistStore {
         request: MemorySelfCheckRequest,
     ) -> anyhow::Result<MemorySelfCheckResult> {
         let mut checks = Vec::new();
-        let history_report = self.backfill_codex_history("", 20, request.repair);
+        let history_report = self.backfill_codex_history("", usize::MAX, request.repair);
         {
-            let conn = self.open()?;
+            let mut conn = self.open()?;
+            if request.repair {
+                let _ = consolidate_items_into_lesson_manual(&mut conn)?;
+                let _ = self.sync_inject_summary_cache(&conn, "");
+            }
             let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             checks.push(MemorySelfCheckItem {
                 name: "schema".to_string(),
@@ -1246,6 +1286,37 @@ fn memory_assist_db_path_for_tests() -> Option<PathBuf> {
 }
 
 static MEMORY_ASSIST_DB_PATH_FOR_TESTS: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+/// Remembers the fingerprint of the Codex session store the last time a status
+/// poll ran a backfill, keyed by memory-db path. The status panel polls every
+/// few seconds; without this guard every poll re-scanned every Codex SQLite DB
+/// and rollout file, which is the dominant "UI gets laggier the more history
+/// you have" cost. We skip the scan when nothing changed.
+static STATUS_BACKFILL_FINGERPRINT: OnceLock<Mutex<BTreeMap<PathBuf, u64>>> = OnceLock::new();
+
+/// Cheap change-detector for the Codex session store: hashes only filesystem
+/// metadata (path, length, mtime) of each session DB — never opens or reads
+/// them. A changed fingerprint means a session DB was written since the last
+/// poll, so new history may be worth backfilling.
+fn codex_history_fingerprint(codex_home: &Path) -> u64 {
+    let mut hasher = Sha256::new();
+    for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(codex_home) {
+        let Ok(metadata) = std::fs::metadata(&db_path) else {
+            continue;
+        };
+        hasher.update(db_path.to_string_lossy().as_bytes());
+        hasher.update(metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(elapsed) = modified.duration_since(UNIX_EPOCH) {
+                hasher.update(elapsed.as_nanos().to_le_bytes());
+            }
+        }
+    }
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(bytes)
+}
 
 pub fn set_memory_assist_db_path_for_tests(path: Option<PathBuf>) -> Option<PathBuf> {
     MEMORY_ASSIST_DB_PATH_FOR_TESTS
@@ -1506,6 +1577,223 @@ fn select_items(conn: &Connection) -> anyhow::Result<Vec<MemoryItem>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+fn consolidate_items_into_lesson_manual(
+    conn: &mut Connection,
+) -> anyhow::Result<Option<MemoryItem>> {
+    let items = select_items(conn)?;
+    if items.is_empty() {
+        return Ok(None);
+    }
+    if items.len() == 1 && items[0].category == LESSON_MANUAL_CATEGORY {
+        return Ok(Some(items[0].clone()));
+    }
+
+    let text = build_lesson_manual_text(&items);
+    let now = now_unix();
+    let id = stable_id("mem", &[GLOBAL_WORKSPACE, LESSON_MANUAL_CATEGORY]);
+    let tags = vec![
+        "lesson".to_string(),
+        "manual".to_string(),
+        "pangu".to_string(),
+    ];
+    let source_count = items.len();
+
+    // The DELETE and the INSERT that rebuilds the manual must be atomic. Without
+    // a transaction, a crash / power loss / disk-full between the two statements
+    // leaves the table empty, permanently destroying every learned memory. The
+    // transaction guarantees callers either see the old items or the new manual,
+    // never nothing.
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM memory_items", [])?;
+    tx.execute(
+        "INSERT INTO memory_items
+         (id, text, workspace, category, tags_json, source, source_session_id,
+          created_at, updated_at, last_accessed_at, access_count, keywords)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8, 0, ?9)",
+        params![
+            id,
+            text,
+            GLOBAL_WORKSPACE,
+            LESSON_MANUAL_CATEGORY,
+            serde_json::to_string(&tags)?,
+            LESSON_MANUAL_SOURCE,
+            "compiled",
+            now,
+            keywords_json(&keywords_for(&text)),
+        ],
+    )?;
+    let item = item_by_id(&tx, &id)?;
+    record_event(
+        &tx,
+        "items_compacted_to_lesson_manual",
+        Some(&item.id),
+        None,
+        &item.workspace,
+        &json!({"sourceItems": source_count}),
+    )?;
+    tx.commit()?;
+    Ok(Some(item))
+}
+
+fn build_lesson_manual_text(items: &[MemoryItem]) -> String {
+    let mut seen = BTreeSet::<String>::new();
+    let mut lines = Vec::<(i32, String)>::new();
+
+    for item in items {
+        for candidate in lesson_manual_candidates(&item.text) {
+            let line = compact_lesson_manual_line(&candidate);
+            if line.chars().count() < 8 || lesson_manual_line_is_noise(&line) {
+                continue;
+            }
+            let key = normalize_memory_text(&line).to_lowercase();
+            if !seen.insert(key) {
+                continue;
+            }
+            let mut score = lesson_sentence_score(&line);
+            if item.category == "lesson-learned" || item.category == LESSON_MANUAL_CATEGORY {
+                score += 4;
+            }
+            if item.category.contains("rule") || item.category.contains("safety") {
+                score += 2;
+            }
+            if !contains_any_case_insensitive(&line, LESSON_ACTION_WORDS) || score < 6 {
+                continue;
+            }
+            lines.push((score, line));
+        }
+    }
+
+    if lines.is_empty() {
+        for item in items.iter().take(8) {
+            let line = compact_lesson_manual_line(&item.text);
+            if line.chars().count() >= 8 && !lesson_manual_line_is_noise(&line) {
+                lines.push((0, line));
+            }
+        }
+    }
+
+    lines.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.chars().count().cmp(&right.1.chars().count()))
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    let bullets = lines
+        .into_iter()
+        .map(|(_, line)| line)
+        .take(10)
+        .collect::<Vec<_>>();
+    if bullets.is_empty() {
+        "经验教训手册：\n- 暂无可沉淀的经验教训。".to_string()
+    } else {
+        format!(
+            "经验教训手册：\n{}",
+            bullets
+                .into_iter()
+                .map(|line| format!("- {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+}
+
+fn lesson_manual_candidates(text: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            candidates.push(trimmed[2..].trim().to_string());
+        }
+    }
+    candidates.extend(lesson_sentence_candidates(text));
+    candidates
+}
+
+fn compact_lesson_manual_line(text: &str) -> String {
+    let mut line = normalize_memory_text(&redact_secrets(text));
+    for prefix in [
+        "经验教训手册：",
+        "经验教训:",
+        "经验教训：",
+        "经验：",
+        "教训：",
+        "lesson:",
+        "Lesson:",
+    ] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            line = rest.trim().to_string();
+        }
+    }
+    line = line
+        .trim_start_matches(|ch: char| {
+            ch == '-' || ch == '*' || ch.is_ascii_digit() || ch == '.' || ch == '、'
+        })
+        .trim()
+        .to_string();
+    let max_chars = 110;
+    if line.chars().count() > max_chars {
+        let mut compact = line.chars().take(max_chars).collect::<String>();
+        compact.push_str("...");
+        compact
+    } else {
+        line
+    }
+}
+
+fn lesson_manual_line_is_noise(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("</image>")
+        || lower.contains("<image")
+        || lower.contains("codex-clipboard")
+        || lower.contains("验证结果")
+        || lower.contains("cargo test")
+        || lower.contains("npm --prefix")
+        || lower.contains("git diff")
+        || lower.contains("target\\debug")
+        // A concrete filesystem path (drive-letter or POSIX absolute) is machine-
+        // specific noise, not a reusable lesson. The old code hard-coded the
+        // author's own `d:\project` / `c:\users`; detect the *shape* instead so it
+        // generalizes to every user's machine.
+        || contains_concrete_filesystem_path(&lower)
+        || lower.contains("这个不需要")
+        || lower.contains("为什么")
+        || lower.contains("怎么")
+        || lower.contains("什么")
+}
+
+/// Whether `lower` (already lowercased) contains a machine-specific absolute
+/// path: a Windows drive path like `x:\...` or a deep POSIX path under a
+/// well-known root (`/home/`, `/users/`, `/mnt/`, `/c/`). Kept deliberately
+/// conservative so a lesson that merely mentions a relative path such as
+/// `src/foo.rs` is not discarded.
+fn contains_concrete_filesystem_path(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    for index in 0..bytes.len() {
+        // Windows drive path: an ASCII letter followed by ":\" or ":/".
+        if bytes[index] == b':'
+            && index > 0
+            && bytes[index - 1].is_ascii_alphabetic()
+            && index + 1 < bytes.len()
+            && (bytes[index + 1] == b'\\' || bytes[index + 1] == b'/')
+        {
+            // Require the letter to be a standalone drive (start of string or
+            // preceded by a non-word byte) so "http://" style text is ignored.
+            let preceding_is_word = index >= 2 && is_ascii_word_byte(bytes[index - 2]);
+            if !preceding_is_word {
+                return true;
+            }
+        }
+    }
+    for root in ["/home/", "/users/", "/mnt/", "/root/", "/var/", "/usr/"] {
+        if lower.contains(root) {
+            return true;
+        }
+    }
+    false
+}
+
 fn select_candidates(conn: &Connection) -> anyhow::Result<Vec<MemoryCandidate>> {
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, reason,
@@ -1627,7 +1915,7 @@ fn codex_thread_workspaces(db: &Connection, limit: usize) -> anyhow::Result<Vec<
          LIMIT ?1"
     );
     let mut stmt = db.prepare(&sql)?;
-    let rows = stmt.query_map([limit as i64], |row| {
+    let rows = stmt.query_map([sqlite_limit_arg(limit)], |row| {
         let workspace = normalize_workspace(&row.get::<_, Option<String>>(0)?.unwrap_or_default());
         Ok(workspace)
     })?;
@@ -1660,7 +1948,7 @@ fn codex_catalog_workspaces(db: &Connection, limit: usize) -> anyhow::Result<Vec
          LIMIT ?1"
     );
     let mut stmt = db.prepare(&sql)?;
-    let rows = stmt.query_map([limit as i64], |row| {
+    let rows = stmt.query_map([sqlite_limit_arg(limit)], |row| {
         let workspace = normalize_workspace(&row.get::<_, Option<String>>(0)?.unwrap_or_default());
         Ok(workspace)
     })?;
@@ -1699,7 +1987,7 @@ fn recent_codex_rollout_rows(
          LIMIT ?1"
     );
     let mut stmt = db.prepare(&sql)?;
-    let rows = stmt.query_map([limit as i64], |row| {
+    let rows = stmt.query_map([sqlite_limit_arg(limit)], |row| {
         Ok(CodexRolloutRow {
             thread_id: row.get::<_, String>(0)?,
             cwd: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
@@ -1740,6 +2028,10 @@ fn read_codex_rollout_user_messages(path: &Path, limit: usize) -> anyhow::Result
         }
     }
     Ok(messages)
+}
+
+fn sqlite_limit_arg(limit: usize) -> i64 {
+    i64::try_from(limit).unwrap_or(i64::MAX)
 }
 
 fn codex_message_content_text(content: &Value) -> String {
@@ -1818,8 +2110,9 @@ struct LearnableMemory {
 fn extract_learnable_memory(text: &str) -> Option<LearnableMemory> {
     let normalized = normalize_memory_text(&redact_secrets(text));
     let classification = classify_learnable_memory(&normalized)?;
+    let text = build_learnable_memory_text(&normalized, &classification);
     Some(LearnableMemory {
-        text: normalized.chars().take(2000).collect(),
+        text,
         category: classification.category,
         tags: classification.tags,
         reason: classification.reason,
@@ -1838,22 +2131,34 @@ fn classify_learnable_memory(text: &str) -> Option<LearnableClassification> {
     if normalized.chars().count() < 16 {
         return None;
     }
+    if looks_like_transient_command_output(&normalized) {
+        return None;
+    }
 
     let signals = learnable_signal_scores(&normalized);
     let confidence: i32 = signals.iter().map(|(_, score)| *score).sum();
+    let has_lesson_signal = contains_any_case_insensitive(&normalized, LESSON_WORDS);
+    let has_actionable_lesson =
+        has_lesson_signal && contains_any_case_insensitive(&normalized, LESSON_ACTION_WORDS);
     if confidence < 3 {
         return None;
     }
 
     let has_scope = contains_any_case_insensitive(&normalized, PROJECT_CONTEXT_WORDS)
         || contains_any_case_insensitive(&normalized, WORKFLOW_CONTEXT_WORDS)
-        || contains_any_case_insensitive(&normalized, PREFERENCE_CONTEXT_WORDS);
+        || contains_any_case_insensitive(&normalized, PREFERENCE_CONTEXT_WORDS)
+        || contains_any_case_insensitive(&normalized, LESSON_CONTEXT_WORDS);
     if !has_scope {
+        return None;
+    }
+    if has_lesson_signal && !has_actionable_lesson {
         return None;
     }
 
     let (category, reason_base) = if contains_any_case_insensitive(&normalized, SAFETY_WORDS) {
         ("safety-rule", "history safety boundary")
+    } else if has_actionable_lesson {
+        ("lesson-learned", "history actionable lesson")
     } else if contains_any_case_insensitive(&normalized, PREFERENCE_CONTEXT_WORDS) {
         ("preference", "history user preference")
     } else if contains_any_case_insensitive(&normalized, WORKFLOW_WORDS)
@@ -1872,11 +2177,18 @@ fn classify_learnable_memory(text: &str) -> Option<LearnableClassification> {
         "auto-learned".to_string(),
         category.to_string(),
     ];
+    // Every fired signal becomes its own tag (multi-label): a "safety-related
+    // workflow lesson" now carries both `safety` and `workflow`, so tag-based
+    // queries surface it under either lens instead of a single hard category.
     for (tag, _) in signals {
         if !tags.iter().any(|existing| existing == tag) {
             tags.push(tag.to_string());
         }
     }
+    // Record confidence as a sortable structured tag (not just buried in the free
+    // text reason) so the UI can rank/filter candidates by strength without a
+    // schema migration.
+    tags.push(format!("confidence:{}", confidence_bucket(confidence)));
 
     Some(LearnableClassification {
         category: category.to_string(),
@@ -1885,15 +2197,86 @@ fn classify_learnable_memory(text: &str) -> Option<LearnableClassification> {
     })
 }
 
+/// Bucket a raw confidence score into a coarse, stable label the UI can sort on.
+/// Kept coarse so small scoring tweaks don't churn the label.
+fn confidence_bucket(confidence: i32) -> &'static str {
+    if confidence >= 8 {
+        "high"
+    } else if confidence >= 5 {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
 fn contains_any_case_insensitive(text: &str, needles: &[&str]) -> bool {
     let lower = text.to_lowercase();
     needles
         .iter()
-        .any(|needle| lower.contains(&needle.to_lowercase()))
+        .any(|needle| contains_needle(&lower, &needle.to_lowercase()))
+}
+
+/// Match `needle` inside the already-lowercased `haystack`. Pure-ASCII needles
+/// (English keywords like "must"/"fix"/"keep") require ASCII word boundaries so
+/// they no longer false-match inside longer words ("must" in "mustard", "fix"
+/// in "prefix"). CJK/mixed needles keep plain substring matching because Chinese
+/// has no whitespace word boundaries.
+fn contains_needle(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    if !needle.is_ascii() {
+        return haystack.contains(needle);
+    }
+    let bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(needle) {
+        let start = search_from + offset;
+        let end = start + needle_bytes.len();
+        let before_ok = start == 0 || !is_ascii_word_byte(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_ascii_word_byte(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        // Advance one byte past this start so overlapping matches are still found.
+        search_from = start + 1;
+    }
+    false
+}
+
+fn is_ascii_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn looks_like_transient_command_output(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let has_shell_prompt = lower.starts_with("ps ")
+        || lower.contains("\nps ")
+        || lower.contains("powershell")
+        || lower.contains("cmd.exe")
+        || lower.contains("$ git ")
+        || lower.contains("> git ");
+    let has_transient_error = lower.contains("unrecognized command or argument")
+        || lower.contains("usage: git")
+        || lower.contains("fatal: unable to access")
+        || lower.contains("remote: permission to")
+        || lower.contains("the requested url returned error")
+        || lower.contains("error 403")
+        || lower.contains("permission denied")
+        || lower.contains("access denied")
+        || lower.contains("拒绝访问");
+    has_shell_prompt && has_transient_error
 }
 
 fn learnable_signal_scores(text: &str) -> Vec<(&'static str, i32)> {
     let mut signals = Vec::new();
+    if contains_any_case_insensitive(text, LESSON_WORDS)
+        && contains_any_case_insensitive(text, LESSON_ACTION_WORDS)
+        && contains_any_case_insensitive(text, LESSON_CONTEXT_WORDS)
+    {
+        signals.push(("lesson", 3));
+    }
     if contains_any_case_insensitive(text, RULE_WORDS) {
         signals.push(("rule", 2));
     }
@@ -1919,9 +2302,34 @@ fn learnable_signal_scores(text: &str) -> Vec<(&'static str, i32)> {
 }
 
 const RULE_WORDS: &[&str] = &[
-    "必须", "不要", "不能", "需要", "保持", "保留", "删除", "改成", "修复", "默认", "统一", "优先",
-    "禁止", "避免", "先", "always", "never", "must", "should", "prefer", "default", "keep",
-    "remove", "fix",
+    "必须",
+    "不要",
+    "不能",
+    "需要",
+    "保持",
+    "保留",
+    "删除",
+    "改成",
+    "修复",
+    "默认",
+    "统一",
+    "优先",
+    "禁止",
+    "避免",
+    "先",
+    "要有",
+    "必须有",
+    "需要有",
+    "应该",
+    "always",
+    "never",
+    "must",
+    "should",
+    "prefer",
+    "default",
+    "keep",
+    "remove",
+    "fix",
 ];
 
 const PROJECT_CONTEXT_WORDS: &[&str] = &[
@@ -1981,7 +2389,7 @@ const UI_WORDS: &[&str] = &[
 const MEMORY_WORDS: &[&str] = &[
     "记忆",
     "盘古",
-    "长期记忆",
+    "经验教训",
     "会话",
     "注入",
     "摘要",
@@ -2013,6 +2421,176 @@ const PREFERENCE_CONTEXT_WORDS: &[&str] = &[
     "注意",
     "记得",
 ];
+
+const LESSON_WORDS: &[&str] = &[
+    "经验",
+    "教训",
+    "踩坑",
+    "复盘",
+    "根因",
+    "原因",
+    "以后",
+    "下次",
+    "不要再",
+    "不能再",
+    "又",
+    "仍然",
+    "还是",
+    "没变化",
+    "没有变化",
+    "没反馈",
+    "没有反馈",
+    "不生效",
+    "失败",
+    "错了",
+    "不对",
+    "看不到",
+    "无法",
+    "被占用",
+    "regression",
+    "lesson",
+    "postmortem",
+    "root cause",
+    "next time",
+];
+
+const LESSON_ACTION_WORDS: &[&str] = &[
+    "必须", "需要", "应该", "要有", "先", "再", "不要", "不能", "避免", "保留", "删除", "改成",
+    "修复", "验证", "构建", "检查", "写入", "显示", "记录", "日志", "反馈", "must", "should",
+    "need", "verify", "build", "log",
+];
+
+const LESSON_CONTEXT_WORDS: &[&str] = &[
+    "盘古记忆",
+    "经验教训",
+    "记忆",
+    "codex",
+    "claude",
+    "manager",
+    "管理工具",
+    "前端",
+    "后端",
+    "按钮",
+    "开关",
+    "构建",
+    "验证",
+    "日志",
+    "反馈",
+    "自检",
+    "数据库",
+    "sqlite",
+    "会话",
+    "工作区",
+    "注入",
+    "target",
+];
+
+fn build_learnable_memory_text(
+    normalized: &str,
+    classification: &LearnableClassification,
+) -> String {
+    let base = if classification.category == "lesson-learned" {
+        extract_lesson_sentence(normalized)
+    } else {
+        normalized.to_string()
+    };
+    let text = if classification.category == "lesson-learned"
+        && !base.starts_with("经验教训")
+        && !base.starts_with("经验：")
+        && !base.starts_with("教训：")
+    {
+        format!("经验教训：{base}")
+    } else {
+        base
+    };
+    text.chars().take(2000).collect()
+}
+
+fn extract_lesson_sentence(text: &str) -> String {
+    let mut best = String::new();
+    let mut best_score = i32::MIN;
+    for segment in lesson_sentence_candidates(text) {
+        let normalized = normalize_memory_text(&segment);
+        if normalized.chars().count() < 8 {
+            continue;
+        }
+        let score = lesson_sentence_score(&normalized);
+        if score > best_score {
+            best_score = score;
+            best = normalized;
+        }
+    }
+    if best.is_empty() {
+        normalize_memory_text(text)
+    } else {
+        best
+    }
+}
+
+fn lesson_sentence_candidates(text: &str) -> Vec<String> {
+    text.split(|ch| matches!(ch, '\n' | '。' | '！' | '？' | ';' | '；'))
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn lesson_sentence_score(segment: &str) -> i32 {
+    let mut score = 0;
+    if contains_any_case_insensitive(segment, LESSON_WORDS) {
+        score += 4;
+    }
+    if contains_any_case_insensitive(segment, LESSON_ACTION_WORDS) {
+        score += 3;
+    }
+    if contains_any_case_insensitive(segment, LESSON_CONTEXT_WORDS) {
+        score += 3;
+    }
+    if contains_any_case_insensitive(segment, RULE_WORDS) {
+        score += 2;
+    }
+    if contains_any_case_insensitive(segment, SAFETY_WORDS) {
+        score += 2;
+    }
+    // A causal/contrast structure ("因为…所以…", "应该…而不是…", "否则…", "下次…")
+    // carries the full actionable lesson, so it should win over a shorter
+    // keyword-only fragment. Boost it and, when present, cancel the long-sentence
+    // penalty so the complete instruction is preserved rather than truncated.
+    let has_structure = has_causal_or_contrast_structure(segment);
+    if has_structure {
+        score += 3;
+    }
+    if segment.chars().count() > 180 && !has_structure {
+        score -= 2;
+    }
+    score
+}
+
+/// Whether `segment` uses a causal or contrastive construction that ties a
+/// recommendation to its rationale/alternative. These sentences state the
+/// reusable lesson in full, so extraction should keep them intact.
+fn has_causal_or_contrast_structure(segment: &str) -> bool {
+    const CAUSAL_CONTRAST_MARKERS: &[&str] = &[
+        "因为",
+        "所以",
+        "因此",
+        "否则",
+        "不然",
+        "下次",
+        "以后",
+        "而不是",
+        "而非",
+        "应该",
+        "应当",
+        "本应",
+        "instead of",
+        "rather than",
+        "so that",
+        "because",
+        "otherwise",
+    ];
+    contains_any_case_insensitive(segment, CAUSAL_CONTRAST_MARKERS)
+}
 
 fn sqlite_has_table(db: &Connection, table: &str) -> anyhow::Result<bool> {
     Ok(db
@@ -2138,16 +2716,30 @@ fn workspace_summaries(
         .collect())
 }
 
+fn select_items_in_workspace(
+    conn: &Connection,
+    workspace: &str,
+) -> anyhow::Result<Vec<MemoryItem>> {
+    // Push the workspace filter into SQL so duplicate detection only loads rows
+    // from the same workspace instead of the whole table on every insert (the
+    // old full-table scan made bulk history backfill O(n^2)).
+    let mut stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, source_session_id,
+                created_at, updated_at, last_accessed_at, access_count
+         FROM memory_items WHERE workspace = ?1 ORDER BY updated_at DESC, id DESC",
+    )?;
+    Ok(stmt
+        .query_map([workspace], row_to_item)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn find_similar_item(
     conn: &Connection,
     workspace: &str,
     text: &str,
 ) -> anyhow::Result<Option<MemoryItem>> {
     let mut best: Option<(usize, MemoryItem)> = None;
-    for item in select_items(conn)? {
-        if item.workspace != workspace {
-            continue;
-        }
+    for item in select_items_in_workspace(conn, workspace)? {
         let Some(score) = duplicate_memory_score(&item.text, text) else {
             continue;
         };
@@ -2162,16 +2754,31 @@ fn find_similar_item(
     Ok(best.map(|(_, item)| item))
 }
 
+fn select_pending_candidates_in_workspace(
+    conn: &Connection,
+    workspace: &str,
+) -> anyhow::Result<Vec<MemoryCandidate>> {
+    // Same rationale as select_items_in_workspace: filter in SQL so we only load
+    // the pending candidates from this workspace, not the whole table.
+    let mut stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, reason,
+                source_session_id, status, created_at, updated_at
+         FROM memory_candidates
+         WHERE workspace = ?1 AND status = 'pending'
+         ORDER BY created_at DESC, id DESC",
+    )?;
+    Ok(stmt
+        .query_map([workspace], row_to_candidate)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn find_similar_candidate(
     conn: &Connection,
     workspace: &str,
     text: &str,
 ) -> anyhow::Result<Option<MemoryCandidate>> {
     let mut best: Option<(usize, MemoryCandidate)> = None;
-    for candidate in select_candidates(conn)? {
-        if candidate.workspace != workspace || candidate.status != "pending" {
-            continue;
-        }
+    for candidate in select_pending_candidates_in_workspace(conn, workspace)? {
         let Some(score) = duplicate_memory_score(&candidate.text, text) else {
             continue;
         };
@@ -2425,14 +3032,14 @@ fn build_inject_summary_cache(
         String::new(),
         format!("- 数据库: {}", db_path.display()),
         format!("- 工作区: {workspace}"),
-        format!("- 长期记忆: {total_items} 条"),
+        format!("- 经验教训: {total_items} 条"),
         format!("- 待确认候选: {pending_candidates} 条"),
         format!("- 采集证据: {total_captures} 条"),
         String::new(),
-        "## 相关长期记忆".to_string(),
+        "## 相关经验教训".to_string(),
     ];
     if items.is_empty() {
-        lines.push("- 暂无可注入长期记忆。".to_string());
+        lines.push("- 暂无可注入经验教训。".to_string());
     } else {
         for item in items {
             lines.push(format!(
@@ -2442,9 +3049,9 @@ fn build_inject_summary_cache(
         }
     }
     lines.push(String::new());
-    lines.push("## 高频长期记忆".to_string());
+    lines.push("## 高频经验教训".to_string());
     if hot_items.is_empty() {
-        lines.push("- 暂无高频长期记忆。".to_string());
+        lines.push("- 暂无高频经验教训。".to_string());
     } else {
         for item in hot_items {
             lines.push(format!(
@@ -2763,6 +3370,77 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ascii_keyword_matching_respects_word_boundaries() {
+        // English keywords must not false-match inside longer words: the old
+        // substring `contains` treated "mustard"/"prefix"/"keeper" as hits.
+        assert!(!contains_needle("i love mustard sauce", "must"));
+        assert!(!contains_needle("this is a prefix only", "fix"));
+        assert!(!contains_needle("the keeper stood there", "keep"));
+        // Genuine standalone words still match, case-insensitively upstream.
+        assert!(contains_needle("you must rebuild first", "must"));
+        assert!(contains_needle("please fix the bug", "fix"));
+        // CJK needles keep substring matching (no whitespace word boundaries).
+        assert!(contains_needle("以后必须重新构建", "必须"));
+    }
+
+    #[test]
+    fn noise_filter_generalizes_machine_specific_paths() {
+        // Concrete absolute paths are machine noise regardless of drive letter or
+        // OS — the old code only knew the author's own d:\project / c:\users.
+        assert!(lesson_manual_line_is_noise("see e:\\work\\build output"));
+        assert!(lesson_manual_line_is_noise("logs under /home/alice/app"));
+        assert!(lesson_manual_line_is_noise("check /mnt/data/cache"));
+        // But a relative path in a genuine lesson must survive, and a URL must not
+        // be mistaken for a drive path.
+        assert!(!contains_concrete_filesystem_path(
+            "edit src/foo.rs then rebuild"
+        ));
+        assert!(!contains_concrete_filesystem_path(
+            "open https://example.com/docs"
+        ));
+    }
+
+    #[test]
+    fn causal_contrast_sentence_wins_over_keyword_only_fragment() {
+        // A full causal/contrast instruction must outscore a shorter fragment that
+        // merely trips a keyword, so extraction keeps the actionable sentence whole.
+        let structured = "下次改完前端必须重新构建并验证，否则管理工具不会更新";
+        let keyword_only = "构建";
+        assert!(
+            lesson_sentence_score(structured) > lesson_sentence_score(keyword_only),
+            "structured lesson should score higher than a bare keyword fragment"
+        );
+        assert!(has_causal_or_contrast_structure(structured));
+        assert!(has_causal_or_contrast_structure(
+            "fix the flag instead of removing it"
+        ));
+        assert!(!has_causal_or_contrast_structure("rebuild the frontend"));
+    }
+
+    #[test]
+    fn confidence_bucket_is_monotonic_and_tagged_on_classification() {
+        // Buckets are coarse and ordered so small scoring tweaks don't churn them.
+        assert_eq!(confidence_bucket(2), "low");
+        assert_eq!(confidence_bucket(4), "low");
+        assert_eq!(confidence_bucket(5), "medium");
+        assert_eq!(confidence_bucket(7), "medium");
+        assert_eq!(confidence_bucket(8), "high");
+        assert_eq!(confidence_bucket(20), "high");
+        // A classified lesson carries a sortable confidence tag, not just a
+        // free-text reason, so the UI can rank candidates by strength.
+        let classification =
+            classify_learnable_memory("以后前端 UI 改动后必须重新构建并验证，否则管理工具不会更新")
+                .expect("actionable lesson should classify");
+        assert!(
+            classification
+                .tags
+                .iter()
+                .any(|tag| tag.starts_with("confidence:")),
+            "classification must emit a confidence:<bucket> tag"
+        );
+    }
+
+    #[test]
     fn simhash_similarity_is_stable_for_reordered_memory_rules() {
         let left = keywords_for(
             "project rule: always read spec acceptance and run verification before delivery",
@@ -2778,6 +3456,79 @@ mod tests {
                 "before delivery always run verification and read acceptance spec project rule",
             )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn terminal_git_error_output_is_not_learnable_memory() {
+        let text = "PS D:\\Project\\Claude-Codex-Pro-Tool> git credential-manager erase https://github.com Unrecognized command or argument 'https://github.com'. Description: [Git] Erase a stored credential Usage: git-credential-manager erase [options] Options: --no-ui Do not use graphical user interface prompts -?, -h, --help Show help and usage information PS D:\\Project\\Claude-Codex-Pro-Tool> git push -u origin main remote: Permission to DamonZS/Claude-Codex-Pro-Tool.git denied to DamonZS. fatal: unable to access 'https://github.com/DamonZS/Claude-Codex-Pro-Tool.git/': The requested URL returned error: 403";
+
+        assert!(extract_learnable_memory(text).is_none());
+    }
+
+    #[test]
+    fn actionable_feedback_is_extracted_as_lesson_memory() {
+        let text = "你没有构建新版吗？以后前端 UI 改动后必须重新构建 target\\debug\\claude-codex-pro-manager.exe 并验证，否则管理工具应用里不会变化。";
+
+        let memory = extract_learnable_memory(text).expect("actionable lesson should be learned");
+
+        assert_eq!(memory.category, "lesson-learned");
+        assert!(memory.text.starts_with("经验教训："));
+        assert!(memory.text.contains("前端 UI 改动后必须重新构建"));
+        assert!(memory.tags.iter().any(|tag| tag == "lesson"));
+        assert!(memory.reason.contains("history actionable lesson"));
+    }
+
+    #[test]
+    fn memory_refine_feedback_is_extracted_as_lesson_memory() {
+        let text = "点击提炼经验教训后没有反馈。经验教训：盘古记忆按钮必须显示使用 Codex SQLite、会话文件和 memory_assist.sqlite，并在结束后输出遍历结果。";
+
+        let memory =
+            extract_learnable_memory(text).expect("memory refine lesson should be learned");
+
+        assert_eq!(memory.category, "lesson-learned");
+        assert!(memory.text.starts_with("经验教训："));
+        assert!(memory.text.contains("盘古记忆按钮必须显示"));
+        assert!(memory.text.contains("遍历结果"));
+    }
+
+    #[test]
+    fn vague_complaint_without_actionable_context_is_not_learnable_memory() {
+        let text = "太丑了，全都错了，还是不行。";
+
+        assert!(extract_learnable_memory(text).is_none());
+    }
+
+    #[test]
+    fn codex_history_fingerprint_is_stable_until_a_session_db_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path();
+        std::fs::create_dir_all(codex_home).unwrap();
+        // The legacy state_5.sqlite path is fingerprinted purely by metadata (no
+        // session-table validation), so it is the reliable fixture for asserting
+        // that a size change flips the fingerprint.
+        let db_path = codex_home.join("state_5.sqlite");
+        std::fs::write(&db_path, b"first").unwrap();
+
+        let first = codex_history_fingerprint(codex_home);
+        // Unchanged files must yield the same fingerprint so status polling can
+        // skip the expensive history backfill.
+        assert_eq!(first, codex_history_fingerprint(codex_home));
+
+        // Growing the DB (as Codex does when a session is written) must change
+        // the fingerprint so the next poll re-backfills.
+        std::fs::write(&db_path, b"first-plus-more-bytes").unwrap();
+        assert_ne!(first, codex_history_fingerprint(codex_home));
+    }
+
+    #[test]
+    fn codex_history_fingerprint_ignores_missing_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("does-not-exist");
+        // No session DBs → a stable, well-defined fingerprint rather than a panic.
+        assert_eq!(
+            codex_history_fingerprint(&missing),
+            codex_history_fingerprint(&missing)
         );
     }
 }

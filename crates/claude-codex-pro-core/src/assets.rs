@@ -27,9 +27,16 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     let image_overlay = image_overlay_config(helper_port, settings);
     let support_payment_qr = image_data_uri("image/png", SUPPORT_PAYMENT_QR);
     let plugin_marketplaces = crate::codex_plugin_marketplace::local_plugin_marketplaces();
+    // The helper token is embedded here so the injected renderer (and only it)
+    // can authenticate to the local helper. It sits in the bootstrap prologue,
+    // which runs in a closure scope, so a random web page that never received
+    // this script cannot read the token off `window`.
+    let helper_token = crate::helper_auth::helper_token();
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
+        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.{} = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
+        crate::helper_auth::HELPER_TOKEN_GLOBAL,
+        serde_json::to_string(helper_token).expect("helper token should serialize"),
         serde_json::to_string(crate::version::VERSION).expect("version should serialize"),
         serde_json::to_string(DIAGNOSTIC_BUILD_ID).expect("build id should serialize"),
         serde_json::to_string(&image_overlay).expect("image overlay config should serialize"),

@@ -1,5 +1,16 @@
 (() => {
   const helperBase = window.__CODEX_SESSION_DELETE_HELPER__ || "http://127.0.0.1:57321";
+  // Per-process capability token injected by the launcher. The helper requires
+  // it on the token-consuming proxy endpoints so that a random web page (which
+  // never received this script) cannot drive the user's relay API key. Captured
+  // in the closure, not left on the DOM, so page scripts cannot read it back.
+  const helperToken = window.__CLAUDE_CODEX_PRO_HELPER_TOKEN__ || "";
+  const helperTokenHeader = "x-claude-codex-pro-token";
+  const withHelperToken = (headers) => {
+    const merged = Object.assign({}, headers || {});
+    if (helperToken) merged[helperTokenHeader] = helperToken;
+    return merged;
+  };
   const buttonClass = "codex-delete-button";
   const exportButtonClass = "codex-export-button";
   const projectMoveButtonClass = "codex-project-move-button";
@@ -4157,7 +4168,7 @@
     } catch (_) {}
     fetch(`${helperBase}/diagnostics/log`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withHelperToken({ "Content-Type": "application/json" }),
       body,
       keepalive: true,
     }).catch(() => {});
@@ -4793,7 +4804,7 @@
         try {
           const response = await fetch(`${helperBase}${path}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withHelperToken({ "Content-Type": "application/json" }),
             body: JSON.stringify(payload || {}),
           });
           return await response.json();
@@ -4814,7 +4825,7 @@
       try {
         const response = await fetch(`${helperBase}${path}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: withHelperToken({ "Content-Type": "application/json" }),
           body: JSON.stringify(payload || {}),
         });
         return await response.json();

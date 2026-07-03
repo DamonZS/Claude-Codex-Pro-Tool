@@ -413,7 +413,11 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
         anyhow::bail!("{}", preview.message);
     }
 
-    match preview.item.install_kind {
+    // The install steps below shell out to git/npm/CLI tools via the synchronous
+    // run_command (git clone / npm install can take minutes). Running them inline
+    // in this async fn blocked a tokio worker for the whole duration and froze
+    // other commands; move the blocking work onto the blocking pool.
+    tokio::task::spawn_blocking(move || match preview.item.install_kind {
         InstallKind::ClaudeDesktopMcp => install_claude_desktop_mcp(preview),
         InstallKind::ClaudeDesktopOrgPlugin => install_claude_desktop_org_plugin(preview),
         InstallKind::CodexPlugin => install_codex_plugin(preview),
@@ -428,7 +432,9 @@ pub async fn install_item(id: &str) -> anyhow::Result<PluginInstallOutcome> {
         InstallKind::SkillBundle | InstallKind::ResourceLink => {
             anyhow::bail!("该社区资源需要人工审查后安装")
         }
-    }
+    })
+    .await
+    .map_err(|join_error| anyhow::anyhow!("plugin install task failed: {join_error}"))?
 }
 
 pub async fn install_ponytail_claude_desktop_local_bundle()
@@ -463,7 +469,10 @@ pub async fn install_ponytail_claude_desktop_local_bundle()
 }
 
 pub fn uninstall_item(id: &str) -> anyhow::Result<Vec<PluginHubInstallRecord>> {
-    let mut records = load_installed_records().unwrap_or_default();
+    // Propagate a read/parse failure instead of starting from an empty map: a
+    // transient failure here followed by save_installed_records would wipe the
+    // entire install history down to nothing.
+    let mut records = load_installed_records()?;
     if let Some(record) = records.get(id).cloned() {
         uninstall_record_artifacts(&record)?;
         records.remove(id);
@@ -1673,10 +1682,27 @@ fn upsert_codex_hook_trust_state(
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let existing = std::fs::read_to_string(config_path).unwrap_or_default();
+    // Never fall back to an empty document here: a read/parse failure on an
+    // *existing* config.toml (permission, transient lock, unusual syntax) would
+    // otherwise cause atomic_write below to overwrite the user's entire Codex
+    // config with a file containing only [hooks.state]. Missing file is the only
+    // case where starting from an empty document is correct.
+    let existing = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read Codex config {}", config_path.display()));
+        }
+    };
     let mut doc = existing
         .parse::<toml_edit::DocumentMut>()
-        .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+        .with_context(|| {
+            format!(
+                "parse Codex config {} (refusing to overwrite it)",
+                config_path.display()
+            )
+        })?;
     let root = doc.as_table_mut();
     if !root.contains_key("hooks") || !root["hooks"].is_table() {
         root.insert("hooks", toml_edit::Item::Table(toml_edit::Table::new()));
@@ -2486,6 +2512,15 @@ fn write_ponytail_mcpb_package_json(package_root: &Path) -> anyhow::Result<()> {
     )
 }
 
+/// Escape a string for safe interpolation into a single-quoted PowerShell
+/// literal. PowerShell escapes a literal single quote by doubling it (`'` ->
+/// `''`); without this, path text containing a single quote breaks out of the
+/// literal and executes as code.
+#[cfg(windows)]
+fn powershell_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 fn pack_mcpb_directory(source_dir: &Path, output_path: &Path) -> anyhow::Result<()> {
     if output_path.exists() {
         std::fs::remove_file(output_path)?;
@@ -2496,14 +2531,19 @@ fn pack_mcpb_directory(source_dir: &Path, output_path: &Path) -> anyhow::Result<
         if zip_path.exists() {
             std::fs::remove_file(&zip_path)?;
         }
+        // Escape single quotes as '' before interpolating paths into the
+        // single-quoted PowerShell string literals. Without this, a path
+        // containing a single quote (e.g. a Windows user name like O'Brien ->
+        // C:\Users\O'Brien\...) closes the literal early and lets attacker- or
+        // accident-controlled path text execute as PowerShell.
         let command = vec![
             "powershell".to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             format!(
                 "Set-Location -LiteralPath '{}'; Compress-Archive -Path * -DestinationPath '{}' -Force",
-                source_dir.display(),
-                zip_path.display()
+                powershell_single_quote(&source_dir.display().to_string()),
+                powershell_single_quote(&zip_path.display().to_string())
             ),
         ];
         run_command(&command)?;
@@ -2538,8 +2578,13 @@ fn pack_mcpb_directory(source_dir: &Path, output_path: &Path) -> anyhow::Result<
 fn open_path_with_system(path: &Path) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", &path.to_string_lossy()])
+        // Use explorer.exe with the path as a direct argv entry rather than
+        // `cmd /C start`. cmd.exe re-parses its whole command line, so a path
+        // containing cmd metacharacters (`&`, `^`, `|`, ...) — which can come
+        // from a user name or a custom directory — would be treated as command
+        // separators. explorer receives the path as a single OS argument.
+        Command::new("explorer.exe")
+            .arg(path)
             .spawn()
             .with_context(|| format!("open {}", path.display()))?;
     }
@@ -2944,9 +2989,61 @@ fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>
     if !path.exists() {
         return Ok(None);
     }
-    let backup_path = path.with_extension("json.bak");
+    // Use a timestamped backup name. A fixed `*.json.bak` gets overwritten on the
+    // second install, so the "backup" ends up being a copy this tool already
+    // modified — losing the user's original config for good. Millisecond
+    // precision plus a collision-avoiding suffix keeps every snapshot recoverable
+    // even when two backups land in the same millisecond.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_string());
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "claude_desktop_config.json".to_string());
+    let mut backup_path = path.with_file_name(format!("{file_name}.{stamp}.bak"));
+    let mut attempt = 1u32;
+    while backup_path.exists() {
+        backup_path = path.with_file_name(format!("{file_name}.{stamp}-{attempt}.bak"));
+        attempt += 1;
+    }
     std::fs::copy(path, &backup_path)?;
     Ok(Some(backup_path.to_string_lossy().to_string()))
+}
+
+/// Read an existing JSON config as an object, refusing to silently discard it.
+///
+/// The many `serde_json::from_str(...).unwrap_or_else(|_| json!({}))` call sites
+/// were a data-loss hazard: a corrupt or momentarily-unreadable
+/// `claude_desktop_config.json` (which holds the user's mcpServers, window
+/// state, etc.) would be replaced wholesale by whatever the caller wrote next.
+/// Missing file -> empty object is safe; a parse failure on an existing file is
+/// an error so the caller aborts instead of overwriting.
+fn read_existing_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            if text.trim().is_empty() {
+                return Ok(json!({}));
+            }
+            let value: Value = serde_json::from_str(&text).with_context(|| {
+                format!(
+                    "解析现有配置失败，已中止写入以避免覆盖用户数据：{}",
+                    path.display()
+                )
+            })?;
+            if value.is_object() {
+                Ok(value)
+            } else {
+                anyhow::bail!(
+                    "现有配置不是 JSON 对象，已中止写入以避免覆盖用户数据：{}",
+                    path.display()
+                )
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+        Err(error) => Err(error).with_context(|| format!("读取现有配置失败：{}", path.display())),
+    }
 }
 
 fn read_deployment_mode(path: &Path) -> Option<String> {
@@ -2967,11 +3064,7 @@ fn write_claude_desktop_deployment_mode(path: &Path, mode: &str) -> anyhow::Resu
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut config = if path.exists() {
-        serde_json::from_str::<Value>(&std::fs::read_to_string(path)?).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
+    let mut config = read_existing_json_object_or_empty(path)?;
     let root = config
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
@@ -3048,14 +3141,7 @@ fn ensure_claude_desktop_marketplaces_config(path: &Path) -> anyhow::Result<()> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut config = if path.exists() {
-        serde_json::from_str::<Value>(&std::fs::read_to_string(path)?).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-    if !config.is_object() {
-        config = json!({});
-    }
+    let mut config = read_existing_json_object_or_empty(path)?;
     let root = config
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
@@ -3410,14 +3496,7 @@ fn write_claude_desktop_dev_mode_meta(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut raw = if path.exists() {
-        serde_json::from_str::<Value>(&std::fs::read_to_string(path)?).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-    if !raw.is_object() {
-        raw = json!({});
-    }
+    let mut raw = read_existing_json_object_or_empty(path)?;
     let root = raw
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop profile metadata must be a JSON object"))?;
@@ -3471,12 +3550,7 @@ fn upsert_claude_desktop_mcp_server(
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut config = if config_path.exists() {
-        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_path)?)
-            .unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
+    let mut config = read_existing_json_object_or_empty(config_path)?;
     let root = config
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
@@ -3496,9 +3570,7 @@ fn remove_claude_desktop_mcp_server(
     if !config_path.exists() {
         return Ok(());
     }
-    let mut config =
-        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_path)?)
-            .unwrap_or_else(|_| json!({}));
+    let mut config = read_existing_json_object_or_empty(config_path)?;
     if let Some(servers) = config
         .get_mut("mcpServers")
         .and_then(serde_json::Value::as_object_mut)
@@ -3543,7 +3615,10 @@ fn record_install_with_managed_paths(
     backup_path: Option<String>,
     managed_paths: Vec<String>,
 ) -> anyhow::Result<()> {
-    let mut records = load_installed_records().unwrap_or_default();
+    // Propagate a read/parse failure rather than defaulting to an empty map:
+    // otherwise recording one new install would silently drop every previously
+    // recorded install (and their managed_paths, which uninstall relies on).
+    let mut records = load_installed_records()?;
     records.insert(
         item.id.clone(),
         PluginHubInstallRecord {
@@ -3751,6 +3826,56 @@ mod tests {
             stderr: String::new(),
             backup_path: None,
         }
+    }
+
+    fn sample_hook_entry() -> CodexHookTrustEntry {
+        CodexHookTrustEntry {
+            key: "ponytail-pre".to_string(),
+            event_name: "PreToolUse".to_string(),
+            matcher: None,
+            command: "ponytail".to_string(),
+            status_message: None,
+            current_hash: "abc123".to_string(),
+            trusted: false,
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn upsert_hook_trust_preserves_existing_codex_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "model_provider = \"custom\"\n\n[model_providers.custom]\nbase_url = \"https://example.com/v1\"\n",
+        )
+        .expect("seed config");
+
+        upsert_codex_hook_trust_state(&config_path, &[sample_hook_entry()]).expect("upsert");
+
+        let updated = std::fs::read_to_string(&config_path).expect("read back");
+        // The user's provider config must survive the trust write.
+        assert!(updated.contains("model_provider = \"custom\""));
+        assert!(updated.contains("base_url = \"https://example.com/v1\""));
+        // And the new trust state must be present.
+        assert!(updated.contains("[hooks.state.ponytail-pre]"));
+        assert!(updated.contains("trusted_hash = \"abc123\""));
+    }
+
+    #[test]
+    fn upsert_hook_trust_refuses_to_overwrite_unparseable_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let garbage = "this is = = not valid toml [[[\n";
+        std::fs::write(&config_path, garbage).expect("seed config");
+
+        let result = upsert_codex_hook_trust_state(&config_path, &[sample_hook_entry()]);
+
+        // A parse failure on an existing config must be an error, never a silent
+        // overwrite that destroys the user's Codex configuration.
+        assert!(result.is_err());
+        let after = std::fs::read_to_string(&config_path).expect("read back");
+        assert_eq!(after, garbage);
     }
 
     #[test]
@@ -4929,5 +5054,51 @@ mod tests {
 
         assert!(message.contains("需要先登录 Claude Code CLI"));
         assert!(message.contains("claude"));
+    }
+
+    #[test]
+    fn claude_desktop_writers_refuse_to_overwrite_corrupt_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude_desktop_config.json");
+        // A corrupt / half-written config must never be silently replaced: the
+        // user's mcpServers, window state, etc. would be lost. Every writer that
+        // reads-modifies-writes should abort instead.
+        let corrupt = r#"{"mcpServers": {"existing": {"command": "node"#.to_string();
+        std::fs::write(&path, &corrupt).unwrap();
+
+        assert!(
+            upsert_claude_desktop_mcp_server(
+                &path,
+                "new-server",
+                json!({"command": "claude", "args": ["mcp", "serve"]}),
+            )
+            .is_err()
+        );
+        assert!(write_claude_desktop_deployment_mode(&path, "3p").is_err());
+        assert!(ensure_claude_desktop_marketplaces_config(&path).is_err());
+        assert!(remove_claude_desktop_mcp_server(&path, "existing").is_err());
+
+        // The corrupt file is left exactly as-is, not clobbered with `{}`.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt);
+    }
+
+    #[test]
+    fn claude_desktop_backup_keeps_each_snapshot_recoverable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude_desktop_config.json");
+        std::fs::write(&path, r#"{"original":true}"#).unwrap();
+
+        let first = backup_claude_desktop_config(&path).unwrap().unwrap();
+        // Mutate the live config, then back up again. A fixed *.json.bak would
+        // overwrite the first snapshot with this already-modified content.
+        std::fs::write(&path, r#"{"modified":true}"#).unwrap();
+        let second = backup_claude_desktop_config(&path).unwrap().unwrap();
+
+        assert_ne!(first, second, "each backup must have a distinct name");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            r#"{"original":true}"#,
+            "the original snapshot must remain recoverable"
+        );
     }
 }

@@ -601,6 +601,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let tauri_bridge = manifest_dir.parent().unwrap().join("src/tauriBridge.ts");
+    let tauri_bridge = std::fs::read_to_string(&tauri_bridge).expect("read manager tauriBridge.ts");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
     let lib_rs =
@@ -711,6 +713,47 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .and_then(|rest| rest.split("title=\"诊断与修复\"").next())
         .expect("memory overview panel source");
     assert!(!memory_panel.contains("Claude 一键开发模式"));
+    assert!(memory_panel.contains("查看/编辑经验教训"));
+    assert!(memory_panel.contains("提炼经验教训"));
+    assert!(memory_panel.contains("memory-overview-matrix"));
+    assert!(memory_panel.contains("memory-overview-actions"));
+    assert!(!memory_panel.contains("待确认"));
+    assert!(memory_panel.contains("actions.refineLongTermMemory()"));
+    assert!(memory_panel.contains("openMemoryDetails()"));
+    assert!(overview_screen.contains("overview-side-stack"));
+    assert!(overview_screen.contains("<OverviewMemoryDetails"));
+    assert!(app_tsx.contains("function OverviewMemoryDetails"));
+    assert!(app_tsx.contains("经验教训手册详情"));
+    assert!(app_tsx.contains("提炼结果会合成为一条精简手册，可在这里直接查看和编辑。"));
+    assert!(app_tsx.contains("const refineLongTermMemory = async () => {"));
+    assert!(app_tsx.contains("\"提炼经验教训\""));
+    assert!(app_tsx.contains(
+        "正在使用 Codex 本地 SQLite、rollout 会话文件和 memory_assist.sqlite 遍历工作区与会话"
+    ));
+    assert!(app_tsx.contains("writeUiEvent(\"memory.refine_long_term.click\""));
+    assert!(
+        app_tsx.contains("function memoryRefineSummary(result: MemorySelfCheckResult): string")
+    );
+    assert!(app_tsx.contains("check.name === \"history\""));
+    assert!(app_tsx.contains("结果：${historyMessage}"));
+    assert!(app_tsx.contains("call<MemorySelfCheckResult>(\"run_memory_assist_selfcheck\", { request: { repair: true } })"));
+    assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.start\""));
+    assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.result\""));
+    assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.failed\""));
+    assert!(app_tsx.contains("writeUiEvent(\"manager.ui.button.click\""));
+    assert!(app_tsx.contains("function buttonLogLabel(button: HTMLButtonElement): string"));
+    assert!(app_tsx.contains("document.addEventListener(\"click\", handleButtonClick, true)"));
+    assert!(commands_rs.contains("manager.memory.selfcheck.start"));
+    assert!(commands_rs.contains("manager.memory.selfcheck.result"));
+    assert!(commands_rs.contains("manager.memory.selfcheck.failed"));
+    assert!(commands_rs.contains("\"historyScan\": \"all_visible_workspaces_and_sessions\""));
+    assert!(styles.contains(".overview-side-stack"));
+    assert!(styles.contains(".overview-memory-list"));
+    assert!(styles.contains(".memory-overview-matrix"));
+    assert!(styles.contains("grid-template-columns: repeat(2, minmax(0, 1fr));"));
+    assert!(styles.contains(".memory-overview-actions"));
+    assert!(styles.contains("grid-template-columns: repeat(3, minmax(0, 1fr));"));
+    assert!(styles.contains("max-height: 360px;"));
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
@@ -728,6 +771,28 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::refresh_claude_third_party_config"));
     assert!(lib_rs.contains("commands::repair_frontend_connection"));
     assert!(lib_rs.contains("commands::repair_backend_service"));
+    assert!(lib_rs.contains("commands::update_memory_assist_item"));
+    assert!(app_tsx.contains("\"update_memory_assist_item\""));
+    assert!(tauri_bridge.contains("command === \"update_memory_assist_item\""));
+    let memory_assist_panel = app_tsx
+        .split("function MemoryAssistPanel")
+        .nth(1)
+        .and_then(|rest| rest.split("function SessionManagementScreen").next())
+        .expect("memory assist panel source");
+    assert!(memory_assist_panel.contains("<strong>经验教训手册</strong>"));
+    assert!(memory_assist_panel.contains("memory-lesson-card"));
+    assert!(!memory_assist_panel.contains("<strong>待确认</strong>"));
+    assert!(!memory_assist_panel.contains("approveMemoryAssistCandidate(candidate.id)"));
+    assert!(!memory_assist_panel.contains("rejectMemoryAssistCandidate(candidate.id)"));
+    assert!(memory_assist_panel.contains("const allItems = items?.items ?? [];"));
+    assert!(!memory_assist_panel.contains("items?.items.slice(0, 5)"));
+    assert!(memory_assist_panel.contains("beginEditMemory"));
+    assert!(memory_assist_panel.contains("saveEditedMemory"));
+    assert!(memory_assist_panel.contains("actions.updateMemoryAssistItem"));
+    assert!(memory_assist_panel.contains("actions.refineLongTermMemory()"));
+    assert!(memory_assist_panel.contains("workspace: item.workspace"));
+    assert!(memory_assist_panel.contains("tags: item.tags"));
+    assert!(memory_assist_panel.contains("sourceSessionId: item.sourceSessionId"));
     assert!(commands_rs.contains("codex_frontend_injected"));
     assert!(!commands_rs.contains("claude_frontend_injected"));
     assert!(commands_rs.contains("codex_backend_online"));
@@ -735,15 +800,17 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("frontend_runtime_online"));
     assert!(commands_rs.contains("latest_renderer_runtime_heartbeat"));
     assert!(commands_rs.contains("renderer_heartbeat_is_fresh"));
-    assert!(commands_rs.contains("renderer_runtime_heartbeat_is_ready"));
+    assert!(commands_rs.contains("renderer_frontend_heartbeat_confirms_injection"));
     assert!(commands_rs.contains("heartbeat.runtime_reported"));
     assert!(commands_rs.contains("renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)"));
     assert!(commands_rs.contains(".map(|runtime| runtime.status != \"failed\")"));
     assert!(commands_rs.contains("renderer.memory_runtime"));
+    assert!(commands_rs.contains("renderer.script_loaded"));
     assert!(commands_rs.contains("#[serde(default)]"));
     assert!(commands_rs.contains("fn normalize_memory_runtime_status"));
     assert!(commands_rs.contains("\"idle\" => \"ok\".to_string()"));
     assert!(commands_rs.contains(".take(2_000)"));
+    assert!(commands_rs.contains("Codex 前端脚本已注入，等待盘古记忆 runtime 同步。"));
     assert!(commands_rs.contains("等待真实对话消息后写入盘古记忆。"));
     assert!(app_tsx.contains("status === \"idle\""));
     assert!(commands_rs.contains("force_reinject_bridge"));
@@ -849,10 +916,28 @@ fn claude_launch_waits_for_real_debug_readiness() {
     assert!(open_section.contains("Claude Desktop 已启动"));
     assert!(core_claude.contains("struct LaunchReadiness"));
     assert!(core_claude.contains("fn launch_readiness_from_status"));
-    assert!(core_claude.contains("Inspector/CDP 端口未就绪"));
-    assert!(core_claude.contains("当前 Claude/Electron 构建不接受外部调试参数"));
-    assert!(core_claude.contains("fn launch_readiness_warns_when_inspector_flag_is_not_ready"));
-    assert!(core_claude.contains("fn launch_readiness_is_ready_only_with_verified_debug_port"));
+    // The Node inspector debug port (`--inspect=127.0.0.1:9229`) was removed from
+    // the launch command: it exposed an unauthenticated inspector any local
+    // process could attach to and run code inside Claude's main process, and
+    // nothing here ever connected to it. Readiness now keys off a running
+    // process, not a debug channel. (The `extract_node_inspector_port` parser and
+    // its test data still mention the flag on purpose — that only reads a port out
+    // of an observed command line for diagnostics; it never passes the flag.)
+    let launch_section = core_claude
+        .split("fn launch_claude_desktop_app")
+        .nth(1)
+        .and_then(|rest| rest.split("fn claude_desktop_executable_path").next())
+        .expect("launch_claude_desktop_app source");
+    // The flag must not be PASSED as a launch argument. An explanatory comment in
+    // the function may still name it, so we assert on the argument-passing form
+    // (`args([... --inspect ...])`) rather than any mention of the string.
+    assert!(!launch_section.contains("args([\"--inspect"));
+    assert!(!launch_section.contains("--inspect=127.0.0.1:9229\"]"));
+    assert!(core_claude.contains("fn launch_readiness_warns_when_no_process_is_running"));
+    assert!(
+        core_claude
+            .contains("fn launch_readiness_is_ready_when_process_is_running_without_debug_port")
+    );
     assert!(commands_rs.contains("\"warning\".to_string()"));
     assert!(commands_rs.contains("本地模型代理已请求启动"));
 }
@@ -949,14 +1034,17 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
                 .expect("latest status path lookup")
     );
     let restart_command = commands_rs
-        .split("pub fn restart_claude_codex_pro")
+        .split("pub async fn restart_claude_codex_pro")
         .nth(1)
         .and_then(|rest| rest.split("fn normalize_launch_request").next())
         .expect("restart_claude_codex_pro source");
     assert!(restart_command.contains("stop_launcher_processes_for_codex_restart()"));
     assert!(!restart_command.contains("stop_launcher_processes();"));
     assert!(restart_command.contains("stop_codex_processes();"));
-    assert!(restart_command.contains("spawn_claude_codex_pro_launch(request"));
+    // rustfmt may wrap the call across lines, so assert on the call and the
+    // forwarded `request` argument separately rather than on a single substring.
+    assert!(restart_command.contains("spawn_claude_codex_pro_launch("));
+    assert!(restart_command.contains("request,"));
     assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
     assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
 }
@@ -1627,12 +1715,12 @@ fn claude_zh_patch_commands_close_claude_before_writing_resources() {
         .split("pub async fn install_claude_zh_patch_at_install_root")
         .nth(1)
         .and_then(|rest| {
-            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+            rest.split("#[tauri::command]\npub async fn restore_claude_zh_patch")
                 .next()
         })
         .expect("manual command source");
     let restore_action = commands_rs
-        .split("pub fn restore_claude_zh_patch()")
+        .split("fn restore_claude_zh_patch_blocking()")
         .nth(1)
         .and_then(|rest| {
             rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
@@ -1663,12 +1751,12 @@ fn claude_zh_patch_closes_claude_before_elevation_branch() {
         .split("pub async fn install_claude_zh_patch_at_install_root")
         .nth(1)
         .and_then(|rest| {
-            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+            rest.split("#[tauri::command]\npub async fn restore_claude_zh_patch")
                 .next()
         })
         .expect("manual command source");
     let restore_action = commands_rs
-        .split("pub fn restore_claude_zh_patch()")
+        .split("fn restore_claude_zh_patch_blocking()")
         .nth(1)
         .and_then(|rest| {
             rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
@@ -1714,7 +1802,7 @@ fn claude_zh_patch_parent_verifies_final_status_after_elevation() {
         .and_then(|rest| rest.split("pub fn handle_internal_cli()").next())
         .expect("install command source");
     let restore_action = commands_rs
-        .split("pub fn restore_claude_zh_patch()")
+        .split("fn restore_claude_zh_patch_blocking()")
         .nth(1)
         .and_then(|rest| {
             rest.split("#[tauri::command]\npub fn new_claude_desktop_chat")
@@ -1764,7 +1852,7 @@ fn claude_zh_patch_manual_install_falls_back_to_uac_when_direct_msix_write_fails
         .split("pub async fn install_claude_zh_patch_at_install_root")
         .nth(1)
         .and_then(|rest| {
-            rest.split("#[tauri::command]\npub fn restore_claude_zh_patch")
+            rest.split("#[tauri::command]\npub async fn restore_claude_zh_patch")
                 .next()
         })
         .expect("manual command source");
@@ -1872,7 +1960,12 @@ fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
     assert!(commands_rs.contains("command.stdout(std::process::Stdio::piped())"));
     assert!(commands_rs.contains("command.stderr(std::process::Stdio::piped())"));
     assert!(commands_rs.contains("child.try_wait()?"));
-    assert!(commands_rs.contains("child.wait_with_output()"));
+    // The elevated child's stdout/stderr must be drained on dedicated threads
+    // (read_to_end) rather than read only after exit: a child that writes past
+    // the ~64 KiB pipe buffer would otherwise deadlock until the timeout. Assert
+    // the deadlock-safe draining instead of the old post-exit wait_with_output().
+    assert!(commands_rs.contains("pipe.read_to_end(&mut buf)"));
+    assert!(commands_rs.contains("std::thread::spawn(move ||"));
     assert!(commands_rs.contains("stdout={}"));
     assert!(commands_rs.contains("stderr={}"));
     assert!(commands_rs.contains("Elevated child did not write result file"));
@@ -1897,7 +1990,8 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
     assert!(repair.contains("let repair_started_ms = current_time_ms();"));
     assert!(repair.contains("restart_codex_for_frontend_repair(&mut details).await"));
     assert!(!repair.contains("let initial_runtime_online"));
-    assert!(repair.contains("wait_for_renderer_runtime_after("));
+    assert!(repair.contains("wait_for_renderer_frontend_after("));
+    assert!(repair.contains("前端脚本已在本次修复后加载"));
     assert!(repair.contains("旧注入状态不会被判定为成功"));
     assert!(
         commands_rs
@@ -1929,7 +2023,7 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         .split("async fn wait_for_codex_launch_ports")
         .nth(1)
         .and_then(|rest| {
-            rest.split("async fn wait_for_renderer_runtime_after")
+            rest.split("async fn wait_for_renderer_frontend_after")
                 .next()
         })
         .expect("wait_for_codex_launch_ports source");
@@ -1938,11 +2032,11 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
     assert!(wait_ports.contains("helper_backend_online(request.helper_port)"));
 
     let wait = commands_rs
-        .split("async fn wait_for_renderer_runtime_after")
+        .split("async fn wait_for_renderer_frontend_after")
         .nth(1)
-        .expect("wait_for_renderer_runtime_after source");
+        .expect("wait_for_renderer_frontend_after source");
     assert!(wait.contains("heartbeat.timestamp_ms >= min_timestamp_ms"));
-    assert!(wait.contains("renderer_runtime_heartbeat_is_ready(&heartbeat)"));
+    assert!(wait.contains("renderer_frontend_heartbeat_confirms_injection(&heartbeat)"));
 }
 
 #[test]

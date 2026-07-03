@@ -11,6 +11,7 @@ pub mod codex_plugin_marketplace;
 pub mod codex_sqlite;
 mod computer_use_guard;
 pub mod diagnostic_log;
+pub mod helper_auth;
 pub mod http_client;
 pub mod install;
 pub mod launcher;

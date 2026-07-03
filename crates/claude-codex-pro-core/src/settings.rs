@@ -158,6 +158,46 @@ pub enum RelayMode {
     PureApi,
 }
 
+/// A user-defined Codex plugin marketplace. Until this existed the tool only
+/// knew about three hard-coded built-in repositories and had no write channel
+/// for user repos at all, so "add a third-party marketplace" was impossible.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCustomMarketplace {
+    /// Marketplace name/key written under `[marketplaces.<name>]` in config.toml.
+    pub name: String,
+    /// Either "git" or "local".
+    #[serde(rename = "sourceType", default = "default_marketplace_source_type")]
+    pub source_type: String,
+    /// Git URL (for git) or filesystem path (for local).
+    pub source: String,
+    /// Git ref (branch/tag/commit). Only meaningful for git sources.
+    #[serde(rename = "ref", default)]
+    pub git_ref: String,
+    /// Optional sparse-checkout paths for git sources.
+    #[serde(rename = "sparsePaths", default)]
+    pub sparse_paths: Vec<String>,
+}
+
+fn default_marketplace_source_type() -> String {
+    "git".to_string()
+}
+
+/// One recorded Codex → Claude Code migration, used to keep re-runs idempotent:
+/// if the recorded target file still exists we reuse it instead of writing a
+/// duplicate transcript.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexSessionMigrationRecord {
+    /// Codex thread id that was migrated.
+    pub session_id: String,
+    /// UUID of the Claude Code transcript file that was written.
+    pub target_uuid: String,
+    /// Claude Code project slug the transcript landed in.
+    #[serde(default)]
+    pub project_slug: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BackendSettings {
     #[serde(rename = "codexAppPath", default)]
@@ -271,6 +311,10 @@ pub struct BackendSettings {
         deserialize_with = "empty_as_default_api_key_env"
     )]
     pub cli_wrapper_api_key_env: String,
+    #[serde(rename = "codexCustomMarketplaces", default)]
+    pub codex_custom_marketplaces: Vec<CodexCustomMarketplace>,
+    #[serde(rename = "codexSessionMigrations", default)]
+    pub codex_session_migrations: Vec<CodexSessionMigrationRecord>,
 }
 
 impl Default for BackendSettings {
@@ -324,6 +368,8 @@ impl Default for BackendSettings {
             cli_wrapper_base_url: String::new(),
             cli_wrapper_api_key: String::new(),
             cli_wrapper_api_key_env: default_api_key_env(),
+            codex_custom_marketplaces: Vec::new(),
+            codex_session_migrations: Vec::new(),
         }
     }
 }

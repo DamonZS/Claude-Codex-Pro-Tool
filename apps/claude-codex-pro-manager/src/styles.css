@@ -488,7 +488,12 @@ body {
   min-width: 760px;
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
+  /* Below the 760px min-width the old `overflow: hidden` clipped the shell with
+     no way to reach the cut-off content. Allow horizontal scrolling instead so
+     a narrow window degrades to a scrollable layout rather than losing content;
+     vertical overflow stays hidden so the app owns its own scroll regions. */
+  overflow-x: auto;
+  overflow-y: hidden;
   background: hsl(var(--shell-bg));
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
@@ -497,7 +502,10 @@ body {
 .shell {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
-  width: 100vw;
+  /* Fill the body (which enforces the 760px floor) rather than the raw viewport,
+     so a sub-760px window scrolls horizontally instead of squashing the grid. */
+  width: 100%;
+  min-width: 760px;
   height: 100vh;
   overflow: hidden;
   background: hsl(var(--shell-bg));
@@ -3561,6 +3569,28 @@ body {
   align-items: start;
 }
 
+.overview-side-stack {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.overview-memory-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.overview-memory-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
 .status-tile {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
@@ -4337,6 +4367,10 @@ body {
   padding: 6px 0;
 }
 
+.info-row.with-action {
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr) auto;
+}
+
 .info-row span {
   color: #8a8f98;
   font-size: 12px;
@@ -4349,6 +4383,77 @@ body {
   font-size: 13px;
   line-height: 1.35;
   text-align: right;
+}
+
+.info-row-action-wrap {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.info-row-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  border: 1px solid rgba(129, 140, 248, 0.5);
+  border-radius: 7px;
+  background: rgba(99, 102, 241, 0.14);
+  padding: 0 8px;
+  color: #cfd5ff;
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.info-row-action:hover {
+  border-color: rgba(165, 180, 252, 0.78);
+  background: rgba(129, 140, 248, 0.22);
+  color: #ffffff;
+}
+
+.memory-overview-matrix {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.memory-overview-matrix .info-row {
+  min-height: 42px;
+  border: 1px solid #23252a;
+  border-radius: 8px;
+  background: rgba(20, 21, 24, 0.72);
+  padding: 8px 10px;
+}
+
+.memory-overview-matrix .info-row.with-action {
+  grid-column: 1 / -1;
+}
+
+.memory-overview-matrix .info-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-overview-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.memory-overview-actions button {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 760px) {
+  .memory-overview-matrix,
+  .memory-overview-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .memory-overview-header {
@@ -4687,6 +4792,13 @@ body {
   line-height: 1.45;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+
+.memory-lesson-card p {
+  display: block;
+  overflow: visible;
+  white-space: pre-wrap;
+  -webkit-line-clamp: unset;
 }
 
 .ops-two-column > .stack .memory-assist-row p {
@@ -5764,8 +5876,11 @@ body {
 .action-button,
 .source-pill,
 .empty-state,
-.info-row,
-.ops-status-row {
+.info-row {
+  /* `.ops-status-row` was in this group but the standalone `.ops-status-row`
+     block further down (equal specificity, later in source) re-declares all
+     five of these properties, so its entry here was fully overridden dead
+     weight. Dropped it; the remaining selectors keep these values unchanged. */
   border-color: var(--ops-hairline);
   border-radius: var(--ops-radius);
   background:
@@ -5822,11 +5937,6 @@ body {
 .supplier-layout,
 .supplier-editor-layout {
   gap: 16px;
-}
-
-.status-tile {
-  min-height: 116px;
-  padding: 16px;
 }
 
 .status-tile svg,

@@ -31,7 +31,7 @@ Codex App 或 Claude Desktop 更新后，旧版本安装目录可能被系统移
 - Codex 自动发现优先级应覆盖：运行中 Codex、最新有效状态路径、用户保存路径、当前安装候选。
 - 所有用于启动 Codex 的候选目录必须确认存在 `Codex.exe` / `codex.exe` 或 macOS bundle 可执行文件。
 - Codex 进程识别不能只匹配 WindowsApps 安装路径，也要识别可归一化为有效 Codex 安装目录的 `codex.exe`。
-- “修复前端连接”必须强制调用 Codex 重启链路，并等待 `renderer.memory_runtime` 或同等 runtime 心跳时间戳不早于本次修复开始时间。
+- “修复前端连接”必须强制调用 Codex 重启链路，并等待 `renderer.script_loaded` 或 `renderer.memory_runtime` 心跳时间戳不早于本次修复开始时间；脚本加载确认前端已注入，runtime 仅用于盘古记忆详细状态同步。
 - “修复前端连接”必须先等待 Codex 自启完成，包括 CDP `/json` 与 helper 后端上线，然后再执行前端注入确认；不得在 Codex 自启期间提前给出最终失败提示。
 - 如果重启、端口上线或新心跳确认失败，修复命令必须返回失败，不得显示“已修复并确认注入”。
 - Claude 启动逻辑只尝试存在的 hint；hint 不存在时继续默认候选路径和 Start menu / AppsFolder 回退。

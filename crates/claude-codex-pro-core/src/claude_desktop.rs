@@ -400,7 +400,10 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
     let focus = match wait_for_claude_focus() {
         Some(focus) => focus,
         None => {
-            let status = detect_status();
+            // Only cdp_status/cdp_blocker are used below, both of which come from
+            // the light probe. Avoid the full integrity audit (sha256 of the whole
+            // Claude.exe + PE parse + PowerShell signature check) that froze the UI.
+            let status = detect_status_light();
             return ClaudeDesktopActionResult {
                 status: "accepted".to_string(),
                 message: format!(
@@ -435,7 +438,7 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
     let process_id = focus.process_id.unwrap_or_default();
     let devtools = observe_devtools_window(process_id);
     if devtools.matched {
-        let status = detect_status();
+        let status = detect_status_light();
         return ClaudeDesktopActionResult {
             status: "ok".to_string(),
             message: format!(
@@ -455,7 +458,7 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
     if send_f12_devtools_shortcut() {
         let second = observe_devtools_window(process_id);
         if second.matched {
-            let status = detect_status();
+            let status = detect_status_light();
             return ClaudeDesktopActionResult {
                 status: "ok".to_string(),
                 message: format!(
@@ -470,7 +473,7 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
                 observed_window_titles: second.titles,
             };
         }
-        let status = detect_status();
+        let status = detect_status_light();
         let observed_suffix = if second.titles.is_empty() {
             String::new()
         } else {
@@ -491,7 +494,7 @@ pub fn enter_claude_desktop_devtools() -> ClaudeDesktopActionResult {
         };
     }
 
-    let status = detect_status();
+    let status = detect_status_light();
     let observed_suffix = if devtools.titles.is_empty() {
         String::new()
     } else {
@@ -800,8 +803,15 @@ fn wait_for_claude_launch_readiness(timeout: std::time::Duration) -> LaunchReadi
 
 fn launch_readiness_from_status(status: &ClaudeDesktopStatus) -> LaunchReadiness {
     let process_running = status.process_count > 0;
-    let ready = process_running
-        && (status.cdp_status == "node_inspector_ready" || !status.debug_ports.is_empty());
+    // Readiness no longer depends on a Node inspector / CDP debug port. We stopped
+    // launching Claude Desktop with `--inspect=127.0.0.1:9229` because that opens
+    // an unauthenticated inspector any local process can attach to and run
+    // arbitrary code inside Claude's main process. Nothing in this project ever
+    // connected to that port to inject (Chinese localization uses a separate
+    // WebView wrapper window), so the port was pure attack surface. A running
+    // Claude process is now the readiness signal; any observed debug port is
+    // still surfaced as extra evidence but is not required.
+    let ready = process_running;
     let message = launch_readiness_message(status, ready, process_running);
     LaunchReadiness {
         ready,
@@ -828,10 +838,10 @@ fn launch_readiness_message(
         ports.sort_unstable();
         ports.dedup();
         return if ports.is_empty() {
-            "已检测到可用调试通道。".to_string()
+            "Claude 已启动并在运行。".to_string()
         } else {
             format!(
-                "已检测到可用调试端口：{}。",
+                "Claude 已启动并在运行（观察到调试端口：{}）。",
                 ports
                     .iter()
                     .map(u16::to_string)
@@ -840,13 +850,7 @@ fn launch_readiness_message(
             )
         };
     }
-    if status.cdp_status == "observed_but_unverified" || status.debug_flags_present {
-        return "Claude 已运行，但 Inspector/CDP 端口未就绪，当前不能注入窗口标识。已观察到调试参数但 HTTP 端点未响应，通常表示当前 Claude/Electron 构建不接受外部调试参数。".to_string();
-    }
-    format!(
-        "Claude 已运行，但未检测到可用 Inspector/CDP 端口，当前状态为 {}。{}",
-        status.cdp_status, status.cdp_blocker
-    )
+    "未检测到 Claude 进程，启动请求没有形成可用窗口。".to_string()
 }
 
 #[cfg(windows)]
@@ -1053,8 +1057,13 @@ fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<(
         .map(Path::to_path_buf)
         .or_else(claude_desktop_executable_path)
     {
+        // Do NOT pass `--inspect=127.0.0.1:9229`. That opens a Node inspector on a
+        // fixed loopback port that ANY local process can connect to and use to run
+        // arbitrary code inside Claude Desktop's main process (reading the user's
+        // session tokens). Nothing in this project actually attaches to that port
+        // to inject — Claude localization uses a separate WebView wrapper window —
+        // so the flag was pure attack surface. Launch the app plainly instead.
         let mut command = std::process::Command::new(path);
-        command.args(["--inspect=127.0.0.1:9229"]);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -2020,24 +2029,25 @@ mod tests {
     }
 
     #[test]
-    fn launch_readiness_warns_when_inspector_flag_is_not_ready() {
+    fn launch_readiness_warns_when_no_process_is_running() {
+        // With the Node inspector debug port removed for security, readiness no
+        // longer depends on a debug channel. The only "not ready" case left is
+        // "the launch did not produce a running Claude process".
         let status = ClaudeDesktopStatus {
             status: "ok".to_string(),
-            message: "Claude Desktop is running.".to_string(),
-            process_count: 1,
+            message: "Claude Desktop is not running.".to_string(),
+            process_count: 0,
             executable_paths: vec![
                 "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe".to_string(),
             ],
             install_kind: "msix".to_string(),
             cdp_status: "observed_but_unverified".to_string(),
             cdp_blocker: cdp_blocker_for_install_kind("msix"),
-            debug_flags_present: true,
+            debug_flags_present: false,
             debug_ports: Vec::new(),
             inspector_ports: Vec::new(),
             listening_ports: Vec::new(),
-            debug_evidence: vec![
-                "Node inspector flag was observed for 127.0.0.1:9229, but the inspector HTTP endpoint did not respond".to_string(),
-            ],
+            debug_evidence: Vec::new(),
             supported_integration: "external_automation".to_string(),
             integrity_status: "not_checked".to_string(),
             integrity_message: String::new(),
@@ -2047,14 +2057,14 @@ mod tests {
         let readiness = launch_readiness_from_status(&status);
 
         assert!(!readiness.ready);
-        assert!(readiness.process_running);
-        assert_eq!(readiness.cdp_status, "observed_but_unverified");
-        assert!(readiness.message.contains("Inspector/CDP 端口未就绪"));
-        assert!(readiness.message.contains("不能注入窗口标识"));
+        assert!(!readiness.process_running);
+        assert!(readiness.message.contains("未检测到 Claude 进程"));
     }
 
     #[test]
-    fn launch_readiness_is_ready_only_with_verified_debug_port() {
+    fn launch_readiness_is_ready_when_process_is_running_without_debug_port() {
+        // No `--inspect` is passed anymore, so a running process is the readiness
+        // signal. This must NOT require any debug/inspector port.
         let status = ClaudeDesktopStatus {
             status: "ok".to_string(),
             message: "Claude Desktop is running.".to_string(),
@@ -2063,13 +2073,13 @@ mod tests {
                 "C:\\Users\\me\\AppData\\Local\\Programs\\Claude\\Claude.exe".to_string(),
             ],
             install_kind: "desktop".to_string(),
-            cdp_status: "node_inspector_ready".to_string(),
+            cdp_status: "observed_but_unverified".to_string(),
             cdp_blocker: cdp_blocker_for_install_kind("desktop"),
-            debug_flags_present: true,
+            debug_flags_present: false,
             debug_ports: Vec::new(),
-            inspector_ports: vec![9229],
-            listening_ports: vec![9229],
-            debug_evidence: vec!["Node inspector responded on 127.0.0.1:9229".to_string()],
+            inspector_ports: Vec::new(),
+            listening_ports: Vec::new(),
+            debug_evidence: Vec::new(),
             supported_integration: "external_automation".to_string(),
             integrity_status: "not_checked".to_string(),
             integrity_message: String::new(),
@@ -2079,8 +2089,9 @@ mod tests {
         let readiness = launch_readiness_from_status(&status);
 
         assert!(readiness.ready);
-        assert_eq!(readiness.inspector_ports, vec![9229]);
-        assert!(readiness.message.contains("9229"));
+        assert!(readiness.process_running);
+        assert!(readiness.inspector_ports.is_empty());
+        assert!(readiness.message.contains("Claude 已启动"));
     }
 
     #[test]

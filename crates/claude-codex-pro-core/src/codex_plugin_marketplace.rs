@@ -171,9 +171,24 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
         initialize_product_design_marketplace_from_github(home).await?;
         initialized = true;
     }
-    let configured = ensure_openai_curated_marketplace_config(home)?
+    let mut configured = ensure_openai_curated_marketplace_config(home)?
         | ensure_hashgraph_awesome_codex_marketplace_config(home)?
         | ensure_product_design_skill_marketplace_config(home)?;
+    // Also (re)apply any user-defined marketplaces. This is the missing write
+    // path that made third-party repos never take effect: without it, a user's
+    // custom marketplace was only ever persisted to settings and never landed in
+    // config.toml. Failures are surfaced rather than silently swallowed.
+    let custom = crate::settings::SettingsStore::default()
+        .load()
+        .map(|settings| settings.codex_custom_marketplaces)
+        .unwrap_or_default();
+    let (custom_changed, custom_errors) = apply_custom_marketplaces_from_home(home, &custom);
+    if !custom_changed.is_empty() {
+        configured = true;
+    }
+    if !custom_errors.is_empty() {
+        anyhow::bail!("自定义插件仓库注册失败：{}", custom_errors.join("；"));
+    }
     let next = status_from_home(home);
     Ok(CodexPluginMarketplaceRepair {
         codex_home: next.codex_home,
@@ -281,6 +296,114 @@ pub fn ensure_product_design_skill_marketplace_config(home: &Path) -> anyhow::Re
         CODEX_SKILLS_ALTERNATIVE_MARKETPLACE,
         &marketplace_root,
     )
+}
+
+/// Names reserved by the built-in marketplaces. A user repo may not reuse these
+/// or it would silently overwrite / be overwritten by the built-in repair pass.
+const RESERVED_MARKETPLACE_NAMES: [&str; 4] = [
+    OPENAI_CURATED_MARKETPLACE,
+    OPENAI_API_CURATED_MARKETPLACE,
+    HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+    CODEX_SKILLS_ALTERNATIVE_MARKETPLACE,
+];
+
+/// Write one user-defined marketplace into `config.toml`. This is the write
+/// channel that previously did not exist: the built-in `ensure_*` helpers were
+/// private and only ever wrote the three hard-coded repos.
+pub fn ensure_custom_marketplace_config(
+    home: &Path,
+    marketplace: &crate::settings::CodexCustomMarketplace,
+) -> anyhow::Result<bool> {
+    let name = marketplace.name.trim();
+    if name.is_empty() {
+        anyhow::bail!("自定义插件仓库名称不能为空");
+    }
+    if RESERVED_MARKETPLACE_NAMES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(name))
+    {
+        anyhow::bail!("插件仓库名称 {name} 与内置仓库冲突，请改用其他名称");
+    }
+    let source = marketplace.source.trim();
+    if source.is_empty() {
+        anyhow::bail!("自定义插件仓库 {name} 的来源地址不能为空");
+    }
+    match marketplace.source_type.trim().to_ascii_lowercase().as_str() {
+        "git" => {
+            let reference = if marketplace.git_ref.trim().is_empty() {
+                "main"
+            } else {
+                marketplace.git_ref.trim()
+            };
+            let sparse_paths = marketplace
+                .sparse_paths
+                .iter()
+                .map(|path| path.trim())
+                .filter(|path| !path.is_empty())
+                .collect::<Vec<_>>();
+            ensure_git_marketplace_config(home, name, source, reference, &sparse_paths)
+        }
+        "local" => ensure_marketplace_config(home, name, Path::new(source)),
+        other => anyhow::bail!("不支持的插件仓库来源类型：{other}（仅支持 git 或 local）"),
+    }
+}
+
+/// Apply every user-defined marketplace from settings to `config.toml`. Returns
+/// the names that were newly written/changed and any per-repo errors so the
+/// caller can surface them instead of silently swallowing failures.
+pub fn apply_custom_marketplaces_from_home(
+    home: &Path,
+    marketplaces: &[crate::settings::CodexCustomMarketplace],
+) -> (Vec<String>, Vec<String>) {
+    let mut changed = Vec::new();
+    let mut errors = Vec::new();
+    for marketplace in marketplaces {
+        match ensure_custom_marketplace_config(home, marketplace) {
+            Ok(true) => changed.push(marketplace.name.trim().to_string()),
+            Ok(false) => {}
+            Err(error) => errors.push(format!("{}: {error}", marketplace.name.trim())),
+        }
+    }
+    (changed, errors)
+}
+
+/// Drop a `[marketplaces.<name>]` section from `config.toml`. Refuses to touch
+/// the built-in repos so a stray remove can never break the managed set.
+/// Returns `true` when a section was actually removed.
+pub fn remove_marketplace_config(home: &Path, name: &str) -> anyhow::Result<bool> {
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("插件仓库名称不能为空");
+    }
+    if RESERVED_MARKETPLACE_NAMES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(name))
+    {
+        anyhow::bail!("不能移除内置插件仓库 {name}");
+    }
+    let config_path = home.join("config.toml");
+    let existing = match std::fs::read(&config_path) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .with_context(|| format!("failed to read UTF-8 {}", config_path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config_path.display()));
+        }
+    };
+    let without_bom = existing.trim_start_matches('\u{feff}');
+    let mut doc = parse_toml_document(without_bom)?;
+    let Some(marketplaces) = doc.get_mut("marketplaces").and_then(Item::as_table_mut) else {
+        return Ok(false);
+    };
+    if marketplaces.remove(name).is_none() {
+        return Ok(false);
+    }
+    if marketplaces.is_empty() {
+        doc.as_table_mut().remove("marketplaces");
+    }
+    let updated = ensure_trailing_newline(doc.to_string());
+    crate::settings::atomic_write(&config_path, updated.as_bytes())?;
+    Ok(true)
 }
 
 fn local_openai_curated_marketplace_root(home: &Path) -> anyhow::Result<Option<PathBuf>> {
@@ -1556,5 +1679,106 @@ enabled = true
 
         assert_eq!(marketplaces[0]["plugins"][0]["installed"], true);
         assert_eq!(marketplaces[1]["plugins"][0]["installed"], true);
+    }
+
+    #[test]
+    fn ensure_custom_git_marketplace_writes_config_and_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let marketplace = crate::settings::CodexCustomMarketplace {
+            name: "my-team-plugins".to_string(),
+            source_type: "git".to_string(),
+            source: "https://github.com/acme/codex-plugins.git".to_string(),
+            git_ref: "release".to_string(),
+            sparse_paths: vec!["plugins".to_string()],
+        };
+
+        let first = ensure_custom_marketplace_config(temp.path(), &marketplace).unwrap();
+        let second = ensure_custom_marketplace_config(temp.path(), &marketplace).unwrap();
+
+        assert!(first, "first write should change config.toml");
+        assert!(!second, "re-applying an unchanged marketplace is a no-op");
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(config.contains("[marketplaces.my-team-plugins]"));
+        assert!(config.contains("source = \"https://github.com/acme/codex-plugins.git\""));
+        assert!(config.contains("ref = \"release\""));
+        assert!(config.contains("sparse_paths = [\"plugins\"]"));
+    }
+
+    #[test]
+    fn ensure_custom_local_marketplace_defaults_ref_and_writes_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let marketplace = crate::settings::CodexCustomMarketplace {
+            name: "local-repo".to_string(),
+            source_type: "local".to_string(),
+            source: temp.path().join("repo").to_string_lossy().to_string(),
+            git_ref: String::new(),
+            sparse_paths: Vec::new(),
+        };
+
+        assert!(ensure_custom_marketplace_config(temp.path(), &marketplace).unwrap());
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(config.contains("[marketplaces.local-repo]"));
+        assert!(config.contains("source_type = \"local\""));
+        // Local sources must not gain a git ref / sparse_paths block.
+        assert!(!config.contains("ref = "));
+        assert!(!config.contains("sparse_paths"));
+    }
+
+    #[test]
+    fn ensure_custom_marketplace_rejects_reserved_names_and_blanks() {
+        let temp = tempfile::tempdir().unwrap();
+        // A name colliding with a built-in repo must be refused so a user repo
+        // can never silently overwrite the OpenAI / third-party entries.
+        let reserved = crate::settings::CodexCustomMarketplace {
+            name: OPENAI_CURATED_MARKETPLACE.to_string(),
+            source_type: "git".to_string(),
+            source: "https://example.test/x.git".to_string(),
+            git_ref: String::new(),
+            sparse_paths: Vec::new(),
+        };
+        assert!(ensure_custom_marketplace_config(temp.path(), &reserved).is_err());
+
+        let blank_source = crate::settings::CodexCustomMarketplace {
+            name: "empty".to_string(),
+            source_type: "git".to_string(),
+            source: "   ".to_string(),
+            git_ref: String::new(),
+            sparse_paths: Vec::new(),
+        };
+        assert!(ensure_custom_marketplace_config(temp.path(), &blank_source).is_err());
+        // Neither rejected write should have created a config.toml section.
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap_or_default();
+        assert!(!config.contains("[marketplaces."));
+    }
+
+    #[test]
+    fn apply_custom_marketplaces_reports_changed_and_errors_separately() {
+        let temp = tempfile::tempdir().unwrap();
+        let marketplaces = vec![
+            crate::settings::CodexCustomMarketplace {
+                name: "good-repo".to_string(),
+                source_type: "git".to_string(),
+                source: "https://github.com/acme/good.git".to_string(),
+                git_ref: "main".to_string(),
+                sparse_paths: Vec::new(),
+            },
+            crate::settings::CodexCustomMarketplace {
+                name: HASHGRAPH_AWESOME_CODEX_MARKETPLACE.to_string(),
+                source_type: "git".to_string(),
+                source: "https://github.com/acme/collision.git".to_string(),
+                git_ref: "main".to_string(),
+                sparse_paths: Vec::new(),
+            },
+        ];
+
+        let (changed, errors) = apply_custom_marketplaces_from_home(temp.path(), &marketplaces);
+
+        assert_eq!(changed, vec!["good-repo".to_string()]);
+        assert_eq!(
+            errors.len(),
+            1,
+            "the reserved-name collision must be reported"
+        );
+        assert!(errors[0].contains(HASHGRAPH_AWESOME_CODEX_MARKETPLACE));
     }
 }

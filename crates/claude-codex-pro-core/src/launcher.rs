@@ -433,6 +433,15 @@ fn powershell_json(script: &str) -> anyhow::Result<Option<serde_json::Value>> {
     Ok(serde_json::from_str::<serde_json::Value>(&stdout).ok())
 }
 
+/// Whether the local protocol-proxy / helper backend is currently answering on
+/// `port`. ChatCompletions profiles rewrite Codex's `base_url` to
+/// `http://127.0.0.1:<port>/v1`, which only works while this tool's helper is
+/// serving that port. The relay layer uses this to warn the user when it writes
+/// such a config but nothing is listening yet (e.g. Codex started independently).
+pub fn protocol_proxy_backend_online(port: u16) -> bool {
+    helper_backend_online_blocking(port)
+}
+
 fn helper_backend_online_blocking(port: u16) -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) =
@@ -774,6 +783,15 @@ impl LaunchHooks for DefaultLaunchHooks {
             .args(&command[1..])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // Pass the provider key explicitly rather than trusting the inherited
+        // environment: right after a provider switch the new OPENAI_API_KEY only
+        // lives in HKCU and its WM_SETTINGCHANGE broadcast may not have reached
+        // this process's environment block yet. Reading auth.json here guarantees
+        // the child Codex sees the key the user just configured.
+        let home = crate::relay_config::default_codex_home_dir();
+        if let Some(api_key) = crate::relay_config::codex_provider_auth_key_from_home(&home) {
+            child_command.env("OPENAI_API_KEY", api_key);
+        }
         #[cfg(windows)]
         child_command.creation_flags(crate::windows_integration::CREATE_NO_WINDOW);
         let child = child_command
@@ -938,6 +956,52 @@ async fn handle_helper_connection(
         }),
     );
 
+    // The protocol-proxy endpoints forward upstream with the user's relay API key
+    // attached, so an arbitrary web page that can reach this loopback port could
+    // otherwise spend the user's tokens. We must block browser-originated abuse
+    // WITHOUT breaking the two legitimate callers, which are distinguished by how
+    // they reach us:
+    //   1. The Codex native model client connects directly (config.toml base_url
+    //      points at this port) using a plain reqwest client: it sends NO browser
+    //      `Origin`/`Referer` header and carries no token. It must be allowed.
+    //   2. The injected renderer script runs inside a web page, so the browser
+    //      attaches an `Origin`, but it also carries the process-local helper
+    //      token that only the injection prologue knows.
+    //   3. A malicious page makes a cross-origin fetch: the browser forces an
+    //      `Origin` header it cannot suppress, and it cannot read the token.
+    // So: reject only when the request is browser-originated AND the token is
+    // absent/wrong. OPTIONS is a CORS preflight that cannot carry custom headers,
+    // so it is answered normally by the handlers below.
+    let is_proxy_path = crate::protocol_proxy::is_responses_proxy_path(path)
+        || crate::protocol_proxy::is_chat_completions_proxy_path(path)
+        || crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
+        || crate::protocol_proxy::is_claude_desktop_models_proxy_path(path)
+        || crate::protocol_proxy::is_models_proxy_path(path);
+    if is_proxy_path && !proxy_request_is_authorized(method, &request) {
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "helper.proxy_request_rejected",
+            serde_json::json!({
+                "method": method,
+                "path": path,
+                "remote_addr": remote_addr_text,
+                "reason": "browser-originated request without valid enhancement token"
+            }),
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "status": "failed",
+            "message": "浏览器来源的代理请求缺少有效增强令牌，已拒绝以保护中转密钥。"
+        }))?;
+        write_http_response(
+            &mut stream,
+            "403 Forbidden",
+            "application/json; charset=utf-8",
+            &body,
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
     if crate::protocol_proxy::is_responses_proxy_path(path) && method == "POST" {
         return handle_protocol_proxy_connection(
             &mut stream,
@@ -1065,11 +1129,11 @@ async fn handle_helper_connection(
     );
     let response = if method == "OPTIONS" {
         format!(
-            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Claude-Codex-Pro-Token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         )
     } else {
         format!(
-            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Claude-Codex-Pro-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         )
     };
@@ -1564,7 +1628,7 @@ async fn write_http_response(
     body: &[u8],
 ) -> anyhow::Result<()> {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Claude-Codex-Pro-Token\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(response.as_bytes()).await?;
@@ -1578,7 +1642,7 @@ async fn write_http_stream_headers(
     content_type: &str,
 ) -> anyhow::Result<()> {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nConnection: close\r\n\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, X-Claude-Codex-Pro-Token\r\nConnection: close\r\n\r\n"
     );
     stream.write_all(response.as_bytes()).await?;
     Ok(())
@@ -1677,6 +1741,54 @@ fn http_request_body(request: &str) -> &str {
         .split_once("\r\n\r\n")
         .map(|(_, body)| body)
         .unwrap_or_default()
+}
+
+/// Extract the value of a request header (case-insensitive name match) from the
+/// raw HTTP request head. Returns an empty string when absent.
+fn http_header_value<'a>(request: &'a str, header_name: &str) -> &'a str {
+    let head = request
+        .split_once("\r\n\r\n")
+        .map(|(h, _)| h)
+        .unwrap_or(request);
+    head.lines()
+        .skip(1)
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(header_name)
+                .then(|| value.trim())
+        })
+        .unwrap_or_default()
+}
+
+/// Decide whether a proxy request may proceed.
+///
+/// The proxy endpoints forward upstream with the user's relay API key attached,
+/// so an arbitrary web page that merely knows the loopback port must not be able
+/// to spend the user's tokens. But these endpoints are consumed two different
+/// ways:
+///   * Codex itself connects with a native (reqwest) client — its config.toml
+///     `base_url` points at this proxy. Native clients send no browser `Origin`
+///     / `Referer` header and cannot know the per-process helper token.
+///   * The injected renderer script runs inside a web page and can carry the
+///     token, but its cross-origin `fetch` always attaches an `Origin` header.
+///
+/// So the rule is: a request that carries a browser origin is only allowed when
+/// it also presents the correct helper token; a request with no browser origin
+/// (the native Codex client, or a CORS preflight) is allowed through. This keeps
+/// Codex working while blocking drive-by requests from other web pages.
+fn proxy_request_is_authorized(method: &str, request: &str) -> bool {
+    // Preflight carries no body and consumes no tokens; let CORS negotiate.
+    if method == "OPTIONS" {
+        return true;
+    }
+    let has_browser_origin = !http_header_value(request, "origin").is_empty()
+        || !http_header_value(request, "referer").is_empty();
+    if !has_browser_origin {
+        return true;
+    }
+    let presented = http_header_value(request, crate::helper_auth::HELPER_TOKEN_HEADER);
+    crate::helper_auth::token_matches(presented)
 }
 
 fn sanitize_diagnostic_event(event: &str) -> String {
@@ -2432,6 +2544,73 @@ mod tests {
         }
     }
 
+    fn proxy_request(method: &str, headers: &[(&str, &str)]) -> String {
+        let mut request = format!("{method} /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n");
+        request
+    }
+
+    #[test]
+    fn proxy_allows_native_codex_client_without_origin_or_token() {
+        // Codex connects with a plain reqwest client: no browser Origin/Referer,
+        // no helper token. This must be allowed or the relay stops working.
+        let request = proxy_request("POST", &[("content-type", "application/json")]);
+        assert!(proxy_request_is_authorized("POST", &request));
+    }
+
+    #[test]
+    fn proxy_allows_cors_preflight() {
+        // OPTIONS carries no body and spends no tokens; let CORS negotiate.
+        let request = proxy_request(
+            "OPTIONS",
+            &[
+                ("origin", "https://chatgpt.com"),
+                ("access-control-request-method", "POST"),
+            ],
+        );
+        assert!(proxy_request_is_authorized("OPTIONS", &request));
+    }
+
+    #[test]
+    fn proxy_rejects_browser_origin_without_token() {
+        // A drive-by page: browser forces an Origin header it cannot suppress and
+        // cannot read the process-local token. Must be rejected.
+        let request = proxy_request("POST", &[("origin", "https://evil.example")]);
+        assert!(!proxy_request_is_authorized("POST", &request));
+
+        // Referer-only (some fetch modes) is treated the same as Origin.
+        let referer = proxy_request("POST", &[("referer", "https://evil.example/x")]);
+        assert!(!proxy_request_is_authorized("POST", &referer));
+    }
+
+    #[test]
+    fn proxy_allows_browser_origin_with_valid_token() {
+        // The injected renderer script: browser attaches Origin, but it also
+        // carries the correct helper token, so it is allowed.
+        let token = crate::helper_auth::helper_token();
+        let request = proxy_request(
+            "POST",
+            &[
+                ("origin", "https://chatgpt.com"),
+                (crate::helper_auth::HELPER_TOKEN_HEADER, token),
+            ],
+        );
+        assert!(proxy_request_is_authorized("POST", &request));
+
+        // A wrong token with a browser origin is still rejected.
+        let bad = proxy_request(
+            "POST",
+            &[
+                ("origin", "https://chatgpt.com"),
+                (crate::helper_auth::HELPER_TOKEN_HEADER, "not-the-token"),
+            ],
+        );
+        assert!(!proxy_request_is_authorized("POST", &bad));
+    }
+
     #[test]
     fn cdp_readiness_accepts_only_codex_page_targets_with_websocket() {
         assert!(is_codex_cdp_target(&cdp_target(
@@ -2600,5 +2779,40 @@ mod tests {
             3,
             &missing_runtime_package
         ));
+    }
+
+    #[test]
+    fn proxy_auth_allows_native_codex_client_but_blocks_untokened_web_page() {
+        let token = crate::helper_auth::helper_token();
+
+        // 1. Codex's native reqwest client: no Origin/Referer, no token -> allowed.
+        //    Without this, switching to relay/API mode would break all model calls.
+        let native = "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\r\n";
+        assert!(proxy_request_is_authorized("POST", native));
+
+        // 2. A malicious web page: browser forces an Origin header, and it cannot
+        //    know the token -> blocked, protecting the user's relay API key.
+        let drive_by = "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\nContent-Type: application/json\r\n\r\n";
+        assert!(!proxy_request_is_authorized("POST", drive_by));
+
+        // 3. The injected renderer: browser attaches an Origin, but the script
+        //    carries the process-local token -> allowed.
+        let injected = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://chatgpt.com\r\n{}: {}\r\nContent-Type: application/json\r\n\r\n",
+            crate::helper_auth::HELPER_TOKEN_HEADER,
+            token
+        );
+        assert!(proxy_request_is_authorized("POST", &injected));
+
+        // 4. A web page presenting a wrong token is still blocked.
+        let bad_token = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nReferer: https://evil.example/\r\n{}: deadbeef\r\nContent-Type: application/json\r\n\r\n",
+            crate::helper_auth::HELPER_TOKEN_HEADER
+        );
+        assert!(!proxy_request_is_authorized("POST", &bad_token));
+
+        // 5. CORS preflight is always allowed so the real request can negotiate.
+        let preflight = "OPTIONS /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: https://evil.example\r\n\r\n";
+        assert!(proxy_request_is_authorized("OPTIONS", preflight));
     }
 }

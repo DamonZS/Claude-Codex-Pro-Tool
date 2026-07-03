@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH};
+use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, WPARAM};
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -50,8 +50,8 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_RESTORE, SetForegroundWindow,
-    ShowWindow,
+    GetWindowThreadProcessId, HWND_BROADCAST, IsIconic, IsWindowVisible, SMTO_ABORTIFHUNG,
+    SW_RESTORE, SendMessageTimeoutW, SetForegroundWindow, ShowWindow, WM_SETTINGCHANGE,
 };
 #[cfg(windows)]
 use windows::core::{Interface, PCWSTR, PWSTR};
@@ -206,7 +206,39 @@ pub fn set_current_user_string_value(subkey: &str, name: &str, value: &str) -> a
         }
         .ok()
         .with_context(|| format!("写入注册表值 {subkey}\\{name} 失败"))
-    })
+    })?;
+    // Writing HKCU\Environment only updates the registry; already-running
+    // processes keep their inherited environment block. Broadcasting
+    // WM_SETTINGCHANGE with "Environment" tells the shell (and any process that
+    // listens) to reload user env vars, so a Codex started afterwards from the
+    // Start menu / another shell can actually see the new OPENAI_API_KEY. We
+    // still pass the value directly on spawn for children we launch ourselves.
+    if subkey.eq_ignore_ascii_case(WINDOWS_USER_ENVIRONMENT_KEY) {
+        broadcast_environment_change();
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+const WINDOWS_USER_ENVIRONMENT_KEY: &str = "Environment";
+
+#[cfg(windows)]
+fn broadcast_environment_change() {
+    let param = wide_null("Environment");
+    unsafe {
+        // SMTO_ABORTIFHUNG + a short timeout so a hung top-level window can never
+        // block the provider switch. The result is advisory, so ignore it.
+        let mut result = 0usize;
+        let _ = SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            WPARAM(0),
+            LPARAM(param.as_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            5000,
+            Some(&mut result as *mut usize as *mut _),
+        );
+    }
 }
 
 #[cfg(windows)]

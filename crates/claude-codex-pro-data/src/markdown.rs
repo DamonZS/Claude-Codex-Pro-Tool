@@ -85,6 +85,101 @@ struct Message {
     body: String,
 }
 
+/// Provider-neutral intermediate representation of one conversation turn,
+/// decoded from a Codex rollout. Both the Markdown exporter and the cross-tool
+/// session migration serialize from this so the rollout parsing lives in one
+/// place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMessage {
+    /// Canonical role: "user" or "assistant".
+    pub role: String,
+    /// Localized display timestamp (already formatted), if the event had one.
+    pub timestamp: Option<String>,
+    /// Plain-text body with newlines normalized.
+    pub body: String,
+}
+
+/// Parse a Codex rollout JSONL file into an ordered list of user/assistant
+/// turns. Non-message events and empty bodies are skipped. This is the shared
+/// entry point for Markdown export and cross-tool migration.
+pub fn load_session_messages(path: &Path) -> anyhow::Result<Vec<SessionMessage>> {
+    Ok(load_messages(path)?
+        .into_iter()
+        .map(|message| SessionMessage {
+            role: match message.speaker {
+                "User" => "user".to_string(),
+                _ => "assistant".to_string(),
+            },
+            timestamp: message.timestamp,
+            body: message.body,
+        })
+        .collect())
+}
+
+/// A resolved Codex thread: its display title, on-disk rollout path, and the
+/// working directory it was recorded against (empty when the column is absent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCodexThread {
+    pub title: String,
+    pub rollout_path: PathBuf,
+    pub cwd: String,
+}
+
+/// Resolve the on-disk rollout path, display title and cwd for a Codex thread
+/// stored in `db_path`. Returns `Ok(None)` when the schema is unsupported, the
+/// thread is missing, or it has no readable rollout file.
+pub fn resolve_codex_thread(
+    db_path: &Path,
+    session_id: &str,
+) -> anyhow::Result<Option<ResolvedCodexThread>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let db = Connection::open(db_path)?;
+    if !supports_codex_threads(&db)? {
+        return Ok(None);
+    }
+    // `cwd` is optional in older schemas; fall back to '' so the SELECT never
+    // fails on databases that predate the column.
+    let has_cwd = {
+        let mut stmt = db.prepare("PRAGMA table_info(\"threads\")")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|column| column == "cwd")
+    };
+    let cwd_expr = if has_cwd { "cwd" } else { "''" };
+    let thread_id = normalize_session_id(session_id);
+    let row = db.query_row(
+        &format!("SELECT title, rollout_path, {cwd_expr} FROM threads WHERE id = ?1"),
+        [&thread_id],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        },
+    );
+    let (title, rollout_path, cwd) = match row {
+        Ok(row) => row,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let Some(rollout_path) = rollout_path.filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let rollout = PathBuf::from(&rollout_path);
+    if !rollout.is_file() {
+        return Ok(None);
+    }
+    Ok(Some(ResolvedCodexThread {
+        title: display_title(title.as_deref().unwrap_or("")),
+        rollout_path: rollout,
+        cwd: cwd.unwrap_or_default(),
+    }))
+}
+
 fn failed(session_id: &str, message: impl Into<String>) -> ExportResult {
     ExportResult {
         status: ExportStatus::Failed,

@@ -24,6 +24,7 @@
 - `MemoryAssistRuntimeSnapshot` 反序列化字段应有默认值。
 - `latest_renderer_runtime_heartbeat` 应扫描足够多的近期日志，避免日志密集时 240 行窗口漏掉心跳。
 - `enrich_memory_status` 遇到 `injected:true` 且 `status:"idle"` 时，必须设置 `codex_injected=true`，并给出“等待真实对话消息”的运行文案。
+- 当只有新鲜 `renderer.script_loaded`、暂未拿到 `renderer.memory_runtime` 时，manager 必须把 Codex 注入显示为已注入，文案说明等待盘古 runtime 同步，而不是显示“等待 Codex 注入”。
 - 前端概览和运行状态行应把 `idle` 视为可用状态，而不是警告。
 
 ## 交付范围
@@ -31,4 +32,3 @@
 - `apps/claude-codex-pro-manager/src-tauri/src/commands.rs`
 - `apps/claude-codex-pro-manager/src/App.tsx`
 - 定向回归测试
-

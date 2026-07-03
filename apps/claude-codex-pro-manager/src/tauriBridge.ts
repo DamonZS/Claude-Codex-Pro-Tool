@@ -570,6 +570,8 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         helper_port: 57322,
         debug_port_online: true,
         helper_port_online: true,
+        frontend_runtime_online: true,
+        frontend_runtime_seen_at_ms: Date.now(),
         codex_app: "preview",
       },
       current_version: "1.2.9-preview",
@@ -985,6 +987,19 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         query: request.query || "",
         workspace: request.workspace || "__all__",
         results: previewMemoryItems().map((item) => ({ item, score: 0.92, matchedKeywords: ["preview", "backup"] })),
+      },
+    });
+  }
+  if (command === "update_memory_assist_item") {
+    const request = (_args?.request ?? {}) as { id?: string; item?: Partial<PreviewMemoryItem> };
+    const stamp = now();
+    return ok("预览模式已模拟更新记忆。", {
+      item: {
+        ...previewMemoryItems()[0],
+        ...request.item,
+        id: request.id || request.item?.id || "preview-memory-1",
+        updatedAt: stamp,
+        lastAccessedAt: stamp,
       },
     });
   }

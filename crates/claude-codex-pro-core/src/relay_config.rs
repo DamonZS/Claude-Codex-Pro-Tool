@@ -98,7 +98,18 @@ pub fn default_relay_status() -> RelayStatus {
 pub fn set_codex_goals_feature_in_home(home: &Path, enabled: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(home)?;
     let config_path = home.join("config.toml");
-    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    // A read failure on an existing config.toml must not be treated as an empty
+    // config: doing so would let the atomic_write below replace the user's whole
+    // Codex config with a file containing only [features]. Missing file → empty
+    // is the only safe fallback.
+    let existing = match std::fs::read_to_string(&config_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read Codex config {}", config_path.display()));
+        }
+    };
     let updated = match parse_toml_document(&existing) {
         Ok(mut doc) => {
             if enabled {
@@ -198,34 +209,50 @@ pub fn relay_config_status_from_home(home: &Path) -> RelayConfigStatus {
     let config_path = home.join("config.toml");
     let contents = std::fs::read_to_string(&config_path).unwrap_or_default();
     let auth_contents = std::fs::read_to_string(home.join("auth.json")).unwrap_or_default();
-    let root_provider = root_key_string(&contents, "model_provider");
-    let provider = root_provider
+
+    // Parse with the real TOML parser instead of hand-rolled line scanning. The
+    // old `root_key_string`/`table_values` helpers mis-read inline comments
+    // (`base_url = "x" # note`), inline tables, multi-line values and quoted
+    // headers, which made the UI report "not configured" for perfectly valid
+    // config.toml files. A parse failure falls back to "not configured" rather
+    // than guessing.
+    let doc = parse_toml_document(&contents).ok();
+    let root_provider = doc
         .as_ref()
-        .and_then(|provider| table_values(&contents, &format!("model_providers.{provider}")));
+        .and_then(|doc| doc.get("model_provider"))
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let provider = root_provider.as_ref().and_then(|provider| {
+        doc.as_ref()
+            .and_then(|doc| doc.get("model_providers"))
+            .and_then(Item::as_table_like)
+            .and_then(|providers| providers.get(provider))
+            .and_then(Item::as_table_like)
+    });
     let requires_openai_auth = provider
-        .as_ref()
         .and_then(|values| values.get("requires_openai_auth"))
-        .map(|value| value.trim() == "true")
+        .and_then(Item::as_bool)
         .unwrap_or(false);
     let has_bearer_token = provider
-        .as_ref()
         .and_then(|values| values.get("experimental_bearer_token"))
-        .map(|value| unquote_toml_string(value).trim().to_string())
+        .and_then(Item::as_str)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     let auth_env_key = provider
-        .as_ref()
         .and_then(|values| values.get("env_key"))
-        .map(|value| unquote_toml_string(value).trim().to_string())
+        .and_then(Item::as_str)
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let has_env_api_key = auth_env_key
         .as_deref()
         .and_then(user_env_var)
         .is_some_and(|value| !value.trim().is_empty());
     let has_base_url = provider
-        .as_ref()
         .and_then(|values| values.get("base_url"))
-        .map(|value| !unquote_toml_string(value).trim().is_empty())
+        .and_then(Item::as_str)
+        .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     RelayConfigStatus {
         configured: root_provider.is_some()
@@ -1256,6 +1283,17 @@ fn normalize_duplicate_toml_text(contents: &str) -> String {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             in_root = false;
+            // `[[array-of-tables]]` entries are legitimately repeated in TOML —
+            // each occurrence is a distinct element, not a duplicate table. Only
+            // de-duplicate single-bracket `[table]` headers; always keep every
+            // `[[...]]` line, otherwise switching providers silently drops all
+            // but the first element of e.g. an mcp_servers array.
+            let is_array_of_tables = trimmed.starts_with("[[");
+            if is_array_of_tables {
+                skipping_duplicate_table = false;
+                kept.push(line);
+                continue;
+            }
             skipping_duplicate_table = !seen_headers.insert(trimmed.to_string());
             if skipping_duplicate_table {
                 continue;
@@ -1758,6 +1796,16 @@ fn codex_auth_api_key(auth_contents: &str) -> Option<String> {
         .map(str::trim)
         .filter(|token| !token.is_empty())
         .map(ToString::to_string)
+}
+
+/// Resolve the `OPENAI_API_KEY` a freshly launched Codex should see, reading the
+/// live `auth.json` under the given Codex home. The launcher passes this value
+/// explicitly on spawn so the child does not depend on the HKCU environment
+/// broadcast having propagated yet (the classic "provider switch didn't take"
+/// case when Codex is started right after switching).
+pub fn codex_provider_auth_key_from_home(home: &Path) -> Option<String> {
+    let auth_contents = read_optional_text(&home.join("auth.json")).ok()?;
+    codex_auth_api_key(&auth_contents)
 }
 
 fn user_env_var(name: &str) -> Option<String> {
@@ -2311,6 +2359,84 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_provider_auth_key_reads_key_from_home_auth_json() {
+        let temp = tempfile::tempdir().unwrap();
+        // The launcher passes this key explicitly to Codex on spawn, so it must be
+        // parsed from the freshly written auth.json regardless of the environment.
+        std::fs::write(
+            temp.path().join("auth.json"),
+            "{\"OPENAI_API_KEY\": \"sk-provider-switch\"}\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            codex_provider_auth_key_from_home(temp.path()).as_deref(),
+            Some("sk-provider-switch")
+        );
+    }
+
+    #[test]
+    fn codex_provider_auth_key_is_none_when_missing_or_blank() {
+        let temp = tempfile::tempdir().unwrap();
+        // No auth.json at all → None (official ChatGPT-login mode, nothing to pass).
+        assert_eq!(codex_provider_auth_key_from_home(temp.path()), None);
+
+        // Present but blank/absent key → None rather than an empty string, so the
+        // launcher never sets OPENAI_API_KEY="" and shadows a real inherited value.
+        std::fs::write(
+            temp.path().join("auth.json"),
+            "{\"OPENAI_API_KEY\": \"   \"}\n",
+        )
+        .unwrap();
+        assert_eq!(codex_provider_auth_key_from_home(temp.path()), None);
+    }
+
+    #[test]
+    fn relay_config_status_recognizes_provider_with_inline_comments() {
+        let temp = tempfile::tempdir().unwrap();
+        // Inline comments, an inline table on model_providers, and a trailing
+        // comment on base_url all broke the old line-scanning parser, which then
+        // reported "not configured" for this perfectly valid config.
+        std::fs::write(
+            temp.path().join("config.toml"),
+            concat!(
+                "model_provider = \"custom\"  # active provider\n",
+                "\n",
+                "[model_providers.custom]\n",
+                "name = \"custom\"\n",
+                "wire_api = \"responses\"\n",
+                "requires_openai_auth = true  # needs key\n",
+                "env_key = \"OPENAI_API_KEY\"\n",
+                "base_url = \"https://ahg.codes\"  # upstream\n",
+                "experimental_bearer_token = \"sk-inline\"\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("auth.json"), "{}\n").unwrap();
+
+        let status = relay_config_status_from_home(temp.path());
+        assert!(status.configured);
+        assert!(status.requires_openai_auth);
+        assert!(status.has_bearer_token);
+    }
+
+    #[test]
+    fn relay_config_status_is_unconfigured_when_provider_table_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        // model_provider points at a provider table that does not exist → the UI
+        // must report "not configured" rather than a false positive.
+        std::fs::write(
+            temp.path().join("config.toml"),
+            "model_provider = \"custom\"\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("auth.json"), "{}\n").unwrap();
+
+        let status = relay_config_status_from_home(temp.path());
+        assert!(!status.configured);
+    }
+
+    #[test]
     fn backfill_relay_profile_from_home_with_common_restores_template_provider_id() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -2365,6 +2491,50 @@ mod tests {
             ..RelayProfile::default()
         };
         assert!(relay_profile_model(&empty).trim().is_empty());
+    }
+
+    #[test]
+    fn normalize_config_text_preserves_array_of_tables() {
+        // `[[x]]` array-of-tables headers are legally repeated in TOML. Treating
+        // them as duplicate `[x]` tables would delete every element after the
+        // first, silently dropping the user's MCP servers / context config on a
+        // provider switch.
+        let config = "\
+[[mcp_servers]]
+name = \"first\"
+
+[[mcp_servers]]
+name = \"second\"
+
+[[mcp_servers]]
+name = \"third\"
+";
+        let normalized = normalize_config_text(config);
+        assert_eq!(normalized.matches("[[mcp_servers]]").count(), 3);
+        assert!(normalized.contains("name = \"first\""));
+        assert!(normalized.contains("name = \"second\""));
+        assert!(normalized.contains("name = \"third\""));
+    }
+
+    #[test]
+    fn normalize_config_text_still_dedupes_plain_tables_and_root_keys() {
+        // Regular `[table]` headers and bare root keys must still be de-duplicated;
+        // only the `[[...]]` array form is exempt.
+        let config = "\
+model = \"a\"
+model = \"b\"
+
+[settings]
+x = 1
+
+[settings]
+x = 2
+";
+        let normalized = normalize_config_text(config);
+        assert_eq!(normalized.matches("[settings]").count(), 1);
+        assert_eq!(normalized.matches("model =").count(), 1);
+        assert!(normalized.contains("model = \"a\""));
+        assert!(normalized.contains("x = 1"));
     }
 }
 
@@ -2450,29 +2620,6 @@ fn remove_root_key(contents: &str, key: &str) -> String {
         lines.push(line.to_string());
     }
     lines.join("\n")
-}
-
-fn table_values(contents: &str, table: &str) -> Option<std::collections::HashMap<String, String>> {
-    let header = format!("[{table}]");
-    let mut in_table = false;
-    let mut values = std::collections::HashMap::new();
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_table {
-                break;
-            }
-            in_table = trimmed == header;
-            continue;
-        }
-        if !in_table || trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = trimmed.split_once('=') {
-            values.insert(key.trim().to_string(), value.trim().to_string());
-        }
-    }
-    in_table.then_some(values)
 }
 
 fn unquote_toml_string(value: &str) -> String {

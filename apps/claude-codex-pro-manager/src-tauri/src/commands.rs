@@ -482,6 +482,57 @@ pub struct CodexPluginMarketplaceRepairPayload {
     pub marketplace: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceStatus,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCustomMarketplaceRequest {
+    pub marketplace: claude_codex_pro_core::settings::CodexCustomMarketplace,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCustomMarketplaceRemoveRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCustomMarketplacesPayload {
+    pub custom_marketplaces: Vec<claude_codex_pro_core::settings::CodexCustomMarketplace>,
+    pub marketplace: claude_codex_pro_core::codex_plugin_marketplace::CodexPluginMarketplaceStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExportRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub db_path: Option<String>,
+    pub format: claude_codex_pro_data::SessionExportFormat,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExportPayload {
+    pub export: Option<claude_codex_pro_data::SessionExport>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMigrationRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub db_path: Option<String>,
+    #[serde(default)]
+    pub target_cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMigrationPayload {
+    pub migration: Option<claude_codex_pro_data::ClaudeCodeMigration>,
+    pub claude_code_available: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginHubPayload {
@@ -1560,17 +1611,46 @@ fn windows_quote_arg(value: &str) -> String {
 fn run_elevated_process_with_timeout(
     command: &mut std::process::Command,
 ) -> anyhow::Result<std::process::Output> {
+    use std::io::Read;
+
     let mut child = command.spawn()?;
+    // Drain stdout/stderr on dedicated threads. The old code only polled
+    // try_wait() and read the pipes after exit: if the elevated child wrote more
+    // than the pipe buffer (~64 KiB) it would block on the write while we waited
+    // for it to exit — a deadlock that only broke at the 5-minute timeout.
+    let stdout_reader = child.stdout.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    });
+
+    let collect = |reader: Option<std::thread::JoinHandle<Vec<u8>>>| -> Vec<u8> {
+        reader
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default()
+    };
+
     let started = Instant::now();
     loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .context("Failed to collect elevated Claude Chinese patch output");
+        if let Some(status) = child.try_wait()? {
+            return Ok(std::process::Output {
+                status,
+                stdout: collect(stdout_reader),
+                stderr: collect(stderr_reader),
+            });
         }
         if started.elapsed() >= CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT {
             let _ = child.kill();
-            let _ = child.wait_with_output();
+            let _ = child.wait();
             anyhow::bail!(
                 "Elevated Claude Chinese patch timed out. Confirm the UAC prompt was handled and retry."
             );
@@ -1730,7 +1810,22 @@ pub async fn install_claude_zh_patch_at_install_root(
 }
 
 #[tauri::command]
-pub fn restore_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+pub async fn restore_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
+    // Restore closes Claude Desktop (kill + wait), scans files for status, and may
+    // poll an elevated PowerShell process for up to ~5 minutes. On the UI thread
+    // that froze the whole WebView for the duration; run it on the blocking pool.
+    tauri::async_runtime::spawn_blocking(restore_claude_zh_patch_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+            failed(
+                &format!("Claude localization restore task failed: {join_error}"),
+                claude_zh_patch_payload(status, Vec::new()),
+            )
+        })
+}
+
+fn restore_claude_zh_patch_blocking() -> CommandResult<ClaudeZhPatchPayload> {
     log_manager_event("manager.claude_zh_patch.restore.start", json!({}));
     if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
         log_manager_event(
@@ -1941,19 +2036,26 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
                     }
                     if !reinjected {
                         false
-                    } else if let Some(heartbeat) = wait_for_renderer_runtime_after(
+                    } else if let Some(heartbeat) = wait_for_renderer_frontend_after(
                         repair_started_ms,
                         REPAIR_CODEX_FRONTEND_TIMEOUT,
                     )
                     .await
                     {
-                        details.push(format!(
-                            "Codex 前端运行时已在本次修复后重新上报，时间戳 {}。",
-                            heartbeat.timestamp_ms
-                        ));
+                        if heartbeat.runtime_reported {
+                            details.push(format!(
+                                "Codex 前端运行时已在本次修复后重新上报，时间戳 {}。",
+                                heartbeat.timestamp_ms
+                            ));
+                        } else {
+                            details.push(format!(
+                                "Codex 前端脚本已在本次修复后加载，时间戳 {}；盘古记忆 runtime 将在页面同步后继续上报。",
+                                heartbeat.timestamp_ms
+                            ));
+                        }
                         true
                     } else {
-                        details.push("未等到本次修复后的 Codex 前端 runtime 新心跳；旧注入状态不会被判定为成功。".to_string());
+                        details.push("未等到本次修复后的 Codex 前端脚本或 runtime 新心跳；旧注入状态不会被判定为成功。".to_string());
                         false
                     }
                 }
@@ -2083,7 +2185,7 @@ async fn wait_for_codex_launch_ports(
     None
 }
 
-async fn wait_for_renderer_runtime_after(
+async fn wait_for_renderer_frontend_after(
     min_timestamp_ms: u64,
     timeout: Duration,
 ) -> Option<RendererRuntimeHeartbeat> {
@@ -2091,7 +2193,7 @@ async fn wait_for_renderer_runtime_after(
     while started.elapsed() < timeout {
         if let Some(heartbeat) = latest_renderer_runtime_heartbeat() {
             if heartbeat.timestamp_ms >= min_timestamp_ms
-                && renderer_runtime_heartbeat_is_ready(&heartbeat)
+                && renderer_frontend_heartbeat_confirms_injection(&heartbeat)
             {
                 return Some(heartbeat);
             }
@@ -2247,11 +2349,25 @@ pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
 }
 
 #[tauri::command]
-pub fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
-    let request = normalize_launch_request(request);
-    claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
-    claude_codex_pro_core::watcher::stop_codex_processes();
-    spawn_claude_codex_pro_launch(request, "Codex restart task is running in the background.")
+pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
+    // Both normalize_launch_request (app-path probing) and the two stop_* calls
+    // enumerate/kill processes — on Windows those go through taskkill/WMI and can
+    // take seconds. Running them on the UI thread froze the WebView during a
+    // restart, so move the whole teardown onto the blocking pool.
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        let request = normalize_launch_request(request);
+        claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
+        claude_codex_pro_core::watcher::stop_codex_processes();
+        request
+    })
+    .await;
+    match prepared {
+        Ok(request) => spawn_claude_codex_pro_launch(
+            request,
+            "Codex restart task is running in the background.",
+        ),
+        Err(error) => failed(&format!("Codex restart task failed: {error}"), json!({})),
+    }
 }
 
 fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
@@ -2403,7 +2519,27 @@ pub fn load_settings() -> CommandResult<SettingsPayload> {
 }
 
 #[tauri::command]
-pub fn save_settings(settings: BackendSettings) -> CommandResult<SettingsPayload> {
+pub async fn save_settings(settings: BackendSettings) -> CommandResult<SettingsPayload> {
+    // Saving normalizes the settings, writes settings.json, and (via
+    // refresh_cli_wrapper_after_settings_save) may write CLI wrapper files — all
+    // synchronous disk IO that must stay off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || save_settings_blocking(settings))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Failed to save settings: {join_error}"),
+                SettingsPayload {
+                    settings: BackendSettings::default(),
+                    settings_path: claude_codex_pro_core::paths::default_settings_path()
+                        .to_string_lossy()
+                        .to_string(),
+                    user_scripts: user_script_inventory(),
+                },
+            )
+        })
+}
+
+fn save_settings_blocking(settings: BackendSettings) -> CommandResult<SettingsPayload> {
     let settings = normalize_settings_before_save(settings);
     match SettingsStore::default().save(&settings) {
         Ok(()) => {
@@ -2427,7 +2563,25 @@ pub fn save_settings(settings: BackendSettings) -> CommandResult<SettingsPayload
 }
 
 #[tauri::command]
-pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
+pub async fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
+    // Enumerates and reads every Codex session DB (SQLite) plus rollout paths.
+    // On the UI thread this froze the session list on machines with large
+    // histories; move the whole scan onto the blocking pool.
+    tauri::async_runtime::spawn_blocking(list_local_sessions_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Failed to read local sessions: {join_error}"),
+                LocalSessionsPayload {
+                    db_path: String::new(),
+                    db_paths: Vec::new(),
+                    sessions: Vec::new(),
+                },
+            )
+        })
+}
+
+fn list_local_sessions_blocking() -> CommandResult<LocalSessionsPayload> {
     let home = claude_codex_pro_core::codex_sqlite::default_codex_home_dir();
     let db_paths = claude_codex_pro_core::codex_sqlite::codex_session_db_paths_from_home(&home);
     let mut sessions = Vec::new();
@@ -2475,12 +2629,26 @@ pub fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
 }
 
 #[tauri::command]
-pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
-    match MemoryAssistStore::default().status() {
-        Ok(memory) => ok(
+pub async fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
+    // This runs SQLite queries and, via enrich_memory_status, two blocking
+    // block_on CDP round-trips. On the UI thread those freeze the whole WebView
+    // whenever the status panel polls (and worse the larger the log grows), so
+    // move the whole thing onto the blocking pool.
+    let computed = tauri::async_runtime::spawn_blocking(|| {
+        MemoryAssistStore::default()
+            .status()
+            .map(enrich_memory_status)
+    })
+    .await;
+    match computed {
+        Ok(Ok(memory)) => ok(
             "Pangu memory status loaded.",
+            MemoryAssistStatusPayload { memory },
+        ),
+        Ok(Err(error)) => failed(
+            &format!("Failed to load Pangu memory status: {error}"),
             MemoryAssistStatusPayload {
-                memory: enrich_memory_status(memory),
+                memory: empty_memory_status(),
             },
         ),
         Err(error) => failed(
@@ -2493,18 +2661,36 @@ pub fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
 }
 
 #[tauri::command]
-pub fn query_memory_assist(request: MemoryQueryRequest) -> CommandResult<MemoryAssistQueryPayload> {
-    match MemoryAssistStore::default().query(request.clone()) {
-        Ok(memory) => ok(
+pub async fn query_memory_assist(
+    request: MemoryQueryRequest,
+) -> CommandResult<MemoryAssistQueryPayload> {
+    // SQLite query with keyword scoring/ranking; keep it off the UI thread.
+    let query = request.query.clone();
+    let workspace = request.workspace.clone();
+    let computed =
+        tauri::async_runtime::spawn_blocking(move || MemoryAssistStore::default().query(request))
+            .await;
+    match computed {
+        Ok(Ok(memory)) => ok(
             "Memory query completed.",
             MemoryAssistQueryPayload { memory },
         ),
-        Err(error) => failed(
+        Ok(Err(error)) => failed(
             &format!("Memory query failed: {error}"),
             MemoryAssistQueryPayload {
                 memory: MemoryQueryResult {
-                    query: request.query,
-                    workspace: request.workspace,
+                    query,
+                    workspace,
+                    results: Vec::new(),
+                },
+            },
+        ),
+        Err(error) => failed(
+            &format!("Memory query task failed: {error}"),
+            MemoryAssistQueryPayload {
+                memory: MemoryQueryResult {
+                    query,
+                    workspace,
                     results: Vec::new(),
                 },
             },
@@ -2513,23 +2699,32 @@ pub fn query_memory_assist(request: MemoryQueryRequest) -> CommandResult<MemoryA
 }
 
 #[tauri::command]
-pub fn list_memory_assist_items(
+pub async fn list_memory_assist_items(
     request: MemoryQueryRequest,
 ) -> CommandResult<MemoryAssistItemsPayload> {
-    match MemoryAssistStore::default().list_items(request) {
-        Ok(items) => ok(
+    // SQLite read; keep it off the UI thread.
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().list_items(request)
+    })
+    .await;
+    match computed {
+        Ok(Ok(items)) => ok(
             &format!("Loaded {} memory items.", items.len()),
             MemoryAssistItemsPayload { items },
         ),
-        Err(error) => failed(
+        Ok(Err(error)) => failed(
             &format!("Failed to load memory list: {error}"),
+            MemoryAssistItemsPayload { items: Vec::new() },
+        ),
+        Err(error) => failed(
+            &format!("Memory list task failed: {error}"),
             MemoryAssistItemsPayload { items: Vec::new() },
         ),
     }
 }
 
 #[tauri::command]
-pub fn learn_memory_assist_item(
+pub async fn learn_memory_assist_item(
     request: MemoryItemRequest,
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
@@ -2540,10 +2735,21 @@ pub fn learn_memory_assist_item(
             },
         );
     }
-    match MemoryAssistStore::default().learn_item(request) {
-        Ok(item) => ok("Memory saved.", MemoryAssistItemPayload { item }),
-        Err(error) => failed(
+    // SQLite write (plus similarity scan and inject-cache rebuild); keep off UI.
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().learn_item(request)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("Memory saved.", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
             &format!("Failed to save memory: {error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Memory save task failed: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2552,7 +2758,7 @@ pub fn learn_memory_assist_item(
 }
 
 #[tauri::command]
-pub fn update_memory_assist_item(
+pub async fn update_memory_assist_item(
     request: MemoryIdAndItemRequest,
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
@@ -2563,10 +2769,20 @@ pub fn update_memory_assist_item(
             },
         );
     }
-    match MemoryAssistStore::default().update_item(&request.id, request.item) {
-        Ok(item) => ok("Memory updated.", MemoryAssistItemPayload { item }),
-        Err(error) => failed(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().update_item(&request.id, request.item)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("Memory updated.", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
             &format!("Failed to update memory: {error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Memory update task failed: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2575,7 +2791,7 @@ pub fn update_memory_assist_item(
 }
 
 #[tauri::command]
-pub fn delete_memory_assist_item(
+pub async fn delete_memory_assist_item(
     request: MemoryIdRequest,
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
@@ -2586,10 +2802,20 @@ pub fn delete_memory_assist_item(
             },
         );
     }
-    match MemoryAssistStore::default().delete_item(&request.id) {
-        Ok(item) => ok("Memory deleted.", MemoryAssistItemPayload { item }),
-        Err(error) => failed(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().delete_item(&request.id)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("Memory deleted.", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
             &format!("Failed to delete memory: {error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Memory delete task failed: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2598,7 +2824,7 @@ pub fn delete_memory_assist_item(
 }
 
 #[tauri::command]
-pub fn create_memory_assist_candidate(
+pub async fn create_memory_assist_candidate(
     request: MemoryCandidateRequest,
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_candidate_enabled() {
@@ -2609,13 +2835,23 @@ pub fn create_memory_assist_candidate(
             },
         );
     }
-    match MemoryAssistStore::default().create_candidate(request) {
-        Ok(candidate) => ok(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().create_candidate(request)
+    })
+    .await;
+    match computed {
+        Ok(Ok(candidate)) => ok(
             "Pending memory created.",
             MemoryAssistCandidatePayload { candidate },
         ),
-        Err(error) => failed(
+        Ok(Err(error)) => failed(
             &format!("Failed to create pending memory: {error}"),
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Pending memory task failed: {error}"),
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2624,16 +2860,26 @@ pub fn create_memory_assist_candidate(
 }
 
 #[tauri::command]
-pub fn list_memory_assist_candidates(
+pub async fn list_memory_assist_candidates(
     request: MemoryCandidateListRequest,
 ) -> CommandResult<MemoryAssistCandidatesPayload> {
-    match MemoryAssistStore::default().list_candidates(&request.workspace, request.include_global) {
-        Ok(candidates) => ok(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().list_candidates(&request.workspace, request.include_global)
+    })
+    .await;
+    match computed {
+        Ok(Ok(candidates)) => ok(
             &format!("Loaded {} pending memories.", candidates.len()),
             MemoryAssistCandidatesPayload { candidates },
         ),
-        Err(error) => failed(
+        Ok(Err(error)) => failed(
             &format!("Failed to load pending memories: {error}"),
+            MemoryAssistCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Pending memories task failed: {error}"),
             MemoryAssistCandidatesPayload {
                 candidates: Vec::new(),
             },
@@ -2642,7 +2888,7 @@ pub fn list_memory_assist_candidates(
 }
 
 #[tauri::command]
-pub fn approve_memory_assist_candidate(
+pub async fn approve_memory_assist_candidate(
     request: MemoryIdRequest,
 ) -> CommandResult<MemoryAssistItemPayload> {
     if !memory_assist_write_enabled() {
@@ -2653,10 +2899,20 @@ pub fn approve_memory_assist_candidate(
             },
         );
     }
-    match MemoryAssistStore::default().approve_candidate(&request.id) {
-        Ok(item) => ok("Pending memory approved.", MemoryAssistItemPayload { item }),
-        Err(error) => failed(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().approve_candidate(&request.id)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("Pending memory approved.", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
             &format!("Failed to approve pending memory: {error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Approve pending memory task failed: {error}"),
             MemoryAssistItemPayload {
                 item: empty_memory_item(),
             },
@@ -2665,7 +2921,7 @@ pub fn approve_memory_assist_candidate(
 }
 
 #[tauri::command]
-pub fn reject_memory_assist_candidate(
+pub async fn reject_memory_assist_candidate(
     request: MemoryIdRequest,
 ) -> CommandResult<MemoryAssistCandidatePayload> {
     if !memory_assist_write_enabled() {
@@ -2676,13 +2932,23 @@ pub fn reject_memory_assist_candidate(
             },
         );
     }
-    match MemoryAssistStore::default().reject_candidate(&request.id) {
-        Ok(candidate) => ok(
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().reject_candidate(&request.id)
+    })
+    .await;
+    match computed {
+        Ok(Ok(candidate)) => ok(
             "Pending memory rejected.",
             MemoryAssistCandidatePayload { candidate },
         ),
-        Err(error) => failed(
+        Ok(Err(error)) => failed(
             &format!("Failed to reject pending memory: {error}"),
+            MemoryAssistCandidatePayload {
+                candidate: empty_memory_candidate(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("Reject pending memory task failed: {error}"),
             MemoryAssistCandidatePayload {
                 candidate: empty_memory_candidate(),
             },
@@ -2691,40 +2957,68 @@ pub fn reject_memory_assist_candidate(
 }
 
 #[tauri::command]
-pub fn load_memory_assist_session(
+pub async fn load_memory_assist_session(
     request: MemorySessionRequest,
 ) -> CommandResult<MemoryAssistSessionPayload> {
-    match MemoryAssistStore::default().session_summary(request) {
-        Ok(summary) => ok(
+    // session_summary triggers Codex history backfill (SQLite scans + rollout
+    // JSONL parsing) — heavy synchronous IO that must not run on the UI thread.
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().session_summary(request)
+    })
+    .await;
+    let empty_summary = || MemorySessionSummary {
+        workspace: String::new(),
+        inject_summary_cache_path: MemoryAssistStore::default()
+            .inject_summary_cache_path()
+            .to_string_lossy()
+            .to_string(),
+        total_items: 0,
+        pending_candidates: 0,
+        injected_items: Vec::new(),
+        recent_captures: Vec::new(),
+        capture_summary: String::new(),
+        summary: String::new(),
+    };
+    match computed {
+        Ok(Ok(summary)) => ok(
             "Memory session summary loaded.",
             MemoryAssistSessionPayload { summary },
+        ),
+        Ok(Err(error)) => failed(
+            &format!("Failed to load memory session summary: {error}"),
+            MemoryAssistSessionPayload {
+                summary: empty_summary(),
+            },
         ),
         Err(error) => failed(
             &format!("Failed to load memory session summary: {error}"),
             MemoryAssistSessionPayload {
-                summary: MemorySessionSummary {
-                    workspace: String::new(),
-                    inject_summary_cache_path: MemoryAssistStore::default()
-                        .inject_summary_cache_path()
-                        .to_string_lossy()
-                        .to_string(),
-                    total_items: 0,
-                    pending_candidates: 0,
-                    injected_items: Vec::new(),
-                    recent_captures: Vec::new(),
-                    capture_summary: String::new(),
-                    summary: String::new(),
-                },
+                summary: empty_summary(),
             },
         ),
     }
 }
 
 #[tauri::command]
-pub fn run_memory_assist_selfcheck(
+pub async fn run_memory_assist_selfcheck(
     request: MemorySelfCheckRequest,
 ) -> CommandResult<MemoryAssistSelfCheckPayload> {
+    log_manager_event(
+        "manager.memory.selfcheck.start",
+        json!({
+            "repair": request.repair,
+            "sources": ["codex_sqlite", "codex_rollout_files", "memory_assist.sqlite"],
+            "historyScan": "all_visible_workspaces_and_sessions"
+        }),
+    );
     if !memory_assist_write_enabled() {
+        log_manager_event(
+            "manager.memory.selfcheck.failed",
+            json!({
+                "repair": request.repair,
+                "reason": "memory_assist_write_disabled"
+            }),
+        );
         return failed(
             "Pangu memory is disabled.",
             MemoryAssistSelfCheckPayload {
@@ -2737,28 +3031,72 @@ pub fn run_memory_assist_selfcheck(
             },
         );
     }
-    match MemoryAssistStore::default().run_selfcheck(request) {
-        Ok(report) => ok(
-            "Pangu memory self-check completed.",
-            MemoryAssistSelfCheckPayload { report },
-        ),
-        Err(error) => failed(
-            &format!("Pangu memory self-check failed: {error}"),
-            MemoryAssistSelfCheckPayload {
-                report: MemorySelfCheckResult {
-                    status: "failed".to_string(),
-                    repaired: false,
-                    backup_path: None,
-                    checks: Vec::new(),
+    // Self-check is the heaviest memory op: it scans every Codex SQLite DB and
+    // rollout file (backfill runs with no cap) and can take seconds to minutes on
+    // large histories. It must never run on the UI thread.
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().run_selfcheck(request)
+    })
+    .await;
+    let outcome = match computed {
+        Ok(inner) => inner,
+        Err(join_error) => Err(anyhow::anyhow!("self-check task failed: {join_error}")),
+    };
+    match outcome {
+        Ok(report) => {
+            let history_message = report
+                .checks
+                .iter()
+                .find(|check| check.name == "history")
+                .map(|check| check.message.clone())
+                .unwrap_or_default();
+            log_manager_event(
+                "manager.memory.selfcheck.result",
+                json!({
+                    "status": &report.status,
+                    "repaired": report.repaired,
+                    "backupPath": &report.backup_path,
+                    "history": history_message,
+                    "checks": &report.checks
+                }),
+            );
+            ok(
+                "Pangu memory self-check completed.",
+                MemoryAssistSelfCheckPayload { report },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.memory.selfcheck.failed",
+                json!({
+                    "reason": error.to_string()
+                }),
+            );
+            failed(
+                &format!("Pangu memory self-check failed: {error}"),
+                MemoryAssistSelfCheckPayload {
+                    report: MemorySelfCheckResult {
+                        status: "failed".to_string(),
+                        repaired: false,
+                        backup_path: None,
+                        checks: Vec::new(),
+                    },
                 },
-            },
-        ),
+            )
+        }
     }
 }
 
 #[tauri::command]
-pub fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
-    match MemoryAssistStore::default().export_json() {
+pub async fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
+    // Exporting serializes the whole SQLite store; keep it off the UI thread.
+    let computed =
+        tauri::async_runtime::spawn_blocking(|| MemoryAssistStore::default().export_json()).await;
+    let outcome = match computed {
+        Ok(inner) => inner,
+        Err(join_error) => Err(anyhow::anyhow!("export task failed: {join_error}")),
+    };
+    match outcome {
         Ok(data) => ok(
             "Pangu memory data exported.",
             MemoryAssistExportPayload { data },
@@ -2778,7 +3116,7 @@ pub fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
 }
 
 #[tauri::command]
-pub fn import_memory_assist(
+pub async fn import_memory_assist(
     request: MemoryImportRequest,
 ) -> CommandResult<MemoryAssistStatusPayload> {
     if !memory_assist_write_enabled() {
@@ -2789,7 +3127,17 @@ pub fn import_memory_assist(
             },
         );
     }
-    match MemoryAssistStore::default().import_json(request) {
+    // Import parses JSON and performs a batch of SQLite writes; run it on the
+    // blocking pool so a large import cannot freeze the UI thread.
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().import_json(request)
+    })
+    .await;
+    let outcome = match computed {
+        Ok(inner) => inner,
+        Err(join_error) => Err(anyhow::anyhow!("import task failed: {join_error}")),
+    };
+    match outcome {
         Ok(memory) => ok(
             "Pangu memory data imported.",
             MemoryAssistStatusPayload { memory },
@@ -2919,6 +3267,12 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
         if runtime.pending_candidates > 0 {
             memory.pending_candidates = runtime.pending_candidates;
         }
+    } else if heartbeat_is_fresh && memory.enabled && memory.inject_enabled {
+        memory.runtime_status = "ok".to_string();
+        memory.runtime_message = "Codex 前端脚本已注入，等待盘古记忆 runtime 同步。".to_string();
+        memory.codex_injected = true;
+        memory.active = true;
+        memory.active_source = "codex-script".to_string();
     } else {
         memory.runtime_status = if memory.enabled && memory.inject_enabled {
             "not_checked".to_string()
@@ -2946,8 +3300,12 @@ fn normalize_memory_runtime_status(runtime: &MemoryAssistRuntimeSnapshot) -> Str
 
 fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
     let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
-    let text = fs::read_to_string(path).ok()?;
-    let mut fallback: Option<RendererRuntimeHeartbeat> = None;
+    // Only the newest few records matter here, and the log is unbounded, so read a
+    // bounded window from the end instead of the whole file (this function is on
+    // the status-panel polling path — a full read got slower as the log grew).
+    let text = read_tail(&path, 2_000).ok()?;
+    let mut newest_script_loaded: Option<RendererRuntimeHeartbeat> = None;
+    let mut newest_runtime: Option<RendererRuntimeHeartbeat> = None;
     for record in text
         .lines()
         .rev()
@@ -2966,30 +3324,38 @@ fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
                 .and_then(|value| {
                     serde_json::from_value::<MemoryAssistRuntimeSnapshot>(value).ok()
                 });
-            return Some(RendererRuntimeHeartbeat {
+            newest_runtime = Some(RendererRuntimeHeartbeat {
                 timestamp_ms: record.timestamp_ms,
                 runtime,
                 runtime_reported: true,
             });
+            break;
         }
-        if fallback.is_none() {
-            fallback = Some(RendererRuntimeHeartbeat {
+        if newest_script_loaded.is_none() {
+            newest_script_loaded = Some(RendererRuntimeHeartbeat {
                 timestamp_ms: record.timestamp_ms,
                 runtime: None,
                 runtime_reported: false,
             });
         }
     }
-    fallback
+    match (newest_runtime, newest_script_loaded) {
+        (Some(runtime), Some(script_loaded))
+            if script_loaded.timestamp_ms > runtime.timestamp_ms =>
+        {
+            Some(script_loaded)
+        }
+        (Some(runtime), _) => Some(runtime),
+        (None, script_loaded) => script_loaded,
+    }
 }
 
 fn renderer_heartbeat_is_fresh(timestamp_ms: u64) -> bool {
     current_time_ms().saturating_sub(timestamp_ms) <= 45_000
 }
 
-fn renderer_runtime_heartbeat_is_ready(heartbeat: &RendererRuntimeHeartbeat) -> bool {
-    heartbeat.runtime_reported
-        && renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)
+fn renderer_frontend_heartbeat_confirms_injection(heartbeat: &RendererRuntimeHeartbeat) -> bool {
+    renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)
         && heartbeat
             .runtime
             .as_ref()
@@ -3099,7 +3465,30 @@ pub fn forget_zed_remote_project(id: String) -> CommandResult<ZedRemoteProjectsP
 }
 
 #[tauri::command]
-pub fn delete_local_session(request: DeleteLocalSessionRequest) -> CommandResult<DeleteResult> {
+pub async fn delete_local_session(
+    request: DeleteLocalSessionRequest,
+) -> CommandResult<DeleteResult> {
+    // SQLite deletion plus backup-file copies are blocking IO; keep them off the
+    // UI thread so deleting a session never stalls the WebView.
+    tauri::async_runtime::spawn_blocking(move || delete_local_session_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Delete session task failed: {join_error}"),
+                DeleteResult {
+                    status: claude_codex_pro_core::models::DeleteStatus::Failed,
+                    session_id: String::new(),
+                    message: format!("Delete session task failed: {join_error}"),
+                    undo_token: None,
+                    backup_path: None,
+                },
+            )
+        })
+}
+
+fn delete_local_session_blocking(
+    request: DeleteLocalSessionRequest,
+) -> CommandResult<DeleteResult> {
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return failed(
@@ -3183,6 +3572,225 @@ fn local_session_adapter(db_path: &Path) -> claude_codex_pro_data::SQLiteStorage
         claude_codex_pro_data::BackupStore::new(
             claude_codex_pro_core::paths::default_app_state_dir().join("backups"),
         ),
+    )
+}
+
+/// Candidate Codex session DBs for a migration/export request: the explicit
+/// db_path first (so the caller's own choice wins), then every discovered DB.
+fn session_candidate_db_paths(explicit: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = explicit {
+        let path = PathBuf::from(path);
+        if !path.as_os_str().is_empty() {
+            paths.push(path);
+        }
+    }
+    for path in claude_codex_pro_core::codex_sqlite::codex_session_db_paths_from_home(
+        &claude_codex_pro_core::codex_sqlite::default_codex_home_dir(),
+    ) {
+        if !paths.iter().any(|candidate| candidate == &path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// `~/.claude` — the root Claude Code stores its `projects/<slug>/<uuid>.jsonl`
+/// transcripts under. Falls back to the config-dir home resolution used
+/// elsewhere in this module.
+fn claude_code_home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude")
+}
+
+#[tauri::command]
+pub async fn export_session_universal(
+    request: SessionExportRequest,
+) -> CommandResult<SessionExportPayload> {
+    // Reads a Codex SQLite DB and its rollout JSONL, then serializes — file IO
+    // that must not run on the UI thread.
+    tauri::async_runtime::spawn_blocking(move || export_session_universal_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Session export task failed: {join_error}"),
+                SessionExportPayload { export: None },
+            )
+        })
+}
+
+fn export_session_universal_blocking(
+    request: SessionExportRequest,
+) -> CommandResult<SessionExportPayload> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return failed(
+            "Session ID cannot be empty.",
+            SessionExportPayload { export: None },
+        );
+    }
+    let format = request.format;
+    for db_path in session_candidate_db_paths(request.db_path.as_deref()) {
+        match claude_codex_pro_data::export_session_universal(&db_path, &session_id, format) {
+            Ok(Some(export)) => {
+                log_manager_event(
+                    "manager.session_export.ok",
+                    json!({
+                        "sessionId": session_id,
+                        "format": format!("{format:?}"),
+                        "messageCount": export.message_count
+                    }),
+                );
+                return ok(
+                    &format!("Exported {} messages.", export.message_count),
+                    SessionExportPayload {
+                        export: Some(export),
+                    },
+                );
+            }
+            Ok(None) => continue,
+            Err(error) => {
+                return failed(
+                    &format!("Session export failed: {error}"),
+                    SessionExportPayload { export: None },
+                );
+            }
+        }
+    }
+    failed(
+        "The session was not found in any local Codex database.",
+        SessionExportPayload { export: None },
+    )
+}
+
+#[tauri::command]
+pub async fn migrate_session_to_claude_code(
+    request: SessionMigrationRequest,
+) -> CommandResult<SessionMigrationPayload> {
+    tauri::async_runtime::spawn_blocking(move || migrate_session_to_claude_code_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Session migration task failed: {join_error}"),
+                SessionMigrationPayload {
+                    migration: None,
+                    claude_code_available: false,
+                },
+            )
+        })
+}
+
+fn migrate_session_to_claude_code_blocking(
+    request: SessionMigrationRequest,
+) -> CommandResult<SessionMigrationPayload> {
+    let session_id = request.session_id.trim().to_string();
+    let claude_home = claude_code_home_dir();
+    let claude_code_available =
+        claude_codex_pro_data::claude_code_projects_dir(&claude_home).is_dir();
+    if session_id.is_empty() {
+        return failed(
+            "Session ID cannot be empty.",
+            SessionMigrationPayload {
+                migration: None,
+                claude_code_available,
+            },
+        );
+    }
+    if !claude_code_available {
+        return failed(
+            "Claude Code is not installed (no ~/.claude/projects directory).",
+            SessionMigrationPayload {
+                migration: None,
+                claude_code_available,
+            },
+        );
+    }
+
+    let store = SettingsStore::default();
+    let mut settings = store.load().unwrap_or_default();
+    // Idempotency: reuse the recorded target UUID so re-running never writes a
+    // duplicate transcript for a thread already migrated.
+    let existing_uuid = settings
+        .codex_session_migrations
+        .iter()
+        .find(|record| record.session_id == session_id)
+        .map(|record| record.target_uuid.clone());
+
+    for db_path in session_candidate_db_paths(request.db_path.as_deref()) {
+        match claude_codex_pro_data::migrate_codex_thread_to_claude_code(
+            &db_path,
+            &session_id,
+            &claude_home,
+            request.target_cwd.as_deref(),
+            existing_uuid.as_deref(),
+        ) {
+            Ok(Some(migration)) => {
+                if !migration.already_migrated {
+                    settings
+                        .codex_session_migrations
+                        .retain(|record| record.session_id != session_id);
+                    settings.codex_session_migrations.push(
+                        claude_codex_pro_core::settings::CodexSessionMigrationRecord {
+                            session_id: session_id.clone(),
+                            target_uuid: migration
+                                .written_path
+                                .rsplit(['/', '\\'])
+                                .next()
+                                .and_then(|name| name.strip_suffix(".jsonl"))
+                                .unwrap_or_default()
+                                .to_string(),
+                            project_slug: migration.project_slug.clone(),
+                        },
+                    );
+                    let _ = store.save(&settings);
+                }
+                log_manager_event(
+                    "manager.session_migration.ok",
+                    json!({
+                        "sessionId": session_id,
+                        "projectSlug": migration.project_slug,
+                        "messageCount": migration.message_count,
+                        "alreadyMigrated": migration.already_migrated
+                    }),
+                );
+                let message = if migration.already_migrated {
+                    "This session was already migrated to Claude Code.".to_string()
+                } else {
+                    format!(
+                        "Migrated {} messages into Claude Code project {}.",
+                        migration.message_count, migration.project_slug
+                    )
+                };
+                return ok(
+                    &message,
+                    SessionMigrationPayload {
+                        migration: Some(migration),
+                        claude_code_available,
+                    },
+                );
+            }
+            Ok(None) => continue,
+            Err(error) => {
+                return failed(
+                    &format!("Session migration failed: {error}"),
+                    SessionMigrationPayload {
+                        migration: None,
+                        claude_code_available,
+                    },
+                );
+            }
+        }
+    }
+    failed(
+        "The session was not found in any local Codex database.",
+        SessionMigrationPayload {
+            migration: None,
+            claude_code_available,
+        },
     )
 }
 
@@ -3662,6 +4270,174 @@ pub async fn repair_codex_plugin_marketplace() -> CommandResult<CodexPluginMarke
                 },
             )
         }
+    }
+}
+
+#[tauri::command]
+pub fn list_codex_custom_marketplaces() -> CommandResult<CodexCustomMarketplacesPayload> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let marketplace = claude_codex_pro_core::codex_plugin_marketplace::status();
+    ok(
+        &format!(
+            "Loaded {} custom marketplaces.",
+            settings.codex_custom_marketplaces.len()
+        ),
+        CodexCustomMarketplacesPayload {
+            custom_marketplaces: settings.codex_custom_marketplaces,
+            marketplace,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn add_codex_custom_marketplace(
+    request: CodexCustomMarketplaceRequest,
+) -> CommandResult<CodexCustomMarketplacesPayload> {
+    // Persisting settings and writing config.toml are both synchronous file IO;
+    // keep them off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || add_codex_custom_marketplace_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Add custom marketplace task failed: {join_error}"),
+                empty_codex_custom_marketplaces_payload(),
+            )
+        })
+}
+
+fn add_codex_custom_marketplace_blocking(
+    request: CodexCustomMarketplaceRequest,
+) -> CommandResult<CodexCustomMarketplacesPayload> {
+    let store = SettingsStore::default();
+    let mut settings = store.load().unwrap_or_default();
+    let mut marketplace = request.marketplace;
+    marketplace.name = marketplace.name.trim().to_string();
+    marketplace.source = marketplace.source.trim().to_string();
+    marketplace.source_type = marketplace.source_type.trim().to_ascii_lowercase();
+    if marketplace.name.is_empty() || marketplace.source.is_empty() {
+        return failed(
+            "Custom marketplace name and source are required.",
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
+    // Write config.toml first so a validation failure never leaves a saved
+    // setting that cannot actually be applied.
+    if let Err(error) =
+        claude_codex_pro_core::codex_plugin_marketplace::ensure_custom_marketplace_config(
+            &home,
+            &marketplace,
+        )
+    {
+        return failed(
+            &format!("Failed to register custom marketplace: {error}"),
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    // Replace an existing entry with the same name (case-insensitive) rather than
+    // appending a duplicate.
+    settings
+        .codex_custom_marketplaces
+        .retain(|existing| !existing.name.eq_ignore_ascii_case(&marketplace.name));
+    settings.codex_custom_marketplaces.push(marketplace);
+
+    if let Err(error) = store.save(&settings) {
+        return failed(
+            &format!("Custom marketplace was registered but settings save failed: {error}"),
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    let status = claude_codex_pro_core::codex_plugin_marketplace::status();
+    log_manager_event(
+        "manager.codex_custom_marketplace.added",
+        json!({ "count": settings.codex_custom_marketplaces.len() }),
+    );
+    ok(
+        "Custom marketplace registered. Restart Codex to load it.",
+        CodexCustomMarketplacesPayload {
+            custom_marketplaces: settings.codex_custom_marketplaces,
+            marketplace: status,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn remove_codex_custom_marketplace(
+    request: CodexCustomMarketplaceRemoveRequest,
+) -> CommandResult<CodexCustomMarketplacesPayload> {
+    tauri::async_runtime::spawn_blocking(move || remove_codex_custom_marketplace_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Remove custom marketplace task failed: {join_error}"),
+                empty_codex_custom_marketplaces_payload(),
+            )
+        })
+}
+
+fn remove_codex_custom_marketplace_blocking(
+    request: CodexCustomMarketplaceRemoveRequest,
+) -> CommandResult<CodexCustomMarketplacesPayload> {
+    let store = SettingsStore::default();
+    let mut settings = store.load().unwrap_or_default();
+    let name = request.name.trim();
+    if name.is_empty() {
+        return failed(
+            "Custom marketplace name is required.",
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+    let before = settings.codex_custom_marketplaces.len();
+    settings
+        .codex_custom_marketplaces
+        .retain(|existing| !existing.name.eq_ignore_ascii_case(name));
+    if settings.codex_custom_marketplaces.len() == before {
+        return failed(
+            &format!("Custom marketplace {name} was not found."),
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    // Drop the [marketplaces.<name>] section from config.toml too, so removing it
+    // here actually stops Codex from seeing it.
+    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
+    if let Err(error) =
+        claude_codex_pro_core::codex_plugin_marketplace::remove_marketplace_config(&home, name)
+    {
+        return failed(
+            &format!("Failed to unregister custom marketplace from config.toml: {error}"),
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    if let Err(error) = store.save(&settings) {
+        return failed(
+            &format!("Custom marketplace was unregistered but settings save failed: {error}"),
+            empty_codex_custom_marketplaces_payload(),
+        );
+    }
+
+    let status = claude_codex_pro_core::codex_plugin_marketplace::status();
+    log_manager_event(
+        "manager.codex_custom_marketplace.removed",
+        json!({ "count": settings.codex_custom_marketplaces.len() }),
+    );
+    ok(
+        "Custom marketplace removed. Restart Codex to apply.",
+        CodexCustomMarketplacesPayload {
+            custom_marketplaces: settings.codex_custom_marketplaces,
+            marketplace: status,
+        },
+    )
+}
+
+fn empty_codex_custom_marketplaces_payload() -> CodexCustomMarketplacesPayload {
+    CodexCustomMarketplacesPayload {
+        custom_marketplaces: Vec::new(),
+        marketplace: claude_codex_pro_core::codex_plugin_marketplace::status(),
     }
 }
 
@@ -4336,15 +5112,33 @@ pub fn disable_watcher() -> CommandResult<WatcherPayload> {
 }
 
 #[tauri::command]
-pub fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
+pub async fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
+    // Tailing the log is disk IO; keep it off the UI thread.
+    let lines = request.lines;
+    tauri::async_runtime::spawn_blocking(move || read_latest_logs_blocking(lines))
+        .await
+        .unwrap_or_else(|join_error| {
+            let path = claude_codex_pro_core::paths::default_diagnostic_log_path();
+            failed(
+                &format!("Failed to read logs: {join_error}"),
+                LogsPayload {
+                    path: path.to_string_lossy().to_string(),
+                    text: String::new(),
+                    lines,
+                },
+            )
+        })
+}
+
+fn read_latest_logs_blocking(lines: usize) -> CommandResult<LogsPayload> {
     let path = claude_codex_pro_core::paths::default_diagnostic_log_path();
-    match read_tail(&path, request.lines) {
+    match read_tail(&path, lines) {
         Ok(text) => ok(
             "Logs loaded.",
             LogsPayload {
                 path: path.to_string_lossy().to_string(),
                 text,
-                lines: request.lines,
+                lines,
             },
         ),
         Err(error) => failed(
@@ -4352,19 +5146,23 @@ pub fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
             LogsPayload {
                 path: path.to_string_lossy().to_string(),
                 text: String::new(),
-                lines: request.lines,
+                lines,
             },
         ),
     }
 }
 
 #[tauri::command]
-pub fn copy_diagnostics() -> CommandResult<DiagnosticsPayload> {
+pub async fn copy_diagnostics() -> CommandResult<DiagnosticsPayload> {
+    // diagnostics_report() probes loopback TCP ports, reads HTTP responses and
+    // tails the diagnostic log — all synchronous blocking IO that froze the UI
+    // thread for up to a couple of seconds. Run it on the blocking pool.
+    let report = tauri::async_runtime::spawn_blocking(diagnostics_report)
+        .await
+        .unwrap_or_else(|join_error| format!("Diagnostics report task failed: {join_error}"));
     ok(
         "Diagnostics report generated.",
-        DiagnosticsPayload {
-            report: diagnostics_report(),
-        },
+        DiagnosticsPayload { report },
     )
 }
 
@@ -4512,10 +5310,36 @@ pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload>
 }
 
 #[tauri::command]
-pub fn switch_relay_profile(
+pub async fn switch_relay_profile(
     request: RelayProfileSwitchRequest,
 ) -> CommandResult<RelaySwitchPayload> {
-    let Ok(_guard) = relay_switch_mutex().lock() else {
+    // The switch performs synchronous config/auth/backup file IO. Running it on
+    // the UI thread froze the WebView; move it to a blocking thread. The lock is
+    // acquired *inside* the closure because a std MutexGuard is `!Send` and can
+    // neither cross an await point nor move into a Send closure.
+    tauri::async_runtime::spawn_blocking(move || switch_relay_profile_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            let status = claude_codex_pro_core::relay_config::default_relay_status();
+            failed(
+                &format!("Provider profile switch task failed: {join_error}"),
+                relay_switch_payload(
+                    SettingsStore::default().load().unwrap_or_default(),
+                    status,
+                    None,
+                ),
+            )
+        })
+}
+
+fn switch_relay_profile_blocking(
+    request: RelayProfileSwitchRequest,
+) -> CommandResult<RelaySwitchPayload> {
+    // `try_lock`, not `lock`: on contention std's `lock()` blocks (it only errors
+    // on poisoning), so the original "already running" branch was dead code and
+    // rapid double-clicks serialized behind each other's full file IO. Fail fast
+    // instead so the second click returns immediately.
+    let Ok(_guard) = relay_switch_mutex().try_lock() else {
         let status = claude_codex_pro_core::relay_config::default_relay_status();
         return failed(
             "Provider switching is already running. Please try again later.",
@@ -4578,7 +5402,24 @@ pub fn switch_relay_profile(
 }
 
 #[tauri::command]
-pub fn preview_claude_desktop_provider(
+pub async fn preview_claude_desktop_provider(
+    request: ClaudeDesktopProviderRequest,
+) -> CommandResult<ClaudeDesktopProviderPreviewPayload> {
+    // current_claude_desktop_proxy_port_hint does a loopback bind test plus a
+    // synchronous HTTP probe — blocking IO that must stay off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || preview_claude_desktop_provider_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Claude Desktop provider preview task failed: {join_error}"),
+                ClaudeDesktopProviderPreviewPayload {
+                    preview: empty_claude_desktop_provider_preview(),
+                },
+            )
+        })
+}
+
+fn preview_claude_desktop_provider_blocking(
     request: ClaudeDesktopProviderRequest,
 ) -> CommandResult<ClaudeDesktopProviderPreviewPayload> {
     log_manager_event(
@@ -4850,7 +5691,24 @@ pub fn upsert_context_entry(request: ContextEntryRequest) -> CommandResult<Conte
 }
 
 #[tauri::command]
-pub fn sync_live_context_entries(
+pub async fn sync_live_context_entries(
+    request: ContextSettingsRequest,
+) -> CommandResult<LiveContextEntriesPayload> {
+    // Reads and rewrites live config.toml — synchronous file IO that must not run
+    // on the UI thread.
+    tauri::async_runtime::spawn_blocking(move || sync_live_context_entries_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Sync live context entries task failed: {join_error}"),
+                LiveContextEntriesPayload {
+                    entries: empty_context_entries(),
+                },
+            )
+        })
+}
+
+fn sync_live_context_entries_blocking(
     request: ContextSettingsRequest,
 ) -> CommandResult<LiveContextEntriesPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
@@ -5142,7 +6000,21 @@ pub async fn fetch_relay_profile_models(
 }
 
 #[tauri::command]
-pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
+pub async fn apply_relay_injection() -> CommandResult<RelayPayload> {
+    // Writes config.toml/auth.json, creates backups and runs the switch rules —
+    // all synchronous file IO. Keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(apply_relay_injection_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            let status = claude_codex_pro_core::relay_config::default_relay_status();
+            failed(
+                &format!("Relay injection task failed: {join_error}"),
+                relay_payload(status, None),
+            )
+        })
+}
+
+fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     let settings = SettingsStore::default().load().unwrap_or_default();
     if !settings.relay_profiles_enabled {
@@ -5171,7 +6043,10 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                     None,
                 );
                 ok(
-                    "Provider switched using compatibility rules.",
+                    &format!(
+                        "Provider switched using compatibility rules.{}",
+                        chat_completions_proxy_warning_suffix(&relay)
+                    ),
                     relay_payload(status, result.backup_path),
                 )
             }
@@ -5225,7 +6100,10 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
                 None,
             );
             ok(
-                "Relay configuration written. The API key is not shown in the UI.",
+                &format!(
+                    "Relay configuration written. The API key is not shown in the UI.{}",
+                    chat_completions_proxy_warning_suffix(&relay)
+                ),
                 relay_payload(status, result.backup_path),
             )
         }
@@ -5247,7 +6125,21 @@ pub fn apply_relay_injection() -> CommandResult<RelayPayload> {
 }
 
 #[tauri::command]
-pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
+pub async fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
+    // Writes config.toml/auth.json plus backups — synchronous file IO that must
+    // not run on the UI thread.
+    tauri::async_runtime::spawn_blocking(apply_pure_api_injection_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            let status = claude_codex_pro_core::relay_config::default_relay_status();
+            failed(
+                &format!("Pure API injection task failed: {join_error}"),
+                relay_payload(status, None),
+            )
+        })
+}
+
+fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     let settings = SettingsStore::default().load().unwrap_or_default();
     if !settings.relay_profiles_enabled {
@@ -5348,7 +6240,21 @@ pub fn apply_pure_api_injection() -> CommandResult<RelayPayload> {
 }
 
 #[tauri::command]
-pub fn clear_relay_injection() -> CommandResult<RelayPayload> {
+pub async fn clear_relay_injection() -> CommandResult<RelayPayload> {
+    // Rewrites config.toml/auth.json and writes a backup — synchronous file IO
+    // that must not run on the UI thread.
+    tauri::async_runtime::spawn_blocking(clear_relay_injection_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            let status = claude_codex_pro_core::relay_config::default_relay_status();
+            failed(
+                &format!("Clear relay injection task failed: {join_error}"),
+                relay_payload(status, None),
+            )
+        })
+}
+
+fn clear_relay_injection_blocking() -> CommandResult<RelayPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = settings.active_relay_profile();
@@ -5399,6 +6305,28 @@ fn relay_has_complete_files(relay: &claude_codex_pro_core::settings::RelayProfil
         return !relay.config_contents.trim().is_empty();
     }
     !relay.config_contents.trim().is_empty() && !relay.auth_contents.trim().is_empty()
+}
+
+/// ChatCompletions profiles rewrite Codex's `base_url` to the local protocol
+/// proxy (`http://127.0.0.1:57321/v1`), which only works while this tool's
+/// helper is serving that port. If nothing is listening when we write the
+/// config, a Codex started independently will fail to reach the proxy with no
+/// visible reason. Return a user-facing warning suffix in that case so the
+/// applied-config message tells the user the proxy must be running, instead of
+/// silently writing a config that points at a dead port.
+fn chat_completions_proxy_warning_suffix(
+    relay: &claude_codex_pro_core::settings::RelayProfile,
+) -> String {
+    if relay.protocol != claude_codex_pro_core::settings::RelayProtocol::ChatCompletions {
+        return String::new();
+    }
+    let proxy_port = claude_codex_pro_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT;
+    if claude_codex_pro_core::launcher::protocol_proxy_backend_online(proxy_port) {
+        return String::new();
+    }
+    format!(
+        " 注意：ChatCompletions 协议依赖本地代理端口 {proxy_port}，当前未检测到本工具的代理在监听。请通过本工具启动 Codex（而非直接运行），否则模型请求会连不上本地代理。"
+    )
 }
 
 fn log_relay_apply_request(
@@ -5927,6 +6855,59 @@ fn builtin_user_scripts_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("user_scripts"))
 }
 
+/// Keys whose value carries a secret and must be masked in the diagnostics
+/// report. Matched case-insensitively against JSON object keys at any depth so
+/// that newly added secret-bearing fields are covered by default rather than
+/// leaking until someone remembers to update this list.
+const DIAGNOSTICS_SECRET_KEY_MARKERS: &[&str] = &[
+    "apikey",
+    "authcontents",
+    "configcontents",
+    "commonconfigcontents",
+    "contextconfigcontents",
+    "bearertoken",
+    "token",
+    "secret",
+    "password",
+];
+
+/// Recursively replace the values of secret-bearing keys with a placeholder.
+/// Empty strings are left as-is so the report still shows whether a field was
+/// configured at all.
+fn redact_settings_secrets(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut redacted = serde_json::Map::with_capacity(map.len());
+            for (key, child) in map {
+                let lower = key.to_ascii_lowercase();
+                let is_secret = DIAGNOSTICS_SECRET_KEY_MARKERS
+                    .iter()
+                    .any(|marker| lower.contains(marker));
+                if is_secret {
+                    match child {
+                        Value::String(text) if text.is_empty() => {
+                            redacted.insert(key, Value::String(String::new()));
+                        }
+                        Value::Null => {
+                            redacted.insert(key, Value::Null);
+                        }
+                        _ => {
+                            redacted.insert(key, Value::String("***redacted***".to_string()));
+                        }
+                    }
+                } else {
+                    redacted.insert(key, redact_settings_secrets(child));
+                }
+            }
+            Value::Object(redacted)
+        }
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(redact_settings_secrets).collect())
+        }
+        other => other,
+    }
+}
+
 fn diagnostics_report() -> String {
     let (codex_app_path, entrypoints, latest_launch) = load_overview_payload();
     let overview = ok(
@@ -5950,6 +6931,11 @@ fn diagnostics_report() -> String {
         },
     );
     let settings = SettingsStore::default().load().unwrap_or_default();
+    // The diagnostics report is meant to be copied into issues / support chats.
+    // Serializing settings verbatim would leak relay API keys, CLI wrapper keys,
+    // and the bearer tokens embedded in auth/config blobs. Redact them first.
+    let redacted_settings =
+        redact_settings_secrets(serde_json::to_value(&settings).unwrap_or_else(|_| json!({})));
     let generated_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -5960,7 +6946,7 @@ fn diagnostics_report() -> String {
         "exePath": current_exe_path_string(),
         "exeLastModifiedMs": current_exe_last_modified_ms(),
         "overview": overview.payload,
-        "settings": settings,
+        "settings": redacted_settings,
         "logs": {
             "diagnosticLogPath": claude_codex_pro_core::paths::default_diagnostic_log_path(),
             "latestStatusPath": claude_codex_pro_core::paths::default_latest_status_path()
@@ -6119,8 +7105,42 @@ fn watcher_payload() -> WatcherPayload {
 }
 
 fn read_tail(path: &Path, max_lines: usize) -> std::io::Result<String> {
-    let contents = fs::read_to_string(path)?;
-    let mut lines = contents.lines().rev().take(max_lines).collect::<Vec<_>>();
+    // The diagnostic log is append-only and never rotated, so it grows without
+    // bound. Reading the whole file into memory just to keep the last N lines got
+    // slower and more memory-hungry the longer the app ran (a top suspect for the
+    // "UI gets laggier over time" reports). Instead, read a bounded window from
+    // the end of the file: for line-oriented log tails, the last few hundred KiB
+    // always contain far more than any reasonable `max_lines`.
+    use std::io::{Read, Seek, SeekFrom};
+
+    if max_lines == 0 {
+        return Ok(String::new());
+    }
+
+    // Cap how much we pull from the tail. 1 MiB comfortably holds thousands of
+    // JSON log lines while keeping the read cheap regardless of total file size.
+    const MAX_TAIL_BYTES: u64 = 1024 * 1024;
+
+    let mut file = fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let read_len = file_len.min(MAX_TAIL_BYTES);
+    let start = file_len - read_len;
+    file.seek(SeekFrom::Start(start))?;
+
+    let mut buffer = Vec::with_capacity(read_len as usize);
+    file.take(read_len).read_to_end(&mut buffer)?;
+
+    // The window may start mid-line when the file is larger than the cap; decode
+    // lossily and drop a leading partial line so we never emit a truncated record.
+    let text = String::from_utf8_lossy(&buffer);
+    let mut slice: &str = &text;
+    if start > 0 {
+        if let Some(newline) = slice.find('\n') {
+            slice = &slice[newline + 1..];
+        }
+    }
+
+    let mut lines = slice.lines().rev().take(max_lines).collect::<Vec<_>>();
     lines.reverse();
     Ok(lines.join("\n"))
 }
@@ -6461,6 +7481,55 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_report_redacts_settings_secrets() {
+        // Simulates the settings blob that diagnostics_report serializes. The
+        // report is meant to be copied into issues, so every secret-bearing
+        // field must be masked while non-secret fields survive verbatim.
+        let settings = json!({
+            "relayApiKey": "sk-live-should-not-leak",
+            "cliWrapperApiKey": "wrapper-key-should-not-leak",
+            "relayBaseUrl": "https://relay.example.com/v1",
+            "relayProfiles": [
+                {
+                    "id": "p1",
+                    "name": "prod",
+                    "authContents": "OPENAI_API_KEY=sk-should-not-leak",
+                    "configContents": "experimental_bearer_token = \"sk-nope\"",
+                    "upstreamBaseUrl": "https://up.example.com"
+                }
+            ],
+            "relayCommonConfigContents": "token bearing blob"
+        });
+
+        let redacted = redact_settings_secrets(settings);
+
+        assert_eq!(redacted["relayApiKey"], json!("***redacted***"));
+        assert_eq!(redacted["cliWrapperApiKey"], json!("***redacted***"));
+        assert_eq!(
+            redacted["relayCommonConfigContents"],
+            json!("***redacted***")
+        );
+        assert_eq!(
+            redacted["relayProfiles"][0]["authContents"],
+            json!("***redacted***")
+        );
+        assert_eq!(
+            redacted["relayProfiles"][0]["configContents"],
+            json!("***redacted***")
+        );
+        // Non-secret fields must be preserved so the report stays useful.
+        assert_eq!(
+            redacted["relayBaseUrl"],
+            json!("https://relay.example.com/v1")
+        );
+        assert_eq!(redacted["relayProfiles"][0]["name"], json!("prod"));
+        assert_eq!(
+            redacted["relayProfiles"][0]["upstreamBaseUrl"],
+            json!("https://up.example.com")
+        );
+    }
+
+    #[test]
     fn ccswitch_import_reads_api_key_from_config_bearer_token() {
         let settings = json!({
             "config": r#"
@@ -6575,12 +7644,15 @@ experimental_bearer_token = "sk-from-config"
 
     #[test]
     fn claude_desktop_provider_preview_command_redacts_api_key() {
-        let result = preview_claude_desktop_provider(ClaudeDesktopProviderRequest {
-            name: "TopoReduce".to_string(),
-            base_url: "https://api.toporeduce.cn".to_string(),
-            api_key: "sk-manager-secret".to_string(),
-            model_list: claude_codex_pro_core::protocol_proxy::claude_desktop_default_model_list(),
-        });
+        let result = tauri::async_runtime::block_on(preview_claude_desktop_provider(
+            ClaudeDesktopProviderRequest {
+                name: "TopoReduce".to_string(),
+                base_url: "https://api.toporeduce.cn".to_string(),
+                api_key: "sk-manager-secret".to_string(),
+                model_list:
+                    claude_codex_pro_core::protocol_proxy::claude_desktop_default_model_list(),
+            },
+        ));
 
         assert_eq!(result.status, "ok");
         assert!(
@@ -6702,7 +7774,7 @@ experimental_bearer_token = "sk-from-config"
 
     #[test]
     fn missing_logs_return_failed_status() {
-        let result = read_latest_logs(LogRequest { lines: 25 });
+        let result = tauri::async_runtime::block_on(read_latest_logs(LogRequest { lines: 25 }));
 
         if result.payload.text.is_empty() {
             assert_eq!(result.status, "failed");
@@ -6788,11 +7860,12 @@ experimental_bearer_token = "sk-from-config"
         unsafe {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
-        let result = delete_local_session(DeleteLocalSessionRequest {
-            session_id: "t1".to_string(),
-            title: "Active Thread".to_string(),
-            db_path: Some(stale_db.to_string_lossy().to_string()),
-        });
+        let result =
+            tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
+                session_id: "t1".to_string(),
+                title: "Active Thread".to_string(),
+                db_path: Some(stale_db.to_string_lossy().to_string()),
+            }));
         unsafe {
             if let Some(value) = previous_codex_home {
                 std::env::set_var("CODEX_HOME", value);
@@ -6832,7 +7905,7 @@ experimental_bearer_token = "sk-from-config"
         unsafe {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
-        let result = list_local_sessions();
+        let result = tauri::async_runtime::block_on(list_local_sessions());
         restore_codex_home(previous_codex_home);
 
         assert_eq!(result.status, "ok");
@@ -6860,11 +7933,12 @@ experimental_bearer_token = "sk-from-config"
         unsafe {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
-        let result = delete_local_session(DeleteLocalSessionRequest {
-            session_id: "t1".to_string(),
-            title: "Legacy Copy".to_string(),
-            db_path: Some(legacy_db.to_string_lossy().to_string()),
-        });
+        let result =
+            tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
+                session_id: "t1".to_string(),
+                title: "Legacy Copy".to_string(),
+                db_path: Some(legacy_db.to_string_lossy().to_string()),
+            }));
         restore_codex_home(previous_codex_home);
 
         assert_eq!(result.status, "ok");
@@ -7045,24 +8119,26 @@ experimental_bearer_token = "sk-from-config"
         assert!(!loaded.memory_assist_enabled);
         assert!(!loaded.memory_assist_auto_suggest_enabled);
 
-        let learned = learn_memory_assist_item(MemoryItemRequest {
+        let learned = tauri::async_runtime::block_on(learn_memory_assist_item(MemoryItemRequest {
             text: "should not persist".to_string(),
             workspace: "repo-a".to_string(),
             category: "manual".to_string(),
             tags: Vec::new(),
             source: "manager".to_string(),
             source_session_id: String::new(),
-        });
-        let candidate = create_memory_assist_candidate(MemoryCandidateRequest {
-            text: "should not become candidate".to_string(),
-            workspace: "repo-a".to_string(),
-            category: "preference".to_string(),
-            tags: Vec::new(),
-            source: "manager".to_string(),
-            reason: "test".to_string(),
-            source_session_id: String::new(),
-        });
-        let status = load_memory_assist_status();
+        }));
+        let candidate = tauri::async_runtime::block_on(create_memory_assist_candidate(
+            MemoryCandidateRequest {
+                text: "should not become candidate".to_string(),
+                workspace: "repo-a".to_string(),
+                category: "preference".to_string(),
+                tags: Vec::new(),
+                source: "manager".to_string(),
+                reason: "test".to_string(),
+                source_session_id: String::new(),
+            },
+        ));
+        let status = tauri::async_runtime::block_on(load_memory_assist_status());
 
         claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
         claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
@@ -7098,24 +8174,26 @@ experimental_bearer_token = "sk-from-config"
         assert!(loaded.memory_assist_enabled);
         assert!(!loaded.memory_assist_auto_suggest_enabled);
 
-        let learned = learn_memory_assist_item(MemoryItemRequest {
+        let learned = tauri::async_runtime::block_on(learn_memory_assist_item(MemoryItemRequest {
             text: "manual memory still works".to_string(),
             workspace: "repo-a".to_string(),
             category: "manual".to_string(),
             tags: Vec::new(),
             source: "manager".to_string(),
             source_session_id: String::new(),
-        });
-        let candidate = create_memory_assist_candidate(MemoryCandidateRequest {
-            text: "auto suggestion should not persist".to_string(),
-            workspace: "repo-a".to_string(),
-            category: "preference".to_string(),
-            tags: Vec::new(),
-            source: "manager".to_string(),
-            reason: "test".to_string(),
-            source_session_id: String::new(),
-        });
-        let status = load_memory_assist_status();
+        }));
+        let candidate = tauri::async_runtime::block_on(create_memory_assist_candidate(
+            MemoryCandidateRequest {
+                text: "auto suggestion should not persist".to_string(),
+                workspace: "repo-a".to_string(),
+                category: "preference".to_string(),
+                tags: Vec::new(),
+                source: "manager".to_string(),
+                reason: "test".to_string(),
+                source_session_id: String::new(),
+            },
+        ));
+        let status = tauri::async_runtime::block_on(load_memory_assist_status());
 
         claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
         claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
