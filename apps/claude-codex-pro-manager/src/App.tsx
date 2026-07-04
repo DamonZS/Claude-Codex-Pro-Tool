@@ -37,762 +37,95 @@ import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, 
 import { Button } from "@/components/ui/button";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
-
-const PONYTAIL_REPOSITORY_URL = "https://github.com/DietrichGebert/ponytail";
-const CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME = "awesome-codex-plugins";
-const CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL =
-  "https://github.com/hashgraph-online/awesome-codex-plugins.git";
-const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_NAME = "codex-skills-alternative";
-const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE =
-  "https://github.com/DKeken/codex-skills-alternative";
-const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE =
-  "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace";
-const PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX = "tools-plugin-repository-repair";
-const SUPPLIER_DRAG_MIME_TYPE = "application/x-claude-codex-pro-supplier-id";
-
-type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
-
-type CommandResult<T> = T & {
-  status: Status;
-  message: string;
-};
-
-type StatusChipTone = "ok" | "warn" | "muted";
-type StatusChip = {
-  label: string;
-  tone: StatusChipTone;
-};
-
-type PathState = {
-  status: string;
-  path: string | null;
-};
-
-type LaunchStatus = {
-  status: string;
-  message: string;
-  started_at_ms: number;
-  debug_port: number | null;
-  helper_port: number | null;
-  debug_port_online: boolean;
-  helper_port_online: boolean;
-  frontend_runtime_online: boolean;
-  frontend_runtime_seen_at_ms: number | null;
-  codex_app: string | null;
-};
-
-type OverviewResult = CommandResult<{
-  codex_app: PathState;
-  codex_version: string | null;
-  silent_shortcut: PathState;
-  management_shortcut: PathState;
-  latest_launch: LaunchStatus | null;
-  current_version: string;
-  update_status: string;
-  settings_path: string;
-  logs_path: string;
-}>;
-
-type ClaudeDesktopResult = CommandResult<{
-  processCount: number;
-  executablePaths: string[];
-  installKind: string;
-  cdpStatus: string;
-  cdpBlocker: string;
-  debugFlagsPresent: boolean;
-  debugPorts: number[];
-  inspectorPorts: number[];
-  listeningPorts: number[];
-  debugEvidence: string[];
-  supportedIntegration: string;
-  integrityStatus: string;
-  integrityMessage: string;
-  executableAudits: Array<Record<string, unknown>>;
-}>;
-
-type RepairConnectionResult = CommandResult<{
-  target: string;
-  frontendInjected: boolean;
-  backendOnline: boolean;
-  codexFrontendInjected: boolean;
-  codexBackendOnline: boolean;
-  claudeBackendOnline: boolean;
-  debugPort: number | null;
-  helperPort: number | null;
-  claudeProxyPort: number | null;
-  details: string[];
-}>;
-
-type ClaudeChineseWindowResult = CommandResult<{
-  open: boolean;
-  label: string;
-  defaultUrl: string;
-  injectionMode: string;
-  cdpStatus: string;
-  cdpBlocker: string;
-  officialInstallKind: string;
-}>;
-
-type ClaudeZhPatchStatus = {
-  status: string;
-  message: string;
-  installRoot: string | null;
-  appRoot: string | null;
-  installKind: string;
-  localeConfigPath: string;
-  backupDir: string;
-  resourcesPresent: boolean;
-  frontendI18nPresent: boolean;
-  statsigI18nPresent: boolean;
-  chunkPatchPresent: boolean;
-  languageWhitelistPatched: boolean;
-  localeConfigured: boolean;
-  writable: boolean;
-};
-
-type ClaudeZhPatchResult = CommandResult<{
-  status: ClaudeZhPatchStatus;
-  changedFiles: string[];
-  backupDir: string;
-  logsPath: string;
-}>;
-
-type BackendSettings = {
-  codexAppPath: string;
-  codexExtraArgs: string[];
-  providerSyncEnabled: boolean;
-  providerSyncSavedProviders: string[];
-  providerSyncManualProviders: string[];
-  providerSyncLastSelectedProvider: string;
-  relayProfilesEnabled: boolean;
-  enhancementsEnabled: boolean;
-  computerUseGuardEnabled: boolean;
-  codexAppPluginEntryUnlock: boolean;
-  codexAppPluginMarketplaceUnlock: boolean;
-  codexAppForcePluginInstall: boolean;
-  codexAppModelWhitelistUnlock: boolean;
-  codexAppSessionDelete: boolean;
-  codexAppMarkdownExport: boolean;
-  codexAppProjectMove: boolean;
-  codexAppConversationTimeline: boolean;
-  codexAppConversationView: boolean;
-  codexAppThreadScrollRestore: boolean;
-  codexAppZedRemoteOpen: boolean;
-  zedRemoteOpenStrategy: string;
-  zedRemoteProjectRegistryEnabled: boolean;
-  zedRemoteSyncToZedSettings: boolean;
-  codexAppUpstreamWorktreeCreate: boolean;
-  codexAppNativeMenuPlacement: boolean;
-  claudeAppChineseOverlayEnabled: boolean;
-  codexAppServiceTierControls: boolean;
-  codexAppImageOverlayEnabled: boolean;
-  codexAppImageOverlayPath: string;
-  codexAppImageOverlayOpacity: number;
-  codexGoalsEnabled: boolean;
-  memoryAssistEnabled: boolean;
-  memoryAssistInjectEnabled: boolean;
-  memoryAssistAutoSuggestEnabled: boolean;
-  memoryAssistMaxInjectedItems: number;
-  memoryAssistWorkspaceMode: string;
-  launchMode: "patch" | "relay";
-  relayBaseUrl: string;
-  relayApiKey: string;
-  relayProfiles: RelayProfile[];
-  relayCommonConfigContents: string;
-  relayContextConfigContents: string;
-  activeRelayId: string;
-  relayTestModel: string;
-  cliWrapperEnabled: boolean;
-  cliWrapperBaseUrl: string;
-  cliWrapperApiKey: string;
-  cliWrapperApiKeyEnv: string;
-};
-
-type RelayProfile = {
-  id: string;
-  name: string;
-  model: string;
-  baseUrl: string;
-  upstreamBaseUrl: string;
-  apiKey: string;
-  protocol: string;
-  relayMode: string;
-  officialMixApiKey: boolean;
-  testModel: string;
-  configContents: string;
-  authContents: string;
-  useCommonConfig: boolean;
-  contextSelection: {
-    mcpServers: string[];
-    skills: string[];
-    plugins: string[];
-  };
-  contextSelectionInitialized: boolean;
-  contextWindow: string;
-  autoCompactLimit: string;
-  modelList: string;
-  userAgent: string;
-  aggregateEnabled?: boolean;
-  aggregateStrategy?: string;
-  aggregateMembers?: string[];
-};
-
-type SupplierSaveResult = {
-  settings: BackendSettings;
-  profile: RelayProfile;
-};
-
-type SettingsResult = CommandResult<{
-  settings: BackendSettings;
-  settings_path: string;
-  user_scripts: UserScriptInventory;
-}>;
-
-type RelayProfileModelsResult = CommandResult<{
-  models: string[];
-  endpoint: string;
-}>;
-
-type CcswitchImportResult = CommandResult<{
-  dbPath: string;
-  profiles: RelayProfile[];
-  scanned: number;
-}>;
-
-type ContextKind = "mcp" | "skill" | "plugin";
-
-type ContextEntry = {
-  id: string;
-  kind: string;
-  title: string;
-  summary: string;
-  tomlBody: string;
-  enabled: boolean;
-};
-
-type ContextEntries = {
-  mcpServers: ContextEntry[];
-  skills: ContextEntry[];
-  plugins: ContextEntry[];
-};
-
-type ContextEntriesResult = CommandResult<{
-  settings: BackendSettings;
-  entries: ContextEntries;
-}>;
-
-type LiveContextEntriesResult = CommandResult<{
-  entries: ContextEntries;
-}>;
-
-type ClaudeContextEntriesResult = CommandResult<{
-  configPath: string;
-  entries: ContextEntries;
-}>;
-
-type SupplierPreset = {
-  id: string;
-  name: string;
-  category: "official" | "cn_official" | "aggregator" | "third_party";
-  baseUrl: string;
-  protocol: "responses" | "chatCompletions";
-  model: string;
-  modelList?: string[];
-  websiteUrl?: string;
-  apiKeyUrl?: string;
-};
-
-type AggregateStrategy = {
-  id: string;
-  label: string;
-  detail: string;
-};
-
-type UserScriptInventory = {
-  enabled?: boolean;
-  scripts?: Array<{
-    key: string;
-    name: string;
-    source: string;
-    enabled: boolean;
-    status: string;
-    error: string;
-    market_id?: string;
-    version?: string;
-    installed?: boolean;
-    source_url?: string;
-    homepage?: string;
-  }>;
-};
-
-type ScriptMarketItem = {
-  id: string;
-  name: string;
-  description: string;
-  version: string;
-  author: string;
-  tags: string[];
-  homepage: string;
-  script_url: string;
-  sha256: string;
-  installed: boolean;
-  installedVersion: string;
-  updateAvailable: boolean;
-};
-
-type ScriptMarketResult = CommandResult<{
-  market: {
-    status: string;
-    message: string;
-    indexUrl: string;
-    updatedAt: string;
-    scripts: ScriptMarketItem[];
-  };
-  user_scripts: UserScriptInventory;
-}>;
-
-type UpdateReleasePayload = {
-  version: string;
-  url: string;
-  body: string;
-  asset_name: string | null;
-  asset_url: string | null;
-};
-
-type UpdateResult = CommandResult<{
-  currentVersion: string;
-  latestVersion?: string | null;
-  releaseSummary?: string;
-  assetName?: string | null;
-  assetUrl?: string | null;
-  updateAvailable?: boolean;
-  progress?: number;
-  installedPath?: string;
-  launched?: boolean;
-}>;
-
-type CodexPluginMarketplaceStatus = {
-  codexHome: string;
-  marketplaceRoot: string | null;
-  configRegistered: boolean;
-  needsRepair: boolean;
-  message: string;
-  repositories?: Array<{
-    label: string;
-    name: string;
-    sourceType: string;
-    source: string;
-    configured: boolean;
-  }>;
-};
-
-type CodexPluginMarketplaceStatusResult = CommandResult<{
-  marketplace: CodexPluginMarketplaceStatus;
-}>;
-
-type CodexPluginMarketplaceRepairResult = CommandResult<{
-  repair: {
-    codexHome: string;
-    marketplaceRoot: string | null;
-    initialized: boolean;
-    configured: boolean;
-    configRegistered: boolean;
-    needsRepair: boolean;
-    message: string;
-  };
-  marketplace: CodexPluginMarketplaceStatus;
-}>;
-
-type LocalSession = {
-  id: string;
-  title: string;
-  cwd: string;
-  modelProvider: string;
-  archived: boolean;
-  updatedAtMs: number | null;
-  rolloutPath: string;
-  dbPath: string;
-};
-
-type LocalSessionsResult = CommandResult<{
-  dbPath: string;
-  dbPaths: string[];
-  sessions: LocalSession[];
-}>;
-
-type LocalSessionProjectGroup = {
-  key: string;
-  label: string;
-  subtitle: string;
-  sessions: LocalSession[];
-};
-
-type MemoryItem = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  sourceSessionId: string;
-  createdAt: number;
-  updatedAt: number;
-  lastAccessedAt: number;
-  accessCount: number;
-};
-
-type MemoryItemEditRequest = Pick<MemoryItem, "text" | "workspace" | "category" | "tags" | "source" | "sourceSessionId">;
-
-type MemoryCandidate = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  reason: string;
-  sourceSessionId: string;
-  status: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-type MemoryStatusResult = CommandResult<{
-  memory: {
-    status: string;
-    enabled: boolean;
-    injectEnabled: boolean;
-    autoSuggestEnabled: boolean;
-    runtimeStatus: string;
-    runtimeMessage: string;
-    codexInjected: boolean;
-    claudeInjected: boolean;
-    codexWorkspace: string;
-    active: boolean;
-    activeSource: string;
-    dbPath: string;
-    totalItems: number;
-    pendingCandidates: number;
-    totalCaptures: number;
-    workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number; captureCount: number; sessionCount: number; latestCaptureAt: number }>;
-    latestBackupPath: string | null;
-  };
-}>;
-
-type MemoryItemsResult = CommandResult<{ items: MemoryItem[] }>;
-type MemoryItemResult = CommandResult<{ item: MemoryItem }>;
-type MemoryCandidateResult = CommandResult<{ candidate: MemoryCandidate }>;
-type MemoryQueryResult = CommandResult<{
-  memory: {
-    query: string;
-    workspace: string;
-    results: Array<{
-      item: MemoryItem;
-      score: number;
-      matchedKeywords: string[];
-    }>;
-  };
-}>;
-type MemoryExport = {
-  schemaVersion: string;
-  exportedAt: number;
-  items: MemoryItem[];
-  candidates: MemoryCandidate[];
-};
-type MemoryExportResult = CommandResult<{ data: MemoryExport }>;
-type MemorySelfCheckResult = CommandResult<{
-  report: {
-    status: string;
-    repaired: boolean;
-    backupPath: string | null;
-    checks: Array<{ name: string; status: string; message: string }>;
-  };
-}>;
-
-type ProviderSyncResult = CommandResult<{
-  syncStatus?: string;
-  targetProvider?: string;
-  changedSessionFiles?: number;
-  skippedLockedRolloutFiles?: string[];
-  sqliteRowsUpdated?: number;
-  sqliteProviderRowsUpdated?: number;
-  sqliteUserEventRowsUpdated?: number;
-  sqliteCwdRowsUpdated?: number;
-  updatedWorkspaceRoots?: string[];
-  encryptedContentWarning?: string;
-  backupDir?: string;
-  syncMessage?: string;
-}>;
-
-type DeleteLocalSessionResult = CommandResult<{
-  session_id?: string;
-  sessionId?: string;
-  undo_token?: string | null;
-  undoToken?: string | null;
-  backup_path?: string | null;
-  backupPath?: string | null;
-}>;
-
-type PluginInstallKind =
-  | "claude_plugin_marketplace"
-  | "claude_desktop_mcp"
-  | "claude_desktop_org_plugin"
-  | "claude_code_plugin"
-  | "codex_plugin"
-  | "copilot_plugin"
-  | "managed_skill_bundle"
-  | "mcp_server"
-  | "skill_bundle"
-  | "resource_link";
-type PluginInstallStatus = "notInstalled" | "installed" | "needsReview" | "unsupported";
-
-type PluginCatalogItem = {
-  id: string;
-  name: string;
-  description: string;
-  sourceId: string;
-  sourceLabel: string;
-  sourceUrl: string;
-  category: string;
-  author: string;
-  homepage: string;
-  license: string;
-  tags: string[];
-  installKind: PluginInstallKind;
-  installStatus: PluginInstallStatus;
-  installCommand: string[];
-  configPreview: string;
-  risk: string;
-  requirements: string[];
-};
-
-type PluginCatalogSource = {
-  id: string;
-  label: string;
-  url: string;
-  status: string;
-  message: string;
-  itemCount: number;
-};
-
-type PluginHubResult = CommandResult<{
-  catalog: {
-    updatedAt: string;
-    sources: PluginCatalogSource[];
-    items: PluginCatalogItem[];
-  };
-}>;
-
-type PluginInstallPreviewResult = CommandResult<{
-  item: PluginCatalogItem;
-  canInstall: boolean;
-  action: string;
-  command: string[];
-  configDiff: string;
-  message: string;
-}>;
-
-type PluginInstallOutcomeResult = CommandResult<{
-  item: PluginCatalogItem;
-  preview: unknown;
-  installed: boolean;
-  installMessage?: string;
-  stdout: string;
-  stderr: string;
-  backupPath: string | null;
-}>;
-
-type PluginInstallOutcomePayload = Omit<PluginInstallOutcomeResult, "status" | "message">;
-
-type CodexHookTrustResult = CommandResult<{
-  preview: {
-    configPath: string;
-    hooks: Array<{
-      key: string;
-      eventName: string;
-      matcher: string | null;
-      command: string;
-      statusMessage: string | null;
-      currentHash: string;
-      trusted: boolean;
-      sourcePath: string;
-    }>;
-    message: string;
-  };
-}>;
-
-type McpbPackageResult = CommandResult<{
-  package: {
-    mcpbPath: string;
-    manifestPath: string;
-    opened: boolean;
-    message: string;
-  };
-}>;
-
-type ClaudeDesktopOrgPluginStatusResult = CommandResult<{
-  orgPluginStatus: {
-    supported: boolean;
-    orgPluginsDir: string;
-    configLibraryDir: string;
-    profileMetaPath: string;
-    ponytailPluginDir: string;
-    ponytailInstalled: boolean;
-    writable: boolean;
-    message: string;
-  };
-}>;
-
-type ClaudeDesktopOrgPluginInstallResult = CommandResult<{
-  outcome: {
-    installed: boolean;
-    orgPluginsDir: string;
-    pluginDir: string;
-    manifestPath: string;
-    pluginJsonPath: string;
-    copiedSkills: string[];
-    backupPath: string | null;
-    message: string;
-  };
-  orgPluginStatus: ClaudeDesktopOrgPluginStatusResult["orgPluginStatus"];
-}>;
-
-type ClaudeDesktopMarketplaceStatusResult = CommandResult<{
-  marketplaceStatus: {
-    supported: boolean;
-    marketplace: string;
-    plugin: string;
-    deepLink: string;
-    canAutoWrite: boolean;
-    configPath: string;
-    repositories: Array<{
-      label: string;
-      repository: string;
-      url: string;
-      configured: boolean;
-    }>;
-    message: string;
-  };
-}>;
-
-type ClaudeDesktopMarketplaceOpenResult = CommandResult<{
-  outcome: {
-    repaired: boolean;
-    configPath: string;
-    repositories: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"]["repositories"];
-    message: string;
-  };
-  marketplaceStatus: ClaudeDesktopMarketplaceStatusResult["marketplaceStatus"];
-}>;
-
-type ClaudeDesktopMarketplaceRepairResult = ClaudeDesktopMarketplaceOpenResult;
-
-type ClaudeDesktopDevModeStatusResult = CommandResult<{
-  devModeStatus: {
-    supported: boolean;
-    configured: boolean;
-    normalConfigPath: string;
-    threepConfigPath: string;
-    configLibraryDir: string;
-    profileMetaPath: string;
-    appliedId: string | null;
-    message: string;
-  };
-}>;
-
-type ClaudeDesktopDevModeConfigureResult = CommandResult<{
-  outcome: {
-    configured: boolean;
-    normalConfigPath: string;
-    threepConfigPath: string;
-    profileMetaPath: string;
-    backupPaths: string[];
-    message: string;
-  };
-  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
-}>;
-
-type ClaudeDesktopProviderPreviewResult = CommandResult<{
-  preview: {
-    profileId: string;
-    profileName: string;
-    normalConfigPath: string;
-    threepConfigPath: string;
-    profilePath: string;
-    metaPath: string;
-    writeTargets: string[];
-    configDiff: string;
-    redactedProfile: string;
-  };
-}>;
-
-type ClaudeDesktopProviderApplyResult = CommandResult<{
-  outcome: {
-    configured: boolean;
-    normalConfigPath: string;
-    threepConfigPath: string;
-    profilePath: string;
-    metaPath: string;
-    backupPaths: string[];
-    message: string;
-  };
-  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
-}>;
-
-type ClaudeDesktopLocalBundleResult = CommandResult<{
-  outcome: {
-    devMode: ClaudeDesktopDevModeConfigureResult["outcome"];
-    codexMcp: PluginInstallOutcomePayload;
-    ponytailMcp: PluginInstallOutcomePayload;
-    organizationPlugin: ClaudeDesktopOrgPluginInstallResult["outcome"];
-    message: string;
-  };
-  devModeStatus: ClaudeDesktopDevModeStatusResult["devModeStatus"];
-  orgPluginStatus: ClaudeDesktopOrgPluginStatusResult["orgPluginStatus"];
-}>;
-
-type LogsResult = CommandResult<{
-  path: string;
-  text: string;
-  lines: number;
-}>;
-
-type WatcherPayload = {
-  enabled: boolean;
-  disabled_flag: string;
-};
-
-type WatcherResult = CommandResult<WatcherPayload>;
-
-type InstallEntrypointsResult = CommandResult<{
-  silent_shortcut: {
-    installed: boolean;
-    path: string | null;
-  };
-  management_shortcut: {
-    installed: boolean;
-    path: string | null;
-  };
-}>;
-
-type Route =
-  | "overview"
-  | "supplier"
-  | "tools"
-  | "sessions"
-  | "maintenance"
-  | "settings"
-  | "about";
-type LegacyRoute = "promptOptimizer" | "relay";
-const MEMORY_ALL_WORKSPACES = "__all__";
-const MEMORY_GLOBAL_WORKSPACE = "global";
-const PROMPT_OPTIMIZER_URL = "https://prompt.always200.com";
-
-declare global {
-  interface Window {
-    __CLAUDE_CODEX_PRO_INITIAL_ROUTE?: Route | LegacyRoute;
-  }
-}
+import {
+  AGGREGATE_STRATEGIES,
+  CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE,
+  CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_NAME,
+  CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE,
+  CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME,
+  CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL,
+  MEMORY_ALL_WORKSPACES,
+  MEMORY_GLOBAL_WORKSPACE,
+  PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX,
+  PONYTAIL_REPOSITORY_URL,
+  PROMPT_OPTIMIZER_URL,
+  SUPPLIER_DRAG_MIME_TYPE,
+  SUPPLIER_PRESETS,
+} from "@/constants";
+import type {
+  AggregateStrategy,
+  BackendSettings,
+  CcswitchImportResult,
+  ClaudeChineseWindowResult,
+  ClaudeContextEntriesResult,
+  ClaudeDesktopDevModeConfigureResult,
+  ClaudeDesktopDevModeStatusResult,
+  ClaudeDesktopLocalBundleResult,
+  ClaudeDesktopMarketplaceOpenResult,
+  ClaudeDesktopMarketplaceRepairResult,
+  ClaudeDesktopMarketplaceStatusResult,
+  ClaudeDesktopOrgPluginInstallResult,
+  ClaudeDesktopOrgPluginStatusResult,
+  ClaudeDesktopProviderApplyResult,
+  ClaudeDesktopProviderPreviewResult,
+  ClaudeDesktopResult,
+  ClaudeZhPatchResult,
+  ClaudeZhPatchStatus,
+  CodexHookTrustResult,
+  CodexPluginMarketplaceRepairResult,
+  CodexPluginMarketplaceStatus,
+  CodexPluginMarketplaceStatusResult,
+  CommandResult,
+  ContextEntries,
+  ContextEntriesResult,
+  ContextEntry,
+  ContextKind,
+  DeleteLocalSessionResult,
+  InstallEntrypointsResult,
+  LaunchStatus,
+  LegacyRoute,
+  LiveContextEntriesResult,
+  LocalSession,
+  LocalSessionProjectGroup,
+  LocalSessionsResult,
+  LogsResult,
+  McpbPackageResult,
+  MemoryCandidate,
+  MemoryCandidateResult,
+  MemoryExport,
+  MemoryExportResult,
+  MemoryItem,
+  MemoryItemEditRequest,
+  MemoryItemResult,
+  MemoryItemsResult,
+  MemoryQueryResult,
+  MemorySelfCheckResult,
+  MemoryStatusResult,
+  OverviewResult,
+  PathState,
+  PluginCatalogItem,
+  PluginCatalogSource,
+  PluginHubResult,
+  PluginInstallKind,
+  PluginInstallOutcomeResult,
+  PluginInstallPreviewResult,
+  PluginInstallStatus,
+  ProviderSyncResult,
+  RelayProfile,
+  RelayProfileModelsResult,
+  RepairConnectionResult,
+  Route,
+  ScriptMarketResult,
+  SettingsResult,
+  Status,
+  StatusChip,
+  SupplierPreset,
+  SupplierSaveResult,
+  UpdateReleasePayload,
+  UpdateResult,
+  UserScriptInventory,
+  WatcherResult,
+} from "@/types";
 
 const routes: Array<{ id: Route; label: string; icon: LucideIcon }> = [
   { id: "overview", label: "概览", icon: LayoutDashboard },
@@ -4857,70 +4190,6 @@ function claudeDesktopVersionLabel(claudeDesktop: ClaudeDesktopResult | null) {
 function Empty({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
-
-const SUPPLIER_PRESETS: SupplierPreset[] = [
-  {
-    id: "openai",
-    name: "OpenAI Official",
-    category: "official",
-    baseUrl: "https://api.openai.com/v1",
-    protocol: "responses",
-    model: "gpt-5.5",
-    websiteUrl: "https://chatgpt.com/codex",
-  },
-  {
-    id: "deepseek",
-    name: "DeepSeek",
-    category: "cn_official",
-    baseUrl: "https://api.deepseek.com",
-    protocol: "chatCompletions",
-    model: "deepseek-v4-flash",
-    modelList: ["deepseek-v4-flash", "deepseek-v4-pro"],
-    apiKeyUrl: "https://platform.deepseek.com/api_keys",
-  },
-  {
-    id: "kimi",
-    name: "Kimi",
-    category: "cn_official",
-    baseUrl: "https://api.moonshot.cn/v1",
-    protocol: "chatCompletions",
-    model: "kimi-k2.6",
-    modelList: ["kimi-k2.6"],
-  },
-  {
-    id: "qwen",
-    name: "Qwen / Bailian",
-    category: "cn_official",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    protocol: "chatCompletions",
-    model: "qwen3-coder-plus",
-    modelList: ["qwen3-coder-plus", "qwen3-max"],
-  },
-  {
-    id: "siliconflow",
-    name: "SiliconFlow",
-    category: "aggregator",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    protocol: "chatCompletions",
-    model: "Pro/MiniMaxAI/MiniMax-M2.7",
-    modelList: ["Pro/MiniMaxAI/MiniMax-M2.7"],
-  },
-  {
-    id: "openrouter",
-    name: "OpenRouter",
-    category: "aggregator",
-    baseUrl: "https://openrouter.ai/api/v1",
-    protocol: "chatCompletions",
-    model: "openai/gpt-5.5",
-  },
-];
-
-const AGGREGATE_STRATEGIES: AggregateStrategy[] = [
-  { id: "failover", label: "失败切换", detail: "请求失败后按成员顺序切换到下一个供应商。" },
-  { id: "conversationRoundRobin", label: "按对话轮转", detail: "同一对话固定成员，新对话轮换成员。" },
-  { id: "requestRoundRobin", label: "按请求轮转", detail: "每次请求按列表顺序轮换成员。" },
-  { id: "weightedRoundRobin", label: "权重轮转", detail: "按成员权重分配请求，权重相同则平均。" },
-];
 
 function supplierIdFromName(value: string) {
   const id = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

@@ -1,3 +1,53 @@
+/// 递归拼接 manager 前端 `src/` 下所有 `.ts` / `.tsx` 源码，作为断言目标。
+///
+/// App.tsx 已被拆分成 types.ts / constants.ts / lib/* / actions.ts /
+/// components/* / screens/* 等多个文件（任务#3）。原先按 `src/App.tsx` 单文件
+/// 做的 `contains(...)` 回归护栏断言，凡是"某字符串必须/禁止出现在前端源码里"
+/// 的语义，改用本函数读取全部前端源码拼接后的字符串——字符串迁到哪个文件都能命中，
+/// 且 `!contains` 覆盖面更广（禁止它出现在任何前端文件里），不会削弱护栏。
+///
+/// 注意：仅对"字符串在前端源码全集里唯一/不会假阳性"的断言使用本函数。对那些
+/// 字符串合法存在于多个组件、需要限定在特定组件文件内判断的结构化断言，仍读取
+/// 对应组件文件的完整内容（见各测试内注释）。
+fn read_all_frontend_sources() -> String {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest_dir.parent().unwrap().join("src");
+    let mut combined = String::new();
+    let mut stack = vec![src_dir];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let is_ts = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext == "ts" || ext == "tsx")
+                .unwrap_or(false);
+            if is_ts {
+                if let Ok(contents) = std::fs::read_to_string(&path) {
+                    combined.push_str(&contents);
+                    combined.push('\n');
+                }
+            }
+        }
+    }
+    combined
+}
+
+/// 读取拆分后某个前端源文件的完整内容（相对 `src/`），用于结构化断言。
+fn read_frontend_file(relative: &str) -> String {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.parent().unwrap().join("src").join(relative);
+    std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read frontend file {relative}"))
+}
+
 #[cfg(windows)]
 #[test]
 fn manager_binary_uses_windows_gui_subsystem_in_debug_and_release() {
@@ -476,8 +526,8 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
 #[test]
 fn plugin_memory_tools_ui_regression_is_locked_down() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx_path = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx_path).expect("read manager App.tsx");
+    // 拆分后：字符串存在性护栏改读前端源码全集（迁到哪个文件都命中；!contains 覆盖更广）。
+    let app_tsx = read_all_frontend_sources();
     let styles_path = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles_path).expect("read manager styles.css");
 
@@ -505,7 +555,8 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     assert!(styles.contains("height: 26px;"));
     assert!(styles.contains("align-items: center;"));
     assert!(styles.contains("flex: 0 0 20px;"));
-    assert!(styles.contains("margin-left: auto;"));
+    // 拨钮选中态位移：三代改用 transform translate（旧的 margin-left: auto 已被覆盖删除）。
+    assert!(styles.contains("transform: translate(22px, -50%);"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch.checked .toggle-switch-thumb"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch-thumb"));
     assert!(styles.contains("grid-template-columns: minmax(0, 1fr) 124px;"));
@@ -599,8 +650,10 @@ fn prompt_optimizer_is_integrated_as_tools_card_launcher() {
 #[test]
 fn manager_window_and_ops_console_layout_stay_usable() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    // 拆分后：存在性/禁止性断言读前端源码全集（字符串迁到哪个文件都能命中，
+    // 且 !contains 覆盖所有前端文件，护栏更强）；结构化切片仍读 App.tsx 单文件。
+    let app_tsx = read_all_frontend_sources();
+    let app_tsx_file = read_frontend_file("App.tsx");
     let tauri_bridge = manifest_dir.parent().unwrap().join("src/tauriBridge.ts");
     let tauri_bridge = std::fs::read_to_string(&tauri_bridge).expect("read manager tauriBridge.ts");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
@@ -626,7 +679,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("ops-commandbar"));
     assert!(app_tsx.contains("id: \"supplier\""));
     assert!(app_tsx.contains("label: \"供应商\""));
-    let route_source = app_tsx
+    let route_source = app_tsx_file
         .split("const routes")
         .nth(1)
         .and_then(|rest| rest.split("function isRoute").next())
@@ -694,7 +747,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!app_tsx.contains("FE on"));
     assert!(!app_tsx.contains("BE on"));
     assert!(!app_tsx.contains("Codex 运行"));
-    let overview_screen = app_tsx
+    let overview_screen = app_tsx_file
         .split("function OverviewScreen")
         .nth(1)
         .and_then(|rest| rest.split("function SupplierScreen").next())
@@ -774,7 +827,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::update_memory_assist_item"));
     assert!(app_tsx.contains("\"update_memory_assist_item\""));
     assert!(tauri_bridge.contains("command === \"update_memory_assist_item\""));
-    let memory_assist_panel = app_tsx
+    let memory_assist_panel = app_tsx_file
         .split("function MemoryAssistPanel")
         .nth(1)
         .and_then(|rest| rest.split("function SessionManagementScreen").next())
@@ -1201,16 +1254,17 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
 #[test]
 fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
-    let app_tsx = app_tsx.replace("\r\n", "\n");
+    // 存在性断言读前端源码全集（聚合策略标签等已迁到 constants.ts 仍能命中）；
+    // 结构化切片读 App.tsx 单文件（SupplierScreen 仍在 App.tsx 内）。
+    let app_tsx = read_all_frontend_sources();
+    let app_tsx_file = read_frontend_file("App.tsx").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
     let commands_rs =
         std::fs::read_to_string(manifest_dir.join("src/commands.rs")).expect("read commands.rs");
     let lib_rs = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read lib.rs");
 
-    let supplier_screen = app_tsx
+    let supplier_screen = app_tsx_file
         .split("function SupplierScreen")
         .nth(1)
         .and_then(|rest| rest.split("function LegacySupplierScreen").next())
@@ -1271,7 +1325,8 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     );
     assert!(supplier_screen.contains("setSupplierOrderIds(previousIds);"));
     assert!(supplier_screen.contains("供应商顺序保存失败，已恢复原顺序。"));
-    assert!(supplier_screen.contains("supplierOrderFromIds(supplierOrderIds).map((profile) => {"));
+    assert!(supplier_screen.contains("const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds)"));
+    assert!(supplier_screen.contains("orderedProfiles.map((profile) => {"));
     assert!(
         supplier_screen.contains("onDragStart={(event) => beginSupplierDrag(event, profile.id)}")
     );
@@ -2042,8 +2097,10 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
 #[test]
 fn settings_and_tools_route_keep_full_ops_controls() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    // 存在性断言读前端源码全集（字符串迁到 types.ts / screens/* 等仍能命中）；
+    // 结构化切片读 App.tsx 单文件（SettingsScreen 等仍在 App.tsx 内）。
+    let app_tsx = read_all_frontend_sources();
+    let app_tsx_file = read_frontend_file("App.tsx");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
 
@@ -2068,12 +2125,12 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("设置文件位置"));
     assert!(app_tsx.contains("Codex 增强矩阵"));
     assert!(app_tsx.contains("Claude 一键汉化"));
-    let settings_screen = app_tsx
+    let settings_screen = app_tsx_file
         .split("function SettingsScreen")
         .nth(1)
         .and_then(|rest| rest.split("function AboutScreen").next())
         .expect("settings screen source");
-    let zh_settings_panel = app_tsx
+    let zh_settings_panel = app_tsx_file
         .split("<Panel title=\"Claude 一键汉化\"")
         .nth(1)
         .and_then(|rest| rest.split("<Panel title=\"CLI Wrapper\"").next())
