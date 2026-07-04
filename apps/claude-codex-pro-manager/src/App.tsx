@@ -3405,8 +3405,11 @@ function ContextManagerPanel({
   const [draftId, setDraftId] = useState("");
   const [draftToml, setDraftToml] = useState(defaultContextToml("mcp"));
   const isCodex = scope === "codex";
-  const sourceEntries = isCodex ? mergeContextEntries(entries, liveEntries) : entries;
-  const currentEntries = contextEntriesByKind(sourceEntries, tab);
+  const sourceEntries = useMemo(
+    () => (isCodex ? mergeContextEntries(entries, liveEntries) : entries),
+    [isCodex, entries, liveEntries],
+  );
+  const currentEntries = useMemo(() => contextEntriesByKind(sourceEntries, tab), [sourceEntries, tab]);
   const title = isCodex ? "Codex 工具与插件" : "Claude 工具与插件";
   const detail = isCodex
     ? "独立管理 Codex 的 MCP、Skills、Plugins；切换任意供应商都会带上。"
