@@ -1148,8 +1148,16 @@ pub fn load_claude_chinese_window_status(
 }
 
 #[tauri::command]
-pub fn load_claude_zh_patch_status() -> CommandResult<ClaudeZhPatchPayload> {
-    let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+pub async fn load_claude_zh_patch_status() -> CommandResult<ClaudeZhPatchPayload> {
+    // detect_status() 会遍历读取并扫描 Claude Desktop 安装目录下大量 JS chunk，
+    // 单次可达 20~30 秒。若作为同步命令直接在主线程执行，会阻塞窗口消息泵导致
+    // 整个管理器窗口 "未响应"。改为 spawn_blocking 放到阻塞线程池，与
+    // load_claude_desktop_status 保持同一套路，窗口在检测期间保持可交互。
+    let status = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::claude_zh_patch::detect_status,
+    )
+    .await
+    .unwrap_or_else(|_| claude_codex_pro_core::claude_zh_patch::detect_status());
     ok(
         &status.message.clone(),
         claude_zh_patch_payload(status, Vec::new()),
