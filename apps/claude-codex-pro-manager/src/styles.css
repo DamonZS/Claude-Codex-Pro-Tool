@@ -5990,6 +5990,28 @@ body {
   --ops-muted: #96a1b5;
   --ops-faint: #687286;
   --ops-radius: 8px;
+
+  /* --- 颜色 token 化补全（第1~4批收敛目标；近似色向这些值合并） --- */
+  /* 文字 */
+  --ops-text-strong: #ffffff;      /* 纯白强调：hover 文字、主按钮文字、toggle 拨钮 */
+  --ops-code-fg: #d7dbe2;          /* 代码块前景 */
+  /* 品牌紫辅助 */
+  --ops-primary-fg: #cdd3ff;       /* 品牌色调文字/图标（深底） */
+  /* 描边 */
+  --ops-hairline-hover: rgba(148, 163, 184, 0.32);
+  /* 状态 - 前景/软底 */
+  --ops-success-fg: #90f5e8;
+  --ops-success-soft: rgba(45, 212, 191, 0.12);
+  --ops-warning-fg: #ffe1a0;
+  --ops-warning-soft: rgba(246, 199, 104, 0.12);
+  --ops-warning-zone-border: #4a3513;
+  --ops-warning-zone-bg: #261d10;
+  --ops-danger-fg: #ffd4dc;
+  --ops-danger-soft: rgba(255, 107, 129, 0.12);
+  /* 阴影（纯黑透明，归一 hsl/rgba 写法） */
+  --ops-shadow-sm: rgba(0, 0, 0, 0.18);
+  --ops-shadow-md: rgba(0, 0, 0, 0.28);
+  --ops-shadow-lg: rgba(0, 0, 0, 0.44);
 }
 
 .ops-workspace {
