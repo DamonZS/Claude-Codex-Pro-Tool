@@ -3566,7 +3566,7 @@ body {
 
 .status-tile.warn svg {
   background: rgba(244, 196, 111, 0.12);
-  color: #f4c46f;
+  color: var(--ops-warning);
 }
 
 .status-tile span {
@@ -4900,10 +4900,10 @@ body {
 }
 
 .risk-box {
-  border: 1px solid #4a3513;
+  border: 1px solid var(--ops-warning-zone-border);
   border-radius: 8px;
-  background: #261d10;
-  color: #f4c46f;
+  background: var(--ops-warning-zone-bg);
+  color: var(--ops-warning);
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.45;
@@ -5821,20 +5821,20 @@ body {
 
 .status-chip.installed,
 .plugin-status.installed {
-  background: rgba(45, 212, 191, 0.11);
-  color: #8df4e6;
+  background: var(--ops-success-soft);
+  color: var(--ops-success-fg);
 }
 
 .status-chip.needsReview,
 .plugin-status.needsReview {
-  background: rgba(246, 199, 104, 0.12);
-  color: #ffe1a0;
+  background: var(--ops-warning-soft);
+  color: var(--ops-warning-fg);
 }
 
 .status-chip.unsupported,
 .plugin-status.unsupported {
-  background: rgba(255, 107, 129, 0.12);
-  color: #ffafbd;
+  background: var(--ops-danger-soft);
+  color: var(--ops-danger-fg);
 }
 
 .ops-form-field input,
@@ -5887,7 +5887,7 @@ body {
   background:
     linear-gradient(180deg, rgba(255, 107, 129, 0.08), transparent),
     rgba(25, 12, 16, 0.9);
-  color: #ffd4dc;
+  color: var(--ops-danger-fg);
 }
 
 .relay-banner {
@@ -6310,8 +6310,8 @@ body {
 .status-chip.installed,
 .plugin-status.installed {
   border-color: rgba(45, 212, 191, 0.34);
-  background: rgba(45, 212, 191, 0.12);
-  color: #90f5e8;
+  background: var(--ops-success-soft);
+  color: var(--ops-success-fg);
 }
 
 .status-segment.warn,
@@ -6319,7 +6319,7 @@ body {
 .plugin-status.needsReview {
   border-color: rgba(247, 197, 107, 0.36);
   background: rgba(247, 197, 107, 0.12);
-  color: #ffe1a0;
+  color: var(--ops-warning-fg);
 }
 
 .status-segment.muted {
