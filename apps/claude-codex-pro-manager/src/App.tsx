@@ -107,6 +107,18 @@ import {
   setContextEnabled,
   setJsonEnabled,
 } from "@/lib/context";
+import {
+  pluginCanInstall,
+  pluginInstallButtonLabel,
+  pluginKindLabel,
+  pluginStatusLabel,
+} from "@/lib/plugin";
+import {
+  claudeDesktopVersionLabel,
+  displayAssetName,
+  updateInfoToRelease,
+  updateStatusLabel,
+} from "@/lib/update";
 import type {
   AggregateStrategy,
   BackendSettings,
@@ -3853,40 +3865,6 @@ function StatusRow({ label, value, status }: { label: string; value: string; sta
   );
 }
 
-function updateInfoToRelease(updateInfo: UpdateResult | null): UpdateReleasePayload | null {
-  if (!updateInfo?.latestVersion) return null;
-  return {
-    version: updateInfo.latestVersion,
-    url: "",
-    body: updateInfo.releaseSummary ?? "",
-    asset_name: updateInfo.assetName ?? null,
-    asset_url: updateInfo.assetUrl ?? null,
-  };
-}
-
-function updateStatusLabel(updateInfo: UpdateResult | null) {
-  if (!updateInfo) return "未检查";
-  if (updateInfo.status === "running") return "检查中";
-  if (statusFailed(updateInfo.status)) return "检查失败";
-  if (updateInfo.updateAvailable) return "有可用更新";
-  if (statusOk(updateInfo.status)) return "已是最新";
-  return "未检查";
-}
-
-function displayAssetName(name?: string | null) {
-  if (!name) return "未检测";
-  return name
-    .replace(/CodexPlusPlus/gi, "Claude Codex Pro")
-    .replace(/claude-codex-pro/gi, "Claude Codex Pro");
-}
-
-function claudeDesktopVersionLabel(claudeDesktop: ClaudeDesktopResult | null) {
-  if (!claudeDesktop) return "未检测";
-  const install = claudeDesktop.installKind || "未知安装";
-  const path = claudeDesktop.executablePaths?.[0] ? compactPath(claudeDesktop.executablePaths[0]) : "未检测到路径";
-  return `${install} · ${path}`;
-}
-
 function Empty({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
@@ -3910,58 +3888,6 @@ function Notice({ notice, onClose }: { notice: { title: string; message: string;
       </div>
     </div>
   );
-}
-
-function pluginKindLabel(kind: PluginInstallKind) {
-  if (kind === "claude_desktop_mcp") return "Claude Desktop MCP";
-  if (kind === "claude_desktop_org_plugin") return "Claude Desktop 组织插件";
-  if (kind === "claude_code_plugin") return "Claude Code 插件";
-  if (kind === "codex_plugin") return "Codex 插件";
-  if (kind === "copilot_plugin") return "GitHub Copilot CLI 插件";
-  if (kind === "managed_skill_bundle") return "托管 Skill Bundle";
-  if (kind === "claude_plugin_marketplace") return "Claude Code 插件";
-  const labels: Partial<Record<PluginInstallKind, string>> = {
-    claude_plugin_marketplace: "Claude 插件",
-    mcp_server: "MCP 服务器",
-    skill_bundle: "Skill Bundle",
-    resource_link: "资源链接",
-  };
-  return labels[kind] ?? kind;
-}
-
-function pluginCanInstall(kind: PluginInstallKind) {
-  return [
-    "claude_desktop_mcp",
-    "claude_desktop_org_plugin",
-    "claude_plugin_marketplace",
-    "claude_code_plugin",
-    "codex_plugin",
-    "copilot_plugin",
-    "managed_skill_bundle",
-  ].includes(kind);
-}
-
-function pluginInstallButtonLabel(kind: PluginInstallKind) {
-  const labels: Partial<Record<PluginInstallKind, string>> = {
-    claude_desktop_mcp: "Install to Claude Desktop",
-    claude_desktop_org_plugin: "Install to Claude Desktop",
-    claude_plugin_marketplace: "Install with Claude CLI",
-    claude_code_plugin: "Install to Claude Code",
-    codex_plugin: "Install to Codex",
-    copilot_plugin: "Install to Copilot CLI",
-    managed_skill_bundle: "Install Skills",
-  };
-  return labels[kind] ?? "Install";
-}
-
-function pluginStatusLabel(status: PluginInstallStatus) {
-  const labels: Record<PluginInstallStatus, string> = {
-    notInstalled: "未安装",
-    installed: "已安装",
-    needsReview: "需审查",
-    unsupported: "仅浏览",
-  };
-  return labels[status] ?? status;
 }
 
 function routeLabel(route: Route) {
