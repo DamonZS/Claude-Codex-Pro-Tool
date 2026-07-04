@@ -649,7 +649,6 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     // 拆分后：存在性/禁止性断言读前端源码全集（字符串迁到哪个文件都能命中，
     // 且 !contains 覆盖所有前端文件，护栏更强）；结构化切片仍读 App.tsx 单文件。
     let app_tsx = read_all_frontend_sources();
-    let app_tsx_file = read_frontend_file("App.tsx");
     let screens_file = read_frontend_file("screens.tsx");
     let tauri_bridge = manifest_dir.parent().unwrap().join("src/tauriBridge.ts");
     let tauri_bridge = std::fs::read_to_string(&tauri_bridge).expect("read manager tauriBridge.ts");
@@ -676,7 +675,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("ops-commandbar"));
     assert!(app_tsx.contains("id: \"supplier\""));
     assert!(app_tsx.contains("label: \"供应商\""));
-    let route_source = app_tsx_file
+    let routes_file = read_frontend_file("lib/routes.ts");
+    let route_source = routes_file
         .split("const routes")
         .nth(1)
         .and_then(|rest| rest.split("function isRoute").next())
@@ -2172,8 +2172,7 @@ fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let vite_config = manifest_dir.parent().unwrap().join("vite.config.ts");
     let vite_config = std::fs::read_to_string(&vite_config).expect("read manager vite config");
-    let app_tsx = std::fs::read_to_string(manifest_dir.parent().unwrap().join("src/App.tsx"))
-        .expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
 
     assert!(vite_config.contains("base: \"./\""));
     assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));

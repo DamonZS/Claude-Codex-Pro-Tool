@@ -7,6 +7,7 @@ import type {
   CodexPluginMarketplaceStatusResult,
   LocalSession,
   LocalSessionProjectGroup,
+  MemorySelfCheckResult,
   MemoryStatusResult,
   OverviewResult,
   StatusChip,
@@ -228,4 +229,33 @@ export function afterFirstPaint(task: () => void, delayMs = 0) {
       window.setTimeout(task, delayMs);
     });
   });
+}
+
+export function stringifyError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return JSON.stringify(error);
+}
+
+export function waitForPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
+export function memoryRefineSummary(result: MemorySelfCheckResult): string {
+  const history = result.report.checks.find((check) => check.name === "history");
+  const historyMessage = history?.message || "未返回历史扫描结果。";
+  const failedChecks = result.report.checks.filter((check) => !statusOk(check.status));
+  const failedSummary = failedChecks.length
+    ? ` 需关注：${failedChecks.map((check) => `${check.name}:${check.status}`).join(" / ")}。`
+    : "";
+  return `使用 Codex 本地 SQLite、rollout 会话文件和 memory_assist.sqlite 遍历工作区与会话。结果：${historyMessage}.${failedSummary}`;
+}
+
+export function buttonLogLabel(button: HTMLButtonElement): string {
+  const label = (button.getAttribute("aria-label") || button.title || button.textContent || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (label || "unlabeled-button").slice(0, 120);
 }
