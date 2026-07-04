@@ -28,7 +28,7 @@ const CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME: &str = "codex-skills-alternative";
 const OPENAI_CURATED_MARKETPLACE_ALIASES: [&str; 2] =
     [OPENAI_CURATED_MARKETPLACE, OPENAI_API_CURATED_MARKETPLACE];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexPluginMarketplaceStatus {
     pub codex_home: String,

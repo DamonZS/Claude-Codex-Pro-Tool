@@ -165,7 +165,7 @@ pub struct McpbPackageOutcome {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopOrgPluginStatus {
     pub supported: bool,
@@ -201,7 +201,7 @@ pub struct ClaudeDesktopLocalBundleOutcome {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopMarketplaceStatus {
     pub supported: bool,
@@ -232,7 +232,7 @@ pub struct ClaudeDesktopMarketplaceOutcome {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopDevModeStatus {
     pub supported: bool,

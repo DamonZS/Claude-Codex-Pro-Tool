@@ -4236,8 +4236,15 @@ pub async fn install_market_script(id: String) -> CommandResult<ScriptMarketPayl
 }
 
 #[tauri::command]
-pub fn load_codex_plugin_marketplace_status() -> CommandResult<CodexPluginMarketplacePayload> {
-    let status = claude_codex_pro_core::codex_plugin_marketplace::status();
+pub async fn load_codex_plugin_marketplace_status() -> CommandResult<CodexPluginMarketplacePayload> {
+    // status() 会扫描 CODEX_HOME 下的 marketplace 目录树并读取多个配置文件。
+    // 工具与插件页挂载时与其余 6 个状态命令并发触发，若都留在主 IPC 线程会
+    // 串行阻塞窗口消息泵导致"未响应"。改为 spawn_blocking 放到阻塞线程池。
+    let status = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::codex_plugin_marketplace::status,
+    )
+    .await
+    .unwrap_or_default();
     ok(
         &status.message.clone(),
         CodexPluginMarketplacePayload {
@@ -4631,8 +4638,15 @@ pub struct ClaudeDesktopDevModeConfigurePayload {
 }
 
 #[tauri::command]
-pub fn load_claude_desktop_org_plugin_status() -> CommandResult<ClaudeDesktopOrgPluginPayload> {
-    let status = plugin_hub::load_claude_desktop_org_plugin_status();
+pub async fn load_claude_desktop_org_plugin_status() -> CommandResult<ClaudeDesktopOrgPluginPayload>
+{
+    // 遍历读取 Claude Desktop 组织插件目录与 profile 元数据，属磁盘 IO。
+    // 与工具页其余状态命令并发挂载，统一放到阻塞线程池避免阻塞窗口消息泵。
+    let status = tauri::async_runtime::spawn_blocking(
+        plugin_hub::load_claude_desktop_org_plugin_status,
+    )
+    .await
+    .unwrap_or_default();
     ok(
         &status.message.clone(),
         ClaudeDesktopOrgPluginPayload {
@@ -4642,8 +4656,14 @@ pub fn load_claude_desktop_org_plugin_status() -> CommandResult<ClaudeDesktopOrg
 }
 
 #[tauri::command]
-pub fn load_claude_desktop_marketplace_status() -> CommandResult<ClaudeDesktopMarketplacePayload> {
-    let status = plugin_hub::load_claude_desktop_marketplace_status();
+pub async fn load_claude_desktop_marketplace_status()
+-> CommandResult<ClaudeDesktopMarketplacePayload> {
+    // 读取并解析 Claude Desktop marketplace 配置，属磁盘 IO，移出主 IPC 线程。
+    let status = tauri::async_runtime::spawn_blocking(
+        plugin_hub::load_claude_desktop_marketplace_status,
+    )
+    .await
+    .unwrap_or_default();
     ok(
         &status.message.clone(),
         ClaudeDesktopMarketplacePayload {
@@ -4653,8 +4673,13 @@ pub fn load_claude_desktop_marketplace_status() -> CommandResult<ClaudeDesktopMa
 }
 
 #[tauri::command]
-pub fn load_claude_desktop_dev_mode_status() -> CommandResult<ClaudeDesktopDevModePayload> {
-    let status = plugin_hub::load_claude_desktop_dev_mode_status();
+pub async fn load_claude_desktop_dev_mode_status() -> CommandResult<ClaudeDesktopDevModePayload> {
+    // 读取 Claude Desktop 开发者模式配置文件，属磁盘 IO，移出主 IPC 线程。
+    let status = tauri::async_runtime::spawn_blocking(
+        plugin_hub::load_claude_desktop_dev_mode_status,
+    )
+    .await
+    .unwrap_or_default();
     ok(
         &status.message.clone(),
         ClaudeDesktopDevModePayload {
@@ -5657,7 +5682,21 @@ pub fn list_context_entries(
 }
 
 #[tauri::command]
-pub fn read_live_context_entries() -> CommandResult<LiveContextEntriesPayload> {
+pub async fn read_live_context_entries() -> CommandResult<LiveContextEntriesPayload> {
+    // 读取 Codex config.toml 并解析上下文条目，属磁盘 IO，移出主 IPC 线程。
+    tauri::async_runtime::spawn_blocking(read_live_context_entries_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Failed to load live context entries: {join_error}"),
+                LiveContextEntriesPayload {
+                    entries: empty_context_entries(),
+                },
+            )
+        })
+}
+
+fn read_live_context_entries_blocking() -> CommandResult<LiveContextEntriesPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     let config_path = home.join("config.toml");
     let config = read_optional_text_file(&config_path).unwrap_or_default();
@@ -5803,7 +5842,23 @@ pub fn delete_context_entry(request: ContextDeleteRequest) -> CommandResult<Cont
 }
 
 #[tauri::command]
-pub fn list_claude_context_entries() -> CommandResult<ClaudeContextEntriesPayload> {
+pub async fn list_claude_context_entries() -> CommandResult<ClaudeContextEntriesPayload> {
+    // 读取 Claude Desktop MCP 配置并扫描组织插件/插件仓库状态，均为磁盘 IO。
+    // 放到阻塞线程池，避免工具与插件页挂载时并发触发导致窗口 "未响应"。
+    tauri::async_runtime::spawn_blocking(list_claude_context_entries_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("Failed to load Claude context entries: {join_error}"),
+                ClaudeContextEntriesPayload {
+                    config_path: String::new(),
+                    entries: empty_context_entries(),
+                },
+            )
+        })
+}
+
+fn list_claude_context_entries_blocking() -> CommandResult<ClaudeContextEntriesPayload> {
     match plugin_hub::list_claude_desktop_mcp_entries() {
         Ok(mcp) => {
             let org = plugin_hub::load_claude_desktop_org_plugin_status();
