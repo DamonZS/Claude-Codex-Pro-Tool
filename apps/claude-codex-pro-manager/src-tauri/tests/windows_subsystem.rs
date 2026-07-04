@@ -994,9 +994,8 @@ fn claude_launch_waits_for_real_debug_readiness() {
 
 #[test]
 fn supplier_editor_generates_config_from_editable_supplier_id() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    // buildSupplierConfigToml / tomlString 已抽到 lib/supplier.ts，切片读该文件。
+    let app_tsx = read_frontend_file("lib/supplier.ts");
 
     let supplier_config_helper = app_tsx
         .split("function buildSupplierConfigToml")
@@ -1148,13 +1147,13 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
 #[test]
 fn supplier_screen_exposes_real_provider_crud_and_switching() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
-    let app_tsx = app_tsx.replace("\r\n", "\n");
+    // 存在性断言读前端源码全集；结构化切片读 App.tsx 单文件（SupplierScreen 仍在 App.tsx）。
+    let app_tsx = read_all_frontend_sources().replace("\r\n", "\n");
+    let app_tsx_file = read_frontend_file("App.tsx").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
 
-    let supplier_screen = app_tsx
+    let supplier_screen = app_tsx_file
         .split("function SupplierScreen")
         .nth(1)
         .and_then(|rest| rest.split("function LegacySupplierScreen").next())
