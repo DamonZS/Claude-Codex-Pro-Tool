@@ -330,8 +330,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
 #[test]
 fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
@@ -373,8 +372,7 @@ fn pr_build_workflow_refreshes_manager_frontend_before_packaging() {
 #[test]
 fn plugin_hub_is_first_class_ops_console_route() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
     let commands_rs = manifest_dir.join("src/commands.rs");
@@ -417,8 +415,8 @@ fn plugin_hub_is_first_class_ops_console_route() {
 #[test]
 fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
+    let app_tsx_file = read_frontend_file("App.tsx");
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
@@ -428,7 +426,7 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
     assert!(app_tsx.contains("id: \"about\""));
     assert!(!app_tsx.contains("id: \"scripts\""));
     assert!(!app_tsx.contains("id: \"logs\""));
-    let tools_section = app_tsx
+    let tools_section = app_tsx_file
         .split("function ToolsAndPluginsScreen")
         .nth(1)
         .and_then(|rest| rest.split("function SessionManagementScreen").next())
@@ -458,9 +456,8 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
 
 #[test]
 fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedback() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx_path = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx_path).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
+    let app_tsx_file = read_frontend_file("App.tsx");
 
     assert!(app_tsx.contains("PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX"));
     assert!(app_tsx.contains("function codexPluginMarketplaceNeedsRepair"));
@@ -471,7 +468,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
         "await promptAndRepairPluginRepositories(codexMarketplaceStatus, claudeMarketplaceStatus)"
     ));
 
-    let tools_route = app_tsx
+    let tools_route = app_tsx_file
         .split("} else if (target === \"tools\")")
         .nth(1)
         .and_then(|rest| rest.split("} else if (target === \"sessions\")").next())
@@ -482,7 +479,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
     assert!(tools_route.contains("claudeMarketplaceStatus"));
     assert!(tools_route.contains("promptAndRepairPluginRepositories"));
 
-    let codex_refresh = app_tsx
+    let codex_refresh = app_tsx_file
         .split("const refreshCodexPluginMarketplace = async")
         .nth(1)
         .and_then(|rest| rest.split("const refreshLocalSessions").next())
@@ -491,7 +488,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
     assert!(codex_refresh.contains("load_codex_plugin_marketplace_status"));
     assert!(codex_refresh.contains("setNotice({ title:"));
 
-    let claude_refresh = app_tsx
+    let claude_refresh = app_tsx_file
         .split("const refreshClaudeDesktopMarketplace = async")
         .nth(1)
         .and_then(|rest| rest.split("const refreshClaudeDesktopDevMode").next())
@@ -500,7 +497,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
     assert!(claude_refresh.contains("load_claude_desktop_marketplace_status"));
     assert!(claude_refresh.contains("setNotice({ title:"));
 
-    let codex_repair = app_tsx
+    let codex_repair = app_tsx_file
         .split("const repairCodexPluginMarketplace = async")
         .nth(1)
         .and_then(|rest| rest.split("const promptAndRepairPluginRepositories").next())
@@ -508,7 +505,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
     assert!(codex_repair.contains("status: \"running\""));
     assert!(codex_repair.contains("repair_codex_plugin_marketplace"));
 
-    let claude_repair = app_tsx
+    let claude_repair = app_tsx_file
         .split("const repairClaudeDesktopMarketplaces = async")
         .nth(1)
         .and_then(|rest| rest.split("const configureClaudeDesktopDevMode").next())
