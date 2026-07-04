@@ -32,7 +32,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { type Dispatch, type DragEvent, type SetStateAction, useEffect, useRef, useState } from "react";
+import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -3920,6 +3920,26 @@ function SessionManagementScreen({
   );
 }
 
+const PluginListItem = memo(function PluginListItem({
+  item,
+  isSelected,
+  onSelect,
+}: {
+  item: PluginCatalogItem;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button className={isSelected ? "active" : ""} onClick={() => onSelect(item.id)} type="button">
+      <div>
+        <strong>{item.name}</strong>
+        <p>{item.description || item.homepage}</p>
+      </div>
+      <span className={`status-chip ${item.installStatus}`}>{pluginStatusLabel(item.installStatus)}</span>
+    </button>
+  );
+});
+
 function PluginHubScreen({
   actions,
   devMode,
@@ -3937,8 +3957,8 @@ function PluginHubScreen({
 }) {
   const [filter, setFilter] = useState<"all" | "official" | "ponytail" | "codex" | "mcp" | "skill" | "installed" | "review">("all");
   const [selectedId, setSelectedId] = useState("");
-  const items = hub?.catalog?.items ?? [];
-  const visible = items.filter((item) => {
+  const items = useMemo(() => hub?.catalog?.items ?? [], [hub]);
+  const visible = useMemo(() => items.filter((item) => {
     if (filter === "official") return item.sourceId === "official";
     if (filter === "ponytail") return item.sourceId === "ponytail" || item.tags.includes("ponytail");
     if (filter === "codex") return item.sourceId === "codex-plugins" || item.category === "codex" || item.installKind === "codex_plugin" || item.tags.includes("codex");
@@ -3947,7 +3967,7 @@ function PluginHubScreen({
     if (filter === "installed") return item.installStatus === "installed";
     if (filter === "review") return item.installStatus === "needsReview";
     return true;
-  });
+  }), [items, filter]);
   const selected = items.find((item) => item.id === selectedId) ?? visible[0] ?? null;
   const selectedPreview = preview?.item.id === selected?.id ? preview : null;
   const selectedCanInstall = selected ? pluginCanInstall(selected.installKind) : false;
@@ -3988,13 +4008,12 @@ function PluginHubScreen({
         </div>
         <div className="plugin-list">
           {visible.length ? visible.slice(0, 220).map((item) => (
-            <button className={selected?.id === item.id ? "active" : ""} key={item.id} onClick={() => setSelectedId(item.id)} type="button">
-              <div>
-                <strong>{item.name}</strong>
-                <p>{item.description || item.homepage}</p>
-              </div>
-              <span className={`status-chip ${item.installStatus}`}>{pluginStatusLabel(item.installStatus)}</span>
-            </button>
+            <PluginListItem
+              key={item.id}
+              item={item}
+              isSelected={selected?.id === item.id}
+              onSelect={setSelectedId}
+            />
           )) : <Empty text="暂无目录数据，点击刷新。" />}
         </div>
       </Panel>
