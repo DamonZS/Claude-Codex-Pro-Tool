@@ -66,5 +66,4 @@
 - `spec/manager-interface-redesign-preview.md`
 - `acceptance/manager-interface-redesign-preview.md`
 - `docs/ui-previews/manager-interface-redesign/index.html`
-- `design/manager-interface-redesign-qa.md`
 - 浏览器截图验证记录

@@ -1,7 +1,7 @@
 # Claude Codex Pro Tool
 
 <p align="center">
-  <img src="docs/images/claude-codex-pro.png" alt="Claude Codex Pro Tool 图标" width="160">
+  <img src="assets/images/claude-codex-pro.png" alt="Claude Codex Pro Tool 图标" width="160">
 </p>
 
 <p align="center">
