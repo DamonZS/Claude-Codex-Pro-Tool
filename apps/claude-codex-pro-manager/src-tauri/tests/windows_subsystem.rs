@@ -1053,8 +1053,7 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
 #[test]
 fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
     let commands_rs =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
             .expect("read manager commands.rs");
@@ -1590,8 +1589,7 @@ fn claude_zh_patch_auto_launches_claude_after_successful_install() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
-    let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_all_frontend_sources();
 
     assert!(commands_rs.contains("fn complete_claude_zh_patch_install("));
     assert!(commands_rs.contains("claude_codex_pro_core::claude_desktop::open_claude_desktop()"));
