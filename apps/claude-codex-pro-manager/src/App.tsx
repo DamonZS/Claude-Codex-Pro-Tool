@@ -3297,76 +3297,6 @@ function PluginHubScreen({
   );
 }
 
-function ClaudeDesktopOrgPluginPanel({
-  actions,
-  devMode,
-  marketplace,
-  status,
-}: {
-  actions: ReturnType<typeof createActionsShape>;
-  devMode: ClaudeDesktopDevModeStatusResult | null;
-  marketplace: ClaudeDesktopMarketplaceStatusResult | null;
-  status: ClaudeDesktopOrgPluginStatusResult | null;
-}) {
-  const orgStatus = status?.orgPluginStatus;
-  const marketStatus = marketplace?.marketplaceStatus;
-  const devStatus = devMode?.devModeStatus;
-  return (
-    <Panel title="Claude Desktop 本地插件" detail="开发模式下直接写 MCP 配置和组织插件 skills 目录，不依赖 Claude CLI 登录。">
-      <div className="info-grid compact">
-        <InfoRow label="开发模式" value={devStatus?.configured ? "已配置" : "未配置"} />
-        <InfoRow label="本地写入" value="MCP + skills + 组织插件目录" />
-        <InfoRow label="官方仓库" value={`${marketStatus?.marketplace ?? "DietrichGebert/ponytail"}（可选）`} />
-        <InfoRow label="组织目录" value={compactPath(orgStatus?.orgPluginsDir)} />
-        <InfoRow label="Ponytail" value={orgStatus?.ponytailInstalled ? "已安装" : "未安装"} />
-        <InfoRow label="目录可写" value={orgStatus?.writable ? "是" : "否"} />
-      </div>
-      <div className="risk-box">
-        {devStatus?.message ?? "Claude Desktop 开发模式会写入本机 deploymentMode=3p 和 Claude-3p 配置库。"}
-        {" "}
-        {orgStatus?.message ?? "正在检测 Claude Desktop 组织插件目录。"}
-      </div>
-      <div className="action-row">
-        <Button
-          onClick={() => {
-            void actions.refreshClaudeDesktopDevMode();
-            void actions.refreshClaudeDesktopMarketplace();
-            void actions.refreshClaudeDesktopOrgPlugin();
-          }}
-          variant="outline"
-        >
-          <RefreshCw className="h-4 w-4" />
-          刷新状态
-        </Button>
-        <Button onClick={() => void actions.configureClaudeDesktopDevMode()}>
-          <Wrench className="h-4 w-4" />
-          Claude 一键开发模式
-        </Button>
-        <Button onClick={() => void actions.installPonytailClaudeDesktopLocalBundle()}>
-          <Download className="h-4 w-4" />
-          一键写入本地插件
-        </Button>
-        <Button onClick={() => void actions.installPonytailClaudeDesktopOrgPlugin()} variant="outline">
-          <Download className="h-4 w-4" />
-          仅写入组织插件
-        </Button>
-        <Button onClick={() => void actions.openClaudeDesktopOrgPluginsDir()} variant="outline">
-          <ExternalLink className="h-4 w-4" />
-          打开组织目录
-        </Button>
-        <Button onClick={() => void actions.repairClaudeDesktopMarketplaces()} variant="outline">
-          <Wrench className="h-4 w-4" />
-          修复 Claude 插件仓库
-        </Button>
-        <Button onClick={() => void actions.openExternalUrl(PONYTAIL_REPOSITORY_URL)} variant="outline">
-          <ExternalLink className="h-4 w-4" />
-          Ponytail 源码
-        </Button>
-      </div>
-    </Panel>
-  );
-}
-
 function PromptOptimizerCard({ actions }: { actions: ReturnType<typeof createActionsShape> }) {
   return (
     <section className="ops-panel prompt-optimizer-card">
@@ -3391,45 +3321,6 @@ function PromptOptimizerCard({ actions }: { actions: ReturnType<typeof createAct
         </button>
       </div>
     </section>
-  );
-}
-
-function ScriptsScreen({ actions, market, settings }: { actions: ReturnType<typeof createActionsShape>; market: ScriptMarketResult | null; settings: SettingsResult | null }) {
-  const scripts = market?.market.scripts ?? [];
-  const localScripts = settings?.user_scripts.scripts ?? [];
-  return (
-    <div className="stack">
-      <Panel title="脚本市场" detail={`${scripts.length} 个远程脚本，${localScripts.length} 个本地脚本。`}>
-        <div className="action-row">
-          <Button onClick={() => void actions.refreshScripts()}>
-            <RefreshCw className="h-4 w-4" />
-            刷新脚本市场
-          </Button>
-          <Button onClick={() => void actions.openExternalUrl("https://github.com/DamonZS/Claude-Codex-Pro-ToolScriptMarket")} variant="outline">
-            <ExternalLink className="h-4 w-4" />
-            投稿仓库
-          </Button>
-        </div>
-      </Panel>
-      <div className="card-grid">
-        {scripts.length ? scripts.map((script) => (
-          <div className="market-card" key={script.id}>
-            <strong>{script.name}</strong>
-            <p>{script.description || script.homepage}</p>
-            <div className="tag-row">
-              <span>{script.version}</span>
-              {script.tags.map((tag) => <span key={tag}>{tag}</span>)}
-            </div>
-            <div className="action-row">
-              <Button disabled={script.installed && !script.updateAvailable} onClick={() => void actions.installMarketScript(script.id)} size="sm">
-                {script.installed ? "已安装" : "安装"}
-              </Button>
-              {script.homepage ? <Button onClick={() => void actions.openExternalUrl(script.homepage)} size="sm" variant="outline">来源</Button> : null}
-            </div>
-          </div>
-        )) : <Empty text="暂无脚本目录数据。" />}
-      </div>
-    </div>
   );
 }
 
