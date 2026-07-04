@@ -2315,7 +2315,7 @@ body {
   grid-template-columns: minmax(0, 1fr) minmax(180px, auto) auto;
   gap: 12px;
   align-items: center;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 12px;
@@ -3304,7 +3304,7 @@ body {
   gap: 3px;
   min-width: 0;
   padding: 8px 12px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 999px;
   background: rgba(20, 21, 22, 0.92);
   justify-self: center;
@@ -3350,14 +3350,14 @@ body {
 }
 
 .ops-commandbar > button {
-  border-color: #2b2d32;
+  border-color: var(--ops-hairline);
   background: #141516;
   color: var(--ops-ink);
   box-shadow: none;
 }
 
 .ops-commandbar > button:not(:disabled):hover {
-  border-color: #34343a;
+  border-color: var(--ops-hairline-hover);
   background: #18191a;
   color: var(--ops-text-strong);
 }
@@ -3391,13 +3391,13 @@ body {
 }
 
 .ops-shell button[class*="bg-secondary"] {
-  border-color: #2b2d32;
+  border-color: var(--ops-hairline);
   background: #18191a;
   color: var(--ops-ink);
 }
 
 .ops-shell button[class*="bg-secondary"]:not(:disabled):hover {
-  border-color: #34343a;
+  border-color: var(--ops-hairline-hover);
   background: #202124;
   color: var(--ops-text-strong);
 }
@@ -3453,7 +3453,7 @@ body {
   gap: 14px;
   align-items: center;
   width: 100%;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
 
   color: var(--ops-ink);
   padding: 14px 16px;
@@ -3538,7 +3538,7 @@ body {
   align-items: center;
   align-content: center;
 
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
 
   border-radius: 8px;
   background: linear-gradient(180deg, #141516, #101113);
@@ -3670,7 +3670,7 @@ body {
 .ops-panel {
   min-width: 0;
 
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 38%),
@@ -3719,7 +3719,7 @@ body {
   gap: 9px;
   min-height: 42px;
   width: 100%;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #141516;
   color: var(--ops-ink);
@@ -3733,7 +3733,7 @@ body {
 }
 
 .action-button:hover {
-  border-color: #34343a;
+  border-color: var(--ops-hairline-hover);
   background: #18191a;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
   transform: translateY(-1px);
@@ -3869,7 +3869,7 @@ body {
 }
 
 .supplier-master-row {
-  border: 1px solid #24272d;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #111214;
   padding: 12px;
@@ -3887,7 +3887,7 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
-  border: 1px solid #24272d;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 13px;
@@ -3938,7 +3938,7 @@ body {
   display: grid;
   min-width: 260px;
   gap: 6px;
-  border: 1px solid #303238;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #171819;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.38);
@@ -3976,7 +3976,7 @@ body {
 
   gap: 12px;
   align-items: center;
-  border: 1px solid #24272d;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #111214;
 
@@ -4071,7 +4071,7 @@ body {
   z-index: 4;
   top: 0;
   justify-content: space-between;
-  border-bottom: 1px solid #24272d;
+  border-bottom: 1px solid var(--ops-hairline);
   background: #0f1011;
   padding-bottom: 10px;
 }
@@ -4091,7 +4091,7 @@ body {
 
 .supplier-check-row {
   min-height: 39px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #141516;
   color: var(--ops-soft);
@@ -4114,7 +4114,7 @@ body {
 .supplier-aggregate-grid button {
   display: grid;
   gap: 5px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   color: var(--ops-ink);
@@ -4137,7 +4137,7 @@ body {
 .supplier-member-box {
   display: grid;
   gap: 8px;
-  border: 1px solid #24272d;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #111214;
   padding: 12px;
@@ -4214,7 +4214,7 @@ body {
 .supplier-preset-strip button {
   display: grid;
   gap: 4px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   color: var(--ops-ink);
@@ -4243,7 +4243,7 @@ body {
 .ops-select {
   width: 100%;
   min-width: 0;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #141516;
   color: var(--ops-ink);
@@ -4284,7 +4284,7 @@ body {
   gap: 10px;
   align-items: center;
   min-height: 34px;
-  border-bottom: 1px solid #23252a;
+  border-bottom: 1px solid var(--ops-hairline);
 
 }
 
@@ -4343,7 +4343,7 @@ body {
 
 .memory-overview-matrix .info-row {
   min-height: 42px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: rgba(20, 21, 24, 0.72);
   padding: 8px 10px;
@@ -4382,7 +4382,7 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 12px;
@@ -4449,7 +4449,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   color: var(--ops-soft);
@@ -4470,7 +4470,7 @@ body {
   gap: 8px 10px;
   align-content: start;
   align-items: center;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-left-width: 3px;
   border-radius: 8px;
   background: #141516;
@@ -4588,7 +4588,7 @@ body {
 .ops-textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #141516;
   color: var(--ops-ink);
@@ -4625,7 +4625,7 @@ body {
   max-width: 100%;
   min-height: 120px;
   overflow: auto;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #0b0c0d;
   color: var(--ops-code-fg);
@@ -4673,7 +4673,7 @@ body {
   display: grid;
   gap: 6px;
   min-width: 0;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 9px 10px;
@@ -4757,7 +4757,7 @@ body {
 
 .filter-row button {
   min-height: 32px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #141516;
   color: var(--ops-soft);
@@ -4775,7 +4775,7 @@ body {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 9px 10px;
@@ -4819,7 +4819,7 @@ body {
   gap: 12px;
   align-items: center;
   width: 100%;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   color: var(--ops-ink);
@@ -4890,7 +4890,7 @@ body {
 }
 
 .tag-row span {
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 999px;
   background: #18191a;
   color: var(--ops-soft);
@@ -4912,7 +4912,7 @@ body {
 .preview-box {
   display: grid;
   gap: 8px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 10px 12px;
@@ -4960,7 +4960,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 6px;
   background: #18191a;
   color: var(--ops-muted);
@@ -4973,7 +4973,7 @@ body {
 }
 
 .prompt-optimizer-source-link:hover {
-  border-color: #34343a;
+  border-color: var(--ops-hairline-hover);
   background: #202124;
   color: var(--ops-ink);
 }
@@ -4991,7 +4991,7 @@ body {
 .market-card {
   display: grid;
   gap: 10px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 14px;
@@ -5005,7 +5005,7 @@ body {
 }
 
 .empty-state {
-  border: 1px dashed #34343a;
+  border: 1px dashed var(--ops-hairline-hover);
   border-radius: 8px;
   background: #141516;
   color: var(--ops-muted);
@@ -5027,7 +5027,7 @@ body {
 .ops-shell.dark .status-tile,
 .ops-shell.dark .market-card,
 .ops-shell.dark .plugin-list > button {
-  border-color: #23252a;
+  border-color: var(--ops-hairline);
   background: #0f1011;
   color: var(--ops-ink);
 }
@@ -5062,7 +5062,7 @@ body {
 .ops-shell.dark .empty-state,
 .ops-shell.dark .ops-status-row,
 .ops-shell.dark .ops-setting-card {
-  border-color: #23252a;
+  border-color: var(--ops-hairline);
   background: #141516;
   color: var(--ops-ink);
 }
@@ -5093,7 +5093,7 @@ body {
 }
 
 .ops-shell.dark .memory-assist-row {
-  border-color: #23252a;
+  border-color: var(--ops-hairline);
   background: #141516;
 }
 
@@ -5111,7 +5111,7 @@ body {
 
 .ops-shell.dark .ops-form-field input,
 .ops-shell.dark .ops-textarea {
-  border-color: #2b2d32;
+  border-color: var(--ops-hairline);
   background: #141516;
   color: var(--ops-ink);
 }
@@ -5325,7 +5325,7 @@ body {
 .context-manager-card {
   display: grid;
   gap: 12px;
-  border: 1px solid #23252a;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #141516;
   padding: 16px;
@@ -5368,7 +5368,7 @@ body {
   display: flex;
   justify-content: center;
   gap: 8px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #18191a;
   color: var(--ops-ink);
@@ -5398,7 +5398,7 @@ body {
   gap: 10px;
   align-items: center;
   min-height: 50px;
-  border: 1px solid #2b2d32;
+  border: 1px solid var(--ops-hairline);
   border-radius: 8px;
   background: #18191a;
   padding: 9px 10px;
@@ -5459,7 +5459,7 @@ body {
 .context-editor {
   display: grid;
   gap: 12px;
-  border-top: 1px solid #2b2d32;
+  border-top: 1px solid var(--ops-hairline);
   padding-top: 12px;
 }
 
