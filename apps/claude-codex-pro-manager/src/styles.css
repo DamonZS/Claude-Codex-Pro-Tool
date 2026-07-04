@@ -2330,11 +2330,11 @@ body {
 }
 
 .session-row strong {
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .session-row span {
-  color: #8a8f98;
+  color: var(--ops-muted);
 }
 
 .session-main,
@@ -3196,7 +3196,7 @@ body {
     radial-gradient(circle at top left, rgba(94, 106, 210, 0.16), transparent 30%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 280px),
     #010102;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-family:
     Inter,
     "SF Pro Display",
@@ -3311,7 +3311,7 @@ body {
 }
 
 .ops-topbar-pill span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -3319,7 +3319,7 @@ body {
 }
 
 .ops-topbar-pill strong {
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
@@ -3352,26 +3352,26 @@ body {
 .ops-commandbar > button {
   border-color: #2b2d32;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   box-shadow: none;
 }
 
 .ops-commandbar > button:not(:disabled):hover {
   border-color: #34343a;
   background: #18191a;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-commandbar > .ops-primary-command:not(:disabled) {
   border-color: #5e6ad2;
   background: #5e6ad2;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-commandbar > .ops-primary-command:not(:disabled):hover {
   border-color: #828fff;
   background: #828fff;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .mobile-command-label {
@@ -3381,25 +3381,25 @@ body {
 .ops-shell button[class*="bg-primary"] {
   border-color: #5e6ad2;
   background: #5e6ad2;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-shell button[class*="bg-primary"]:not(:disabled):hover {
   border-color: #828fff;
   background: #828fff;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-shell button[class*="bg-secondary"] {
   border-color: #2b2d32;
   background: #18191a;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .ops-shell button[class*="bg-secondary"]:not(:disabled):hover {
   border-color: #34343a;
   background: #202124;
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-screen {
@@ -3455,7 +3455,7 @@ body {
   width: 100%;
   border: 1px solid #23252a;
 
-  color: #f7f8f8;
+  color: var(--ops-ink);
   padding: 14px 16px;
   text-align: left;
 
@@ -3470,7 +3470,7 @@ body {
 
 .relay-banner span {
   display: block;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -3478,14 +3478,14 @@ body {
 .relay-banner strong {
   display: block;
   margin-top: 2px;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 18px;
   line-height: 1.2;
 }
 
 .relay-banner p {
   margin: 5px 0 0;
-  color: #b8bec7;
+  color: var(--ops-muted);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -3693,7 +3693,7 @@ body {
 
 .ops-panel h2 {
   margin: 0;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 16px;
   line-height: 1.25;
   font-weight: 700;
@@ -3702,7 +3702,7 @@ body {
 
 .ops-panel header p {
   margin: 4px 0 0;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -3722,7 +3722,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 0 12px;
   text-align: left;
@@ -3812,13 +3812,13 @@ body {
 
 .supplier-page-heading h2 {
   margin: 0;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 22px;
 }
 
 .supplier-page-heading p {
   margin: 4px 0 0;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 13px;
 }
 
@@ -3847,7 +3847,7 @@ body {
 
 .supplier-env-card strong,
 .supplier-master-row label {
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 14px;
   font-weight: 750;
 }
@@ -3855,7 +3855,7 @@ body {
 .supplier-env-card p,
 .supplier-master-row p {
   margin: 4px 0 8px;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
@@ -3863,7 +3863,7 @@ body {
   display: inline-flex;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.28);
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 11px;
   padding: 5px 10px;
 }
@@ -3902,13 +3902,13 @@ body {
 .supplier-headline span,
 .supplier-headline small,
 .supplier-inline-note {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
 .supplier-headline strong {
   overflow: hidden;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3951,7 +3951,7 @@ body {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 9px;
   text-align: left;
@@ -3962,7 +3962,7 @@ body {
 }
 
 .supplier-drop-popover span {
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
@@ -3996,7 +3996,7 @@ body {
   width: 16px;
   height: 16px;
   place-items: center;
-  color: #707782;
+  color: var(--ops-faint);
   cursor: grab;
   user-select: none;
   -webkit-user-drag: none;
@@ -4040,7 +4040,7 @@ body {
 .supplier-title-line strong {
   min-width: 0;
   overflow: hidden;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4049,7 +4049,7 @@ body {
 .supplier-card-main span,
 .supplier-card-main small {
   overflow: hidden;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4085,7 +4085,7 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 18px;
 }
 
@@ -4094,7 +4094,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #141516;
-  color: #d8dde6;
+  color: var(--ops-soft);
   font-size: 13px;
   padding: 9px 10px;
 }
@@ -4117,7 +4117,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 8px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 11px;
   text-align: left;
@@ -4129,7 +4129,7 @@ body {
 }
 
 .supplier-aggregate-grid span {
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -4153,24 +4153,24 @@ body {
 
 .supplier-member-head {
   grid-template-columns: minmax(0, 1fr) auto;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .supplier-member-row {
-  color: #d8dde6;
+  color: var(--ops-soft);
   font-size: 13px;
 }
 
 .supplier-member-row small {
   overflow: hidden;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .supplier-member-box p {
   margin: 0;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 13px;
 }
 
@@ -4217,7 +4217,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 8px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 10px;
   text-align: left;
@@ -4236,7 +4236,7 @@ body {
 }
 
 .supplier-preset-strip span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
@@ -4246,7 +4246,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   padding: 9px 10px;
   font: inherit;
 }
@@ -4293,14 +4293,14 @@ body {
 }
 
 .info-row span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
 .info-row strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 13px;
   line-height: 1.35;
   text-align: right;
@@ -4333,7 +4333,7 @@ body {
 .info-row-action:hover {
   border-color: rgba(165, 180, 252, 0.78);
   background: rgba(129, 140, 248, 0.22);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .memory-overview-matrix {
@@ -4390,13 +4390,13 @@ body {
 
 .memory-overview-header strong {
   display: block;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 14px;
 }
 
 .memory-overview-header p {
   margin: 4px 0 0;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -4452,7 +4452,7 @@ body {
   border: 1px solid #23252a;
   border-radius: 8px;
   background: #141516;
-  color: #d0d6e0;
+  color: var(--ops-soft);
   padding: 10px 12px;
   font-size: 13px;
 }
@@ -4492,7 +4492,7 @@ body {
 .ops-setting-card strong {
   grid-column: 1;
   overflow: hidden;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4502,7 +4502,7 @@ body {
 .ops-setting-card span {
   grid-column: 1;
   margin: 0;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -4579,7 +4579,7 @@ body {
 
 .ops-form-field span,
 .ops-toggle-line span {
-  color: #d0d6e0;
+  color: var(--ops-soft);
   font-size: 13px;
   font-weight: 700;
 }
@@ -4591,7 +4591,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   padding: 9px 10px;
   font: inherit;
 }
@@ -4628,7 +4628,7 @@ body {
   border: 1px solid #23252a;
   border-radius: 8px;
   background: #0b0c0d;
-  color: #d7dbe2;
+  color: var(--ops-code-fg);
   padding: 12px;
   font: 12px/1.5 "JetBrains Mono", Consolas, monospace;
   white-space: pre-wrap;
@@ -4665,7 +4665,7 @@ body {
 }
 
 .memory-assist-list > strong {
-  color: #d0d6e0;
+  color: var(--ops-soft);
   font-size: 13px;
 }
 
@@ -4680,7 +4680,7 @@ body {
 }
 
 .memory-assist-row span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -4689,7 +4689,7 @@ body {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 13px;
   line-height: 1.45;
   -webkit-box-orient: vertical;
@@ -4712,7 +4712,7 @@ body {
 }
 
 .memory-assist-row em {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   font-style: normal;
   line-height: 1.4;
@@ -4760,7 +4760,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #141516;
-  color: #d0d6e0;
+  color: var(--ops-soft);
   cursor: pointer;
   padding: 0 10px;
   font-size: 13px;
@@ -4793,14 +4793,14 @@ body {
 
 .source-pill strong {
   overflow: hidden;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .source-pill span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
   line-height: 1.3;
 }
@@ -4822,7 +4822,7 @@ body {
   border: 1px solid #23252a;
   border-radius: 8px;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 11px 12px;
   text-align: left;
@@ -4839,13 +4839,13 @@ body {
 
 .plugin-list strong,
 .detail-stack > p {
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .plugin-list p,
 .detail-stack > p {
   margin: 4px 0 0;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -4863,7 +4863,7 @@ body {
   min-height: 24px;
   border-radius: 999px;
   background: #18191a;
-  color: #d0d6e0;
+  color: var(--ops-soft);
   padding: 0 9px;
   font-size: 12px;
   white-space: nowrap;
@@ -4886,14 +4886,14 @@ body {
 
 .status-chip.unsupported {
   background: #18191a;
-  color: #8a8f98;
+  color: var(--ops-muted);
 }
 
 .tag-row span {
   border: 1px solid #2b2d32;
   border-radius: 999px;
   background: #18191a;
-  color: #d0d6e0;
+  color: var(--ops-soft);
   padding: 4px 8px;
   font-size: 12px;
   line-height: 1.2;
@@ -4919,11 +4919,11 @@ body {
 }
 
 .preview-box strong {
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .preview-box span {
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 13px;
 }
 
@@ -4933,7 +4933,7 @@ body {
   margin: 0;
   border-radius: 6px;
   background: #0b0c0d;
-  color: #d7dbe2;
+  color: var(--ops-code-fg);
   padding: 10px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -4963,7 +4963,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 6px;
   background: #18191a;
-  color: #b8bec7;
+  color: var(--ops-muted);
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
@@ -4975,7 +4975,7 @@ body {
 .prompt-optimizer-source-link:hover {
   border-color: #34343a;
   background: #202124;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .action-row button {
@@ -4999,7 +4999,7 @@ body {
 
 .market-card p {
   margin: 0;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -5008,7 +5008,7 @@ body {
   border: 1px dashed #34343a;
   border-radius: 8px;
   background: #141516;
-  color: #8a8f98;
+  color: var(--ops-muted);
   padding: 24px;
   text-align: center;
   font-size: 13px;
@@ -5018,7 +5018,7 @@ body {
   background:
     radial-gradient(circle at top left, rgba(94, 106, 210, 0.12), transparent 28%),
     #010102;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-rail,
@@ -5029,7 +5029,7 @@ body {
 .ops-shell.dark .plugin-list > button {
   border-color: #23252a;
   background: #0f1011;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-topbar h1,
@@ -5039,7 +5039,7 @@ body {
 .ops-shell.dark .source-pill strong,
 .ops-shell.dark .detail-stack > p,
 .ops-shell.dark .info-row strong {
-  color: #f8fafc;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-topbar p,
@@ -5049,11 +5049,11 @@ body {
 .ops-shell.dark .detail-stack > p,
 .ops-shell.dark .market-card p,
 .ops-shell.dark .source-pill span {
-  color: #8a8f98;
+  color: var(--ops-muted);
 }
 
 .ops-shell.dark .ops-rail nav button:not(.active) {
-  color: #8a8f98;
+  color: var(--ops-muted);
 }
 
 .ops-shell.dark .action-button,
@@ -5064,7 +5064,7 @@ body {
 .ops-shell.dark .ops-setting-card {
   border-color: #23252a;
   background: #141516;
-  color: #f7f8f8;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-setting-card.enabled {
@@ -5079,7 +5079,7 @@ body {
 .ops-shell.dark .ops-setting-card strong,
 .ops-shell.dark .memory-assist-list > strong,
 .ops-shell.dark .memory-assist-row p {
-  color: #f8fafc;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-status-row span,
@@ -5089,7 +5089,7 @@ body {
 .ops-shell.dark .ops-toggle-line span,
 .ops-shell.dark .memory-assist-row span,
 .ops-shell.dark .memory-assist-row em {
-  color: #8a8f98;
+  color: var(--ops-muted);
 }
 
 .ops-shell.dark .memory-assist-row {
@@ -5113,7 +5113,7 @@ body {
 .ops-shell.dark .ops-textarea {
   border-color: #2b2d32;
   background: #141516;
-  color: #f8fafc;
+  color: var(--ops-ink);
 }
 
 .ops-shell.dark .ops-danger-zone {
@@ -5346,14 +5346,14 @@ body {
 
 .context-manager-head h2 {
   margin: 0;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 16px;
 }
 
 .context-manager-head p,
 .context-manager-note {
   margin: 5px 0 0;
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -5371,7 +5371,7 @@ body {
   border: 1px solid #2b2d32;
   border-radius: 8px;
   background: #18191a;
-  color: #f7f8f8;
+  color: var(--ops-ink);
   cursor: pointer;
   padding: 10px;
 }
@@ -5383,7 +5383,7 @@ body {
 }
 
 .context-tabs span {
-  color: #9aa2ad;
+  color: var(--ops-muted);
   font-weight: 800;
 }
 
@@ -5414,13 +5414,13 @@ body {
 }
 
 .context-entry-row strong {
-  color: #f7f8f8;
+  color: var(--ops-ink);
   font-size: 14px;
 }
 
 .context-entry-row span {
   margin-top: 3px;
-  color: #8a8f98;
+  color: var(--ops-muted);
   font-size: 12px;
 }
 
@@ -5513,7 +5513,7 @@ body {
 
 .ops-shell ::selection {
   background: rgba(111, 125, 255, 0.38);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-shell ::-webkit-scrollbar {
@@ -5544,7 +5544,7 @@ body {
 
   border-color: rgba(111, 125, 255, 0.36);
 
-  color: #ffffff;
+  color: var(--ops-text-strong);
   font-size: 12px;
   font-weight: 800;
 
@@ -5605,7 +5605,7 @@ body {
 .filter-row button {
   border-color: rgba(148, 163, 184, 0.2);
   background: rgba(255, 255, 255, 0.045);
-  color: #dce5f4;
+  color: var(--ops-soft);
   box-shadow: none;
 }
 
@@ -5615,7 +5615,7 @@ body {
 .filter-row button:not(:disabled):hover {
   border-color: rgba(145, 160, 255, 0.6);
   background: rgba(111, 125, 255, 0.14);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-commandbar > .ops-primary-command:not(:disabled):hover,
@@ -5774,7 +5774,7 @@ body {
 .filter-row button.active {
   border-color: rgba(145, 160, 255, 0.72);
   background: rgba(111, 125, 255, 0.2);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .plugin-list strong,
@@ -5815,7 +5815,7 @@ body {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.055);
-  color: #cad2e4;
+  color: var(--ops-soft);
   font-weight: 650;
 }
 
@@ -6054,7 +6054,7 @@ body {
 .ops-rail nav button {
   min-height: 58px;
   border-radius: var(--ops-radius);
-  color: #9ba6ba;
+  color: var(--ops-muted);
   padding: 8px 4px;
 }
 
@@ -6069,7 +6069,7 @@ body {
   background:
     linear-gradient(180deg, rgba(124, 140, 255, 0.26), rgba(124, 140, 255, 0.11)),
     rgba(18, 22, 34, 0.98);
-  color: #ffffff;
+  color: var(--ops-text-strong);
   box-shadow:
     inset 3px 0 0 #a3adff,
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -6133,7 +6133,7 @@ body {
 .filter-row button {
   border-color: rgba(148, 163, 184, 0.22);
   background: rgba(255, 255, 255, 0.05);
-  color: #dce4f2;
+  color: var(--ops-soft);
 }
 
 .ops-commandbar > button:not(:disabled):hover,
@@ -6145,14 +6145,14 @@ body {
 .filter-row button:not(:disabled):hover {
   border-color: rgba(163, 173, 255, 0.68);
   background: rgba(124, 140, 255, 0.15);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .ops-commandbar > .ops-primary-command:not(:disabled),
 .ops-shell button[class*="bg-primary"] {
   border-color: rgba(163, 173, 255, 0.78);
   background: linear-gradient(180deg, #9aa6ff, #6f7dff);
-  color: #ffffff;
+  color: var(--ops-text-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.24),
     0 12px 30px rgba(124, 140, 255, 0.22);
@@ -6301,7 +6301,7 @@ body {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.055);
-  color: #cad4e6;
+  color: var(--ops-soft);
   font-size: 12px;
   font-weight: 700;
 }
@@ -6325,7 +6325,7 @@ body {
 .status-segment.muted {
   border-color: rgba(148, 163, 184, 0.18);
   background: rgba(148, 163, 184, 0.08);
-  color: #aab4c5;
+  color: var(--ops-muted);
 }
 
 .ops-status-row {
@@ -6476,12 +6476,12 @@ body {
 
 .context-entry-icon-button {
   border-radius: 7px;
-  color: #c7d0df;
+  color: var(--ops-soft);
 }
 
 .context-entry-icon-button:hover:not(:disabled) {
   background: rgba(124, 140, 255, 0.18);
-  color: #ffffff;
+  color: var(--ops-text-strong);
 }
 
 .supplier-card {
