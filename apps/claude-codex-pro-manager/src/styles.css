@@ -5052,7 +5052,7 @@ body {
   color: #8a8f98;
 }
 
-.ops-shell.dark .ops-rail nav button {
+.ops-shell.dark .ops-rail nav button:not(.active) {
   color: #8a8f98;
 }
 
