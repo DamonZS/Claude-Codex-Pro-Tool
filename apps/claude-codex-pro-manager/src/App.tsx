@@ -2678,13 +2678,13 @@ function SupplierScreen({
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);
   const appSettings = settings?.settings ?? null;
-  const profiles = appSettings?.relayProfiles ?? [];
+  const profiles = useMemo(() => appSettings?.relayProfiles ?? [], [appSettings]);
   const profileIdsKey = profiles.map((profile) => profile.id).join("\u001f");
   const active = profiles.find((profile) => profile.id === appSettings?.activeRelayId) ?? profiles[0];
   const editingExisting = draft && editingId ? profiles.find((profile) => profile.id === editingId) : null;
   const isNewDraft = !!draft && !editingExisting;
-  const aggregateProfiles = profiles.filter((profile) => profile.aggregateEnabled);
-  const apiProfiles = profiles.filter((profile) => !profile.aggregateEnabled && profile.relayMode !== "official");
+  const aggregateProfiles = useMemo(() => profiles.filter((profile) => profile.aggregateEnabled), [profiles]);
+  const apiProfiles = useMemo(() => profiles.filter((profile) => !profile.aggregateEnabled && profile.relayMode !== "official"), [profiles]);
   const updateClaudeDraft = (field: keyof typeof claudeDesktopProviderDraft, value: string) => {
     onClaudeDesktopProviderDraftChange((current) => ({ ...current, [field]: value }));
   };
@@ -2877,6 +2877,11 @@ function SupplierScreen({
     const used = new Set(ordered.map((profile) => profile.id));
     return [...ordered, ...profiles.filter((profile) => !used.has(profile.id))];
   };
+  // 渲染用的排序结果：drag 期间 dragOverId 频繁变化，避免每次重建 Map + 重排。
+  // supplierOrderFromIds 是纯函数，仅依赖 profiles 与传入的 ids。
+  // 必须置于任何条件 return 之前以遵守 Hooks 规则。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds), [profiles, supplierOrderIds]);
   const reorderSupplierIds = (sourceId: string, targetId: string, ids = supplierOrderIds) => {
     const currentIds = supplierOrderFromIds(ids.length ? ids : profiles.map((profile) => profile.id)).map((profile) => profile.id);
     const fromIndex = currentIds.indexOf(sourceId);
@@ -3048,7 +3053,7 @@ function SupplierScreen({
       <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
       <div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现 {profiles.filter((profile) => profile.userAgent === "ccswitch" || profile.name.includes("ccswitch")).length || 4} 个 Codex 供应商</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div>
       <div className="supplier-card-list">
-        {profiles.length ? supplierOrderFromIds(supplierOrderIds).map((profile) => {
+        {profiles.length ? orderedProfiles.map((profile) => {
           const selected = profile.id === appSettings?.activeRelayId;
           const aggregate = !!profile.aggregateEnabled;
           return (
@@ -3805,8 +3810,8 @@ function SessionManagementScreen({
   providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
 }) {
-  const sessions = localSessions?.sessions ?? [];
-  const sessionProjectGroups = groupLocalSessionsByProject(sessions);
+  const sessions = useMemo(() => localSessions?.sessions ?? [], [localSessions]);
+  const sessionProjectGroups = useMemo(() => groupLocalSessionsByProject(sessions), [sessions]);
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
