@@ -6453,7 +6453,7 @@ body {
   height: 20px;
   border-radius: 50%;
   background: var(--ops-text-strong);
-  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
   transform: translate(0, -50%);
   transition: transform 140ms ease;
 }
