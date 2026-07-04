@@ -3619,7 +3619,6 @@ body {
 .status-segment.ok {
   border-color: rgb(var(--ops-primary-rgb) / 0.42);
   background: rgb(var(--ops-primary-rgb) / 0.16);
-  color: #eef0ff;
 }
 
 .status-segment.warn {
@@ -3839,10 +3838,6 @@ body {
   border-radius: 8px;
 
   padding: 12px;
-}
-
-.supplier-env-card svg {
-  color: #aeb7ff;
 }
 
 .supplier-env-card strong,
