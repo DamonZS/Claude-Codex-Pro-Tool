@@ -580,7 +580,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
     });
   }
-  if (command === "load_claude_desktop_status") {
+  if (command === "load_claude_desktop_status" || command === "load_claude_desktop_status_light") {
     return ok("预览模式 Claude 诊断。", {
       processCount: 0,
       executablePaths: [],

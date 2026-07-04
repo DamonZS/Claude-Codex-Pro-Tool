@@ -4214,7 +4214,7 @@ function MaintenanceToolsPanel({
 }) {
   const savedCodexPath = settings?.settings.codexAppPath?.trim() || "";
   const detectedCodexPath = overview?.codex_app.path || "";
-  const detectedClaudePath = claudeDesktop?.executablePaths[0] || "";
+  const detectedClaudePath = claudeDesktop?.executablePaths?.[0] || "";
   return (
     <div className="stack">
       <Panel title="检查与修复" detail="检查入口、Codex 应用和 Watcher 状态。">
@@ -4569,8 +4569,8 @@ function StatusTile({ icon: Icon, label, value, status, items }: { icon: LucideI
       <span>{label}</span>
       {items?.length ? (
         <div className="status-segment-list">
-          {items.map((item) => (
-            <b className={`status-segment ${item.tone}`} key={item.label}>{item.label}</b>
+          {items.map((item, index) => (
+            <b className={`status-segment ${item.tone}`} key={index}>{item.label}</b>
           ))}
         </div>
       ) : (
@@ -4810,7 +4810,7 @@ function displayAssetName(name?: string | null) {
 function claudeDesktopVersionLabel(claudeDesktop: ClaudeDesktopResult | null) {
   if (!claudeDesktop) return "未检测";
   const install = claudeDesktop.installKind || "未知安装";
-  const path = claudeDesktop.executablePaths[0] ? compactPath(claudeDesktop.executablePaths[0]) : "未检测到路径";
+  const path = claudeDesktop.executablePaths?.[0] ? compactPath(claudeDesktop.executablePaths[0]) : "未检测到路径";
   return `${install} · ${path}`;
 }
 
