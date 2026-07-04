@@ -5117,9 +5117,9 @@ body {
 }
 
 .ops-shell.dark .ops-danger-zone {
-  border-color: #4a3513;
-  background: #261d10;
-  color: #fdba74;
+  border-color: var(--ops-warning-zone-border);
+  background: var(--ops-warning-zone-bg);
+  color: var(--ops-warning-strong);
 }
 
 .ops-shell.dark .action-button:hover,
