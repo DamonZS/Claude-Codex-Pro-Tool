@@ -94,8 +94,61 @@ pub fn resolve_codex_app_dir(app_dir: Option<&Path>) -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         return find_macos_codex_app_default();
     }
-    // Windows: try MS Store version first, then standalone install
-    find_latest_codex_app_dir_default().or_else(|| find_standalone_codex_app_dir())
+    // Windows: try MS Store version first, then standalone install.
+    // find_latest_codex_app_dir_default() reads C:\Program Files\WindowsApps
+    // directly, which throws UnauthorizedAccessException for a non-elevated
+    // process — so on a normal user session it always returns None and the MSIX
+    // install is invisible. codex_appx_app_dir() recovers the real install
+    // location via Get-AppxPackage (the same registry the OS uses), which does
+    // not require elevation. Without it, a stale saved path (e.g. an
+    // already-updated package version) makes 重启 Codex fail with "Codex App
+    // directory not found" on every click.
+    find_latest_codex_app_dir_default()
+        .or_else(codex_appx_app_dir)
+        .or_else(|| find_standalone_codex_app_dir())
+}
+
+/// Resolve the latest installed Codex MSIX package directory via the Appx
+/// registry. Works without elevation, unlike enumerating WindowsApps on disk.
+#[cfg(windows)]
+fn codex_appx_app_dir() -> Option<PathBuf> {
+    let script = "$packages = @(); \
+foreach ($name in @('OpenAI.Codex','OpenAI.CodexBeta')) { \
+  $packages += Get-AppxPackage -Name $name -ErrorAction SilentlyContinue; \
+  try { $packages += Get-AppxPackage -AllUsers -Name $name -ErrorAction Stop } catch { } }; \
+$packages | Where-Object { $_.InstallLocation } | \
+  Sort-Object Version -Descending | \
+  Select-Object -First 1 -ExpandProperty InstallLocation";
+    let install_location = powershell_line(script)?;
+    let install_location = install_location.trim();
+    if install_location.is_empty() {
+        return None;
+    }
+    normalize_codex_app_path(Path::new(install_location))
+}
+
+#[cfg(not(windows))]
+fn codex_appx_app_dir() -> Option<PathBuf> {
+    None
+}
+
+/// Run a PowerShell one-liner and return its trimmed first line of stdout.
+/// Returns None on spawn failure, non-zero exit, or empty output.
+#[cfg(windows)]
+fn powershell_line(script: &str) -> Option<String> {
+    let mut command = std::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-Command", script]);
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::windows_create_no_window());
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().find(|line| !line.trim().is_empty())?;
+    Some(line.to_string())
 }
 
 /// Search for standalone Codex installations (non-MS Store).
