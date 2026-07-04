@@ -2518,7 +2518,15 @@ pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
         .map(|path| path.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join("; ");
-    bail!("Silent launcher {launcher_name} was not found; searched: {searched}")
+    // 已安装场景下 NSIS 会把 claude-codex-pro.exe 与管理器放在同一 $INSTDIR；
+    // dev 场景下 beforeDevCommand 会先 `cargo build -p claude-codex-pro-launcher`
+    // 把它产到 target/debug。两种入口都缺失时，多半是直接跑了 manager.exe 却
+    // 没先编译 launcher。给出可执行的恢复指引，而不是只抛一串搜索路径。
+    bail!(
+        "未找到静默启动器 {launcher_name}。开发环境请先运行 \
+         `cargo build -p claude-codex-pro-launcher --bin claude-codex-pro`（或直接 `npm run dev`），\
+         已安装环境请重新运行安装包修复。已搜索路径：{searched}"
+    )
 }
 
 #[tauri::command]
