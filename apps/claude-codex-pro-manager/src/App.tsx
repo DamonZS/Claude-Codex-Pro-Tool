@@ -1079,6 +1079,16 @@ export function App() {
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
     if (!statusOk(next.status)) setNotice(next);
   };
+  // 用户主动动作（启动/修复/保存/删除/安装等）统一走这里：无论成功或失败都在右下角给出反馈。
+  // 数据加载/切页面刷新仍用 notifyIfNeedsAttention，成功时保持静默，避免频繁弹出。
+  const notifyResult = (next: { title: string; message?: string; status?: Status }) => {
+    const message = next.message?.trim()
+      ? next.message
+      : statusOk(next.status)
+        ? "操作完成。"
+        : "操作未成功，请检查状态或日志。";
+    setNotice({ title: next.title, message, status: next.status });
+  };
 
   const run = async <T,>(
     task: () => Promise<T>,
@@ -1294,7 +1304,7 @@ export function App() {
     if (result) {
       setCodexContextEntries(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "保存工具与插件", message: result.message, status: result.status });
+      notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
       await refreshContextEntries(true, result.settings);
     }
@@ -1310,7 +1320,7 @@ export function App() {
     if (result) {
       setCodexContextEntries(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "删除工具与插件", message: result.message, status: result.status });
+      notifyResult({ title: "删除工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
       await refreshContextEntries(true, result.settings);
     }
@@ -1325,7 +1335,7 @@ export function App() {
     );
     if (result) {
       setLiveCodexContextEntries(result);
-      notifyIfNeedsAttention({ title: "同步当前 Codex 配置", message: result.message, status: result.status });
+      notifyResult({ title: "同步当前 Codex 配置", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1346,7 +1356,7 @@ export function App() {
     );
     if (result) {
       setClaudeContextEntries(result);
-      notifyIfNeedsAttention({ title: "保存 Claude 工具与插件", message: result.message, status: result.status });
+      notifyResult({ title: "保存 Claude 工具与插件", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1358,7 +1368,7 @@ export function App() {
     );
     if (result) {
       setClaudeContextEntries(result);
-      notifyIfNeedsAttention({ title: "删除 Claude 工具与插件", message: result.message, status: result.status });
+      notifyResult({ title: "删除 Claude 工具与插件", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1376,7 +1386,7 @@ export function App() {
     const result = await run(() => call<UpdateResult>("perform_update", release ? { release } : undefined), "下载并运行安装包");
     if (result) {
       setUpdateInfo(result);
-      notifyIfNeedsAttention({ title: "下载并运行安装包", message: result.message, status: result.status });
+      notifyResult({ title: "下载并运行安装包", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1448,7 +1458,7 @@ export function App() {
     const result = await run(() => call<ClaudeChineseWindowResult>("open_claude_chinese_window"), "Claude 一键汉化");
     if (result) {
       setClaudeChinese(result);
-      notifyIfNeedsAttention({ title: "Claude 一键汉化", message: result.message, status: result.status });
+      notifyResult({ title: "Claude 一键汉化", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -1473,7 +1483,7 @@ export function App() {
   const launchClaudeDesktop = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("open_claude_desktop"), "启动/重启Claude");
     if (result) {
-      notifyIfNeedsAttention({ title: "启动/重启Claude", message: result.message, status: result.status });
+      notifyResult({ title: "启动/重启Claude", message: result.message, status: result.status });
       await refreshClaude(true);
     }
   };
@@ -1482,7 +1492,7 @@ export function App() {
     const request = codexLaunchRequestFromOverview(overview);
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("restart_claude_codex_pro", { request }), "重启 Codex");
     if (result) {
-      notifyIfNeedsAttention({ title: "重启 Codex", message: result.message, status: result.status });
+      notifyResult({ title: "重启 Codex", message: result.message, status: result.status });
       await refreshOverview(true);
     }
   };
@@ -1491,7 +1501,7 @@ export function App() {
     const request = codexLaunchRequestFromOverview(overview);
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("launch_claude_codex_pro", { request }), "启动/重启Codex");
     if (result) {
-      notifyIfNeedsAttention({ title: "启动/重启Codex", message: result.message, status: result.status });
+      notifyResult({ title: "启动/重启Codex", message: result.message, status: result.status });
       await refreshOverview(true);
     }
   };
@@ -1500,7 +1510,7 @@ export function App() {
     const result = await run(() => call<PluginInstallPreviewResult>("preview_plugin_hub_install", { request: { id } }), "安装预览");
     if (result) {
       setPluginPreview(result);
-      notifyIfNeedsAttention({ title: "安装预览", message: result.message, status: result.status });
+      notifyResult({ title: "安装预览", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1524,7 +1534,7 @@ export function App() {
         ? "插件安装失败，请检查 Claude CLI 状态和安装预览。"
         : "插件安装失败，请检查安装预览、文件权限和本地依赖。";
       const message = result.message || result.installMessage || result.stderr || result.stdout || defaultFailure;
-      notifyIfNeedsAttention({ title: "插件中心", message, status: result.status });
+      notifyResult({ title: "插件中心", message, status: result.status });
       await refreshPluginHub(true);
     }
   };
@@ -1534,7 +1544,7 @@ export function App() {
     const result = await run(() => call<PluginHubResult>("uninstall_plugin_hub_item", { request: { id } }), "卸载插件");
     if (result) {
       setPluginHub(result);
-      notifyIfNeedsAttention({ title: "插件中心", message: result.message, status: result.status });
+      notifyResult({ title: "插件中心", message: result.message, status: result.status });
     }
   };
 
@@ -1542,7 +1552,7 @@ export function App() {
     const result = await run(() => call<CodexHookTrustResult>("preview_ponytail_codex_hooks"), "Ponytail Codex Hooks");
     if (result) {
       setCodexHookTrust(result);
-      notifyIfNeedsAttention({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
+      notifyResult({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1560,14 +1570,14 @@ export function App() {
     const result = await run(() => call<CodexHookTrustResult>("trust_ponytail_codex_hooks"), "Trust Ponytail Hooks");
     if (result) {
       setCodexHookTrust(result);
-      notifyIfNeedsAttention({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
+      notifyResult({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });
     }
   };
 
   const generatePonytailMcpbInstaller = async () => {
     const result = await run(() => call<McpbPackageResult>("generate_ponytail_mcpb_installer"), "Ponytail MCPB");
     if (result) {
-      notifyIfNeedsAttention({ title: "Ponytail MCPB", message: result.message || result.package.message, status: result.status });
+      notifyResult({ title: "Ponytail MCPB", message: result.message || result.package.message, status: result.status });
     }
   };
 
@@ -1590,7 +1600,7 @@ export function App() {
         message: result.message,
         orgPluginStatus: result.orgPluginStatus,
       });
-      notifyIfNeedsAttention({ title: "Claude Desktop 本地插件包", message: result.message || result.outcome.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 本地插件包", message: result.message || result.outcome.message, status: result.status });
       await refreshPluginHub(true);
     }
   };
@@ -1599,7 +1609,7 @@ export function App() {
     const result = await run(() => call<ClaudeDesktopOrgPluginStatusResult>("open_claude_desktop_org_plugins_dir"), "Claude Desktop 组织插件目录");
     if (result) {
       setClaudeDesktopOrgPlugin(result);
-      notifyIfNeedsAttention({ title: "Claude Desktop 组织插件目录", message: result.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 组织插件目录", message: result.message, status: result.status });
     }
   };
 
@@ -1611,7 +1621,7 @@ export function App() {
         message: result.message,
         marketplaceStatus: result.marketplaceStatus,
       });
-      notifyIfNeedsAttention({ title: "Claude Desktop 插件仓库", message: result.message || result.outcome.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 插件仓库", message: result.message || result.outcome.message, status: result.status });
     }
   };
 
@@ -1625,7 +1635,7 @@ export function App() {
         message: result.message,
         marketplaceStatus: result.marketplaceStatus,
       });
-      notifyIfNeedsAttention({ title: "Claude 插件仓库", message: result.message || result.outcome.message, status: result.status });
+      notifyResult({ title: "Claude 插件仓库", message: result.message || result.outcome.message, status: result.status });
       await refreshClaudeDesktopDevMode(true);
     }
   };
@@ -1657,7 +1667,7 @@ export function App() {
     const result = await run(() => call<ScriptMarketResult>("install_market_script", { id }), "安装脚本");
     if (result) {
       setScriptMarket(result);
-      notifyIfNeedsAttention({ title: "脚本市场", message: result.message, status: result.status });
+      notifyResult({ title: "脚本市场", message: result.message, status: result.status });
     }
   };
 
@@ -1750,7 +1760,10 @@ export function App() {
   };
 
   const openExternalUrl = async (url: string) => {
-    await run(() => call<CommandResult<Record<string, unknown>>>("open_external_url", { url }), "打开链接");
+    const result = await run(() => call<CommandResult<Record<string, unknown>>>("open_external_url", { url }), "打开链接");
+    if (result) {
+      notifyResult({ title: "打开链接", message: result.message, status: result.status });
+    }
   };
 
   const goPluginHub = async () => {
@@ -1769,7 +1782,7 @@ export function App() {
 
   const repairEntrypoints = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("repair_shortcuts"), "修复入口");
-    if (result) notifyIfNeedsAttention({ title: "修复入口", message: result.message, status: result.status });
+    if (result) notifyResult({ title: "修复入口", message: result.message, status: result.status });
     await refreshOverview(true);
   };
 
@@ -1778,7 +1791,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "修复后端", message: result.message, status: result.status });
+      notifyResult({ title: "修复后端", message: result.message, status: result.status });
     }
   };
 
@@ -1786,7 +1799,7 @@ export function App() {
     const result = await run(() => call<ProviderSyncResult>("sync_providers_now"), "历史会话修复");
     if (result) {
       setProviderSync(result);
-      notifyIfNeedsAttention({ title: "历史会话修复", message: result.message, status: result.status });
+      notifyResult({ title: "历史会话修复", message: result.message, status: result.status });
       await refreshLocalSessions(true);
       await refreshSettings(true);
     }
@@ -1800,7 +1813,7 @@ export function App() {
       "删除 Codex 会话",
     );
     if (result) {
-      notifyIfNeedsAttention({ title: "删除 Codex 会话", message: result.message, status: result.status });
+      notifyResult({ title: "删除 Codex 会话", message: result.message, status: result.status });
       await refreshLocalSessions(true);
     }
   };
@@ -1811,7 +1824,7 @@ export function App() {
       "保存记忆",
     );
     if (result) {
-      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
     return result?.status === "ok";
@@ -1823,7 +1836,7 @@ export function App() {
       "更新记忆",
     );
     if (result) {
-      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
     return result?.status === "ok";
@@ -1836,7 +1849,7 @@ export function App() {
     );
     if (result) {
       setMemorySearch(result);
-      notifyIfNeedsAttention({ title: "记忆搜索", message: result.message, status: result.status });
+      notifyResult({ title: "记忆搜索", message: result.message, status: result.status });
     }
   };
 
@@ -1844,7 +1857,7 @@ export function App() {
     if (!window.confirm("确认删除这条经验教训？")) return;
     const result = await run(() => call<MemoryItemResult>("delete_memory_assist_item", { request: { id } }), "删除经验教训");
     if (result) {
-      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1852,7 +1865,7 @@ export function App() {
   const approveMemoryAssistCandidate = async (id: string) => {
     const result = await run(() => call<MemoryItemResult>("approve_memory_assist_candidate", { request: { id } }), "确认候选记忆");
     if (result) {
-      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1860,7 +1873,7 @@ export function App() {
   const rejectMemoryAssistCandidate = async (id: string) => {
     const result = await run(() => call<MemoryCandidateResult>("reject_memory_assist_candidate", { request: { id } }), "忽略候选记忆");
     if (result) {
-      notifyIfNeedsAttention({ title: "盘古记忆", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1869,7 +1882,7 @@ export function App() {
     const result = await run(() => call<MemoryExportResult>("export_memory_assist"), "导出记忆");
     if (result) {
       setMemoryExport(result);
-      notifyIfNeedsAttention({ title: "记忆导出", message: result.message, status: result.status });
+      notifyResult({ title: "记忆导出", message: result.message, status: result.status });
     }
   };
 
@@ -1893,7 +1906,7 @@ export function App() {
     );
     if (result) {
       setMemoryAssist(result);
-      notifyIfNeedsAttention({ title: "记忆导入", message: result.message, status: result.status });
+      notifyResult({ title: "记忆导入", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1902,7 +1915,7 @@ export function App() {
     const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "盘古记忆自检");
     if (result) {
       setMemorySelfCheck(result);
-      notifyIfNeedsAttention({ title: "盘古记忆自检", message: result.message, status: result.status });
+      notifyResult({ title: "盘古记忆自检", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
     }
   };
@@ -1929,7 +1942,7 @@ export function App() {
   const applyRelayMode = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_relay_injection"), "官方混入 API Key");
     if (result) {
-      notifyIfNeedsAttention({ title: "官方混入 API Key", message: result.message, status: result.status });
+      notifyResult({ title: "官方混入 API Key", message: result.message, status: result.status });
       await refreshSettings(true);
     }
   };
@@ -1937,7 +1950,7 @@ export function App() {
   const applyPureApiMode = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_pure_api_injection"), "纯 API");
     if (result) {
-      notifyIfNeedsAttention({ title: "纯 API", message: result.message, status: result.status });
+      notifyResult({ title: "纯 API", message: result.message, status: result.status });
       await refreshSettings(true);
     }
   };
@@ -1945,7 +1958,7 @@ export function App() {
   const clearRelayMode = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("clear_relay_injection"), "清除 API 模式");
     if (result) {
-      notifyIfNeedsAttention({ title: "清除 API 模式", message: result.message, status: result.status });
+      notifyResult({ title: "清除 API 模式", message: result.message, status: result.status });
       await refreshSettings(true);
     }
   };
@@ -1970,7 +1983,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "切换 Codex 供应商", message: result.message, status: result.status });
+      notifyResult({ title: "切换 Codex 供应商", message: result.message, status: result.status });
       await refreshSettings(true);
     }
   };
@@ -1978,7 +1991,7 @@ export function App() {
   const fetchRelayProfileModels = async (profile: RelayProfile) => {
     const result = await run(() => call<RelayProfileModelsResult>("fetch_relay_profile_models", { profile }), "获取供应商模型");
     if (result) {
-      notifyIfNeedsAttention({ title: "获取供应商模型", message: result.message, status: result.status });
+      notifyResult({ title: "获取供应商模型", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1986,7 +1999,7 @@ export function App() {
   const importCcswitchCodexProviders = async () => {
     const result = await run(() => call<CcswitchImportResult>("import_ccswitch_codex_providers"), "CC-switch 导入");
     if (result) {
-      notifyIfNeedsAttention({ title: "CC-switch 导入", message: result.message, status: result.status });
+      notifyResult({ title: "CC-switch 导入", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1998,7 +2011,7 @@ export function App() {
     );
     if (result) {
       setClaudeDesktopProviderPreview(result);
-      notifyIfNeedsAttention({ title: "Claude Desktop 供应商预览", message: result.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 供应商预览", message: result.message, status: result.status });
     }
   };
 
@@ -2018,7 +2031,7 @@ export function App() {
         message: result.message,
         devModeStatus: result.devModeStatus,
       });
-      notifyIfNeedsAttention({ title: "Claude Desktop 供应商", message: result.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 供应商", message: result.message, status: result.status });
       await refreshClaudeDesktopDevMode(true);
     }
   };
@@ -2036,7 +2049,7 @@ export function App() {
         message: result.message,
         devModeStatus: result.devModeStatus,
       });
-      notifyIfNeedsAttention({ title: "Claude Desktop 官方模式", message: result.message, status: result.status });
+      notifyResult({ title: "Claude Desktop 官方模式", message: result.message, status: result.status });
       await refreshClaudeDesktopDevMode(true);
     }
   };
@@ -2046,14 +2059,14 @@ export function App() {
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "保存设置", message: result.message, status: result.status });
+      notifyResult({ title: "保存设置", message: result.message, status: result.status });
     }
     return result;
   };
 
   const installEntrypoints = async () => {
     const result = await run(() => call<InstallEntrypointsResult>("install_entrypoints"), "安装入口");
-    if (result) notifyIfNeedsAttention({ title: "安装入口", message: result.message, status: result.status });
+    if (result) notifyResult({ title: "安装入口", message: result.message, status: result.status });
     await refreshOverview(true);
   };
 
@@ -2063,13 +2076,13 @@ export function App() {
       () => call<InstallEntrypointsResult>("uninstall_entrypoints", { options: { removeOwnedData: false } }),
       "卸载入口",
     );
-    if (result) notifyIfNeedsAttention({ title: "卸载入口", message: result.message, status: result.status });
+    if (result) notifyResult({ title: "卸载入口", message: result.message, status: result.status });
     await refreshOverview(true);
   };
 
   const repairShortcuts = async () => {
     const result = await run(() => call<InstallEntrypointsResult>("repair_shortcuts"), "修复快捷方式");
-    if (result) notifyIfNeedsAttention({ title: "修复快捷方式", message: result.message, status: result.status });
+    if (result) notifyResult({ title: "修复快捷方式", message: result.message, status: result.status });
     await refreshOverview(true);
   };
 
@@ -2077,7 +2090,7 @@ export function App() {
     const result = await run(() => call<WatcherResult>(command), title);
     if (result) {
       setWatcher(result);
-      notifyIfNeedsAttention({ title, message: result.message, status: result.status });
+      notifyResult({ title, message: result.message, status: result.status });
     }
   };
 
@@ -2087,7 +2100,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "重置设置", message: result.message, status: result.status });
+      notifyResult({ title: "重置设置", message: result.message, status: result.status });
     }
   };
 
@@ -2096,7 +2109,7 @@ export function App() {
     if (result) {
       setSettings(result);
       setSettingsDraft(result.settings);
-      notifyIfNeedsAttention({ title: "重置图片覆盖", message: result.message, status: result.status });
+      notifyResult({ title: "重置图片覆盖", message: result.message, status: result.status });
     }
   };
 
