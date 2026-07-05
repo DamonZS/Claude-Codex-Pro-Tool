@@ -4396,13 +4396,10 @@ body {
   line-height: 1.45;
 }
 
-/* active 时遮罩从左往右缓慢铺满整条，用可动画的自定义属性驱动填充边缘。 */
-@property --wave-fill {
-  syntax: "<percentage>";
-  inherits: false;
-  initial-value: 0%;
-}
-
+/* 对话监控活动条：宿主一个 WebGL2 火焰 canvas（见 MemoryActivityWave.tsx）。
+   火焰噪声天生无周期，会真实忽明忽暗地闪烁并从左往右流动——不像 radial-gradient
+   圆点网格（必生 moiré 斜纹）或平移噪声（只流不闪）那样躲不掉规律。
+   容器只负责裁剪成胶囊、给 idle 态一条暗紫底；canvas 铺满并 screen 混合叠上火焰。 */
 .memory-activity-wave {
   position: relative;
   display: inline-flex;
@@ -4412,82 +4409,24 @@ body {
   border-radius: 999px;
   overflow: hidden;
   isolation: isolate;
-  /* idle：保留右侧淡出的静态粒子带。 */
-  -webkit-mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.24) 64%, transparent 100%);
-  mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.24) 64%, transparent 100%);
+  background: linear-gradient(90deg, rgb(var(--ops-primary-rgb) / 0.14), rgb(var(--ops-primary-rgb) / 0.04));
 }
 
-/* 无规律流水闪烁：用 SVG feTurbulence 分形噪声作纹理——它本身随机、无周期，
-   不像 radial-gradient 圆点网格那样必然产生斜向 moiré 花纹。两层不同频率/种子/
-   速度的噪声（tile 宽 300/360px、时长 7s/11s 不成倍数）朝右滚动，噪声滚过时
-   每个像素伪随机忽明忽暗，合成出「从左往右流、无规律闪」的效果。
-   色值直接写死 #a3adff（= --ops-primary-hover），因 data-URI 内无法引用 CSS 变量。 */
-.memory-activity-wave::before,
-.memory-activity-wave::after {
-  content: "";
+.memory-activity-wave canvas {
   position: absolute;
   inset: 0;
-  background-repeat: repeat;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  /* idle：火焰渲染循环停转后淡出，只留暗紫底。 */
+  opacity: 0;
+  transition: opacity 0.35s ease;
 }
 
-.memory-activity-wave::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='18'%3E%3Cfilter id='a' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75 0.7' numOctaves='2' seed='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.639 0 0 0 0 0.678 0 0 0 0 1 0 0 0 1.7 -0.62'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23a)'/%3E%3C/svg%3E");
-  background-size: 300px 18px;
-  opacity: 0.95;
-  animation-name: memory-flow-a;
-  animation-duration: 7s;
-}
-
-.memory-activity-wave::after {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='18'%3E%3Cfilter id='b' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.05 0.85' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.639 0 0 0 0 0.678 0 0 0 0 1 0 0 0 1.5 -0.55'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23b)'/%3E%3C/svg%3E");
-  background-size: 360px 18px;
-  opacity: 0.7;
-  animation-name: memory-flow-b;
-  animation-duration: 11s;
-}
-
-/* active：整条自左向右缓慢铺满（粒子漂移/闪烁已在基线常驻）。 */
-.memory-activity-wave[data-active="true"] {
-  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 var(--wave-fill), transparent calc(var(--wave-fill) + 15%));
-  mask-image: linear-gradient(90deg, #000 0%, #000 var(--wave-fill), transparent calc(var(--wave-fill) + 15%));
-  animation: memory-fill 5.2s ease-in-out infinite;
-}
-
-@keyframes memory-fill {
-  0% {
-    --wave-fill: 0%;
-  }
-  70% {
-    --wave-fill: 100%;
-  }
-  92% {
-    --wave-fill: 100%;
-  }
-  100% {
-    --wave-fill: 0%;
-  }
-}
-
-/* 两层噪声各朝右滚动整数个 tile 宽（300px / 360px），首尾像素相同 → 无缝循环。
-   两层宽度/时长都不成整除比（300÷7s、360÷11s），叠加后永不重复对齐 → 无规律。 */
-@keyframes memory-flow-a {
-  from {
-    background-position: 0 0;
-  }
-  to {
-    background-position: -300px 0;
-  }
-}
-
-@keyframes memory-flow-b {
-  from {
-    background-position: 0 0;
-  }
-  to {
-    background-position: -360px 0;
-  }
+/* active：火焰淡入常亮。 */
+.memory-activity-wave[data-active="true"] canvas {
+  opacity: 1;
 }
 
 .ops-note {

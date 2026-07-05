@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { MemoryActivityWave } from "@/components/MemoryActivityWave";
 import {
   AGGREGATE_STRATEGIES,
   CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE,
@@ -231,7 +232,7 @@ export function OverviewScreen({
           <div className="ops-note">
             <Activity className="h-4 w-4" />
             <span>对话监控</span>
-            <span className="memory-activity-wave" data-active={memoryMonitorActive} aria-hidden="true" />
+            <MemoryActivityWave active={memoryMonitorActive} />
           </div>
           <div className="info-grid compact memory-overview-matrix">
             <InfoRow
