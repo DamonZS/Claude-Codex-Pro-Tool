@@ -2,7 +2,7 @@ use claude_codex_pro_core::memory_assist::{
     MemoryAssistStore, MemoryCandidateRequest, MemoryImportRequest, MemoryItemRequest,
     MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::{Mutex, OnceLock};
 
 static CODEX_HOME_LOCK: Mutex<()> = Mutex::new(());
@@ -166,10 +166,12 @@ fn all_workspaces_scope_lists_and_searches_every_workspace() {
             limit: 20,
         })
         .unwrap();
-    assert!(search
-        .results
-        .iter()
-        .any(|item| item.item.workspace == "codex:repo:b"));
+    assert!(
+        search
+            .results
+            .iter()
+            .any(|item| item.item.workspace == "codex:repo:b")
+    );
 
     let candidates = store.list_candidates("__all__", true).unwrap();
     assert_eq!(candidates.len(), 3);
@@ -916,9 +918,11 @@ fn codex_history_backfill_records_captures_and_pending_candidates() {
     .unwrap();
     assert_eq!(summary.recent_captures.len(), 1);
     assert_eq!(summary.injected_items.len(), 1);
-    assert!(summary
-        .capture_summary
-        .contains("auto_learned: history workflow rule"));
+    assert!(
+        summary
+            .capture_summary
+            .contains("auto_learned: history workflow rule")
+    );
 }
 
 #[test]
