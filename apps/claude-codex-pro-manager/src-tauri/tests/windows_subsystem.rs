@@ -877,7 +877,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!commands_rs.contains("repair_claude_frontend_via_node_inspector"));
     assert!(!commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
     assert!(!commands_rs.contains("open_claude_chinese_window(app.clone()).await"));
-    assert!(commands_rs.contains("Claude localization window opened."));
+    assert!(commands_rs.contains("Claude 汉化窗口已打开。"));
     assert!(commands_rs.contains("pub async fn repair_frontend_connection("));
     assert!(commands_rs.contains("pub async fn repair_frontend_connection()"));
     assert!(!commands_rs.contains("BrowserWindow.getAllWindows"));
@@ -1778,11 +1778,11 @@ fn claude_zh_patch_commands_close_claude_before_writing_resources() {
         .expect("restore command source");
 
     assert!(install_action.contains("close_claude_desktop_for_patch()"));
-    assert!(install_action.contains("Failed to close Claude Desktop before patch"));
+    assert!(install_action.contains("打补丁前关闭 Claude Desktop 失败"));
     assert!(manual_action.contains("close_claude_desktop_for_patch()"));
-    assert!(manual_action.contains("Failed to close Claude Desktop before manual patch"));
+    assert!(manual_action.contains("手动打补丁前关闭 Claude Desktop 失败"));
     assert!(restore_action.contains("close_claude_desktop_for_patch()"));
-    assert!(restore_action.contains("Failed to close Claude Desktop before restore"));
+    assert!(restore_action.contains("还原前关闭 Claude Desktop 失败"));
 }
 
 #[test]
@@ -1860,9 +1860,9 @@ fn claude_zh_patch_parent_verifies_final_status_after_elevation() {
         .expect("restore command source");
 
     assert!(install_action.contains("if status.status != \"ok\""));
-    assert!(install_action.contains("elevated run did not complete"));
+    assert!(install_action.contains("提权运行未完成"));
     assert!(restore_action.contains("if status.status != \"not_installed\""));
-    assert!(restore_action.contains("elevated run left patch residue"));
+    assert!(restore_action.contains("仍残留汉化文件"));
 }
 
 #[test]
@@ -2017,9 +2017,9 @@ fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
     assert!(commands_rs.contains("std::thread::spawn(move ||"));
     assert!(commands_rs.contains("stdout={}"));
     assert!(commands_rs.contains("stderr={}"));
-    assert!(commands_rs.contains("Elevated child did not write result file"));
+    assert!(commands_rs.contains("提权子进程未写入结果文件"));
     assert!(commands_rs.contains("child.kill()"));
-    assert!(commands_rs.contains("Elevated Claude Chinese patch timed out"));
+    assert!(commands_rs.contains("Claude 汉化补丁提权执行超时"));
 }
 
 #[test]
