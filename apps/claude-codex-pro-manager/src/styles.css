@@ -4427,17 +4427,17 @@ body {
   inset: 0;
   background-image: radial-gradient(
     circle,
-    rgb(var(--ops-primary-hover-rgb) / 0.95) 0.6px,
-    transparent 1.3px
+    rgb(var(--ops-primary-hover-rgb) / 1) 1px,
+    transparent 1.7px
   );
   background-size: 4px 4px;
-  opacity: 0.3;
+  opacity: 0.95;
   animation: memory-particles-a 2.2s linear infinite;
 }
 
 .memory-activity-wave::after {
   background-position: 2px 2px;
-  opacity: 0.18;
+  opacity: 0.7;
   animation: memory-particles-b 3s linear infinite;
 }
 
@@ -4466,28 +4466,28 @@ body {
 @keyframes memory-particles-a {
   0% {
     background-position: 0 0;
-    opacity: 0.22;
+    opacity: 0.8;
   }
   50% {
-    opacity: 0.66;
+    opacity: 1;
   }
   100% {
     background-position: 16px 0;
-    opacity: 0.22;
+    opacity: 0.8;
   }
 }
 
 @keyframes memory-particles-b {
   0% {
     background-position: 2px 2px;
-    opacity: 0.38;
+    opacity: 0.85;
   }
   50% {
-    opacity: 0.12;
+    opacity: 0.5;
   }
   100% {
     background-position: -14px 2px;
-    opacity: 0.38;
+    opacity: 0.85;
   }
 }
 
