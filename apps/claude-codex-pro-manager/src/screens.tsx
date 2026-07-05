@@ -173,7 +173,15 @@ export function OverviewScreen({
   const memoryCodexInjected = Boolean(memory?.codexInjected);
   const memoryMonitorActive = Boolean(memory?.active);
   const memoryRuntimeStatus = memory?.runtimeStatus ?? "not_checked";
-  const memoryRuntimeMessage = memory?.runtimeMessage || "尚未检测到 Codex 记忆运行时。";
+  // 运行状态行只显示短标签，不再把后端 runtimeMessage（可能是整份经验教训全文）灌进 value。
+  const memoryRuntimeValue = ({
+    ok: "运行中",
+    waiting: "等待 Codex 注入",
+    disabled: "未开启",
+    failed: "未运行",
+    loading: "正在检测",
+    not_checked: "尚未检测",
+  } as Record<string, string>)[memoryRuntimeStatus] ?? "尚未检测";
   const memoryInjectStatus = memoryCodexInjected ? "ok" : memoryEnabled && memoryInjectEnabled ? "running" : memoryEnabled ? "failed" : "not_checked";
   const memoryInjectValue = memoryCodexInjected ? "已注入" : memoryEnabled && memoryInjectEnabled ? "等待 Codex 注入" : "未开启";
   const memoryMonitorValue = memoryMonitorActive
@@ -216,19 +224,14 @@ export function OverviewScreen({
             <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
           </div>
           <div className="ops-status-list">
-            <StatusRow label="运行状态" status={memoryRuntimeStatus} value={memoryRuntimeMessage} />
+            <StatusRow label="运行状态" status={memoryRuntimeStatus} value={memoryRuntimeValue} />
             <StatusRow label="Codex 注入" status={memoryInjectStatus} value={memoryInjectValue} />
             <StatusRow label="对话监控" status={memoryMonitorStatus} value={memoryMonitorValue} />
           </div>
           <div className="ops-note">
             <Activity className="h-4 w-4" />
             <span>对话监控</span>
-            <span className="memory-activity-wave" data-active={memoryMonitorActive}>
-              <span />
-              <span />
-              <span />
-              <span />
-            </span>
+            <span className="memory-activity-wave" data-active={memoryMonitorActive} aria-hidden="true" />
           </div>
           <div className="info-grid compact memory-overview-matrix">
             <InfoRow
