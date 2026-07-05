@@ -4419,12 +4419,12 @@ body {
   height: 100%;
   pointer-events: none;
   mix-blend-mode: screen;
-  /* idle：火焰渲染循环停转后淡出，只留暗紫底。 */
-  opacity: 0;
+  /* idle（等待 Codex 注入/等待会话变化）：火焰常驻燃烧，压暗一档。 */
+  opacity: 0.5;
   transition: opacity 0.35s ease;
 }
 
-/* active：火焰淡入常亮。 */
+/* active（自动学习运行中）：火焰全亮。 */
 .memory-activity-wave[data-active="true"] canvas {
   opacity: 1;
 }

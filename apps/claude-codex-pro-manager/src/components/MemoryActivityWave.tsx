@@ -403,9 +403,10 @@ export function MemoryActivityWave({ active }: { active: boolean }) {
     };
   }, []);
 
+  // 火焰常驻燃烧（active/idle 都点着），亮度差异交给 CSS 的 data-active 控制。
   useEffect(() => {
-    engineRef.current?.setActive(active);
-  }, [active]);
+    engineRef.current?.setActive(true);
+  }, []);
 
   return (
     <span className="memory-activity-wave" data-active={active} aria-hidden="true">
