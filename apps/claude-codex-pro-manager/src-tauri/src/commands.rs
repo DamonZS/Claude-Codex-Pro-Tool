@@ -2057,13 +2057,13 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
                             ));
                         } else {
                             details.push(format!(
-                                "Codex 前端脚本已在本次修复后加载，时间戳 {}；盘古记忆 runtime 将在页面同步后继续上报。",
+                                "Codex 前端脚本已在本次修复后加载，时间戳 {}；盘古记忆运行时将在页面同步后继续上报。",
                                 heartbeat.timestamp_ms
                             ));
                         }
                         true
                     } else {
-                        details.push("未等到本次修复后的 Codex 前端脚本或 runtime 新心跳；旧注入状态不会被判定为成功。".to_string());
+                        details.push("未等到本次修复后的 Codex 前端脚本或运行时新心跳；旧注入状态不会被判定为成功。".to_string());
                         false
                     }
                 }
@@ -3263,7 +3263,7 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
             "disabled".to_string()
         };
         memory.runtime_message = if runtime.summary.trim().is_empty() {
-            "盘古记忆 runtime 已同步。".to_string()
+            "盘古记忆运行时已同步。".to_string()
         } else if runtime.injected && runtime.status == "idle" {
             "等待真实对话消息后写入盘古记忆。".to_string()
         } else {
@@ -3285,7 +3285,7 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
         }
     } else if heartbeat_is_fresh && memory.enabled && memory.inject_enabled {
         memory.runtime_status = "ok".to_string();
-        memory.runtime_message = "Codex 前端脚本已注入，等待盘古记忆 runtime 同步。".to_string();
+        memory.runtime_message = "Codex 前端脚本已注入，正在等待盘古记忆运行时同步。".to_string();
         memory.codex_injected = true;
         memory.active = true;
         memory.active_source = "codex-script".to_string();
@@ -3296,7 +3296,7 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
             "disabled".to_string()
         };
         memory.runtime_message = if memory.enabled && memory.inject_enabled {
-            "等待 Codex 记忆 runtime 注入。".to_string()
+            "已启用盘古记忆并开启注入，正在等待 Codex 前端加载记忆运行时脚本。请确认 Codex 已启动并完成注入。".to_string()
         } else {
             "盘古记忆当前已禁用。".to_string()
         };

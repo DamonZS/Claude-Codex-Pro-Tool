@@ -860,7 +860,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("fn normalize_memory_runtime_status"));
     assert!(commands_rs.contains("\"idle\" => \"ok\".to_string()"));
     assert!(commands_rs.contains(".take(2_000)"));
-    assert!(commands_rs.contains("Codex 前端脚本已注入，等待盘古记忆 runtime 同步。"));
+    assert!(commands_rs.contains("Codex 前端脚本已注入，正在等待盘古记忆运行时同步。"));
     assert!(commands_rs.contains("等待真实对话消息后写入盘古记忆。"));
     assert!(app_tsx.contains("status === \"idle\""));
     assert!(commands_rs.contains("force_reinject_bridge"));
@@ -2126,7 +2126,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     let zh_settings_panel = screens_file
         .split("<Panel title=\"Claude 一键汉化\"")
         .nth(1)
-        .and_then(|rest| rest.split("<Panel title=\"CLI Wrapper\"").next())
+        .and_then(|rest| rest.split("<Panel title=\"CLI 命令包装器\"").next())
         .expect("Claude zh settings panel source");
     assert!(zh_settings_panel.contains("安装类型"));
     assert!(zh_settings_panel.contains("目录可写"));
@@ -2136,7 +2136,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(zh_settings_panel.contains("Statsig 资源"));
     assert!(!zh_settings_panel.contains("入口 URL"));
     assert!(!zh_settings_panel.contains("wrapped_webview"));
-    assert!(app_tsx.contains("CLI Wrapper"));
+    assert!(app_tsx.contains("CLI 命令包装器"));
     assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
     assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
     assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
