@@ -839,7 +839,7 @@ export function LegacySupplierScreen({
             <InfoRow label="当前供应商" value={active?.name || active?.id || "未配置"} />
             <InfoRow label="模式" value={active?.relayMode || "official"} />
             <InfoRow label="模型" value={active?.model || settings?.settings.relayTestModel || "默认"} />
-            <InfoRow label="Base URL" value={active?.baseUrl || settings?.settings.relayBaseUrl || "官方登录"} />
+            <InfoRow label="接口地址" value={active?.baseUrl || settings?.settings.relayBaseUrl || "官方登录"} />
             <InfoRow label="配置路径" value={settings?.settings_path ?? "未加载"} />
           </div>
           <div className="action-row">
@@ -933,12 +933,12 @@ export function LegacySupplierScreen({
             <InfoRow label="开发模式" value={claudeDesktopDevMode?.devModeStatus.configured ? "已配置" : "未配置"} />
             <InfoRow label="普通配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.normalConfigPath)} />
             <InfoRow label="3P 配置" value={compactPath(claudeDesktopDevMode?.devModeStatus.threepConfigPath)} />
-            <InfoRow label="Profile Meta" value={compactPath(claudeDesktopDevMode?.devModeStatus.profileMetaPath)} />
+            <InfoRow label="Profile 元数据" value={compactPath(claudeDesktopDevMode?.devModeStatus.profileMetaPath)} />
           </div>
         </Panel>
         <Panel title="当前配置摘录" detail="只展示路径和非敏感字段。">
           <div className="info-grid compact">
-            <InfoRow label="Provider Sync" value={settings?.settings.providerSyncEnabled ? "开启" : "关闭"} />
+            <InfoRow label="供应商同步" value={settings?.settings.providerSyncEnabled ? "开启" : "关闭"} />
             <InfoRow label="供应商开关" value={settings?.settings.relayProfilesEnabled ? "开启" : "关闭"} />
             <InfoRow label="协议" value={active?.protocol || "responses"} />
             <InfoRow label="测试模型" value={active?.testModel || settings?.settings.relayTestModel || "默认"} />
@@ -1026,7 +1026,7 @@ export function CodexPluginRepositoryPanel({
             configured: false,
           },
           {
-            label: "Product Design Skill 仓库",
+            label: "产品设计技能仓库",
             name: CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_NAME,
             sourceType: "local",
             source: `${CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE} / ${CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE}`,
@@ -1559,7 +1559,7 @@ export function SessionManagementScreen({
         <div className="ops-wide-column">
           <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
             <div className="ops-status-list">
-              <StatusRow label="Provider Sync" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
+              <StatusRow label="供应商同步" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
               <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
               <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
             </div>
@@ -1707,7 +1707,7 @@ export function PluginHubScreen({
   const selected = items.find((item) => item.id === selectedId) ?? visible[0] ?? null;
   const selectedPreview = preview?.item.id === selected?.id ? preview : null;
   const selectedCanInstall = selected ? pluginCanInstall(selected.installKind) : false;
-  const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "Install";
+  const installButtonLabel = selected ? pluginInstallButtonLabel(selected.installKind) : "安装";
   return (
     <div className="stack">
       <div className="plugin-layout">
@@ -2011,7 +2011,7 @@ export function SettingsScreen({
     ["供应商同步", "providerSyncEnabled"],
     ["供应商配置", "relayProfilesEnabled"],
     ["增强总开关", "enhancementsEnabled"],
-    ["Computer Use Guard", "computerUseGuardEnabled"],
+    ["电脑操作守护", "computerUseGuardEnabled"],
     ["插件入口解锁", "codexAppPluginEntryUnlock"],
     ["插件市场解锁", "codexAppPluginMarketplaceUnlock"],
     ["特殊插件强制安装", "codexAppForcePluginInstall"],
@@ -2019,22 +2019,22 @@ export function SettingsScreen({
     ["会话删除", "codexAppSessionDelete"],
     ["Markdown 导出", "codexAppMarkdownExport"],
     ["会话项目移动", "codexAppProjectMove"],
-    ["对话 Timeline", "codexAppConversationTimeline"],
+    ["对话时间线", "codexAppConversationTimeline"],
     ["对话阅读视图", "codexAppConversationView"],
     ["切换对话保留位置", "codexAppThreadScrollRestore"],
-    ["Zed Remote open", "codexAppZedRemoteOpen"],
+    ["Zed 远程打开", "codexAppZedRemoteOpen"],
     ["Zed 项目记录", "zedRemoteProjectRegistryEnabled"],
-    ["同步 Zed settings", "zedRemoteSyncToZedSettings"],
-    ["Upstream worktree", "codexAppUpstreamWorktreeCreate"],
+    ["同步 Zed 设置", "zedRemoteSyncToZedSettings"],
+    ["上游工作树创建", "codexAppUpstreamWorktreeCreate"],
     ["原生菜单栏位置", "codexAppNativeMenuPlacement"],
     ["Claude 中文覆盖", "claudeAppChineseOverlayEnabled"],
     ["Fast 按钮", "codexAppServiceTierControls"],
     ["图片覆盖", "codexAppImageOverlayEnabled"],
-    ["Codex Goals", "codexGoalsEnabled"],
+    ["Codex 目标", "codexGoalsEnabled"],
     ["盘古记忆", "memoryAssistEnabled"],
     ["盘古记忆 DOM 标识", "memoryAssistInjectEnabled"],
     ["自动学习", "memoryAssistAutoSuggestEnabled"],
-    ["CLI Wrapper", "cliWrapperEnabled"],
+    ["CLI 包装器", "cliWrapperEnabled"],
   ] as const;
   return (
     <div className="ops-two-column">
@@ -2116,9 +2116,9 @@ export function SettingsScreen({
             </Button>
           </div>
         </Panel>
-        <Panel title="CLI Wrapper" detail="命令行包装器用于把本地 Codex CLI 请求接入当前配置。">
+        <Panel title="CLI 命令包装器" detail="命令行包装器用于把本地 Codex CLI 请求接入当前配置。">
           <div className="ops-toggle-line">
-            <span>启用 CLI Wrapper</span>
+            <span>启用 CLI 命令包装器</span>
             <ToggleSwitch checked={Boolean(s?.cliWrapperEnabled)} disabled={!s} onChange={(value) => updateDraft("cliWrapperEnabled", value)} />
           </div>
           <label className="ops-form-field">
@@ -2134,10 +2134,10 @@ export function SettingsScreen({
             <input disabled={!s} onChange={(event) => updateDraft("cliWrapperApiKey", event.currentTarget.value)} placeholder={s?.cliWrapperApiKey ? "已配置，输入新值覆盖" : "未设置"} type="password" value={s?.cliWrapperApiKey ?? ""} />
           </label>
           <div className="info-grid compact">
-            <InfoRow label="生效方式" value="保存后重建 Codex CLI Wrapper" />
+            <InfoRow label="生效方式" value="保存后重建 Codex CLI 命令包装器" />
             <InfoRow label="依赖" value="需要本机可执行 Codex CLI" />
           </div>
-          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI Wrapper</Button>
+          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI 命令包装器</Button>
         </Panel>
         <LogsScreen actions={actions} logs={logs} />
       </div>

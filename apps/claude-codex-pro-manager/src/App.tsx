@@ -763,12 +763,12 @@ export function App() {
     if (!preview) return;
     const pending = preview.preview.hooks.filter((hook) => !hook.trusted);
     if (!pending.length) {
-      setNotice({ title: "Ponytail Codex Hooks", message: "No untrusted Ponytail hooks were found.", status: "ok" });
+      setNotice({ title: "Ponytail Codex Hooks", message: "未发现未信任的 Ponytail hook。", status: "ok" });
       return;
     }
     const details = pending.map((hook) => `${hook.eventName}: ${hook.command}`).join("\n\n");
-    if (!window.confirm(`Trust these Ponytail Codex hooks?\n\n${details}`)) return;
-    const result = await run(() => call<CodexHookTrustResult>("trust_ponytail_codex_hooks"), "Trust Ponytail Hooks");
+    if (!window.confirm(`是否信任以下 Ponytail Codex hooks？\n\n${details}`)) return;
+    const result = await run(() => call<CodexHookTrustResult>("trust_ponytail_codex_hooks"), "信任 Ponytail Hooks");
     if (result) {
       setCodexHookTrust(result);
       notifyResult({ title: "Ponytail Codex Hooks", message: result.message, status: result.status });

@@ -31,15 +31,15 @@ export function pluginCanInstall(kind: PluginInstallKind) {
 
 export function pluginInstallButtonLabel(kind: PluginInstallKind) {
   const labels: Partial<Record<PluginInstallKind, string>> = {
-    claude_desktop_mcp: "Install to Claude Desktop",
-    claude_desktop_org_plugin: "Install to Claude Desktop",
-    claude_plugin_marketplace: "Install with Claude CLI",
-    claude_code_plugin: "Install to Claude Code",
-    codex_plugin: "Install to Codex",
-    copilot_plugin: "Install to Copilot CLI",
-    managed_skill_bundle: "Install Skills",
+    claude_desktop_mcp: "安装到 Claude Desktop",
+    claude_desktop_org_plugin: "安装到 Claude Desktop",
+    claude_plugin_marketplace: "用 Claude CLI 安装",
+    claude_code_plugin: "安装到 Claude Code",
+    codex_plugin: "安装到 Codex",
+    copilot_plugin: "安装到 Copilot CLI",
+    managed_skill_bundle: "安装技能包",
   };
-  return labels[kind] ?? "Install";
+  return labels[kind] ?? "安装";
 }
 
 export function pluginStatusLabel(status: PluginInstallStatus) {
