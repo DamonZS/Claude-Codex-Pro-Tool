@@ -1332,8 +1332,18 @@ fn run_command(command: &[String]) -> anyhow::Result<(String, String)> {
     let executable = command
         .first()
         .ok_or_else(|| anyhow::anyhow!("plugin install command is empty"))?;
-    let output = Command::new(executable)
-        .args(command.iter().skip(1))
+    let mut child = Command::new(executable);
+    child.args(command.iter().skip(1));
+    // Suppress the transient console window Windows opens for each child
+    // process (git clone/pull, npm install, ...). Without this flag every
+    // marketplace refresh flashes a terminal and steals focus, which also
+    // cancels any in-progress drag in the manager UI.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        child.creation_flags(crate::windows_create_no_window());
+    }
+    let output = child
         .output()
         .with_context(|| format!("cannot run command: {}", command.join(" ")))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1834,15 +1844,21 @@ fn install_official_claude_plugin(
             .first()
             .ok_or_else(|| anyhow::anyhow!("Claude plugin install command is empty"))?;
         let args = command.iter().skip(1).collect::<Vec<_>>();
-        let output = Command::new(executable)
-            .args(args)
-            .output()
-            .with_context(|| {
-                format!(
-                    "Claude Code CLI unavailable; cannot run plugin install command: {}",
-                    command.join(" ")
-                )
-            })?;
+        let mut child = Command::new(executable);
+        child.args(args);
+        // Suppress the transient console window Windows opens for each child
+        // process, matching every other subprocess spawn in the project.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            child.creation_flags(crate::windows_create_no_window());
+        }
+        let output = child.output().with_context(|| {
+            format!(
+                "Claude Code CLI unavailable; cannot run plugin install command: {}",
+                command.join(" ")
+            )
+        })?;
         let command_stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let command_stderr = String::from_utf8_lossy(&output.stderr).to_string();
         if !output.status.success() {

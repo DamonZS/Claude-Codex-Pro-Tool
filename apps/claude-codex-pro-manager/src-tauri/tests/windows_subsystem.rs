@@ -552,8 +552,10 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     assert!(styles.contains("height: 26px;"));
     assert!(styles.contains("align-items: center;"));
     assert!(styles.contains("flex: 0 0 20px;"));
-    // 拨钮选中态位移：三代改用 transform translate（旧的 margin-left: auto 已被覆盖删除）。
-    assert!(styles.contains("transform: translate(22px, -50%);"));
+    // 拨钮垂直居中改用 top/bottom:0 + margin-block:auto（不再靠 translate 的 -50% 兜底，
+    // 那种写法会因 box-shadow 显得偏下）；选中态只做水平位移 translate(22px, 0)。
+    assert!(styles.contains("transform: translate(22px, 0);"));
+    assert!(styles.contains("margin-block: auto;"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch.checked .toggle-switch-thumb"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch-thumb"));
     assert!(styles.contains("grid-template-columns: minmax(0, 1fr) 124px;"));
@@ -1042,7 +1044,8 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         )
     );
     assert!(
-        app_tsx.contains("afterFirstPaintIfFresh(() => {\n        void refreshClaudeZhPatch(true);")
+        app_tsx
+            .contains("afterFirstPaintIfFresh(() => {\n        void refreshClaudeZhPatch(true);")
     );
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
@@ -1322,7 +1325,11 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     );
     assert!(supplier_screen.contains("setSupplierOrderIds(previousIds);"));
     assert!(supplier_screen.contains("供应商顺序保存失败，已恢复原顺序。"));
-    assert!(supplier_screen.contains("const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds)"));
+    assert!(
+        supplier_screen.contains(
+            "const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds)"
+        )
+    );
     assert!(supplier_screen.contains("orderedProfiles.map((profile) => {"));
     assert!(
         supplier_screen.contains("onDragStart={(event) => beginSupplierDrag(event, profile.id)}")
@@ -1730,6 +1737,55 @@ fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
     assert!(validation.contains("command.stdout(std::process::Stdio::null())"));
     assert!(validation.contains("command.stderr(std::process::Stdio::null())"));
     assert!(validation.contains("command.creation_flags(crate::windows_create_no_window())"));
+}
+
+#[test]
+fn plugin_hub_and_worktree_git_spawns_suppress_console_window() {
+    // 回归护栏：Windows 下所有会 spawn 外部程序（git clone/pull、npm install、
+    // 官方插件安装、上游 worktree 的 git 调用）的代码路径都必须带 CREATE_NO_WINDOW，
+    // 否则每次调用都会闪出黑色终端窗并抢焦点，进而打断供应商列表的拖拽排序。
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let core_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("crates/claude-codex-pro-core/src");
+
+    let plugin_hub =
+        std::fs::read_to_string(core_dir.join("plugin_hub.rs")).expect("read core plugin_hub.rs");
+    // run_command 是 git clone/pull 与 npm install 的公共出口。
+    let run_command = plugin_hub
+        .split("fn run_command(command: &[String])")
+        .nth(1)
+        .and_then(|rest| rest.split("\nfn ").next())
+        .expect("run_command source");
+    assert!(run_command.contains("command.iter().skip(1)"));
+    assert!(run_command.contains("child.creation_flags(crate::windows_create_no_window())"));
+
+    // 官方 Claude 插件安装单独走一段 spawn，也必须隐藏窗口。
+    let official_install = plugin_hub
+        .split("fn install_official_claude_plugin(")
+        .nth(1)
+        .and_then(|rest| rest.split("\nfn ").next())
+        .expect("install_official_claude_plugin source");
+    assert!(official_install.contains("child.creation_flags(crate::windows_create_no_window())"));
+
+    // 上游 worktree 的 git 调用统一走 git_command()，且该 helper 带隐藏窗口标志。
+    let worktree_git = std::fs::read_to_string(core_dir.join("upstream_worktree/git.rs"))
+        .expect("read upstream_worktree/git.rs");
+    let git_command = worktree_git
+        .split("fn git_command() -> Command")
+        .nth(1)
+        .and_then(|rest| rest.split("\npub fn ").next())
+        .expect("git_command source");
+    assert!(git_command.contains("Command::new(\"git\")"));
+    assert!(git_command.contains("command.creation_flags(crate::windows_create_no_window())"));
+    // 不再有裸的 Command::new("git")（除 helper 自身那一处）。
+    assert_eq!(worktree_git.matches("Command::new(\"git\")").count(), 1);
+    assert_eq!(worktree_git.matches("git_command()").count(), 4);
 }
 
 #[test]

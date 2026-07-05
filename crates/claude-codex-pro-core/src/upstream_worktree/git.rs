@@ -9,6 +9,20 @@ use super::types::{
     UpstreamWorktreeResult, UpstreamWorktreeSourceRequest,
 };
 
+/// Build a `git` command with the platform-appropriate flags. On Windows this
+/// sets `CREATE_NO_WINDOW` so the transient console window is never shown; every
+/// other subprocess in the project does the same, and skipping it here flashes a
+/// terminal (and steals focus) on each call.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::windows_create_no_window());
+    }
+    command
+}
+
 pub fn validate_branch_name(branch: &str) -> UpstreamWorktreeResult<()> {
     let branch = branch.trim();
     if branch.is_empty() || branch.starts_with('-') || branch.contains('\\') {
@@ -18,7 +32,7 @@ pub fn validate_branch_name(branch: &str) -> UpstreamWorktreeResult<()> {
         ));
     }
 
-    let output = Command::new("git")
+    let output = git_command()
         .args(["check-ref-format", "--branch", branch])
         .output()
         .map_err(|_| {
@@ -152,7 +166,7 @@ pub(crate) fn source_request_from_payload(
 }
 
 pub(crate) fn git_output(args: Vec<OsString>) -> Result<GitOutput, std::io::Error> {
-    let output = Command::new("git").args(args).output()?;
+    let output = git_command().args(args).output()?;
     Ok(GitOutput {
         status_success: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
@@ -171,7 +185,7 @@ pub(crate) fn failed_response(error: UpstreamWorktreeError) -> Value {
 }
 
 fn git_available() -> bool {
-    Command::new("git")
+    git_command()
         .arg("--version")
         .output()
         .map(|output| output.status.success())
