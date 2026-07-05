@@ -4417,28 +4417,39 @@ body {
   mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.24) 64%, transparent 100%);
 }
 
-/* 两层错位的像素粒子场，营造 Claude「思考」时的粒子涌动感。
-   漂移 + 明暗涌动是常驻基线动画（idle 也一直在闪），激活态只在其上叠加
-   整条从左往右铺满的填充遮罩。 */
+/* 散乱闪烁的像素粒子场：每层叠两套「质数错开、永不周期对齐」的圆点网格
+   （5/7px、4/9px），各自以不同速度、不同方向漂移。两套网格交错滑动时在重叠处
+   忽明忽暗（moiré 干涉），合成出的整体是无规律的散乱闪烁，而不是整层同步明暗。
+   刻意不再用整层 opacity 脉冲——那正是「整齐同步闪」的根源。 */
 .memory-activity-wave::before,
 .memory-activity-wave::after {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(
-    circle,
-    rgb(var(--ops-primary-hover-rgb) / 1) 1px,
-    transparent 1.7px
-  );
-  background-size: 4px 4px;
+  background-repeat: repeat, repeat;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.memory-activity-wave::before {
+  background-image:
+    radial-gradient(circle, rgb(var(--ops-primary-hover-rgb) / 1) 1px, transparent 1.7px),
+    radial-gradient(circle, rgb(var(--ops-primary-hover-rgb) / 0.85) 0.9px, transparent 1.6px);
+  background-size: 5px 5px, 7px 7px;
   opacity: 0.95;
-  animation: memory-particles-a 2.2s linear infinite;
+  animation-name: memory-drift-a;
+  animation-duration: 2.3s;
 }
 
 .memory-activity-wave::after {
-  background-position: 2px 2px;
-  opacity: 0.7;
-  animation: memory-particles-b 3s linear infinite;
+  background-image:
+    radial-gradient(circle, rgb(var(--ops-primary-hover-rgb) / 0.95) 0.9px, transparent 1.6px),
+    radial-gradient(circle, rgb(var(--ops-primary-hover-rgb) / 0.8) 0.8px, transparent 1.5px);
+  background-size: 4px 4px, 9px 9px;
+  background-position: 2px 1px, 0 3px;
+  opacity: 0.8;
+  animation-name: memory-drift-b;
+  animation-duration: 3.1s;
 }
 
 /* active：整条自左向右缓慢铺满（粒子漂移/闪烁已在基线常驻）。 */
@@ -4463,31 +4474,23 @@ body {
   }
 }
 
-@keyframes memory-particles-a {
-  0% {
-    background-position: 0 0;
-    opacity: 0.8;
+/* 两套网格朝不同方向、以不成整除比例的距离漂移，重叠处不断错位 → 散乱闪。
+   位移量（20/-21、-18/27）与网格尺寸（5/7、4/9）互质，避免任何周期对齐。 */
+@keyframes memory-drift-a {
+  from {
+    background-position: 0 0, 0 0;
   }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    background-position: 16px 0;
-    opacity: 0.8;
+  to {
+    background-position: 20px -6px, -21px 8px;
   }
 }
 
-@keyframes memory-particles-b {
-  0% {
-    background-position: 2px 2px;
-    opacity: 0.85;
+@keyframes memory-drift-b {
+  from {
+    background-position: 2px 1px, 0 3px;
   }
-  50% {
-    opacity: 0.5;
-  }
-  100% {
-    background-position: -14px 2px;
-    opacity: 0.85;
+  to {
+    background-position: -18px 9px, 27px -7px;
   }
 }
 
