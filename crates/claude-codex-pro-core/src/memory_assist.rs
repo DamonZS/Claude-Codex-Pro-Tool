@@ -11,9 +11,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
+/// Dimensionality of the local deterministic embedding. Feature-hashing maps any
+/// text into this fixed-size dense vector; 256 keeps the BLOB small (256 * 4B =
+/// 1KiB per item) while giving enough buckets to separate distinct vocabularies.
+const LOCAL_EMBEDDING_DIM: usize = 256;
+/// Model tag stored alongside each embedding so a future switch to a real
+/// embedding model can detect and re-embed rows produced by this offline scheme.
+const LOCAL_EMBEDDING_MODEL: &str = "local-hash-v1";
 const ALL_WORKSPACES: &str = "__all__";
 const LESSON_MANUAL_CATEGORY: &str = "lesson-manual";
 const LESSON_MANUAL_SOURCE: &str = "lesson-manual-compiler";
@@ -465,11 +472,28 @@ impl MemoryAssistStore {
             }
         }
 
+        // Full-text signal: FTS5 (trigram) gives a bm25 rank per item that
+        // catches substring/token matches the in-memory keyword scan can miss.
+        // It only activates for queries the trigram tokenizer can handle (>= 3
+        // chars); shorter/CJK-2 queries still rely on the keyword score below.
+        let fts_scores = fts_match_scores(&conn, &request.query).unwrap_or_default();
+        // Semantic signal: cosine similarity over local deterministic embeddings.
+        // Surfaces memories that share vocabulary/co-occurrence even when the
+        // exact query tokens are absent. Backfills legacy rows in place.
+        let vector_scores = vector_match_scores(&conn, &request.query).unwrap_or_default();
+
         let query_keywords = keywords_for(&request.query);
         let mut matches = items
             .into_iter()
             .filter_map(|item| {
-                let (score, matched_keywords) = score_item(&query_keywords, &request.query, &item);
+                let (keyword_score, matched_keywords) =
+                    score_item(&query_keywords, &request.query, &item);
+                let fts_score = fts_scores.get(&item.id).copied().unwrap_or(0.0);
+                let vector_score = vector_scores.get(&item.id).copied().unwrap_or(0.0);
+                // Hybrid fusion: exact keyword score is the base; FTS bm25 and the
+                // semantic cosine are added as complementary signals (each squashed
+                // to 0..1) so neither exact-match nor semantic recall dominates.
+                let score = keyword_score + fts_score * 0.5 + vector_score * 0.4;
                 if request.query.trim().is_empty() || score > 0.0 {
                     Some(MemoryQueryMatch {
                         item,
@@ -1429,7 +1453,9 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             updated_at INTEGER NOT NULL,
             last_accessed_at INTEGER NOT NULL,
             access_count INTEGER NOT NULL DEFAULT 0,
-            keywords TEXT NOT NULL
+            keywords TEXT NOT NULL,
+            embedding BLOB,
+            embedding_model TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_memory_items_workspace ON memory_items(workspace);
         CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at ON memory_items(updated_at);
@@ -1487,7 +1513,73 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             item_count INTEGER NOT NULL,
             candidate_count INTEGER NOT NULL
         );
-        PRAGMA user_version = 2;
+        ",
+    )?;
+
+    // v3: full-text search + embedding columns. Migrate old v2 databases in place
+    // (never drop existing memory_items / memory_candidates).
+    let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if user_version < 3 {
+        migrate_to_v3(conn)?;
+    }
+    conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    Ok(())
+}
+
+/// Returns true when `table` already has a column named `column`. Used to make
+/// the v2 -> v3 `ALTER TABLE ADD COLUMN` steps idempotent (SQLite errors if the
+/// column already exists, and a partially-migrated DB is possible after a crash).
+fn column_exists(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// v2 -> v3 migration: add embedding storage to `memory_items` and build the
+/// FTS5 full-text index (trigram tokenizer, which handles both ASCII and CJK
+/// substring search, unlike the old in-memory keyword-intersection scan). The
+/// FTS content is kept in sync by triggers, and this backfills it from every
+/// existing row so old memories become searchable immediately.
+fn migrate_to_v3(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "memory_items", "embedding")? {
+        conn.execute_batch("ALTER TABLE memory_items ADD COLUMN embedding BLOB;")?;
+    }
+    if !column_exists(conn, "memory_items", "embedding_model")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_items ADD COLUMN embedding_model TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    conn.execute_batch(
+        "
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
+            item_id UNINDEXED,
+            text,
+            tokenize = 'trigram'
+        );
+
+        DROP TRIGGER IF EXISTS memory_items_fts_ai;
+        DROP TRIGGER IF EXISTS memory_items_fts_ad;
+        DROP TRIGGER IF EXISTS memory_items_fts_au;
+
+        CREATE TRIGGER memory_items_fts_ai AFTER INSERT ON memory_items BEGIN
+            INSERT INTO memory_items_fts(item_id, text) VALUES (new.id, new.text);
+        END;
+        CREATE TRIGGER memory_items_fts_ad AFTER DELETE ON memory_items BEGIN
+            DELETE FROM memory_items_fts WHERE item_id = old.id;
+        END;
+        CREATE TRIGGER memory_items_fts_au AFTER UPDATE ON memory_items BEGIN
+            DELETE FROM memory_items_fts WHERE item_id = old.id;
+            INSERT INTO memory_items_fts(item_id, text) VALUES (new.id, new.text);
+        END;
+
+        DELETE FROM memory_items_fts;
+        INSERT INTO memory_items_fts(item_id, text) SELECT id, text FROM memory_items;
         ",
     )?;
     Ok(())
@@ -2859,6 +2951,170 @@ fn stable_token_hash64(token: &str) -> u64 {
     u64::from_le_bytes(bytes)
 }
 
+/// Query the FTS5 trigram index and return a normalized (0..1) full-text score
+/// per item id. The trigram tokenizer needs at least 3 characters, so shorter
+/// queries return an empty map and the caller falls back to the keyword scan.
+///
+/// The raw query is wrapped as a single quoted FTS5 phrase (with embedded
+/// double-quotes doubled) so user input containing FTS operators (`AND`, `*`,
+/// `:`, `-`, ...) is treated as literal text rather than query syntax.
+fn fts_match_scores(
+    conn: &Connection,
+    raw_query: &str,
+) -> anyhow::Result<std::collections::HashMap<String, f64>> {
+    let trimmed = raw_query.trim();
+    // Trigram FTS matches on 3-char windows; anything shorter can't be indexed.
+    if trimmed.chars().count() < 3 {
+        return Ok(std::collections::HashMap::new());
+    }
+    let phrase = format!("\"{}\"", trimmed.replace('"', "\"\""));
+    let mut stmt = conn.prepare(
+        "SELECT item_id, bm25(memory_items_fts) AS rank
+         FROM memory_items_fts
+         WHERE memory_items_fts MATCH ?1",
+    )?;
+    let rows = stmt.query_map(params![phrase], |row| {
+        let item_id: String = row.get(0)?;
+        let rank: f64 = row.get(1)?;
+        Ok((item_id, rank))
+    });
+    // A malformed MATCH expression (should not happen after quoting) must not
+    // break querying — degrade to keyword-only rather than propagate the error.
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
+    // bm25() returns a negative score where more-negative = more relevant.
+    // Flip the sign and squash into 0..1 with x/(1+x) so it composes with the
+    // keyword score without any single hit dominating.
+    let mut scores = std::collections::HashMap::new();
+    for row in rows {
+        let Ok((item_id, rank)) = row else { continue };
+        let relevance = (-rank).max(0.0);
+        scores.insert(item_id, relevance / (1.0 + relevance));
+    }
+    Ok(scores)
+}
+
+/// Build a local, deterministic embedding for `text` using feature hashing over
+/// the same keyword set the lexical layer produces (ASCII tokens + CJK n-grams).
+/// Each keyword is hashed to a bucket and a sign, accumulated, then L2-normalized
+/// so cosine similarity is a plain dot product. This is offline and dependency-
+/// free — no network, no model download. It is not a learned semantic embedding,
+/// but it captures token co-occurrence, so memories sharing vocabulary land close
+/// together and complement the exact-match lexical/FTS signals. The stored BLOB
+/// leaves room to swap in a real embedding model later (see [LOCAL_EMBEDDING_MODEL]).
+fn local_embedding(text: &str) -> Vec<f32> {
+    let mut vector = vec![0.0_f32; LOCAL_EMBEDDING_DIM];
+    for keyword in keywords_for(text) {
+        let hash = stable_token_hash64(&keyword);
+        let bucket = (hash % LOCAL_EMBEDDING_DIM as u64) as usize;
+        // A second bit of the hash decides the sign so distinct tokens colliding
+        // on the same bucket don't always reinforce each other.
+        let sign = if (hash >> 63) & 1 == 1 { 1.0 } else { -1.0 };
+        vector[bucket] += sign;
+    }
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
+}
+
+/// Serialize an embedding to a little-endian f32 BLOB for SQLite storage.
+fn embedding_to_blob(vector: &[f32]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(vector.len() * 4);
+    for value in vector {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob
+}
+
+/// Parse a little-endian f32 BLOB back into an embedding, or None if the byte
+/// length is not a whole number of f32s (corrupt/legacy row → skip the vector
+/// signal rather than error).
+fn blob_to_embedding(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.is_empty() || blob.len() % 4 != 0 {
+        return None;
+    }
+    Some(
+        blob.chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect(),
+    )
+}
+
+/// Cosine similarity of two already-L2-normalized vectors (a plain dot product).
+/// Returns 0 for mismatched dimensions so a legacy/other-model row is ignored
+/// rather than skewing the ranking.
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+    if left.len() != right.len() {
+        return 0.0;
+    }
+    left.iter()
+        .zip(right.iter())
+        .map(|(a, b)| a * b)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0)
+}
+
+/// Read every item's stored embedding and score it against the query embedding.
+/// Rows with a missing/empty/legacy embedding are backfilled in place so the
+/// vector signal becomes complete over time without a blocking migration pass.
+fn vector_match_scores(
+    conn: &Connection,
+    raw_query: &str,
+) -> anyhow::Result<std::collections::HashMap<String, f64>> {
+    let trimmed = raw_query.trim();
+    if trimmed.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let query_vector = local_embedding(trimmed);
+    let mut stmt = conn.prepare("SELECT id, text, embedding, embedding_model FROM memory_items")?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let text: String = row.get(1)?;
+        let embedding: Option<Vec<u8>> = row.get(2)?;
+        let model: String = row.get(3)?;
+        Ok((id, text, embedding, model))
+    })?;
+
+    let mut scores = std::collections::HashMap::new();
+    let mut backfill: Vec<(String, Vec<u8>)> = Vec::new();
+    for row in rows {
+        let Ok((id, text, embedding, model)) = row else {
+            continue;
+        };
+        let vector = match embedding
+            .as_deref()
+            .filter(|_| model == LOCAL_EMBEDDING_MODEL)
+            .and_then(blob_to_embedding)
+        {
+            Some(vector) => vector,
+            None => {
+                // Missing or produced by a different scheme: recompute with the
+                // current local model and remember it for a single write pass.
+                let vector = local_embedding(&text);
+                backfill.push((id.clone(), embedding_to_blob(&vector)));
+                vector
+            }
+        };
+        let similarity = cosine_similarity(&query_vector, &vector);
+        if similarity > 0.0 {
+            scores.insert(id, similarity as f64);
+        }
+    }
+    for (id, blob) in backfill {
+        let _ = conn.execute(
+            "UPDATE memory_items SET embedding = ?1, embedding_model = ?2 WHERE id = ?3",
+            params![blob, LOCAL_EMBEDDING_MODEL, id],
+        );
+    }
+    Ok(scores)
+}
+
 fn score_item(
     query_keywords: &BTreeSet<String>,
     raw_query: &str,
@@ -3529,6 +3785,196 @@ mod tests {
         assert_eq!(
             codex_history_fingerprint(&missing),
             codex_history_fingerprint(&missing)
+        );
+    }
+
+    #[test]
+    fn fts_index_retrieves_substring_matches_the_keyword_scan_would_miss() {
+        // Regression guard for the v3 FTS5 layer: the trigram tokenizer must be
+        // available in the bundled SQLite and must surface a substring match even
+        // when the query is a fragment embedded inside a longer token — something
+        // the word-boundary keyword scan cannot catch on its own.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        store
+            .learn_item(MemoryItemRequest {
+                text: "部署脚本 deployment 走 kubernetes 集群".to_string(),
+                workspace: "global".to_string(),
+                category: "workflow-rule".to_string(),
+                tags: vec![],
+                source: "manual".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn item");
+
+        // "deploy" is a strict substring of "deployment"; the keyword scan treats
+        // them as different tokens, so a hit here proves the FTS layer is live.
+        let result = store
+            .query(MemoryQueryRequest {
+                query: "deploy".to_string(),
+                workspace: "global".to_string(),
+                include_global: true,
+                limit: 5,
+            })
+            .expect("query");
+        assert!(
+            result
+                .results
+                .iter()
+                .any(|m| m.item.text.contains("deployment")),
+            "FTS5 trigram search should retrieve the 'deployment' item for query 'deploy'"
+        );
+    }
+
+    #[test]
+    fn v2_database_migrates_to_v3_without_losing_items() {
+        // A v2 DB (no embedding columns, no FTS table) must upgrade in place: keep
+        // every existing memory_items row and become full-text searchable, never
+        // drop data.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("memory_assist.sqlite");
+        {
+            // Hand-build a minimal v2 schema + one row, exactly as the old code did.
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE memory_items (
+                    id TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_session_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_accessed_at INTEGER NOT NULL,
+                    access_count INTEGER NOT NULL DEFAULT 0,
+                    keywords TEXT NOT NULL
+                );
+                INSERT INTO memory_items VALUES
+                    ('mem-legacy', '旧版长期记忆 legacy retrieval rule', 'global',
+                     'general', '[]', 'manual', '', 100, 100, 100, 0, '[]');
+                PRAGMA user_version = 2;
+                ",
+            )
+            .unwrap();
+        }
+
+        // Opening through the store triggers ensure_schema → migrate_to_v3.
+        let store = MemoryAssistStore::new(db_path.clone());
+        let items = store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: ALL_WORKSPACES.to_string(),
+                include_global: true,
+                limit: 50,
+            })
+            .expect("list items after migration");
+        assert!(
+            items.iter().any(|item| item.id == "mem-legacy"),
+            "v2 -> v3 migration must preserve existing memory_items"
+        );
+
+        // The migrated row must be reachable through the FTS-backed query too.
+        let conn = Connection::open(&db_path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            version, SCHEMA_VERSION,
+            "schema version should be bumped to v3"
+        );
+        let fts_count: i64 = conn
+            .query_row("SELECT count(*) FROM memory_items_fts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            fts_count, 1,
+            "migration must backfill the FTS index from existing rows"
+        );
+    }
+
+    #[test]
+    fn local_embedding_is_deterministic_and_normalized() {
+        // The offline embedding must be stable (same text → same vector) so stored
+        // BLOBs stay comparable across runs, and L2-normalized so cosine is a plain
+        // dot product bounded in [-1, 1].
+        let a = local_embedding("以后改完前端必须重新构建并验证");
+        let b = local_embedding("以后改完前端必须重新构建并验证");
+        assert_eq!(a, b, "embedding must be deterministic for identical text");
+        assert_eq!(a.len(), LOCAL_EMBEDDING_DIM);
+        let norm = a.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-4,
+            "embedding must be L2-normalized, got norm={norm}"
+        );
+
+        // A blob round-trips losslessly, and self-similarity is 1.
+        let blob = embedding_to_blob(&a);
+        let restored = blob_to_embedding(&blob).expect("blob round-trip");
+        assert_eq!(a, restored);
+        assert!((cosine_similarity(&a, &a) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn vector_signal_ranks_shared_vocabulary_above_unrelated_memory() {
+        // The vector layer must rank a memory that shares vocabulary with the query
+        // above an unrelated one, even when neither is an exact substring match —
+        // this is the semantic-adjacency signal the pure keyword scan lacks.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        for text in [
+            "构建 前端 之后 必须 运行 验证 测试",
+            "供应商 API key 切换 会 回滚 设置",
+        ] {
+            store
+                .learn_item(MemoryItemRequest {
+                    text: text.to_string(),
+                    workspace: "global".to_string(),
+                    category: "general".to_string(),
+                    tags: vec![],
+                    source: "manual".to_string(),
+                    source_session_id: String::new(),
+                })
+                .expect("learn item");
+        }
+
+        let result = store
+            .query(MemoryQueryRequest {
+                query: "前端 构建 验证".to_string(),
+                workspace: "global".to_string(),
+                include_global: true,
+                limit: 5,
+            })
+            .expect("query");
+        assert!(
+            result
+                .results
+                .first()
+                .map(|m| m.item.text.contains("验证"))
+                .unwrap_or(false),
+            "the vocabulary-sharing memory should rank first, got {:?}",
+            result
+                .results
+                .iter()
+                .map(|m| &m.item.text)
+                .collect::<Vec<_>>()
+        );
+
+        // Backfill happened during the query: every row now carries a local embedding.
+        let conn = Connection::open(store.db_path()).unwrap();
+        let missing: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_items WHERE embedding IS NULL OR embedding_model != ?1",
+                params![LOCAL_EMBEDDING_MODEL],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            missing, 0,
+            "query must lazily backfill embeddings for all rows"
         );
     }
 }

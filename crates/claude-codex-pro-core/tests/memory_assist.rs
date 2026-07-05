@@ -2,9 +2,51 @@ use claude_codex_pro_core::memory_assist::{
     MemoryAssistStore, MemoryCandidateRequest, MemoryImportRequest, MemoryItemRequest,
     MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
+use std::sync::{Mutex, OnceLock};
+
+static CODEX_HOME_LOCK: Mutex<()> = Mutex::new(());
+static TEST_CODEX_HOME: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+fn init_empty_codex_home_locked() -> &'static tempfile::TempDir {
+    TEST_CODEX_HOME.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("CODEX_HOME", dir.path());
+        }
+        dir
+    })
+}
+
+fn ensure_empty_codex_home() {
+    let _guard = CODEX_HOME_LOCK.lock().unwrap();
+    init_empty_codex_home_locked();
+}
+
+fn with_codex_home_env<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = CODEX_HOME_LOCK.lock().unwrap();
+    init_empty_codex_home_locked();
+    f()
+}
+
+fn with_temporary_codex_home<T>(codex_home: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    let _guard = CODEX_HOME_LOCK.lock().unwrap();
+    let empty_codex_home = init_empty_codex_home_locked().path().to_path_buf();
+    unsafe {
+        std::env::set_var("CODEX_HOME", codex_home);
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    unsafe {
+        std::env::set_var("CODEX_HOME", empty_codex_home);
+    }
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
 
 fn store_at(path: &std::path::Path) -> MemoryAssistStore {
+    ensure_empty_codex_home();
     MemoryAssistStore::new(path.to_path_buf())
 }
 
@@ -61,7 +103,10 @@ fn learn_query_and_workspace_filter_use_project_plus_global_scope() {
     assert!(texts.iter().any(|text| text.contains("vite:build")));
     assert!(texts.iter().any(|text| text.contains("先备份源码")));
     assert!(!texts.iter().any(|text| text.contains("另一个项目")));
-    assert_eq!(store.status().unwrap().total_items, 3);
+    assert_eq!(
+        with_codex_home_env(|| store.status()).unwrap().total_items,
+        3
+    );
 }
 
 #[test]
@@ -121,12 +166,10 @@ fn all_workspaces_scope_lists_and_searches_every_workspace() {
             limit: 20,
         })
         .unwrap();
-    assert!(
-        search
-            .results
-            .iter()
-            .any(|item| item.item.workspace == "codex:repo:b")
-    );
+    assert!(search
+        .results
+        .iter()
+        .any(|item| item.item.workspace == "codex:repo:b"));
 
     let candidates = store.list_candidates("__all__", true).unwrap();
     assert_eq!(candidates.len(), 3);
@@ -375,13 +418,14 @@ fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
         )
         .unwrap();
     assert_eq!(first_updated_at, second_updated_at);
-    let session = store
-        .session_summary(MemorySessionRequest {
+    let session = with_codex_home_env(|| {
+        store.session_summary(MemorySessionRequest {
             workspace: "repo-filter".into(),
             query: "Pangu memory capture evidence".into(),
             max_items: 5,
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(session.recent_captures.len(), 1);
     assert!(!session.capture_summary.contains("codex_internal_context"));
 }
@@ -768,13 +812,14 @@ fn session_summary_limits_injected_items_and_reports_workspace_counts() {
             .unwrap();
     }
 
-    let summary = store
-        .session_summary(MemorySessionRequest {
+    let summary = with_codex_home_env(|| {
+        store.session_summary(MemorySessionRequest {
             workspace: "repo-a".into(),
             query: "插件中心会话修复".into(),
             max_items: 3,
         })
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(summary.injected_items.len(), 3);
     assert_eq!(summary.workspace, "repo-a");
@@ -857,24 +902,23 @@ fn codex_history_backfill_records_captures_and_pending_candidates() {
     assert_eq!(report.candidates_created, 0);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 
-    let status = store.status().unwrap();
+    let status = with_codex_home_env(|| store.status()).unwrap();
     assert_eq!(status.total_items, 1);
     assert_eq!(status.pending_candidates, 0);
     assert!(std::path::Path::new(&status.inject_summary_cache_path).exists());
-    let summary = store
-        .session_summary(MemorySessionRequest {
+    let summary = with_codex_home_env(|| {
+        store.session_summary(MemorySessionRequest {
             workspace: "repo-history".into(),
             query: "规格".into(),
             max_items: 5,
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(summary.recent_captures.len(), 1);
     assert_eq!(summary.injected_items.len(), 1);
-    assert!(
-        summary
-            .capture_summary
-            .contains("auto_learned: history workflow rule")
-    );
+    assert!(summary
+        .capture_summary
+        .contains("auto_learned: history workflow rule"));
 }
 
 #[test]
@@ -1014,26 +1058,14 @@ fn session_summary_auto_learns_high_confidence_history_from_codex_home() {
     .unwrap();
     drop(db);
 
-    let previous_codex_home = std::env::var_os("CODEX_HOME");
-    unsafe {
-        std::env::set_var("CODEX_HOME", &codex_home);
-    }
-    let summary = store
-        .session_summary(MemorySessionRequest {
+    let summary = with_temporary_codex_home(&codex_home, || {
+        store.session_summary(MemorySessionRequest {
             workspace: "repo-session".into(),
             query: "盘古记忆 历史会话".into(),
             max_items: 5,
         })
-        .unwrap();
-    if let Some(value) = previous_codex_home {
-        unsafe {
-            std::env::set_var("CODEX_HOME", value);
-        }
-    } else {
-        unsafe {
-            std::env::remove_var("CODEX_HOME");
-        }
-    }
+    })
+    .unwrap();
 
     assert_eq!(summary.total_items, 1);
     assert_eq!(summary.injected_items.len(), 1);
@@ -1067,7 +1099,12 @@ fn export_import_and_selfcheck_create_recoverable_state() {
             replace_existing: true,
         })
         .unwrap();
-    assert_eq!(imported_store.status().unwrap().total_items, 1);
+    assert_eq!(
+        with_codex_home_env(|| imported_store.status())
+            .unwrap()
+            .total_items,
+        1
+    );
 
     let report = imported_store
         .run_selfcheck(MemorySelfCheckRequest { repair: true })
