@@ -1374,12 +1374,14 @@ pub fn handle_internal_cli() -> bool {
             "message": cli_result.message,
         }),
     );
+    let mut exit_code = if cli_result.status == "ok" { 0 } else { 1 };
     if let Some(path) = result_path {
         if let Ok(text) = serde_json::to_string(&cli_result) {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
             if let Err(error) = fs::write(&path, text) {
+                exit_code = 1;
                 log_manager_event(
                     "manager.claude_zh_patch.internal.result_write_failed",
                     json!({
@@ -1390,7 +1392,7 @@ pub fn handle_internal_cli() -> bool {
             }
         }
     }
-    cli_result.status == "ok"
+    std::process::exit(exit_code);
 }
 
 fn install_claude_zh_patch_internal(

@@ -389,10 +389,6 @@ fn install_patch_at_with_resources_impl(
     )?;
     changed_files.push(statsig_i18n.to_string_lossy().to_string());
 
-    backup_file(&paths.locale_config_path, paths)?;
-    write_locale_config(&paths.locale_config_path)?;
-    changed_files.push(paths.locale_config_path.to_string_lossy().to_string());
-
     let chunks = find_patchable_chunks(&paths.app_root)?;
     let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
     for chunk in chunks {
@@ -422,6 +418,17 @@ fn install_patch_at_with_resources_impl(
         }
     }
     clear_claude_renderer_cache(paths, &mut changed_files);
+
+    // Best effort: if Claude was relaunched during the long chunk patch phase,
+    // close it again immediately before writing locale so it cannot flush en-US back.
+    let _ = crate::claude_desktop::close_claude_desktop_for_patch();
+
+    backup_file(&paths.locale_config_path, paths)?;
+    write_locale_config(&paths.locale_config_path)?;
+    if !locale_configured(&paths.locale_config_path) {
+        write_locale_config(&paths.locale_config_path)?;
+    }
+    changed_files.push(paths.locale_config_path.to_string_lossy().to_string());
 
     let outcome = ClaudeZhPatchOutcome {
         status: status_for_paths(paths),
