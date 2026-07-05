@@ -4417,7 +4417,9 @@ body {
   mask-image: linear-gradient(90deg, #000 0%, rgba(0, 0, 0, 0.24) 64%, transparent 100%);
 }
 
-/* 两层错位的像素粒子场，营造 Claude「思考」时的粒子涌动感。 */
+/* 两层错位的像素粒子场，营造 Claude「思考」时的粒子涌动感。
+   漂移 + 明暗涌动是常驻基线动画（idle 也一直在闪），激活态只在其上叠加
+   整条从左往右铺满的填充遮罩。 */
 .memory-activity-wave::before,
 .memory-activity-wave::after {
   content: "";
@@ -4430,26 +4432,20 @@ body {
   );
   background-size: 4px 4px;
   opacity: 0.3;
+  animation: memory-particles-a 2.2s linear infinite;
 }
 
 .memory-activity-wave::after {
   background-position: 2px 2px;
   opacity: 0.18;
+  animation: memory-particles-b 3s linear infinite;
 }
 
-/* active：整条自左向右缓慢铺满 + 两层粒子错位漂移、明暗涌动。 */
+/* active：整条自左向右缓慢铺满（粒子漂移/闪烁已在基线常驻）。 */
 .memory-activity-wave[data-active="true"] {
   -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 var(--wave-fill), transparent calc(var(--wave-fill) + 15%));
   mask-image: linear-gradient(90deg, #000 0%, #000 var(--wave-fill), transparent calc(var(--wave-fill) + 15%));
   animation: memory-fill 5.2s ease-in-out infinite;
-}
-
-.memory-activity-wave[data-active="true"]::before {
-  animation: memory-particles-a 2.2s linear infinite;
-}
-
-.memory-activity-wave[data-active="true"]::after {
-  animation: memory-particles-b 3s linear infinite;
 }
 
 @keyframes memory-fill {
