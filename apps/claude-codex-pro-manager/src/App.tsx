@@ -152,6 +152,7 @@ import {
   SupplierScreen,
   ToolsAndPluginsScreen,
 } from "@/screens";
+import type { AppActions } from "@/lib/actions";
 import type {
   AggregateStrategy,
   BackendSettings,
@@ -1320,53 +1321,68 @@ export function App() {
     const loadEpoch = routeLoadEpochRef.current + 1;
     routeLoadEpochRef.current = loadEpoch;
     const isStaleRouteLoad = () => routeLoadEpochRef.current !== loadEpoch;
+    const afterFirstPaintIfFresh = (work: () => Promise<void> | void, delay?: number) => {
+      afterFirstPaint(() => {
+        if (isStaleRouteLoad()) return;
+        void work();
+      }, delay);
+    };
     if (target === "overview") {
       await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
-      afterFirstPaint(() => {
+      afterFirstPaintIfFresh(() => {
         void refreshMemoryAssistStatus(true);
       }, 250);
-      afterFirstPaint(() => {
+      afterFirstPaintIfFresh(() => {
         void refreshClaudeZhPatch(true);
       }, 650);
     } else if (target === "settings") {
-      await Promise.all([refreshSettings(true), refreshLogs(true)]);
+      await refreshSettings(true);
+      afterFirstPaintIfFresh(() => {
+        void refreshLogs(true);
+      }, 250);
     } else if (target === "supplier") {
       await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
     } else if (target === "tools") {
       const loadedSettings = await refreshSettings(true);
-      const [
-        ,
-        codexMarketplaceStatus,
-        ,
-        claudeMarketplaceStatus,
-      ] = await Promise.all([
+      await Promise.all([
         refreshPluginHub(true),
-        refreshCodexPluginMarketplace(true),
         refreshClaudeDesktopOrgPlugin(true),
-        refreshClaudeDesktopMarketplace(true),
         refreshClaudeDesktopDevMode(true),
         refreshClaudeContextEntries(true),
-        refreshOverview(true),
-        refreshClaude(true),
-        refreshWatcher(true),
       ]);
       if (isStaleRouteLoad()) return;
       const sourceSettings = loadedSettings?.settings ?? settings?.settings ?? settingsDraft;
       if (sourceSettings) await refreshContextEntries(true, sourceSettings);
-      if (isStaleRouteLoad()) return;
-      await promptAndRepairPluginRepositories(codexMarketplaceStatus, claudeMarketplaceStatus);
+      afterFirstPaintIfFresh(async () => {
+        const [codexMarketplaceStatus, claudeMarketplaceStatus] = await Promise.all([
+          refreshCodexPluginMarketplace(true),
+          refreshClaudeDesktopMarketplace(true),
+        ]);
+        if (isStaleRouteLoad()) return;
+        await promptAndRepairPluginRepositories(codexMarketplaceStatus, claudeMarketplaceStatus);
+      }, 250);
+      afterFirstPaintIfFresh(() => {
+        void Promise.all([refreshOverview(true), refreshClaude(true), refreshWatcher(true)]);
+      }, 650);
     } else if (target === "sessions") {
       await Promise.all([
         refreshLocalSessions(true),
         refreshMemoryAssist(true),
         refreshSettings(true),
-        refreshOverview(true),
-        refreshClaude(true),
       ]);
+      afterFirstPaintIfFresh(() => {
+        void Promise.all([refreshOverview(true), refreshClaude(true)]);
+      }, 250);
     } else if (target === "maintenance") {
-      await Promise.all([refreshOverview(true), refreshSettings(true), refreshWatcher(true), refreshClaudeLight(true)]);
+      await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
+      afterFirstPaintIfFresh(() => {
+        void Promise.all([refreshOverview(true), refreshWatcher(true)]);
+      }, 250);
     } else if (target === "about") {
-      await Promise.all([refreshOverview(true), refreshClaudeLight(true), checkUpdate(true)]);
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);
+      afterFirstPaintIfFresh(() => {
+        void checkUpdate(true);
+      }, 250);
     }
   };
 
@@ -1418,7 +1434,8 @@ export function App() {
     document.title = routeDocumentTitle(route);
   }, [route]);
 
-  const actions = {
+  const actionsRef = useRef<AppActions | null>(null);
+  actionsRef.current = {
       refreshRoute,
       showNotice: setNotice,
       openClaudeChinese,
@@ -1502,6 +1519,91 @@ export function App() {
       saveClaudeContextEntry,
       deleteClaudeContextEntry,
   };
+
+  const actions = useMemo<AppActions>(() => ({
+      refreshRoute: (...args) => actionsRef.current!.refreshRoute(...args),
+      showNotice: (...args) => actionsRef.current!.showNotice(...args),
+      openClaudeChinese: (...args) => actionsRef.current!.openClaudeChinese(...args),
+      installClaudeZhPatch: (...args) => actionsRef.current!.installClaudeZhPatch(...args),
+      installClaudeZhPatchFromDirectory: (...args) => actionsRef.current!.installClaudeZhPatchFromDirectory(...args),
+      restoreClaudeZhPatch: (...args) => actionsRef.current!.restoreClaudeZhPatch(...args),
+      launchClaudeDesktop: (...args) => actionsRef.current!.launchClaudeDesktop(...args),
+      launchCodex: (...args) => actionsRef.current!.launchCodex(...args),
+      restartCodex: (...args) => actionsRef.current!.restartCodex(...args),
+      openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
+      goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
+      goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
+      goPromptOptimizer: (...args) => actionsRef.current!.goPromptOptimizer(...args),
+      previewPlugin: (...args) => actionsRef.current!.previewPlugin(...args),
+      installPlugin: (...args) => actionsRef.current!.installPlugin(...args),
+      uninstallPlugin: (...args) => actionsRef.current!.uninstallPlugin(...args),
+      previewPonytailCodexHooks: (...args) => actionsRef.current!.previewPonytailCodexHooks(...args),
+      trustPonytailCodexHooks: (...args) => actionsRef.current!.trustPonytailCodexHooks(...args),
+      generatePonytailMcpbInstaller: (...args) => actionsRef.current!.generatePonytailMcpbInstaller(...args),
+      installPonytailClaudeDesktopOrgPlugin: (...args) => actionsRef.current!.installPonytailClaudeDesktopOrgPlugin(...args),
+      installPonytailClaudeDesktopLocalBundle: (...args) => actionsRef.current!.installPonytailClaudeDesktopLocalBundle(...args),
+      openClaudeDesktopOrgPluginsDir: (...args) => actionsRef.current!.openClaudeDesktopOrgPluginsDir(...args),
+      openPonytailClaudeDesktopMarketplaceSetup: (...args) => actionsRef.current!.openPonytailClaudeDesktopMarketplaceSetup(...args),
+      repairClaudeDesktopMarketplaces: (...args) => actionsRef.current!.repairClaudeDesktopMarketplaces(...args),
+      configureClaudeDesktopDevMode: (...args) => actionsRef.current!.configureClaudeDesktopDevMode(...args),
+      installMarketScript: (...args) => actionsRef.current!.installMarketScript(...args),
+      refreshCodexPluginMarketplace: (...args) => actionsRef.current!.refreshCodexPluginMarketplace(...args),
+      repairCodexPluginMarketplace: (...args) => actionsRef.current!.repairCodexPluginMarketplace(...args),
+      refreshClaudeThirdPartyConfig: (...args) => actionsRef.current!.refreshClaudeThirdPartyConfig(...args),
+      repairFrontendConnection: (...args) => actionsRef.current!.repairFrontendConnection(...args),
+      repairBackendService: (...args) => actionsRef.current!.repairBackendService(...args),
+      refreshPluginHub: (...args) => actionsRef.current!.refreshPluginHub(...args),
+      refreshClaudeDesktopOrgPlugin: (...args) => actionsRef.current!.refreshClaudeDesktopOrgPlugin(...args),
+      refreshClaudeDesktopMarketplace: (...args) => actionsRef.current!.refreshClaudeDesktopMarketplace(...args),
+      refreshClaudeDesktopDevMode: (...args) => actionsRef.current!.refreshClaudeDesktopDevMode(...args),
+      refreshScripts: (...args) => actionsRef.current!.refreshScripts(...args),
+      repairEntrypoints: (...args) => actionsRef.current!.repairEntrypoints(...args),
+      repairBackend: (...args) => actionsRef.current!.repairBackend(...args),
+      repairHistorySessions: (...args) => actionsRef.current!.repairHistorySessions(...args),
+      refreshLocalSessions: (...args) => actionsRef.current!.refreshLocalSessions(...args),
+      deleteLocalSession: (...args) => actionsRef.current!.deleteLocalSession(...args),
+      refreshMemoryAssist: (...args) => actionsRef.current!.refreshMemoryAssist(...args),
+      learnMemoryAssistItem: (...args) => actionsRef.current!.learnMemoryAssistItem(...args),
+      updateMemoryAssistItem: (...args) => actionsRef.current!.updateMemoryAssistItem(...args),
+      searchMemoryAssist: (...args) => actionsRef.current!.searchMemoryAssist(...args),
+      deleteMemoryAssistItem: (...args) => actionsRef.current!.deleteMemoryAssistItem(...args),
+      approveMemoryAssistCandidate: (...args) => actionsRef.current!.approveMemoryAssistCandidate(...args),
+      rejectMemoryAssistCandidate: (...args) => actionsRef.current!.rejectMemoryAssistCandidate(...args),
+      runMemoryAssistSelfcheck: (...args) => actionsRef.current!.runMemoryAssistSelfcheck(...args),
+      refineLongTermMemory: (...args) => actionsRef.current!.refineLongTermMemory(...args),
+      exportMemoryAssist: (...args) => actionsRef.current!.exportMemoryAssist(...args),
+      importMemoryAssist: (...args) => actionsRef.current!.importMemoryAssist(...args),
+      applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
+      applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
+      clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
+      switchCodexRelayProfile: (...args) => actionsRef.current!.switchCodexRelayProfile(...args),
+      fetchRelayProfileModels: (...args) => actionsRef.current!.fetchRelayProfileModels(...args),
+      importCcswitchCodexProviders: (...args) => actionsRef.current!.importCcswitchCodexProviders(...args),
+      previewClaudeDesktopProvider: (...args) => actionsRef.current!.previewClaudeDesktopProvider(...args),
+      applyClaudeDesktopProvider: (...args) => actionsRef.current!.applyClaudeDesktopProvider(...args),
+      restoreClaudeDesktopProviderOfficial: (...args) => actionsRef.current!.restoreClaudeDesktopProviderOfficial(...args),
+      saveSettings: (...args) => actionsRef.current!.saveSettings(...args),
+      installEntrypoints: (...args) => actionsRef.current!.installEntrypoints(...args),
+      uninstallEntrypoints: (...args) => actionsRef.current!.uninstallEntrypoints(...args),
+      repairShortcuts: (...args) => actionsRef.current!.repairShortcuts(...args),
+      installWatcher: (...args) => actionsRef.current!.installWatcher(...args),
+      uninstallWatcher: (...args) => actionsRef.current!.uninstallWatcher(...args),
+      enableWatcher: (...args) => actionsRef.current!.enableWatcher(...args),
+      disableWatcher: (...args) => actionsRef.current!.disableWatcher(...args),
+      resetSettings: (...args) => actionsRef.current!.resetSettings(...args),
+      resetImageOverlaySettings: (...args) => actionsRef.current!.resetImageOverlaySettings(...args),
+      refreshLogs: (...args) => actionsRef.current!.refreshLogs(...args),
+      refreshWatcher: (...args) => actionsRef.current!.refreshWatcher(...args),
+      checkUpdate: (...args) => actionsRef.current!.checkUpdate(...args),
+      performUpdate: (...args) => actionsRef.current!.performUpdate(...args),
+      refreshContextEntries: (...args) => actionsRef.current!.refreshContextEntries(...args),
+      saveContextEntry: (...args) => actionsRef.current!.saveContextEntry(...args),
+      deleteContextEntry: (...args) => actionsRef.current!.deleteContextEntry(...args),
+      syncLiveContextEntries: (...args) => actionsRef.current!.syncLiveContextEntries(...args),
+      refreshClaudeContextEntries: (...args) => actionsRef.current!.refreshClaudeContextEntries(...args),
+      saveClaudeContextEntry: (...args) => actionsRef.current!.saveClaudeContextEntry(...args),
+      deleteClaudeContextEntry: (...args) => actionsRef.current!.deleteClaudeContextEntry(...args),
+  }), []);
 
   return (
     <div className="ops-shell dark">

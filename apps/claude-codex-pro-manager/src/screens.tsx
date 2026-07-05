@@ -949,7 +949,7 @@ export function LegacySupplierScreen({
   );
 }
 
-export function ToolsAndPluginsScreen({
+export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
   actions,
   claudeContextEntries,
   claudeDesktopDevMode,
@@ -1003,7 +1003,7 @@ export function ToolsAndPluginsScreen({
       />
     </div>
   );
-}
+});
 
 export function CodexPluginRepositoryPanel({
   actions,
@@ -1106,7 +1106,7 @@ export function ClaudePluginRepositoryPanel({
     </Panel>
   );
 }
-export function ContextManagerPanel({
+export const ContextManagerPanel = memo(function ContextManagerPanel({
   actions,
   claudeDesktopDevMode,
   claudeDesktopMarketplace,
@@ -1309,7 +1309,7 @@ export function ContextManagerPanel({
       ) : null}
     </section>
   );
-}
+});
 
 export function MemoryAssistPanel({
   actions,
@@ -1516,7 +1516,7 @@ export function MemoryAssistPanel({
   );
 }
 
-export function SessionManagementScreen({
+export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
   claudeChinese,
   claudeDesktop,
@@ -1654,7 +1654,7 @@ export function SessionManagementScreen({
       </div>
     </div>
   );
-}
+});
 
 export const PluginListItem = memo(function PluginListItem({
   item,
@@ -1957,7 +1957,7 @@ export function LogsScreen({ actions, logs }: { actions: AppActions; logs: LogsR
   );
 }
 
-export function MaintenanceScreen({
+export const MaintenanceScreen = memo(function MaintenanceScreen({
   actions,
   claudeDesktop,
   overview,
@@ -1975,9 +1975,9 @@ export function MaintenanceScreen({
       <MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} />
     </div>
   );
-}
+});
 
-export function SettingsScreen({
+export const SettingsScreen = memo(function SettingsScreen({
   actions,
   claudeChinese,
   claudeZhPatch,
@@ -2143,9 +2143,9 @@ export function SettingsScreen({
       </div>
     </div>
   );
-}
+});
 
-export function AboutScreen({
+export const AboutScreen = memo(function AboutScreen({
   actions,
   claudeDesktop,
   overview,
@@ -2203,4 +2203,4 @@ export function AboutScreen({
       </div>
     </div>
   );
-}
+});

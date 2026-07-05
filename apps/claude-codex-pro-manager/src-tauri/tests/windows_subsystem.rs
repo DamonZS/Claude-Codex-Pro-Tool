@@ -1037,9 +1037,13 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
     ));
     assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy ? \"写入中...\" : devModeConfigured ? \"已写入\" : \"写入开发配置\";"));
     assert!(
-        app_tsx.contains("afterFirstPaint(() => {\n        void refreshMemoryAssistStatus(true);")
+        app_tsx.contains(
+            "afterFirstPaintIfFresh(() => {\n        void refreshMemoryAssistStatus(true);"
+        )
     );
-    assert!(app_tsx.contains("afterFirstPaint(() => {\n        void refreshClaudeZhPatch(true);"));
+    assert!(
+        app_tsx.contains("afterFirstPaintIfFresh(() => {\n        void refreshClaudeZhPatch(true);")
+    );
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
         "useEffect(() => {\n    void (async () => {\n      await Promise.all([\n        refreshOverview(true),\n        refreshClaude(true),\n        refreshSettings(true),\n        refreshPluginHub(true),"
