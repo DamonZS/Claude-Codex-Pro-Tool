@@ -6446,21 +6446,23 @@ body {
 
 .toggle-switch-thumb {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   left: 2px;
+  margin-block: auto;
   display: block;
   width: 20px;
   height: 20px;
   border-radius: 50%;
   background: var(--ops-text-strong);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
-  transform: translate(0, -50%);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.28);
+  transform: translate(0, 0);
   transition: transform 140ms ease;
 }
 
 .toggle-switch.checked .toggle-switch-thumb {
   margin-left: 0;
-  transform: translate(22px, -50%);
+  transform: translate(22px, 0);
 }
 
 .context-entry-actions {
