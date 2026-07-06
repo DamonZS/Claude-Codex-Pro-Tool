@@ -4458,6 +4458,99 @@ body {
   line-height: 1.45;
 }
 
+/* 盘古记忆说明：标题旁一个信息图标，悬停/聚焦弹出富文本说明框。
+   纯 CSS 触发（hover + focus-within），无需 JS 状态。 */
+.memory-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ops-muted);
+  cursor: help;
+  outline: none;
+  transition: color 120ms ease;
+}
+
+.memory-info:hover,
+.memory-info:focus-visible {
+  color: var(--ops-primary);
+}
+
+.memory-info-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 340px;
+  max-width: min(340px, 78vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--ops-hairline-strong);
+  border-radius: 10px;
+  background: var(--ops-surface-2);
+  box-shadow: 0 12px 30px var(--ops-shadow-lg);
+  padding: 14px 16px;
+  color: var(--ops-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms;
+  pointer-events: none;
+}
+
+.memory-info:hover .memory-info-popover,
+.memory-info:focus-within .memory-info-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.memory-info-popover strong {
+  display: block;
+  margin-top: 10px;
+  color: var(--ops-primary-fg);
+  font-size: 12px;
+}
+
+.memory-info-popover strong:first-child {
+  margin-top: 0;
+}
+
+.memory-info-popover p {
+  margin: 4px 0 0;
+  color: var(--ops-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-info-popover ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+
+.memory-info-popover li {
+  margin-top: 3px;
+  color: var(--ops-soft);
+}
+
+.memory-info-popover code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(var(--ops-primary-rgb) / 0.12);
+  color: var(--ops-primary-fg);
+  font-size: 11px;
+}
+
 /* 对话监控活动条：宿主一个 WebGL2 火焰 canvas（见 MemoryActivityWave.tsx）。
    火焰噪声天生无周期，会真实忽明忽暗地闪烁并从左往右流动——不像 radial-gradient
    圆点网格（必生 moiré 斜纹）或平移噪声（只流不闪）那样躲不掉规律。

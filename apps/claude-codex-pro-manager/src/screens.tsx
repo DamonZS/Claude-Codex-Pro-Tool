@@ -12,6 +12,7 @@ import {
   FileDown,
   FileUp,
   GripVertical,
+  Info,
   KeyRound,
   Languages,
   MessageCircle,
@@ -221,7 +222,30 @@ export function OverviewScreen({
         <Panel title="盘古记忆总览" hideHeader>
           <div className="memory-overview-header">
             <div>
-              <strong>盘古记忆开关</strong>
+              <div className="memory-title-row">
+                <strong>盘古记忆开关</strong>
+                <span className="memory-info" tabIndex={0}>
+                  <Info className="h-3.5 w-3.5" />
+                  <span className="memory-info-popover" role="tooltip">
+                    <strong>盘古记忆是什么</strong>
+                    <p>一份保存在本机的 agent 长期记忆库（<code>memory_assist.sqlite</code>）。它把你和 Codex / Claude 的每次协作里沉淀的经验教训、约定和结论记下来，下次自动喂回给 agent，让它记得住上下文、不再重复踩同一个坑。</p>
+                    <strong>有多好</strong>
+                    <ul>
+                      <li>语义检索：按意思找记忆，不只是关键词匹配。</li>
+                      <li>遗忘曲线：长期没用到的记忆自动淡出，常用的越记越牢，注入的上下文始终聚焦。</li>
+                      <li>跨 agent 共享：通过 MCP，Claude Code / Cursor / Codex CLI 接入同一份大脑。</li>
+                    </ul>
+                    <strong>怎么用</strong>
+                    <ul>
+                      <li>打开上方开关，允许 Codex 读写本地记忆。</li>
+                      <li>「提炼经验教训」把历史会话沉淀成手册；「查看/编辑」可手动增删。</li>
+                      <li>在设置里开「盘古记忆 MCP」后，用一键注册把它接到 Claude Desktop / Codex。</li>
+                    </ul>
+                    <strong>怎么让 agent 越用越聪明</strong>
+                    <p>用得越多，记忆越丰富、命中越频繁，高价值经验被强化、低价值的自动归档——大脑随使用持续自我打磨。手动固化的规则（约定、安全红线）常驻不衰减，始终生效。</p>
+                  </span>
+                </span>
+              </div>
               <p>{memoryEnabled ? "已允许 Codex 使用本地经验教训与会话摘要。" : "当前不会向 Codex 注入盘古记忆。可在这里直接开启。"}</p>
             </div>
             <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
