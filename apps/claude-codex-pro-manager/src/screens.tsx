@@ -2145,8 +2145,9 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["CLI 包装器", "cliWrapperEnabled"],
   ] as const;
   return (
-    <div className="ops-two-column">
-      <div className="ops-wide-column">
+    <div className="stack">
+      <div className="ops-two-column">
+        <div className="ops-wide-column">
         <Panel title="设置文件位置" detail={settings?.settings_path ?? "未读取到设置文件。"}>
           <div className="info-grid compact">
             <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
@@ -2247,8 +2248,9 @@ export const SettingsScreen = memo(function SettingsScreen({
           </div>
           <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI 命令包装器</Button>
         </Panel>
-        <LogsScreen actions={actions} logs={logs} />
       </div>
+      </div>
+      <LogsScreen actions={actions} logs={logs} />
     </div>
   );
 });
