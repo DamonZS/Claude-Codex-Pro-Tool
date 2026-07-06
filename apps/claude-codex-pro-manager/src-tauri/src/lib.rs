@@ -98,6 +98,7 @@ pub fn run() {
             commands::run_memory_assist_selfcheck,
             commands::export_memory_assist,
             commands::import_memory_assist,
+            commands::register_memory_mcp_server,
             commands::list_zed_remote_projects,
             commands::open_zed_remote,
             commands::forget_zed_remote_project,

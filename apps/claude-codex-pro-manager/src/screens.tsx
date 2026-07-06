@@ -1463,6 +1463,10 @@ export function MemoryAssistPanel({
           <PencilRuler className="h-4 w-4" />
           提炼经验教训
         </Button>
+        <Button onClick={() => void actions.registerMemoryMcpServer()} size="sm" variant="outline">
+          <Network className="h-4 w-4" />
+          注册 MCP 到 Claude/Codex
+        </Button>
       </div>
       <div className="memory-assist-search">
         <label className="ops-form-field">
@@ -2113,6 +2117,7 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["盘古记忆 DOM 标识", "memoryAssistInjectEnabled"],
     ["自动学习", "memoryAssistAutoSuggestEnabled"],
     ["记忆 LLM 摘要", "memoryAssistLlmSummaryEnabled"],
+    ["记忆 MCP 共享", "memoryAssistMcpEnabled"],
     ["CLI 包装器", "cliWrapperEnabled"],
   ] as const;
   return (

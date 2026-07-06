@@ -99,6 +99,7 @@ function previewSettings() {
     memoryAssistInjectEnabled: true,
     memoryAssistAutoSuggestEnabled: true,
     memoryAssistLlmSummaryEnabled: false,
+    memoryAssistMcpEnabled: false,
     memoryAssistMaxInjectedItems: 5,
     memoryAssistWorkspaceMode: "project_plus_global",
     launchMode: "patch",

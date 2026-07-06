@@ -84,6 +84,7 @@ export function createActionsShape() {
     rejectMemoryAssistCandidate: async (_id: string) => {},
     runMemoryAssistSelfcheck: async () => {},
     refineLongTermMemory: async () => {},
+    registerMemoryMcpServer: async () => {},
     exportMemoryAssist: async () => {},
     importMemoryAssist: async (_jsonText: string, _replaceExisting: boolean) => {},
     applyRelayMode: async () => {},

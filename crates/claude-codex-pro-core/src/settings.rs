@@ -279,6 +279,13 @@ pub struct BackendSettings {
     /// summarizer only.
     #[serde(rename = "memoryAssistLlmSummaryEnabled", default)]
     pub memory_assist_llm_summary_enabled: bool,
+    /// Phase 4 module D: opt-in gate for the MCP server that exposes Pangu memory
+    /// to external agents (Claude Code / Cursor / Codex CLI) over stdio. Defaults
+    /// to false because it makes local memory readable/writable by any agent that
+    /// spawns the server; when off, the MCP server refuses to serve. Individual
+    /// tools additionally re-check `memoryAssistEnabled` at call time. See ADR 0002.
+    #[serde(rename = "memoryAssistMcpEnabled", default)]
+    pub memory_assist_mcp_enabled: bool,
     #[serde(
         rename = "memoryAssistMaxInjectedItems",
         default = "default_memory_assist_max_injected_items",
@@ -364,6 +371,7 @@ impl Default for BackendSettings {
             memory_assist_max_injected_items: default_memory_assist_max_injected_items(),
             memory_assist_workspace_mode: default_memory_assist_workspace_mode(),
             memory_assist_llm_summary_enabled: false,
+            memory_assist_mcp_enabled: false,
             launch_mode: LaunchMode::Patch,
             relay_base_url: default_relay_base_url(),
             relay_api_key: String::new(),
@@ -703,6 +711,7 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "memoryAssistInjectEnabled");
     merge_bool_setting(target, source, "memoryAssistAutoSuggestEnabled");
     merge_bool_setting(target, source, "memoryAssistLlmSummaryEnabled");
+    merge_bool_setting(target, source, "memoryAssistMcpEnabled");
     if let Some(value) = source
         .get("codexAppImageOverlayPath")
         .and_then(Value::as_str)
@@ -1127,6 +1136,8 @@ mod tests {
         // LLM summarization sends memory content to an external relay, so it must
         // stay off unless the user explicitly opts in.
         assert!(!settings.memory_assist_llm_summary_enabled);
+        // The MCP server exposes memory to external agents, so it must default off.
+        assert!(!settings.memory_assist_mcp_enabled);
         assert_eq!(settings.memory_assist_max_injected_items, 20);
         assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
     }

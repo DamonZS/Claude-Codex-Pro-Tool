@@ -10,7 +10,7 @@ use anyhow::{Context, bail};
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
-use claude_codex_pro_core::install::SILENT_BINARY;
+use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryExport,
     MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
@@ -3188,6 +3188,135 @@ pub async fn import_memory_assist(
                 memory: empty_memory_status(),
             },
         ),
+    }
+}
+
+/// MCP server 在各客户端配置里的条目名（Claude Desktop 的 mcpServers key /
+/// Codex config.toml 的 [mcp_servers.<id>]）。
+const MEMORY_MCP_SERVER_ID: &str = "pangu-memory";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMcpRegisterPayload {
+    pub mcp_binary_path: String,
+    pub mcp_binary_exists: bool,
+    pub claude_desktop_config_path: String,
+    pub claude_desktop_registered: bool,
+    pub codex_config_path: String,
+    pub codex_registered: bool,
+    pub mcp_enabled: bool,
+    pub errors: Vec<String>,
+}
+
+fn empty_mcp_register_payload() -> MemoryMcpRegisterPayload {
+    MemoryMcpRegisterPayload {
+        mcp_binary_path: String::new(),
+        mcp_binary_exists: false,
+        claude_desktop_config_path: String::new(),
+        claude_desktop_registered: false,
+        codex_config_path: String::new(),
+        codex_registered: false,
+        mcp_enabled: false,
+        errors: Vec::new(),
+    }
+}
+
+/// 一键把盘古记忆 MCP server 注册到 Claude Desktop 与 Codex 两端配置（ADR 0002
+/// 决策 B）。复用现有 `upsert_claude_desktop_mcp_entry`（写 mcpServers JSON）与
+/// `upsert_context_entry_in_common_config`（写 config.toml 的 mcp_servers 表），
+/// MCP exe 路径用 `companion_binary_path` 解析同目录兄弟二进制的绝对路径。
+///
+/// 两端各自独立成败：一端失败不阻断另一端，错误汇总回报。文件 IO 走 blocking 池。
+#[tauri::command]
+pub async fn register_memory_mcp_server() -> CommandResult<MemoryMcpRegisterPayload> {
+    tauri::async_runtime::spawn_blocking(register_memory_mcp_server_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("注册盘古记忆 MCP 任务失败：{join_error}"),
+                empty_mcp_register_payload(),
+            )
+        })
+}
+
+fn register_memory_mcp_server_blocking() -> CommandResult<MemoryMcpRegisterPayload> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let mcp_enabled = settings.memory_assist_mcp_enabled;
+
+    let mcp_binary = claude_codex_pro_core::install::companion_binary_path(MCP_BINARY);
+    let mcp_binary_path = mcp_binary.to_string_lossy().to_string();
+    let mcp_binary_exists = mcp_binary.exists();
+
+    let mut payload = empty_mcp_register_payload();
+    payload.mcp_binary_path = mcp_binary_path.clone();
+    payload.mcp_binary_exists = mcp_binary_exists;
+    payload.mcp_enabled = mcp_enabled;
+
+    // Claude Desktop 端：写 mcpServers JSON。
+    let claude_body = json!({
+        "command": mcp_binary_path,
+        "args": [],
+    })
+    .to_string();
+    match plugin_hub::upsert_claude_desktop_mcp_entry(MEMORY_MCP_SERVER_ID, &claude_body) {
+        Ok(entries) => {
+            payload.claude_desktop_config_path = entries.config_path;
+            payload.claude_desktop_registered = true;
+        }
+        Err(error) => payload
+            .errors
+            .push(format!("注册到 Claude Desktop 失败：{error}")),
+    }
+
+    // Codex 端：写 config.toml 的 [mcp_servers.<id>]。用 toml_edit 安全构建 body，
+    // 自动转义 Windows 路径反斜杠，避免手拼字符串出错。
+    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
+    let codex_config_path = home.join("config.toml");
+    payload.codex_config_path = codex_config_path.to_string_lossy().to_string();
+    let mut body_doc = toml_edit::DocumentMut::new();
+    body_doc["command"] = toml_edit::value(mcp_binary_path.clone());
+    let toml_body = body_doc.to_string();
+    let existing_config = std::fs::read_to_string(&codex_config_path).unwrap_or_default();
+    match claude_codex_pro_core::relay_config::upsert_context_entry_in_common_config(
+        &existing_config,
+        "mcp",
+        MEMORY_MCP_SERVER_ID,
+        &toml_body,
+    ) {
+        Ok(updated) => {
+            let write_result = codex_config_path
+                .parent()
+                .map(std::fs::create_dir_all)
+                .unwrap_or(Ok(()))
+                .and_then(|_| std::fs::write(&codex_config_path, &updated));
+            match write_result {
+                Ok(()) => payload.codex_registered = true,
+                Err(error) => payload
+                    .errors
+                    .push(format!("写入 Codex config.toml 失败：{error}")),
+            }
+        }
+        Err(error) => payload.errors.push(format!("注册到 Codex 失败：{error}")),
+    }
+
+    if !mcp_binary_exists {
+        payload.errors.push(format!(
+            "MCP 二进制未找到：{mcp_binary_path}（配置已写入，但需构建/安装 claude-codex-pro-mcp 后才能启动）。"
+        ));
+    }
+
+    let both_ok = payload.claude_desktop_registered && payload.codex_registered;
+    if both_ok && payload.errors.is_empty() {
+        ok(
+            "盘古记忆 MCP 已注册到 Claude Desktop 与 Codex 两端。",
+            payload,
+        )
+    } else if payload.claude_desktop_registered || payload.codex_registered {
+        let message = format!("盘古记忆 MCP 部分注册完成：{}", payload.errors.join("；"));
+        ok(&message, payload)
+    } else {
+        let message = format!("盘古记忆 MCP 注册失败：{}", payload.errors.join("；"));
+        failed(&message, payload)
     }
 }
 

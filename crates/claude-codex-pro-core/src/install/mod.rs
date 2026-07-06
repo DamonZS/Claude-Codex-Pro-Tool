@@ -9,6 +9,10 @@ pub const SILENT_NAME: &str = "Claude Code Pro";
 pub const MANAGER_NAME: &str = "Claude Code Pro 管理工具";
 pub const SILENT_BINARY: &str = "claude-codex-pro";
 pub const MANAGER_BINARY: &str = "claude-codex-pro-manager";
+/// The Pangu memory MCP server binary (phase 4 / ADR 0002). Resolved as a
+/// sibling of the manager exe via `companion_binary_path` so client MCP configs
+/// can point at an absolute path.
+pub const MCP_BINARY: &str = "claude-codex-pro-mcp";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

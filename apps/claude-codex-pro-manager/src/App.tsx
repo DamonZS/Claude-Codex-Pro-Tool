@@ -199,6 +199,7 @@ import type {
   MemoryItemEditRequest,
   MemoryItemResult,
   MemoryItemsResult,
+  MemoryMcpRegisterPayload,
   MemoryQueryResult,
   MemorySelfCheckResult,
   MemoryStatusResult,
@@ -1157,6 +1158,24 @@ export function App() {
     }
   };
 
+  const registerMemoryMcpServer = async () => {
+    setNotice({
+      title: "注册盘古记忆 MCP",
+      message: "正在把盘古记忆 MCP server 写入 Claude Desktop 与 Codex 配置...",
+      status: "running",
+    });
+    await waitForPaint();
+    void writeUiEvent("memory.register_mcp.click", { targets: ["claude_desktop", "codex"] });
+    const result = await run(
+      () => call<CommandResult<MemoryMcpRegisterPayload>>("register_memory_mcp_server"),
+      "注册盘古记忆 MCP",
+    );
+    if (result) {
+      notifyResult({ title: "注册盘古记忆 MCP", message: result.message, status: result.status });
+      await refreshSettings(true);
+    }
+  };
+
   const applyRelayMode = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("apply_relay_injection"), "官方混入 API Key");
     if (result) {
@@ -1504,6 +1523,7 @@ export function App() {
       rejectMemoryAssistCandidate,
       runMemoryAssistSelfcheck,
       refineLongTermMemory,
+      registerMemoryMcpServer,
       exportMemoryAssist,
       importMemoryAssist,
       applyRelayMode,
@@ -1591,6 +1611,7 @@ export function App() {
       rejectMemoryAssistCandidate: (...args) => actionsRef.current!.rejectMemoryAssistCandidate(...args),
       runMemoryAssistSelfcheck: (...args) => actionsRef.current!.runMemoryAssistSelfcheck(...args),
       refineLongTermMemory: (...args) => actionsRef.current!.refineLongTermMemory(...args),
+      registerMemoryMcpServer: (...args) => actionsRef.current!.registerMemoryMcpServer(...args),
       exportMemoryAssist: (...args) => actionsRef.current!.exportMemoryAssist(...args),
       importMemoryAssist: (...args) => actionsRef.current!.importMemoryAssist(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),

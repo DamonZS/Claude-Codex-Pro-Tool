@@ -144,6 +144,7 @@ export type BackendSettings = {
   memoryAssistInjectEnabled: boolean;
   memoryAssistAutoSuggestEnabled: boolean;
   memoryAssistLlmSummaryEnabled: boolean;
+  memoryAssistMcpEnabled: boolean;
   memoryAssistMaxInjectedItems: number;
   memoryAssistWorkspaceMode: string;
   launchMode: "patch" | "relay";
@@ -241,6 +242,18 @@ export type ClaudeContextEntriesResult = CommandResult<{
   configPath: string;
   entries: ContextEntries;
 }>;
+
+// 阶段4 模块D：一键注册盘古记忆 MCP 到 Claude Desktop 与 Codex 两端的返回。
+export type MemoryMcpRegisterPayload = {
+  mcpBinaryPath: string;
+  mcpBinaryExists: boolean;
+  claudeDesktopConfigPath: string;
+  claudeDesktopRegistered: boolean;
+  codexConfigPath: string;
+  codexRegistered: boolean;
+  mcpEnabled: boolean;
+  errors: string[];
+};
 
 export type SupplierPreset = {
   id: string;
