@@ -3066,11 +3066,22 @@ pub async fn run_memory_assist_selfcheck(
             },
         );
     }
+    // Phase 3 module C: when the LLM-summary gate is on, resolve a per-workspace
+    // summary through the active relay *before* the synchronous consolidation.
+    // This ships memory text to the relay, so it is off by default and only runs
+    // on an explicit repair. Any workspace that fails (or the whole call failing)
+    // degrades silently to the rule-based summarizer inside consolidation.
+    let summaries = if request.repair {
+        resolve_memory_llm_summaries().await
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
     // Self-check is the heaviest memory op: it scans every Codex SQLite DB and
     // rollout file (backfill runs with no cap) and can take seconds to minutes on
     // large histories. It must never run on the UI thread.
     let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().run_selfcheck(request)
+        MemoryAssistStore::default().run_selfcheck_with_summaries(request, &summaries)
     })
     .await;
     let outcome = match computed {
@@ -3243,6 +3254,50 @@ fn empty_memory_candidate() -> MemoryCandidate {
         created_at: 0,
         updated_at: 0,
     }
+}
+
+/// Resolve a per-workspace LLM summary through the active relay profile (phase 3
+/// module C). Returns an empty map — degrading to the rule-based summarizer — when
+/// the gate is off, memory is disabled, no consolidatable inputs exist, or the
+/// relay call fails. Shipping memory text to the relay is privacy-sensitive, so
+/// the `memoryAssistLlmSummaryEnabled` gate defaults to false.
+async fn resolve_memory_llm_summaries() -> std::collections::BTreeMap<String, String> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    if !settings.memory_assist_enabled || !settings.memory_assist_llm_summary_enabled {
+        return std::collections::BTreeMap::new();
+    }
+    let inputs = match tauri::async_runtime::spawn_blocking(|| {
+        MemoryAssistStore::default().collect_consolidation_inputs()
+    })
+    .await
+    {
+        Ok(Ok(inputs)) => inputs,
+        _ => return std::collections::BTreeMap::new(),
+    };
+    if inputs.is_empty() {
+        return std::collections::BTreeMap::new();
+    }
+    let profile = settings.active_relay_profile();
+    let mut summaries = std::collections::BTreeMap::new();
+    for (workspace, source_text) in inputs {
+        let prompt = format!(
+            "你是记忆整合助手。请把下面同一工作区的多条经验教训合并去重，浓缩为一份不超过 10 条要点的中文\"经验教训手册\"，\
+             每条以\"- \"开头，只保留可执行的项目约定、修复结论、偏好与工作流规则，剔除一次性命令输出和临时错误。\
+             第一行输出\"经验教训手册：\"。\n\n原始记忆：\n{source_text}"
+        );
+        match claude_codex_pro_core::relay_config::summarize_memory_via_relay(&profile, &prompt)
+            .await
+        {
+            Ok(summary) if !summary.trim().is_empty() => {
+                summaries.insert(workspace, summary);
+            }
+            _ => {
+                // Degrade silently: this workspace falls back to the rule-based
+                // summarizer inside consolidation.
+            }
+        }
+    }
+    summaries
 }
 
 fn memory_assist_write_enabled() -> bool {

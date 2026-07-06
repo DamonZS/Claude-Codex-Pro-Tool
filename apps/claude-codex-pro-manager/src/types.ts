@@ -143,6 +143,7 @@ export type BackendSettings = {
   memoryAssistEnabled: boolean;
   memoryAssistInjectEnabled: boolean;
   memoryAssistAutoSuggestEnabled: boolean;
+  memoryAssistLlmSummaryEnabled: boolean;
   memoryAssistMaxInjectedItems: number;
   memoryAssistWorkspaceMode: string;
   launchMode: "patch" | "relay";

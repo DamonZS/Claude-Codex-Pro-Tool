@@ -1257,12 +1257,26 @@ impl MemoryAssistStore {
         &self,
         request: MemorySelfCheckRequest,
     ) -> anyhow::Result<MemorySelfCheckResult> {
+        self.run_selfcheck_with_summaries(request, &BTreeMap::new())
+    }
+
+    /// Self-check + repair, optionally supplied with LLM-generated per-workspace
+    /// summaries (phase 3 module C). The LLM call is async and privacy-sensitive
+    /// (it ships memory text to the active relay), so it happens in the async
+    /// command layer *before* this synchronous path; here we only pass the
+    /// resolved text into consolidation, which falls back to the rule-based
+    /// summarizer for any workspace missing from `summaries`.
+    pub fn run_selfcheck_with_summaries(
+        &self,
+        request: MemorySelfCheckRequest,
+        summaries: &BTreeMap<String, String>,
+    ) -> anyhow::Result<MemorySelfCheckResult> {
         let mut checks = Vec::new();
         let history_report = self.backfill_codex_history("", usize::MAX, request.repair);
         {
             let mut conn = self.open()?;
             if request.repair {
-                let _ = consolidate_items_into_lesson_manual(&mut conn)?;
+                let _ = consolidate_items_with_summaries(&mut conn, summaries)?;
                 let _ = self.sync_inject_summary_cache(&conn, "");
             }
             let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -1396,6 +1410,51 @@ impl MemoryAssistStore {
             backup_path: backup_path.map(|path| path.to_string_lossy().to_string()),
             checks,
         })
+    }
+
+    /// Collect the raw text that would be consolidated per workspace (phase 3
+    /// module C). The async command layer calls this to build LLM summary prompts
+    /// *before* the synchronous consolidation pass. Only workspaces with enough
+    /// consolidatable source items are returned, using the same grouping rules as
+    /// `consolidate_items_with_summaries` (active, non-exempt, non-summary sources,
+    /// with any existing summary carried forward). Returns a map of workspace ->
+    /// combined source text.
+    pub fn collect_consolidation_inputs(&self) -> anyhow::Result<BTreeMap<String, String>> {
+        let conn = self.open()?;
+        let all = select_items(&conn)?;
+        let mut existing_summary: BTreeMap<String, MemoryItem> = BTreeMap::new();
+        let mut by_workspace: BTreeMap<String, Vec<MemoryItem>> = BTreeMap::new();
+        for item in all {
+            if item.category == LESSON_MANUAL_CATEGORY {
+                existing_summary.insert(item.workspace.clone(), item);
+                continue;
+            }
+            if item.tier != TIER_ACTIVE {
+                continue;
+            }
+            if item_is_decay_exempt(&item.source, &item.category) {
+                continue;
+            }
+            by_workspace
+                .entry(item.workspace.clone())
+                .or_default()
+                .push(item);
+        }
+        let mut inputs = BTreeMap::new();
+        for (workspace, sources) in by_workspace {
+            if sources.len() < CONSOLIDATE_MIN_ITEMS {
+                continue;
+            }
+            let mut lines = Vec::new();
+            if let Some(prev) = existing_summary.get(&workspace) {
+                lines.push(prev.text.clone());
+            }
+            for item in &sources {
+                lines.push(item.text.clone());
+            }
+            inputs.insert(workspace, lines.join("\n"));
+        }
+        Ok(inputs)
     }
 
     fn open(&self) -> anyhow::Result<Connection> {
@@ -1871,7 +1930,8 @@ fn row_to_capture(row: &Row<'_>) -> rusqlite::Result<MemoryCaptureRecord> {
 fn select_items(conn: &Connection) -> anyhow::Result<Vec<MemoryItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
-                created_at, updated_at, last_accessed_at, access_count
+                created_at, updated_at, last_accessed_at, access_count,
+                tier, strength, archived_at
          FROM memory_items ORDER BY updated_at DESC, id DESC",
     )?;
     Ok(stmt
@@ -1879,62 +1939,159 @@ fn select_items(conn: &Connection) -> anyhow::Result<Vec<MemoryItem>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Minimum consolidatable source items in a workspace before we fold them into a
+/// summary layer. Below this there is nothing worth compressing, so consolidation
+/// is a no-op for that workspace.
+const CONSOLIDATE_MIN_ITEMS: usize = 2;
+
 fn consolidate_items_into_lesson_manual(
     conn: &mut Connection,
 ) -> anyhow::Result<Option<MemoryItem>> {
-    let items = select_items(conn)?;
-    if items.is_empty() {
+    consolidate_items_with_summaries(conn, &BTreeMap::new())
+}
+
+/// Core consolidation (phase 3). Replaces the old full-table `DELETE` rewrite:
+/// for each workspace with enough consolidatable source items it archives those
+/// sources (a soft, recoverable tier flip — never a physical delete) and upserts
+/// a single summary item with a *deterministic* id keyed on (workspace, manual),
+/// so repeated runs update the same row instead of spawning jittered duplicates.
+///
+/// `summaries` optionally supplies an LLM-generated summary text per workspace;
+/// any workspace missing from the map (or with blank text) falls back to the
+/// rule-based `build_lesson_manual_text`. The LLM call is async and must happen
+/// *outside* this synchronous transaction — the caller resolves the text first
+/// and passes it in here.
+///
+/// Consolidation only folds active, non-exempt, non-summary items. Exempt
+/// memories (manual / safety-rule / project-rule) stay authoritative and are
+/// never hidden behind a summary. Returns the representative summary (the
+/// global-workspace one if present, else the first) to preserve the existing
+/// single-item caller contract.
+fn consolidate_items_with_summaries(
+    conn: &mut Connection,
+    summaries: &BTreeMap<String, String>,
+) -> anyhow::Result<Option<MemoryItem>> {
+    let all = select_items(conn)?;
+    // Remember any existing summary per workspace so incremental runs carry old
+    // bullets forward instead of dropping them when regenerating from only the
+    // newly-accumulated sources.
+    let mut existing_summary: BTreeMap<String, MemoryItem> = BTreeMap::new();
+    let mut by_workspace: BTreeMap<String, Vec<MemoryItem>> = BTreeMap::new();
+    for item in all {
+        if item.category == LESSON_MANUAL_CATEGORY {
+            existing_summary.insert(item.workspace.clone(), item);
+            continue;
+        }
+        if item.tier != TIER_ACTIVE {
+            continue;
+        }
+        if item_is_decay_exempt(&item.source, &item.category) {
+            continue;
+        }
+        by_workspace
+            .entry(item.workspace.clone())
+            .or_default()
+            .push(item);
+    }
+
+    let now = now_unix();
+    let mut created: Vec<MemoryItem> = Vec::new();
+
+    for (workspace, sources) in &by_workspace {
+        if sources.len() < CONSOLIDATE_MIN_ITEMS {
+            continue;
+        }
+        // Carry the existing summary forward so its distilled bullets survive an
+        // incremental re-consolidation (the archived originals remain recoverable
+        // regardless, but the live summary should not lose old lessons).
+        let mut text_inputs: Vec<MemoryItem> = Vec::with_capacity(sources.len() + 1);
+        if let Some(prev) = existing_summary.get(workspace) {
+            text_inputs.push(prev.clone());
+        }
+        text_inputs.extend(sources.iter().cloned());
+
+        let text = summaries
+            .get(workspace)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| build_lesson_manual_text(&text_inputs));
+
+        let id = deterministic_id("mem", &[workspace, LESSON_MANUAL_CATEGORY]);
+        let tags = vec![
+            "lesson".to_string(),
+            "manual".to_string(),
+            "pangu".to_string(),
+        ];
+        let source_ids: Vec<&str> = sources.iter().map(|item| item.id.as_str()).collect();
+
+        // Archive-then-upsert must be atomic: a crash between them should leave
+        // either the old active items or the finished summary, never a half state.
+        // Because we archive (not delete), even a mid-run crash keeps every source
+        // recoverable.
+        let tx = conn.transaction()?;
+        for src in sources {
+            tx.execute(
+                "UPDATE memory_items SET tier = ?1, archived_at = ?2, updated_at = ?2
+                 WHERE id = ?3 AND tier = ?4",
+                params![TIER_ARCHIVED, now, src.id, TIER_ACTIVE],
+            )?;
+        }
+        // Deterministic-id upsert: first run inserts, later runs update the same
+        // row in place (keeping it active), so the summary layer never duplicates.
+        tx.execute(
+            "INSERT INTO memory_items
+             (id, text, workspace, category, tags_json, source, source_session_id,
+              created_at, updated_at, last_accessed_at, access_count, keywords,
+              tier, strength, archived_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8, 0, ?9, ?10, 1.0, 0)
+             ON CONFLICT(id) DO UPDATE SET
+                 text = excluded.text,
+                 tags_json = excluded.tags_json,
+                 updated_at = excluded.updated_at,
+                 last_accessed_at = excluded.updated_at,
+                 keywords = excluded.keywords,
+                 tier = excluded.tier,
+                 archived_at = 0",
+            params![
+                id,
+                text,
+                workspace,
+                LESSON_MANUAL_CATEGORY,
+                serde_json::to_string(&tags)?,
+                LESSON_MANUAL_SOURCE,
+                "compiled",
+                now,
+                keywords_json(&keywords_for(&text)),
+                TIER_ACTIVE,
+            ],
+        )?;
+        let item = item_by_id(&tx, &id)?;
+        record_event(
+            &tx,
+            "items_compacted_to_lesson_manual",
+            Some(&item.id),
+            None,
+            &item.workspace,
+            &json!({
+                "sourceItems": sources.len(),
+                "sourceIds": source_ids,
+                "archived": true,
+                "summarizer": if summaries.contains_key(workspace) { "llm" } else { "rule" },
+            }),
+        )?;
+        tx.commit()?;
+        created.push(item);
+    }
+
+    if created.is_empty() {
         return Ok(None);
     }
-    if items.len() == 1 && items[0].category == LESSON_MANUAL_CATEGORY {
-        return Ok(Some(items[0].clone()));
-    }
-
-    let text = build_lesson_manual_text(&items);
-    let now = now_unix();
-    let id = stable_id("mem", &[GLOBAL_WORKSPACE, LESSON_MANUAL_CATEGORY]);
-    let tags = vec![
-        "lesson".to_string(),
-        "manual".to_string(),
-        "pangu".to_string(),
-    ];
-    let source_count = items.len();
-
-    // The DELETE and the INSERT that rebuilds the manual must be atomic. Without
-    // a transaction, a crash / power loss / disk-full between the two statements
-    // leaves the table empty, permanently destroying every learned memory. The
-    // transaction guarantees callers either see the old items or the new manual,
-    // never nothing.
-    let tx = conn.transaction()?;
-    tx.execute("DELETE FROM memory_items", [])?;
-    tx.execute(
-        "INSERT INTO memory_items
-         (id, text, workspace, category, tags_json, source, source_session_id,
-          created_at, updated_at, last_accessed_at, access_count, keywords)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8, 0, ?9)",
-        params![
-            id,
-            text,
-            GLOBAL_WORKSPACE,
-            LESSON_MANUAL_CATEGORY,
-            serde_json::to_string(&tags)?,
-            LESSON_MANUAL_SOURCE,
-            "compiled",
-            now,
-            keywords_json(&keywords_for(&text)),
-        ],
-    )?;
-    let item = item_by_id(&tx, &id)?;
-    record_event(
-        &tx,
-        "items_compacted_to_lesson_manual",
-        Some(&item.id),
-        None,
-        &item.workspace,
-        &json!({"sourceItems": source_count}),
-    )?;
-    tx.commit()?;
-    Ok(Some(item))
+    let representative = created
+        .iter()
+        .find(|item| item.workspace == GLOBAL_WORKSPACE)
+        .cloned()
+        .unwrap_or_else(|| created[0].clone());
+    Ok(Some(representative))
 }
 
 fn build_lesson_manual_text(items: &[MemoryItem]) -> String {
@@ -3027,7 +3184,8 @@ fn select_items_in_workspace(
     // old full-table scan made bulk history backfill O(n^2)).
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
-                created_at, updated_at, last_accessed_at, access_count
+                created_at, updated_at, last_accessed_at, access_count,
+                tier, strength, archived_at
          FROM memory_items WHERE workspace = ?1 ORDER BY updated_at DESC, id DESC",
     )?;
     Ok(stmt
@@ -3671,6 +3829,24 @@ fn stable_id(prefix: &str, parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(now_nanos().to_string().as_bytes());
     hasher.update(std::process::id().to_string().as_bytes());
+    for part in parts {
+        hasher.update([0]);
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    format!(
+        "{prefix}_{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]
+    )
+}
+
+/// Deterministic id derived purely from `parts` — no time/pid entropy. Unlike
+/// `stable_id`, calling this with the same parts always yields the same id, so a
+/// consolidation summary layer keyed on (workspace, category) upserts the same
+/// row across repeated runs instead of spawning a jittered duplicate each time
+/// (the phase-3 fix for the old `now_nanos()`/pid id churn).
+fn deterministic_id(prefix: &str, parts: &[&str]) -> String {
+    let mut hasher = Sha256::new();
     for part in parts {
         hasher.update([0]);
         hasher.update(part.as_bytes());
@@ -4526,5 +4702,219 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION, "schema version should bump to v4");
+    }
+
+    #[test]
+    fn deterministic_id_is_stable_across_calls() {
+        // The consolidation summary id must be a pure function of its parts (no
+        // now_nanos()/pid jitter), so repeated runs upsert the same row.
+        let a = deterministic_id("mem", &["repo-a", LESSON_MANUAL_CATEGORY]);
+        let b = deterministic_id("mem", &["repo-a", LESSON_MANUAL_CATEGORY]);
+        assert_eq!(a, b, "same parts must yield the same id");
+        let c = deterministic_id("mem", &["repo-b", LESSON_MANUAL_CATEGORY]);
+        assert_ne!(a, c, "different workspace must yield a different id");
+    }
+
+    /// Learn `count` distinct auto memories into `workspace`, returning the store.
+    /// Each memory uses genuinely different vocabulary so `find_similar_item` does
+    /// not merge them into one row (which would defeat consolidation tests).
+    fn seed_workspace(store: &MemoryAssistStore, workspace: &str, count: usize) {
+        seed_workspace_from(store, workspace, 0, count);
+    }
+
+    /// Same as `seed_workspace` but starts numbering at `start` so a second call
+    /// on the same workspace produces genuinely new rows instead of duplicates
+    /// that `find_similar_item` would merge into (already-archived) originals.
+    fn seed_workspace_from(store: &MemoryAssistStore, workspace: &str, start: usize, count: usize) {
+        let distinct = [
+            "改完前端界面后必须重新构建 debug manager 才能看到最新效果",
+            "切换供应商配置以后要同步历史会话，否则旧线程读不到新 key",
+            "发布打包前先把源码备份到外置磁盘，避免误删无法恢复",
+            "插件中心安装脚本要先校验校验和，防止装到被篡改的第三方包",
+            "自检修复会先创建备份再整合记忆，任何一步失败都能回滚",
+            "注入脚本只在 Codex 页面生效，不要污染其他窗口的 DOM 结构",
+        ];
+        for idx in start..start + count {
+            let base = distinct[idx % distinct.len()];
+            store
+                .learn_item(MemoryItemRequest {
+                    text: format!("{base}（{workspace} 条目 {idx} 号补充说明）"),
+                    workspace: workspace.to_string(),
+                    category: "lesson-learned".to_string(),
+                    tags: vec![],
+                    source: "auto".to_string(),
+                    source_session_id: String::new(),
+                })
+                .expect("learn item");
+        }
+    }
+
+    #[test]
+    fn consolidation_archives_sources_and_never_deletes_rows() {
+        // Phase 3 core contract: consolidation must NOT run `DELETE FROM
+        // memory_items`. Sources are archived (recoverable) and a summary layer is
+        // upserted, so the total row count only grows.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        seed_workspace(&store, "repo-a", 3);
+
+        let mut conn = store.open().expect("open");
+        let total_before: i64 = conn
+            .query_row("SELECT count(*) FROM memory_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(total_before, 3);
+
+        let summary = consolidate_items_with_summaries(&mut conn, &BTreeMap::new())
+            .expect("consolidate")
+            .expect("a summary should be produced");
+        assert_eq!(summary.category, LESSON_MANUAL_CATEGORY);
+        assert_eq!(summary.tier, TIER_ACTIVE);
+        assert_eq!(summary.workspace, "repo-a");
+
+        // Nothing was deleted: 3 archived sources + 1 active summary = 4 rows.
+        let total_after: i64 = conn
+            .query_row("SELECT count(*) FROM memory_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            total_after, 4,
+            "sources archived, summary added, none deleted"
+        );
+        let archived: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_items WHERE tier = ?1",
+                params![TIER_ARCHIVED],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 3, "all three sources archived, still recoverable");
+    }
+
+    #[test]
+    fn consolidation_reruns_with_stable_id_no_duplicate_summary() {
+        // Re-running consolidation must update the same deterministic-id summary in
+        // place, never spawn a second summary row for the workspace.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        seed_workspace(&store, "repo-a", 3);
+        let mut conn = store.open().expect("open");
+
+        let first = consolidate_items_with_summaries(&mut conn, &BTreeMap::new())
+            .expect("first consolidate")
+            .expect("summary");
+        // Add more sources, consolidate again. Start numbering past the first
+        // batch so these are genuinely new active rows, not duplicates that
+        // find_similar_item would merge into the (now archived) originals.
+        drop(conn);
+        seed_workspace_from(&store, "repo-a", 3, 2);
+        let mut conn = store.open().expect("reopen");
+        let second = consolidate_items_with_summaries(&mut conn, &BTreeMap::new())
+            .expect("second consolidate")
+            .expect("summary");
+        assert_eq!(first.id, second.id, "summary id must be stable across runs");
+
+        let summary_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_items WHERE category = ?1 AND workspace = ?2",
+                params![LESSON_MANUAL_CATEGORY, "repo-a"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary_rows, 1, "exactly one summary layer per workspace");
+    }
+
+    #[test]
+    fn consolidation_prefers_supplied_llm_summary_and_falls_back_to_rules() {
+        // With a supplied per-workspace summary the summary item carries that text
+        // verbatim; without one it falls back to the rule-based bullet compiler.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        seed_workspace(&store, "repo-a", 3);
+        let mut conn = store.open().expect("open");
+
+        let mut summaries = BTreeMap::new();
+        summaries.insert(
+            "repo-a".to_string(),
+            "LLM 浓缩：始终先构建再验证。".to_string(),
+        );
+        let with_llm = consolidate_items_with_summaries(&mut conn, &summaries)
+            .expect("consolidate")
+            .expect("summary");
+        assert!(
+            with_llm.text.contains("LLM 浓缩"),
+            "supplied LLM summary text must be used, got {:?}",
+            with_llm.text
+        );
+
+        // After the first consolidate, repo-a's sources must be archived (0 active
+        // non-summary rows), so the second call only touches the newly-seeded repo-b.
+        let repo_a_active: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM memory_items WHERE workspace = ?1 AND tier = ?2 AND category != ?3",
+                params!["repo-a", TIER_ACTIVE, LESSON_MANUAL_CATEGORY],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            repo_a_active, 0,
+            "repo-a sources should be archived after first consolidate"
+        );
+
+        // Re-seed a different workspace with no supplied summary → rule fallback.
+        drop(conn);
+        seed_workspace(&store, "repo-b", 3);
+        let mut conn = store.open().expect("reopen");
+        let rule = consolidate_items_with_summaries(&mut conn, &BTreeMap::new())
+            .expect("consolidate")
+            .expect("summary");
+        // The fallback summary belongs to repo-b and is the rule-based bullet manual,
+        // never the LLM sentinel text (repo-a is already archived, so it is not
+        // re-consolidated).
+        assert_eq!(rule.workspace, "repo-b");
+        assert!(!rule.text.contains("LLM 浓缩"));
+        assert!(rule.text.starts_with("经验教训手册："));
+    }
+
+    #[test]
+    fn consolidation_never_folds_exempt_memories() {
+        // Exempt memories (manual / safety-rule / project-rule) must stay active and
+        // authoritative — consolidation must not archive them behind a summary.
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        let manual = store
+            .learn_item(MemoryItemRequest {
+                text: "用户手动固化：发布前必须在 F 盘备份源码。".to_string(),
+                workspace: "repo-a".to_string(),
+                category: "general".to_string(),
+                tags: vec![],
+                source: "manual".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn manual");
+        let safety = store
+            .learn_item(MemoryItemRequest {
+                text: "安全边界：不得删除官方 MSIX 文件。".to_string(),
+                workspace: "repo-a".to_string(),
+                category: "safety-rule".to_string(),
+                tags: vec![],
+                source: "auto".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn safety");
+
+        let mut conn = store.open().expect("open");
+        // Only exempt items exist, so there is nothing consolidatable → no summary.
+        let result = consolidate_items_with_summaries(&mut conn, &BTreeMap::new()).expect("run");
+        assert!(result.is_none(), "no consolidatable non-exempt items");
+
+        for id in [&manual.id, &safety.id] {
+            let tier: String = conn
+                .query_row(
+                    "SELECT tier FROM memory_items WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(tier, TIER_ACTIVE, "exempt item {id} must stay active");
+        }
     }
 }

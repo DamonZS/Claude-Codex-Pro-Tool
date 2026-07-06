@@ -2112,6 +2112,7 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["盘古记忆", "memoryAssistEnabled"],
     ["盘古记忆 DOM 标识", "memoryAssistInjectEnabled"],
     ["自动学习", "memoryAssistAutoSuggestEnabled"],
+    ["记忆 LLM 摘要", "memoryAssistLlmSummaryEnabled"],
     ["CLI 包装器", "cliWrapperEnabled"],
   ] as const;
   return (

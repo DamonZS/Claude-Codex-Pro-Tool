@@ -272,6 +272,13 @@ pub struct BackendSettings {
     pub memory_assist_inject_enabled: bool,
     #[serde(rename = "memoryAssistAutoSuggestEnabled", default = "default_true")]
     pub memory_assist_auto_suggest_enabled: bool,
+    /// Phase 3 module C: opt-in gate for sending memory text to the active relay
+    /// profile to generate a consolidation summary. Defaults to false because it
+    /// transmits local memory content (which may include project detail) to an
+    /// external endpoint; when off, consolidation uses the local rule-based
+    /// summarizer only.
+    #[serde(rename = "memoryAssistLlmSummaryEnabled", default)]
+    pub memory_assist_llm_summary_enabled: bool,
     #[serde(
         rename = "memoryAssistMaxInjectedItems",
         default = "default_memory_assist_max_injected_items",
@@ -356,6 +363,7 @@ impl Default for BackendSettings {
             memory_assist_auto_suggest_enabled: true,
             memory_assist_max_injected_items: default_memory_assist_max_injected_items(),
             memory_assist_workspace_mode: default_memory_assist_workspace_mode(),
+            memory_assist_llm_summary_enabled: false,
             launch_mode: LaunchMode::Patch,
             relay_base_url: default_relay_base_url(),
             relay_api_key: String::new(),
@@ -694,6 +702,7 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "memoryAssistEnabled");
     merge_bool_setting(target, source, "memoryAssistInjectEnabled");
     merge_bool_setting(target, source, "memoryAssistAutoSuggestEnabled");
+    merge_bool_setting(target, source, "memoryAssistLlmSummaryEnabled");
     if let Some(value) = source
         .get("codexAppImageOverlayPath")
         .and_then(Value::as_str)
@@ -1115,6 +1124,9 @@ mod tests {
         assert!(settings.memory_assist_enabled);
         assert!(settings.memory_assist_inject_enabled);
         assert!(settings.memory_assist_auto_suggest_enabled);
+        // LLM summarization sends memory content to an external relay, so it must
+        // stay off unless the user explicitly opts in.
+        assert!(!settings.memory_assist_llm_summary_enabled);
         assert_eq!(settings.memory_assist_max_injected_items, 20);
         assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
     }

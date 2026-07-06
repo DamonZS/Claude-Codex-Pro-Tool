@@ -629,6 +629,130 @@ fn relay_profile_test_payload(protocol: RelayProtocol, model: &str) -> Value {
     }
 }
 
+/// Payload for a memory-summarization completion. Same two-protocol shape as the
+/// test payload, but carries the real system+user prompt and a larger output cap.
+fn relay_profile_summary_payload(protocol: RelayProtocol, model: &str, prompt: &str) -> Value {
+    let system = "你是盘古记忆的整合助手。把多条零散的项目经验教训压缩成一份精简、去重、可执行的中文经验教训手册，每条一个要点，保留关键动作和上下文，去掉一次性命令输出和噪声。只输出手册正文，不要解释。";
+    match protocol {
+        RelayProtocol::Responses => serde_json::json!({
+            "model": model,
+            "instructions": system,
+            "input": prompt,
+            "max_output_tokens": 800
+        }),
+        RelayProtocol::ChatCompletions => serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": prompt }
+            ],
+            "max_tokens": 800
+        }),
+    }
+}
+
+/// Extract the assistant text from either protocol's JSON response. Returns None
+/// when the shape is unexpected (which the caller treats as "LLM unavailable" and
+/// degrades to the rule-based summarizer).
+fn extract_summary_text(protocol: RelayProtocol, body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let text = match protocol {
+        // Chat Completions: choices[0].message.content
+        RelayProtocol::ChatCompletions => value
+            .get("choices")?
+            .get(0)?
+            .get("message")?
+            .get("content")?
+            .as_str()
+            .map(|s| s.to_string()),
+        // Responses API: prefer the flattened output_text, else dig into output[].
+        RelayProtocol::Responses => value
+            .get("output_text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                value.get("output")?.as_array()?.iter().find_map(|item| {
+                    item.get("content")?
+                        .as_array()?
+                        .iter()
+                        .find_map(|part| part.get("text")?.as_str().map(|s| s.to_string()))
+                })
+            }),
+    }?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Summarize memory text through the active relay profile (phase 3 module C LLM
+/// channel). Reuses the same base-url / api-key resolution, proxied client, bearer
+/// auth, and `/v1` fallback as `test_relay_profile`. Returns the assistant summary
+/// text, or an error the caller degrades to the rule-based summarizer on. This is
+/// async and must be called *outside* the synchronous consolidation transaction.
+pub async fn summarize_memory_via_relay(
+    profile: &RelayProfile,
+    prompt: &str,
+) -> anyhow::Result<String> {
+    let base_url = relay_profile_base_url(profile);
+    let base_url = base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        anyhow::bail!("Base URL 不能为空");
+    }
+    let api_key = relay_profile_api_key(profile);
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        anyhow::bail!("API Key 不能为空");
+    }
+    let model = relay_profile_model(profile);
+    let model = model.trim();
+    if model.is_empty() {
+        anyhow::bail!("模型不能为空");
+    }
+
+    let client = crate::http_client::proxied_client("ClaudeCodexPro/MemorySummary")?;
+    let payload = relay_profile_summary_payload(profile.protocol, model, prompt);
+    let path = match profile.protocol {
+        RelayProtocol::Responses => "/responses",
+        RelayProtocol::ChatCompletions => "/chat/completions",
+    };
+
+    let send = |endpoint: String| {
+        let client = client.clone();
+        let api_key = api_key.to_string();
+        let payload = payload.clone();
+        async move {
+            client
+                .post(&endpoint)
+                .bearer_auth(api_key)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&payload)
+                .send()
+                .await
+        }
+    };
+
+    let response = send(format!("{base_url}{path}")).await?;
+    let http_status = response.status().as_u16();
+    // Same `/v1` fallback as test_relay_profile: many relays expose /v1/-prefixed
+    // paths and users omit the prefix.
+    if http_status == 404 && !base_url.ends_with("/v1") {
+        let v1_response = send(format!("{base_url}/v1{path}")).await?;
+        if v1_response.status().as_u16() < 400 {
+            let body = v1_response.text().await.unwrap_or_default();
+            return extract_summary_text(profile.protocol, &body)
+                .context("relay 摘要响应缺少可用文本");
+        }
+    }
+    if http_status >= 400 {
+        anyhow::bail!("relay 摘要请求失败：HTTP {http_status}");
+    }
+    let body = response.text().await.unwrap_or_default();
+    extract_summary_text(profile.protocol, &body).context("relay 摘要响应缺少可用文本")
+}
+
 fn codex_base_url_for_protocol(base_url: &str, protocol: RelayProtocol, proxy_port: u16) -> String {
     match protocol {
         RelayProtocol::Responses => base_url.to_string(),
