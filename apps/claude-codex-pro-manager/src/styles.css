@@ -3530,6 +3530,68 @@ body {
   padding-right: 2px;
 }
 
+/* Phase 2 tiering: strength bar, resident/archived badges, archive toggle. */
+.memory-tier-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.memory-strength-bar {
+  position: relative;
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(120, 120, 140, 0.25);
+  overflow: hidden;
+  cursor: help;
+}
+
+.memory-strength-fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7c5cff, #b18cff);
+  transition: width 0.3s ease;
+}
+
+.memory-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.memory-tier-badge.resident {
+  color: #7c5cff;
+  background: rgba(124, 92, 255, 0.14);
+}
+
+.memory-tier-badge.archived {
+  color: #8a8a99;
+  background: rgba(138, 138, 153, 0.16);
+}
+
+.memory-archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.memory-archived {
+  opacity: 0.55;
+}
+
 .status-tile {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);

@@ -2,6 +2,8 @@ import { type Dispatch, type DragEvent, type SetStateAction, memo, useEffect, us
 import {
   Activity,
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   CheckCircle2,
   Copy,
   Download,
@@ -281,6 +283,46 @@ export function OverviewScreen({
   );
 }
 
+// Phase 2 tiering UI: a decay strength bar (exempt items read "常驻" and show
+// full), plus an archive/restore action. Shared by the overview detail list and
+// the memory management screen so both surfaces stay consistent.
+function MemoryTierControls({ actions, item }: { actions: AppActions; item: MemoryItem }) {
+  const archived = item.tier === "archived";
+  const exempt = Boolean(item.exempt);
+  // retention is 0..1; exempt items always report 1. Clamp for safety.
+  const retention = exempt ? 1 : Math.max(0, Math.min(1, item.retention ?? 1));
+  const pct = Math.round(retention * 100);
+  return (
+    <div className="memory-tier-controls">
+      {archived ? (
+        <span className="memory-tier-badge archived">已归档</span>
+      ) : exempt ? (
+        <span className="memory-tier-badge resident" title="常驻记忆，豁免遗忘衰减">
+          <Pin className="h-3 w-3" />
+          常驻
+        </span>
+      ) : (
+        <span
+          className="memory-strength-bar"
+          title={`记忆强度 ${pct}%（越低越接近归档）`}
+        >
+          <span className="memory-strength-fill" style={{ width: `${pct}%` }} />
+        </span>
+      )}
+      {archived ? (
+        <Button onClick={() => void actions.restoreMemoryAssistItem(item.id)} size="sm" variant="outline">
+          恢复
+        </Button>
+      ) : (
+        <Button onClick={() => void actions.archiveMemoryAssistItem(item.id)} size="sm" variant="outline">
+          <Archive className="h-4 w-4" />
+          归档
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function OverviewMemoryDetails({
   actions,
   items,
@@ -293,6 +335,7 @@ export function OverviewMemoryDetails({
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [editingText, setEditingText] = useState("");
   const [editingCategory, setEditingCategory] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const allItems = items?.items ?? [];
   const beginEditMemory = (item: MemoryItem) => {
     setEditingMemoryId(item.id);
@@ -328,13 +371,26 @@ export function OverviewMemoryDetails({
           <RefreshCw className="h-4 w-4" />
           刷新
         </Button>
+        <label className="memory-archive-toggle">
+          <input
+            checked={showArchived}
+            onChange={(event) => {
+              const next = event.currentTarget.checked;
+              setShowArchived(next);
+              void actions.refreshMemoryAssist(false, next);
+            }}
+            type="checkbox"
+          />
+          <span>显示归档</span>
+        </label>
         <Button onClick={onClose} size="sm" variant="outline">收起</Button>
       </div>
       <div className="overview-memory-list">
         {allItems.length ? allItems.map((item) => {
           const editing = editingMemoryId === item.id;
+          const archived = item.tier === "archived";
           return (
-            <div className="memory-assist-row memory-lesson-card" key={item.id}>
+            <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
               <span>{item.category} · {item.workspace}</span>
               {editing ? (
                 <>
@@ -357,6 +413,7 @@ export function OverviewMemoryDetails({
               ) : (
                 <>
                   <p>{item.text}</p>
+                  <MemoryTierControls actions={actions} item={item} />
                   <div className="action-row">
                     <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
                       <Pencil className="h-4 w-4" />
@@ -1337,6 +1394,7 @@ export function MemoryAssistPanel({
   const [editingMemoryId, setEditingMemoryId] = useState("");
   const [editingText, setEditingText] = useState("");
   const [editingCategory, setEditingCategory] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const allItems = items?.items ?? [];
   const matches = search?.memory.results ?? [];
   const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
@@ -1412,13 +1470,13 @@ export function MemoryAssistPanel({
           <input
             onChange={(event) => setSearchQuery(event.currentTarget.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery);
+              if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived);
             }}
             placeholder="搜索项目约定、构建命令、历史修复结论"
             value={searchQuery}
           />
         </label>
-        <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery)} size="sm" variant="outline">
+        <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">
           <RefreshCw className="h-4 w-4" />
           搜索
         </Button>
@@ -1442,11 +1500,26 @@ export function MemoryAssistPanel({
         </div>
       ) : null}
       <div className="memory-assist-list">
-          <strong>经验教训手册</strong>
+          <div className="memory-list-header">
+            <strong>经验教训手册</strong>
+            <label className="memory-archive-toggle">
+              <input
+                checked={showArchived}
+                onChange={(event) => {
+                  const next = event.currentTarget.checked;
+                  setShowArchived(next);
+                  void actions.refreshMemoryAssist(false, next);
+                }}
+                type="checkbox"
+              />
+              <span>显示归档</span>
+            </label>
+          </div>
           {allItems.length ? allItems.map((item) => {
             const editing = editingMemoryId === item.id;
+            const archived = item.tier === "archived";
             return (
-            <div className="memory-assist-row memory-lesson-card" key={item.id}>
+            <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
               <span>{item.category} · {item.workspace}</span>
               {editing ? (
                 <>
@@ -1469,6 +1542,7 @@ export function MemoryAssistPanel({
               ) : (
                 <>
                   <p>{item.text}</p>
+                  <MemoryTierControls actions={actions} item={item} />
                   <div className="action-row">
                     <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
                       <Pencil className="h-4 w-4" />

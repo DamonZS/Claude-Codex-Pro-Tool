@@ -390,6 +390,16 @@ export type MemoryItem = {
   updatedAt: number;
   lastAccessedAt: number;
   accessCount: number;
+  // Tiering (phase 2): "active" or "archived"; archived is a soft, recoverable state.
+  tier: string;
+  // Stored base strength, boosted on each access.
+  strength: number;
+  // Unix seconds when archived (0 = active).
+  archivedAt: number;
+  // Read-time Ebbinghaus-decayed retention in 0..1 (exempt items report 1.0).
+  retention: number;
+  // Read-time flag: exempt from decay (manual / safety-rule / project-rule).
+  exempt: boolean;
 };
 
 export type MemoryItemEditRequest = Pick<MemoryItem, "text" | "workspace" | "category" | "tags" | "source" | "sourceSessionId">;

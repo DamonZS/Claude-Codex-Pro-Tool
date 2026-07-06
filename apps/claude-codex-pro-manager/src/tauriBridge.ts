@@ -39,6 +39,11 @@ type PreviewMemoryItem = {
   updatedAt: number;
   lastAccessedAt: number;
   accessCount: number;
+  tier: string;
+  strength: number;
+  archivedAt: number;
+  retention: number;
+  exempt: boolean;
 };
 
 type PreviewMemoryCandidate = {
@@ -394,6 +399,11 @@ function previewMemoryItems(): PreviewMemoryItem[] {
       updatedAt: stamp,
       lastAccessedAt: stamp,
       accessCount: 5,
+      tier: "active",
+      strength: 1.0,
+      archivedAt: 0,
+      retention: 1.0,
+      exempt: true,
     },
   ];
 }
@@ -1005,6 +1015,16 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "delete_memory_assist_item") {
     return ok("预览模式已模拟删除记忆。", { item: previewMemoryItems()[0] });
+  }
+  if (command === "archive_memory_assist_item") {
+    return ok("预览模式已模拟归档记忆。", {
+      item: { ...previewMemoryItems()[0], tier: "archived", archivedAt: Math.floor(Date.now() / 1000), retention: 0.05 },
+    });
+  }
+  if (command === "restore_memory_assist_item") {
+    return ok("预览模式已模拟恢复记忆。", {
+      item: { ...previewMemoryItems()[0], tier: "active", archivedAt: 0, retention: 1, strength: 1 },
+    });
   }
   if (command === "approve_memory_assist_candidate") {
     return ok("预览模式已模拟确认待确认记忆。", { item: { ...previewMemoryItems()[0], id: "approved-preview-memory" } });

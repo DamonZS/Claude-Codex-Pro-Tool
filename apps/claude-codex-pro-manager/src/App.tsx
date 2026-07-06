@@ -455,10 +455,10 @@ export function App() {
     return status;
   };
 
-  const refreshMemoryAssist = async (silent = false) => {
+  const refreshMemoryAssist = async (silent = false, includeArchived = false) => {
     const [status, items] = await Promise.all([
       refreshMemoryAssistStatus(silent),
-      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80 } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
+      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80, includeArchived } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
     ]);
     if (items) setMemoryItems(items);
     return status;
@@ -1044,9 +1044,9 @@ export function App() {
     return result?.status === "ok";
   };
 
-  const searchMemoryAssist = async (query: string) => {
+  const searchMemoryAssist = async (query: string, includeArchived = false) => {
     const result = await run(
-      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 12 } }),
+      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 12, includeArchived } }),
       "搜索记忆",
     );
     if (result) {
@@ -1058,6 +1058,22 @@ export function App() {
   const deleteMemoryAssistItem = async (id: string) => {
     if (!window.confirm("确认删除这条经验教训？")) return;
     const result = await run(() => call<MemoryItemResult>("delete_memory_assist_item", { request: { id } }), "删除经验教训");
+    if (result) {
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const archiveMemoryAssistItem = async (id: string) => {
+    const result = await run(() => call<MemoryItemResult>("archive_memory_assist_item", { request: { id } }), "归档记忆");
+    if (result) {
+      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
+      await refreshMemoryAssist(true);
+    }
+  };
+
+  const restoreMemoryAssistItem = async (id: string) => {
+    const result = await run(() => call<MemoryItemResult>("restore_memory_assist_item", { request: { id } }), "恢复记忆");
     if (result) {
       notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
       await refreshMemoryAssist(true);
@@ -1482,6 +1498,8 @@ export function App() {
       updateMemoryAssistItem,
       searchMemoryAssist,
       deleteMemoryAssistItem,
+      archiveMemoryAssistItem,
+      restoreMemoryAssistItem,
       approveMemoryAssistCandidate,
       rejectMemoryAssistCandidate,
       runMemoryAssistSelfcheck,
@@ -1567,6 +1585,8 @@ export function App() {
       updateMemoryAssistItem: (...args) => actionsRef.current!.updateMemoryAssistItem(...args),
       searchMemoryAssist: (...args) => actionsRef.current!.searchMemoryAssist(...args),
       deleteMemoryAssistItem: (...args) => actionsRef.current!.deleteMemoryAssistItem(...args),
+      archiveMemoryAssistItem: (...args) => actionsRef.current!.archiveMemoryAssistItem(...args),
+      restoreMemoryAssistItem: (...args) => actionsRef.current!.restoreMemoryAssistItem(...args),
       approveMemoryAssistCandidate: (...args) => actionsRef.current!.approveMemoryAssistCandidate(...args),
       rejectMemoryAssistCandidate: (...args) => actionsRef.current!.rejectMemoryAssistCandidate(...args),
       runMemoryAssistSelfcheck: (...args) => actionsRef.current!.runMemoryAssistSelfcheck(...args),

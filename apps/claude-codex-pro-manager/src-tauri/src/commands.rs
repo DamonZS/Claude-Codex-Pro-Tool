@@ -2793,6 +2793,72 @@ pub async fn delete_memory_assist_item(
 }
 
 #[tauri::command]
+pub async fn archive_memory_assist_item(
+    request: MemoryIdRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "盘古记忆当前已禁用。",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().archive_item(&request.id)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("记忆已归档。", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
+            &format!("归档记忆失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("记忆归档任务失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn restore_memory_assist_item(
+    request: MemoryIdRequest,
+) -> CommandResult<MemoryAssistItemPayload> {
+    if !memory_assist_write_enabled() {
+        return failed(
+            "盘古记忆当前已禁用。",
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        );
+    }
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().restore_item(&request.id)
+    })
+    .await;
+    match computed {
+        Ok(Ok(item)) => ok("记忆已恢复到活跃层。", MemoryAssistItemPayload { item }),
+        Ok(Err(error)) => failed(
+            &format!("恢复记忆失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("记忆恢复任务失败：{error}"),
+            MemoryAssistItemPayload {
+                item: empty_memory_item(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
 pub async fn create_memory_assist_candidate(
     request: MemoryCandidateRequest,
 ) -> CommandResult<MemoryAssistCandidatePayload> {
@@ -3155,6 +3221,11 @@ fn empty_memory_item() -> MemoryItem {
         updated_at: 0,
         last_accessed_at: 0,
         access_count: 0,
+        tier: "active".to_string(),
+        strength: 1.0,
+        archived_at: 0,
+        retention: 1.0,
+        exempt: false,
     }
 }
 

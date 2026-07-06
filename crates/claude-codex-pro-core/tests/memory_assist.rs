@@ -91,6 +91,7 @@ fn learn_query_and_workspace_filter_use_project_plus_global_scope() {
             query: "构建前需要备份吗".into(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 8,
         })
         .unwrap();
@@ -147,6 +148,7 @@ fn all_workspaces_scope_lists_and_searches_every_workspace() {
             query: String::new(),
             workspace: "__all__".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -163,6 +165,7 @@ fn all_workspaces_scope_lists_and_searches_every_workspace() {
             query: "插件 diff".into(),
             workspace: "__all__".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -594,6 +597,7 @@ fn similar_memory_updates_existing_item_instead_of_creating_duplicate() {
             query: String::new(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -632,6 +636,7 @@ fn related_but_distinct_memory_does_not_overwrite_existing_fact() {
             query: String::new(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -666,6 +671,7 @@ fn list_items_does_not_increment_access_count() {
             query: String::new(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -676,6 +682,7 @@ fn list_items_does_not_increment_access_count() {
             query: "列表刷新".into(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -686,6 +693,7 @@ fn list_items_does_not_increment_access_count() {
             query: String::new(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 20,
         })
         .unwrap();
@@ -999,6 +1007,7 @@ fn codex_history_backfill_compacts_lessons_into_single_manual() {
             query: String::new(),
             workspace: "__all__".into(),
             include_global: true,
+            include_archived: false,
             limit: 10,
         })
         .unwrap();
@@ -1207,6 +1216,7 @@ fn import_redacts_secret_values_before_storage_and_search() {
             query: "import-secret imported.token".into(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 5,
         })
         .unwrap();
@@ -1220,6 +1230,7 @@ fn import_redacts_secret_values_before_storage_and_search() {
             query: "导入包".into(),
             workspace: "repo-a".into(),
             include_global: true,
+            include_archived: false,
             limit: 5,
         })
         .unwrap();

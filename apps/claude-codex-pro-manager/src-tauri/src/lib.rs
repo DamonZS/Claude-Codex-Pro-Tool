@@ -88,6 +88,8 @@ pub fn run() {
             commands::learn_memory_assist_item,
             commands::update_memory_assist_item,
             commands::delete_memory_assist_item,
+            commands::archive_memory_assist_item,
+            commands::restore_memory_assist_item,
             commands::create_memory_assist_candidate,
             commands::list_memory_assist_candidates,
             commands::approve_memory_assist_candidate,

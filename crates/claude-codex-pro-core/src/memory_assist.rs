@@ -11,9 +11,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
+/// Tiering (phase 2). Items live in one of two tiers; archived is a soft,
+/// recoverable visibility state, never a physical delete.
+const TIER_ACTIVE: &str = "active";
+const TIER_ARCHIVED: &str = "archived";
+/// Ebbinghaus decay half-life in seconds (~30 days). retention decays as
+/// strength * 0.5^(elapsed / HALF_LIFE) since the last access, so an untouched
+/// item halves every ~30 days and crosses the archive threshold around ~90 days.
+const DECAY_HALF_LIFE_SECS: f64 = 30.0 * 24.0 * 60.0 * 60.0;
+/// Below this decayed retention an item is eligible for auto-archive (~12%,
+/// i.e. roughly three half-lives / ~90 days without a hit).
+const ARCHIVE_RETENTION_THRESHOLD: f64 = 0.12;
+/// Each access adds this to the stored base strength (capped at STRENGTH_MAX),
+/// so frequently-hit memories decay from a higher plateau.
+const STRENGTH_ACCESS_BOOST: f64 = 0.25;
+/// Upper bound on stored base strength so boosts can't grow unbounded.
+const STRENGTH_MAX: f64 = 3.0;
 /// Dimensionality of the local deterministic embedding. Feature-hashing maps any
 /// text into this fixed-size dense vector; 256 keeps the BLOB small (256 * 4B =
 /// 1KiB per item) while giving enough buckets to separate distinct vocabularies.
@@ -46,6 +62,26 @@ pub struct MemoryItem {
     pub updated_at: i64,
     pub last_accessed_at: i64,
     pub access_count: i64,
+    /// Tiering (phase 2): "active" (default) or "archived". Archived items are a
+    /// soft, recoverable visibility state — never physically deleted by decay.
+    #[serde(default = "default_tier")]
+    pub tier: String,
+    /// Base retention strength, boosted on each access. Combined with the elapsed
+    /// time since `last_accessed_at` it yields the decayed retention at read time.
+    #[serde(default = "default_strength")]
+    pub strength: f64,
+    /// Unix seconds when the item was archived (0 = not archived). Kept for audit
+    /// and restore.
+    #[serde(default)]
+    pub archived_at: i64,
+    /// Computed at read time (not stored): Ebbinghaus-decayed retention in 0..1.
+    /// Exempt items report 1.0. Drives the frontend strength bar.
+    #[serde(default = "default_strength")]
+    pub retention: f64,
+    /// Computed at read time (not stored): true when the item is exempt from decay
+    /// (manual source, safety-rule, or project-rule). Drives the "常驻" badge.
+    #[serde(default)]
+    pub exempt: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -246,6 +282,11 @@ pub struct MemoryQueryRequest {
     pub include_global: bool,
     #[serde(default = "default_query_limit")]
     pub limit: usize,
+    /// Tiering (phase 2): when false (default) only `active` items are returned,
+    /// so injection and normal search never surface faded-out memories. The
+    /// manager's search can opt in to include the `archived` tier.
+    #[serde(default)]
+    pub include_archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -438,6 +479,65 @@ impl MemoryAssistStore {
         Ok(item)
     }
 
+    /// Manually archive an item (phase 2): a soft, recoverable visibility state,
+    /// never a physical delete. Injection and default search stop surfacing it.
+    /// Idempotent — archiving an already-archived item is a no-op that still
+    /// returns the current row.
+    pub fn archive_item(&self, id: &str) -> anyhow::Result<MemoryItem> {
+        let conn = self.open()?;
+        let now = now_unix();
+        conn.execute(
+            "UPDATE memory_items SET tier = ?1, archived_at = ?2, updated_at = ?2
+             WHERE id = ?3",
+            params![TIER_ARCHIVED, now, id],
+        )?;
+        if conn.changes() == 0 {
+            anyhow::bail!("memory item not found");
+        }
+        let mut item = item_by_id(&conn, id)?;
+        decorate_item_decay(&mut item, now);
+        record_event(
+            &conn,
+            "item_archived",
+            Some(&item.id),
+            None,
+            &item.workspace,
+            &json!({ "reason": "manual" }),
+        )?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
+        Ok(item)
+    }
+
+    /// Restore an archived item back to the active tier (phase 2). Resets the
+    /// decay clock and base strength so a deliberately-restored memory gets a
+    /// fresh lease rather than immediately re-archiving on the next read.
+    pub fn restore_item(&self, id: &str) -> anyhow::Result<MemoryItem> {
+        let conn = self.open()?;
+        let now = now_unix();
+        conn.execute(
+            "UPDATE memory_items
+             SET tier = ?1, archived_at = 0, strength = 1.0,
+                 last_accessed_at = ?2, updated_at = ?2
+             WHERE id = ?3",
+            params![TIER_ACTIVE, now, id],
+        )?;
+        if conn.changes() == 0 {
+            anyhow::bail!("memory item not found");
+        }
+        let mut item = item_by_id(&conn, id)?;
+        decorate_item_decay(&mut item, now);
+        record_event(
+            &conn,
+            "item_restored",
+            Some(&item.id),
+            None,
+            &item.workspace,
+            &json!({ "reason": "manual" }),
+        )?;
+        let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
+        Ok(item)
+    }
+
     pub fn list_items(&self, request: MemoryQueryRequest) -> anyhow::Result<Vec<MemoryItem>> {
         let result = self.query_items(request, false)?;
         Ok(result.results.into_iter().map(|item| item.item).collect())
@@ -460,16 +560,64 @@ impl MemoryAssistStore {
         let mut items = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT id, text, workspace, category, tags_json, source, source_session_id,
-                    created_at, updated_at, last_accessed_at, access_count
+                    created_at, updated_at, last_accessed_at, access_count,
+                    tier, strength, archived_at
              FROM memory_items
              ORDER BY updated_at DESC, id DESC",
         )?;
         let rows = stmt.query_map([], row_to_item)?;
+        let now = now_unix();
+        // Read-time lazy auto-archive (phase 2): active, non-exempt items whose
+        // decayed retention has fallen below the threshold are archived as a side
+        // effect of this scan. We only collect ids here and apply the writes after
+        // the read cursor (`stmt`) is dropped, to avoid writing to the same
+        // connection while a query is still stepping.
+        let mut to_auto_archive: Vec<(String, String)> = Vec::new();
         for row in rows {
-            let item = row?;
-            if all_workspaces || scope.contains(&item.workspace.as_str()) {
-                items.push(item);
+            let mut item = row?;
+            if !(all_workspaces || scope.contains(&item.workspace.as_str())) {
+                continue;
             }
+            // Tiering (phase 2): archived items are hidden unless explicitly asked
+            // for, so injection and normal search never surface faded-out memories.
+            if !request.include_archived && item.tier == TIER_ARCHIVED {
+                continue;
+            }
+            // Fill read-time retention/exempt so ranking and the UI strength bar
+            // have data without a stored column.
+            decorate_item_decay(&mut item, now);
+            // A still-active item that has decayed below the archive threshold is
+            // marked for auto-archive. It stays visible in this response only when
+            // the caller explicitly asked for archived items (manager search);
+            // otherwise it is dropped so injection never surfaces a fading memory.
+            if item.tier == TIER_ACTIVE
+                && !item.exempt
+                && item.retention < ARCHIVE_RETENTION_THRESHOLD
+            {
+                to_auto_archive.push((item.id.clone(), item.workspace.clone()));
+                if !request.include_archived {
+                    continue;
+                }
+                item.tier = TIER_ARCHIVED.to_string();
+                item.archived_at = now;
+            }
+            items.push(item);
+        }
+        drop(stmt);
+        for (id, workspace) in &to_auto_archive {
+            conn.execute(
+                "UPDATE memory_items SET tier = ?1, archived_at = ?2, updated_at = ?2
+                 WHERE id = ?3 AND tier = ?4",
+                params![TIER_ARCHIVED, now, id, TIER_ACTIVE],
+            )?;
+            record_event(
+                &conn,
+                "item_archived",
+                Some(id),
+                None,
+                workspace,
+                &json!({ "reason": "decay" }),
+            )?;
         }
 
         // Full-text signal: FTS5 (trigram) gives a bm25 rank per item that
@@ -510,19 +658,33 @@ impl MemoryAssistStore {
                 .score
                 .partial_cmp(&left.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Decayed retention breaks ties so fresher/stronger memories win
+                // over faded ones at the same lexical+semantic score.
+                .then_with(|| {
+                    right
+                        .item
+                        .retention
+                        .partial_cmp(&left.item.retention)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| right.item.access_count.cmp(&left.item.access_count))
                 .then_with(|| right.item.updated_at.cmp(&left.item.updated_at))
         });
         matches.truncate(limit);
 
         if record_access {
-            let now = now_unix();
             for item in &matches {
+                // Access enhancement (phase 2): a hit resets the decay clock
+                // (last_accessed_at = now) and boosts base strength (capped), so
+                // frequently-used memories decay from a higher plateau. Exempt
+                // items don't need the boost but the clock reset is harmless.
                 conn.execute(
                     "UPDATE memory_items
-                     SET access_count = access_count + 1, last_accessed_at = ?1
-                     WHERE id = ?2",
-                    params![now, item.item.id],
+                     SET access_count = access_count + 1,
+                         last_accessed_at = ?1,
+                         strength = MIN(strength + ?2, ?3)
+                     WHERE id = ?4",
+                    params![now, STRENGTH_ACCESS_BOOST, STRENGTH_MAX, item.item.id],
                 )?;
             }
         }
@@ -963,6 +1125,9 @@ impl MemoryAssistStore {
             workspace: workspace.clone(),
             include_global: true,
             limit: max_items,
+            // Injection only ever surfaces active memories — decayed/archived
+            // items must not leak back into the session-start summary.
+            include_archived: false,
         })?;
         let conn = self.open()?;
         let _ = self.sync_inject_summary_cache(&conn, &workspace);
@@ -1455,10 +1620,17 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             access_count INTEGER NOT NULL DEFAULT 0,
             keywords TEXT NOT NULL,
             embedding BLOB,
-            embedding_model TEXT NOT NULL DEFAULT ''
+            embedding_model TEXT NOT NULL DEFAULT '',
+            tier TEXT NOT NULL DEFAULT 'active',
+            strength REAL NOT NULL DEFAULT 1.0,
+            archived_at INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_memory_items_workspace ON memory_items(workspace);
         CREATE INDEX IF NOT EXISTS idx_memory_items_updated_at ON memory_items(updated_at);
+        -- Note: the tier index is created in migrate_to_v4, not here, because for a
+        -- migrating v2/v3 DB the tier column does not exist yet when this batch runs
+        -- (CREATE TABLE IF NOT EXISTS is a no-op on the pre-existing table). A fresh
+        -- DB still gets the index via migrate_to_v4 (user_version 0 < 4).
 
         CREATE TABLE IF NOT EXISTS memory_candidates (
             id TEXT PRIMARY KEY,
@@ -1521,6 +1693,9 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if user_version < 3 {
         migrate_to_v3(conn)?;
+    }
+    if user_version < 4 {
+        migrate_to_v4(conn)?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     Ok(())
@@ -1585,10 +1760,35 @@ fn migrate_to_v3(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// v3 -> v4 migration: add the phase-2 tiering columns to `memory_items`. Every
+/// existing row becomes an `active` item at the default strength (never archived
+/// retroactively), so upgrading is non-destructive. Idempotent via `column_exists`
+/// so a crash mid-migration can be re-run safely.
+fn migrate_to_v4(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "memory_items", "tier")? {
+        conn.execute_batch(&format!(
+            "ALTER TABLE memory_items ADD COLUMN tier TEXT NOT NULL DEFAULT '{TIER_ACTIVE}';"
+        ))?;
+    }
+    if !column_exists(conn, "memory_items", "strength")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_items ADD COLUMN strength REAL NOT NULL DEFAULT 1.0;",
+        )?;
+    }
+    if !column_exists(conn, "memory_items", "archived_at")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_items ADD COLUMN archived_at INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_memory_items_tier ON memory_items(tier);")?;
+    Ok(())
+}
+
 fn item_by_id(conn: &Connection, id: &str) -> anyhow::Result<MemoryItem> {
     conn.query_row(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
-                created_at, updated_at, last_accessed_at, access_count
+                created_at, updated_at, last_accessed_at, access_count,
+                tier, strength, archived_at
          FROM memory_items WHERE id = ?1",
         [id],
         row_to_item,
@@ -1609,6 +1809,11 @@ fn candidate_by_id(conn: &Connection, id: &str) -> anyhow::Result<MemoryCandidat
 
 fn row_to_item(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
     let tags_json: String = row.get(4)?;
+    // Columns 11..=13 (tier/strength/archived_at) are only present in SELECTs that
+    // opt into them; read them defensively so the many 11-column SELECTs still work
+    // and legacy rows fall back to sane defaults. retention/exempt are computed at
+    // read time by `decorate_item_decay`, not stored — seed them with defaults here.
+    let strength = row.get::<_, f64>(12).unwrap_or_else(|_| default_strength());
     Ok(MemoryItem {
         id: row.get(0)?,
         text: row.get(1)?,
@@ -1621,6 +1826,11 @@ fn row_to_item(row: &Row<'_>) -> rusqlite::Result<MemoryItem> {
         updated_at: row.get(8)?,
         last_accessed_at: row.get(9)?,
         access_count: row.get(10)?,
+        tier: row.get::<_, String>(11).unwrap_or_else(|_| default_tier()),
+        strength,
+        archived_at: row.get::<_, i64>(13).unwrap_or(0),
+        retention: strength,
+        exempt: false,
     })
 }
 
@@ -3368,10 +3578,13 @@ fn ranked_items_for_inject_cache(
     let all_workspaces = is_all_workspaces(&workspace);
     let scope = workspace_scope(&workspace, true);
     let query_keywords = keywords_for(query);
+    // Injection only surfaces active-tier memories: archived (faded-out) items
+    // must never re-enter the session-start summary.
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
                 created_at, updated_at, last_accessed_at, access_count
          FROM memory_items
+         WHERE tier = 'active'
          ORDER BY updated_at DESC, access_count DESC, id DESC",
     )?;
     let mut matches = Vec::new();
@@ -3407,11 +3620,12 @@ fn high_frequency_items_for_inject_cache(
     let limit = clamp_limit(limit);
     let all_workspaces = is_all_workspaces(&workspace);
     let scope = workspace_scope(&workspace, true);
+    // Injection only surfaces active-tier memories (see ranked_items_for_inject_cache).
     let mut stmt = conn.prepare(
         "SELECT id, text, workspace, category, tags_json, source, source_session_id,
                 created_at, updated_at, last_accessed_at, access_count
          FROM memory_items
-         WHERE access_count > 0
+         WHERE access_count > 0 AND tier = 'active'
          ORDER BY access_count DESC, last_accessed_at DESC, updated_at DESC, id DESC",
     )?;
     let mut items = Vec::new();
@@ -3482,6 +3696,55 @@ fn now_nanos() -> u128 {
         .unwrap_or(0)
 }
 
+/// True when an item is exempt from decay: user-fixed memories (`source=manual`)
+/// and hard rules (`safety-rule` / `project-rule`) must never fade out of the
+/// active tier on their own. Exempt items always report retention = 1.0.
+fn item_is_decay_exempt(source: &str, category: &str) -> bool {
+    source == "manual" || category == "safety-rule" || category == "project-rule"
+}
+
+/// Ebbinghaus-decayed retention in 0..1 for an item at time `now`. Exempt items
+/// report 1.0. Otherwise retention = min(1, strength * 0.5^(elapsed/half_life)),
+/// where elapsed is measured from `last_accessed_at` (each access resets the
+/// clock and boosts `strength`, so frequently-hit memories decay from a higher
+/// plateau). A missing/zero `last_accessed_at` falls back to `created_at`.
+fn decayed_retention(
+    source: &str,
+    category: &str,
+    strength: f64,
+    last_accessed_at: i64,
+    created_at: i64,
+    now: i64,
+) -> f64 {
+    if item_is_decay_exempt(source, category) {
+        return 1.0;
+    }
+    let anchor = if last_accessed_at > 0 {
+        last_accessed_at
+    } else {
+        created_at
+    };
+    let elapsed = (now - anchor).max(0) as f64;
+    let base = if strength > 0.0 { strength } else { 1.0 };
+    let decayed = base * 0.5_f64.powf(elapsed / DECAY_HALF_LIFE_SECS);
+    decayed.clamp(0.0, 1.0)
+}
+
+/// Fills the read-time `retention` and `exempt` fields on an item (they are not
+/// stored columns). Call this before returning items to callers/UI so the
+/// strength bar and "常驻" badge have data.
+fn decorate_item_decay(item: &mut MemoryItem, now: i64) {
+    item.exempt = item_is_decay_exempt(&item.source, &item.category);
+    item.retention = decayed_retention(
+        &item.source,
+        &item.category,
+        item.strength,
+        item.last_accessed_at,
+        item.created_at,
+        now,
+    );
+}
+
 fn normalize_memory_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -3549,6 +3812,14 @@ fn clamp_limit(limit: usize) -> usize {
 
 fn default_query_limit() -> usize {
     20
+}
+
+fn default_tier() -> String {
+    TIER_ACTIVE.to_string()
+}
+
+fn default_strength() -> f64 {
+    1.0
 }
 
 fn default_session_items() -> usize {
@@ -3814,6 +4085,7 @@ mod tests {
                 query: "deploy".to_string(),
                 workspace: "global".to_string(),
                 include_global: true,
+                include_archived: false,
                 limit: 5,
             })
             .expect("query");
@@ -3868,6 +4140,7 @@ mod tests {
                 query: String::new(),
                 workspace: ALL_WORKSPACES.to_string(),
                 include_global: true,
+                include_archived: false,
                 limit: 50,
             })
             .expect("list items after migration");
@@ -3946,6 +4219,7 @@ mod tests {
                 query: "前端 构建 验证".to_string(),
                 workspace: "global".to_string(),
                 include_global: true,
+                include_archived: false,
                 limit: 5,
             })
             .expect("query");
@@ -3976,5 +4250,281 @@ mod tests {
             missing, 0,
             "query must lazily backfill embeddings for all rows"
         );
+    }
+
+    #[test]
+    fn decay_exempt_covers_manual_and_hard_rules_only() {
+        // Exemption is the safety valve: user-fixed memories and hard rules must
+        // never fade, but ordinary categories (including preference/lesson) decay.
+        assert!(item_is_decay_exempt("manual", "general"));
+        assert!(item_is_decay_exempt("codex-history-auto", "safety-rule"));
+        assert!(item_is_decay_exempt("auto", "project-rule"));
+        assert!(!item_is_decay_exempt("auto", "preference"));
+        assert!(!item_is_decay_exempt(
+            "codex-history-auto",
+            "lesson-learned"
+        ));
+        assert!(!item_is_decay_exempt("auto", "workflow-rule"));
+    }
+
+    #[test]
+    fn decayed_retention_halves_each_half_life_and_exempts_stay_full() {
+        let now = 1_000_000_000_i64;
+        let half = DECAY_HALF_LIFE_SECS as i64;
+        // A fresh non-exempt item is at full retention.
+        let fresh = decayed_retention("auto", "general", 1.0, now, now, now);
+        assert!((fresh - 1.0).abs() < 1e-6, "fresh item should be ~1.0");
+        // One half-life without a hit halves it.
+        let one = decayed_retention("auto", "general", 1.0, now - half, now - half, now);
+        assert!(
+            (one - 0.5).abs() < 0.01,
+            "one half-life should be ~0.5, got {one}"
+        );
+        // Exactly three half-lives is 0.125 — deliberately just *above* the 0.12
+        // threshold, so a memory survives ~90 days before fading (matches the ADR).
+        let three = decayed_retention("auto", "general", 1.0, now - 3 * half, now - 3 * half, now);
+        assert!(
+            three > ARCHIVE_RETENTION_THRESHOLD,
+            "three half-lives ({three}) should still be above archive threshold {ARCHIVE_RETENTION_THRESHOLD}"
+        );
+        // A bit past three half-lives (~105 days) falls below the archive threshold.
+        let past = decayed_retention(
+            "auto",
+            "general",
+            1.0,
+            now - 7 * half / 2,
+            now - 7 * half / 2,
+            now,
+        );
+        assert!(
+            past < ARCHIVE_RETENTION_THRESHOLD,
+            "3.5 half-lives ({past}) should be below archive threshold {ARCHIVE_RETENTION_THRESHOLD}"
+        );
+        // Exempt item ignores elapsed time entirely.
+        let exempt = decayed_retention(
+            "manual",
+            "general",
+            1.0,
+            now - 10 * half,
+            now - 10 * half,
+            now,
+        );
+        assert!((exempt - 1.0).abs() < 1e-6, "exempt item stays at 1.0");
+    }
+
+    #[test]
+    fn read_time_query_auto_archives_faded_non_exempt_items() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        // A learned auto item, then backdate its clock far past the archive
+        // threshold so the next read should auto-archive it.
+        let item = store
+            .learn_item(MemoryItemRequest {
+                text: "一条很久没有再被命中的自动记忆 stale auto memory".to_string(),
+                workspace: "repo-x".to_string(),
+                category: "general".to_string(),
+                tags: vec![],
+                source: "auto".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn item");
+        let ancient = now_unix() - (DECAY_HALF_LIFE_SECS as i64) * 6;
+        {
+            let conn = Connection::open(store.db_path()).unwrap();
+            conn.execute(
+                "UPDATE memory_items SET last_accessed_at = ?1, created_at = ?1, strength = 1.0 WHERE id = ?2",
+                params![ancient, item.id],
+            )
+            .unwrap();
+        }
+
+        // A normal (active-only) query must not surface the faded item and must
+        // archive it as a side effect.
+        let visible = store
+            .query(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-x".to_string(),
+                include_global: true,
+                include_archived: false,
+                limit: 20,
+            })
+            .expect("query active");
+        assert!(
+            !visible.results.iter().any(|m| m.item.id == item.id),
+            "faded item must not appear in an active-only query"
+        );
+
+        // It still exists, now in the archived tier, and is reachable when asked.
+        let with_archived = store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-x".to_string(),
+                include_global: true,
+                include_archived: true,
+                limit: 20,
+            })
+            .expect("list with archived");
+        let archived = with_archived
+            .iter()
+            .find(|it| it.id == item.id)
+            .expect("archived item must still exist (never deleted)");
+        assert_eq!(archived.tier, TIER_ARCHIVED);
+    }
+
+    #[test]
+    fn exempt_item_is_never_auto_archived_however_old() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        let item = store
+            .learn_item(MemoryItemRequest {
+                text: "手动固化的项目铁律 permanent manual rule".to_string(),
+                workspace: "repo-x".to_string(),
+                category: "general".to_string(),
+                tags: vec![],
+                source: "manual".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn item");
+        let ancient = now_unix() - (DECAY_HALF_LIFE_SECS as i64) * 20;
+        {
+            let conn = Connection::open(store.db_path()).unwrap();
+            conn.execute(
+                "UPDATE memory_items SET last_accessed_at = ?1, created_at = ?1 WHERE id = ?2",
+                params![ancient, item.id],
+            )
+            .unwrap();
+        }
+        let visible = store
+            .query(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-x".to_string(),
+                include_global: true,
+                include_archived: false,
+                limit: 20,
+            })
+            .expect("query active");
+        let found = visible
+            .results
+            .iter()
+            .find(|m| m.item.id == item.id)
+            .expect("exempt manual item must stay active regardless of age");
+        assert_eq!(found.item.tier, TIER_ACTIVE);
+        assert!(found.item.exempt, "manual item must report exempt");
+        assert!(
+            (found.item.retention - 1.0).abs() < 1e-6,
+            "exempt item reports full retention"
+        );
+    }
+
+    #[test]
+    fn manual_archive_and_restore_round_trip() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        let item = store
+            .learn_item(MemoryItemRequest {
+                text: "可以被手动归档再恢复的记忆 archivable memory".to_string(),
+                workspace: "repo-x".to_string(),
+                category: "general".to_string(),
+                tags: vec![],
+                source: "auto".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn item");
+
+        let archived = store.archive_item(&item.id).expect("archive");
+        assert_eq!(archived.tier, TIER_ARCHIVED);
+        assert!(archived.archived_at > 0);
+
+        // Active-only query hides it; include_archived surfaces it.
+        let active_only = store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-x".to_string(),
+                include_global: true,
+                include_archived: false,
+                limit: 20,
+            })
+            .expect("active list");
+        assert!(!active_only.iter().any(|it| it.id == item.id));
+
+        let restored = store.restore_item(&item.id).expect("restore");
+        assert_eq!(restored.tier, TIER_ACTIVE);
+        assert_eq!(restored.archived_at, 0);
+
+        let active_again = store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-x".to_string(),
+                include_global: true,
+                include_archived: false,
+                limit: 20,
+            })
+            .expect("active list after restore");
+        assert!(active_again.iter().any(|it| it.id == item.id));
+    }
+
+    #[test]
+    fn v3_database_migrates_to_v4_adding_tier_without_losing_items() {
+        // A v3 DB (embeddings + FTS but no tier columns) must upgrade in place:
+        // every row becomes an active item, none is dropped or archived.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("memory_assist.sqlite");
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE memory_items (
+                    id TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_session_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_accessed_at INTEGER NOT NULL,
+                    access_count INTEGER NOT NULL DEFAULT 0,
+                    keywords TEXT NOT NULL,
+                    embedding BLOB,
+                    embedding_model TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO memory_items
+                    (id, text, workspace, category, tags_json, source, source_session_id,
+                     created_at, updated_at, last_accessed_at, access_count, keywords,
+                     embedding_model)
+                VALUES
+                    ('mem-v3', 'v3 时代的长期记忆 legacy tiering rule', 'global',
+                     'general', '[]', 'manual', '', 100, 100, 100, 0, '[]', '');
+                PRAGMA user_version = 3;
+                ",
+            )
+            .unwrap();
+        }
+
+        let store = MemoryAssistStore::new(db_path.clone());
+        let items = store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: ALL_WORKSPACES.to_string(),
+                include_global: true,
+                include_archived: true,
+                limit: 50,
+            })
+            .expect("list after v4 migration");
+        let migrated = items
+            .iter()
+            .find(|it| it.id == "mem-v3")
+            .expect("v3 -> v4 migration must preserve existing rows");
+        assert_eq!(
+            migrated.tier, TIER_ACTIVE,
+            "migrated rows default to active"
+        );
+
+        let conn = Connection::open(&db_path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION, "schema version should bump to v4");
     }
 }

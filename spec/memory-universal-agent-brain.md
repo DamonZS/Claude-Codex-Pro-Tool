@@ -27,10 +27,49 @@
 
 ### 模块 B：遗忘曲线 + 分层记忆
 
-- 为每条记忆引入一个"强度 / 保留分"字段，基于 Ebbinghaus 遗忘曲线：随时间衰减，被检索命中（访问）时增强。
-- 记忆分层：至少区分"工作/短期"与"长期/语义"两层；短期记忆若长期未被强化则自动降级或归档，不再进入注入摘要。
-- 衰减与归档必须是可解释、可审计的：归档而非物理删除，保留可恢复能力，写入 `memory_events` 审计。
-- 高价值记忆（高置信度、`safety-rule`、`project-rule`、被频繁命中）应豁免或减缓衰减。
+> 架构决策见 [`docs/adr/0001-pangu-memory-decay-and-tiering.md`](../docs/adr/0001-pangu-memory-decay-and-tiering.md)。以下为可实现规格。
+
+**分层模型（两层）**
+
+- 记忆分两层：`active`（活跃，进入检索与注入）与 `archived`（归档，默认不进入注入）。给 `memory_items` 增加 `tier TEXT NOT NULL DEFAULT 'active'` 列，走 v3→v4 迁移，旧行默认 `active`，不物理删除任何记忆。
+- 归档是可见性状态而非删除，永远可恢复。
+
+**衰减公式（Ebbinghaus 指数衰减）**
+
+- 每条记忆的保留分 `retention = exp(-Δt / τ)`，其中 `Δt = now - last_accessed_at`（秒），`τ` 为时间常数。
+- 时间常数取 **τ ≈ 30 天半衰期**（即 `τ = 30 * 86400 / ln(2)`），归档阈值取 **retention < 0.12**（约对应 90 天未命中）。两个数值以命名常量定义，便于日后调参。
+- 检索命中（`record_access` 路径）时更新 `last_accessed_at = now`，即重置衰减计时；`access_count` 累加，作为强度信号（命中越多的记忆，即使阈值相同也应更晚归档——通过在有效 τ 上叠加一个随 `access_count` 增长的小加成实现，封顶避免永不归档）。
+- retention 是纯函数计算（输入 `last_accessed_at` / `access_count` / `tier` / `category` / `source`），不新增计时字段。
+
+**归档触发（读时懒惰计算 + fingerprint 防抖）**
+
+- 不引入后台定时线程。在状态刷新 / 注入摘要构建 / 检索路径上，对 active 记忆懒惰计算 retention，低于阈值则写 `tier='archived'`。
+- 复用现有 `STATUS_BACKFILL_FINGERPRINT` 同款防抖思路：无变化时跳过重扫，避免每次轮询全表重算。
+- 每次自动归档写 `memory_events`（新事件类型 `item_archived`，detail 记录归档时的 retention 与原因）。
+
+**豁免规则**
+
+- 以下记忆豁免衰减，永久保持 `active`、retention 视为满值：
+  - `source == manual`（用户手动固化）；
+  - `category == safety-rule` 或 `category == project-rule`。
+- 豁免记忆在前端强度条显示为满并标注"常驻"。
+
+**检索与注入可见性**
+
+- 注入路径（`build_inject_summary_cache` / `ranked_items_for_inject_cache` / `session_summary`）强制只取 `tier='active'`，衰减淡出的记忆不再干扰会话上下文。
+- 管理器主动搜索默认只搜 `active`；查询请求新增 `include_archived: bool`（默认 false），为 true 时才把归档记忆纳入结果并在结果上标注归档态。
+
+**手动操作（与自动对称）**
+
+- 用户可手动归档一条 active 记忆（即使未到阈值）与手动恢复一条归档记忆，分别写 `item_archived` / `item_restored` 审计事件。
+- 手动恢复时 `last_accessed_at = now`，给予完整的重新计时。
+
+**前端界面（本阶段必须同步修改）**
+
+- 记忆列表默认只显示 active；新增"显示归档"开关，打开后归档项以置灰样式 + "已归档"标签 + "恢复"按钮呈现。
+- 每张 active 记忆卡片显示一条细"记忆强度"进度条（retention 映射到 0..1），悬停显示精确数值与预计归档时间；豁免记忆显示满条并标"常驻"。
+- 每张 active 卡片提供"归档"按钮，每张归档卡片提供"恢复"按钮。
+- 概览页盘古记忆总览新增"活跃 / 归档"计数，自检结果新增衰减/分层维度状态。
 
 ### 模块 C：LLM 压缩整合（替换全表重写）
 
