@@ -1967,7 +1967,7 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
     details.push("已请求重启 Codex 注入入口，旧前端心跳不会作为本次修复成功依据。".to_string());
     let latest = restart_codex_for_frontend_repair(&mut details).await;
 
-    let codex_backend_online = latest
+    let mut codex_backend_online = latest
         .as_ref()
         .is_some_and(|status| status.helper_port_online);
     let codex_frontend_ok = if let Some(status) = latest.as_ref() {
@@ -1981,12 +1981,51 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
                         "Codex CDP 端口 127.0.0.1:{debug_port} 仍离线或 /json 不可用；已尝试自动重启，请确认 Codex 安装路径可用。"
                     ));
                     false
-                } else if !status.helper_port_online {
-                    details.push(format!(
-                        "Codex 后端 127.0.0.1:{helper_port}/backend/status 未在线；请先点击“修复后端服务”。"
-                    ));
-                    false
                 } else {
+                    if !status.helper_port_online {
+                        details.push(format!(
+                            "Codex 后端 127.0.0.1:{helper_port}/backend/status 未在线，正在自动启动本地 helper 后端。"
+                        ));
+                        match claude_codex_pro_core::launcher::ensure_detached_helper(helper_port)
+                            .await
+                        {
+                            Ok(()) => {
+                                codex_backend_online =
+                                    wait_helper_backend_online(helper_port).await;
+                                if codex_backend_online {
+                                    details.push(format!(
+                                        "Codex 后端已在 127.0.0.1:{helper_port}/backend/status 验证在线。"
+                                    ));
+                                } else {
+                                    details.push(format!(
+                                        "已请求启动 Codex 后端，但 127.0.0.1:{helper_port}/backend/status 尚未响应。"
+                                    ));
+                                }
+                            }
+                            Err(error) => {
+                                codex_backend_online = false;
+                                details.push(format!("自动启动 Codex 后端失败：{error}"));
+                            }
+                        }
+                    }
+                    if !codex_backend_online {
+                        return CommandResult {
+                            status: "failed".to_string(),
+                            message: "Codex 前端连接修复未确认可注入，请查看详情。".to_string(),
+                            payload: RepairConnectionPayload {
+                                target: "codex".to_string(),
+                                frontend_injected: false,
+                                backend_online: false,
+                                codex_frontend_injected: false,
+                                codex_backend_online,
+                                claude_backend_online: false,
+                                debug_port: Some(debug_port),
+                                helper_port: Some(helper_port),
+                                claude_proxy_port: None,
+                                details,
+                            },
+                        };
+                    }
                     let reinjected = match tokio::time::timeout(
                         REPAIR_CODEX_FRONTEND_TIMEOUT,
                         claude_codex_pro_core::launcher::force_reinject_bridge(
@@ -2106,11 +2145,19 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
     details.push("已启动 Codex，正在等待 Codex 自启完成、CDP 与后端端口上线。".to_string());
     if let Some(status) = wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await
     {
-        details.push(format!(
-            "Codex 自启完成，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
-            debug_port = status.debug_port.unwrap_or(request.debug_port),
-            helper_port = status.helper_port.unwrap_or(request.helper_port)
-        ));
+        if status.helper_port_online {
+            details.push(format!(
+                "Codex 自启完成，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
+                debug_port = status.debug_port.unwrap_or(request.debug_port),
+                helper_port = status.helper_port.unwrap_or(request.helper_port)
+            ));
+        } else {
+            details.push(format!(
+                "Codex 自启完成，CDP 端口 {debug_port} 已上线；后端端口 {helper_port} 将继续自动修复。",
+                debug_port = status.debug_port.unwrap_or(request.debug_port),
+                helper_port = status.helper_port.unwrap_or(request.helper_port)
+            ));
+        }
         return Some(status);
     }
 
@@ -2137,6 +2184,9 @@ async fn wait_for_codex_launch_ports(
             if status.debug_port_online && status.helper_port_online {
                 return Some(status);
             }
+            if status.debug_port_online {
+                return Some(status);
+            }
         } else if codex_debug_port_online(request.debug_port)
             && helper_backend_online(request.helper_port)
         {
@@ -2149,6 +2199,19 @@ async fn wait_for_codex_launch_ports(
                 helper_port: Some(request.helper_port),
                 debug_port_online: true,
                 helper_port_online: true,
+                frontend_runtime_online: false,
+                frontend_runtime_seen_at_ms: None,
+            });
+        } else if codex_debug_port_online(request.debug_port) {
+            return Some(LaunchStatus {
+                status: "running_degraded".to_string(),
+                message: "前端修复期间检测到 Codex CDP 已上线，helper 后端仍需恢复。".to_string(),
+                started_at_ms: current_time_ms(),
+                codex_app: Some(request.app_path.clone()),
+                debug_port: Some(request.debug_port),
+                helper_port: Some(request.helper_port),
+                debug_port_online: true,
+                helper_port_online: false,
                 frontend_runtime_online: false,
                 frontend_runtime_seen_at_ms: None,
             });
@@ -7205,19 +7268,62 @@ fn load_overview_payload() -> (
     )
 }
 
+/// Pure self-heal decision for the recorded helper port.
+///
+/// The helper port drifts: when the default port is occupied at launch,
+/// `select_platform_loopback_port` falls back to a random free port and writes
+/// that into `latest-status.json`. When that instance dies and a fresh backend
+/// rebinds the default port, the status file still points at the dead random
+/// port. Given whether the recorded port and the default port are each online,
+/// this returns the `(helper_port, helper_port_online)` the overview should use:
+/// prefer the recorded port when it is online, otherwise self-heal to the
+/// default port when *it* is online.
+fn resolve_helper_port_status(
+    recorded_port: Option<u16>,
+    recorded_online: bool,
+    default_port: u16,
+    default_online: bool,
+) -> (Option<u16>, bool) {
+    if recorded_online {
+        return (recorded_port, true);
+    }
+    if default_online && recorded_port != Some(default_port) {
+        return (Some(default_port), true);
+    }
+    (recorded_port, recorded_online)
+}
+
 fn refresh_launch_port_status(mut status: LaunchStatus) -> LaunchStatus {
     status.debug_port_online = status
         .debug_port
         .is_some_and(|port| codex_debug_port_online(port));
-    status.helper_port_online = status
-        .helper_port
-        .is_some_and(|port| helper_backend_online(port));
+
+    let recorded_port = status.helper_port;
+    let recorded_online = recorded_port.is_some_and(helper_backend_online);
+    let default_port = default_helper_port();
+    // Only probe the default port when the recorded port isn't already online,
+    // so the common (healthy) path keeps a single probe.
+    let default_online = !recorded_online
+        && recorded_port != Some(default_port)
+        && helper_backend_online(default_port);
+    let (resolved_port, resolved_online) =
+        resolve_helper_port_status(recorded_port, recorded_online, default_port, default_online);
+    let helper_healed = resolved_port != recorded_port || resolved_online != recorded_online;
+    status.helper_port = resolved_port;
+    status.helper_port_online = resolved_online;
+
     if let Some(heartbeat) = latest_renderer_runtime_heartbeat() {
         status.frontend_runtime_online = renderer_heartbeat_is_fresh(heartbeat.timestamp_ms);
         status.frontend_runtime_seen_at_ms = Some(heartbeat.timestamp_ms);
     } else {
         status.frontend_runtime_online = false;
         status.frontend_runtime_seen_at_ms = None;
+    }
+
+    // Persist the healed port so the next probe stops chasing the stale one.
+    // Best-effort: a write failure must not change what the overview shows.
+    if helper_healed {
+        let _ = StatusStore::default().save_latest(&status);
     }
     status
 }
@@ -7641,6 +7747,56 @@ mod tests {
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn resolve_helper_port_prefers_recorded_when_online() {
+        // Recorded port online → keep it, never mind the default.
+        assert_eq!(
+            resolve_helper_port_status(Some(55957), true, 57321, false),
+            (Some(55957), true)
+        );
+        // Recorded port online AND equals default → still just the recorded one.
+        assert_eq!(
+            resolve_helper_port_status(Some(57321), true, 57321, false),
+            (Some(57321), true)
+        );
+    }
+
+    #[test]
+    fn resolve_helper_port_self_heals_to_default_when_recorded_dead() {
+        // The real bug: recorded 55957 is dead, default 57321 answers.
+        assert_eq!(
+            resolve_helper_port_status(Some(55957), false, 57321, true),
+            (Some(57321), true)
+        );
+        // No recorded port at all, default answers → adopt the default.
+        assert_eq!(
+            resolve_helper_port_status(None, false, 57321, true),
+            (Some(57321), true)
+        );
+    }
+
+    #[test]
+    fn resolve_helper_port_reports_offline_when_neither_answers() {
+        assert_eq!(
+            resolve_helper_port_status(Some(55957), false, 57321, false),
+            (Some(55957), false)
+        );
+        assert_eq!(
+            resolve_helper_port_status(None, false, 57321, false),
+            (None, false)
+        );
+    }
+
+    #[test]
+    fn resolve_helper_port_does_not_flip_default_when_recorded_is_default() {
+        // Recorded already is the default and it's offline; default_online can
+        // never be true for the same port (caller guards it), so stay offline.
+        assert_eq!(
+            resolve_helper_port_status(Some(57321), false, 57321, false),
+            (Some(57321), false)
+        );
     }
 
     #[test]

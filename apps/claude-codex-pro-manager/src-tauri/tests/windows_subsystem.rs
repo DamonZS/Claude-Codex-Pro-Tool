@@ -2099,6 +2099,10 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
     assert!(repair.contains("let repair_started_ms = current_time_ms();"));
     assert!(repair.contains("restart_codex_for_frontend_repair(&mut details).await"));
     assert!(!repair.contains("let initial_runtime_online"));
+    assert!(repair.contains("ensure_detached_helper(helper_port)"));
+    assert!(repair.contains("wait_helper_backend_online(helper_port).await"));
+    assert!(repair.contains("正在自动启动本地 helper 后端"));
+    assert!(!repair.contains("请先点击“修复后端服务”"));
     assert!(repair.contains("wait_for_renderer_frontend_after("));
     assert!(repair.contains("前端脚本已在本次修复后加载"));
     assert!(repair.contains("旧注入状态不会被判定为成功"));
@@ -2137,6 +2141,8 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         })
         .expect("wait_for_codex_launch_ports source");
     assert!(wait_ports.contains("status.debug_port_online && status.helper_port_online"));
+    assert!(wait_ports.contains("if status.debug_port_online"));
+    assert!(wait_ports.contains("helper 后端仍需恢复"));
     assert!(wait_ports.contains("codex_debug_port_online(request.debug_port)"));
     assert!(wait_ports.contains("helper_backend_online(request.helper_port)"));
 

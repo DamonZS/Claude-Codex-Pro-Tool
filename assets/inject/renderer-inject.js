@@ -809,6 +809,218 @@
       .claude-codex-pro-service-tier-button { border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 5px 8px; white-space: nowrap; }
       .claude-codex-pro-service-tier-button[data-active="true"] { border-color: #0f766e; background: #eef6f5; color: #0f766e; }
       .claude-codex-pro-service-tier-button:disabled { opacity: .55; cursor: not-allowed; }
+      .claude-codex-pro-comic-shell {
+        --ccp-comic-ink: #172033;
+        --ccp-comic-paper: #fff8df;
+        --ccp-comic-paper-deep: #ffe7a8;
+        --ccp-comic-pink: #ff4da6;
+        --ccp-comic-cyan: #24d7ff;
+        --ccp-comic-yellow: #ffd43b;
+        --ccp-comic-green: #22c55e;
+        --ccp-comic-blue: #4f46e5;
+        --ccp-comic-halftone: rgba(23,32,51,.08);
+      }
+      .claude-codex-pro-modal-overlay:has(.claude-codex-pro-comic-shell) {
+        background:
+          radial-gradient(circle at 18% 18%, rgba(255,77,166,.22) 0 9%, transparent 23%),
+          radial-gradient(circle at 82% 16%, rgba(36,215,255,.20) 0 10%, transparent 24%),
+          radial-gradient(circle at 50% 100%, rgba(255,212,59,.18) 0 12%, transparent 32%),
+          rgba(15,23,42,.42);
+        backdrop-filter: blur(7px) saturate(1.12);
+      }
+      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell {
+        width: min(560px, calc(100vw - 48px));
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 22px;
+        background:
+          radial-gradient(circle at 12px 12px, var(--ccp-comic-halftone) 0 1.2px, transparent 1.4px) 0 0 / 13px 13px,
+          linear-gradient(135deg, #fffdf4 0%, var(--ccp-comic-paper) 54%, #fff2be 100%);
+        color: var(--ccp-comic-ink);
+        font-family: "Comic Sans MS", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        box-shadow: 8px 8px 0 var(--ccp-comic-ink), 0 24px 90px rgba(15,23,42,.35);
+        position: relative;
+        isolation: isolate;
+      }
+      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell::before {
+        content: "POWER PANEL";
+        position: absolute;
+        right: 22px;
+        top: -15px;
+        z-index: 1;
+        transform: rotate(2deg);
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 999px;
+        background: var(--ccp-comic-yellow);
+        color: var(--ccp-comic-ink);
+        box-shadow: 4px 4px 0 var(--ccp-comic-ink);
+        font: 900 11px/1 "Segoe UI", system-ui, sans-serif;
+        letter-spacing: .08em;
+        padding: 7px 12px;
+      }
+      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="support"] { width: min(840px, calc(100vw - 48px)); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-modal-header {
+        margin: 12px 12px 0;
+        padding: 14px 16px 12px;
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 18px;
+        background:
+          linear-gradient(90deg, rgba(255,77,166,.18), rgba(36,215,255,.16)),
+          #fffef8;
+        box-shadow: 5px 5px 0 rgba(23,32,51,.92);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-modal-title {
+        gap: 10px;
+        font-size: 19px;
+        font-weight: 900;
+        letter-spacing: -.02em;
+        text-shadow: 1.5px 1.5px 0 rgba(255,212,59,.9);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator {
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--ccp-comic-ink);
+        box-shadow: 2px 2px 0 var(--ccp-comic-ink);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator[data-status="ok"] { background: var(--ccp-comic-green); box-shadow: 2px 2px 0 var(--ccp-comic-ink), 0 0 14px rgba(34,197,94,.75); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator[data-status="failed"] { background: #ff3b30; box-shadow: 2px 2px 0 var(--ccp-comic-ink), 0 0 14px rgba(255,59,48,.65); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-modal-close {
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--ccp-comic-ink);
+        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
+        font-weight: 900;
+        line-height: 1;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-modal-close:hover { transform: translate(-1px, -1px); background: #ffe4ef; }
+      .claude-codex-pro-comic-shell .claude-codex-pro-tabs {
+        gap: 10px;
+        padding: 14px 18px 8px;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-tab-button {
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 999px;
+        background: #ffffff;
+        color: var(--ccp-comic-ink);
+        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
+        font: 900 12px/1 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        padding: 8px 13px;
+        cursor: pointer;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-tab-button[data-active="true"] {
+        background: linear-gradient(135deg, var(--ccp-comic-pink), var(--ccp-comic-blue));
+        color: #fff;
+        text-shadow: 1px 1px 0 rgba(23,32,51,.8);
+        transform: translate(-1px, -1px) rotate(-1deg);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-modal-body {
+        padding: 8px 18px 18px;
+        scrollbar-color: rgba(23,32,51,.55) transparent;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-row {
+        margin: 0 0 10px;
+        padding: 12px 13px;
+        border: 2px solid rgba(23,32,51,.86);
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 10px 10px, rgba(23,32,51,.055) 0 1px, transparent 1.2px) 0 0 / 10px 10px,
+          rgba(255,255,255,.72);
+        box-shadow: 4px 4px 0 rgba(23,32,51,.82);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-row:first-child { border-top: 2px solid rgba(23,32,51,.86); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-row-title {
+        font-weight: 900;
+        color: var(--ccp-comic-ink);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-row-description,
+      .claude-codex-pro-comic-shell .claude-codex-pro-about,
+      .claude-codex-pro-comic-shell .claude-codex-pro-status-note,
+      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-status,
+      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-thread-label,
+      .claude-codex-pro-comic-shell .claude-codex-pro-support-text,
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-description {
+        color: #3d4a62;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-toggle {
+        width: 46px;
+        height: 26px;
+        border: 3px solid var(--ccp-comic-ink);
+        background: #cbd5e1;
+        box-shadow: 3px 3px 0 rgba(23,32,51,.92);
+        padding: 2px;
+        cursor: pointer;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-toggle span {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--ccp-comic-ink);
+        background: #fff;
+        box-shadow: 1px 1px 0 var(--ccp-comic-ink);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-enabled="true"] { background: linear-gradient(135deg, var(--ccp-comic-green), var(--ccp-comic-cyan)); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-enabled="true"] span { transform: translateX(20px); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-relay-unneeded="true"] {
+        width: 82px;
+        border-color: var(--ccp-comic-ink);
+        background: #e7fff1;
+        color: var(--ccp-comic-ink);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-action-button,
+      .claude-codex-pro-comic-shell .claude-codex-pro-issue-button,
+      .claude-codex-pro-comic-shell .claude-codex-pro-backend-repair,
+      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button,
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-link {
+        border: 2px solid var(--ccp-comic-ink);
+        border-radius: 12px;
+        background: #ffffff;
+        color: var(--ccp-comic-ink);
+        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
+        font-weight: 900;
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-action-button:hover,
+      .claude-codex-pro-comic-shell .claude-codex-pro-issue-button:hover,
+      .claude-codex-pro-comic-shell .claude-codex-pro-backend-repair:hover,
+      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button:hover,
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-link:hover { transform: translate(-1px, -1px); }
+      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button[data-active="true"] {
+        background: var(--ccp-comic-yellow);
+        color: var(--ccp-comic-ink);
+        border-color: var(--ccp-comic-ink);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-width-input,
+      .claude-codex-pro-comic-shell .claude-codex-pro-form-field input {
+        border: 2px solid var(--ccp-comic-ink);
+        border-radius: 12px;
+        background: #fffef7;
+        color: var(--ccp-comic-ink);
+        box-shadow: 3px 3px 0 rgba(23,32,51,.84);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-section-title,
+      .claude-codex-pro-comic-shell .claude-codex-pro-support-title {
+        color: var(--ccp-comic-ink);
+        font-weight: 900;
+        text-shadow: 1.5px 1.5px 0 rgba(255,212,59,.82);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-card,
+      .claude-codex-pro-comic-shell .claude-codex-pro-support-qr-wrap,
+      .claude-codex-pro-comic-shell .claude-codex-pro-support-empty,
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-empty {
+        border: 3px solid var(--ccp-comic-ink);
+        border-radius: 18px;
+        background: rgba(255,255,255,.74);
+        box-shadow: 5px 5px 0 rgba(23,32,51,.9);
+      }
+      .claude-codex-pro-comic-shell .claude-codex-pro-ad-highlights span {
+        border: 2px solid var(--ccp-comic-ink);
+        background: #e9fff4;
+        color: var(--ccp-comic-ink);
+        font-weight: 800;
+      }
       .${codexServiceTierBadgeClass} {
         display: inline-flex;
         align-items: center;
@@ -1136,10 +1348,32 @@
     }
   }
 
+  function hasAnyCodexFrontendEnhancementEnabled(settings) {
+    return [
+      "pluginEntryUnlock",
+      "pluginMarketplaceUnlock",
+      "forcePluginInstall",
+      "modelWhitelistUnlock",
+      "sessionDelete",
+      "markdownExport",
+      "projectMove",
+      "conversationTimeline",
+      "conversationView",
+      "threadScrollRestore",
+      "zedRemoteOpen",
+      "upstreamWorktreeCreate",
+      "nativeMenuPlacement",
+      "serviceTierControls",
+      "memoryAssistEnabled",
+      "memoryAssistInjectEnabled",
+      "memoryAssistAutoSuggestEnabled",
+    ].some((key) => settings[key] === true);
+  }
+
   function claudeCodexProSettings() {
     const relayPatchDisabled = claudeCodexProBackendSettings.launchMode === "relay";
     const settings = claudeCodexProConfiguredSettings();
-    if (claudeCodexProBackendSettings.enhancementsEnabled === false) {
+    if (claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)) {
       return {
         ...settings,
         pluginEntryUnlock: false,
@@ -2024,6 +2258,9 @@
     loadBackendSettings().then((loaded) => {
       if (loaded) {
         scan();
+        codexMemoryUpdateBadge();
+        void codexMemoryLoadSession(true);
+        void codexMemoryMaybeSuggestCandidate();
         return;
       }
       if (attempt < 60) {
@@ -2524,7 +2761,10 @@
     if (!trigger) return;
     trigger.setAttribute("aria-label", `CCP ${claudeCodexProVersion}`);
     trigger.title = `CCP ${claudeCodexProVersion}`;
-    if (trigger.dataset.claudeCodexProTriggerLabel === "ccp-status-v2") return;
+    const hasRenderableStatusLabel = !!trigger.querySelector("[data-codex-backend-indicator]")
+      && Array.from(trigger.querySelectorAll(".claude-codex-pro-window-status-title"))
+        .some((node) => String(node.textContent || "").trim().startsWith("CCP"));
+    if (trigger.dataset.claudeCodexProTriggerLabel === "ccp-status-v2" && hasRenderableStatusLabel) return;
     trigger.dataset.claudeCodexProTriggerLabel = "ccp-status-v2";
     trigger.textContent = "";
     const indicator = document.createElement("span");
@@ -2740,7 +2980,7 @@
     const overlay = document.createElement("div");
     overlay.className = "claude-codex-pro-modal-overlay";
     overlay.innerHTML = `
-      <div class="claude-codex-pro-modal-content" role="dialog" aria-modal="true" aria-label="Claude Codex Pro">
+      <div class="claude-codex-pro-modal-content claude-codex-pro-comic-shell" data-claude-codex-pro-dialog="true" role="dialog" aria-modal="true" aria-label="Claude Codex Pro">
         <div class="claude-codex-pro-modal-header">
           <div class="claude-codex-pro-modal-title"><span class="claude-codex-pro-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-claude-codex-pro-version="true">Claude Codex Pro ${claudeCodexProVersion}</span></div>
           <button type="button" class="claude-codex-pro-modal-close" aria-label="关闭">×</button>
@@ -3033,6 +3273,7 @@
   function configureClaudeCodexProTrigger(menu, trigger, nativeButtonClass) {
     if (!trigger) return;
     trigger.className = "claude-codex-pro-trigger";
+    setClaudeCodexProTriggerLabel(trigger);
     if (trigger.dataset.claudeCodexProTriggerInstalled === "5") return;
     trigger.dataset.claudeCodexProTriggerInstalled = "5";
     trigger.addEventListener("click", (event) => {
@@ -9105,13 +9346,14 @@
     });
   }
 
-  if (!window.__claudeCodexProMemoryHeartbeatTimer) {
-    window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval(() => {
-      try {
-        codexMemoryExposeRuntime();
-      } catch (_) {}
-    }, 10000);
+  if (window.__claudeCodexProMemoryHeartbeatTimer) {
+    clearInterval(window.__claudeCodexProMemoryHeartbeatTimer);
   }
+  window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval(() => {
+    try {
+      codexMemoryExposeRuntime();
+    } catch (_) {}
+  }, 10000);
 
   function codexMemoryPulseActivity(source = "stream", durationMs = 3200) {
     codexMemoryState.activeUntil = Date.now() + durationMs;
@@ -9517,7 +9759,7 @@
       <span class="codex-memory-dot"></span>
       <span>盘古记忆</span>
       <span class="codex-memory-count">${codexMemoryState.totalItems || 0}</span>
-      <span>${escapeHtml(codexMemoryState.pendingCandidates ? `待确认 ${codexMemoryState.pendingCandidates}` : codexMemoryState.workspace)}</span>
+      ${codexMemoryState.pendingCandidates ? `<span>待确认 ${codexMemoryState.pendingCandidates}</span>` : ""}
     `;
     node.title = codexMemoryState.summary || "盘古记忆";
     if (!badge) {

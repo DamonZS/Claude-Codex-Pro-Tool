@@ -170,12 +170,14 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
         };
         let cdp_listening_before_launch =
             claude_codex_pro_core::watcher::cdp_listening(options.debug_port);
-        if settings.enhancements_enabled {
+        let codex_injection_enabled =
+            claude_codex_pro_core::launcher::codex_frontend_injection_enabled(&settings);
+        if codex_injection_enabled {
             hooks.start_helper(options.helper_port).await?;
             helper_started = true;
         }
         let mut injection_ready = false;
-        if settings.enhancements_enabled && cdp_listening_before_launch {
+        if codex_injection_enabled && cdp_listening_before_launch {
             injection_ready = hooks
                 .ensure_injection(options.debug_port, options.helper_port, &app_dir)
                 .await;
@@ -192,7 +194,7 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
             {
                 Ok(_) => {
                     launch_ok = Some(true);
-                    if settings.enhancements_enabled {
+                    if codex_injection_enabled {
                         injection_ready = hooks
                             .ensure_injection(options.debug_port, options.helper_port, &app_dir)
                             .await;
@@ -221,7 +223,7 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
             }
         }
 
-        if injection_ready || !settings.enhancements_enabled {
+        if injection_ready || !codex_injection_enabled {
             hooks.write_status("running").await;
         } else {
             hooks.write_status("running_degraded").await;

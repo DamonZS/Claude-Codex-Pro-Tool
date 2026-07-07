@@ -134,7 +134,18 @@ fn injection_script_exposes_left_anchored_codex_status_entry() {
     assert!(!script.contains("html:not(.light):not([data-theme=\"light\"]) #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass}"));
     assert!(script.contains("updateCodexMemoryBadgePosition"));
     assert!(script.contains("openClaudeCodexProModal()"));
+    assert!(script.contains("hasRenderableStatusLabel"));
+    assert!(script.contains("trigger.querySelector(\"[data-codex-backend-indicator]\")"));
+    assert!(script.contains(".claude-codex-pro-window-status-title"));
     assert!(script.contains("trigger.dataset.claudeCodexProTriggerLabel = \"ccp-status-v2\""));
+}
+
+#[test]
+fn injection_script_memory_badge_hides_workspace_label() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("codexMemoryState.pendingCandidates ? `<span>待确认 ${codexMemoryState.pendingCandidates}</span>` : \"\""));
+    assert!(!script.contains("codexMemoryState.pendingCandidates ? `待确认 ${codexMemoryState.pendingCandidates}` : codexMemoryState.workspace"));
 }
 
 #[test]
@@ -153,6 +164,28 @@ fn injection_script_modal_hides_user_scripts_management() {
     assert!(!script.contains("if (tab === \"userScripts\") loadUserScripts();"));
     assert!(!script.contains("loadUserScripts();"));
     assert!(!script.contains("\"/user-scripts/list\""));
+}
+
+#[test]
+fn injection_script_uses_comic_modal_theme() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("claude-codex-pro-comic-shell"));
+    assert!(script.contains("--ccp-comic-halftone"));
+    assert!(script.contains("box-shadow: 8px 8px 0 var(--ccp-comic-ink)"));
+    assert!(script.contains("radial-gradient(circle at 12px 12px"));
+    assert!(script.contains("POWER PANEL"));
+
+    assert!(script.contains("data-claude-codex-pro-dialog=\"true\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"home\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"recommendations\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"support\""));
+    assert!(script.contains("data-claude-codex-pro-setting"));
+    assert!(script.contains("data-codex-backend-status"));
+    assert!(script.contains("data-codex-backend-repair"));
+    assert!(script.contains("data-codex-service-tier-standard"));
+    assert!(script.contains("data-claude-codex-pro-discord"));
+    assert!(script.contains("data-claude-codex-pro-issue"));
 }
 
 #[test]
@@ -333,6 +366,33 @@ fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
         ),
         "auto-suggest must stop when DOM memory injection is disabled"
     );
+}
+
+#[test]
+fn injection_script_global_enhancement_toggle_does_not_hide_enabled_child_features() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function hasAnyCodexFrontendEnhancementEnabled(settings)"));
+    assert!(script.contains(
+        "claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)"
+    ));
+}
+
+#[test]
+fn injection_script_refreshes_memory_after_backend_settings_load() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("codexMemoryUpdateBadge();"));
+    assert!(script.contains("void codexMemoryLoadSession(true);"));
+    assert!(script.contains("void codexMemoryMaybeSuggestCandidate();"));
+}
+
+#[test]
+fn injection_script_replaces_stale_memory_heartbeat_on_reinject() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("clearInterval(window.__claudeCodexProMemoryHeartbeatTimer);"));
+    assert!(script.contains("window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval"));
 }
 
 #[test]

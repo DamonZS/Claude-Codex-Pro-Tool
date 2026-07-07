@@ -271,6 +271,14 @@ fn launcher_windows_process_wait_uses_platform_cfg_guards() {
 }
 
 #[test]
+fn launcher_keeps_helper_alive_when_reusing_existing_packaged_codex() {
+    let source = include_str!("../src/launcher.rs").replace("\r\n", "\n");
+
+    assert!(source.contains("wait_for_running_codex_processes().await?;"));
+    assert!(source.contains("crate::watcher::find_codex_processes()"));
+}
+
+#[test]
 fn launcher_appends_extra_codex_arguments_after_debug_arguments() {
     let app_dir = PathBuf::from(r"C:\Codex\app");
     let extra_args = vec![
@@ -672,8 +680,33 @@ async fn launch_lifecycle_keeps_js_injection_in_relay_mode() {
     );
 }
 
+fn settings_with_all_codex_frontend_injection_disabled() -> BackendSettings {
+    BackendSettings {
+        enhancements_enabled: false,
+        codex_app_plugin_entry_unlock: false,
+        codex_app_plugin_marketplace_unlock: false,
+        codex_app_force_plugin_install: false,
+        codex_app_model_whitelist_unlock: false,
+        codex_app_session_delete: false,
+        codex_app_markdown_export: false,
+        codex_app_project_move: false,
+        codex_app_conversation_timeline: false,
+        codex_app_conversation_view: false,
+        codex_app_thread_scroll_restore: false,
+        codex_app_zed_remote_open: false,
+        codex_app_upstream_worktree_create: false,
+        codex_app_native_menu_placement: false,
+        codex_app_service_tier_controls: false,
+        codex_app_image_overlay_enabled: false,
+        codex_goals_enabled: false,
+        memory_assist_enabled: false,
+        memory_assist_inject_enabled: false,
+        ..BackendSettings::default()
+    }
+}
+
 #[tokio::test]
-async fn launch_lifecycle_skips_helper_and_injection_when_enhancements_disabled() {
+async fn launch_lifecycle_still_injects_when_global_enhancements_disabled_but_child_features_on() {
     let temp = tempfile::tempdir().unwrap();
     let app_dir = temp.path().join("Codex.app");
     std::fs::create_dir_all(&app_dir).unwrap();
@@ -683,6 +716,46 @@ async fn launch_lifecycle_skips_helper_and_injection_when_enhancements_disabled(
         enhancements_enabled: false,
         ..BackendSettings::default()
     });
+
+    let handle = launch_and_inject_with_hooks(
+        LaunchOptions {
+            app_dir: Some(app_dir),
+            debug_port: 9229,
+            helper_port: 57321,
+            status_store,
+        },
+        &hooks,
+    )
+    .await
+    .unwrap();
+    handle.wait_for_codex_exit().await.unwrap();
+
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            "select-debug:9229",
+            "select-helper:57321",
+            "load-settings",
+            "start-helper:57321",
+            "launch:9229",
+            "status:running_degraded",
+            "inject:9229:57321",
+            "status:running",
+            "wait-codex",
+            "shutdown-helper:57321",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn launch_lifecycle_skips_helper_and_injection_when_all_frontend_features_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let app_dir = temp.path().join("Codex.app");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    let status_store = StatusStore::new(temp.path().join("latest-status.json"));
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hooks = FakeHooks::new(events.clone())
+        .with_settings(settings_with_all_codex_frontend_injection_disabled());
 
     let handle = launch_and_inject_with_hooks(
         LaunchOptions {

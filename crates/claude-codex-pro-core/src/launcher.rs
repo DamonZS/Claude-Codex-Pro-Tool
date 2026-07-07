@@ -90,6 +90,27 @@ impl Default for LaunchOptions {
     }
 }
 
+pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
+    settings.enhancements_enabled
+        || settings.codex_app_plugin_entry_unlock
+        || settings.codex_app_plugin_marketplace_unlock
+        || settings.codex_app_force_plugin_install
+        || settings.codex_app_model_whitelist_unlock
+        || settings.codex_app_session_delete
+        || settings.codex_app_markdown_export
+        || settings.codex_app_project_move
+        || settings.codex_app_conversation_timeline
+        || settings.codex_app_conversation_view
+        || settings.codex_app_thread_scroll_restore
+        || settings.codex_app_zed_remote_open
+        || settings.codex_app_upstream_worktree_create
+        || settings.codex_app_native_menu_placement
+        || settings.codex_app_service_tier_controls
+        || settings.codex_app_image_overlay_enabled
+        || settings.codex_goals_enabled
+        || (settings.memory_assist_enabled && settings.memory_assist_inject_enabled)
+}
+
 #[derive(Clone)]
 pub struct LaunchHandle {
     pub debug_port: u16,
@@ -487,7 +508,8 @@ where
             hooks.ensure_computer_use_config(&settings).await?;
         }
         let protocol_proxy_enabled = relay_protocol_proxy_enabled(&settings);
-        if settings.enhancements_enabled || protocol_proxy_enabled {
+        let codex_injection_enabled = codex_frontend_injection_enabled(&settings);
+        if codex_injection_enabled || protocol_proxy_enabled {
             hooks.start_helper(helper_port).await?;
             helper_started = true;
         }
@@ -497,7 +519,7 @@ where
             .await?;
         launched = Some(launch.clone());
         keep_launched_on_error = true;
-        if settings.enhancements_enabled {
+        if codex_injection_enabled {
             let launched_status = launch_status(
                 "running_degraded",
                 "Codex launched; Claude Codex Pro enhancements are still waiting for the page bridge.",
@@ -513,7 +535,7 @@ where
         }
 
         let mut injection_degraded = false;
-        if settings.enhancements_enabled {
+        if codex_injection_enabled {
             let injection_ready = hooks
                 .ensure_injection(debug_port, helper_port, &app_dir)
                 .await;
@@ -525,7 +547,7 @@ where
             }
         }
 
-        if !settings.enhancements_enabled || !injection_degraded {
+        if !codex_injection_enabled || !injection_degraded {
             let status = launch_status(
                 "running",
                 "Claude Codex Pro launcher ready",
@@ -875,6 +897,8 @@ impl LaunchHooks for DefaultLaunchHooks {
             CodexLaunch::PackagedActivation { process_id, .. } => {
                 if let Some(process_id) = process_id {
                     wait_for_windows_process_id(*process_id).await?;
+                } else {
+                    wait_for_running_codex_processes().await?;
                 }
                 Ok(())
             }
@@ -2340,6 +2364,17 @@ async fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
+async fn wait_for_running_codex_processes() -> anyhow::Result<()> {
+    loop {
+        let process_ids = crate::watcher::find_codex_processes();
+        if process_ids.is_empty() {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+#[cfg(windows)]
 async fn terminate_windows_process_id(process_id: u32) -> anyhow::Result<()> {
     tokio::task::spawn_blocking(move || terminate_windows_process_id_blocking(process_id))
         .await
@@ -2395,6 +2430,11 @@ fn terminate_windows_process_id_blocking(process_id: u32) -> anyhow::Result<()> 
 #[cfg(not(windows))]
 async fn wait_for_windows_process_id(process_id: u32) -> anyhow::Result<()> {
     anyhow::bail!("cannot wait for Windows process id {process_id} on this platform")
+}
+
+#[cfg(not(windows))]
+async fn wait_for_running_codex_processes() -> anyhow::Result<()> {
+    Ok(())
 }
 
 #[cfg(not(windows))]
