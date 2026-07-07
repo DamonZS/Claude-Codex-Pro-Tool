@@ -48,6 +48,7 @@ function runTests() {
   assert.equal(nextReleaseTag(["v1.2.9"]), "V0.01");
   assert.equal(nextReleaseTag(["V0.01"]), "V0.02");
   assert.equal(nextReleaseTag(["V0.01", "V0.09", "V0.03"]), "V0.10");
+  assert.equal(nextReleaseTag(["V0.12"]), "V0.13");
   assert.equal(nextReleaseTag(["V0.99"]), "V1.00");
   assert.equal(nextReleaseTag(["v0.01", "V0.02"]), "V0.03");
   assert.equal(parseReleaseTag("V10.42").value, 1042);

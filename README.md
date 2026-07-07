@@ -486,7 +486,7 @@ New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
 Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
 
-$version = "1.2.9"
+$version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 if (-not (Test-Path $makensis)) { $makensis = "makensis" }
 Push-Location scripts/installer/windows
@@ -497,7 +497,7 @@ Pop-Location
 输出：
 
 ```text
-dist/windows/claude-codex-pro-1.2.9-windows-x64-setup.exe
+dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe
 ```
 
 ### macOS DMG
@@ -509,7 +509,7 @@ npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add aarch64-apple-darwin
 cargo build --release --target aarch64-apple-darwin
-BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 1.2.9 arm64
+BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 0.12 arm64
 ```
 
 Intel Mac：
@@ -519,14 +519,14 @@ npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add x86_64-apple-darwin
 cargo build --release --target x86_64-apple-darwin
-BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 1.2.9 x64
+BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 0.12 x64
 ```
 
 输出：
 
 ```text
-dist/macos/claude-codex-pro-1.2.9-macos-arm64.dmg
-dist/macos/claude-codex-pro-1.2.9-macos-x64.dmg
+dist/macos/claude-codex-pro-0.12-macos-arm64.dmg
+dist/macos/claude-codex-pro-0.12-macos-x64.dmg
 ```
 
 本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证。因此本地 DMG 可能被 Gatekeeper 提示，需要按上文 macOS 常见问题手动允许。

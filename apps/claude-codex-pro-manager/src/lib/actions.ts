@@ -32,7 +32,7 @@ import type {
 /// 各 Screen 组件通过 `ReturnType<typeof createActionsShape>`（即 AppActions）获得 actions 的类型。
 export function createActionsShape() {
   return {
-    refreshRoute: async (_route?: Route) => {},
+    refreshRoute: async (_route?: Route, _options?: { notify?: boolean }) => {},
     showNotice: (_notice: { title: string; message: string; status?: Status } | null) => {},
     openClaudeChinese: async () => {},
     installClaudeZhPatch: async () => {},

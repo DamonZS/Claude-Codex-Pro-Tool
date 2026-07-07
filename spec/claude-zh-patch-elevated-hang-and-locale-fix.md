@@ -93,3 +93,16 @@
 - 测试：新增/更新 `windows_subsystem.rs`（或 core 单测）覆盖：内部 CLI 命令后进程会退出（结构断言：内部分支存在 `process::exit` / 无条件早退）；locale 写入在 chunk 之后或有兜底重写（结构/单测断言）。既有 52 个 windows_subsystem 测试与 core `claude_zh_patch` 单测不回归。
 - 文档：本 spec 与对应 `acceptance/claude-zh-patch-elevated-hang-and-locale-fix.md`。
 - 不交付：文案汉化、提权判定改动、前端交互改动（除非后端返回结构变化必须联动）。
+
+## 追加约束：新版 Claude chunk 兼容
+
+- 安装补丁时不得对所有 `.js` chunk 无差别写入标记；只有确实存在可替换文本、locale 数组、旧补丁残留或已安装标记的 chunk 才允许写入。
+- 对新版 Claude 中不存在可补 locale 白名单数组的 UI chunk，若文本补丁标记、三类 i18n 资源和 locale 配置均满足，则 language whitelist 项视为“不适用但满足”；不得因此把状态误判为 `not_installed`。
+- JS 校验失败时必须保留 `node --check` 的 stderr 摘要，不能只返回泛化的“JS 校验失败”。
+
+## 追加约束：vendor/react 依赖 chunk 不参与 UI 汉化补丁
+
+- `vendor-*`、`vendor-react-*` 等第三方依赖或运行时依赖 chunk 不属于 Claude UI 文案补丁目标。
+- 即使这些 chunk 中包含 `Settings`、React 错误提示、Suspense 文案等普通英文字符串，也不得因为命中文案关键词而被写入 `TEXT_MARKER`、进入 `changed_files` 或触发 `node --check` 校验失败。
+- 状态检测也必须忽略这类 vendor/runtime 依赖 chunk 中既有的文本 marker，避免旧残留影响本机中文补丁的真实安装状态判断。
+- 例外：如果 vendor/runtime chunk 存在旧版 unsafe window runtime patch 残留，可进入清理路径；但不得把普通 vendor chunk 当作 UI 文案 chunk 批量改写。

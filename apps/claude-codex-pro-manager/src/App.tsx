@@ -1350,7 +1350,13 @@ export function App() {
     }
   };
 
-  const refreshRoute = async (target = route) => {
+  const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {
+    const shouldNotify = options.notify === true;
+    const refreshTitle = `刷新${routeLabel(target)}`;
+    if (shouldNotify) {
+      setNotice({ title: refreshTitle, message: `正在刷新${routeLabel(target)}状态...`, status: "running" });
+      await waitForPaint();
+    }
     // Capture this load's epoch so trailing work can bail if the user has
     // navigated to another route (or re-triggered this one) in the meantime.
     const loadEpoch = routeLoadEpochRef.current + 1;
@@ -1418,6 +1424,9 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void checkUpdate(true);
       }, 250);
+    }
+    if (shouldNotify && !isStaleRouteLoad()) {
+      setNotice({ title: refreshTitle, message: `${routeLabel(target)}已刷新。`, status: "ok" });
     }
   };
 

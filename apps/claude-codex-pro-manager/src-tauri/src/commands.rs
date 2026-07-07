@@ -1043,7 +1043,7 @@ pub async fn open_claude_chinese_window(
         );
     }
 
-    let url = match tauri::Url::parse(default_url) {
+    let url = match claude_chinese_window_shell_url(default_url) {
         Ok(url) => url,
         Err(error) => {
             return failed(
@@ -1069,6 +1069,17 @@ pub async fn open_claude_chinese_window(
                     });
                     return false;
                 }
+                if url.scheme() == "claude-codex-pro" && url.host_str() == Some("open-external") {
+                    let target = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()));
+                    if let Some(target) = target
+                        && (target.starts_with("https://") || target.starts_with("http://"))
+                    {
+                        let _ = open_url(&target);
+                    }
+                    return false;
+                }
                 true
             })
             .build()
@@ -1092,6 +1103,93 @@ pub async fn open_claude_chinese_window(
             claude_chinese_window_payload(&app, &status),
         ),
     }
+}
+
+fn claude_chinese_window_shell_url(default_url: &str) -> anyhow::Result<tauri::Url> {
+    let html = claude_chinese_window_shell_html(default_url);
+    Ok(tauri::Url::parse(&format!(
+        "data:text/html;charset=utf-8,{}",
+        percent_encode_data_url(&html)
+    ))?)
+}
+
+fn claude_chinese_window_shell_html(default_url: &str) -> String {
+    let escaped_url = html_escape(default_url);
+    let encoded_url = percent_encode_query_component(default_url);
+    format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: https://claude.ai https://*.claude.ai; frame-src https://claude.ai https://*.claude.ai; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:;">
+  <title>Claude 加载诊断</title>
+  <style>
+    html, body {{ margin: 0; width: 100%; height: 100%; background: #090d18; color: #e5edff; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    .shell {{ display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100%; height: 100%; }}
+    .banner {{ display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; border-bottom: 1px solid rgba(148, 163, 184, .24); background: linear-gradient(135deg, rgba(79, 70, 229, .28), rgba(20, 184, 166, .14)); box-shadow: 0 18px 50px rgba(0,0,0,.28); }}
+    .title {{ font-size: 15px; font-weight: 850; }}
+    .hint {{ margin-top: 4px; color: #b9c6dd; font-size: 12px; line-height: 1.5; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .button {{ display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 12px; border: 1px solid rgba(45, 212, 191, .56); border-radius: 999px; background: rgba(45, 212, 191, .14); color: #b5fff3; font-size: 12px; font-weight: 800; text-decoration: none; }}
+    .frame-wrap {{ position: relative; min-height: 0; }}
+    iframe {{ width: 100%; height: 100%; border: 0; background: #ffffff; }}
+    .fallback {{ position: absolute; right: 18px; bottom: 18px; max-width: 360px; padding: 14px 16px; border: 1px solid rgba(248, 181, 75, .38); border-radius: 18px; background: rgba(15, 23, 42, .88); box-shadow: 0 22px 70px rgba(0,0,0,.35); color: #f8fafc; }}
+    .fallback strong {{ display: block; margin-bottom: 6px; font-size: 13px; }}
+    .fallback p {{ margin: 0; color: #cbd5e1; font-size: 12px; line-height: 1.55; }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="banner">
+      <div>
+        <div class="title">Claude 加载中 / 白屏诊断</div>
+        <div class="hint">如果下方区域保持空白，通常是 Claude 官方页面在 WebView 中被登录态、网络、CSP 或兼容性限制阻塞。请使用右侧按钮在系统浏览器打开。</div>
+      </div>
+      <div class="actions">
+        <a class="button" href="claude-codex-pro://open-external?url={encoded_url}">在浏览器打开 Claude</a>
+        <a class="button" href="{escaped_url}" target="_blank" rel="noreferrer">普通链接打开</a>
+      </div>
+    </section>
+    <section class="frame-wrap">
+      <iframe src="{escaped_url}" title="Claude"></iframe>
+      <aside class="fallback">
+        <strong>看见白屏时不要等待</strong>
+        <p>这是本地诊断兜底层，说明管理工具没有卡死。请点击“在浏览器打开 Claude”，或回到管理工具使用“启动/重启Claude”。</p>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>"#
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn percent_encode_query_component(value: &str) -> String {
+    percent_encode_bytes(value.as_bytes())
+}
+
+fn percent_encode_data_url(value: &str) -> String {
+    percent_encode_bytes(value.as_bytes())
+}
+
+fn percent_encode_bytes(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len());
+    for byte in bytes {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 #[tauri::command]

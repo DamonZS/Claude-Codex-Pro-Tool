@@ -167,6 +167,31 @@ fn injection_script_modal_hides_user_scripts_management() {
 }
 
 #[test]
+fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("window.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__"));
+    assert!(script.contains("data-claude-codex-pro-tab=\"contact\""));
+    assert!(script.contains("data-claude-codex-pro-panel=\"contact\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"home\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"recommendations\""));
+    assert!(script.contains("data-claude-codex-pro-tab=\"support\""));
+    assert!(script.contains("联系我"));
+    assert!(script.contains("官方QQ群："));
+    assert!(script.contains("10061615"));
+    assert!(script.contains("1076215359"));
+    assert!(script.contains("一键添加"));
+    assert!(script.contains("合作代理请联系微信"));
+    assert!(script.contains("data:image/jpeg;base64,"));
+    assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg"));
+    assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68"));
+    assert!(script.contains("target=\"_blank\" rel=\"noreferrer\""));
+    assert!(script.contains("data-claude-codex-pro-setting"));
+    assert!(script.contains("data-codex-backend-status"));
+    assert!(script.contains("data-codex-backend-repair"));
+}
+
+#[test]
 fn injection_script_uses_comic_modal_theme() {
     let script = assets::injection_script(57321);
 

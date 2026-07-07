@@ -1053,9 +1053,12 @@ fn ensure_claude_foreground(process_id: Option<u32>) -> anyhow::Result<()> {
 #[cfg(windows)]
 fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
     if let Some(path) = executable_hint
-        .filter(|path| path.is_file())
+        .filter(|path| path.is_file() && !is_windowsapps_executable_path(path))
         .map(Path::to_path_buf)
-        .or_else(claude_desktop_executable_path)
+        .or_else(|| {
+            claude_desktop_executable_path()
+                .filter(|path| !is_windowsapps_executable_path(path.as_path()))
+        })
     {
         // Do NOT pass `--inspect=127.0.0.1:9229`. That opens a Node inspector on a
         // fixed loopback port that ANY local process can connect to and use to run
@@ -1106,6 +1109,15 @@ Start-Process ('shell:AppsFolder\' + $app.AppID)
         anyhow::bail!("{message}");
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn is_windowsapps_executable_path(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    normalized.contains("\\windowsapps\\")
 }
 
 #[cfg(windows)]
@@ -2021,6 +2033,17 @@ mod tests {
             ]),
             "desktop"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windowsapps_executable_paths_are_not_launched_directly() {
+        assert!(is_windowsapps_executable_path(Path::new(
+            "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe"
+        )));
+        assert!(!is_windowsapps_executable_path(Path::new(
+            "C:\\Users\\me\\AppData\\Local\\Programs\\Claude\\Claude.exe"
+        )));
     }
 
     #[test]

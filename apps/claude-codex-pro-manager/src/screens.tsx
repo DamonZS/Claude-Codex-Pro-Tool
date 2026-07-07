@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import { MemoryActivityWave } from "@/components/MemoryActivityWave";
 import {
   AGGREGATE_STRATEGIES,
@@ -289,10 +290,11 @@ export function OverviewScreen({
         </Panel>
         <div className="overview-side-stack">
           <Panel title="诊断与修复" detail="检查和修复入口集中在这里；修复动作会先显示运行反馈，再调用后端命令。">
-            <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview")} />
+            <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview", { notify: true })} />
             <ActionButton icon={RefreshCw} label="刷新 Claude 第三方配置" onClick={() => void actions.refreshClaudeThirdPartyConfig()} />
             <ActionButton icon={Wrench} label="修复前端连接" onClick={() => void actions.repairFrontendConnection()} />
             <ActionButton icon={Wrench} label="修复后端服务" onClick={() => void actions.repairBackendService()} />
+            <ActionButton icon={Wrench} label="修复 Claude" onClick={() => void actions.restoreClaudeZhPatch()} />
           </Panel>
           {showMemoryDetails ? (
             <OverviewMemoryDetails
@@ -310,6 +312,9 @@ export function OverviewScreen({
 // Phase 2 tiering UI: a decay strength bar (exempt items read "常驻" and show
 // full), plus an archive/restore action. Shared by the overview detail list and
 // the memory management screen so both surfaces stay consistent.
+const CONTACT_QQ_GROUP_PRIMARY_URL = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
+const CONTACT_QQ_GROUP_SECONDARY_URL = "https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68";
+
 function MemoryTierControls({ actions, item }: { actions: AppActions; item: MemoryItem }) {
   const archived = item.tier === "archived";
   const exempt = Boolean(item.exempt);
@@ -2287,6 +2292,24 @@ export const AboutScreen = memo(function AboutScreen({
               <ExternalLink className="h-4 w-4" />
               Release
             </Button>
+          </div>
+        </Panel>
+        <Panel title="联系我" detail="官方 QQ 群一键添加与合作代理微信。">
+          <div className="contact-card">
+            <div className="contact-line">
+              <span className="contact-label">官方QQ群：</span>
+              <span className="contact-group-number">10061615</span>
+              <button className="contact-link" type="button" onClick={() => void actions.openExternalUrl(CONTACT_QQ_GROUP_PRIMARY_URL)}>一键添加</button>
+              <span className="contact-group-number">1076215359</span>
+              <button className="contact-link" type="button" onClick={() => void actions.openExternalUrl(CONTACT_QQ_GROUP_SECONDARY_URL)}>一键添加</button>
+            </div>
+            <div className="contact-wechat">
+              <div>
+                <strong>合作代理请联系微信</strong>
+                <p>扫码添加微信，备注合作代理。</p>
+              </div>
+              <img className="contact-qr" src={contactWechatQr} alt="合作代理微信二维码" />
+            </div>
           </div>
         </Panel>
       </div>

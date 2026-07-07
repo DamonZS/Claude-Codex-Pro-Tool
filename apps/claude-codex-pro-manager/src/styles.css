@@ -6728,3 +6728,87 @@ body {
     justify-self: start;
   }
 }
+
+.contact-card {
+  display: grid;
+  gap: 16px;
+}
+
+.contact-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--ops-hairline-strong);
+  border-radius: 14px;
+  background: var(--ops-surface-2);
+}
+
+.contact-label,
+.contact-group-number {
+  color: var(--ops-text-1);
+  font-weight: 800;
+}
+
+.contact-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px solid rgba(45, 212, 191, 0.42);
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.12);
+  color: #99f6e4;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 800;
+  padding: 4px 10px;
+  text-decoration: none;
+}
+
+.contact-link:hover {
+  border-color: rgba(129, 140, 248, 0.72);
+  background: rgba(129, 140, 248, 0.16);
+  color: #ffffff;
+}
+
+.contact-wechat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--ops-hairline-strong);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(129, 140, 248, 0.12), rgba(45, 212, 191, 0.08));
+}
+
+.contact-wechat strong {
+  color: var(--ops-text-1);
+  font-size: 15px;
+}
+
+.contact-wechat p {
+  margin: 6px 0 0;
+  color: var(--ops-text-2);
+  font-size: 13px;
+}
+
+.contact-qr {
+  width: 148px;
+  height: 148px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 16px;
+  background: #ffffff;
+  object-fit: contain;
+  padding: 8px;
+}
+
+@media (max-width: 760px) {
+  .contact-wechat {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+}

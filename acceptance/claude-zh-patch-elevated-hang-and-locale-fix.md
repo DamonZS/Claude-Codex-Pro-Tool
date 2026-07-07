@@ -80,3 +80,26 @@
 - 不验证提权判定是否“该不该弹 UAC”（MSIX 弹 UAC 是既定正确行为）。
 - 不做全量汉化完整性人工逐条核对（交由既有 status 校验）。
 - 不验证非 MSIX（可写桌面版）路径的行为变化（本次聚焦 MSIX 提权路径的两个缺陷）。
+
+### D. 新版 Claude chunk 兼容
+
+**通过：**
+- 安装循环会先判断 chunk 是否确实需要或已有补丁痕迹；无关 `.js` 文件保持原样，不会被写成只有补丁 marker。
+- 当新版 UI chunk 没有可补 locale 白名单数组，但已经有文本补丁 marker，且 i18n 资源与 locale 均满足时，`language_whitelist_patched` 为 true，整体状态不误判为 `not_installed`。
+- `node --check` 失败返回信息包含 stderr 摘要，便于定位具体语法错误。
+
+**失败：**
+- 任意无关 `.js` chunk 被写入 marker 或内容被清空。
+- 新版无 locale 白名单数组的已补丁 chunk 仍导致状态 `not_installed`。
+- JS 校验失败仍吞掉 stderr。
+
+### E. vendor/react 依赖 chunk 排除
+
+**通过：**
+- 构造 `vendor-react-*.js`，其中包含会误触发的普通英文字符串（例如 `Settings`）时，执行 `install_patch_at` 后文件内容保持原样。
+- `vendor-react-*.js` 不出现在 `changed_files` 中，不被写入 `TEXT_MARKER`，也不会触发 `node --check` 失败导致整次一键汉化回滚。
+- `status_for_paths` 统计 UI chunk 时忽略 vendor/runtime 依赖 chunk 的普通文本 marker 残留。
+
+**失败：**
+- vendor/react 依赖 chunk 因普通英文字符串被当作 UI 文案 chunk 改写。
+- vendor/react 依赖 chunk 的 JS 校验失败导致 Claude 一键汉化整体失败或回滚。

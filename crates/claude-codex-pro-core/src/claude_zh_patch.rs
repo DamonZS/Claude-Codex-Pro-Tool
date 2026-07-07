@@ -393,6 +393,9 @@ fn install_patch_at_with_resources_impl(
     let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
     for chunk in chunks {
         let before = std::fs::read_to_string(&chunk).unwrap_or_default();
+        if !chunk_path_needs_or_has_ui_patch(&chunk, &before) {
+            continue;
+        }
         backup_file(&chunk, paths)?;
         patch_chunk(
             &chunk,
@@ -654,20 +657,30 @@ pub fn status_for_paths(paths: &ClaudeZhPatchPaths) -> ClaudeZhPatchStatus {
     let chunk_texts = find_patchable_chunks(&paths.app_root)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text)))
         .collect::<Vec<_>>();
     let ui_chunk_texts = chunk_texts
         .iter()
-        .filter(|text| chunk_needs_or_has_ui_patch(text))
+        .filter(|(path, text)| chunk_path_needs_or_has_ui_patch(path, text))
+        .map(|(_, text)| text)
         .collect::<Vec<_>>();
     let chunk_patch_present = !ui_chunk_texts.is_empty()
         && ui_chunk_texts.iter().all(|text| text.contains(TEXT_MARKER))
         && ui_chunk_texts
             .iter()
             .all(|text| !text.contains(PATCH_MARKER));
-    let language_whitelist_patched = ui_chunk_texts
-        .iter()
-        .any(|text| text.contains(LANGUAGE_MARKER) || has_zh_cn_language_support(text));
+    let language_whitelist_required = ui_chunk_texts.iter().any(|text| {
+        text.contains(LANGUAGE_MARKER)
+            || has_zh_cn_language_support(text)
+            || patch_locale_arrays(text).1
+    });
+    let language_whitelist_patched = if language_whitelist_required {
+        ui_chunk_texts
+            .iter()
+            .any(|text| text.contains(LANGUAGE_MARKER) || has_zh_cn_language_support(text))
+    } else {
+        !ui_chunk_texts.is_empty() && ui_chunk_texts.iter().all(|text| text.contains(TEXT_MARKER))
+    };
     let writable = resource_tree_writable_no_create(paths);
     let locale_configured = locale_configured(&paths.locale_config_path);
     let resources_present = valid_i18n_resource_with_min_keys(&root_i18n, 100);
@@ -1290,20 +1303,31 @@ fn validate_patched_javascript_chunk(path: &Path) -> anyhow::Result<()> {
     command.arg("--check").arg(path);
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::null());
-    command.stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(crate::windows_create_no_window());
     }
-    let status = command.status();
-    match status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => anyhow::bail!(
-            "node --check failed for {} with exit status {}",
-            path.display(),
-            status
-        ),
+    let output = command.output();
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join("\n");
+            anyhow::bail!(
+                "node --check failed for {} with exit status {}{}",
+                path.display(),
+                output.status,
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            )
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error)
             .with_context(|| format!("run node --check for Claude JS chunk {}", path.display())),
@@ -1678,6 +1702,24 @@ fn has_unsafe_window_runtime_patch(text: &str) -> bool {
         || text.contains("window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__")
 }
 
+fn chunk_path_needs_or_has_ui_patch(path: &Path, text: &str) -> bool {
+    if is_vendor_runtime_dependency_chunk(path)
+        && !has_unsafe_window_runtime_patch(text)
+        && !text.contains(PATCH_MARKER)
+        && !text.contains(LANGUAGE_MARKER)
+    {
+        return false;
+    }
+    chunk_needs_or_has_ui_patch(text)
+}
+
+fn is_vendor_runtime_dependency_chunk(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase())
+        .is_some_and(|name| name.starts_with("vendor-") || name.contains("vendor-react"))
+}
+
 fn chunk_needs_or_has_ui_patch(text: &str) -> bool {
     text.contains(PATCH_MARKER)
         || text.contains(TEXT_MARKER)
@@ -1987,6 +2029,24 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = sample_paths(temp.path());
         create_sample_install(&paths);
+        let inert_chunk = paths
+            .app_root
+            .join("resources")
+            .join("ion-dist")
+            .join("assets")
+            .join("v1")
+            .join("inert.js");
+        let inert_source = "console.log('official chunk without translatable UI');";
+        std::fs::write(&inert_chunk, inert_source).unwrap();
+        let vendor_react_chunk = paths
+            .app_root
+            .join("resources")
+            .join("ion-dist")
+            .join("assets")
+            .join("v1")
+            .join("vendor-react-demo.js");
+        let vendor_react_source = "const ReactVendor={version:\"19.2.4\"}; console.error('Settings'); export{ReactVendor as R};";
+        std::fs::write(&vendor_react_chunk, vendor_react_source).unwrap();
         let cache_dir = paths
             .locale_config_path
             .parent()
@@ -2003,6 +2063,23 @@ mod tests {
         assert!(outcome.status.locale_configured);
         assert!(outcome.status.chunk_patch_present);
         assert!(outcome.status.language_whitelist_patched);
+        assert_eq!(std::fs::read_to_string(&inert_chunk).unwrap(), inert_source);
+        assert_eq!(
+            std::fs::read_to_string(&vendor_react_chunk).unwrap(),
+            vendor_react_source
+        );
+        assert!(
+            !outcome
+                .changed_files
+                .iter()
+                .any(|path| path.ends_with("inert.js"))
+        );
+        assert!(
+            !outcome
+                .changed_files
+                .iter()
+                .any(|path| path.ends_with("vendor-react-demo.js"))
+        );
         assert!(!cache_dir.exists());
         assert!(
             std::fs::read_to_string(&paths.locale_config_path)
@@ -2082,6 +2159,34 @@ mod tests {
         .unwrap();
         assert_eq!(frontend_i18n, EMBEDDED_FRONTEND_I18N);
         assert!(frontend_i18n.len() > 1_000_000);
+    }
+
+    #[test]
+    fn status_accepts_newer_chunks_without_locale_whitelist_arrays_when_text_patch_is_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = sample_paths(temp.path());
+        let resources = paths.app_root.join("resources");
+        let i18n = resources.join("ion-dist").join("i18n");
+        let statsig = i18n.join("statsig");
+        let assets_v1 = resources.join("ion-dist").join("assets").join("v1");
+        std::fs::create_dir_all(&statsig).unwrap();
+        std::fs::create_dir_all(&assets_v1).unwrap();
+        std::fs::write(resources.join("zh-CN.json"), desktop_i18n_json()).unwrap();
+        std::fs::write(i18n.join("zh-CN.json"), frontend_i18n_json()).unwrap();
+        std::fs::write(statsig.join("zh-CN.json"), statsig_i18n_json()).unwrap();
+        std::fs::write(
+            assets_v1.join("new-runtime.js"),
+            format!("console.log('Claude runtime without locale array');\n/* {TEXT_MARKER} */"),
+        )
+        .unwrap();
+        write_locale_config(&paths.locale_config_path).unwrap();
+
+        let status = status_for_paths(&paths);
+
+        assert_eq!(status.status, "ok");
+        assert!(status.chunk_patch_present);
+        assert!(status.language_whitelist_patched);
+        assert!(status.locale_configured);
     }
 
     #[test]

@@ -321,10 +321,12 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
 
     assert!(version_script.contains("RELEASE_TAG_PATTERN = /^[vV](\\d+)\\.(\\d{2})$/"));
     assert!(version_script.contains("assert.equal(nextReleaseTag([]), \"V0.01\")"));
+    assert!(version_script.contains("assert.equal(nextReleaseTag([\"V0.12\"]), \"V0.13\")"));
     assert!(version_script.contains("assert.equal(nextReleaseTag([\"V0.99\"]), \"V1.00\")"));
 
     assert!(version_rs.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
-    assert!(version_rs.contains("env!(\"CARGO_PKG_VERSION\")"));
+    assert!(version_rs.contains("DEFAULT_RELEASE_VERSION: &str = \"V0.12\""));
+    assert!(!version_rs.contains("None => env!(\"CARGO_PKG_VERSION\")"));
 }
 
 #[test]
@@ -347,6 +349,14 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(commands_rs.contains("pub async fn open_prompt_optimizer_window"));
     assert!(commands_rs.contains("tauri::WebviewUrl::External"));
     assert!(commands_rs.contains("https://claude.ai/new"));
+    assert!(!commands_rs.contains("tauri::Url::parse(default_url)"));
+    assert!(commands_rs.contains("fn claude_chinese_window_shell_url"));
+    assert!(commands_rs.contains("data:text/html;charset=utf-8"));
+    assert!(commands_rs.contains("Claude 加载中 / 白屏诊断"));
+    assert!(commands_rs.contains("在浏览器打开 Claude"));
+    assert!(commands_rs.contains("claude-codex-pro://open-external?url="));
+    assert!(commands_rs.contains("url.host_str() == Some(\"open-external\")"));
+    assert!(commands_rs.contains("<iframe src=\"{escaped_url}\" title=\"Claude\"></iframe>"));
     assert!(commands_rs.contains("https://prompt.always200.com"));
     assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
     assert!(commands_rs.contains("claude-codex-pro-navigate"));
@@ -809,12 +819,21 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
+    assert!(overview_screen.contains("刷新概览"));
+    assert!(overview_screen.contains("actions.refreshRoute(\"overview\", { notify: true })"));
     assert!(overview_screen.contains("刷新 Claude 第三方配置"));
     assert!(overview_screen.contains("修复前端连接"));
     assert!(overview_screen.contains("修复后端服务"));
+    assert!(overview_screen.contains("修复 Claude"));
     assert!(app_tsx.contains("refresh_claude_third_party_config"));
     assert!(app_tsx.contains("repair_frontend_connection"));
     assert!(app_tsx.contains("repair_backend_service"));
+    assert!(app_tsx.contains("actions.restoreClaudeZhPatch()"));
+    assert!(app_tsx.contains("options: { notify?: boolean } = {}"));
+    assert!(app_tsx.contains("const shouldNotify = options.notify === true"));
+    assert!(app_tsx.contains("setNotice({ title: refreshTitle, message: `正在刷新${routeLabel(target)}状态...`, status: \"running\" })"));
+    assert!(app_tsx.contains("setNotice({ title: refreshTitle, message: `${routeLabel(target)}已刷新。`, status: \"ok\" })"));
+    assert!(app_tsx.contains("void refreshRoute(route);"));
     assert!(app_tsx.contains("codexFrontendInjected"));
     assert!(!app_tsx.contains("claudeFrontendInjected"));
     assert!(app_tsx.contains("codexBackendOnline"));
@@ -1055,7 +1074,6 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
 
 #[test]
 fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let commands_rs =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
@@ -1137,8 +1155,17 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
     assert!(core_claude.contains("let is_restart = !existing_process_ids.is_empty();"));
     assert!(core_claude.contains("terminate_claude_processes(&existing_process_ids)"));
     assert!(core_claude.contains("wait_for_claude_process_exit("));
-    assert!(core_claude.contains(".filter(|path| path.is_file())"));
-    assert!(core_claude.contains(".or_else(claude_desktop_executable_path)"));
+    assert!(
+        core_claude
+            .contains(".filter(|path| path.is_file() && !is_windowsapps_executable_path(path))")
+    );
+    assert!(core_claude.contains("fn is_windowsapps_executable_path(path: &Path) -> bool"));
+    assert!(core_claude.contains("normalized.contains(\"\\\\windowsapps\\\\\")"));
+    assert!(core_claude.contains(".or_else(|| {"));
+    assert!(core_claude.contains("claude_desktop_executable_path()"));
+    assert!(
+        core_claude.contains(".filter(|path| !is_windowsapps_executable_path(path.as_path()))")
+    );
     assert!(core_claude.contains("let mut seen = std::collections::HashSet::new();"));
     assert!(core_claude.contains("paths.sort_by(|left, right| right.cmp(left));"));
     assert!(core_claude.contains("Claude Desktop 已关闭并重新启动。"));
@@ -1467,7 +1494,7 @@ fn overview_startup_uses_light_claude_status_and_defers_heavy_checks() {
     let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
 
     let refresh_route = app_tsx
-        .split("const refreshRoute = async (target = route) => {")
+        .split("const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {")
         .nth(1)
         .and_then(|rest| rest.split("const actions = {").next())
         .expect("refreshRoute body");
@@ -1735,8 +1762,12 @@ fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
     assert!(validation.contains("Command::new(\"node\")"));
     assert!(validation.contains("command.stdin(std::process::Stdio::null())"));
     assert!(validation.contains("command.stdout(std::process::Stdio::null())"));
-    assert!(validation.contains("command.stderr(std::process::Stdio::null())"));
     assert!(validation.contains("command.creation_flags(crate::windows_create_no_window())"));
+    assert!(validation.contains("let output = command.output()"));
+    assert!(validation.contains("String::from_utf8_lossy(&output.stderr)"));
+    assert!(validation.contains(".take(8)"));
+    assert!(validation.contains("node --check failed for"));
+    assert!(!validation.contains("command.stderr(std::process::Stdio::null())"));
 }
 
 #[test]
@@ -2243,4 +2274,35 @@ fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
     assert!(vite_config.contains("base: \"./\""));
     assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
     assert!(app_tsx.contains("window.location.search"));
+}
+
+#[test]
+fn about_screen_exposes_contact_entrypoints() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manager_root = manifest_dir.parent().unwrap();
+    let screens = read_frontend_file("screens.tsx");
+    let styles = read_frontend_file("styles.css");
+    let qr_asset = manager_root.join("src/assets/contact-wechat-qr.jpg");
+
+    assert!(qr_asset.exists());
+    assert!(screens.contains("contactWechatQr"));
+    assert!(screens.contains("CONTACT_QQ_GROUP_PRIMARY_URL"));
+    assert!(screens.contains("CONTACT_QQ_GROUP_SECONDARY_URL"));
+    assert!(screens.contains("联系我"));
+    assert!(screens.contains("官方QQ群："));
+    assert!(screens.contains("10061615"));
+    assert!(screens.contains("1076215359"));
+    assert!(screens.contains("一键添加"));
+    assert!(screens.contains("合作代理请联系微信"));
+    assert!(screens.contains("扫码添加微信，备注合作代理。"));
+    assert!(screens.contains("actions.openExternalUrl(CONTACT_QQ_GROUP_PRIMARY_URL)"));
+    assert!(screens.contains("actions.openExternalUrl(CONTACT_QQ_GROUP_SECONDARY_URL)"));
+    assert!(screens.contains("type=\"button\""));
+    assert!(screens.contains("https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg"));
+    assert!(screens.contains("https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68"));
+    assert!(styles.contains(".contact-card"));
+    assert!(styles.contains(".contact-line"));
+    assert!(styles.contains(".contact-link"));
+    assert!(styles.contains(".contact-wechat"));
+    assert!(styles.contains(".contact-qr"));
 }

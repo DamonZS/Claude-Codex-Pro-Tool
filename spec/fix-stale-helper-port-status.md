@@ -12,7 +12,7 @@
 
 证据（本机实测）：
 - `latest-status.json` 记录 `helper_port: 55957`，端口 55957 CLOSED。
-- 默认端口 57321 OPEN，`POST /backend/status` → `HTTP 200 {"status":"ok","transport":"http-helper","version":"1.2.9"}`。
+- 默认端口 57321 OPEN，`POST /backend/status` → `HTTP 200 {"status":"ok","transport":"http-helper","version":"V0.12"}`。
 - CDP 9230（`debug_port`）OPEN 且 `/json` 含 `webSocketDebuggerUrl`——debug 端口在 Windows 固定不漂移（`select_packaged_codex_debug_port` 在 Windows 直接返回 requested），只有 helper 端口会漂移。
 
 ## 目标

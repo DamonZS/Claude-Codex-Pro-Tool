@@ -586,7 +586,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
         frontend_runtime_seen_at_ms: Date.now(),
         codex_app: "preview",
       },
-      current_version: "1.2.9-preview",
+      current_version: "V0.12",
       update_status: "preview",
       settings_path: "~\\.claude-codex-pro\\settings.json",
       logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
@@ -1216,22 +1216,22 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "check_update") {
     return ok("预览模式已模拟检查更新。", {
-      currentVersion: "1.2.9-preview",
-      latestVersion: "v1.2.9",
+      currentVersion: "V0.12",
+      latestVersion: "V0.12",
       releaseSummary: "预览模式：当前已是最新版本。",
-      assetName: "claude-codex-pro-1.2.9-windows-x64-setup.exe",
-      assetUrl: "https://example.invalid/claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      assetName: "claude-codex-pro-0.12-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-0.12-windows-x64-setup.exe",
       updateAvailable: false,
       progress: 0,
     });
   }
   if (command === "perform_update") {
     return ok("预览模式已模拟下载并运行安装包。", {
-      currentVersion: "1.2.9-preview",
-      latestVersion: "v1.2.9",
+      currentVersion: "V0.12",
+      latestVersion: "V0.12",
       releaseSummary: "预览模式不会下载真实安装包。",
-      assetName: "claude-codex-pro-1.2.9-windows-x64-setup.exe",
-      assetUrl: "https://example.invalid/claude-codex-pro-1.2.9-windows-x64-setup.exe",
+      assetName: "claude-codex-pro-0.12-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-0.12-windows-x64-setup.exe",
       updateAvailable: false,
       progress: 100,
       installedPath: "~\\.claude-codex-pro\\updates\\preview-installer.exe",

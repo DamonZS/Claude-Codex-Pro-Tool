@@ -74,6 +74,9 @@
   let claudeCodexProVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
   const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
   const claudeCodexProSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
+  const claudeCodexProContactWechatQr = window.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ || "";
+  const claudeCodexProQqGroupPrimaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
+  const claudeCodexProQqGroupSecondaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68";
   const claudeCodexProSettingsKey = "claudeCodexProSettings";
   const codexThreadScrollKey = "codexThreadScroll";
   const codexThreadServiceTierKey = "codexThreadServiceTierOverrides";
@@ -703,7 +706,8 @@
         pointer-events: auto;
         -webkit-app-region: no-drag;
       }
-      .claude-codex-pro-modal-content[data-claude-codex-pro-active-tab="support"] { width: min(820px, calc(100vw - 48px)); }
+      .claude-codex-pro-modal-content[data-claude-codex-pro-active-tab="support"],
+      .claude-codex-pro-modal-content[data-claude-codex-pro-active-tab="contact"] { width: min(820px, calc(100vw - 48px)); }
       .claude-codex-pro-modal-header {
         display: flex;
         align-items: center;
@@ -857,7 +861,8 @@
         letter-spacing: .08em;
         padding: 7px 12px;
       }
-      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="support"] { width: min(840px, calc(100vw - 48px)); }
+      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="support"],
+      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="contact"] { width: min(840px, calc(100vw - 48px)); }
       .claude-codex-pro-comic-shell .claude-codex-pro-modal-header {
         margin: 12px 12px 0;
         padding: 14px 16px 12px;
@@ -943,6 +948,7 @@
       .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-status,
       .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-thread-label,
       .claude-codex-pro-comic-shell .claude-codex-pro-support-text,
+      .claude-codex-pro-comic-shell .claude-codex-pro-contact-text,
       .claude-codex-pro-comic-shell .claude-codex-pro-ad-description {
         color: #3d4a62;
       }
@@ -1001,7 +1007,8 @@
         box-shadow: 3px 3px 0 rgba(23,32,51,.84);
       }
       .claude-codex-pro-comic-shell .claude-codex-pro-ad-section-title,
-      .claude-codex-pro-comic-shell .claude-codex-pro-support-title {
+      .claude-codex-pro-comic-shell .claude-codex-pro-support-title,
+      .claude-codex-pro-comic-shell .claude-codex-pro-contact-title {
         color: var(--ccp-comic-ink);
         font-weight: 900;
         text-shadow: 1.5px 1.5px 0 rgba(255,212,59,.82);
@@ -1009,6 +1016,7 @@
       .claude-codex-pro-comic-shell .claude-codex-pro-ad-card,
       .claude-codex-pro-comic-shell .claude-codex-pro-support-qr-wrap,
       .claude-codex-pro-comic-shell .claude-codex-pro-support-empty,
+      .claude-codex-pro-comic-shell .claude-codex-pro-contact-card,
       .claude-codex-pro-comic-shell .claude-codex-pro-ad-empty {
         border: 3px solid var(--ccp-comic-ink);
         border-radius: 18px;
@@ -1223,6 +1231,15 @@
       .claude-codex-pro-support-qr-wrap { display: grid; gap: 10px; justify-items: center; width: min(360px, 100%); border: 1px solid #dce3ed; border-radius: 8px; background: #f8fafc; padding: 14px; box-sizing: border-box; }
       .claude-codex-pro-support-qr { display: block; width: min(320px, 100%); aspect-ratio: 1 / 1; border-radius: 8px; background: #ffffff; object-fit: contain; }
       .claude-codex-pro-support-empty { border: 1px dashed #cbd5e1; border-radius: 8px; color: #64748b; font-size: 13px; padding: 12px; text-align: center; }
+      .claude-codex-pro-contact-panel { display: grid; gap: 14px; padding: 8px 0 4px; }
+      .claude-codex-pro-contact-title { margin: 0; color: #172033; font-size: 18px; line-height: 1.35; text-align: center; }
+      .claude-codex-pro-contact-text { margin: 0; color: #64748b; font-size: 13px; line-height: 1.55; text-align: center; }
+      .claude-codex-pro-contact-card { display: grid; gap: 12px; border: 1px solid #dce3ed; border-radius: 10px; background: #ffffff; padding: 14px; box-sizing: border-box; }
+      .claude-codex-pro-contact-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; color: #172033; font-size: 13px; line-height: 1.5; }
+      .claude-codex-pro-contact-label { font-weight: 750; }
+      .claude-codex-pro-contact-link { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #0f766e; border-radius: 999px; background: #eef6f5; color: #0f766e; font-size: 12px; font-weight: 750; text-decoration: none; padding: 4px 9px; }
+      .claude-codex-pro-contact-qr-wrap { display: grid; gap: 8px; justify-items: center; }
+      .claude-codex-pro-contact-qr { display: block; width: min(220px, 80%); aspect-ratio: 1 / 1; border: 1px solid #dce3ed; border-radius: 12px; background: #ffffff; object-fit: contain; padding: 8px; box-sizing: border-box; }
       .${timelineClass} {
         position: fixed;
         top: calc(72px + 12px);
@@ -2989,6 +3006,7 @@
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="home" data-active="true">主页</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">支持</button>
+          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="contact" data-active="false">联系我</button>
         </div>
         <div class="claude-codex-pro-modal-body">
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
@@ -3116,6 +3134,26 @@
               ${claudeCodexProSupportPaymentQr
                 ? `<div class="claude-codex-pro-support-qr-wrap"><img class="claude-codex-pro-support-qr" src="${escapeHtml(claudeCodexProSupportPaymentQr)}" alt="支付二维码"></div>`
                 : `<div class="claude-codex-pro-support-empty">支付二维码未加载。</div>`}
+            </div>
+          </div>
+          <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="contact" hidden>
+            <div class="claude-codex-pro-contact-panel">
+              <h3 class="claude-codex-pro-contact-title">联系我</h3>
+              <div class="claude-codex-pro-contact-card">
+                <div class="claude-codex-pro-contact-line">
+                  <span class="claude-codex-pro-contact-label">官方QQ群：</span>
+                  <span>10061615</span>
+                  <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupPrimaryUrl)}">一键添加</a>
+                  <span>1076215359</span>
+                  <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupSecondaryUrl)}">一键添加</a>
+                </div>
+                <div class="claude-codex-pro-contact-qr-wrap">
+                  <p class="claude-codex-pro-contact-text">合作代理请联系微信</p>
+                  ${claudeCodexProContactWechatQr
+                    ? `<img class="claude-codex-pro-contact-qr" src="${escapeHtml(claudeCodexProContactWechatQr)}" alt="合作代理微信二维码">`
+                    : `<div class="claude-codex-pro-support-empty">微信二维码未加载。</div>`}
+                </div>
+              </div>
             </div>
           </div>
         </div>

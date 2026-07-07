@@ -14,7 +14,7 @@ pub fn run() {
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
         "manager.start",
         serde_json::json!({
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": claude_codex_pro_core::version::VERSION,
             "exePath": commands::current_exe_path_string(),
             "exeLastModifiedMs": commands::current_exe_last_modified_ms()
         }),
