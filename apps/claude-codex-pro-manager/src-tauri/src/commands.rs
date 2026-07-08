@@ -12,9 +12,10 @@ use claude_codex_pro_core::claude_desktop_provider::{
 };
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryExport,
-    MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
-    MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
+    MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest,
+    MemoryCaptureProgressStatus, MemoryExport, MemoryImportRequest, MemoryItem, MemoryItemRequest,
+    MemoryQueryRequest, MemoryQueryResult, MemorySelfCheckRequest, MemorySelfCheckResult,
+    MemorySessionRequest, MemorySessionSummary,
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
@@ -3494,6 +3495,7 @@ fn empty_memory_status() -> MemoryAssistStatus {
         total_items: 0,
         pending_candidates: 0,
         total_captures: 0,
+        capture_progress: MemoryCaptureProgressStatus::default(),
         workspaces: Vec::new(),
         latest_backup_path: None,
         enabled: false,
@@ -5652,7 +5654,7 @@ pub fn import_ccswitch_codex_providers() -> CommandResult<CcswitchImportPayload>
         Ok((profiles, scanned)) => {
             let count = profiles.len();
             ok(
-                &format!("已从 cc-switch 导入 {count} 个 Codex 供应商配置。"),
+                &format!("已从 cc-switch 导入 {count} 个 Codex / Claude 供应商配置。"),
                 CcswitchImportPayload {
                     db_path: db_path.to_string_lossy().to_string(),
                     profiles,
@@ -7609,18 +7611,27 @@ fn read_ccswitch_codex_profiles(db_path: &Path) -> anyhow::Result<(Vec<RelayProf
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .with_context(|| format!("闁瑰灚鎸哥槐?{}", db_path.display()))?;
-    let mut statement = conn.prepare(
-        "SELECT id, name, settings_config, COALESCE(sort_index, 0)
+    .with_context(|| format!("无法打开 cc-switch 数据库: {}", db_path.display()))?;
+    let has_meta_column = sqlite_table_has_column(&conn, "providers", "meta")?;
+    let sql = if has_meta_column {
+        "SELECT id, name, app_type, settings_config, COALESCE(meta, '{}')
          FROM providers
-         WHERE app_type = 'codex'
-         ORDER BY COALESCE(sort_index, 0), name COLLATE NOCASE, id COLLATE NOCASE",
-    )?;
+         WHERE app_type IN ('codex', 'claude', 'claude-desktop')
+         ORDER BY COALESCE(sort_index, 0), name COLLATE NOCASE, id COLLATE NOCASE"
+    } else {
+        "SELECT id, name, app_type, settings_config, '{}'
+         FROM providers
+         WHERE app_type IN ('codex', 'claude', 'claude-desktop')
+         ORDER BY COALESCE(sort_index, 0), name COLLATE NOCASE, id COLLATE NOCASE"
+    };
+    let mut statement = conn.prepare(sql)?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
         ))
     })?;
 
@@ -7628,12 +7639,45 @@ fn read_ccswitch_codex_profiles(db_path: &Path) -> anyhow::Result<(Vec<RelayProf
     let mut scanned = 0usize;
     for row in rows {
         scanned += 1;
-        let (id, name, settings_config) = row?;
-        if let Some(profile) = ccswitch_codex_profile_from_settings(&id, &name, &settings_config) {
+        let (id, name, app_type, settings_config, meta) = row?;
+        if let Some(profile) =
+            ccswitch_profile_from_settings(&id, &name, &app_type, &settings_config, &meta)
+        {
             profiles.push(profile);
         }
     }
     Ok((profiles, scanned))
+}
+
+fn sqlite_table_has_column(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+) -> anyhow::Result<bool> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row?.eq_ignore_ascii_case(column) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ccswitch_profile_from_settings(
+    id: &str,
+    name: &str,
+    app_type: &str,
+    settings: &str,
+    meta: &str,
+) -> Option<RelayProfile> {
+    match app_type {
+        "codex" => ccswitch_codex_profile_from_settings(id, name, settings),
+        "claude" | "claude-desktop" => {
+            ccswitch_claude_profile_from_settings(id, name, app_type, settings, meta)
+        }
+        _ => None,
+    }
 }
 
 fn ccswitch_codex_profile_from_settings(
@@ -7668,17 +7712,360 @@ fn ccswitch_codex_profile_from_settings(
         upstream_base_url: base_url.trim().to_string(),
         api_key: api_key.trim().to_string(),
         relay_mode: claude_codex_pro_core::settings::RelayMode::PureApi,
-        user_agent: "ccswitch".to_string(),
+        user_agent: "ccswitch:codex".to_string(),
+        import_source: "cc-switch".to_string(),
+        target_app: "codex".to_string(),
+        api_format: codex_config_api_format(config)
+            .unwrap_or_else(|| "OpenAI Responses".to_string()),
+        route_mode: "Codex provider config".to_string(),
         ..RelayProfile::default()
     };
     profile.test_model = profile.model.clone();
-    profile.config_contents = imported_supplier_config_toml(&profile);
+    profile.config_contents = if config.trim().is_empty() {
+        imported_supplier_config_toml(&profile)
+    } else {
+        config.to_string()
+    };
+    profile.auth_contents =
+        if auth.is_null() || auth.as_object().is_some_and(|object| object.is_empty()) {
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": profile.api_key }))
+                    .unwrap_or_else(|_| "{}".to_string())
+            )
+        } else {
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(auth).unwrap_or_else(|_| "{}".to_string())
+            )
+        };
+    Some(profile)
+}
+
+fn ccswitch_claude_profile_from_settings(
+    id: &str,
+    name: &str,
+    app_type: &str,
+    settings: &str,
+    meta: &str,
+) -> Option<RelayProfile> {
+    let parsed = serde_json::from_str::<Value>(settings).ok()?;
+    let parsed_meta = serde_json::from_str::<Value>(meta).unwrap_or(Value::Null);
+    let env = parsed.get("env").unwrap_or(&Value::Null);
+    let base_url = string_at(env, &["ANTHROPIC_BASE_URL", "CLAUDE_BASE_URL"])
+        .or_else(|| string_at(&parsed, &["base_url", "baseUrl", "apiBaseUrl"]))
+        .unwrap_or_default();
+    if base_url.trim().is_empty() {
+        return None;
+    }
+    let api_key = string_at(
+        env,
+        &[
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENROUTER_API_KEY",
+            "GOOGLE_API_KEY",
+            "apiKey",
+        ],
+    )
+    .or_else(|| string_at(&parsed, &["apiKey", "api_key"]))
+    .unwrap_or_default();
+    let model = string_at(env, &["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"])
+        .map(|value| strip_ccswitch_one_m_marker(&value).0)
+        .unwrap_or_else(|| "claude-sonnet".to_string());
+    let routes = claude_model_routes_from_meta_or_env(&parsed_meta, env);
+    let api_format = ccswitch_api_format_label(
+        string_at(&parsed_meta, &["apiFormat", "api_format"])
+            .or_else(|| string_at(&parsed, &["apiFormat", "api_format"])),
+    );
+    let claude_desktop_mode =
+        string_at(&parsed_meta, &["claudeDesktopMode", "claude_desktop_mode"])
+            .or_else(|| string_at(&parsed, &["claudeDesktopMode", "claude_desktop_mode"]))
+            .unwrap_or_else(|| {
+                if ccswitch_api_format_requires_route(&api_format) || !routes.is_empty() {
+                    "proxy".to_string()
+                } else {
+                    "direct".to_string()
+                }
+            });
+    let route_enabled = claude_desktop_mode.eq_ignore_ascii_case("proxy")
+        || ccswitch_api_format_requires_route(&api_format);
+    let model_mapping = claude_model_mapping_from_routes(&routes);
+    let mut model_list = routes
+        .iter()
+        .filter_map(|route| {
+            (!route.request_model.trim().is_empty()).then(|| route.request_model.clone())
+        })
+        .collect::<Vec<_>>();
+    if model_list.is_empty() {
+        model_list.push(model.clone());
+    }
+    model_list.sort();
+    model_list.dedup();
+    let mut profile = RelayProfile {
+        id: format!("{}-ccswitch", supplier_id_from_import(id)),
+        name: format!("{name} (ccswitch)"),
+        model,
+        base_url: base_url.trim().to_string(),
+        upstream_base_url: base_url.trim().to_string(),
+        api_key: api_key.trim().to_string(),
+        relay_mode: claude_codex_pro_core::settings::RelayMode::PureApi,
+        user_agent: format!("ccswitch:{app_type}"),
+        import_source: "cc-switch".to_string(),
+        target_app: app_type.to_string(),
+        api_format,
+        claude_desktop_mode: claude_desktop_mode.to_ascii_lowercase(),
+        route_enabled,
+        route_mode: if route_enabled {
+            "Claude Desktop Proxy route".to_string()
+        } else {
+            "Claude Desktop Direct".to_string()
+        },
+        model_mapping: model_mapping.clone(),
+        model_mapping_enabled: route_enabled || !model_mapping.trim().is_empty(),
+        model_mapping_json: claude_model_mapping_json_from_routes(&routes),
+        model_list: model_list.join("\n"),
+        ..RelayProfile::default()
+    };
+    profile.test_model = profile.model.clone();
+    profile.config_contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&json!({
+            "app_type": app_type,
+            "env": env,
+            "meta": parsed_meta
+        }))
+        .unwrap_or_else(|_| "{}".to_string())
+    );
     profile.auth_contents = format!(
         "{}\n",
-        serde_json::to_string_pretty(&json!({ "OPENAI_API_KEY": profile.api_key }))
+        serde_json::to_string_pretty(&json!({ "ANTHROPIC_AUTH_TOKEN": profile.api_key }))
             .unwrap_or_else(|_| "{}".to_string())
     );
     Some(profile)
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeRouteImportRow {
+    role: &'static str,
+    label: &'static str,
+    route_id: String,
+    display_name: String,
+    request_model: String,
+    supports_1m: bool,
+}
+
+fn claude_default_route_specs() -> [(&'static str, &'static str, &'static str, &'static str); 4] {
+    [
+        (
+            "sonnet",
+            "Sonnet",
+            "claude-sonnet-4-6",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        ),
+        (
+            "opus",
+            "Opus",
+            "claude-opus-4-8",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        ),
+        (
+            "fable",
+            "Fable",
+            "claude-fable-5",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        ),
+        (
+            "haiku",
+            "Haiku",
+            "claude-haiku-4-5",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ),
+    ]
+}
+
+fn claude_model_routes_from_meta_or_env(meta: &Value, env: &Value) -> Vec<ClaudeRouteImportRow> {
+    if let Some(routes) = meta
+        .get("claudeDesktopModelRoutes")
+        .or_else(|| meta.get("claude_desktop_model_routes"))
+        .and_then(Value::as_object)
+    {
+        let mut rows = routes
+            .iter()
+            .filter_map(|(route_id, route)| {
+                let request_model = string_at(route, &["model", "requestModel"])?;
+                let (request_model, marker_supports_1m) =
+                    strip_ccswitch_one_m_marker(&request_model);
+                let role = claude_route_role(route_id).unwrap_or("sonnet");
+                let label = claude_route_label(role);
+                let display_name = string_at(route, &["labelOverride", "displayName"])
+                    .unwrap_or_else(|| request_model.clone());
+                Some(ClaudeRouteImportRow {
+                    role,
+                    label,
+                    route_id: route_id.trim().to_string(),
+                    display_name,
+                    request_model,
+                    supports_1m: route
+                        .get("supports1m")
+                        .or_else(|| route.get("supports_1m"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(marker_supports_1m),
+                })
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.route_id.cmp(&right.route_id));
+        if !rows.is_empty() {
+            return rows;
+        }
+    }
+
+    let mut rows = Vec::new();
+    for (role, label, route_id, env_key) in claude_default_route_specs() {
+        let Some(raw_model) = string_at(env, &[env_key]) else {
+            continue;
+        };
+        let (request_model, _marker_supports_1m) = strip_ccswitch_one_m_marker(&raw_model);
+        if request_model.trim().is_empty() {
+            continue;
+        }
+        let display_name = string_at(env, &[&format!("{env_key}_NAME")]).unwrap_or_else(|| {
+            if is_claude_safe_model_id(&request_model) {
+                String::new()
+            } else {
+                request_model.clone()
+            }
+        });
+        rows.push(ClaudeRouteImportRow {
+            role,
+            label,
+            route_id: route_id.to_string(),
+            display_name,
+            request_model,
+            supports_1m: true,
+        });
+    }
+    if rows.is_empty() {
+        if let Some(raw_model) = string_at(env, &["ANTHROPIC_MODEL"]) {
+            let (request_model, _marker_supports_1m) = strip_ccswitch_one_m_marker(&raw_model);
+            if !request_model.trim().is_empty() {
+                rows.push(ClaudeRouteImportRow {
+                    role: "sonnet",
+                    label: "Sonnet",
+                    route_id: "claude-sonnet-4-6".to_string(),
+                    display_name: if is_claude_safe_model_id(&request_model) {
+                        String::new()
+                    } else {
+                        request_model.clone()
+                    },
+                    request_model,
+                    supports_1m: true,
+                });
+            }
+        }
+    }
+    rows
+}
+
+fn strip_ccswitch_one_m_marker(value: &str) -> (String, bool) {
+    let raw = value.trim();
+    let marker = "[1M]";
+    if raw.len() >= marker.len() && raw[raw.len() - marker.len()..].eq_ignore_ascii_case(marker) {
+        (raw[..raw.len() - marker.len()].trim_end().to_string(), true)
+    } else {
+        (raw.to_string(), false)
+    }
+}
+
+fn is_claude_safe_model_id(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.starts_with("claude-")
+        && ["sonnet", "opus", "haiku", "fable"]
+            .iter()
+            .any(|role| value.contains(role))
+}
+
+fn claude_route_role(route_id: &str) -> Option<&'static str> {
+    let lower = route_id.to_ascii_lowercase();
+    if lower.contains("sonnet") {
+        Some("sonnet")
+    } else if lower.contains("opus") {
+        Some("opus")
+    } else if lower.contains("haiku") {
+        Some("haiku")
+    } else if lower.contains("fable") {
+        Some("fable")
+    } else {
+        None
+    }
+}
+
+fn claude_route_label(role: &str) -> &'static str {
+    match role {
+        "opus" => "Opus",
+        "haiku" => "Haiku",
+        "fable" => "Fable",
+        _ => "Sonnet",
+    }
+}
+
+fn claude_model_mapping_from_routes(routes: &[ClaudeRouteImportRow]) -> String {
+    routes
+        .iter()
+        .map(|route| {
+            format!(
+                "{} ({}): {} -> {}{}",
+                route.label,
+                route.route_id,
+                if route.display_name.trim().is_empty() {
+                    route.request_model.as_str()
+                } else {
+                    route.display_name.as_str()
+                },
+                route.request_model,
+                if route.supports_1m { " [1M]" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn claude_model_mapping_json_from_routes(routes: &[ClaudeRouteImportRow]) -> String {
+    let values = routes
+        .iter()
+        .map(|route| {
+            json!({
+                "role": route.role,
+                "label": route.label,
+                "routeId": route.route_id,
+                "displayName": route.display_name,
+                "requestModel": route.request_model,
+                "supports1m": route.supports_1m
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&values).unwrap_or_default()
+}
+
+fn ccswitch_api_format_label(raw: Option<String>) -> String {
+    match raw.unwrap_or_default().trim() {
+        "anthropic" | "Anthropic Messages" | "" => "Anthropic Messages".to_string(),
+        "openai_chat" | "OpenAI Chat Completions" => "OpenAI Chat Completions".to_string(),
+        "openai_responses" | "OpenAI Responses" | "OpenAI Responses API" => {
+            "OpenAI Responses API".to_string()
+        }
+        "gemini_native" | "Gemini Native" | "Gemini Native generateContent" => {
+            "Gemini Native generateContent".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+fn ccswitch_api_format_requires_route(api_format: &str) -> bool {
+    matches!(
+        api_format,
+        "OpenAI Chat Completions" | "OpenAI Responses API" | "Gemini Native generateContent"
+    )
 }
 
 fn codex_auth_api_key(auth: &Value) -> Option<String> {
@@ -7740,8 +8127,52 @@ fn codex_config_api_key(config: &str) -> Option<String> {
         {
             return Some(value);
         }
+        if let Some(value) = doc
+            .get("model_providers")
+            .and_then(|item| item.as_table())
+            .and_then(|providers| providers.get(provider_id))
+            .and_then(|item| item.as_table())
+            .and_then(|provider| provider.get("http_headers"))
+            .and_then(|item| item.as_table())
+            .and_then(|headers| headers.get("Authorization"))
+            .and_then(|item| item.as_str())
+            .and_then(bearer_token_from_authorization)
+        {
+            return Some(value);
+        }
     }
     None
+}
+
+fn bearer_token_from_authorization(value: &str) -> Option<String> {
+    value
+        .trim()
+        .strip_prefix("Bearer ")
+        .or_else(|| value.trim().strip_prefix("bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn codex_config_api_format(config: &str) -> Option<String> {
+    let doc = config.parse::<DocumentMut>().ok()?;
+    let provider_id = doc.get("model_provider").and_then(|item| item.as_str())?;
+    let wire_api = doc
+        .get("model_providers")
+        .and_then(|item| item.as_table())
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(|item| item.as_table())
+        .and_then(|provider| provider.get("wire_api"))
+        .and_then(|item| item.as_str())
+        .unwrap_or("responses");
+    Some(
+        match wire_api {
+            "chat" | "chat_completions" | "chat-completions" => "OpenAI Chat Completions",
+            "gemini" | "gemini_native" | "gemini-native" => "Gemini Native",
+            _ => "OpenAI Responses",
+        }
+        .to_string(),
+    )
 }
 
 fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
@@ -8035,6 +8466,161 @@ experimental_bearer_token = "sk-from-config"
         assert_eq!(profile.base_url, "https://relay.example/v1");
         assert_eq!(profile.api_key, "sk-from-config");
         assert!(profile.auth_contents.contains("sk-from-config"));
+    }
+
+    #[test]
+    fn ccswitch_import_preserves_codex_config_and_reads_authorization_header() {
+        let settings = json!({
+            "config": r#"
+model = "gpt-5.5"
+model_provider = "relay"
+model_instructions_file = "./custom-instructions.md"
+
+[model_providers.relay]
+name = "relay"
+wire_api = "chat"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+
+[model_providers.relay.http_headers]
+Authorization = "Bearer sk-from-header"
+
+[plugins.example]
+enabled = true
+"#,
+            "auth": {}
+        });
+
+        let profile = ccswitch_codex_profile_from_settings(
+            "Relay Provider",
+            "Relay Provider",
+            &settings.to_string(),
+        )
+        .expect("profile imported from header token");
+
+        assert_eq!(profile.api_key, "sk-from-header");
+        assert_eq!(profile.api_format, "OpenAI Chat Completions");
+        assert!(profile.config_contents.contains("model_instructions_file"));
+        assert!(profile.config_contents.contains("[plugins.example]"));
+        assert!(profile.auth_contents.contains("sk-from-header"));
+    }
+
+    #[test]
+    fn ccswitch_import_reads_claude_env_provider() {
+        let settings = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://claude-relay.example",
+                "ANTHROPIC_AUTH_TOKEN": "sk-claude-test",
+                "ANTHROPIC_MODEL": "claude-fable-5",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1M]",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5"
+            }
+        });
+
+        let profile = ccswitch_claude_profile_from_settings(
+            "Claude Provider",
+            "Claude Provider",
+            "claude",
+            &settings.to_string(),
+            "{}",
+        )
+        .expect("profile imported from claude env");
+
+        assert_eq!(profile.base_url, "https://claude-relay.example");
+        assert_eq!(profile.api_key, "sk-claude-test");
+        assert_eq!(profile.target_app, "claude");
+        assert_eq!(profile.api_format, "Anthropic Messages");
+        assert_eq!(profile.claude_desktop_mode, "proxy");
+        assert!(profile.route_enabled);
+        assert!(profile.model_mapping_enabled);
+        assert!(
+            profile
+                .model_mapping
+                .contains("Sonnet (claude-sonnet-4-6): claude-sonnet-5 -> claude-sonnet-5 [1M]")
+        );
+        assert!(
+            profile
+                .model_mapping
+                .contains("Opus (claude-opus-4-8): claude-opus-5 -> claude-opus-5")
+        );
+        assert!(profile.model_mapping_json.contains("\"role\": \"sonnet\""));
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"routeId\": \"claude-sonnet-4-6\"")
+        );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"requestModel\": \"claude-sonnet-5\"")
+        );
+        assert!(profile.model_mapping_json.contains("\"supports1m\": true"));
+        assert!(profile.model_list.contains("claude-fable-5"));
+    }
+
+    #[test]
+    fn ccswitch_import_preserves_claude_desktop_proxy_routes_from_meta() {
+        let settings = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://openai-compatible.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "sk-claude-proxy",
+                "ANTHROPIC_MODEL": "gpt-5.5"
+            }
+        });
+        let meta = json!({
+            "apiFormat": "openai_responses",
+            "claudeDesktopMode": "proxy",
+            "claudeDesktopModelRoutes": {
+                "claude-sonnet-4-6": {
+                    "model": "gpt-5.5[1M]",
+                    "labelOverride": "GPT 5.5 Sonnet",
+                    "supports1m": true
+                },
+                "claude-opus-4-8": {
+                    "model": "gpt-5.5-pro",
+                    "labelOverride": "GPT 5.5 Pro"
+                }
+            }
+        });
+
+        let profile = ccswitch_claude_profile_from_settings(
+            "Claude Desktop Provider",
+            "Claude Desktop Provider",
+            "claude-desktop",
+            &settings.to_string(),
+            &meta.to_string(),
+        )
+        .expect("profile imported from claude desktop proxy");
+
+        assert_eq!(profile.target_app, "claude-desktop");
+        assert_eq!(profile.api_format, "OpenAI Responses API");
+        assert_eq!(profile.claude_desktop_mode, "proxy");
+        assert!(profile.route_enabled);
+        assert!(profile.model_mapping_enabled);
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"routeId\": \"claude-sonnet-4-6\"")
+        );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"displayName\": \"GPT 5.5 Sonnet\"")
+        );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"requestModel\": \"gpt-5.5\"")
+        );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"routeId\": \"claude-opus-4-8\"")
+        );
+        assert!(profile.model_list.contains("gpt-5.5"));
+        assert!(profile.model_list.contains("gpt-5.5-pro"));
     }
 
     #[test]

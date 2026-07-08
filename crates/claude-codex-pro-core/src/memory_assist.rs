@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
 /// Tiering (phase 2). Items live in one of two tiers; archived is a soft,
@@ -144,6 +144,22 @@ pub struct MemoryWorkspaceSummary {
     pub latest_capture_at: i64,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCaptureProgressStatus {
+    pub first_baseline_at: i64,
+    pub last_scan_at: i64,
+    pub total_sources: i64,
+    pub codex_sources: i64,
+    pub claude_sources: i64,
+    /// Cumulative captured readable context units across all tracked sources.
+    pub total_context_count: i64,
+    /// Readable context units captured in the most recent scan wave.
+    pub new_context_count: i64,
+    /// Sources skipped as unchanged in the most recent scan wave.
+    pub skipped_unchanged_sessions: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryAssistStatus {
@@ -153,6 +169,7 @@ pub struct MemoryAssistStatus {
     pub total_items: i64,
     pub pending_candidates: i64,
     pub total_captures: i64,
+    pub capture_progress: MemoryCaptureProgressStatus,
     pub workspaces: Vec<MemoryWorkspaceSummary>,
     pub latest_backup_path: Option<String>,
     pub enabled: bool,
@@ -268,6 +285,10 @@ pub struct MemoryHistoryCaptureReport {
     pub captures_recorded: usize,
     pub candidates_created: usize,
     pub items_learned: usize,
+    pub sources_checked: usize,
+    pub sources_skipped_unchanged: usize,
+    pub new_contexts_seen: usize,
+    pub scan_id: String,
     pub errors: Vec<String>,
 }
 
@@ -370,10 +391,12 @@ impl MemoryAssistStore {
                 guard.insert(self.db_path.clone(), fingerprint);
             }
         }
+        let _claude_report = self.backfill_claude_history(50, false);
         let conn = self.open()?;
         let total_items = count_items(&conn)?;
         let pending_candidates = count_pending_candidates(&conn)?;
         let total_captures = count_captures(&conn)?;
+        let capture_progress = capture_progress_status(&conn)?;
         let session_counts =
             codex_session_workspace_counts_from_home(codex_home, 500).unwrap_or_default();
         let workspaces = workspace_summaries(&conn, &session_counts)?;
@@ -395,6 +418,7 @@ impl MemoryAssistStore {
             total_items,
             pending_candidates,
             total_captures,
+            capture_progress,
             workspaces,
             latest_backup_path,
             enabled: true,
@@ -880,7 +904,10 @@ impl MemoryAssistStore {
         max_messages: usize,
         generate_candidates: bool,
     ) -> MemoryHistoryCaptureReport {
-        let mut report = MemoryHistoryCaptureReport::default();
+        let mut report = MemoryHistoryCaptureReport {
+            scan_id: new_scan_id("codex"),
+            ..Default::default()
+        };
         let limit = max_messages.max(1);
         let mut remaining = limit;
         for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(codex_home) {
@@ -928,7 +955,29 @@ impl MemoryAssistStore {
                     continue;
                 }
                 report.rollout_files_checked += 1;
-                let messages = match read_codex_rollout_user_messages(&rollout_path, remaining) {
+                report.sources_checked += 1;
+                let source_key = format!("codex:{}", row.thread_id);
+                if self.source_progress_is_current(&source_key, &rollout_path) {
+                    report.sources_skipped_unchanged += 1;
+                    if let Err(error) = self.mark_source_skipped(
+                        &source_key,
+                        "codex-rollout",
+                        &rollout_path,
+                        if !row.cwd.trim().is_empty() {
+                            row.cwd.as_str()
+                        } else {
+                            workspace_hint
+                        },
+                        &report.scan_id,
+                    ) {
+                        report.errors.push(format!(
+                            "record codex unchanged progress for {} failed: {error}",
+                            row.thread_id
+                        ));
+                    }
+                    continue;
+                }
+                let messages = match read_codex_rollout_context_messages(&rollout_path, remaining) {
                     Ok(messages) => messages,
                     Err(error) => {
                         report.errors.push(format!(
@@ -938,15 +987,15 @@ impl MemoryAssistStore {
                         continue;
                     }
                 };
-                for text in messages {
+                let scanned_units = messages.len();
+                let mut captured_units = 0usize;
+                for message in messages {
                     if remaining == 0 {
                         break;
                     }
-                    if !memory_capture_text_is_user_evidence(&text) {
-                        continue;
-                    }
                     remaining -= 1;
                     report.user_messages_seen += 1;
+                    let text = message.text;
                     let workspace = if !row.cwd.trim().is_empty() {
                         row.cwd.as_str()
                     } else {
@@ -964,7 +1013,7 @@ impl MemoryAssistStore {
                             category: memory.category.clone(),
                             tags: memory.tags.clone(),
                             source: "codex-history-auto".to_string(),
-                            source_session_id: row.thread_id.clone(),
+                            source_session_id: format!("{}#{}", row.thread_id, message.sequence),
                         })
                     });
                     let (candidate_triggered, candidate_reason, skip_reason) = match learn_result {
@@ -992,18 +1041,40 @@ impl MemoryAssistStore {
                     match self.record_capture(MemoryCaptureRequest {
                         text,
                         workspace: workspace.to_string(),
-                        source: "codex-history-rollout".to_string(),
-                        source_session_id: row.thread_id.clone(),
+                        source: format!("codex-history-rollout-{}", message.role),
+                        source_session_id: format!("{}#{}", row.thread_id, message.sequence),
                         candidate_triggered,
                         candidate_reason,
                         skip_reason,
                     }) {
-                        Ok(_) => report.captures_recorded += 1,
+                        Ok(_) => {
+                            report.captures_recorded += 1;
+                            report.new_contexts_seen += 1;
+                            captured_units += 1;
+                        }
                         Err(error) => report.errors.push(format!(
                             "record history capture for {} failed: {error}",
                             row.thread_id
                         )),
                     }
+                }
+                if let Err(error) = self.upsert_source_progress(
+                    &source_key,
+                    "codex-rollout",
+                    &rollout_path,
+                    if !row.cwd.trim().is_empty() {
+                        row.cwd.as_str()
+                    } else {
+                        workspace_hint
+                    },
+                    scanned_units,
+                    captured_units,
+                    &report.scan_id,
+                ) {
+                    report.errors.push(format!(
+                        "record codex progress for {} failed: {error}",
+                        row.thread_id
+                    ));
                 }
             }
         }
@@ -1457,6 +1528,204 @@ impl MemoryAssistStore {
         Ok(inputs)
     }
 
+    pub fn backfill_claude_history(
+        &self,
+        max_messages: usize,
+        _generate_candidates: bool,
+    ) -> MemoryHistoryCaptureReport {
+        let mut report = MemoryHistoryCaptureReport {
+            scan_id: new_scan_id("claude"),
+            ..Default::default()
+        };
+        let mut remaining = max_messages.max(1);
+        for path in discover_claude_capture_files() {
+            if remaining == 0 {
+                break;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            report.sources_checked += 1;
+            let source_key = format!("claude:{}", path.to_string_lossy());
+            if self.source_progress_is_current(&source_key, &path) {
+                report.sources_skipped_unchanged += 1;
+                if let Err(error) = self.mark_source_skipped(
+                    &source_key,
+                    "claude-file",
+                    &path,
+                    "global",
+                    &report.scan_id,
+                ) {
+                    report.errors.push(format!(
+                        "record claude unchanged progress for {} failed: {error}",
+                        path.display()
+                    ));
+                }
+                continue;
+            }
+            let messages = match read_claude_context_messages(&path, remaining) {
+                Ok(messages) => messages,
+                Err(error) => {
+                    report.errors.push(format!(
+                        "read claude source {} failed: {error}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            let scanned_units = messages.len();
+            let mut captured_units = 0usize;
+            for message in messages {
+                if remaining == 0 {
+                    break;
+                }
+                remaining -= 1;
+                report.user_messages_seen += 1;
+                let workspace = normalize_workspace(&message.workspace);
+                match self.record_capture(MemoryCaptureRequest {
+                    text: message.text,
+                    workspace,
+                    source: format!("claude-history-{}", message.role),
+                    source_session_id: format!("{}#{}", message.session_id, message.sequence),
+                    candidate_triggered: false,
+                    candidate_reason: String::new(),
+                    skip_reason: "pending_core_classification".to_string(),
+                }) {
+                    Ok(_) => {
+                        report.captures_recorded += 1;
+                        report.new_contexts_seen += 1;
+                        captured_units += 1;
+                    }
+                    Err(error) => report.errors.push(format!(
+                        "record claude capture for {} failed: {error}",
+                        path.display()
+                    )),
+                }
+            }
+            if let Err(error) = self.upsert_source_progress(
+                &source_key,
+                "claude-file",
+                &path,
+                "global",
+                scanned_units,
+                captured_units,
+                &report.scan_id,
+            ) {
+                report.errors.push(format!(
+                    "record claude progress for {} failed: {error}",
+                    path.display()
+                ));
+            }
+        }
+        report
+    }
+
+    fn source_progress_is_current(&self, source_key: &str, source_path: &Path) -> bool {
+        let Ok(conn) = self.open() else {
+            return false;
+        };
+        let (modified_ms, size_bytes) = source_file_fingerprint(source_path);
+        conn.query_row(
+            "SELECT last_modified_ms, size_bytes FROM memory_capture_progress WHERE source_key = ?1",
+            [source_key],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .map(|(last_modified_ms, last_size)| last_modified_ms == modified_ms && last_size == size_bytes)
+        .unwrap_or(false)
+    }
+
+    fn upsert_source_progress(
+        &self,
+        source_key: &str,
+        source_kind: &str,
+        source_path: &Path,
+        workspace: &str,
+        scanned_units: usize,
+        captured_units: usize,
+        scan_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.open()?;
+        let now = now_unix();
+        let (modified_ms, size_bytes) = source_file_fingerprint(source_path);
+        let captured_units = i64::try_from(captured_units).unwrap_or(i64::MAX);
+        conn.execute(
+            "INSERT INTO memory_capture_progress
+             (source_key, source_kind, source_path, workspace, last_modified_ms, size_bytes,
+              scanned_units, captured_units, last_new_units, last_skipped_unchanged, last_scan_id,
+              first_scanned_at, last_scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 0, ?9, ?10, ?10)
+             ON CONFLICT(source_key) DO UPDATE SET
+                source_kind = excluded.source_kind,
+                source_path = excluded.source_path,
+                workspace = excluded.workspace,
+                last_modified_ms = excluded.last_modified_ms,
+                size_bytes = excluded.size_bytes,
+                scanned_units = excluded.scanned_units,
+                captured_units = memory_capture_progress.captured_units + excluded.captured_units,
+                last_new_units = excluded.last_new_units,
+                last_skipped_unchanged = 0,
+                last_scan_id = excluded.last_scan_id,
+                last_scanned_at = excluded.last_scanned_at",
+            params![
+                source_key,
+                source_kind,
+                source_path.to_string_lossy(),
+                normalize_workspace(workspace),
+                modified_ms,
+                size_bytes,
+                i64::try_from(scanned_units).unwrap_or(i64::MAX),
+                captured_units,
+                scan_id,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn mark_source_skipped(
+        &self,
+        source_key: &str,
+        source_kind: &str,
+        source_path: &Path,
+        workspace: &str,
+        scan_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.open()?;
+        let now = now_unix();
+        let (modified_ms, size_bytes) = source_file_fingerprint(source_path);
+        conn.execute(
+            "INSERT INTO memory_capture_progress
+             (source_key, source_kind, source_path, workspace, last_modified_ms, size_bytes,
+              scanned_units, captured_units, last_new_units, last_skipped_unchanged, last_scan_id,
+              first_scanned_at, last_scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, 0, 1, ?7, ?8, ?8)
+             ON CONFLICT(source_key) DO UPDATE SET
+                source_kind = excluded.source_kind,
+                source_path = excluded.source_path,
+                workspace = excluded.workspace,
+                last_modified_ms = excluded.last_modified_ms,
+                size_bytes = excluded.size_bytes,
+                last_new_units = 0,
+                last_skipped_unchanged = 1,
+                last_scan_id = excluded.last_scan_id,
+                last_scanned_at = excluded.last_scanned_at",
+            params![
+                source_key,
+                source_kind,
+                source_path.to_string_lossy(),
+                normalize_workspace(workspace),
+                modified_ms,
+                size_bytes,
+                scan_id,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
     fn open(&self) -> anyhow::Result<Connection> {
         if let Some(parent) = self.db_path.parent() {
             fs::create_dir_all(parent)
@@ -1737,6 +2006,24 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_memory_captures_workspace ON memory_captures(workspace);
         CREATE INDEX IF NOT EXISTS idx_memory_captures_updated_at ON memory_captures(updated_at);
 
+        CREATE TABLE IF NOT EXISTS memory_capture_progress (
+            source_key TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            last_modified_ms INTEGER NOT NULL DEFAULT 0,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            scanned_units INTEGER NOT NULL DEFAULT 0,
+            captured_units INTEGER NOT NULL DEFAULT 0,
+            last_new_units INTEGER NOT NULL DEFAULT 0,
+            last_skipped_unchanged INTEGER NOT NULL DEFAULT 0,
+            last_scan_id TEXT NOT NULL DEFAULT '',
+            first_scanned_at INTEGER NOT NULL,
+            last_scanned_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_capture_progress_kind ON memory_capture_progress(source_kind);
+        CREATE INDEX IF NOT EXISTS idx_memory_capture_progress_last_scan ON memory_capture_progress(last_scanned_at);
+
         CREATE TABLE IF NOT EXISTS memory_backups (
             id TEXT PRIMARY KEY,
             path TEXT NOT NULL,
@@ -1755,6 +2042,9 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     }
     if user_version < 4 {
         migrate_to_v4(conn)?;
+    }
+    if user_version < 5 {
+        migrate_to_v5(conn)?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     Ok(())
@@ -1840,6 +2130,28 @@ fn migrate_to_v4(conn: &Connection) -> anyhow::Result<()> {
         )?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_memory_items_tier ON memory_items(tier);")?;
+    Ok(())
+}
+
+/// v4 -> v5 migration: add recent-scan accounting to the capture progress table.
+/// Existing progress rows remain valid; recent counters start at zero until the
+/// next scan wave updates them.
+fn migrate_to_v5(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "memory_capture_progress", "last_new_units")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_capture_progress ADD COLUMN last_new_units INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if !column_exists(conn, "memory_capture_progress", "last_skipped_unchanged")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_capture_progress ADD COLUMN last_skipped_unchanged INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    if !column_exists(conn, "memory_capture_progress", "last_scan_id")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_capture_progress ADD COLUMN last_scan_id TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
     Ok(())
 }
 
@@ -2280,6 +2592,61 @@ fn capture_by_workspace_hash(
     .with_context(|| format!("memory capture not found: {workspace}/{text_hash}"))
 }
 
+fn capture_progress_status(conn: &Connection) -> anyhow::Result<MemoryCaptureProgressStatus> {
+    let mut status = MemoryCaptureProgressStatus::default();
+    let mut stmt = conn.prepare(
+        "SELECT source_kind, first_scanned_at, last_scanned_at, captured_units,
+                last_new_units, last_skipped_unchanged, last_scan_id
+         FROM memory_capture_progress",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    let mut latest_scan_id = String::new();
+    for row in rows {
+        let (
+            kind,
+            first_scanned_at,
+            last_scanned_at,
+            captured_units,
+            last_new_units,
+            last_skipped_unchanged,
+            scan_id,
+        ) = row?;
+        status.total_sources += 1;
+        if kind.starts_with("codex") {
+            status.codex_sources += 1;
+        } else if kind.starts_with("claude") {
+            status.claude_sources += 1;
+        }
+        if status.first_baseline_at == 0 || first_scanned_at < status.first_baseline_at {
+            status.first_baseline_at = first_scanned_at;
+        }
+        status.total_context_count += captured_units;
+        if last_scanned_at > status.last_scan_at
+            || (last_scanned_at == status.last_scan_at && scan_id > latest_scan_id)
+        {
+            status.last_scan_at = last_scanned_at;
+            latest_scan_id = scan_id.clone();
+            status.new_context_count = 0;
+            status.skipped_unchanged_sessions = 0;
+        }
+        if !latest_scan_id.is_empty() && scan_id == latest_scan_id {
+            status.new_context_count += last_new_units;
+            status.skipped_unchanged_sessions += last_skipped_unchanged;
+        }
+    }
+    Ok(status)
+}
+
 fn latest_capture(conn: &Connection) -> anyhow::Result<Option<MemoryCaptureRecord>> {
     let sql = format!(
         "SELECT id, workspace, source, source_session_id, text_length, text_hash,
@@ -2315,6 +2682,247 @@ fn recent_captures(
     Ok(stmt
         .query_map(params![workspace, GLOBAL_WORKSPACE, limit], row_to_capture)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn source_file_fingerprint(path: &Path) -> (i64, i64) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (0, 0);
+    };
+    let size_bytes = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    (modified_ms, size_bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaudeContextMessage {
+    role: String,
+    text: String,
+    session_id: String,
+    workspace: String,
+    sequence: usize,
+}
+
+fn discover_claude_capture_files() -> Vec<PathBuf> {
+    let Some(home_dir) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+    else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    let roots = [
+        home_dir.join(".claude").join("sessions"),
+        home_dir.join(".claude").join("claude-code-sessions"),
+        home_dir.join(".claude").join("local-agent-mode-sessions"),
+        home_dir.join(".config").join("claude-code-sessions"),
+        home_dir.join(".config").join("local-agent-mode-sessions"),
+    ];
+    for root in roots {
+        collect_claude_capture_files(&root, &mut files, 4);
+    }
+    for candidate in [
+        home_dir.join(".claude").join("audit.jsonl"),
+        home_dir.join(".claude").join("local.json"),
+    ] {
+        if candidate.is_file() {
+            files.push(candidate);
+        }
+    }
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn collect_claude_capture_files(dir: &Path, files: &mut Vec<PathBuf>, depth: usize) {
+    if depth == 0 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_claude_capture_files(&path, files, depth - 1);
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        if lower == "audit.jsonl"
+            || lower.starts_with("local_") && lower.ends_with(".json")
+            || lower == "local.json"
+            || lower.ends_with(".jsonl")
+            || lower.ends_with(".json")
+        {
+            files.push(path);
+        }
+    }
+}
+
+fn read_claude_context_messages(
+    path: &Path,
+    limit: usize,
+) -> anyhow::Result<Vec<ClaudeContextMessage>> {
+    let content = fs::read_to_string(path)?;
+    let workspace = infer_workspace_from_path(path);
+    let session_id = stable_id("claude-session", &[path.to_string_lossy().as_ref()]);
+    let mut messages = Vec::new();
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        .unwrap_or(false)
+    {
+        for line in content.lines() {
+            if messages.len() >= limit {
+                break;
+            }
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                collect_claude_messages_from_value(
+                    &value,
+                    &workspace,
+                    &session_id,
+                    &mut messages,
+                    limit,
+                );
+            }
+        }
+    } else if let Ok(value) = serde_json::from_str::<Value>(&content) {
+        collect_claude_messages_from_value(&value, &workspace, &session_id, &mut messages, limit);
+    }
+    Ok(messages)
+}
+
+fn collect_claude_messages_from_value(
+    value: &Value,
+    workspace: &str,
+    session_id: &str,
+    out: &mut Vec<ClaudeContextMessage>,
+    limit: usize,
+) {
+    if out.len() >= limit {
+        return;
+    }
+    if let Some(array) = value.as_array() {
+        for item in array {
+            collect_claude_messages_from_value(item, workspace, session_id, out, limit);
+            if out.len() >= limit {
+                break;
+            }
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if let Some(messages) = object
+        .get("messages")
+        .or_else(|| object.get("conversation"))
+        .or_else(|| object.get("turns"))
+        .or_else(|| object.get("entries"))
+        .and_then(Value::as_array)
+    {
+        for item in messages {
+            collect_claude_messages_from_value(item, workspace, session_id, out, limit);
+            if out.len() >= limit {
+                break;
+            }
+        }
+    }
+    if out.len() >= limit {
+        return;
+    }
+    let role = object
+        .get("role")
+        .or_else(|| object.get("type"))
+        .or_else(|| object.get("speaker"))
+        .and_then(Value::as_str)
+        .map(normalize_capture_role)
+        .unwrap_or_else(|| "unknown".to_string());
+    let text = object
+        .get("content")
+        .or_else(|| object.get("text"))
+        .or_else(|| object.get("message"))
+        .or_else(|| object.get("prompt"))
+        .or_else(|| object.get("response"))
+        .map(extract_text_from_json_value)
+        .unwrap_or_default();
+    let text = normalize_memory_text(&redact_secrets(&text));
+    if !text.is_empty() {
+        let workspace = object
+            .get("cwd")
+            .or_else(|| object.get("workspace"))
+            .or_else(|| object.get("project"))
+            .and_then(Value::as_str)
+            .map(normalize_workspace)
+            .unwrap_or_else(|| normalize_workspace(workspace));
+        let session_id = object
+            .get("session_id")
+            .or_else(|| object.get("sessionId"))
+            .or_else(|| object.get("conversation_id"))
+            .or_else(|| object.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or(session_id)
+            .to_string();
+        out.push(ClaudeContextMessage {
+            role,
+            text,
+            session_id,
+            workspace,
+            sequence: out.len() + 1,
+        });
+    }
+}
+
+fn extract_text_from_json_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(extract_text_from_json_value)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            ),
+        Value::Object(object) => object
+            .get("text")
+            .or_else(|| object.get("content"))
+            .or_else(|| object.get("message"))
+            .map(extract_text_from_json_value)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn normalize_capture_role(role: &str) -> String {
+    let role = role.trim().to_ascii_lowercase();
+    match role.as_str() {
+        "human" => "user".to_string(),
+        "ai" | "model" => "assistant".to_string(),
+        "tool_result" => "tool".to_string(),
+        "system" | "developer" | "user" | "assistant" | "tool" => role,
+        _ if role.is_empty() => "unknown".to_string(),
+        _ => role,
+    }
+}
+
+fn infer_workspace_from_path(path: &Path) -> String {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .map(normalize_workspace)
+        .unwrap_or_else(|| GLOBAL_WORKSPACE.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -2456,10 +3064,21 @@ fn recent_codex_rollout_rows(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn read_codex_rollout_user_messages(path: &Path, limit: usize) -> anyhow::Result<Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexRolloutContextMessage {
+    role: String,
+    text: String,
+    sequence: usize,
+}
+
+fn read_codex_rollout_context_messages(
+    path: &Path,
+    limit: usize,
+) -> anyhow::Result<Vec<CodexRolloutContextMessage>> {
     let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
     let mut messages = Vec::new();
+    let mut sequence = 0usize;
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -2472,16 +3091,29 @@ fn read_codex_rollout_user_messages(path: &Path, limit: usize) -> anyhow::Result
             continue;
         }
         let payload = &event["payload"];
-        if payload.get("type").and_then(Value::as_str) != Some("message")
-            || payload.get("role").and_then(Value::as_str) != Some("user")
-        {
+        if payload.get("type").and_then(Value::as_str) != Some("message") {
             continue;
         }
+        let role = payload
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .trim()
+            .to_ascii_lowercase();
         let body = codex_message_content_text(&payload["content"]);
         if body.trim().is_empty() {
             continue;
         }
-        messages.push(body);
+        sequence += 1;
+        messages.push(CodexRolloutContextMessage {
+            role: if role.is_empty() {
+                "unknown".to_string()
+            } else {
+                role
+            },
+            text: body,
+            sequence,
+        });
         if messages.len() >= limit {
             break;
         }
@@ -2502,10 +3134,10 @@ fn codex_message_content_text(content: &Value) -> String {
         .filter_map(|block| {
             let block_type = block.get("type").and_then(Value::as_str)?;
             match block_type {
-                "input_text" => block
+                "input_text" | "output_text" | "text" => block
                     .get("text")
                     .and_then(Value::as_str)
-                    .and_then(codex_visible_user_text_block),
+                    .and_then(codex_visible_context_text_block),
                 _ => None,
             }
         })
@@ -2514,7 +3146,7 @@ fn codex_message_content_text(content: &Value) -> String {
         .join("\n\n")
 }
 
-fn codex_visible_user_text_block(text: &str) -> Option<String> {
+fn codex_visible_context_text_block(text: &str) -> Option<String> {
     let mut raw = text.trim().replace("\r\n", "\n").replace('\r', "\n");
     if raw.contains("## My request for Codex:") {
         if let Some((_, request)) = raw.split_once("## My request for Codex:") {
@@ -2535,27 +3167,11 @@ fn codex_visible_user_text_block(text: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     let normalized = normalize_memory_text(&filtered);
-    memory_capture_text_is_user_evidence(&normalized).then_some(normalized)
-}
-
-fn memory_capture_text_is_user_evidence(text: &str) -> bool {
-    let normalized = normalize_memory_text(text);
     if normalized.is_empty() {
-        return false;
+        None
+    } else {
+        Some(normalized)
     }
-    let lower = normalized.to_ascii_lowercase();
-    let internal_prefixes = [
-        "<environment_context",
-        "<codex_internal_context",
-        "<system",
-        "<developer",
-        "<image ",
-        "<attachment ",
-        "another language model started to solve this problem",
-    ];
-    !internal_prefixes
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
 }
 
 #[derive(Debug, Clone)]
@@ -3865,6 +4481,15 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+fn new_scan_id(scope: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        now_unix(),
+        normalize_label(scope, "history"),
+        now_nanos()
+    )
+}
+
 fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4084,6 +4709,187 @@ mod tests {
         assert!(contains_needle("please fix the bug", "fix"));
         // CJK needles keep substring matching (no whitespace word boundaries).
         assert!(contains_needle("以后必须重新构建", "必须"));
+    }
+
+    #[test]
+    fn codex_rollout_context_reader_keeps_all_readable_roles() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("rollout.jsonl");
+        std::fs::write(
+            &rollout_path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "system",
+                        "content": [{"type": "text", "text": "system rule text"}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "text", "text": "developer context text"}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "short"}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "assistant answer"}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "tool",
+                        "content": [{"type": "text", "text": "tool result"}]
+                    }
+                }),
+            ),
+        )
+        .unwrap();
+
+        let messages = read_codex_rollout_context_messages(&rollout_path, 10).unwrap();
+        assert_eq!(messages.len(), 5);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["system", "developer", "user", "assistant", "tool"]
+        );
+        assert!(messages.iter().any(|message| message.text == "short"));
+    }
+
+    #[test]
+    fn claude_context_reader_keeps_all_readable_roles() {
+        let temp = tempfile::tempdir().unwrap();
+        let audit_path = temp.path().join("audit.jsonl");
+        std::fs::write(
+            &audit_path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                serde_json::json!({"role": "system", "content": "system context"}),
+                serde_json::json!({"role": "developer", "message": "developer note"}),
+                serde_json::json!({"role": "user", "content": "short"}),
+                serde_json::json!({"role": "assistant", "response": "assistant answer"}),
+                serde_json::json!({"role": "tool", "text": "tool output"}),
+            ),
+        )
+        .unwrap();
+
+        let messages = read_claude_context_messages(&audit_path, 10).unwrap();
+        assert_eq!(messages.len(), 5);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["system", "developer", "user", "assistant", "tool"]
+        );
+        assert!(messages.iter().any(|message| message.text == "short"));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.text == "assistant answer")
+        );
+    }
+
+    #[test]
+    fn capture_progress_status_reports_latest_scan_not_lifetime_total() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO memory_capture_progress
+             (source_key, source_kind, source_path, workspace, last_modified_ms, size_bytes,
+              scanned_units, captured_units, last_new_units, last_skipped_unchanged, last_scan_id,
+              first_scanned_at, last_scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                "codex:old",
+                "codex-rollout",
+                "old-rollout.jsonl",
+                "repo-a",
+                100_i64,
+                10_i64,
+                5_i64,
+                5_i64,
+                5_i64,
+                0_i64,
+                "100:codex:1",
+                100_i64,
+                100_i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_capture_progress
+             (source_key, source_kind, source_path, workspace, last_modified_ms, size_bytes,
+              scanned_units, captured_units, last_new_units, last_skipped_unchanged, last_scan_id,
+              first_scanned_at, last_scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                "claude:new",
+                "claude-file",
+                "audit.jsonl",
+                "global",
+                200_i64,
+                20_i64,
+                2_i64,
+                2_i64,
+                2_i64,
+                0_i64,
+                "200:claude:1",
+                100_i64,
+                200_i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_capture_progress
+             (source_key, source_kind, source_path, workspace, last_modified_ms, size_bytes,
+              scanned_units, captured_units, last_new_units, last_skipped_unchanged, last_scan_id,
+              first_scanned_at, last_scanned_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                "claude:skip",
+                "claude-file",
+                "local_1.json",
+                "global",
+                200_i64,
+                20_i64,
+                0_i64,
+                0_i64,
+                0_i64,
+                1_i64,
+                "200:claude:1",
+                100_i64,
+                200_i64,
+            ],
+        )
+        .unwrap();
+
+        let status = capture_progress_status(&conn).unwrap();
+        assert_eq!(status.total_sources, 3);
+        assert_eq!(status.codex_sources, 1);
+        assert_eq!(status.claude_sources, 2);
+        assert_eq!(status.total_context_count, 7);
+        assert_eq!(status.new_context_count, 2);
+        assert_eq!(status.skipped_unchanged_sessions, 1);
     }
 
     #[test]

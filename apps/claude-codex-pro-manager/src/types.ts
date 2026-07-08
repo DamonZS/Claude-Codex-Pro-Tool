@@ -185,6 +185,25 @@ export type RelayProfile = {
   autoCompactLimit: string;
   modelList: string;
   userAgent: string;
+  notes?: string;
+  websiteUrl?: string;
+  authField?: string;
+  headerOverride?: string;
+  bodyOverride?: string;
+  hideAiSignature?: boolean;
+  teammatesMode?: boolean;
+  toolSearchEnabled?: boolean;
+  maxThinkingEnabled?: boolean;
+  disableAutoUpdate?: boolean;
+  importSource?: string;
+  targetApp?: string;
+  apiFormat?: string;
+  claudeDesktopMode?: string;
+  routeEnabled?: boolean;
+  routeMode?: string;
+  modelMapping?: string;
+  modelMappingEnabled?: boolean;
+  modelMappingJson?: string;
   aggregateEnabled?: boolean;
   aggregateStrategy?: string;
   aggregateMembers?: string[];
@@ -265,6 +284,13 @@ export type SupplierPreset = {
   modelList?: string[];
   websiteUrl?: string;
   apiKeyUrl?: string;
+  targetApp?: string;
+  apiFormat?: string;
+  claudeDesktopMode?: string;
+  routeEnabled?: boolean;
+  routeMode?: string;
+  modelMappingEnabled?: boolean;
+  modelMappingJson?: string;
 };
 
 export type AggregateStrategy = {
@@ -446,9 +472,20 @@ export type MemoryStatusResult = CommandResult<{
     active: boolean;
     activeSource: string;
     dbPath: string;
+    injectSummaryCachePath?: string | null;
     totalItems: number;
     pendingCandidates: number;
     totalCaptures: number;
+    captureProgress: {
+      firstBaselineAt: number;
+      lastScanAt: number;
+      totalSources: number;
+      codexSources: number;
+      claudeSources: number;
+      totalContextCount: number;
+      newContextCount: number;
+      skippedUnchangedSessions: number;
+    };
     workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number; captureCount: number; sessionCount: number; latestCaptureAt: number }>;
     latestBackupPath: string | null;
   };

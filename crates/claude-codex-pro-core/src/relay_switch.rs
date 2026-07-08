@@ -57,12 +57,19 @@ fn backfill_profile_before_switch(
         .iter_mut()
         .find(|profile| profile.id == previous_active_relay_id)
         .with_context(|| "当前供应商已不在配置列表中，已停止切换以避免覆盖用户改动。")?;
+    if !is_codex_relay_profile(profile) {
+        return Ok(());
+    }
     backfill_relay_profile_from_home_with_common(
         home,
         profile,
         &mut settings.relay_context_config_contents,
     )
     .with_context(|| "回填当前供应商配置失败")
+}
+
+fn is_codex_relay_profile(profile: &crate::settings::RelayProfile) -> bool {
+    profile.target_app.trim().is_empty() || profile.target_app.trim() == "codex"
 }
 
 fn apply_selected_relay_profile(
@@ -151,5 +158,57 @@ fn relay_combined_common_config(settings: &BackendSettings) -> String {
         String::new()
     } else {
         crate::relay_config::normalize_config_text(&format!("{}\n", sections.join("\n\n")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{RelayProfile, RelayProtocol};
+
+    #[test]
+    fn switch_relay_profile_skips_backfill_for_non_codex_previous_active_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(temp.path().join("settings.json"));
+        let previous_claude_config = "{\"app_type\":\"claude-desktop\"}\n".to_string();
+        let previous_claude = RelayProfile {
+            id: "claude-imported".to_string(),
+            name: "Claude imported".to_string(),
+            target_app: "claude-desktop".to_string(),
+            config_contents: previous_claude_config.clone(),
+            auth_contents: "{\"ANTHROPIC_AUTH_TOKEN\":\"sk-claude\"}\n".to_string(),
+            ..RelayProfile::default()
+        };
+        let target_codex = RelayProfile {
+            id: "codex-imported".to_string(),
+            name: "Codex imported".to_string(),
+            target_app: "codex".to_string(),
+            relay_mode: RelayMode::PureApi,
+            protocol: RelayProtocol::Responses,
+            config_contents: "model = \"gpt-5.5\"\nmodel_provider = \"codex-imported\"\n\n[model_providers.codex-imported]\nname = \"codex-imported\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://example.invalid/v1\"\n".to_string(),
+            auth_contents: "{\"OPENAI_API_KEY\":\"sk-codex\"}\n".to_string(),
+            ..RelayProfile::default()
+        };
+        let settings = BackendSettings {
+            relay_profiles_enabled: true,
+            active_relay_id: target_codex.id.clone(),
+            relay_profiles: vec![previous_claude.clone(), target_codex],
+            ..BackendSettings::default()
+        };
+
+        let result =
+            switch_relay_profile_in_home(&store, temp.path(), settings, &previous_claude.id)
+                .unwrap();
+
+        assert!(result.configured);
+        let result_previous = result
+            .settings
+            .relay_profiles
+            .iter()
+            .find(|profile| profile.id == previous_claude.id)
+            .unwrap();
+        assert_eq!(result_previous.config_contents, previous_claude_config);
+        let saved = store.load().unwrap();
+        assert_eq!(saved.active_relay_id, "codex-imported");
     }
 }

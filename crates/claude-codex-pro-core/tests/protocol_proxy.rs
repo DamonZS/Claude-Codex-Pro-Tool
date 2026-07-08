@@ -204,6 +204,46 @@ fn claude_desktop_model_mapping_has_default_safe_models_when_empty() {
 }
 
 #[test]
+fn claude_desktop_model_mapping_prefers_ccswitch_route_json() {
+    let relay = RelayProfile {
+        model_list: "fallback-model".to_string(),
+        model_mapping_json: serde_json::json!([
+            {
+                "role": "sonnet",
+                "label": "Sonnet",
+                "routeId": "claude-sonnet-4-6",
+                "displayName": "GPT Sonnet",
+                "requestModel": "gpt-5.5[1M]",
+                "supports1m": true
+            },
+            {
+                "role": "opus",
+                "label": "Opus",
+                "routeId": "claude-opus-4-8",
+                "displayName": "GPT Opus",
+                "requestModel": "gpt-5.5-pro",
+                "supports1m": false
+            }
+        ])
+        .to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
+        Some("gpt-5.5")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6-20260101", &relay).as_deref(),
+        Some("gpt-5.5")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
+        Some("gpt-5.5-pro")
+    );
+}
+
+#[test]
 fn claude_desktop_default_model_list_matches_expected_ui_order() {
     assert_eq!(
         claude_desktop_default_model_list(),

@@ -732,6 +732,9 @@ pub fn claude_desktop_model_mapping_for(
     original_model: &str,
     relay: &crate::settings::RelayProfile,
 ) -> Option<String> {
+    if let Some(mapped) = claude_desktop_model_mapping_json_for(original_model, relay) {
+        return Some(mapped);
+    }
     let models = parse_plain_model_list(&relay.model_list);
     let default_models = non_empty_model_list_or_default(&relay.model_list);
     let fallback = relay_model_fallback(relay)
@@ -762,6 +765,85 @@ pub fn claude_desktop_model_mapping_for(
         fallback
     }?;
     Some(strip_one_m_suffix(&mapped).to_string())
+}
+
+fn claude_desktop_model_mapping_json_for(
+    original_model: &str,
+    relay: &crate::settings::RelayProfile,
+) -> Option<String> {
+    let raw = relay.model_mapping_json.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    let requested = strip_one_m_suffix(original_model.trim());
+    if requested.is_empty() {
+        return None;
+    }
+    let entries = parsed.as_array()?;
+    let exact = entries.iter().find(|entry| {
+        entry
+            .get("routeId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|route_id| route_id == requested)
+    });
+    let role_fallback = || {
+        let role = claude_route_role_keyword(requested)?;
+        entries.iter().find(|entry| {
+            entry
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|entry_role| entry_role.eq_ignore_ascii_case(role))
+                || entry
+                    .get("routeId")
+                    .and_then(Value::as_str)
+                    .and_then(claude_route_role_keyword)
+                    .is_some_and(|entry_role| entry_role == role)
+        })
+    };
+    let fable_to_opus_fallback = || {
+        (claude_route_role_keyword(requested) == Some("fable"))
+            .then(|| {
+                entries.iter().find(|entry| {
+                    entry
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|entry_role| entry_role.eq_ignore_ascii_case("opus"))
+                        || entry
+                            .get("routeId")
+                            .and_then(Value::as_str)
+                            .and_then(claude_route_role_keyword)
+                            .is_some_and(|entry_role| entry_role == "opus")
+                })
+            })
+            .flatten()
+    };
+    exact
+        .or_else(role_fallback)
+        .or_else(fable_to_opus_fallback)
+        .and_then(|entry| entry.get("requestModel").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(strip_one_m_suffix)
+        .map(ToOwned::to_owned)
+}
+
+fn claude_route_role_keyword(model: &str) -> Option<&'static str> {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("sonnet") {
+        Some("sonnet")
+    } else if lower.contains("opus") {
+        Some("opus")
+    } else if lower.contains("haiku") {
+        Some("haiku")
+    } else if lower.contains("fable") {
+        Some("fable")
+    } else {
+        None
+    }
 }
 
 fn relay_model_fallback(relay: &crate::settings::RelayProfile) -> Option<String> {

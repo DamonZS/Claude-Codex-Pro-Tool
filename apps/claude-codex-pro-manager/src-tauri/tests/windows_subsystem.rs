@@ -1217,6 +1217,8 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(app_tsx.contains(
         "const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);"
     ));
+    assert!(app_tsx.contains("const previousActiveProfile = current.relayProfiles.find((profile) => profile.id === current.activeRelayId);"));
+    assert!(app_tsx.contains("previousActiveProfile.targetApp === \"codex\""));
     assert!(app_tsx.contains("该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。"));
     assert!(!supplier_screen.contains("if (!requestedId || requestedId !== normalizedId)"));
     assert!(supplier_screen.contains("const idWasNormalized = requestedId !== normalizedId;"));
@@ -1225,8 +1227,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
         "const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {"
     ));
     assert!(
-        supplier_screen
-            .contains("const next = withSupplierGeneratedFiles({ ...current, id: nextId });")
+        supplier_screen.contains("const next = normalizeDraftProfile({ ...current, id: nextId });")
     );
     assert!(supplier_screen.contains(
         "onBlur={(event) => updateDraftId(event.currentTarget.value || draft.name, { normalize: true })}"
@@ -1280,10 +1281,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
 #[test]
 fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    // 存在性断言读前端源码全集（聚合策略标签等已迁到 constants.ts 仍能命中）；
-    // 结构化切片读 App.tsx 单文件（SupplierScreen 仍在 App.tsx 内）。
     let app_tsx = read_all_frontend_sources();
-    // SupplierScreen 已随 Screen 组件抽到 screens.tsx，结构化切片读该文件。
     let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
@@ -1297,50 +1295,68 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
         .and_then(|rest| rest.split("function LegacySupplierScreen").next())
         .expect("supplier screen source");
 
-    assert!(supplier_screen.contains("供应商配置"));
-    assert!(!supplier_screen.contains("管理 API 供应商、协议、Key 与配置文件"));
-    assert!(!supplier_screen.contains("供应商列表"));
-    assert!(!supplier_screen.contains("Claude Desktop 3P 状态"));
-    assert!(!supplier_screen.contains("当前配置摘要"));
-    assert!(supplier_screen.contains("检测到 OPENAI 环境变量"));
-    assert!(supplier_screen.contains("启用供应商配置切换"));
-    assert!(supplier_screen.contains("添加供应商"));
-    assert!(supplier_screen.contains("添加聚合供应商"));
-    assert!(supplier_screen.contains("从第三方导入"));
+    assert!(supplier_screen.contains("supplier-target-filter"));
+    assert!(supplier_screen.contains("supplier-control-row"));
+    assert!(supplier_screen.contains("supplier-route-master-toggle"));
+    assert!(supplier_screen.contains("routableSupplierProfiles"));
+    assert!(!supplier_screen.contains("visibleRoutableSupplierProfiles"));
+    assert!(supplier_screen.contains("supplierRouteSwitchEnabled"));
+    assert!(supplier_screen.contains("toggleVisibleSupplierRouting"));
+    assert!(supplier_screen.contains("供应商路由"));
+    assert!(supplier_screen.contains("已开启 Claude 供应商路由。"));
+    assert!(!supplier_screen.contains("?????"));
+    assert!(supplier_screen.contains("routeEnabled: enabled"));
+    assert!(supplier_screen.contains("claudeDesktopMode: enabled ? \"proxy\" : \"direct\""));
+    assert!(supplier_screen.contains("supplierTargetFilter"));
+    assert!(supplier_screen.contains("Codex"));
+    assert!(supplier_screen.contains("Claude"));
+    assert!(supplier_screen.contains("Claude Desktop"));
     assert!(supplier_screen.contains("ccswitch"));
-    assert!(supplier_screen.contains("<Pencil className=\"h-4 w-4 tilted-pen-icon\" />"));
-    assert!(!supplier_screen.contains("<PencilRuler className=\"h-4 w-4\" />"));
-    assert!(supplier_screen.contains("发现"));
-    assert!(supplier_screen.contains("刷新列表"));
-    assert!(supplier_screen.contains("onDragStart"));
-    assert!(supplier_screen.contains("onDragEnter"));
-    assert!(supplier_screen.contains("onDragOver"));
-    assert!(supplier_screen.contains("onDrop"));
-    assert!(supplier_screen.contains("SUPPLIER_DRAG_MIME_TYPE"));
+    assert!(supplier_screen.contains(r#"<Edit className="h-4 w-4" />"#));
+    assert!(supplier_screen.contains(r#"<Activity className="h-4 w-4" />"#));
+    assert!(supplier_screen.contains(r#"<BarChart3 className="h-4 w-4" />"#));
+    assert!(!supplier_screen.contains("不写 API 文件"));
+    assert!(!supplier_screen.contains("不会写入 API key"));
+    assert!(supplier_screen.contains("未配置接口地址"));
+    assert!(!supplier_screen.contains(r#"<PencilRuler className="h-4 w-4" />"#));
+    assert!(supplier_screen.contains("supplier-drop-popover"));
+    assert!(supplier_screen.contains(r#"actions.refreshRoute("supplier")"#));
+
+    assert!(!supplier_screen.contains(" onDragStart"));
+    assert!(!supplier_screen.contains(" onDragEnter"));
+    assert!(!supplier_screen.contains(" onDragOver"));
+    assert!(!supplier_screen.contains(" onDrop"));
+    assert!(!supplier_screen.contains(" draggable key={profile.id}"));
+    assert!(!supplier_screen.contains("SUPPLIER_DRAG_MIME_TYPE"));
+    assert!(!supplier_screen.contains("event.dataTransfer"));
+    assert!(supplier_screen.contains("const beginSupplierPointerDrag = (event: ReactPointerEvent<HTMLElement>, profileId: string) => {"));
     assert!(
-        supplier_screen.contains("event.dataTransfer.setData(SUPPLIER_DRAG_MIME_TYPE, profileId);")
+        supplier_screen
+            .contains(r#"window.addEventListener("pointermove", handlePointerMove, true);"#)
     );
-    assert!(supplier_screen.contains("event.dataTransfer.setData(\"text/plain\", profileId);"));
-    assert!(supplier_screen.contains("event.dataTransfer.dropEffect = \"move\";"));
-    assert!(supplier_screen.contains("event.dataTransfer.getData(SUPPLIER_DRAG_MIME_TYPE)"));
-    assert!(supplier_screen.contains(
-        "const beginSupplierDrag = (event: DragEvent<HTMLElement>, profileId: string) => {"
-    ));
     assert!(
-        supplier_screen.contains("const supplierDragSourceId = (event: DragEvent<HTMLElement>) =>")
+        supplier_screen
+            .contains(r#"window.removeEventListener("pointermove", handlePointerMove, true);"#)
     );
+    assert!(supplier_screen.contains("moveEvent.preventDefault();"));
+    assert!(supplier_screen.contains("dragHandle.releasePointerCapture(event.pointerId);"));
     assert!(
         supplier_screen
             .contains("const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);")
     );
-    assert!(supplier_screen.contains("useEffect(() => {\n    setSupplierOrderIds(profiles.map((profile) => profile.id));\n  }, [profileIdsKey]);"));
     assert!(supplier_screen.contains("const supplierOrderFromIds = (ids: string[]) => {"));
     assert!(supplier_screen.contains("const reorderSupplierIds = (sourceId: string, targetId: string, ids = supplierOrderIds) => {"));
     assert!(
-        supplier_screen
+        !supplier_screen
             .contains("const previewSupplierOrder = (sourceId: string, targetId: string) => {")
     );
-    assert!(supplier_screen.contains("setSupplierOrderIds((current) => reorderSupplierIds(sourceId, targetId, current) ?? current);"));
+    assert!(!supplier_screen.contains("dragStartOrderIds"));
+    assert!(supplier_screen.contains("const baselineIds = supplierOrderFromIds(supplierOrderIds.length ? supplierOrderIds : profiles.map((profile) => profile.id))"));
+    assert!(
+        supplier_screen
+            .contains("reorderSupplierIds(current.sourceId, targetId, current.latestIds)")
+    );
+    assert!(!supplier_screen.contains("current.baselineIds"));
     assert!(supplier_screen.contains("saveSupplierOrder"));
     assert!(
         supplier_screen
@@ -1357,16 +1373,54 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
             "const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds)"
         )
     );
-    assert!(supplier_screen.contains("orderedProfiles.map((profile) => {"));
     assert!(
-        supplier_screen.contains("onDragStart={(event) => beginSupplierDrag(event, profile.id)}")
+        supplier_screen
+            .contains("filteredOrderedProfiles.map((profile) => renderSupplierCard(profile))")
     );
-    assert!(
-        supplier_screen.contains("onDragOver={(event) => previewSupplierDrag(event, profile.id)}")
-    );
-    assert!(supplier_screen.contains("title=\"拖拽排序\""));
+    assert!(supplier_screen.contains("beginSupplierPointerDrag(event, profile.id)"));
+    assert!(supplier_screen.contains("supplierTargetIdFromPointer"));
+    assert!(supplier_screen.contains("const [supplierDragOverlay, setSupplierDragOverlay]"));
+    assert!(supplier_screen.contains("setSupplierDragOverlay({"));
+    assert!(supplier_screen.contains("top: moveEvent.clientY - overlay.offsetY"));
+    assert!(supplier_screen.contains("setSupplierDragOverlay(null);"));
+    assert!(supplier_screen.contains("drag-overlay-card"));
+    assert!(supplier_screen.contains("drag-source"));
+    assert!(supplier_screen.contains("supplier-card-action-button"));
+    assert!(supplier_screen.contains("supplier-card-use-button"));
+    assert!(supplier_screen.contains("supplier-url-link"));
 
-    assert!(supplier_screen.contains("从预设模板创建"));
+    assert!(supplier_screen.contains("supplier-ccswitch-editor"));
+    assert!(supplier_screen.contains("编辑供应商"));
+    assert!(supplier_screen.contains("官网链接"));
+    assert!(supplier_screen.contains("API Key"));
+    assert!(supplier_screen.contains("请求地址"));
+    assert!(supplier_screen.contains("完整 URL"));
+    assert!(supplier_screen.contains("高级选项"));
+    assert!(supplier_screen.contains("API 格式"));
+    assert!(supplier_screen.contains("认证字段"));
+    assert!(supplier_screen.contains("模型映射"));
+    assert!(supplier_screen.contains("默认兜底模型"));
+    assert!(supplier_screen.contains("Header 覆盖"));
+    assert!(supplier_screen.contains("Body 覆盖"));
+    assert!(supplier_screen.contains("配置 JSON"));
+    assert!(supplier_screen.contains("模型测试配置"));
+    assert!(supplier_screen.contains("计费配置"));
+    assert!(supplier_screen.contains("supplierTestConfigOpen"));
+    assert!(supplier_screen.contains("supplierPricingConfigOpen"));
+    assert!(supplier_screen.contains("setSupplierTestConfigOpen"));
+    assert!(supplier_screen.contains("setSupplierPricingConfigOpen"));
+    assert!(!supplier_screen.contains("supplier-ccswitch-collapse-card expanded"));
+    assert!(supplier_screen.contains("supplier-ccswitch-savebar"));
+
+    assert!(app_tsx.contains("Anthropic / Claude"));
+    assert!(app_tsx.contains("Anthropic Messages（原生）"));
+    assert!(app_tsx.contains("OpenAI Chat Completions（需开启路由）"));
+    assert!(app_tsx.contains("OpenAI Responses API（需开启路由）"));
+    assert!(app_tsx.contains("Gemini Native generateContent（需开启路由）"));
+    assert!(supplier_screen.contains("是否开启路由"));
+    assert!(supplier_screen.contains("安全路由 ID"));
+    assert!(supplier_screen.contains(r#""routeId""#));
+    assert!(supplier_screen.contains("supplierRouteEnabled"));
     assert!(supplier_screen.contains("接入模式"));
     assert!(supplier_screen.contains("Codex 目标"));
     assert!(supplier_screen.contains("混入 API KEY"));
@@ -1380,7 +1434,6 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(app_tsx.contains("按请求轮转"));
     assert!(app_tsx.contains("权重轮转"));
     assert!(supplier_screen.contains("aggregate.strategy / aggregate.members"));
-    assert!(supplier_screen.contains("请先添加或选择至少 1 个普通 API 供应商"));
 
     assert!(app_tsx.contains("importCcswitchCodexProviders"));
     assert!(app_tsx.contains("import_ccswitch_codex_providers"));
@@ -1391,6 +1444,26 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(styles.contains(".supplier-card.dragging"));
     assert!(styles.contains(".supplier-card.drag-over"));
     assert!(styles.contains(".supplier-aggregate-grid"));
+    assert!(styles.contains(".supplier-card.drag-overlay-card"));
+    assert!(styles.contains("position: fixed"));
+    assert!(styles.contains(".supplier-card.drag-source"));
+    assert!(styles.contains(".supplier-card-action-button"));
+    assert!(styles.contains(".supplier-card-use-button"));
+    assert!(styles.contains(".supplier-url-link"));
+    assert!(styles.contains(".supplier-ccswitch-editor"));
+    assert!(styles.contains("grid-template-rows: auto minmax(0, 1fr) auto;"));
+    assert!(styles.contains("overflow-y: auto;"));
+    assert!(styles.contains(".supplier-control-row"));
+    assert!(styles.contains("justify-content: space-between;"));
+    assert!(styles.contains("width: 100%;"));
+    assert!(styles.contains("max-width: none;"));
+    assert!(styles.contains("padding: 32px max(16px, calc((100% - 880px) / 2));"));
+    assert!(styles.contains("textarea.supplier-config-json"));
+    assert!(styles.contains(".supplier-route-master-toggle"));
+    assert!(styles.contains(
+        ".supplier-ccswitch-collapse-card:not(.expanded) .supplier-ccswitch-collapse-head"
+    ));
+    assert!(styles.contains(".supplier-ccswitch-collapse-body"));
 }
 
 #[test]

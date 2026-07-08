@@ -1212,7 +1212,10 @@ export function App() {
       setNotice({ title: "供应商切换", message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
       return;
     }
-    const previousActiveRelayId = current.activeRelayId;
+    const previousActiveProfile = current.relayProfiles.find((profile) => profile.id === current.activeRelayId);
+    const previousActiveRelayId = !previousActiveProfile || !previousActiveProfile.targetApp || previousActiveProfile.targetApp === "codex"
+      ? current.activeRelayId
+      : "";
     const next = { ...current, activeRelayId: profileId, relayProfilesEnabled: true };
     const result = await run(
       () => call<SettingsResult & { relay?: unknown }>("switch_relay_profile", { request: { settings: next, previousActiveRelayId } }),

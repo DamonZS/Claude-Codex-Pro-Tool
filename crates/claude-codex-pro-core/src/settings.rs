@@ -87,6 +87,104 @@ pub struct RelayProfile {
         skip_serializing_if = "String::is_empty"
     )]
     pub user_agent: String,
+    #[serde(rename = "notes", default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    #[serde(
+        rename = "websiteUrl",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub website_url: String,
+    #[serde(
+        rename = "authField",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub auth_field: String,
+    #[serde(
+        rename = "headerOverride",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub header_override: String,
+    #[serde(
+        rename = "bodyOverride",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub body_override: String,
+    #[serde(rename = "hideAiSignature", default, skip_serializing_if = "is_false")]
+    pub hide_ai_signature: bool,
+    #[serde(rename = "teammatesMode", default, skip_serializing_if = "is_false")]
+    pub teammates_mode: bool,
+    #[serde(
+        rename = "toolSearchEnabled",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub tool_search_enabled: bool,
+    #[serde(
+        rename = "maxThinkingEnabled",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub max_thinking_enabled: bool,
+    #[serde(
+        rename = "disableAutoUpdate",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub disable_auto_update: bool,
+    #[serde(
+        rename = "importSource",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub import_source: String,
+    #[serde(
+        rename = "targetApp",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub target_app: String,
+    #[serde(
+        rename = "apiFormat",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub api_format: String,
+    #[serde(
+        rename = "claudeDesktopMode",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub claude_desktop_mode: String,
+    #[serde(rename = "routeEnabled", default, skip_serializing_if = "is_false")]
+    pub route_enabled: bool,
+    #[serde(
+        rename = "routeMode",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub route_mode: String,
+    #[serde(
+        rename = "modelMapping",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub model_mapping: String,
+    #[serde(
+        rename = "modelMappingEnabled",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub model_mapping_enabled: bool,
+    #[serde(
+        rename = "modelMappingJson",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub model_mapping_json: String,
     #[serde(rename = "aggregateEnabled", default, skip_serializing_if = "is_false")]
     pub aggregate_enabled: bool,
     #[serde(
@@ -126,6 +224,25 @@ impl Default for RelayProfile {
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
             user_agent: String::new(),
+            notes: String::new(),
+            website_url: String::new(),
+            auth_field: String::new(),
+            header_override: String::new(),
+            body_override: String::new(),
+            hide_ai_signature: false,
+            teammates_mode: false,
+            tool_search_enabled: false,
+            max_thinking_enabled: false,
+            disable_auto_update: false,
+            import_source: String::new(),
+            target_app: String::new(),
+            api_format: String::new(),
+            claude_desktop_mode: String::new(),
+            route_enabled: false,
+            route_mode: String::new(),
+            model_mapping: String::new(),
+            model_mapping_enabled: false,
+            model_mapping_json: String::new(),
             aggregate_enabled: false,
             aggregate_strategy: String::new(),
             aggregate_members: Vec::new(),

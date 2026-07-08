@@ -1,13 +1,17 @@
-import { type Dispatch, type DragEvent, type SetStateAction, memo, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type SetStateAction, memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
   Archive,
   ArchiveRestore,
+  BarChart3,
   CheckCircle2,
   Copy,
   Download,
+  Edit,
   ExternalLink,
+  Eye,
+  EyeOff,
   FileCode2,
   FileDown,
   FileUp,
@@ -20,6 +24,7 @@ import {
   Pencil,
   PencilRuler,
   Pin,
+  Play,
   Plus,
   Power,
   RefreshCw,
@@ -39,7 +44,6 @@ import {
   CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE,
   CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME,
   CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL,
-  SUPPLIER_DRAG_MIME_TYPE,
   SUPPLIER_PRESETS,
 } from "@/constants";
 import type { AppActions } from "@/lib/actions";
@@ -75,8 +79,18 @@ import {
   supplierProfileIsCcswitch,
   supplierProtocolLabel,
   supplierRelayModeLabel,
+  supplierTargetAppLabel,
+  supplierApiFormatLabel,
+  supplierApiFormatOption,
+  supplierApiFormatRequiresRoute,
+  supplierRouteEnabled,
+  SUPPLIER_API_FORMAT_OPTIONS,
+  supplierModelMappingJson,
+  supplierModelMappingRows,
+  supplierModelMappingText,
   uniqueSupplierProfileId,
   withSupplierGeneratedFiles,
+  withSupplierPreservedImportedFiles,
 } from "@/lib/supplier";
 import {
   claudeContextSummary,
@@ -261,32 +275,6 @@ export function OverviewScreen({
             <span>对话监控</span>
             <MemoryActivityWave active={memoryMonitorActive} />
           </div>
-          <div className="info-grid compact memory-overview-matrix">
-            <InfoRow
-              action={(
-                <button
-                  aria-label="查看/编辑经验教训"
-                  className="info-row-action"
-                  onClick={() => void openMemoryDetails()}
-                  type="button"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  查看/编辑
-                </button>
-              )}
-              label="经验教训"
-              value={(memory?.totalItems ?? 0) > 0 ? "已沉淀" : "待提炼"}
-            />
-            <InfoRow label="采集记录" value={`${memoryCaptureCount} 条`} />
-            <InfoRow label="工作区" value={`${memoryWorkspaceCount} 个`} />
-            <InfoRow label="数据库" value={compactPath(memory?.dbPath)} />
-            <InfoRow label="最近备份" value={compactPath(memory?.latestBackupPath)} />
-          </div>
-          <div className="action-row memory-overview-actions">
-            <ActionButton icon={PencilRuler} label="提炼经验教训" onClick={() => void actions.refineLongTermMemory()} />
-            <ActionButton icon={RefreshCw} label="刷新盘古记忆" onClick={() => void actions.refreshMemoryAssist()} />
-            <ActionButton icon={ShieldCheck} label="盘古记忆自检并备份" onClick={() => void actions.runMemoryAssistSelfcheck()} />
-          </div>
         </Panel>
         <div className="overview-side-stack">
           <Panel title="诊断与修复" detail="检查和修复入口集中在这里；修复动作会先显示运行反馈，再调用后端命令。">
@@ -296,13 +284,6 @@ export function OverviewScreen({
             <ActionButton icon={Wrench} label="修复后端服务" onClick={() => void actions.repairBackendService()} />
             <ActionButton icon={Wrench} label="修复 Claude" onClick={() => void actions.restoreClaudeZhPatch()} />
           </Panel>
-          {showMemoryDetails ? (
-            <OverviewMemoryDetails
-              actions={actions}
-              items={memoryItems}
-              onClose={() => setShowMemoryDetails(false)}
-            />
-          ) : null}
         </div>
       </div>
     </div>
@@ -461,6 +442,7 @@ export function OverviewMemoryDetails({
 }
 
 export function SupplierScreen({
+  // 供应商主列表 / 编辑 / 聚合配置
   actions,
   settings,
   claudeDesktopDevMode,
@@ -492,9 +474,27 @@ export function SupplierScreen({
   const [modelFetch, setModelFetch] = useState<RelayProfileModelsResult | null>(null);
   const [supplierSaveBusy, setSupplierSaveBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
+  const [supplierTestConfigOpen, setSupplierTestConfigOpen] = useState(false);
+  const [supplierPricingConfigOpen, setSupplierPricingConfigOpen] = useState(false);
+  const [supplierTargetFilter, setSupplierTargetFilter] = useState<"codex" | "claude" | "claude-desktop">("codex");
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);
+  const [supplierDragOverlay, setSupplierDragOverlay] = useState<{
+    profileId: string;
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    offsetY: number;
+  } | null>(null);
+  const supplierCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const supplierPointerDragRef = useRef<{
+    sourceId: string;
+    latestIds: string[];
+    lastTargetId: string | null;
+  } | null>(null);
   const appSettings = settings?.settings ?? null;
   const profiles = useMemo(() => appSettings?.relayProfiles ?? [], [appSettings]);
   const profileIdsKey = profiles.map((profile) => profile.id).join("\u001f");
@@ -503,6 +503,7 @@ export function SupplierScreen({
   const isNewDraft = !!draft && !editingExisting;
   const aggregateProfiles = useMemo(() => profiles.filter((profile) => profile.aggregateEnabled), [profiles]);
   const apiProfiles = useMemo(() => profiles.filter((profile) => !profile.aggregateEnabled && profile.relayMode !== "official"), [profiles]);
+  const supplierTargetForProfile = (profile: RelayProfile) => profile.targetApp || "codex";
   const updateClaudeDraft = (field: keyof typeof claudeDesktopProviderDraft, value: string) => {
     onClaudeDesktopProviderDraftChange((current) => ({ ...current, [field]: value }));
   };
@@ -550,24 +551,39 @@ export function SupplierScreen({
     setEditingId(null);
     setDraft(copy);
   };
+  const normalizeDraftProfile = (profile: RelayProfile) => supplierProfileIsCcswitch(profile)
+    ? normalizeSupplierProfile(profile)
+    : normalizeSupplierProfile(withSupplierGeneratedFiles(profile));
   const updateDraft = (patch: Partial<RelayProfile>) => {
-    setDraft((current) => current ? normalizeSupplierProfile(withSupplierGeneratedFiles({ ...current, ...patch })) : current);
+    setDraft((current) => current ? normalizeDraftProfile({ ...current, ...patch }) : current);
   };
   const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {
     setDraft((current) => {
       if (!current) return current;
       const nextId = options.normalize ? supplierIdFromName(value || current.name) : value;
-      const next = withSupplierGeneratedFiles({ ...current, id: nextId });
+      const next = normalizeDraftProfile({ ...current, id: nextId });
       return options.normalize ? normalizeSupplierProfile(next) : { ...next, id: nextId };
     });
   };
+  const updateSupplierModelMapping = (role: string, field: "routeId" | "displayName" | "requestModel" | "supports1m", value: string | boolean) => {
+    if (!draft) return;
+    const rows = supplierModelMappingRows(draft).map((row) => row.role === role ? { ...row, [field]: value } : row);
+    updateDraft({
+      modelMappingEnabled: true,
+      modelMappingJson: supplierModelMappingJson(rows),
+      modelMapping: supplierModelMappingText(rows),
+    });
+  };
+
   const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {
     if (!appSettings || !draft || supplierSaveBusy) return null;
     const aggregateDraft = !!draft.aggregateEnabled;
     const requestedId = draft.id.trim();
     const normalizedId = supplierIdFromName(requestedId || draft.name);
     const idWasNormalized = requestedId !== normalizedId;
-    const normalized = normalizeSupplierProfile(withSupplierGeneratedFiles({ ...draft, id: normalizedId }));
+    const normalized = supplierProfileIsCcswitch(draft)
+      ? withSupplierPreservedImportedFiles({ ...draft, id: normalizedId })
+      : normalizeSupplierProfile(withSupplierGeneratedFiles({ ...draft, id: normalizedId }));
     if (!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())) {
       window.alert(aggregateDraft ? "请填写聚合供应商名称后再保存。" : "请填写供应商名称和 Base URL 后再保存。API Key 可以后续补入。");
       return null;
@@ -603,7 +619,7 @@ export function SupplierScreen({
         const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;
         if (options.stayInEditor) {
           setEditingId(savedProfile.id);
-          setDraft(normalizeSupplierProfile(withSupplierGeneratedFiles(savedProfile)));
+          setDraft(normalizeDraftProfile(savedProfile));
         } else {
           setEditingId(null);
           setDraft(null);
@@ -659,6 +675,14 @@ export function SupplierScreen({
       baseUrl: preset.baseUrl,
       upstreamBaseUrl: preset.baseUrl,
       protocol: preset.protocol,
+      targetApp: preset.targetApp ?? "codex",
+      apiFormat: preset.apiFormat ?? "",
+      claudeDesktopMode: preset.claudeDesktopMode ?? "",
+      routeEnabled: preset.routeEnabled ?? supplierApiFormatRequiresRoute(preset.apiFormat),
+      routeMode: preset.routeMode ?? "",
+      modelMappingEnabled: preset.modelMappingEnabled ?? false,
+      modelMappingJson: preset.modelMappingJson ?? "",
+      modelMapping: preset.modelMappingJson ? supplierModelMappingText(supplierModelMappingRows({ ...draft, modelMappingJson: preset.modelMappingJson })) : "",
       relayMode: "pureApi",
       aggregateEnabled: false,
       aggregateMembers: [],
@@ -687,6 +711,25 @@ export function SupplierScreen({
     if (!appSettings) return;
     await saveSupplierSettings({ ...appSettings, relayProfilesEnabled: enabled });
   };
+  const toggleVisibleSupplierRouting = async (enabled: boolean) => {
+    if (!appSettings || !routableSupplierProfiles.length) return;
+    const visibleIds = new Set(routableSupplierProfiles.map((profile) => profile.id));
+    const nextProfiles = appSettings.relayProfiles.map((profile) => {
+      if (!visibleIds.has(profile.id)) return profile;
+      return normalizeSupplierProfile({
+        ...profile,
+        routeEnabled: enabled,
+        claudeDesktopMode: enabled ? "proxy" : "direct",
+        routeMode: enabled ? (profile.routeMode || "Claude Desktop Proxy") : "Claude Desktop Direct",
+        modelMappingEnabled: enabled ? true : profile.modelMappingEnabled,
+      });
+    });
+    actions.showNotice({ title: "供应商路由", message: enabled ? "正在开启 Claude 供应商路由..." : "正在关闭 Claude 供应商路由...", status: "running" });
+    const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+    if (saved) {
+      actions.showNotice({ title: "供应商路由", message: enabled ? "已开启 Claude 供应商路由。" : "已关闭 Claude 供应商路由。", status: "ok" });
+    }
+  };
   const supplierOrderFromIds = (ids: string[]) => {
     const byId = new Map(profiles.map((profile) => [profile.id, profile]));
     const ordered = ids
@@ -700,6 +743,19 @@ export function SupplierScreen({
   // 必须置于任何条件 return 之前以遵守 Hooks 规则。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds), [profiles, supplierOrderIds]);
+  const filteredOrderedProfiles = useMemo(() => orderedProfiles.filter((profile) => supplierTargetForProfile(profile) === supplierTargetFilter), [orderedProfiles, supplierTargetFilter]);
+  const visibleSupplierOrderIds = useMemo(() => filteredOrderedProfiles.map((profile) => profile.id), [filteredOrderedProfiles]);
+  const routableSupplierProfiles = useMemo(() => profiles.filter((profile) => supplierTargetForProfile(profile) === "claude" || supplierTargetForProfile(profile) === "claude-desktop"), [profiles]);
+  const supplierRouteSwitchEnabled = routableSupplierProfiles.some((profile) => supplierRouteEnabled(profile));
+  const supplierRouteSwitchDisabled = !appSettings || !routableSupplierProfiles.length;
+  const setSupplierCardRef = (profileId: string) => (node: HTMLDivElement | null) => {
+    if (node) {
+      supplierCardRefs.current.set(profileId, node);
+    } else {
+      supplierCardRefs.current.delete(profileId);
+    }
+  };
+  // 目标应用过滤后渲染卡片；保持全量 supplierOrderIds 用于跨过滤视图稳定排序。
   const reorderSupplierIds = (sourceId: string, targetId: string, ids = supplierOrderIds) => {
     const currentIds = supplierOrderFromIds(ids.length ? ids : profiles.map((profile) => profile.id)).map((profile) => profile.id);
     const fromIndex = currentIds.indexOf(sourceId);
@@ -709,26 +765,6 @@ export function SupplierScreen({
     const [moved] = nextIds.splice(fromIndex, 1);
     nextIds.splice(toIndex, 0, moved);
     return nextIds;
-  };
-  const previewSupplierOrder = (sourceId: string, targetId: string) => {
-    if (sourceId === targetId || dragOverId === targetId) return;
-    setDragOverId(targetId);
-    setSupplierOrderIds((current) => reorderSupplierIds(sourceId, targetId, current) ?? current);
-  };
-  const beginSupplierDrag = (event: DragEvent<HTMLElement>, profileId: string) => {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(SUPPLIER_DRAG_MIME_TYPE, profileId);
-    event.dataTransfer.setData("text/plain", profileId);
-    setDraggedId(profileId);
-    setDragOverId(null);
-  };
-  const supplierDragSourceId = (event: DragEvent<HTMLElement>) =>
-    event.dataTransfer.getData(SUPPLIER_DRAG_MIME_TYPE) || event.dataTransfer.getData("text/plain") || draggedId;
-  const previewSupplierDrag = (event: DragEvent<HTMLElement>, targetId: string) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const sourceId = supplierDragSourceId(event);
-    if (sourceId) previewSupplierOrder(sourceId, targetId);
   };
   const saveSupplierOrder = async (orderedIds: string[]) => {
     if (!appSettings) return;
@@ -746,6 +782,88 @@ export function SupplierScreen({
       actions.showNotice({ title: "供应商排序", message: "供应商顺序保存失败，已恢复原顺序。", status: "failed" });
     }
   };
+  const supplierTargetIdFromPointer = (clientY: number) => {
+    if (!visibleSupplierOrderIds.length) return null;
+    for (const profileId of visibleSupplierOrderIds) {
+      const node = supplierCardRefs.current.get(profileId);
+      if (!node) continue;
+      const rect = node.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return profileId;
+    }
+    return visibleSupplierOrderIds[visibleSupplierOrderIds.length - 1] ?? null;
+  };
+  const beginSupplierPointerDrag = (event: ReactPointerEvent<HTMLElement>, profileId: string) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may be unavailable in some WebView states; window listeners still finish sorting.
+    }
+    const baselineIds = supplierOrderFromIds(supplierOrderIds.length ? supplierOrderIds : profiles.map((profile) => profile.id))
+      .map((profile) => profile.id);
+    const dragHandle = event.currentTarget;
+    const sourceNode = supplierCardRefs.current.get(profileId);
+    const sourceRect = sourceNode?.getBoundingClientRect();
+    supplierPointerDragRef.current = {
+      sourceId: profileId,
+      latestIds: baselineIds,
+      lastTargetId: profileId,
+    };
+    if (sourceRect) {
+      setSupplierDragOverlay({
+        profileId,
+        top: sourceRect.top,
+        left: sourceRect.left,
+        width: sourceRect.width,
+        height: sourceRect.height,
+        offsetY: event.clientY - sourceRect.top,
+      });
+    }
+    setDraggedId(profileId);
+    setDragOverId(profileId);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const current = supplierPointerDragRef.current;
+      if (!current) return;
+      moveEvent.preventDefault();
+      setSupplierDragOverlay((overlay) => overlay && overlay.profileId === current.sourceId
+        ? { ...overlay, top: moveEvent.clientY - overlay.offsetY }
+        : overlay);
+      const targetId = supplierTargetIdFromPointer(moveEvent.clientY);
+      if (!targetId || targetId === current.lastTargetId) return;
+      const nextIds = reorderSupplierIds(current.sourceId, targetId, current.latestIds) ?? current.latestIds;
+      current.latestIds = nextIds;
+      current.lastTargetId = targetId;
+      setDragOverId(targetId);
+      setSupplierOrderIds(nextIds);
+    };
+
+    const finishPointerDrag = () => {
+      const current = supplierPointerDragRef.current;
+      supplierPointerDragRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", finishPointerDrag, true);
+      window.removeEventListener("pointercancel", finishPointerDrag, true);
+      try {
+        dragHandle.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be released by the WebView.
+      }
+      setDraggedId(null);
+      setDragOverId(null);
+      setSupplierDragOverlay(null);
+      if (current) {
+        setSupplierOrderIds(current.latestIds);
+        void saveSupplierOrder(current.latestIds);
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", finishPointerDrag, { capture: true, once: true });
+    window.addEventListener("pointercancel", finishPointerDrag, { capture: true, once: true });
+  };
   const pinSupplierToTop = (profileId: string) => {
     const currentIds = supplierOrderFromIds(supplierOrderIds.length ? supplierOrderIds : profiles.map((profile) => profile.id))
       .map((profile) => profile.id);
@@ -759,7 +877,7 @@ export function SupplierScreen({
     setImportOpen(false);
     const result = await actions.importCcswitchCodexProviders();
     if (!result || statusFailed(result.status)) return;
-    const imported = result.profiles.map((profile) => normalizeSupplierProfile(withSupplierGeneratedFiles(profile)));
+    const imported = result.profiles.map((profile) => normalizeSupplierProfile(profile));
     const importedById = new Map(imported.map((profile) => [profile.id, profile]));
     let updatedCount = 0;
     const nextProfiles = appSettings.relayProfiles.map((profile) => {
@@ -775,7 +893,7 @@ export function SupplierScreen({
     let addedCount = 0;
     for (const profile of importedById.values()) {
       const nextProfile = existingIds.has(profile.id)
-        ? normalizeSupplierProfile(withSupplierGeneratedFiles({ ...profile, id: uniqueSupplierProfileId(nextProfiles, profile.id) }))
+        ? normalizeSupplierProfile({ ...profile, id: uniqueSupplierProfileId(nextProfiles, profile.id) })
         : profile;
       existingIds.add(nextProfile.id);
       nextProfiles.push(nextProfile);
@@ -784,6 +902,62 @@ export function SupplierScreen({
     await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
     actions.showNotice({ title: "CC-switch 导入", message: `已从 cc-switch 更新 ${updatedCount} 个、新增 ${addedCount} 个供应商配置。`, status: "ok" });
   };
+
+  const supplierDisplayUrl = (profile: RelayProfile) => {
+    const configBaseUrl = profile.configContents.match(/\bbase_url\s*=\s*["']([^"']+)["']/i)?.[1]?.trim() ?? "";
+    const rawUrl = profile.upstreamBaseUrl || profile.baseUrl || configBaseUrl;
+    if (!rawUrl.trim()) return "未配置接口地址";
+    return rawUrl.trim().replace(/\/v1\/?$/i, "");
+  };
+
+  const renderSupplierCard = (profile: RelayProfile, options: { overlay?: boolean; style?: CSSProperties } = {}) => {
+    const selected = profile.id === appSettings?.activeRelayId;
+    const aggregate = !!profile.aggregateEnabled;
+    const imported = supplierProfileIsCcswitch(profile);
+    const appLabel = imported ? supplierTargetAppLabel(profile.targetApp) : supplierRelayModeLabel(profile.relayMode);
+    const protocolLabel = imported ? supplierApiFormatLabel(profile) : supplierProtocolLabel(profile.protocol);
+    const summary = aggregate
+      ? `${aggregateStrategyLabel(profile.aggregateStrategy)} / ${profile.aggregateMembers?.length ?? 0} \u4e2a\u6210\u5458`
+      : `${appLabel} / ${protocolLabel}`;
+    const displayUrl = supplierDisplayUrl(profile);
+    const dragSource = draggedId === profile.id && !options.overlay;
+    return (
+      <div
+        className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""} ${dragSource ? "drag-source" : ""} ${options.overlay ? "drag-overlay-card" : ""}`}
+        key={options.overlay ? `${profile.id}-overlay` : profile.id}
+        ref={options.overlay ? undefined : setSupplierCardRef(profile.id)}
+        style={options.style}
+      >
+        <button aria-label={"\u62d6\u62fd\u6392\u5e8f"} className="supplier-drag-handle" disabled={options.overlay} onPointerDown={options.overlay ? undefined : (event) => beginSupplierPointerDrag(event, profile.id)} title={"\u6309\u4f4f\u62d6\u62fd\u6392\u5e8f"} type="button">
+          <GripVertical className="h-4 w-4" focusable="false" />
+        </button>
+        <div className="supplier-avatar">{aggregate ? "\u805a" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
+        <div className="supplier-card-main">
+          <div className="supplier-title-line">
+            <strong>{profile.name || profile.id}</strong>
+            {selected ? <span className="supplier-badge current">\u4f7f\u7528\u4e2d</span> : null}
+            {aggregate ? <span className="supplier-badge">\u805a\u5408</span> : null}
+            {imported ? <span className="supplier-badge">cc-switch</span> : null}
+          </div>
+          {aggregate ? <span className="supplier-card-subtitle">{summary}</span> : null}
+          <button className="supplier-url-link" disabled type="button">{displayUrl}</button>
+        </div>
+        <div className="supplier-card-actions">
+          <button className={`supplier-card-action-button supplier-card-use-button ${selected ? "current" : ""}`} disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false || options.overlay} onClick={() => void actions.switchCodexRelayProfile(profile.id)} type="button">
+            <Play className="h-4 w-4" />
+            {selected ? "\u4f7f\u7528\u4e2d" : "\u4f7f\u7528"}
+          </button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => openProfileEditor(profile)} title="\u7f16\u8f91" type="button"><Edit className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => duplicateProfile(profile)} title="\u590d\u5236" type="button"><Copy className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled title="\u68c0\u6d4b\u8fde\u901a" type="button"><Activity className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled title="\u7528\u91cf\u914d\u7f6e" type="button"><BarChart3 className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={profiles.length <= 1 || options.overlay} onClick={() => void removeProfile(profile)} title="\u5220\u9664\u4f9b\u5e94\u5546" type="button"><Trash2 className="h-4 w-4" /></button>
+        </div>
+      </div>
+    );
+  };
+  const supplierDragOverlayProfile = supplierDragOverlay ? profiles.find((profile) => profile.id === supplierDragOverlay.profileId) : null;
+
 
   if (draft?.aggregateEnabled) {
     const generated = normalizeSupplierProfile(withSupplierGeneratedFiles(draft));
@@ -828,8 +1002,136 @@ export function SupplierScreen({
   }
 
   if (draft) {
-    const generated = normalizeSupplierProfile(withSupplierGeneratedFiles(draft));
+    const generated = normalizeDraftProfile(draft);
     const canSwitch = !!editingExisting && appSettings?.relayProfilesEnabled !== false;
+    const apiFormatOption = supplierApiFormatOption(generated.apiFormat || "Anthropic Messages");
+    const routeRequired = supplierApiFormatRequiresRoute(generated.apiFormat);
+    const routeEnabled = supplierRouteEnabled(generated);
+    const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
+    const authField = generated.authField || "ANTHROPIC_AUTH_TOKEN";
+    const defaultModel = generated.model || generated.testModel || "claude-sonnet";
+    const claudeConfigJson = JSON.stringify({
+      env: {
+        [authField]: generated.apiKey,
+        ANTHROPIC_BASE_URL: generated.baseUrl || generated.upstreamBaseUrl,
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "haiku")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_OPUS_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "opus")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "sonnet")?.requestModel || defaultModel,
+        ANTHROPIC_MODEL: defaultModel,
+      },
+      ...(generated.headerOverride?.trim() || generated.bodyOverride?.trim()
+        ? {
+            localProxyOverrides: {
+              headers: generated.headerOverride || "{}",
+              body: generated.bodyOverride || "{}",
+            },
+          }
+        : {}),
+    }, null, 2);
+    if (isClaudeSupplier) {
+      const modelRows = supplierModelMappingRows(generated);
+      return (
+        <div className="supplier-ccswitch-editor">
+          <div className="supplier-ccswitch-editor-head">
+            <button className="supplier-back-button" onClick={() => { setDraft(null); setEditingId(null); }} type="button" aria-label="返回供应商列表">←</button>
+            <strong>编辑供应商</strong>
+          </div>
+          <div className="supplier-ccswitch-editor-body">
+            <div className="supplier-ccswitch-form-grid two">
+              <label className="ops-form-field"><span>供应商名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={generated.name.replace(/\s*\(ccswitch\)$/i, "")} /></label>
+              <label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label>
+            </div>
+            <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || supplierDisplayUrl(generated)} /></label>
+            <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
+            <label className="ops-form-field"><span>请求地址 <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder="https://api.example.com" value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
+            <div className="supplier-route-note">💡 填写兼容 Claude API 的服务端点地址，不要以斜杠结尾</div>
+            <details className="supplier-ccswitch-section" open>
+              <summary>高级选项</summary>
+              <label className="ops-form-field"><span>API 格式</span><select className="ops-select" onChange={(event) => {
+                const nextApiFormat = event.currentTarget.value;
+                const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat);
+                updateDraft({
+                  apiFormat: nextApiFormat,
+                  claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct",
+                  routeEnabled: nextRequiresRoute ? true : generated.routeEnabled,
+                  modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled,
+                });
+              }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>选择供应商 API 的输入格式</small></label>
+              <label className="ops-form-field"><span>认证字段</span><select className="ops-select" onChange={(event) => updateDraft({ authField: event.currentTarget.value })} value={authField}><option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN（默认）</option><option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</option></select><small>选择写入配置的认证环境变量名</small></label>
+              <div className="supplier-ccswitch-divider" />
+              <div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => {
+                const baseModel = defaultModel;
+                const rows = modelRows.map((row) => ({ ...row, displayName: row.displayName || baseModel, requestModel: row.requestModel || baseModel }));
+                updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) });
+              }} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型列表</Button></div></div>
+              <p className="supplier-inline-note">显示名称只影响 /model 菜单；1M 只是给 Claude Code 的上下文能力声明。</p>
+              <div className="supplier-model-map-grid header"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
+              {modelRows.map((row) => (
+                <div className="supplier-model-map-grid claude" key={row.role}>
+                  <input disabled value={row.label} />
+                  <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} />
+                  <input onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} placeholder={defaultModel} value={row.requestModel || ""} />
+                  <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
+                </div>
+              ))}
+              <div className="supplier-ccswitch-divider" />
+              <label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /><small>用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。</small></label>
+              <label className="ops-form-field"><span>自定义 User-Agent</span><input onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })} placeholder="Mozilla/5.0 ..." value={generated.userAgent || ""} /><small>仅在启用本地路由 / 代理接管后生效。</small></label>
+              <div className="supplier-ccswitch-divider" />
+              <strong>本地代理请求覆盖</strong>
+              <p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p>
+              <div className="supplier-ccswitch-form-grid two">
+                <label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label>
+                <label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label>
+              </div>
+              <div className="supplier-ccswitch-divider" />
+              <div className="supplier-ccswitch-checks">
+                <label><input checked={!!generated.hideAiSignature} onChange={(event) => updateDraft({ hideAiSignature: event.currentTarget.checked })} type="checkbox" />隐藏 AI 署名</label>
+                <label><input checked={!!generated.teammatesMode} onChange={(event) => updateDraft({ teammatesMode: event.currentTarget.checked })} type="checkbox" />Teammates 模式</label>
+                <label><input checked={!!generated.toolSearchEnabled} onChange={(event) => updateDraft({ toolSearchEnabled: event.currentTarget.checked })} type="checkbox" />启用 Tool Search</label>
+                <label><input checked={!!generated.maxThinkingEnabled} onChange={(event) => updateDraft({ maxThinkingEnabled: event.currentTarget.checked })} type="checkbox" />最大强度思考</label>
+                <label><input checked={!!generated.disableAutoUpdate} onChange={(event) => updateDraft({ disableAutoUpdate: event.currentTarget.checked })} type="checkbox" />禁用自动升级</label>
+              </div>
+              <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={generated.configContents || claudeConfigJson} /></label>
+              <div className={`supplier-ccswitch-collapse-card ${supplierTestConfigOpen ? "expanded" : ""}`}>
+                <div className="supplier-ccswitch-collapse-head" onClick={() => setSupplierTestConfigOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSupplierTestConfigOpen((value) => !value); } }} role="button" tabIndex={0}>
+                  <span className="supplier-collapse-title"><Activity className="h-4 w-4" />模型测试配置</span>
+                  <span className="supplier-collapse-right"><span>使用单独配置</span><ToggleSwitch checked={false} disabled onChange={() => undefined} /><span className="supplier-collapse-chevron">{supplierTestConfigOpen ? "⌄" : "›"}</span></span>
+                </div>
+                {supplierTestConfigOpen ? (
+                  <div className="supplier-ccswitch-collapse-body">
+                    <p>为此供应商配置单独的模型测试参数，不启用时使用全局配置。</p>
+                    <div className="supplier-ccswitch-form-grid two">
+                      <label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label>
+                      <label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label>
+                      <label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div className={`supplier-ccswitch-collapse-card ${supplierPricingConfigOpen ? "expanded" : ""}`}>
+                <div className="supplier-ccswitch-collapse-head" onClick={() => setSupplierPricingConfigOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSupplierPricingConfigOpen((value) => !value); } }} role="button" tabIndex={0}>
+                  <span className="supplier-collapse-title"><BarChart3 className="h-4 w-4" />计费配置</span>
+                  <span className="supplier-collapse-right"><span>使用单独配置</span><ToggleSwitch checked={false} disabled onChange={() => undefined} /><span className="supplier-collapse-chevron">{supplierPricingConfigOpen ? "⌄" : "›"}</span></span>
+                </div>
+                {supplierPricingConfigOpen ? (
+                  <div className="supplier-ccswitch-collapse-body">
+                    <p>为此供应商配置单独的计费参数，不启用时使用全局默认配置。</p>
+                    <div className="supplier-ccswitch-form-grid two">
+                      <label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认（1）" /></label>
+                      <label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select><small>选择按请求模型还是返回模型进行定价匹配</small></label>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </details>
+          </div>
+          <div className="supplier-ccswitch-savebar">
+            <Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="supplier-workbench">
         <Panel title={isNewDraft ? generated.name || "供应商 2" : generated.name || "编辑供应商"} detail={isNewDraft ? "新建供应商需要先保存到列表" : "保存会写入管理器 settings；设为当前会调用真实切换命令写入 Codex config.toml 和 auth.json。"}>
@@ -847,12 +1149,61 @@ export function SupplierScreen({
               <label className="ops-form-field"><span>配置模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} placeholder="gpt-5.5" value={generated.model} /></label>
               <label className="ops-form-field"><span>Base URL</span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder="https://api.example.com/v1" value={generated.baseUrl} /></label>
               <label className="ops-form-field"><span>协议</span><select className="ops-select" onChange={(event) => updateDraft({ protocol: event.currentTarget.value })} value={generated.protocol || "responses"}><option value="responses">Responses API</option><option value="chatCompletions">Chat Completions（本地协议代理）</option></select></label>
-              <label className="ops-form-field"><span>API Key / Bearer Token</span><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type="password" value={generated.apiKey} /></label>
+              <label className="ops-form-field"><span>API Key / Bearer Token</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
               <label className="supplier-check-row"><input checked={generated.relayMode !== "official"} onChange={(event) => updateDraft({ relayMode: event.currentTarget.checked ? "pureApi" : "official" })} type="checkbox" />Codex 目标</label>
               <label className="supplier-check-row"><input checked={generated.officialMixApiKey} onChange={(event) => updateDraft({ officialMixApiKey: event.currentTarget.checked })} type="checkbox" />混入 API KEY</label>
               <label className="ops-form-field span-2"><span>模型列表（一行一个）</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ modelList: event.currentTarget.value })} rows={5} value={generated.modelList} /></label>
             </div>
-            <p className="supplier-inline-note">更多选项：官方登录模式不会写入 API key；纯 API 使用 provider 级 model_provider + env_key 写入。</p>
+            {(generated.targetApp === "claude" || generated.targetApp === "claude-desktop") ? (
+              <div className="supplier-ccswitch-config-card">
+                <label className="ops-form-field span-2"><span>API 格式</span><select className="ops-select" onChange={(event) => {
+                  const nextApiFormat = event.currentTarget.value;
+                  const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat);
+                  updateDraft({
+                    apiFormat: nextApiFormat,
+                    claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct",
+                    routeEnabled: nextRequiresRoute ? true : generated.routeEnabled,
+                    routeMode: nextRequiresRoute ? (generated.routeMode || "Claude Desktop Proxy") : (generated.routeMode || "Claude Desktop Direct"),
+                    modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled,
+                  });
+                }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+                <label className="supplier-model-mapping-switch">
+                  <div>
+                    <strong>是否开启路由</strong>
+                    <span>{apiFormatOption?.detail || "Anthropic Messages 原生直连不需要路由；OpenAI / Gemini 格式必须开启 Claude Desktop Proxy 路由。"}</span>
+                  </div>
+                  <input checked={routeEnabled} disabled={routeRequired} onChange={(event) => updateDraft({ routeEnabled: event.currentTarget.checked, claudeDesktopMode: event.currentTarget.checked ? "proxy" : "direct", modelMappingEnabled: event.currentTarget.checked ? true : generated.modelMappingEnabled })} type="checkbox" />
+                </label>
+                <label className="supplier-model-mapping-switch"><div><strong>需要模型映射</strong><span>Claude Desktop 只接受 claude-sonnet-* / claude-opus-* / claude-haiku-* / claude-fable-* 安全路由 ID；开启后按路由映射到供应商实际模型。</span></div><input checked={generated.modelMappingEnabled !== false} onChange={(event) => updateDraft({ modelMappingEnabled: event.currentTarget.checked })} type="checkbox" /></label>
+                <label className="ops-form-field span-2"><span>路由</span><input onChange={(event) => updateDraft({ routeMode: event.currentTarget.value })} placeholder="Claude Desktop Proxy / Direct" value={generated.routeMode || (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct")} /></label>
+                <div className="supplier-route-note span-2">{routeEnabled ? "当前按 cc-switch Proxy 语义启用路由：Claude 安全路由 ID 会映射到上游真实模型。" : "当前为 Direct 直连：只使用 Anthropic Messages 原生协议，不做模型路由转换。"}</div>
+                <div className="supplier-model-map-table span-2">
+                  <div className="supplier-model-map-head"><strong>模型映射</strong><span>安全路由 ID / 菜单显示名 / 实际请求模型 / 声明支持 1M</span></div>
+                  <div className="supplier-model-map-grid header"><span>模型角色</span><span>安全路由 ID</span><span>菜单显示名</span><span>实际请求模型</span><span>声明支持 1M</span></div>
+                  {supplierModelMappingRows(generated).map((row) => (
+                    <div className="supplier-model-map-grid" key={row.role}>
+                      <input disabled value={row.label} />
+                      <input onChange={(event) => updateSupplierModelMapping(row.role, "routeId", event.currentTarget.value)} value={row.routeId} />
+                      <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} value={row.displayName} />
+                      <input onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel} />
+                      <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {supplierProfileIsCcswitch(generated) ? (
+              <div className="info-grid compact supplier-import-meta">
+                <InfoRow label="导入来源" value={generated.importSource || "cc-switch"} />
+                <InfoRow label="目标应用" value={supplierTargetAppLabel(generated.targetApp)} />
+                <InfoRow label="API 格式" value={supplierApiFormatLabel(generated)} />
+                <InfoRow label="是否开启路由" value={supplierRouteEnabled(generated) ? "已开启" : "未开启"} />
+                <InfoRow label="Claude Desktop 模式" value={generated.claudeDesktopMode || (supplierRouteEnabled(generated) ? "proxy" : "direct")} />
+                <InfoRow label="路由" value={generated.routeMode || "第三方导入配置"} />
+                <InfoRow label="模型映射" value={generated.modelMapping || generated.modelList || "未提供"} />
+              </div>
+            ) : null}
+            <p className="supplier-inline-note">更多选项：纯 API 使用 provider 级 model_provider + env_key 写入；官方登录模式保留官方登录能力。</p>
             <div className="action-row"><Button onClick={() => void fetchModels()} variant="outline"><RefreshCw className="h-4 w-4" />从供应商拉取模型</Button>{modelFetch?.models.length ? <span className="supplier-inline-note">已从 {modelFetch.endpoint || "模型接口"} 获取 {modelFetch.models.length} 个模型</span> : null}</div>
             <div className="supplier-preview-grid">
               <div className="preview-box"><strong>config.toml 预览</strong><pre>{generated.configContents}</pre></div>
@@ -869,23 +1220,19 @@ export function SupplierScreen({
     <div className="supplier-list-shell">
       <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>检测到 OPENAI 环境变量</strong><p>这些变量可能覆盖当前供应商写入的 config.toml / auth.json；CODEX_HOME 不会被清理。</p><span className="supplier-env-chip">OPENAI_API_KEY 用户环境</span></div><div className="supplier-env-actions"><Button size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button size="sm" variant="outline"><RefreshCw className="h-4 w-4" />检测</Button></div></div>
       <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
-      <div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现 {profiles.filter((profile) => profile.userAgent === "ccswitch" || profile.name.includes("ccswitch")).length || 4} 个 Codex 供应商</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div>
+      <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div></div>
       <div className="supplier-card-list">
-        {profiles.length ? orderedProfiles.map((profile) => {
-          const selected = profile.id === appSettings?.activeRelayId;
-          const aggregate = !!profile.aggregateEnabled;
-          return (
-            <div className={`supplier-card ${selected ? "selected" : ""} ${draggedId === profile.id ? "dragging" : ""} ${dragOverId === profile.id ? "drag-over" : ""}`} draggable key={profile.id} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDragEnter={(event) => previewSupplierDrag(event, profile.id)} onDragOver={(event) => previewSupplierDrag(event, profile.id)} onDragStart={(event) => beginSupplierDrag(event, profile.id)} onDrop={(event) => { event.preventDefault(); const sourceId = supplierDragSourceId(event); const nextIds = sourceId && sourceId !== profile.id && !dragOverId ? reorderSupplierIds(sourceId, profile.id) ?? supplierOrderIds : supplierOrderIds; setDraggedId(null); setDragOverId(null); setSupplierOrderIds(nextIds); void saveSupplierOrder(nextIds); }}>
-              <span aria-label="拖拽排序" className="supplier-drag-handle" title="拖拽排序">
-                <GripVertical className="h-4 w-4" focusable="false" />
-              </span>
-              <div className="supplier-avatar">{aggregate ? "聚" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
-              <div className="supplier-card-main"><div className="supplier-title-line"><strong>{profile.name || profile.id}</strong>{selected ? <span className="supplier-badge">当前</span> : null}{aggregate ? <span className="supplier-badge">聚合</span> : null}</div><span>{aggregate ? `${aggregateStrategyLabel(profile.aggregateStrategy)} · ${profile.aggregateMembers?.length ?? 0} 个成员` : `${supplierRelayModeLabel(profile.relayMode)} · ${supplierProtocolLabel(profile.protocol)} · ${profile.baseUrl || "不写 API 文件"}`}</span></div>
-              <div className="supplier-card-actions"><Button disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false} onClick={() => void actions.switchCodexRelayProfile(profile.id)} size="sm" variant="outline">{selected ? "使用中" : "使用"}</Button><Button onClick={() => pinSupplierToTop(profile.id)} size="sm" variant="outline" title="置顶"><Pin className="h-4 w-4" /></Button><Button onClick={() => openProfileEditor(profile)} size="sm" variant="outline" title="编辑"><Pencil className="h-4 w-4 tilted-pen-icon" /></Button><Button onClick={() => duplicateProfile(profile)} size="sm" variant="outline" title="复制"><Copy className="h-4 w-4" /></Button><Button disabled={profiles.length <= 1} onClick={() => void removeProfile(profile)} size="sm" variant="outline" title="删除供应商"><Trash2 className="h-4 w-4" /></Button></div>
-            </div>
-          );
-        }) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
+        {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="\u6682\u65e0\u4f9b\u5e94\u5546\u914d\u7f6e\uff0c\u70b9\u51fb\u201c\u6dfb\u52a0\u4f9b\u5e94\u5546\u201d\u521b\u5efa\u4e00\u4e2a\u771f\u5b9e\u53ef\u5207\u6362\u7684 Codex API \u914d\u7f6e\u3002" />}
       </div>
+      {supplierDragOverlay && supplierDragOverlayProfile ? renderSupplierCard(supplierDragOverlayProfile, {
+        overlay: true,
+        style: {
+          left: supplierDragOverlay.left,
+          minHeight: supplierDragOverlay.height,
+          top: supplierDragOverlay.top,
+          width: supplierDragOverlay.width,
+        },
+      }) : null}
     </div>
   );
 }
@@ -1627,16 +1974,435 @@ export function MemoryAssistPanel({
   );
 }
 
+function memoryManualHeadings(markdown: string) {
+  return markdown
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = /^(#{2,3})\s+(.+?)\s*$/.exec(line);
+      if (!match) return null;
+      const title = match[2].trim();
+      return { depth: match[1].length, title, anchor: title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") };
+    })
+    .filter((item): item is { depth: number; title: string; anchor: string } => Boolean(item));
+}
+
+function fallbackMemoryManual(status: MemoryStatusResult | null) {
+  const captureCount = status?.memory.totalCaptures ?? 0;
+  const itemCount = status?.memory.totalItems ?? 0;
+  const workspaceCount = status?.memory.workspaces?.length ?? 0;
+  return [
+    "# 会话经验教训注入手册",
+    "",
+    "> 用途：在新会话启动时注入由盘古核心算法提炼的经验教训。",
+    "> 来源：memory_assist.sqlite 与真实 Codex/Claude 会话采集记录。",
+    `> 更新时间：${new Date().toLocaleString()}`,
+    "> 工作区：global",
+    "",
+    "## 目录",
+    "",
+    "- [当前状态](#当前状态)",
+    "- [附录：来源摘要](#附录来源摘要)",
+    "",
+    "## 当前状态",
+    "",
+    "- 当前可用于生成手册的材料不足，等待核心算法从真实会话中提炼。",
+    "",
+    "## 附录：来源摘要",
+    "",
+    `- 来源长期记忆：${itemCount} 条`,
+    `- 来源采集记录：${captureCount} 条`,
+    `- 来源工作区：${workspaceCount} 个`,
+    "- 生成方式：fallback",
+  ].join("\n");
+}
+
+export function MemoryScreen({
+  actions,
+  exported,
+  items,
+  search,
+  selfCheck,
+  settings,
+  status,
+}: {
+  actions: AppActions;
+  exported: MemoryExportResult | null;
+  items: MemoryItemsResult | null;
+  search: MemoryQueryResult | null;
+  selfCheck: MemorySelfCheckResult | null;
+  settings: SettingsResult | null;
+  status: MemoryStatusResult | null;
+}) {
+  const [manualEditing, setManualEditing] = useState(false);
+  const [manualDraft, setManualDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const [editingMemoryId, setEditingMemoryId] = useState("");
+  const [editingText, setEditingText] = useState("");
+  const [editingCategory, setEditingCategory] = useState("");
+  const [importText, setImportText] = useState("");
+  const [replaceExisting, setReplaceExisting] = useState(false);
+
+  const allItems = items?.items ?? [];
+  const activeItems = allItems.filter((item) => item.tier !== "archived");
+  const archivedItems = allItems.filter((item) => item.tier === "archived");
+  const exemptItems = allItems.filter((item) => item.exempt);
+  const sourceItems = showArchived ? allItems : activeItems;
+  const manualItem =
+    activeItems.find((item) => item.category === "lesson-manual") ??
+    allItems.find((item) => item.category === "lesson-manual");
+  const manualText = manualItem?.text?.trim() || fallbackMemoryManual(status);
+  const headings = memoryManualHeadings(manualEditing ? manualDraft : manualText);
+  const avgStrength = allItems.length ? allItems.reduce((total, item) => total + (item.strength ?? 0), 0) / allItems.length : 0;
+  const avgRetention = allItems.length ? allItems.reduce((total, item) => total + (item.retention ?? 0), 0) / allItems.length : 0;
+  const captureProgress = status?.memory.captureProgress;
+  const latestWorkspaceCapture = Math.max(0, ...(status?.memory.workspaces ?? []).map((workspace) => workspace.latestCaptureAt || 0));
+  const latestScanAt = captureProgress?.lastScanAt || latestWorkspaceCapture;
+  const firstBaselineAt = captureProgress?.firstBaselineAt || 0;
+  const workspaceSummary = status?.memory.codexWorkspace || status?.memory.workspaces?.[0]?.workspace || "global";
+  const mcpEnabled = Boolean(settings?.settings.memoryAssistMcpEnabled);
+  const memoryEnabled = status?.memory.enabled ?? Boolean(settings?.settings.memoryAssistEnabled);
+  const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
+  const matches = search?.memory.results ?? [];
+  const selfCheckSummary = selfCheck
+    ? selfCheck.report.checks.map((check) => `${check.name}:${check.status}`).join(" / ")
+    : "等待自检";
+
+  const beginManualEdit = () => {
+    setManualDraft(manualText);
+    setManualEditing(true);
+  };
+  const saveManual = async () => {
+    const text = manualDraft.trim();
+    if (!text) return;
+    if (manualItem) {
+      const saved = await actions.updateMemoryAssistItem(manualItem.id, {
+        text,
+        workspace: manualItem.workspace,
+        category: manualItem.category,
+        tags: manualItem.tags,
+        source: manualItem.source || "manager",
+        sourceSessionId: manualItem.sourceSessionId,
+      });
+      if (saved) setManualEditing(false);
+      return;
+    }
+    const saved = await actions.learnMemoryAssistItem(text, "lesson-manual");
+    if (saved) setManualEditing(false);
+  };
+  const beginEditMemory = (item: MemoryItem) => {
+    setEditingMemoryId(item.id);
+    setEditingText(item.text);
+    setEditingCategory(item.category);
+  };
+  const cancelEditMemory = () => {
+    setEditingMemoryId("");
+    setEditingText("");
+    setEditingCategory("");
+  };
+  const saveEditedMemory = async (item: MemoryItem) => {
+    const text = editingText.trim();
+    if (!text) return;
+    const saved = await actions.updateMemoryAssistItem(item.id, {
+      text,
+      workspace: item.workspace,
+      category: editingCategory.trim() || item.category || "general",
+      tags: item.tags,
+      source: item.source || "manager",
+      sourceSessionId: item.sourceSessionId,
+    });
+    if (saved) cancelEditMemory();
+  };
+  const copyManual = async () => {
+    await navigator.clipboard?.writeText(manualEditing ? manualDraft : manualText);
+    actions.showNotice({ title: "复制注入手册", message: "已复制会话经验教训注入手册全文。", status: "ok" });
+  };
+
+  return (
+    <div className="stack memory-page">
+      <section className="memory-layer-grid" aria-label="盘古记忆三层链路状态">
+        <Panel title="历史会话采集层" detail="主路径：从 Codex / Claude 本地可解析会话源建立采集证据。">
+          <div className="ops-status-list">
+            <StatusRow label="Codex 会话源" status="running" value="session DB / rollout 文件" />
+            <StatusRow label="Claude 会话源" status="running" value="claude-code / local-agent / audit / .claude" />
+            <StatusRow label="采集记录" status={(status?.memory.totalCaptures ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalCaptures ?? 0} 条`} />
+            <StatusRow label="扫描模式" status="running" value={(status?.memory.totalCaptures ?? 0) > 0 ? "增量采集中" : "首次全量待建立"} />
+            <StatusRow label="最近扫描" status={latestWorkspaceCapture > 0 ? "ok" : "not_checked"} value={latestWorkspaceCapture ? new Date(latestWorkspaceCapture * 1000).toLocaleString() : "等待扫描"} />
+          </div>
+        </Panel>
+        <Panel title="注入实时监听层" detail="辅助路径：只负责页面实时状态、workspace/thread 与最近输入。">
+          <div className="ops-status-list">
+            <StatusRow label="Codex 注入" status={status?.memory.codexInjected ? "ok" : "not_checked"} value={status?.memory.codexInjected ? "已注入" : "等待 Codex 注入"} />
+            <StatusRow label="Codex 对话监控" status={status?.memory.active ? "running" : "not_checked"} value={status?.memory.active ? "监控中" : "等待会话变化"} />
+            <StatusRow label="当前 workspace/thread" status={workspaceSummary ? "ok" : "not_checked"} value={workspaceSummary} />
+            <StatusRow label="Claude 使用方式" status="ok" value="MCP 共享，不走前端注入" />
+          </div>
+        </Panel>
+        <Panel title="核心算法裁判层" detail="裁判路径：去重、分类、留存、归档、手册生成与自检。">
+          <div className="ops-status-list">
+            <StatusRow label="待处理候选" status={(status?.memory.pendingCandidates ?? 0) > 0 ? "running" : "ok"} value={`${status?.memory.pendingCandidates ?? 0} 条`} />
+            <StatusRow label="长期记忆" status={(status?.memory.totalItems ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalItems ?? 0} 条`} />
+            <StatusRow label="已归档" status={archivedItems.length ? "ok" : "not_checked"} value={`${archivedItems.length} 条`} />
+            <StatusRow label="注入手册" status={manualItem ? "ok" : "not_checked"} value={manualItem ? "已进入注入缓存" : "等待提炼"} />
+            <StatusRow label="自检摘要" status={selfCheck?.report.status ?? "not_checked"} value={selfCheckSummary} />
+          </div>
+        </Panel>
+      </section>
+
+      <Panel title="增量采集状态" detail="首次建立采集进度；后续只扫描新增会话或已有会话新增上下文。">
+        <div className="memory-stat-grid">
+          <InfoRow label="首次基线" value={firstBaselineAt > 0 ? `已建立 · ${new Date(firstBaselineAt * 1000).toLocaleString()}` : "等待首次全量建立"} />
+          <InfoRow label="采集进度" value={`${captureProgress?.totalSources ?? 0} 个源已建立采集进度`} />
+          <InfoRow label="Codex 源" value={`${captureProgress?.codexSources ?? 0} 个 · session DB / rollout / 实时注入`} />
+          <InfoRow label="Claude 源" value={`${captureProgress?.claudeSources ?? 0} 个 · audit.jsonl / local_*.json / .claude/sessions`} />
+          <InfoRow label="新增上下文" value={`${captureProgress?.newContextCount ?? 0} 条 · 最近一次扫描`} />
+          <InfoRow label="跳过未变化" value={`${captureProgress?.skippedUnchangedSessions ?? 0} 个会话源 · 最近一次扫描`} />
+        </div>
+        <div className="ops-note">
+          <ShieldCheck className="h-4 w-4" />
+          <span>采集层只拿全可解析对话上下文；留存、去重、分类、归档、手册生成统一交给盘古核心算法。</span>
+        </div>
+      </Panel>
+
+      <Panel title="会话经验教训注入手册" detail="单个 Markdown 注入文档；前端只展示核心算法生成内容与目录，不写死业务章节。">
+        <div className="memory-manual-toolbar">
+          <Button onClick={() => void actions.refineLongTermMemory()} size="sm">
+            <PencilRuler className="h-4 w-4" />
+            重新提炼会话经验
+          </Button>
+          {manualEditing ? (
+            <>
+              <Button disabled={!manualDraft.trim()} onClick={() => void saveManual()} size="sm" variant="outline">
+                <Save className="h-4 w-4" />
+                保存
+              </Button>
+              <Button onClick={() => setManualEditing(false)} size="sm" variant="outline">取消</Button>
+            </>
+          ) : (
+            <Button onClick={beginManualEdit} size="sm" variant="outline">
+              <Pencil className="h-4 w-4" />
+              编辑注入手册
+            </Button>
+          )}
+          <Button onClick={() => void copyManual()} size="sm" variant="outline">
+            <Copy className="h-4 w-4" />
+            复制全文
+          </Button>
+          <Button onClick={() => setShowSources(true)} size="sm" variant="outline">查看来源条目</Button>
+        </div>
+        <div className="memory-manual-meta">
+          <InfoRow label="更新时间" value={manualItem ? new Date(manualItem.updatedAt * 1000).toLocaleString() : "fallback 预览"} />
+          <InfoRow label="来源统计" value={`长期记忆 ${status?.memory.totalItems ?? 0} 条 / 采集记录 ${status?.memory.totalCaptures ?? 0} 条 / 工作区 ${status?.memory.workspaces?.length ?? 0} 个`} />
+          <InfoRow label="同步注入缓存" value={status?.memory.injectSummaryCachePath ? compactPath(status.memory.injectSummaryCachePath) : "等待生成"} />
+          <InfoRow label="生成方式" value={manualItem?.source || "fallback"} />
+        </div>
+        <div className="memory-manual-layout">
+          <aside className="memory-manual-toc">
+            <strong>目录</strong>
+            {headings.length ? headings.map((heading) => (
+              <span className={heading.depth === 3 ? "child" : ""} key={`${heading.depth}:${heading.title}`}>{heading.title}</span>
+            )) : <em>暂无标题</em>}
+          </aside>
+          {manualEditing ? (
+            <textarea className="ops-textarea mono memory-manual-editor" onChange={(event) => setManualDraft(event.currentTarget.value)} value={manualDraft} />
+          ) : (
+            <pre className="memory-manual-document">{manualText}</pre>
+          )}
+        </div>
+        <div className="ops-note">
+          <Archive className="h-4 w-4" />
+          <span>压缩整合会将源条目软归档而非物理删除；手册使用稳定 ID 增量更新。</span>
+        </div>
+      </Panel>
+
+      <Panel title="遗忘曲线与记忆分层" detail="Ebbinghaus 衰减 + active/archive 两层；注入只看 active 层。">
+        <div className="memory-stat-grid">
+          <InfoRow label="active 记忆" value={`${activeItems.length} 条`} />
+          <InfoRow label="archived 记忆" value={`${archivedItems.length} 条`} />
+          <InfoRow label="常驻豁免" value={`${exemptItems.length} 条`} />
+          <InfoRow label="平均 strength" value={`${Math.round(avgStrength * 100)}%`} />
+          <InfoRow label="平均 retention" value={`${Math.round(avgRetention * 100)}%`} />
+          <InfoRow label="注入层" value="只使用 active 层" />
+        </div>
+        <div className="ops-note">
+          <Pin className="h-4 w-4" />
+          <span>manual / safety-rule / project-rule 等常驻记忆不受自动归档影响。归档是软标记，可恢复，不是删除。</span>
+        </div>
+        <div className="memory-tier-preview">
+          {sourceItems.slice(0, 6).map((item) => (
+            <div className={`memory-assist-row${item.tier === "archived" ? " memory-archived" : ""}`} key={`tier-${item.id}`}>
+              <span>{item.category} · {item.workspace}</span>
+              <p>{item.text}</p>
+              <MemoryTierControls actions={actions} item={item} />
+            </div>
+          ))}
+          {sourceItems.length ? null : <Empty text="暂无可展示的记忆分层条目。" />}
+        </div>
+      </Panel>
+
+      <Panel title="MCP 跨 Agent 共享" detail="Claude/Codex 通过同一份 sqlite 与 MCP 工具共享盘古记忆。">
+        <div className="memory-stat-grid">
+          <InfoRow label="MCP 开关" value={mcpEnabled ? "已开启" : "未开启"} />
+          <InfoRow label="总开关" value={memoryEnabled ? "盘古记忆已启用" : "盘古记忆未启用"} />
+          <InfoRow label="共享数据库" value={compactPath(status?.memory.dbPath)} />
+          <InfoRow label="MCP 注册状态" value={mcpEnabled ? "可注册/刷新" : "等待开启后注册"} />
+          <InfoRow label="Claude 使用方式" value="通过 MCP 共享同一份盘古记忆" />
+          <InfoRow label="Codex 使用方式" value="前端注入 + 本地会话采集 + MCP 可选" />
+        </div>
+        <div className="memory-tool-grid">
+          {[
+            ["memory_search", "检索记忆"],
+            ["memory_list", "列出记忆"],
+            ["memory_recent", "最近记忆"],
+            ["memory_learn", "写入记忆"],
+          ].map(([name, detail]) => (
+            <div className="memory-tool-card" key={name}>
+              <strong>{name}</strong>
+              <span>{detail}</span>
+            </div>
+          ))}
+        </div>
+        <div className="action-row">
+          <Button onClick={() => void actions.registerMemoryMcpServer()} size="sm">
+            <Network className="h-4 w-4" />
+            注册 MCP 到 Claude/Codex
+          </Button>
+          <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline">
+            <RefreshCw className="h-4 w-4" />
+            刷新 MCP 状态
+          </Button>
+        </div>
+      </Panel>
+
+      <Panel title="来源条目审查" detail="默认折叠；支持搜索、显示归档、编辑、删除、归档/恢复、导入导出。">
+        <div className="memory-source-toolbar">
+          <Button onClick={() => setShowSources((value) => !value)} size="sm" variant="outline">
+            {showSources ? "折叠来源条目" : "展开来源条目"}
+          </Button>
+          <label className="memory-archive-toggle">
+            <input
+              checked={showArchived}
+              onChange={(event) => {
+                const next = event.currentTarget.checked;
+                setShowArchived(next);
+                void actions.refreshMemoryAssist(false, next);
+              }}
+              type="checkbox"
+            />
+            <span>显示归档</span>
+          </label>
+          <Button onClick={() => void actions.exportMemoryAssist()} size="sm" variant="outline">
+            <FileDown className="h-4 w-4" />
+            导出
+          </Button>
+        </div>
+        {showSources ? (
+          <>
+            <div className="memory-assist-search">
+              <label className="ops-form-field">
+                <span>搜索来源条目</span>
+                <input
+                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived);
+                  }}
+                  placeholder="搜索项目约定、经验教训、历史修复..."
+                  value={searchQuery}
+                />
+              </label>
+              <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">
+                <RefreshCw className="h-4 w-4" />
+                搜索
+              </Button>
+            </div>
+            {matches.length ? (
+              <div className="memory-assist-list">
+                <strong>搜索结果：{search?.memory.query}</strong>
+                {matches.slice(0, 8).map((match) => (
+                  <div className="memory-assist-row" key={`match-${match.item.id}`}>
+                    <span>{match.item.category} · {match.item.workspace} · score {match.score.toFixed(2)}</span>
+                    <p>{match.item.text}</p>
+                    {match.matchedKeywords.length ? <em>命中：{match.matchedKeywords.slice(0, 8).join(" / ")}</em> : null}
+                  </div>
+                ))}
+              </div>
+            ) : search ? <Empty text="没有匹配到来源条目。" /> : null}
+            <div className="memory-assist-list">
+              {sourceItems.length ? sourceItems.map((item) => {
+                const editing = editingMemoryId === item.id;
+                const archived = item.tier === "archived";
+                return (
+                  <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
+                    <span>{item.category} · {item.workspace}</span>
+                    {editing ? (
+                      <>
+                        <label className="ops-form-field">
+                          <span>分类</span>
+                          <input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} />
+                        </label>
+                        <label className="ops-form-field">
+                          <span>来源内容</span>
+                          <textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} />
+                        </label>
+                        <div className="action-row">
+                          <Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm">
+                            <Save className="h-4 w-4" />
+                            保存
+                          </Button>
+                          <Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p>{item.text}</p>
+                        <MemoryTierControls actions={actions} item={item} />
+                        <div className="action-row">
+                          <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
+                            <Pencil className="h-4 w-4" />
+                            编辑
+                          </Button>
+                          <Button onClick={() => void actions.deleteMemoryAssistItem(item.id)} size="sm" variant="outline">
+                            <Trash2 className="h-4 w-4" />
+                            删除
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              }) : <Empty text="暂无来源条目。" />}
+            </div>
+            <div className="memory-assist-transfer">
+              <div className="memory-assist-list">
+                <strong>导出 JSON</strong>
+                <textarea className="ops-textarea compact mono" readOnly value={exportJson} />
+              </div>
+              <div className="memory-assist-list">
+                <strong>导入 JSON</strong>
+                <textarea className="ops-textarea compact mono" onChange={(event) => setImportText(event.currentTarget.value)} placeholder="粘贴 memory-assist/v1 导出 JSON。" value={importText} />
+                <div className="ops-toggle-line">
+                  <span>替换已有记忆</span>
+                  <ToggleSwitch checked={replaceExisting} onChange={setReplaceExisting} />
+                </div>
+                <Button disabled={!importText.trim()} onClick={() => void actions.importMemoryAssist(importText, replaceExisting)} size="sm">
+                  <FileUp className="h-4 w-4" />
+                  导入
+                </Button>
+              </div>
+            </div>
+          </>
+        ) : <Empty text="来源条目已折叠。点击展开后可审查、搜索、编辑和归档恢复。" />}
+      </Panel>
+    </div>
+  );
+}
+
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
   claudeChinese,
   claudeDesktop,
   localSessions,
-  memoryAssist,
-  memoryExport,
-  memoryItems,
-  memorySearch,
-  memorySelfCheck,
   providerSync,
   settings,
 }: {
@@ -1644,11 +2410,6 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   claudeChinese: ClaudeChineseWindowResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   localSessions: LocalSessionsResult | null;
-  memoryAssist: MemoryStatusResult | null;
-  memoryExport: MemoryExportResult | null;
-  memoryItems: MemoryItemsResult | null;
-  memorySearch: MemoryQueryResult | null;
-  memorySelfCheck: MemorySelfCheckResult | null;
   providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
 }) {
@@ -1742,14 +2503,6 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
           </Panel>
         </div>
         <div className="ops-wide-column">
-          <MemoryAssistPanel
-            actions={actions}
-            exported={memoryExport}
-            items={memoryItems}
-            search={memorySearch}
-            selfCheck={memorySelfCheck}
-            status={memoryAssist}
-          />
           <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
             <div className="ops-status-list">
               <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
