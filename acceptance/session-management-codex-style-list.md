@@ -8,12 +8,12 @@
    - 通过标准：`spec/session-management-codex-style-list.md` 和 `acceptance/session-management-codex-style-list.md` 存在。
    - 证据：文件存在检查。
 
-2. Codex 会话列表按项目分组。
-   - 通过标准：`SessionScreen` 中存在项目分组逻辑，使用 `cwd` 等字段推导项目名，并渲染项目标题与项目下的会话。
+2. Codex 和 Claude 会话列表按项目分组。
+   - 通过标准：`SessionManagementScreen` 中存在项目分组逻辑，使用 `cwd` 等字段推导项目名，并渲染 Codex/Claude 两个会话管理面板的项目标题与项目下的会话。
    - 证据：源码检查和 UI 回归测试。
 
 3. 会话展示接近 Codex 侧边栏结构。
-   - 通过标准：页面包含 `codex-session-browser`、项目组、项目标题行、会话行、右侧相对时间等结构。
+   - 通过标准：页面包含 `codex-session-browser`、项目组、项目标题行、会话行、右侧相对时间等结构，并包含 `Claude 会话管理`。
    - 证据：`windows_subsystem` 回归测试和 CSS 检查。
 
 4. 删除行为保持原功能。
@@ -39,6 +39,10 @@
 9. Debug 管理工具已重新构建。
    - 通过标准：`cargo build -p claude-codex-pro-manager --manifest-path Cargo.toml` 成功。
    - 证据：命令输出。
+
+10. 会话管理页移除 Claude 会话诊断并使用宽屏布局。
+    - 通过标准：源码中 `SessionManagementScreen` 不再包含 `Claude 会话诊断`、`launchClaudeDesktop`、`installClaudeZhPatch`；包含 `session-management-wide-grid`、`Codex 会话管理` 与 `Claude 会话管理`。
+    - 证据：Manager UI 回归测试和源码检查。
 
 ## 必需验证
 

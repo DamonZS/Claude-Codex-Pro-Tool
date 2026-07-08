@@ -1749,8 +1749,6 @@ export function App() {
           {route === "sessions" ? (
             <SessionManagementScreen
               actions={actions}
-              claudeChinese={claudeChinese}
-              claudeDesktop={claudeDesktop}
               localSessions={localSessions}
               providerSync={providerSync}
               settings={settings}

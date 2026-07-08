@@ -716,6 +716,13 @@ export function SupplierScreen({
     const visibleIds = new Set(routableSupplierProfiles.map((profile) => profile.id));
     const nextProfiles = appSettings.relayProfiles.map((profile) => {
       if (!visibleIds.has(profile.id)) return profile;
+      if (supplierRouteGroup === "codex") {
+        return normalizeSupplierProfile({
+          ...profile,
+          routeEnabled: enabled,
+          routeMode: enabled ? (profile.routeMode || "Codex Proxy") : "Codex Direct",
+        });
+      }
       return normalizeSupplierProfile({
         ...profile,
         routeEnabled: enabled,
@@ -724,10 +731,10 @@ export function SupplierScreen({
         modelMappingEnabled: enabled ? true : profile.modelMappingEnabled,
       });
     });
-    actions.showNotice({ title: "供应商路由", message: enabled ? "正在开启 Claude 供应商路由..." : "正在关闭 Claude 供应商路由...", status: "running" });
+    actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
     const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
     if (saved) {
-      actions.showNotice({ title: "供应商路由", message: enabled ? "已开启 Claude 供应商路由。" : "已关闭 Claude 供应商路由。", status: "ok" });
+      actions.showNotice({ title: "供应商路由", message: enabled ? `已开启 ${supplierRouteGroupLabel} 供应商路由。` : `已关闭 ${supplierRouteGroupLabel} 供应商路由。`, status: "ok" });
     }
   };
   const supplierOrderFromIds = (ids: string[]) => {
@@ -745,8 +752,13 @@ export function SupplierScreen({
   const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds), [profiles, supplierOrderIds]);
   const filteredOrderedProfiles = useMemo(() => orderedProfiles.filter((profile) => supplierTargetForProfile(profile) === supplierTargetFilter), [orderedProfiles, supplierTargetFilter]);
   const visibleSupplierOrderIds = useMemo(() => filteredOrderedProfiles.map((profile) => profile.id), [filteredOrderedProfiles]);
-  const routableSupplierProfiles = useMemo(() => profiles.filter((profile) => supplierTargetForProfile(profile) === "claude" || supplierTargetForProfile(profile) === "claude-desktop"), [profiles]);
-  const supplierRouteSwitchEnabled = routableSupplierProfiles.some((profile) => supplierRouteEnabled(profile));
+  const supplierRouteGroup = supplierTargetFilter === "codex" ? "codex" : "claude";
+  const supplierRouteGroupLabel = supplierRouteGroup === "codex" ? "Codex" : "Claude";
+  const routableSupplierProfiles = useMemo(() => profiles.filter((profile) => {
+    const target = supplierTargetForProfile(profile);
+    return supplierRouteGroup === "codex" ? target === "codex" : target === "claude" || target === "claude-desktop";
+  }), [profiles, supplierRouteGroup]);
+  const supplierRouteSwitchEnabled = routableSupplierProfiles.some((profile) => !!profile.routeEnabled);
   const supplierRouteSwitchDisabled = !appSettings || !routableSupplierProfiles.length;
   const setSupplierCardRef = (profileId: string) => (node: HTMLDivElement | null) => {
     if (node) {
@@ -935,7 +947,6 @@ export function SupplierScreen({
         <div className="supplier-card-main">
           <div className="supplier-title-line">
             <strong>{profile.name || profile.id}</strong>
-            {selected ? <span className="supplier-badge current">\u4f7f\u7528\u4e2d</span> : null}
             {aggregate ? <span className="supplier-badge">\u805a\u5408</span> : null}
             {imported ? <span className="supplier-badge">cc-switch</span> : null}
           </div>
@@ -2400,15 +2411,11 @@ export function MemoryScreen({
 
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
-  claudeChinese,
-  claudeDesktop,
   localSessions,
   providerSync,
   settings,
 }: {
   actions: AppActions;
-  claudeChinese: ClaudeChineseWindowResult | null;
-  claudeDesktop: ClaudeDesktopResult | null;
   localSessions: LocalSessionsResult | null;
   providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
@@ -2418,16 +2425,67 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
+  const renderSessionBrowserPanel = (title: string, ariaLabel: string, emptyText: string) => (
+    <Panel title={title} detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
+      <div className="codex-session-toolbar">
+        <div>
+          <span>数据库</span>
+          <strong>{compactPath(localSessions?.dbPath)}</strong>
+        </div>
+        <div>
+          <span>候选库</span>
+          <strong>{localSessions?.dbPaths.length ?? 0} 个</strong>
+        </div>
+        <div>
+          <span>会话数</span>
+          <strong>{sessions.length} 个</strong>
+        </div>
+        <Button onClick={() => void actions.refreshLocalSessions()} size="sm" variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新
+        </Button>
+      </div>
+      <div className="codex-session-browser" aria-label={ariaLabel}>
+        <div className="codex-session-browser-title">项目</div>
+        {sessionProjectGroups.length ? sessionProjectGroups.map((group) => (
+          <section className="codex-session-project" key={`${title}:${group.key}`}>
+            <div className="codex-session-project-header" title={group.subtitle || group.label}>
+              <FileCode2 className="h-4 w-4" />
+              <strong>{group.label}</strong>
+            </div>
+            <div className="codex-session-project-list">
+              {group.sessions.map((session) => (
+                <div className="codex-session-row" key={`${title}:${session.dbPath}:${session.id}`}>
+                  <button className="codex-session-main" title={session.title || session.id} type="button">
+                    <span>{session.title || "未命名会话"}</span>
+                    <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
+                  </button>
+                  <button
+                    className="codex-session-delete"
+                    onClick={() => void actions.deleteLocalSession(session)}
+                    title="删除会话"
+                    type="button"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )) : <Empty text={emptyText} />}
+      </div>
+    </Panel>
+  );
 
   return (
     <div className="stack">
-      <Panel title="会话管理" detail="历史会话修复、盘古记忆、Codex 会话管理和 Claude 会话诊断集中在这里。">
+      <Panel title="会话管理" detail="历史会话修复、Codex 会话管理和 Claude 会话管理集中在这里。">
         <div className="ops-note">
           <ShieldCheck className="h-4 w-4" />
           <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
         </div>
       </Panel>
-      <div className="ops-two-column">
+      <div className="session-management-wide-grid">
         <div className="ops-wide-column">
           <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
             <div className="ops-status-list">
@@ -2452,68 +2510,10 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
               </div>
             ) : null}
           </Panel>
-          <Panel title="Codex 会话管理" detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
-            <div className="codex-session-toolbar">
-              <div>
-                <span>数据库</span>
-                <strong>{compactPath(localSessions?.dbPath)}</strong>
-              </div>
-              <div>
-                <span>候选库</span>
-                <strong>{localSessions?.dbPaths.length ?? 0} 个</strong>
-              </div>
-              <div>
-                <span>会话数</span>
-                <strong>{sessions.length} 个</strong>
-              </div>
-              <Button onClick={() => void actions.refreshLocalSessions()} size="sm" variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                刷新
-              </Button>
-            </div>
-            <div className="codex-session-browser" aria-label="Codex 本地会话项目列表">
-              <div className="codex-session-browser-title">项目</div>
-              {sessionProjectGroups.length ? sessionProjectGroups.map((group) => (
-                <section className="codex-session-project" key={group.key}>
-                  <div className="codex-session-project-header" title={group.subtitle || group.label}>
-                    <FileCode2 className="h-4 w-4" />
-                    <strong>{group.label}</strong>
-                  </div>
-                  <div className="codex-session-project-list">
-                    {group.sessions.map((session) => (
-                      <div className="codex-session-row" key={`${session.dbPath}:${session.id}`}>
-                        <button className="codex-session-main" title={session.title || session.id} type="button">
-                          <span>{session.title || "未命名会话"}</span>
-                          <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
-                        </button>
-                        <button
-                          className="codex-session-delete"
-                          onClick={() => void actions.deleteLocalSession(session)}
-                          title="删除会话"
-                          type="button"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              )) : <Empty text="暂未读取到 Codex 本地会话。" />}
-            </div>
-          </Panel>
         </div>
         <div className="ops-wide-column">
-          <Panel title="Claude 会话诊断" detail="官方 Claude 历史会话不写入本工具可直接修复的本地 SQLite；这里提供可验证入口和包装窗口。">
-            <div className="ops-status-list">
-              <StatusRow label="官方 Claude" status={claudeDesktop?.status ?? "not_checked"} value={`${claudeDesktop?.installKind ?? "未检测"} / ${claudeDesktop?.cdpStatus ?? "unknown"}`} />
-              <StatusRow label="Claude 一键汉化" status={claudeChinese?.open ? "ok" : "not_checked"} value={claudeChinese?.open ? "已打开" : "未打开"} />
-              <StatusRow label="安全边界" status="ok" value="不修改官方 MSIX / app.asar" />
-            </div>
-            <div className="action-row">
-              <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">启动/重启Claude</Button>
-              <Button onClick={() => void actions.installClaudeZhPatch()} variant="outline">Claude 一键汉化</Button>
-            </div>
-          </Panel>
+          {renderSessionBrowserPanel("Codex 会话管理", "Codex 本地会话项目列表", "暂未读取到 Codex 本地会话。")}
+          {renderSessionBrowserPanel("Claude 会话管理", "Claude 本地会话项目列表", "暂未读取到 Claude 本地会话。")}
         </div>
       </div>
     </div>

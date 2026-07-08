@@ -3722,6 +3722,14 @@ body {
   align-items: start;
 }
 
+.session-management-wide-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(520px, 1.35fr);
+  gap: 16px;
+  align-items: start;
+  width: 100%;
+}
+
 .ops-wide-column {
   min-width: 0;
   display: grid;
@@ -5670,6 +5678,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .session-management-wide-grid {
+    grid-template-columns: 1fr;
+  }
+
   .ops-tools-columns {
     grid-template-columns: 1fr;
   }
@@ -5798,6 +5810,10 @@ body {
   }
 
   .ops-two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .session-management-wide-grid {
     grid-template-columns: 1fr;
   }
 

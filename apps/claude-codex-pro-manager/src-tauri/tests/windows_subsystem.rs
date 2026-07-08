@@ -575,7 +575,7 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
 }
 
 #[test]
-fn session_management_route_contains_history_memory_and_diagnostics() {
+fn session_management_route_contains_history_and_codex_claude_session_management() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
     let app_tsx = read_frontend_file("screens.tsx");
@@ -590,23 +590,27 @@ fn session_management_route_contains_history_memory_and_diagnostics() {
 
     assert!(session_section.contains("会话管理"));
     assert!(session_section.contains("历史会话修复"));
-    assert!(session_section.contains("盘古记忆"));
     assert!(session_section.contains("Codex 会话管理"));
-    assert!(session_section.contains("Claude 会话诊断"));
+    assert!(session_section.contains("Claude 会话管理"));
     assert!(session_section.contains("refreshLocalSessions"));
     assert!(session_section.contains("deleteLocalSession"));
     assert!(session_section.contains("groupLocalSessionsByProject(sessions)"));
+    assert!(session_section.contains("renderSessionBrowserPanel"));
+    assert!(session_section.contains("session-management-wide-grid"));
     assert!(session_section.contains("className=\"codex-session-browser\""));
     assert!(session_section.contains("Codex 本地会话项目列表"));
+    assert!(session_section.contains("Claude 本地会话项目列表"));
     assert!(session_section.contains("className=\"codex-session-project-header\""));
     assert!(session_section.contains("className=\"codex-session-main\""));
     assert!(session_section.contains("formatSessionRelativeTime(session.updatedAtMs)"));
     assert!(session_section.contains("actions.deleteLocalSession(session)"));
     assert!(session_section.contains("repairHistorySessions"));
-    assert!(session_section.contains("launchClaudeDesktop"));
-    assert!(session_section.contains("installClaudeZhPatch"));
+    assert!(!session_section.contains("Claude 会话诊断"));
+    assert!(!session_section.contains("launchClaudeDesktop"));
+    assert!(!session_section.contains("installClaudeZhPatch"));
     assert!(!session_section.contains("openClaudeChinese"));
-    assert!(styles.contains(".ops-two-column"));
+    assert!(styles.contains(".session-management-wide-grid"));
+    assert!(styles.contains("grid-template-columns: minmax(320px, 0.9fr) minmax(520px, 1.35fr);"));
     assert!(styles.contains(".codex-session-browser"));
     assert!(!styles.contains("background: #f3eeee;"));
     assert!(styles.contains("rgba(8, 9, 12, 0.72);"));
@@ -1301,9 +1305,27 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("routableSupplierProfiles"));
     assert!(!supplier_screen.contains("visibleRoutableSupplierProfiles"));
     assert!(supplier_screen.contains("supplierRouteSwitchEnabled"));
+    assert!(
+        supplier_screen
+            .contains("routableSupplierProfiles.some((profile) => !!profile.routeEnabled)")
+    );
+    assert!(
+        !supplier_screen
+            .contains("routableSupplierProfiles.some((profile) => supplierRouteEnabled(profile))")
+    );
     assert!(supplier_screen.contains("toggleVisibleSupplierRouting"));
-    assert!(supplier_screen.contains("供应商路由"));
-    assert!(supplier_screen.contains("已开启 Claude 供应商路由。"));
+    assert!(supplier_screen.contains(
+        "const supplierRouteGroup = supplierTargetFilter === \"codex\" ? \"codex\" : \"claude\";"
+    ));
+    assert!(supplier_screen.contains(
+        "const supplierRouteGroupLabel = supplierRouteGroup === \"codex\" ? \"Codex\" : \"Claude\";"
+    ));
+    assert!(supplier_screen.contains("supplierRouteGroup === \"codex\" ? target === \"codex\" : target === \"claude\" || target === \"claude-desktop\""));
+    assert!(supplier_screen.contains("if (supplierRouteGroup === \"codex\")"));
+    assert!(supplier_screen.contains(
+        "routeMode: enabled ? (profile.routeMode || \"Codex Proxy\") : \"Codex Direct\""
+    ));
+    assert!(supplier_screen.contains("supplierRouteGroupLabel"));
     assert!(!supplier_screen.contains("?????"));
     assert!(supplier_screen.contains("routeEnabled: enabled"));
     assert!(supplier_screen.contains("claudeDesktopMode: enabled ? \"proxy\" : \"direct\""));
@@ -1387,6 +1409,8 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("drag-source"));
     assert!(supplier_screen.contains("supplier-card-action-button"));
     assert!(supplier_screen.contains("supplier-card-use-button"));
+    assert!(!supplier_screen.contains("supplier-badge current"));
+    assert!(!supplier_screen.contains("\\u4f7f\\u7528\\u4e2d</span>"));
     assert!(supplier_screen.contains("supplier-url-link"));
 
     assert!(supplier_screen.contains("supplier-ccswitch-editor"));
