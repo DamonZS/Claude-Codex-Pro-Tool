@@ -1494,7 +1494,9 @@ fn overview_startup_uses_light_claude_status_and_defers_heavy_checks() {
     let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
 
     let refresh_route = app_tsx
-        .split("const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {")
+        .split(
+            "const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {",
+        )
         .nth(1)
         .and_then(|rest| rest.split("const actions = {").next())
         .expect("refreshRoute body");

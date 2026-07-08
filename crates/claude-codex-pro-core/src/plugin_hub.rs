@@ -2167,6 +2167,9 @@ pub fn repair_claude_desktop_marketplaces() -> anyhow::Result<ClaudeDesktopMarke
     if !status.supported {
         anyhow::bail!("{}", status.message);
     }
+    if !crate::claude_desktop::close_claude_desktop_for_patch() {
+        anyhow::bail!("无法关闭 Claude Desktop，请先手动退出 Claude 后再修复插件仓库。");
+    }
     let threep_paths = claude_desktop_threep_paths();
     for threep in &threep_paths {
         ensure_claude_desktop_marketplaces_config(&threep.config_path)?;
@@ -2179,7 +2182,7 @@ pub fn repair_claude_desktop_marketplaces() -> anyhow::Result<ClaudeDesktopMarke
             .all(|repository| repository.configured),
         config_path: next.config_path,
         repositories: next.repositories,
-        message: "已写入 Claude 官方与 Ponytail 插件仓库配置。".to_string(),
+        message: "已写入 Claude 官方与 Ponytail 插件仓库的新版可见配置，请重新启动 Claude Desktop 后查看插件目录。".to_string(),
     })
 }
 
@@ -3138,18 +3141,16 @@ fn claude_desktop_marketplace_repository_statuses(
 }
 
 fn claude_desktop_marketplace_is_configured(raw: &Value, name: &str, repository: &str) -> bool {
-    let Some(marketplaces) = raw.get("extraKnownMarketplaces").and_then(Value::as_object) else {
+    let _ = name;
+    let Some(marketplaces) = raw
+        .get("allowedPluginMarketplaces")
+        .and_then(Value::as_array)
+    else {
         return false;
     };
-    marketplaces.iter().any(|(key, value)| {
-        key == name
-            && value
-                .get("source")
-                .and_then(Value::as_object)
-                .is_some_and(|source| {
-                    source.get("source").and_then(Value::as_str) == Some("github")
-                        && source.get("repo").and_then(Value::as_str) == Some(repository)
-                })
+    marketplaces.iter().any(|value| {
+        value.get("source").and_then(Value::as_str) == Some("github")
+            && value.get("repo").and_then(Value::as_str) == Some(repository)
     })
 }
 
@@ -3161,6 +3162,32 @@ fn ensure_claude_desktop_marketplaces_config(path: &Path) -> anyhow::Result<()> 
     let root = config
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Claude Desktop config must be a JSON object"))?;
+    if !root
+        .get("allowedPluginMarketplaces")
+        .is_some_and(Value::is_array)
+    {
+        root.insert("allowedPluginMarketplaces".to_string(), json!([]));
+    }
+    let allowed_marketplaces = root
+        .get_mut("allowedPluginMarketplaces")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("allowedPluginMarketplaces must be an array"))?;
+    for (_, _, repository) in desired_claude_desktop_marketplaces() {
+        let already_present = allowed_marketplaces.iter().any(|value| {
+            value.get("source").and_then(Value::as_str) == Some("github")
+                && value.get("repo").and_then(Value::as_str) == Some(repository)
+        });
+        if !already_present {
+            allowed_marketplaces.push(json!({
+                "source": "github",
+                "repo": repository
+            }));
+        }
+    }
+
+    // Keep the legacy map for older Claude Desktop builds. Current builds read
+    // `allowedPluginMarketplaces`, so status detection intentionally does not
+    // treat this legacy block as sufficient.
     if !root
         .get("extraKnownMarketplaces")
         .is_some_and(Value::is_object)
@@ -4336,6 +4363,21 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed["deploymentMode"], "3p");
+        assert!(
+            parsed["allowedPluginMarketplaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["source"] == "github"
+                    && entry["repo"] == OFFICIAL_MARKETPLACE_REPOSITORY)
+        );
+        assert!(
+            parsed["allowedPluginMarketplaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["source"] == "github" && entry["repo"] == PONYTAIL_MARKETPLACE)
+        );
         assert_eq!(
             parsed["extraKnownMarketplaces"][OFFICIAL_MARKETPLACE_NAME]["source"]["repo"],
             OFFICIAL_MARKETPLACE_REPOSITORY
@@ -4347,6 +4389,42 @@ mod tests {
         let repositories = claude_desktop_marketplace_repository_statuses(&path);
         assert_eq!(repositories.len(), 2);
         assert!(repositories.iter().all(|repository| repository.configured));
+    }
+
+    #[test]
+    fn claude_desktop_marketplace_status_rejects_legacy_only_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("Claude-3p")
+            .join("claude_desktop_config.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            json!({
+                "deploymentMode": "3p",
+                "extraKnownMarketplaces": {
+                    OFFICIAL_MARKETPLACE_NAME: {
+                        "source": {
+                            "source": "github",
+                            "repo": OFFICIAL_MARKETPLACE_REPOSITORY
+                        }
+                    },
+                    PONYTAIL_MARKETPLACE_NAME: {
+                        "source": {
+                            "source": "github",
+                            "repo": PONYTAIL_MARKETPLACE
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let repositories = claude_desktop_marketplace_repository_statuses(&path);
+        assert_eq!(repositories.len(), 2);
+        assert!(repositories.iter().all(|repository| !repository.configured));
     }
 
     #[test]
@@ -4362,6 +4440,7 @@ mod tests {
             .expect("repair_claude_desktop_marketplaces source");
 
         assert!(repair.contains("ensure_claude_desktop_marketplaces_config"));
+        assert!(repair.contains("close_claude_desktop_for_patch()"));
         assert!(!repair.contains("open_ponytail_claude_desktop_marketplace_setup()"));
     }
 

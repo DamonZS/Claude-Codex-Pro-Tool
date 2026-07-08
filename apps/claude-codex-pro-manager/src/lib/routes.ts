@@ -1,4 +1,4 @@
-import { Info, LayoutDashboard, MessageSquare, Network, PackageSearch, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { Info, LayoutDashboard, MessageSquare, Network, PackageSearch, Settings, ShieldCheck, Wrench, type LucideIcon } from "lucide-react";
 
 import type { Route } from "@/types";
 
@@ -34,6 +34,7 @@ export function initialRoute(): Route {
 
 export function normalizeRoute(value: unknown): unknown {
   if (value === "pluginHub" || value === "context" || value === "promptOptimizer" || value === "scripts") return "tools";
+  if (value === "memoryAssist") return "memory";
   if (value === "logs") return "settings";
   if (value === "relay") return "supplier";
   return value;

@@ -147,6 +147,7 @@ import {
   AboutScreen,
   MaintenanceScreen,
   OverviewScreen,
+  MemoryScreen,
   SessionManagementScreen,
   SettingsScreen,
   SupplierScreen,
@@ -1408,9 +1409,13 @@ export function App() {
     } else if (target === "sessions") {
       await Promise.all([
         refreshLocalSessions(true),
-        refreshMemoryAssist(true),
         refreshSettings(true),
       ]);
+      afterFirstPaintIfFresh(() => {
+        void Promise.all([refreshOverview(true), refreshClaude(true)]);
+      }, 250);
+    } else if (target === "memory") {
+      await Promise.all([refreshMemoryAssist(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
@@ -1744,13 +1749,19 @@ export function App() {
               claudeChinese={claudeChinese}
               claudeDesktop={claudeDesktop}
               localSessions={localSessions}
-              memoryAssist={memoryAssist}
-              memoryExport={memoryExport}
-              memoryItems={memoryItems}
-              memorySearch={memorySearch}
-              memorySelfCheck={memorySelfCheck}
               providerSync={providerSync}
               settings={settings}
+            />
+          ) : null}
+          {route === "memory" ? (
+            <MemoryScreen
+              actions={actions}
+              exported={memoryExport}
+              items={memoryItems}
+              search={memorySearch}
+              selfCheck={memorySelfCheck}
+              settings={settings}
+              status={memoryAssist}
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}

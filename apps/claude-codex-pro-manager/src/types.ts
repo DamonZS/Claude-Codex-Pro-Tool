@@ -755,6 +755,7 @@ export type Route =
   | "supplier"
   | "tools"
   | "sessions"
+  | "memory"
   | "maintenance"
   | "settings"
   | "about";
