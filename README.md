@@ -584,7 +584,7 @@ docs/
 ## 反馈
 
 - Issues：<https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues>
-- 讨论群二维码：<https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#>
+- 讨论群二维码：<https://kcnl7iasnc4t.feishu.cn/wiki/O4T8wAodLiz05MkpqVkcoI7SnRd?from=from_copylink>
 
 ## 协议与规则
 
