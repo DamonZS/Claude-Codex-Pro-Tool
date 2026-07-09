@@ -31,7 +31,7 @@ fn read_all_frontend_sources() -> String {
                 .map(|ext| ext == "ts" || ext == "tsx")
                 .unwrap_or(false);
             if is_ts {
-                if let Ok(contents) = std::fs::read_to_string(&path) {
+                if let Ok(contents) = std::fs::read_to_string(&path).map(normalize_source) {
                     combined.push_str(&contents);
                     combined.push('\n');
                 }
@@ -42,10 +42,21 @@ fn read_all_frontend_sources() -> String {
 }
 
 /// 读取拆分后某个前端源文件的完整内容（相对 `src/`），用于结构化断言。
+fn normalize_source(source: String) -> String {
+    source.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn read_source_file(path: &std::path::Path) -> String {
+    normalize_source(
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read source file {}: {error}", path.display())),
+    )
+}
+
 fn read_frontend_file(relative: &str) -> String {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.parent().unwrap().join("src").join(relative);
-    std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read frontend file {relative}"))
+    read_source_file(&path)
 }
 
 #[cfg(windows)]
@@ -141,9 +152,10 @@ fn manager_runs_as_invoker_while_installer_requests_administrator_privileges() {
 
 #[test]
 fn manager_launch_button_spawns_silent_launcher_binary() {
-    let commands_rs =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
-            .expect("read manager commands.rs");
+    let commands_rs = read_source_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/commands.rs"
+    )));
 
     assert!(commands_rs.contains("SILENT_BINARY"));
     assert!(commands_rs.contains("resolve_silent_launcher_path()"));
@@ -157,9 +169,10 @@ fn manager_launch_button_spawns_silent_launcher_binary() {
 #[test]
 fn codex_launch_and_injected_status_do_not_auto_open_manager() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let commands_rs =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
-            .expect("read manager commands.rs");
+    let commands_rs = read_source_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/commands.rs"
+    )));
     let repo_root = manifest_dir
         .parent()
         .unwrap()
@@ -191,9 +204,10 @@ fn codex_launch_and_injected_status_do_not_auto_open_manager() {
 
 #[test]
 fn watcher_install_uses_resolved_existing_launcher_path() {
-    let commands_rs =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
-            .expect("read manager commands.rs");
+    let commands_rs = read_source_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/commands.rs"
+    )));
     let watcher_section = commands_rs
         .split("pub fn install_watcher()")
         .nth(1)
@@ -494,7 +508,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
@@ -646,7 +660,7 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     // 拆分后：字符串存在性护栏改读前端源码全集（迁到哪个文件都命中；!contains 覆盖更广）。
     let app_tsx = read_all_frontend_sources();
     let styles_path = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles_path).expect("read manager styles.css");
+    let styles = read_source_file(&styles_path);
 
     assert!(!app_tsx.contains("<span>后端链接</span>"));
     assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
@@ -690,7 +704,7 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
     let app_tsx = read_frontend_file("screens.tsx");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
 
     let session_section = app_tsx
         .split("function SessionManagementScreen")
@@ -749,7 +763,7 @@ fn prompt_optimizer_is_integrated_as_tools_card_launcher() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
@@ -792,24 +806,20 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_frontend_file("screens.tsx");
     let tauri_bridge = manifest_dir.parent().unwrap().join("src/tauriBridge.ts");
-    let tauri_bridge = std::fs::read_to_string(&tauri_bridge).expect("read manager tauriBridge.ts");
+    let tauri_bridge = read_source_file(&tauri_bridge);
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
-    let lib_rs =
-        std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read manager lib.rs");
-    let commands_rs = std::fs::read_to_string(manifest_dir.join("src/commands.rs"))
-        .expect("read manager commands.rs");
-    let tauri_conf =
-        std::fs::read_to_string(manifest_dir.join("tauri.conf.json")).expect("read tauri config");
-    let launcher_main = std::fs::read_to_string(
-        manifest_dir
+    let styles = read_source_file(&styles);
+    let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let tauri_conf = read_source_file(&manifest_dir.join("tauri.conf.json"));
+    let launcher_main = read_source_file(
+        &manifest_dir
             .parent()
             .unwrap()
             .parent()
             .unwrap()
             .join("claude-codex-pro-launcher/src/main.rs"),
-    )
-    .expect("read launcher main.rs");
+    );
 
     assert!(app_tsx.contains("ops-shell"));
     assert!(app_tsx.contains("ops-rail"));
@@ -1218,9 +1228,10 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
 #[test]
 fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     let app_tsx = read_all_frontend_sources();
-    let commands_rs =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs"))
-            .expect("read manager commands.rs");
+    let commands_rs = read_source_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/commands.rs"
+    )));
 
     assert!(app_tsx.contains("function codexLaunchRequestFromOverview"));
     assert!(app_tsx.contains("overview?.codex_app.path || overview?.latest_launch?.codex_app"));
@@ -1325,7 +1336,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     let app_tsx = read_all_frontend_sources().replace("\r\n", "\n");
     let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
 
     let supplier_screen = screens_file
         .split("function SupplierScreen")
@@ -1427,7 +1438,7 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
     let commands_rs =
         std::fs::read_to_string(manifest_dir.join("src/commands.rs")).expect("read commands.rs");
     let lib_rs = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read lib.rs");
@@ -2448,7 +2459,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_frontend_file("screens.tsx");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = std::fs::read_to_string(&styles).expect("read manager styles.css");
+    let styles = read_source_file(&styles);
 
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("function MaintenanceToolsPanel"));
