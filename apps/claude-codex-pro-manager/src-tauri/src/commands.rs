@@ -8271,11 +8271,44 @@ fn default_log_lines() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::{
+        ffi::OsString,
+        path::Path,
+        sync::{Mutex, OnceLock},
+    };
 
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    struct TestEnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn set_test_codex_home(path: &Path) -> TestEnvVarGuard {
+        let previous = std::env::var_os("CODEX_HOME");
+        std::fs::create_dir_all(path).unwrap();
+        unsafe {
+            std::env::set_var("CODEX_HOME", path);
+        }
+        TestEnvVarGuard {
+            key: "CODEX_HOME",
+            previous,
+        }
     }
 
     #[test]
@@ -9165,8 +9198,10 @@ enabled = true
     fn memory_assist_commands_respect_disabled_settings_before_writing() {
         let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
+        let _codex_home = set_test_codex_home(&temp.path().join("codex-home"));
         let settings_path = temp.path().join("settings.json");
         let memory_path = temp.path().join("memory.sqlite");
+        let isolated_memory_path = memory_path.clone();
         let previous_settings =
             claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
         let previous_memory =
@@ -9203,7 +9238,10 @@ enabled = true
                 source_session_id: String::new(),
             },
         ));
-        let status = tauri::async_runtime::block_on(load_memory_assist_status());
+        let status =
+            claude_codex_pro_core::memory_assist::MemoryAssistStore::new(isolated_memory_path)
+                .status_from_codex_home(&temp.path().join("codex-home"))
+                .unwrap();
 
         claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
         claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
@@ -9212,16 +9250,18 @@ enabled = true
         assert!(!learned.message.is_empty());
         assert_eq!(candidate.status, "failed");
         assert!(!candidate.message.is_empty());
-        assert_eq!(status.payload.memory.total_items, 0);
-        assert_eq!(status.payload.memory.pending_candidates, 0);
+        assert_eq!(status.total_items, 0);
+        assert_eq!(status.pending_candidates, 0);
     }
 
     #[test]
     fn memory_assist_candidate_command_respects_auto_suggest_disabled() {
         let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
+        let _codex_home = set_test_codex_home(&temp.path().join("codex-home"));
         let settings_path = temp.path().join("settings.json");
         let memory_path = temp.path().join("memory.sqlite");
+        let isolated_memory_path = memory_path.clone();
         let previous_settings =
             claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
         let previous_memory =
@@ -9258,7 +9298,10 @@ enabled = true
                 source_session_id: String::new(),
             },
         ));
-        let status = tauri::async_runtime::block_on(load_memory_assist_status());
+        let status =
+            claude_codex_pro_core::memory_assist::MemoryAssistStore::new(isolated_memory_path)
+                .status_from_codex_home(&temp.path().join("codex-home"))
+                .unwrap();
 
         claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
         claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
@@ -9266,8 +9309,8 @@ enabled = true
         assert_eq!(learned.status, "ok");
         assert_eq!(candidate.status, "failed");
         assert!(!candidate.message.is_empty());
-        assert_eq!(status.payload.memory.total_items, 1);
-        assert_eq!(status.payload.memory.pending_candidates, 0);
+        assert_eq!(status.total_items, 1);
+        assert_eq!(status.pending_candidates, 0);
     }
 
     #[test]

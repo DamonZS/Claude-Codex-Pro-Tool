@@ -597,6 +597,9 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("groupLocalSessionsByProject(sessions)"));
     assert!(session_section.contains("renderSessionBrowserPanel"));
     assert!(session_section.contains("session-management-wide-grid"));
+    assert!(session_section.contains("session-history-card"));
+    assert!(session_section.contains("session-codex-card"));
+    assert!(session_section.contains("session-claude-card"));
     assert!(session_section.contains("className=\"codex-session-browser\""));
     assert!(session_section.contains("Codex 本地会话项目列表"));
     assert!(session_section.contains("Claude 本地会话项目列表"));
@@ -610,7 +613,11 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(!session_section.contains("installClaudeZhPatch"));
     assert!(!session_section.contains("openClaudeChinese"));
     assert!(styles.contains(".session-management-wide-grid"));
-    assert!(styles.contains("grid-template-columns: minmax(320px, 0.9fr) minmax(520px, 1.35fr);"));
+    assert!(styles.contains("grid-template-columns: minmax(340px, 0.72fr) minmax(560px, 1.28fr);"));
+    assert!(styles.contains(".session-codex-card .codex-session-browser"));
+    assert!(styles.contains("max-height: 136px;"));
+    assert!(styles.contains(".session-claude-card"));
+    assert!(styles.contains("grid-column: 1 / -1;"));
     assert!(styles.contains(".codex-session-browser"));
     assert!(!styles.contains("background: #f3eeee;"));
     assert!(styles.contains("rgba(8, 9, 12, 0.72);"));
@@ -779,15 +786,18 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .and_then(|rest| rest.split("title=\"诊断与修复\"").next())
         .expect("memory overview panel source");
     assert!(!memory_panel.contains("Claude 一键开发模式"));
-    assert!(memory_panel.contains("查看/编辑经验教训"));
-    assert!(memory_panel.contains("提炼经验教训"));
-    assert!(memory_panel.contains("memory-overview-matrix"));
-    assert!(memory_panel.contains("memory-overview-actions"));
+    assert!(memory_panel.contains("盘古记忆开关"));
+    assert!(memory_panel.contains("运行状态"));
+    assert!(memory_panel.contains("Codex 注入"));
+    assert!(memory_panel.contains("对话监控"));
+    assert!(memory_panel.contains("<MemoryActivityWave active={memoryMonitorActive} />"));
+    assert!(!memory_panel.contains("查看/编辑经验教训"));
+    assert!(!memory_panel.contains("memory-overview-matrix"));
+    assert!(!memory_panel.contains("memory-overview-actions"));
     assert!(!memory_panel.contains("待确认"));
-    assert!(memory_panel.contains("actions.refineLongTermMemory()"));
-    assert!(memory_panel.contains("openMemoryDetails()"));
+    assert!(!memory_panel.contains("actions.refineLongTermMemory()"));
+    assert!(!memory_panel.contains("openMemoryDetails()"));
     assert!(overview_screen.contains("overview-side-stack"));
-    assert!(overview_screen.contains("<OverviewMemoryDetails"));
     assert!(app_tsx.contains("function OverviewMemoryDetails"));
     assert!(app_tsx.contains("经验教训手册详情"));
     assert!(app_tsx.contains("提炼结果会合成为一条精简手册，可在这里直接查看和编辑。"));
@@ -1337,6 +1347,20 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains(r#"<Edit className="h-4 w-4" />"#));
     assert!(supplier_screen.contains(r#"<Activity className="h-4 w-4" />"#));
     assert!(supplier_screen.contains(r#"<BarChart3 className="h-4 w-4" />"#));
+    assert!(supplier_screen.contains("const supplierModelOptions = Array.from(new Set(["));
+    assert!(supplier_screen.contains("...(modelFetch?.models ?? [])"));
+    assert!(supplier_screen.contains("...String(generated.modelList || \"\").split(/\\r?\\n/)"));
+    assert!(
+        supplier_screen
+            .contains("...modelRowsForDraft.flatMap((row) => [row.requestModel, row.displayName])")
+    );
+    assert!(supplier_screen.contains("supplier-model-map-select"));
+    assert!(supplier_screen.contains(
+        "updateSupplierModelMapping(row.role, \"requestModel\", event.currentTarget.value)"
+    ));
+    assert!(supplier_screen.contains("显示名称"));
+    assert!(supplier_screen.contains("实际请求模型"));
+    assert!(supplier_screen.contains("声明支持 1M"));
     assert!(!supplier_screen.contains("不写 API 文件"));
     assert!(!supplier_screen.contains("不会写入 API key"));
     assert!(supplier_screen.contains("未配置接口地址"));
@@ -1484,6 +1508,8 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(styles.contains("padding: 32px max(16px, calc((100% - 880px) / 2));"));
     assert!(styles.contains("textarea.supplier-config-json"));
     assert!(styles.contains(".supplier-route-master-toggle"));
+    assert!(styles.contains(".supplier-model-map-grid select"));
+    assert!(styles.contains(".supplier-model-map-select"));
     assert!(styles.contains(
         ".supplier-ccswitch-collapse-card:not(.expanded) .supplier-ccswitch-collapse-head"
     ));

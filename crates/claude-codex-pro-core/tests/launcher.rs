@@ -1103,7 +1103,8 @@ async fn protocol_proxy_port_uses_selected_helper_port_when_default_is_busy() {
     assert!(before_stop.contains(&"select-helper:57321".to_string()));
     assert!(before_stop.contains(&"start-helper:58434".to_string()));
     assert!(!before_stop.contains(&"start-helper:57321".to_string()));
-    assert!(!before_stop.contains(&"inject:9229:58434".to_string()));
+    assert!(before_stop.contains(&"inject:9229:58434".to_string()));
+    assert!(!before_stop.contains(&"inject:9229:57321".to_string()));
 
     handle.wait_for_codex_exit().await.unwrap();
 

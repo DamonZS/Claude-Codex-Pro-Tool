@@ -41,7 +41,7 @@
    - 证据：命令输出。
 
 10. 会话管理页移除 Claude 会话诊断并使用宽屏布局。
-    - 通过标准：源码中 `SessionManagementScreen` 不再包含 `Claude 会话诊断`、`launchClaudeDesktop`、`installClaudeZhPatch`；包含 `session-management-wide-grid`、`Codex 会话管理` 与 `Claude 会话管理`。
+    - 通过标准：源码中 `SessionManagementScreen` 不再包含 `Claude 会话诊断`、`launchClaudeDesktop`、`installClaudeZhPatch`；包含 `session-management-wide-grid`、`session-history-card`、`session-codex-card`、`session-claude-card`、`Codex 会话管理` 与 `Claude 会话管理`，且 Codex 列表在卡片内限高滚动。
     - 证据：Manager UI 回归测试和源码检查。
 
 ## 必需验证

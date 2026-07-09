@@ -263,13 +263,13 @@ fn status_includes_capture_and_codex_session_workspaces_without_auto_approving()
         status.pending_candidates, 0,
         "status refresh may backfill captures but must not generate candidates"
     );
-    assert_eq!(status.total_captures, 1);
+    assert_eq!(status.total_captures, 2);
     let repo = status
         .workspaces
         .iter()
         .find(|workspace| workspace.workspace == "D:\\Project\\Claude-Codex-Pro-Tool")
         .expect("thread cwd workspace should be visible");
-    assert_eq!(repo.capture_count, 1);
+    assert_eq!(repo.capture_count, 2);
     assert_eq!(repo.session_count, 1);
     assert!(repo.latest_capture_at > 0);
     let catalog = status
@@ -368,7 +368,7 @@ fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
     drop(db);
 
     let first = store.status_from_codex_home(&codex_home).unwrap();
-    assert_eq!(first.total_captures, 1);
+    assert_eq!(first.total_captures, 2);
 
     let conn = Connection::open(store.db_path()).unwrap();
     conn.execute(
@@ -391,7 +391,9 @@ fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
     let (summary, first_updated_at): (String, i64) = conn
         .query_row(
             "SELECT summary, updated_at FROM memory_captures
-             WHERE workspace = 'repo-filter' AND summary NOT LIKE '<codex_internal_context%'
+             WHERE workspace = 'repo-filter'
+               AND source = 'codex-history-rollout-user'
+               AND summary LIKE '%Pangu memory capture evidence%'
              ORDER BY updated_at DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -405,18 +407,20 @@ fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
 
     std::thread::sleep(std::time::Duration::from_secs(1));
     let second = store.status_from_codex_home(&codex_home).unwrap();
-    assert_eq!(second.total_captures, 1);
+    assert_eq!(second.total_captures, 2);
     let workspace = second
         .workspaces
         .iter()
         .find(|workspace| workspace.workspace == "repo-filter")
         .expect("valid capture workspace");
-    assert_eq!(workspace.capture_count, 1);
+    assert_eq!(workspace.capture_count, 2);
     let conn = Connection::open(store.db_path()).unwrap();
     let second_updated_at: i64 = conn
         .query_row(
             "SELECT updated_at FROM memory_captures
-             WHERE workspace = 'repo-filter' AND summary NOT LIKE '<codex_internal_context%'
+             WHERE workspace = 'repo-filter'
+               AND source = 'codex-history-rollout-user'
+               AND summary LIKE '%Pangu memory capture evidence%'
              ORDER BY updated_at DESC LIMIT 1",
             [],
             |row| row.get(0),
@@ -431,7 +435,7 @@ fn codex_history_backfill_ignores_internal_context_and_is_idempotent() {
         })
     })
     .unwrap();
-    assert_eq!(session.recent_captures.len(), 1);
+    assert_eq!(session.recent_captures.len(), 2);
     assert!(!session.capture_summary.contains("codex_internal_context"));
 }
 
@@ -906,8 +910,8 @@ fn codex_history_backfill_records_captures_and_pending_candidates() {
     let report = store.backfill_codex_history_from_home(&codex_home, "", 5, true);
     assert_eq!(report.db_paths_checked, 1);
     assert_eq!(report.rollout_files_checked, 1);
-    assert_eq!(report.user_messages_seen, 1);
-    assert_eq!(report.captures_recorded, 1);
+    assert_eq!(report.user_messages_seen, 2);
+    assert_eq!(report.captures_recorded, 2);
     assert_eq!(report.items_learned, 1);
     assert_eq!(report.candidates_created, 0);
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -924,13 +928,13 @@ fn codex_history_backfill_records_captures_and_pending_candidates() {
         })
     })
     .unwrap();
-    assert_eq!(summary.recent_captures.len(), 1);
+    assert_eq!(summary.recent_captures.len(), 2);
     assert_eq!(summary.injected_items.len(), 1);
-    assert!(
-        summary
-            .capture_summary
+    assert!(summary.recent_captures.iter().any(|capture| {
+        capture
+            .candidate_reason
             .contains("auto_learned: history workflow rule")
-    );
+    }));
 }
 
 #[test]

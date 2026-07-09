@@ -3724,10 +3724,28 @@ body {
 
 .session-management-wide-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(520px, 1.35fr);
+  grid-template-columns: minmax(340px, 0.72fr) minmax(560px, 1.28fr);
   gap: 16px;
   align-items: start;
   width: 100%;
+}
+
+.session-history-card,
+.session-codex-card,
+.session-claude-card {
+  min-width: 0;
+}
+
+.session-claude-card {
+  grid-column: 1 / -1;
+}
+
+.session-codex-card .codex-session-browser {
+  max-height: 136px;
+}
+
+.session-claude-card .codex-session-browser {
+  max-height: 520px;
 }
 
 .ops-wide-column {
@@ -7336,13 +7354,20 @@ body {
   font-weight: 700;
 }
 
-.supplier-model-map-grid input:not([type="checkbox"]) {
+.supplier-model-map-grid input:not([type="checkbox"]),
+.supplier-model-map-grid select {
   width: 100%;
   border: 1px solid var(--ops-hairline);
   border-radius: 9px;
   background: var(--ops-surface);
   color: var(--ops-ink);
   padding: 9px 10px;
+}
+
+.supplier-model-map-select {
+  min-width: 0;
+  height: 38px;
+  cursor: pointer;
 }
 
 .supplier-model-map-grid input:disabled {

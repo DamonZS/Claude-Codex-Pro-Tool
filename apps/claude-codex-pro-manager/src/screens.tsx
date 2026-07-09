@@ -1021,13 +1021,22 @@ export function SupplierScreen({
     const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
     const authField = generated.authField || "ANTHROPIC_AUTH_TOKEN";
     const defaultModel = generated.model || generated.testModel || "claude-sonnet";
+    const modelRowsForDraft = supplierModelMappingRows(generated);
+    const supplierModelOptions = Array.from(new Set([
+      ...(modelFetch?.models ?? []),
+      ...String(generated.modelList || "").split(/\r?\n/),
+      generated.model,
+      generated.testModel,
+      defaultModel,
+      ...modelRowsForDraft.flatMap((row) => [row.requestModel, row.displayName]),
+    ].map((model) => String(model || "").trim()).filter(Boolean)));
     const claudeConfigJson = JSON.stringify({
       env: {
         [authField]: generated.apiKey,
         ANTHROPIC_BASE_URL: generated.baseUrl || generated.upstreamBaseUrl,
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "haiku")?.requestModel || defaultModel,
-        ANTHROPIC_DEFAULT_OPUS_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "opus")?.requestModel || defaultModel,
-        ANTHROPIC_DEFAULT_SONNET_MODEL: supplierModelMappingRows(generated).find((row) => row.role === "sonnet")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: modelRowsForDraft.find((row) => row.role === "haiku")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_OPUS_MODEL: modelRowsForDraft.find((row) => row.role === "opus")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: modelRowsForDraft.find((row) => row.role === "sonnet")?.requestModel || defaultModel,
         ANTHROPIC_MODEL: defaultModel,
       },
       ...(generated.headerOverride?.trim() || generated.bodyOverride?.trim()
@@ -1040,7 +1049,7 @@ export function SupplierScreen({
         : {}),
     }, null, 2);
     if (isClaudeSupplier) {
-      const modelRows = supplierModelMappingRows(generated);
+      const modelRows = modelRowsForDraft;
       return (
         <div className="supplier-ccswitch-editor">
           <div className="supplier-ccswitch-editor-head">
@@ -1075,13 +1084,16 @@ export function SupplierScreen({
                 const rows = modelRows.map((row) => ({ ...row, displayName: row.displayName || baseModel, requestModel: row.requestModel || baseModel }));
                 updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) });
               }} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型列表</Button></div></div>
-              <p className="supplier-inline-note">显示名称只影响 /model 菜单；1M 只是给 Claude Code 的上下文能力声明。</p>
-              <div className="supplier-model-map-grid header"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
+              <p className="supplier-inline-note">显示名称只影响 /model 菜单；实际请求模型会写入请求路由；声明支持 1M 只表示上游上下文能力。</p>
+              <div className="supplier-model-map-grid header claude"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
               {modelRows.map((row) => (
                 <div className="supplier-model-map-grid claude" key={row.role}>
                   <input disabled value={row.label} />
                   <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} />
-                  <input onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} placeholder={defaultModel} value={row.requestModel || ""} />
+                  <select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}>
+                    <option value="">选择实际请求模型</option>
+                    {supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}
+                  </select>
                   <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
                 </div>
               ))}
@@ -1189,14 +1201,17 @@ export function SupplierScreen({
                 <label className="ops-form-field span-2"><span>路由</span><input onChange={(event) => updateDraft({ routeMode: event.currentTarget.value })} placeholder="Claude Desktop Proxy / Direct" value={generated.routeMode || (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct")} /></label>
                 <div className="supplier-route-note span-2">{routeEnabled ? "当前按 cc-switch Proxy 语义启用路由：Claude 安全路由 ID 会映射到上游真实模型。" : "当前为 Direct 直连：只使用 Anthropic Messages 原生协议，不做模型路由转换。"}</div>
                 <div className="supplier-model-map-table span-2">
-                  <div className="supplier-model-map-head"><strong>模型映射</strong><span>安全路由 ID / 菜单显示名 / 实际请求模型 / 声明支持 1M</span></div>
-                  <div className="supplier-model-map-grid header"><span>模型角色</span><span>安全路由 ID</span><span>菜单显示名</span><span>实际请求模型</span><span>声明支持 1M</span></div>
-                  {supplierModelMappingRows(generated).map((row) => (
+                  <div className="supplier-model-map-head"><strong>模型映射</strong><span>安全路由 ID / 显示名称 / 实际请求模型 / 声明支持 1M</span></div>
+                  <div className="supplier-model-map-grid header"><span>模型角色</span><span>安全路由 ID</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
+                  {modelRowsForDraft.map((row) => (
                     <div className="supplier-model-map-grid" key={row.role}>
                       <input disabled value={row.label} />
                       <input onChange={(event) => updateSupplierModelMapping(row.role, "routeId", event.currentTarget.value)} value={row.routeId} />
                       <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} value={row.displayName} />
-                      <input onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel} />
+                      <select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}>
+                        <option value="">选择实际请求模型</option>
+                        {supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}
+                      </select>
                       <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
                     </div>
                   ))}
@@ -2486,7 +2501,7 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
         </div>
       </Panel>
       <div className="session-management-wide-grid">
-        <div className="ops-wide-column">
+        <div className="session-history-card">
           <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
             <div className="ops-status-list">
               <StatusRow label="供应商同步" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
@@ -2511,8 +2526,10 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
             ) : null}
           </Panel>
         </div>
-        <div className="ops-wide-column">
+        <div className="session-codex-card">
           {renderSessionBrowserPanel("Codex 会话管理", "Codex 本地会话项目列表", "暂未读取到 Codex 本地会话。")}
+        </div>
+        <div className="session-claude-card">
           {renderSessionBrowserPanel("Claude 会话管理", "Claude 本地会话项目列表", "暂未读取到 Claude 本地会话。")}
         </div>
       </div>
