@@ -135,6 +135,7 @@ import type {
   ContextEntry,
   ContextKind,
   LiveContextEntriesResult,
+  LocalSession,
   LocalSessionsResult,
   LogsResult,
   MemoryExportResult,
@@ -2311,62 +2312,90 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
 }) {
-  const sessions = useMemo(() => localSessions?.sessions ?? [], [localSessions]);
-  const sessionProjectGroups = useMemo(() => groupLocalSessionsByProject(sessions), [sessions]);
+  const codexSessions = useMemo(() => localSessions?.sessions ?? [], [localSessions]);
+  const codexSessionProjectGroups = useMemo(() => groupLocalSessionsByProject(codexSessions), [codexSessions]);
+  const claudeSessionProjectGroups = useMemo(() => [], []);
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
-  const renderSessionBrowserPanel = (title: string, ariaLabel: string, emptyText: string) => (
-    <Panel title={title} detail={`${sessions.length} 个本地会话；删除会先写备份。`}>
-      <div className="codex-session-toolbar">
-        <div>
-          <span>数据库</span>
-          <strong>{compactPath(localSessions?.dbPath)}</strong>
+  const renderSessionBrowserPanel = ({
+    title,
+    ariaLabel,
+    emptyText,
+    data,
+    groups,
+    onRefresh,
+    onDelete,
+    sourceLabel = "数据库",
+    statusLabel,
+  }: {
+    title: string;
+    ariaLabel: string;
+    emptyText: string;
+    data: LocalSessionsResult | null;
+    groups: ReturnType<typeof groupLocalSessionsByProject>;
+    onRefresh?: () => void;
+    onDelete?: (session: LocalSession) => void;
+    sourceLabel?: string;
+    statusLabel?: string;
+  }) => {
+    const sessionCount = data?.sessions.length ?? 0;
+    return (
+      <Panel title={title} detail={`${sessionCount} 个本地会话；删除会先写备份。`}>
+        <div className="codex-session-toolbar">
+          <div>
+            <span>{sourceLabel}</span>
+            <strong>{data?.dbPath ? compactPath(data.dbPath) : statusLabel || "尚未接入"}</strong>
+          </div>
+          <div>
+            <span>候选库</span>
+            <strong>{data?.dbPaths.length ?? 0} 个</strong>
+          </div>
+          <div>
+            <span>会话数</span>
+            <strong>{sessionCount} 个</strong>
+          </div>
+          {onRefresh ? (
+            <Button onClick={onRefresh} size="sm" variant="outline">
+              <RefreshCw className="h-4 w-4" />
+              刷新
+            </Button>
+          ) : null}
         </div>
-        <div>
-          <span>候选库</span>
-          <strong>{localSessions?.dbPaths.length ?? 0} 个</strong>
+        <div className="codex-session-browser" aria-label={ariaLabel}>
+          <div className="codex-session-browser-title">项目</div>
+          {groups.length ? groups.map((group) => (
+            <section className="codex-session-project" key={`${title}:${group.key}`}>
+              <div className="codex-session-project-header" title={group.subtitle || group.label}>
+                <FileCode2 className="h-4 w-4" />
+                <strong>{group.label}</strong>
+              </div>
+              <div className="codex-session-project-list">
+                {group.sessions.map((session) => (
+                  <div className="codex-session-row" key={`${title}:${session.dbPath}:${session.id}`}>
+                    <button className="codex-session-main" title={session.title || session.id} type="button">
+                      <span>{session.title || "未命名会话"}</span>
+                      <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
+                    </button>
+                    {onDelete ? (
+                      <button
+                        className="codex-session-delete"
+                        onClick={() => onDelete(session)}
+                        title="删除会话"
+                        type="button"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )) : <Empty text={emptyText} />}
         </div>
-        <div>
-          <span>会话数</span>
-          <strong>{sessions.length} 个</strong>
-        </div>
-        <Button onClick={() => void actions.refreshLocalSessions()} size="sm" variant="outline">
-          <RefreshCw className="h-4 w-4" />
-          刷新
-        </Button>
-      </div>
-      <div className="codex-session-browser" aria-label={ariaLabel}>
-        <div className="codex-session-browser-title">项目</div>
-        {sessionProjectGroups.length ? sessionProjectGroups.map((group) => (
-          <section className="codex-session-project" key={`${title}:${group.key}`}>
-            <div className="codex-session-project-header" title={group.subtitle || group.label}>
-              <FileCode2 className="h-4 w-4" />
-              <strong>{group.label}</strong>
-            </div>
-            <div className="codex-session-project-list">
-              {group.sessions.map((session) => (
-                <div className="codex-session-row" key={`${title}:${session.dbPath}:${session.id}`}>
-                  <button className="codex-session-main" title={session.title || session.id} type="button">
-                    <span>{session.title || "未命名会话"}</span>
-                    <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
-                  </button>
-                  <button
-                    className="codex-session-delete"
-                    onClick={() => void actions.deleteLocalSession(session)}
-                    title="删除会话"
-                    type="button"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )) : <Empty text={emptyText} />}
-      </div>
-    </Panel>
-  );
+      </Panel>
+    );
+  };
 
   return (
     <div className="stack">
@@ -2403,10 +2432,26 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
           </Panel>
         </div>
         <div className="session-codex-card">
-          {renderSessionBrowserPanel("Codex 会话管理", "Codex 本地会话项目列表", "暂未读取到 Codex 本地会话。")}
+          {renderSessionBrowserPanel({
+            title: "Codex 会话管理",
+            ariaLabel: "Codex 本地会话项目列表",
+            emptyText: "暂未读取到 Codex 本地会话。",
+            data: localSessions,
+            groups: codexSessionProjectGroups,
+            onRefresh: () => void actions.refreshLocalSessions(),
+            onDelete: (session) => void actions.deleteLocalSession(session),
+          })}
         </div>
         <div className="session-claude-card">
-          {renderSessionBrowserPanel("Claude 会话管理", "Claude 本地会话项目列表", "暂未读取到 Claude 本地会话。")}
+          {renderSessionBrowserPanel({
+            title: "Claude 会话管理",
+            ariaLabel: "Claude 本地会话项目列表",
+            emptyText: "Claude 会话扫描尚未接入，不会复用 Codex 会话。",
+            data: null,
+            groups: claudeSessionProjectGroups,
+            sourceLabel: "Claude 会话源",
+            statusLabel: "待接入",
+          })}
         </div>
       </div>
     </div>

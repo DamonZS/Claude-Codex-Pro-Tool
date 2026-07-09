@@ -594,7 +594,7 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("Claude 会话管理"));
     assert!(session_section.contains("refreshLocalSessions"));
     assert!(session_section.contains("deleteLocalSession"));
-    assert!(session_section.contains("groupLocalSessionsByProject(sessions)"));
+    assert!(session_section.contains("groupLocalSessionsByProject(codexSessions)"));
     assert!(session_section.contains("renderSessionBrowserPanel"));
     assert!(session_section.contains("session-management-wide-grid"));
     assert!(session_section.contains("session-history-card"));
@@ -603,10 +603,18 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("className=\"codex-session-browser\""));
     assert!(session_section.contains("Codex 本地会话项目列表"));
     assert!(session_section.contains("Claude 本地会话项目列表"));
+    assert!(session_section.contains("data: localSessions"));
+    assert!(session_section.contains("data: null"));
+    assert!(session_section.contains("Claude 会话扫描尚未接入，不会复用 Codex 会话。"));
+    assert!(session_section.contains(r#"sourceLabel: "Claude 会话源""#));
+    assert!(session_section.contains(r#"statusLabel: "待接入""#));
+    assert!(!session_section.contains(r#"renderSessionBrowserPanel("Claude 会话管理""#));
     assert!(session_section.contains("className=\"codex-session-project-header\""));
     assert!(session_section.contains("className=\"codex-session-main\""));
     assert!(session_section.contains("formatSessionRelativeTime(session.updatedAtMs)"));
-    assert!(session_section.contains("actions.deleteLocalSession(session)"));
+    assert!(
+        session_section.contains("onDelete: (session) => void actions.deleteLocalSession(session)")
+    );
     assert!(session_section.contains("repairHistorySessions"));
     assert!(!session_section.contains("Claude 会话诊断"));
     assert!(!session_section.contains("launchClaudeDesktop"));
