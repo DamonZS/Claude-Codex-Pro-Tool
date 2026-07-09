@@ -419,13 +419,14 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("version: tag"));
     assert!(workflow.contains("## 更新内容"));
     assert!(workflow.contains("## 验证"));
-    assert!(workflow.contains("Assets 9"));
-    assert!(workflow.contains("windows-x64-setup.exe"));
-    assert!(workflow.contains("windows-x64.zip"));
-    assert!(workflow.contains("macos-x64.dmg"));
-    assert!(workflow.contains("macos-x64.zip"));
-    assert!(workflow.contains("macos-arm64.dmg"));
-    assert!(workflow.contains("macos-arm64.zip"));
+    assert!(workflow.contains("## 构建产物说明"));
+    assert!(!workflow.contains("## Assets 9"));
+    assert!(!workflow.contains("Source code (zip)"));
+    assert!(!workflow.contains("Source code (tar.gz)"));
+    assert!(!workflow.contains("claude-codex-pro-${version}-macos-arm64.dmg"));
+    assert!(workflow.contains("Windows x64"));
+    assert!(workflow.contains("macOS x64"));
+    assert!(workflow.contains("macOS arm64"));
     assert!(workflow.contains("Compress-Archive"));
     assert!(workflow.contains("ditto -c -k --sequesterRsrc"));
     assert!(

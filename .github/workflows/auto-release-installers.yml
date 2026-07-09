@@ -80,29 +80,20 @@ jobs:
 
           ## 更新内容
 
-          - 自动发布说明恢复“更新内容 / 验证 / Assets 9”结构，方便用户直接查看版本变化。
-          - 发布资产补齐 Windows x64、macOS x64、macOS arm64 的安装包与 ZIP 包。
-          - 保持 latest.json 下载索引，便于管理工具检查和获取最新版。
-          - 发布包只包含构建产物，不打包本机供应商配置、API Key、记忆库或用户缓存。
+          - GitHub Actions builds Windows and macOS installers for this release.
+          - Packages include only built application files; no local provider config, API keys, memory DB, or user cache.
+          - latest.json remains the update index for the manager.
 
           ## 验证
 
-          - npm run check 通过。
-          - npm run vite:build 通过。
-          - cargo test --workspace 通过。
-          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均由 GitHub Actions 构建并上传。
+          - npm run check passed.
+          - npm run vite:build passed.
+          - cargo test --workspace passed.
+          - Windows installer/ZIP and macOS DMG/ZIP are built by GitHub Actions.
 
-          ## Assets 9
+          ## 构建产物说明
 
-          - claude-codex-pro-${version}-macos-arm64.dmg
-          - claude-codex-pro-${version}-macos-arm64.zip
-          - claude-codex-pro-${version}-macos-x64.dmg
-          - claude-codex-pro-${version}-macos-x64.zip
-          - claude-codex-pro-${version}-windows-x64-setup.exe
-          - claude-codex-pro-${version}-windows-x64.zip
-          - latest.json
-          - Source code (zip)
-          - Source code (tar.gz)
+          The GitHub Assets area below is the only download list. App artifacts cover Windows x64, macOS x64, and macOS arm64. latest.json is an update index. GitHub-generated repository archives are not application builds and are not counted as app versions.
 
           Source commit: $SHA
           NOTES

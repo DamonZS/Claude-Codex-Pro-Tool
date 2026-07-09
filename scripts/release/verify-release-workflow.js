@@ -56,13 +56,11 @@ mustContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS man
 for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   mustContain(source, "windows-x64-setup.exe", label);
   mustContain(source, "windows-x64.zip", label);
-  mustContain(source, "macos-x64.dmg", label);
-  mustContain(source, "macos-x64.zip", label);
-  mustContain(source, "macos-arm64.dmg", label);
-  mustContain(source, "macos-arm64.zip", label);
   mustContain(source, "latest.json", label);
   mustContain(source, "Compress-Archive", label);
   mustContain(source, "ditto -c -k --sequesterRsrc", label);
+  mustContain(source, "package-dmg.sh", `${label} macOS DMG build`);
+  mustContain(source, "dist/macos/", `${label} macOS artifact path`);
   mustContain(source, "runs-on: windows-latest", `${label} Windows runner`);
   mustContain(source, "runner: macos-latest", `${label} macOS runner`);
   assert.ok(source.match(/runner: macos-latest/g)?.length >= 2, `${label} must use macos-latest for both macOS matrix entries`);
@@ -74,9 +72,19 @@ for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   }
 }
 
+mustContain(auto, "dist/macos/*.dmg", "auto macOS DMG upload");
+mustContain(auto, "dist/macos/*.zip", "auto macOS ZIP upload");
+mustContain(auto, "macos-${{ matrix.arch }}.zip", "auto macOS ZIP naming");
+mustContain(manual, "macos-${{ matrix.arch }}.dmg", "manual macOS DMG artifact path");
+mustContain(manual, "macos-${{ matrix.arch }}.zip", "manual macOS ZIP artifact path");
+
 mustContain(auto, "## 更新内容", "auto release notes");
 mustContain(auto, "## 验证", "auto release notes");
-mustContain(auto, "## Assets 9", "auto release notes");
+mustContain(auto, "## 构建产物说明", "auto release notes");
+mustNotContain(auto, "## Assets 9", "auto release notes");
+mustNotContain(auto, "Source code (zip)", "auto release notes");
+mustNotContain(auto, "Source code (tar.gz)", "auto release notes");
+mustNotContain(auto, "claude-codex-pro-${version}-macos-arm64.dmg", "auto release notes");
 mustContain(auto, 'version="${TAG#v}"', "auto release version variable");
 mustContain(auto, 'gh release edit "$TAG"', "auto release update existing notes");
 assert.ok(!auto.includes('Release $TAG already exists; assets will be replaced.\n            exit 0'), "auto release must not skip notes update for existing draft");
