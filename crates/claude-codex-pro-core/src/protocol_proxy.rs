@@ -781,6 +781,22 @@ fn claude_desktop_model_mapping_json_for(
         return None;
     }
     let entries = parsed.as_array()?;
+    let subagent_preserve = entries.iter().any(|entry| {
+        entry
+            .get("role")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|role| role.eq_ignore_ascii_case("subagent"))
+            && entry
+                .get("requestModel")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .map(strip_one_m_suffix)
+                .is_some_and(|model| model == requested)
+    });
+    if subagent_preserve {
+        return Some(requested.to_string());
+    }
     let exact = entries.iter().find(|entry| {
         entry
             .get("routeId")
@@ -841,6 +857,8 @@ fn claude_route_role_keyword(model: &str) -> Option<&'static str> {
         Some("haiku")
     } else if lower.contains("fable") {
         Some("fable")
+    } else if lower.contains("subagent") {
+        Some("subagent")
     } else {
         None
     }

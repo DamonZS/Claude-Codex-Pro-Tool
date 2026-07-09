@@ -244,6 +244,42 @@ fn claude_desktop_model_mapping_prefers_ccswitch_route_json() {
 }
 
 #[test]
+fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback() {
+    let relay = RelayProfile {
+        model_list: "fallback-model".to_string(),
+        model_mapping_json: serde_json::json!([
+            {
+                "role": "subagent",
+                "label": "Subagent",
+                "routeId": "claude-subagent",
+                "displayName": "",
+                "requestModel": "gpt-5.4-mini[1M]",
+                "supports1m": true
+            },
+            {
+                "role": "sonnet",
+                "label": "Sonnet",
+                "routeId": "claude-sonnet-4-6",
+                "displayName": "GPT Sonnet",
+                "requestModel": "gpt-5.5",
+                "supports1m": false
+            }
+        ])
+        .to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("gpt-5.4-mini[1M]", &relay).as_deref(),
+        Some("gpt-5.4-mini")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
+        Some("gpt-5.5")
+    );
+}
+
+#[test]
 fn claude_desktop_default_model_list_matches_expected_ui_order() {
     assert_eq!(
         claude_desktop_default_model_list(),

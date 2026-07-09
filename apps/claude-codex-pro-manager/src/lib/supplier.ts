@@ -45,7 +45,7 @@ export function createAggregateSupplierProfile(settings: BackendSettings): Relay
   return normalizeSupplierProfile(withSupplierGeneratedFiles({
     ...createSupplierProfile(settings),
     id: uniqueSupplierProfileId(settings.relayProfiles, "aggregate"),
-    name: `聚合供应商${settings.relayProfiles.filter((profile) => profile.aggregateEnabled).length + 1}`,
+    name: `聚合供应商 ${settings.relayProfiles.filter((profile) => profile.aggregateEnabled).length + 1}`,
     model: "gpt-5.5",
     baseUrl: "",
     upstreamBaseUrl: "",
@@ -110,7 +110,7 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
 
 
 export type SupplierModelMappingRow = {
-  role: "sonnet" | "opus" | "fable" | "haiku";
+  role: "sonnet" | "opus" | "fable" | "haiku" | "subagent";
   label: string;
   routeId: string;
   displayName: string;
@@ -122,7 +122,8 @@ export const SUPPLIER_MODEL_MAPPING_DEFAULTS: SupplierModelMappingRow[] = [
   { role: "sonnet", label: "Sonnet", routeId: "claude-sonnet-4-6", displayName: "", requestModel: "", supports1m: true },
   { role: "opus", label: "Opus", routeId: "claude-opus-4-8", displayName: "", requestModel: "", supports1m: true },
   { role: "fable", label: "Fable", routeId: "claude-fable-5", displayName: "", requestModel: "", supports1m: true },
-  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "", requestModel: "", supports1m: true },
+  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "", requestModel: "", supports1m: false },
+  { role: "subagent", label: "Subagent", routeId: "claude-subagent", displayName: "", requestModel: "", supports1m: true },
 ];
 
 export const SUPPLIER_API_FORMAT_OPTIONS = [
@@ -134,20 +135,20 @@ export const SUPPLIER_API_FORMAT_OPTIONS = [
   },
   {
     value: "OpenAI Chat Completions",
-    label: "OpenAI Chat Completions（需开启路由）",
-    detail: "Claude Desktop 通过本地路由把 Anthropic 请求转换为 OpenAI Chat Completions。",
+    label: "OpenAI Chat Completions（需要路由）",
+    detail: "通过本地路由把 Anthropic 请求转换为 OpenAI Chat Completions。",
     routeRequired: true,
   },
   {
     value: "OpenAI Responses API",
-    label: "OpenAI Responses API（需开启路由）",
-    detail: "Claude Desktop 通过本地路由把 Anthropic 请求转换为 OpenAI Responses API。",
+    label: "OpenAI Responses API（需要路由）",
+    detail: "通过本地路由把 Anthropic 请求转换为 OpenAI Responses API。",
     routeRequired: true,
   },
   {
     value: "Gemini Native generateContent",
-    label: "Gemini Native generateContent（需开启路由）",
-    detail: "Claude Desktop 通过本地路由把 Anthropic 请求转换为 Gemini 原生 generateContent。",
+    label: "Gemini Native generateContent（需要路由）",
+    detail: "通过本地路由把 Anthropic 请求转换为 Gemini 原生 generateContent。",
     routeRequired: true,
   },
 ] as const;
@@ -280,7 +281,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
   if (generated.targetApp === "claude" || generated.targetApp === "claude-desktop") {
     const routeRows = supplierModelMappingRows(generated).filter((row) => row.routeId.trim() && row.requestModel.trim());
     const claudeDesktopModelRoutes = Object.fromEntries(routeRows.map((row) => [row.routeId.trim(), {
-      model: `${row.requestModel.trim()}${row.supports1m ? " [1M]" : ""}`,
+      model: row.requestModel.trim(),
       labelOverride: row.displayName.trim() || undefined,
       supports1m: row.supports1m,
     }]));
@@ -292,6 +293,18 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
           ANTHROPIC_BASE_URL: generated.baseUrl,
           ANTHROPIC_AUTH_TOKEN: apiKey,
           ANTHROPIC_MODEL: generated.model,
+          ...Object.fromEntries(routeRows.map((row) => {
+            const key = row.role === "sonnet"
+              ? "ANTHROPIC_DEFAULT_SONNET_MODEL"
+              : row.role === "opus"
+                ? "ANTHROPIC_DEFAULT_OPUS_MODEL"
+                : row.role === "fable"
+                  ? "ANTHROPIC_DEFAULT_FABLE_MODEL"
+                  : row.role === "haiku"
+                    ? "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+                    : "CLAUDE_CODE_SUBAGENT_MODEL";
+            return [key, row.requestModel.trim()];
+          })),
         },
         meta: {
           apiFormat: normalizedSupplierApiFormat(generated.apiFormat || "Anthropic Messages"),
@@ -406,16 +419,16 @@ export function redactSupplierAuth(contents: string) {
 
 export function supplierCategoryLabel(category: SupplierPreset["category"]) {
   const labels: Record<SupplierPreset["category"], string> = {
-    official: "官方",
-    cn_official: "国内官方",
-    aggregator: "聚合/中转",
-    third_party: "第三方",
+    official: "\u5b98\u65b9",
+    cn_official: "\u56fd\u5185\u5b98\u65b9",
+    aggregator: "\u805a\u5408/\u4e2d\u8f6c",
+    third_party: "\u7b2c\u4e09\u65b9",
   };
   return labels[category];
 }
 
 export function aggregateStrategyLabel(strategy?: string) {
-  return AGGREGATE_STRATEGIES.find((item) => item.id === strategy)?.label ?? "失败切换";
+  return AGGREGATE_STRATEGIES.find((item) => item.id === strategy)?.label ?? "\u5931\u8d25\u5207\u6362";
 }
 
 export function supplierProtocolLabel(protocol?: string) {
@@ -423,7 +436,7 @@ export function supplierProtocolLabel(protocol?: string) {
 }
 
 export function supplierRelayModeLabel(mode?: string) {
-  if (mode === "official") return "官方登录";
-  if (mode === "mixedApi") return "官方混入 API Key";
-  return "纯 API";
+  if (mode === "official") return "\u5b98\u65b9\u767b\u5f55";
+  if (mode === "mixedApi") return "\u5b98\u65b9\u6df7\u5165 API Key";
+  return "\u7eaf API";
 }

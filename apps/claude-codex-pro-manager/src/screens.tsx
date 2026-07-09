@@ -1,6 +1,7 @@
-import { type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type SetStateAction, memo, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  ArrowLeft,
   AlertTriangle,
   Archive,
   ArchiveRestore,
@@ -473,6 +474,7 @@ export function SupplierScreen({
   const [draft, setDraft] = useState<RelayProfile | null>(null);
   const [modelFetch, setModelFetch] = useState<RelayProfileModelsResult | null>(null);
   const [supplierSaveBusy, setSupplierSaveBusy] = useState(false);
+  const [supplierRefreshBusy, setSupplierRefreshBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
   const [supplierTestConfigOpen, setSupplierTestConfigOpen] = useState(false);
@@ -915,6 +917,25 @@ export function SupplierScreen({
     actions.showNotice({ title: "CC-switch 导入", message: `已从 cc-switch 更新 ${updatedCount} 个、新增 ${addedCount} 个供应商配置。`, status: "ok" });
   };
 
+  const refreshSupplierList = async () => {
+    if (supplierRefreshBusy) return;
+    setSupplierRefreshBusy(true);
+    actions.showNotice({ title: "刷新供应商列表", message: "正在刷新供应商配置和路由状态...", status: "running" });
+    try {
+      await actions.refreshRoute("supplier", { notify: true });
+      actions.showNotice({ title: "刷新供应商列表", message: "供应商列表已刷新。", status: "ok" });
+      setImportOpen(false);
+    } catch (error) {
+      actions.showNotice({
+        title: "刷新供应商列表失败",
+        message: error instanceof Error ? error.message : String(error),
+        status: "failed",
+      });
+    } finally {
+      setSupplierRefreshBusy(false);
+    }
+  };
+
   const supplierDisplayUrl = (profile: RelayProfile) => {
     const configBaseUrl = profile.configContents.match(/\bbase_url\s*=\s*["']([^"']+)["']/i)?.[1]?.trim() ?? "";
     const rawUrl = profile.upstreamBaseUrl || profile.baseUrl || configBaseUrl;
@@ -1019,8 +1040,9 @@ export function SupplierScreen({
     const routeRequired = supplierApiFormatRequiresRoute(generated.apiFormat);
     const routeEnabled = supplierRouteEnabled(generated);
     const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
+    const isCodexSupplier = generated.targetApp === "codex" || !generated.targetApp;
     const authField = generated.authField || "ANTHROPIC_AUTH_TOKEN";
-    const defaultModel = generated.model || generated.testModel || "claude-sonnet";
+    const defaultModel = generated.model || generated.testModel || (isCodexSupplier ? "gpt-5.1" : "claude-sonnet");
     const modelRowsForDraft = supplierModelMappingRows(generated);
     const supplierModelOptions = Array.from(new Set([
       ...(modelFetch?.models ?? []),
@@ -1030,223 +1052,77 @@ export function SupplierScreen({
       defaultModel,
       ...modelRowsForDraft.flatMap((row) => [row.requestModel, row.displayName]),
     ].map((model) => String(model || "").trim()).filter(Boolean)));
+    const cleanName = generated.name.replace(/\s*\(ccswitch\)$/i, "");
+    const editorTitle = isNewDraft ? "添加供应商" : "编辑供应商";
+    const editorAppLabel = supplierTargetAppLabel(generated.targetApp || "codex");
+    const formAvatar = (cleanName || generated.id || "P").slice(0, 1).toUpperCase();
+    const baseEndpointLabel = isCodexSupplier ? "API 请求地址" : "请求地址";
+    const baseEndpointHint = isCodexSupplier
+      ? "填写兼容 OpenAI Responses 或 Chat Completions 格式的服务端点地址；Chat Completions 按 cc-switch 语义启用路由接管。"
+      : "填写兼容 Claude API 的服务端点地址，不要以斜杠结尾。";
+    const routeSummary = routeEnabled
+      ? "已启用 Proxy 路由：安全路由 ID 会映射到上游真实模型。"
+      : "已启用 Direct 直连：不进行本地模型路由转换。";
     const claudeConfigJson = JSON.stringify({
       env: {
         [authField]: generated.apiKey,
         ANTHROPIC_BASE_URL: generated.baseUrl || generated.upstreamBaseUrl,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: modelRowsForDraft.find((row) => row.role === "haiku")?.requestModel || defaultModel,
         ANTHROPIC_DEFAULT_OPUS_MODEL: modelRowsForDraft.find((row) => row.role === "opus")?.requestModel || defaultModel,
+        ANTHROPIC_DEFAULT_FABLE_MODEL: modelRowsForDraft.find((row) => row.role === "fable")?.requestModel || defaultModel,
         ANTHROPIC_DEFAULT_SONNET_MODEL: modelRowsForDraft.find((row) => row.role === "sonnet")?.requestModel || defaultModel,
+        CLAUDE_CODE_SUBAGENT_MODEL: modelRowsForDraft.find((row) => row.role === "subagent")?.requestModel || "",
         ANTHROPIC_MODEL: defaultModel,
       },
       ...(generated.headerOverride?.trim() || generated.bodyOverride?.trim()
-        ? {
-            localProxyOverrides: {
-              headers: generated.headerOverride || "{}",
-              body: generated.bodyOverride || "{}",
-            },
-          }
+        ? { localProxyOverrides: { headers: generated.headerOverride || "{}", body: generated.bodyOverride || "{}" } }
         : {}),
     }, null, 2);
-    if (isClaudeSupplier) {
-      const modelRows = modelRowsForDraft;
-      return (
-        <div className="supplier-ccswitch-editor">
-          <div className="supplier-ccswitch-editor-head">
-            <button className="supplier-back-button" onClick={() => { setDraft(null); setEditingId(null); }} type="button" aria-label="返回供应商列表">←</button>
-            <strong>编辑供应商</strong>
-          </div>
-          <div className="supplier-ccswitch-editor-body">
-            <div className="supplier-ccswitch-form-grid two">
-              <label className="ops-form-field"><span>供应商名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={generated.name.replace(/\s*\(ccswitch\)$/i, "")} /></label>
-              <label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label>
-            </div>
-            <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || supplierDisplayUrl(generated)} /></label>
-            <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
-            <label className="ops-form-field"><span>请求地址 <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder="https://api.example.com" value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
-            <div className="supplier-route-note">💡 填写兼容 Claude API 的服务端点地址，不要以斜杠结尾</div>
-            <details className="supplier-ccswitch-section" open>
-              <summary>高级选项</summary>
-              <label className="ops-form-field"><span>API 格式</span><select className="ops-select" onChange={(event) => {
-                const nextApiFormat = event.currentTarget.value;
-                const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat);
-                updateDraft({
-                  apiFormat: nextApiFormat,
-                  claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct",
-                  routeEnabled: nextRequiresRoute ? true : generated.routeEnabled,
-                  modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled,
-                });
-              }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>选择供应商 API 的输入格式</small></label>
-              <label className="ops-form-field"><span>认证字段</span><select className="ops-select" onChange={(event) => updateDraft({ authField: event.currentTarget.value })} value={authField}><option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN（默认）</option><option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</option></select><small>选择写入配置的认证环境变量名</small></label>
-              <div className="supplier-ccswitch-divider" />
-              <div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => {
-                const baseModel = defaultModel;
-                const rows = modelRows.map((row) => ({ ...row, displayName: row.displayName || baseModel, requestModel: row.requestModel || baseModel }));
-                updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) });
-              }} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型列表</Button></div></div>
-              <p className="supplier-inline-note">显示名称只影响 /model 菜单；实际请求模型会写入请求路由；声明支持 1M 只表示上游上下文能力。</p>
-              <div className="supplier-model-map-grid header claude"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
-              {modelRows.map((row) => (
-                <div className="supplier-model-map-grid claude" key={row.role}>
-                  <input disabled value={row.label} />
-                  <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} />
-                  <select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}>
-                    <option value="">选择实际请求模型</option>
-                    {supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}
-                  </select>
-                  <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
-                </div>
-              ))}
-              <div className="supplier-ccswitch-divider" />
-              <label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /><small>用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。</small></label>
-              <label className="ops-form-field"><span>自定义 User-Agent</span><input onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })} placeholder="Mozilla/5.0 ..." value={generated.userAgent || ""} /><small>仅在启用本地路由 / 代理接管后生效。</small></label>
-              <div className="supplier-ccswitch-divider" />
-              <strong>本地代理请求覆盖</strong>
-              <p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p>
-              <div className="supplier-ccswitch-form-grid two">
-                <label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label>
-                <label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label>
-              </div>
-              <div className="supplier-ccswitch-divider" />
-              <div className="supplier-ccswitch-checks">
-                <label><input checked={!!generated.hideAiSignature} onChange={(event) => updateDraft({ hideAiSignature: event.currentTarget.checked })} type="checkbox" />隐藏 AI 署名</label>
-                <label><input checked={!!generated.teammatesMode} onChange={(event) => updateDraft({ teammatesMode: event.currentTarget.checked })} type="checkbox" />Teammates 模式</label>
-                <label><input checked={!!generated.toolSearchEnabled} onChange={(event) => updateDraft({ toolSearchEnabled: event.currentTarget.checked })} type="checkbox" />启用 Tool Search</label>
-                <label><input checked={!!generated.maxThinkingEnabled} onChange={(event) => updateDraft({ maxThinkingEnabled: event.currentTarget.checked })} type="checkbox" />最大强度思考</label>
-                <label><input checked={!!generated.disableAutoUpdate} onChange={(event) => updateDraft({ disableAutoUpdate: event.currentTarget.checked })} type="checkbox" />禁用自动升级</label>
-              </div>
-              <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={generated.configContents || claudeConfigJson} /></label>
-              <div className={`supplier-ccswitch-collapse-card ${supplierTestConfigOpen ? "expanded" : ""}`}>
-                <div className="supplier-ccswitch-collapse-head" onClick={() => setSupplierTestConfigOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSupplierTestConfigOpen((value) => !value); } }} role="button" tabIndex={0}>
-                  <span className="supplier-collapse-title"><Activity className="h-4 w-4" />模型测试配置</span>
-                  <span className="supplier-collapse-right"><span>使用单独配置</span><ToggleSwitch checked={false} disabled onChange={() => undefined} /><span className="supplier-collapse-chevron">{supplierTestConfigOpen ? "⌄" : "›"}</span></span>
-                </div>
-                {supplierTestConfigOpen ? (
-                  <div className="supplier-ccswitch-collapse-body">
-                    <p>为此供应商配置单独的模型测试参数，不启用时使用全局配置。</p>
-                    <div className="supplier-ccswitch-form-grid two">
-                      <label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label>
-                      <label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label>
-                      <label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-              <div className={`supplier-ccswitch-collapse-card ${supplierPricingConfigOpen ? "expanded" : ""}`}>
-                <div className="supplier-ccswitch-collapse-head" onClick={() => setSupplierPricingConfigOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSupplierPricingConfigOpen((value) => !value); } }} role="button" tabIndex={0}>
-                  <span className="supplier-collapse-title"><BarChart3 className="h-4 w-4" />计费配置</span>
-                  <span className="supplier-collapse-right"><span>使用单独配置</span><ToggleSwitch checked={false} disabled onChange={() => undefined} /><span className="supplier-collapse-chevron">{supplierPricingConfigOpen ? "⌄" : "›"}</span></span>
-                </div>
-                {supplierPricingConfigOpen ? (
-                  <div className="supplier-ccswitch-collapse-body">
-                    <p>为此供应商配置单独的计费参数，不启用时使用全局默认配置。</p>
-                    <div className="supplier-ccswitch-form-grid two">
-                      <label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认（1）" /></label>
-                      <label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select><small>选择按请求模型还是返回模型进行定价匹配</small></label>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </details>
-          </div>
-          <div className="supplier-ccswitch-savebar">
-            <Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button>
-          </div>
+    const codexAuthJson = generated.authContents || JSON.stringify({ OPENAI_API_KEY: generated.apiKey }, null, 2);
+    const codexConfigToml = generated.configContents || `model = "${generated.model || defaultModel}"
+model_provider = "${generated.id || "custom"}"
+
+[model_providers.${generated.id || "custom"}]
+name = "${cleanName || "Custom Provider"}"
+base_url = "${generated.baseUrl || generated.upstreamBaseUrl || "https://api.example.com/v1"}"
+wire_api = "${generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "chat" : "responses"}"
+env_key = "OPENAI_API_KEY"
+`;
+    const renderSourceCollapse = (open: boolean, setOpen: Dispatch<SetStateAction<boolean>>, icon: ReactNode, title: string, children: ReactNode) => (
+      <div className={`supplier-ccswitch-collapse-card ${open ? "expanded" : ""}`}>
+        <div className="supplier-ccswitch-collapse-head" onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen((value) => !value); } }} role="button" tabIndex={0}>
+          <span className="supplier-collapse-title">{icon}{title}</span>
+          <span className="supplier-collapse-right"><span>使用单独配置</span><ToggleSwitch checked={false} disabled onChange={() => undefined} /><span className="supplier-collapse-chevron">{open ? "v" : ">"}</span></span>
         </div>
-      );
-    }
+        {open ? <div className="supplier-ccswitch-collapse-body">{children}</div> : null}
+      </div>
+    );
     return (
-      <div className="supplier-workbench">
-        <Panel title={isNewDraft ? generated.name || "供应商 2" : generated.name || "编辑供应商"} detail={isNewDraft ? "新建供应商需要先保存到列表" : "保存会写入管理器 settings；设为当前会调用真实切换命令写入 Codex config.toml 和 auth.json。"}>
-          <div className="supplier-editor-toolbar sticky">
-            <Button onClick={() => { setDraft(null); setEditingId(null); }} variant="outline">返回列表</Button>
-            <Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button" variant="outline"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button>
-            <Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />{generated.id === appSettings?.activeRelayId ? "重新写入当前供应商" : "保存并设为当前"}</Button>
-          </div>
-          <div className="supplier-editor-card">
-            <label className="ops-form-field span-2"><span>从预设模板创建 {SUPPLIER_PRESETS.length} 个供应商</span><select className="ops-select" onChange={(event) => { const preset = SUPPLIER_PRESETS.find((item) => item.id === event.currentTarget.value); if (preset) applyPreset(preset); }} value=""><option value="">选择预设模板</option>{SUPPLIER_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select></label>
-            <div className="supplier-form-grid">
-              <label className="ops-form-field"><span>名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={generated.name} /></label>
-              <label className="ops-form-field"><span>供应商 ID</span><input onBlur={(event) => updateDraftId(event.currentTarget.value || draft.name, { normalize: true })} onChange={(event) => updateDraftId(event.currentTarget.value)} value={draft.id} /></label>
-              <label className="ops-form-field"><span>接入模式</span><select className="ops-select" onChange={(event) => updateDraft({ relayMode: event.currentTarget.value })} value={generated.relayMode || "pureApi"}><option value="pureApi">纯 API</option><option value="official">官方登录</option></select></label>
-              <label className="ops-form-field"><span>配置模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} placeholder="gpt-5.5" value={generated.model} /></label>
-              <label className="ops-form-field"><span>Base URL</span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder="https://api.example.com/v1" value={generated.baseUrl} /></label>
-              <label className="ops-form-field"><span>协议</span><select className="ops-select" onChange={(event) => updateDraft({ protocol: event.currentTarget.value })} value={generated.protocol || "responses"}><option value="responses">Responses API</option><option value="chatCompletions">Chat Completions（本地协议代理）</option></select></label>
-              <label className="ops-form-field"><span>API Key / Bearer Token</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
-              <label className="supplier-check-row"><input checked={generated.relayMode !== "official"} onChange={(event) => updateDraft({ relayMode: event.currentTarget.checked ? "pureApi" : "official" })} type="checkbox" />Codex 目标</label>
-              <label className="supplier-check-row"><input checked={generated.officialMixApiKey} onChange={(event) => updateDraft({ officialMixApiKey: event.currentTarget.checked })} type="checkbox" />混入 API KEY</label>
-              <label className="ops-form-field span-2"><span>模型列表（一行一个）</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ modelList: event.currentTarget.value })} rows={5} value={generated.modelList} /></label>
-            </div>
-            {(generated.targetApp === "claude" || generated.targetApp === "claude-desktop") ? (
-              <div className="supplier-ccswitch-config-card">
-                <label className="ops-form-field span-2"><span>API 格式</span><select className="ops-select" onChange={(event) => {
-                  const nextApiFormat = event.currentTarget.value;
-                  const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat);
-                  updateDraft({
-                    apiFormat: nextApiFormat,
-                    claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct",
-                    routeEnabled: nextRequiresRoute ? true : generated.routeEnabled,
-                    routeMode: nextRequiresRoute ? (generated.routeMode || "Claude Desktop Proxy") : (generated.routeMode || "Claude Desktop Direct"),
-                    modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled,
-                  });
-                }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-                <label className="supplier-model-mapping-switch">
-                  <div>
-                    <strong>是否开启路由</strong>
-                    <span>{apiFormatOption?.detail || "Anthropic Messages 原生直连不需要路由；OpenAI / Gemini 格式必须开启 Claude Desktop Proxy 路由。"}</span>
-                  </div>
-                  <input checked={routeEnabled} disabled={routeRequired} onChange={(event) => updateDraft({ routeEnabled: event.currentTarget.checked, claudeDesktopMode: event.currentTarget.checked ? "proxy" : "direct", modelMappingEnabled: event.currentTarget.checked ? true : generated.modelMappingEnabled })} type="checkbox" />
-                </label>
-                <label className="supplier-model-mapping-switch"><div><strong>需要模型映射</strong><span>Claude Desktop 只接受 claude-sonnet-* / claude-opus-* / claude-haiku-* / claude-fable-* 安全路由 ID；开启后按路由映射到供应商实际模型。</span></div><input checked={generated.modelMappingEnabled !== false} onChange={(event) => updateDraft({ modelMappingEnabled: event.currentTarget.checked })} type="checkbox" /></label>
-                <label className="ops-form-field span-2"><span>路由</span><input onChange={(event) => updateDraft({ routeMode: event.currentTarget.value })} placeholder="Claude Desktop Proxy / Direct" value={generated.routeMode || (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct")} /></label>
-                <div className="supplier-route-note span-2">{routeEnabled ? "当前按 cc-switch Proxy 语义启用路由：Claude 安全路由 ID 会映射到上游真实模型。" : "当前为 Direct 直连：只使用 Anthropic Messages 原生协议，不做模型路由转换。"}</div>
-                <div className="supplier-model-map-table span-2">
-                  <div className="supplier-model-map-head"><strong>模型映射</strong><span>安全路由 ID / 显示名称 / 实际请求模型 / 声明支持 1M</span></div>
-                  <div className="supplier-model-map-grid header"><span>模型角色</span><span>安全路由 ID</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
-                  {modelRowsForDraft.map((row) => (
-                    <div className="supplier-model-map-grid" key={row.role}>
-                      <input disabled value={row.label} />
-                      <input onChange={(event) => updateSupplierModelMapping(row.role, "routeId", event.currentTarget.value)} value={row.routeId} />
-                      <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} value={row.displayName} />
-                      <select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}>
-                        <option value="">选择实际请求模型</option>
-                        {supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}
-                      </select>
-                      <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {supplierProfileIsCcswitch(generated) ? (
-              <div className="info-grid compact supplier-import-meta">
-                <InfoRow label="导入来源" value={generated.importSource || "cc-switch"} />
-                <InfoRow label="目标应用" value={supplierTargetAppLabel(generated.targetApp)} />
-                <InfoRow label="API 格式" value={supplierApiFormatLabel(generated)} />
-                <InfoRow label="是否开启路由" value={supplierRouteEnabled(generated) ? "已开启" : "未开启"} />
-                <InfoRow label="Claude Desktop 模式" value={generated.claudeDesktopMode || (supplierRouteEnabled(generated) ? "proxy" : "direct")} />
-                <InfoRow label="路由" value={generated.routeMode || "第三方导入配置"} />
-                <InfoRow label="模型映射" value={generated.modelMapping || generated.modelList || "未提供"} />
-              </div>
-            ) : null}
-            <p className="supplier-inline-note">更多选项：纯 API 使用 provider 级 model_provider + env_key 写入；官方登录模式保留官方登录能力。</p>
-            <div className="action-row"><Button onClick={() => void fetchModels()} variant="outline"><RefreshCw className="h-4 w-4" />从供应商拉取模型</Button>{modelFetch?.models.length ? <span className="supplier-inline-note">已从 {modelFetch.endpoint || "模型接口"} 获取 {modelFetch.models.length} 个模型</span> : null}</div>
-            <div className="supplier-preview-grid">
-              <div className="preview-box"><strong>config.toml 预览</strong><pre>{generated.configContents}</pre></div>
-              <div className="preview-box"><strong>通用配置文件</strong><pre>{appSettings?.relayCommonConfigContents || "# 暂无通用配置"}</pre></div>
-              <div className="preview-box"><strong>auth.json</strong><pre>{redactSupplierAuth(generated.authContents)}</pre></div>
-            </div>
-          </div>
-        </Panel>
+      <div className="supplier-ccswitch-editor source-parity">
+        <div className="supplier-ccswitch-editor-head"><button className="supplier-back-button" onClick={() => { setDraft(null); setEditingId(null); }} type="button" aria-label="返回供应商列表" title="返回"><ArrowLeft className="h-5 w-5" /></button><strong>{editorTitle}</strong></div>
+        <div className="supplier-ccswitch-editor-body"><section className="supplier-ccswitch-form-card">
+          <div className="supplier-form-avatar-shell"><div className="supplier-form-avatar">{formAvatar}</div></div>
+          <div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>供应商名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={cleanName} /></label><label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label></div>
+          <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || ""} /></label>
+          <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
+          <label className="ops-form-field"><span>{baseEndpointLabel} <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder={isCodexSupplier ? "https://api.example.com/v1" : "https://api.example.com"} value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
+          <div className="supplier-route-note">提示：{baseEndpointHint}</div>
+          {isClaudeSupplier ? <section className="supplier-mapping-card"><div><strong>需要模型映射</strong><p>Claude / Claude Desktop 只接收 Claude 安全路由 ID；cc-switch model_mapper 会映射到上游真实模型。</p></div><ToggleSwitch checked={generated.modelMappingEnabled !== false} onChange={(value) => updateDraft({ modelMappingEnabled: value })} /></section> : <section className="supplier-mapping-card"><div><strong>启用 Codex 路由</strong><p>对齐 cc-switch CodexFormFields：Chat Completions 走本地路由转换，Responses 可以直连。</p></div><ToggleSwitch checked={routeEnabled} onChange={(value) => updateDraft({ routeEnabled: value, routeMode: value ? (generated.routeMode || "Codex Proxy") : "Codex Direct", protocol: value ? "chatCompletions" : (generated.protocol || "responses") })} /></section>}
+          <details className="supplier-ccswitch-section supplier-advanced-card" open><summary><span>&gt;</span>高级选项</summary>
+            {isClaudeSupplier ? <><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>API 格式</span><select className="ops-select" onChange={(event) => { const nextApiFormat = event.currentTarget.value; const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat); updateDraft({ apiFormat: nextApiFormat, claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct", routeEnabled: nextRequiresRoute ? true : generated.routeEnabled, routeMode: nextRequiresRoute ? (generated.routeMode || "Claude Desktop Proxy") : (generated.routeMode || "Claude Desktop Direct"), modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled }); }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>{apiFormatOption?.detail || "选择供应商 API 的输入格式"}</small></label><label className="ops-form-field"><span>认证字段</span><select className="ops-select" onChange={(event) => updateDraft({ authField: event.currentTarget.value })} value={authField}><option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</option><option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</option></select><small>生成配置使用的环境变量名。</small></label></div><label className="supplier-model-mapping-switch"><div><strong>是否开启路由</strong><span>{routeSummary}</span></div><ToggleSwitch checked={routeEnabled} disabled={routeRequired} onChange={(value) => updateDraft({ routeEnabled: value, claudeDesktopMode: value ? "proxy" : "direct", modelMappingEnabled: value ? true : generated.modelMappingEnabled })} /></label><label className="ops-form-field"><span>路由</span><input onChange={(event) => updateDraft({ routeMode: event.currentTarget.value })} placeholder="Claude Desktop Proxy / Direct" value={generated.routeMode || (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct")} /></label><div className="supplier-ccswitch-divider" /><div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => { const rows = modelRowsForDraft.map((row) => ({ ...row, displayName: row.displayName || defaultModel, requestModel: row.requestModel || defaultModel })); updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) }); }} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button></div></div><p className="supplier-inline-note">显示名称只影响模型菜单；实际请求模型会发送到上游；1M 是本地能力声明。</p><div className="supplier-model-map-grid header claude"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>{modelRowsForDraft.map((row) => <div className="supplier-model-map-grid claude" key={row.role}><input disabled value={row.label} /><input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} /><select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}><option value="">选择实际请求模型</option>{supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}</select><label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label></div>)}<label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /></label></> : <><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>上游格式</span><select className="ops-select" onChange={(event) => { const next = event.currentTarget.value; updateDraft({ apiFormat: next, protocol: next === "openai_chat" ? "chatCompletions" : "responses", routeEnabled: next === "openai_chat" ? true : generated.routeEnabled }); }} value={generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses"}><option value="openai_chat">Chat Completions（需开启路由）</option><option value="openai_responses">Responses（原生）</option></select><small>Responses 可直连；Chat Completions 需要路由接管。</small></label><label className="ops-form-field"><span>模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} placeholder="gpt-5.1" value={generated.model} /></label></div><div className="supplier-ccswitch-divider" /><div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button></div></div><p className="supplier-inline-note">对齐 cc-switch CodexFormFields：显示名称用于 Codex 模型菜单，实际请求模型发送到上游。</p><div className="supplier-codex-catalog-grid header"><span>显示名称</span><span>实际请求模型</span><span>上下文窗口</span></div><div className="supplier-codex-catalog-grid"><input onChange={(event) => updateDraft({ testModel: event.currentTarget.value })} placeholder="DeepSeek V4 Pro" value={generated.testModel || generated.model || ""} /><select className="supplier-model-map-select" onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={generated.model || ""}><option value="">选择实际请求模型</option>{supplierModelOptions.map((model) => <option key={`codex:${model}`} value={model}>{model}</option>)}</select><input onChange={(event) => updateDraft({ contextWindow: event.currentTarget.value })} placeholder="128000" value={generated.contextWindow || ""} /></div><label className="ops-form-field"><span>自定义 User-Agent</span><input onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })} placeholder="Mozilla/5.0 ..." value={generated.userAgent || ""} /></label></>}
+            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={generated.configContents || claudeConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" onChange={(event) => updateDraft({ authContents: event.currentTarget.value })} value={redactSupplierAuth(codexAuthJson)} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={codexConfigToml} /></label></>}{renderSourceCollapse(supplierTestConfigOpen, setSupplierTestConfigOpen, <Activity className="h-4 w-4" />, "模型 Test Config", <><p>为此供应商配置单独的模型测试参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label><label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label><label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label></div></>)}{renderSourceCollapse(supplierPricingConfigOpen, setSupplierPricingConfigOpen, <BarChart3 className="h-4 w-4" />, "计费配置", <><p>为此供应商配置单独的计费参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认" /></label><label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select></label></div></>)}
+          </details></section></div>
+        <div className="supplier-ccswitch-savebar"><span>{modelFetch?.models.length ? `已获取 ${modelFetch.models.length} 个模型，来源：${modelFetch.endpoint || "模型接口"}` : "请检查并保存供应商配置"}</span><div className="action-row"><Button onClick={() => { setDraft(null); setEditingId(null); }} type="button" variant="outline">取消</Button><Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button><Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />保存并使用</Button></div></div>
       </div>
     );
   }
+
 
   return (
     <div className="supplier-list-shell">
       <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>检测到 OPENAI 环境变量</strong><p>这些变量可能覆盖当前供应商写入的 config.toml / auth.json；CODEX_HOME 不会被清理。</p><span className="supplier-env-chip">OPENAI_API_KEY 用户环境</span></div><div className="supplier-env-actions"><Button size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button size="sm" variant="outline"><RefreshCw className="h-4 w-4" />检测</Button></div></div>
       <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
-      <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button onClick={() => void actions.refreshRoute("supplier")} type="button"><RefreshCw className="h-4 w-4" />刷新列表</button></div> : null}</div></div></div>
+      <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
       <div className="supplier-card-list">
         {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="\u6682\u65e0\u4f9b\u5e94\u5546\u914d\u7f6e\uff0c\u70b9\u51fb\u201c\u6dfb\u52a0\u4f9b\u5e94\u5546\u201d\u521b\u5efa\u4e00\u4e2a\u771f\u5b9e\u53ef\u5207\u6362\u7684 Codex API \u914d\u7f6e\u3002" />}
       </div>

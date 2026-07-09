@@ -7855,7 +7855,7 @@ struct ClaudeRouteImportRow {
     supports_1m: bool,
 }
 
-fn claude_default_route_specs() -> [(&'static str, &'static str, &'static str, &'static str); 4] {
+fn claude_default_route_specs() -> [(&'static str, &'static str, &'static str, &'static str); 5] {
     [
         (
             "sonnet",
@@ -7880,6 +7880,12 @@ fn claude_default_route_specs() -> [(&'static str, &'static str, &'static str, &
             "Haiku",
             "claude-haiku-4-5",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ),
+        (
+            "subagent",
+            "Subagent",
+            "claude-subagent",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
         ),
     ]
 }
@@ -7995,6 +8001,8 @@ fn claude_route_role(route_id: &str) -> Option<&'static str> {
         Some("haiku")
     } else if lower.contains("fable") {
         Some("fable")
+    } else if lower.contains("subagent") {
+        Some("subagent")
     } else {
         None
     }
@@ -8005,6 +8013,7 @@ fn claude_route_label(role: &str) -> &'static str {
         "opus" => "Opus",
         "haiku" => "Haiku",
         "fable" => "Fable",
+        "subagent" => "Subagent",
         _ => "Sonnet",
     }
 }
@@ -8614,6 +8623,11 @@ enabled = true
                 "claude-opus-4-8": {
                     "model": "gpt-5.5-pro",
                     "labelOverride": "GPT 5.5 Pro"
+                },
+                "claude-subagent": {
+                    "model": "gpt-5.4-mini[1M]",
+                    "labelOverride": "GPT 5.4 Mini",
+                    "supports1m": true
                 }
             }
         });
@@ -8652,8 +8666,19 @@ enabled = true
                 .model_mapping_json
                 .contains("\"routeId\": \"claude-opus-4-8\"")
         );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"routeId\": \"claude-subagent\"")
+        );
+        assert!(
+            profile
+                .model_mapping_json
+                .contains("\"requestModel\": \"gpt-5.4-mini\"")
+        );
         assert!(profile.model_list.contains("gpt-5.5"));
         assert!(profile.model_list.contains("gpt-5.5-pro"));
+        assert!(profile.model_list.contains("gpt-5.4-mini"));
     }
 
     #[test]

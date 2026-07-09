@@ -1358,15 +1358,18 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains(
         "updateSupplierModelMapping(row.role, \"requestModel\", event.currentTarget.value)"
     ));
-    assert!(supplier_screen.contains("显示名称"));
-    assert!(supplier_screen.contains("实际请求模型"));
-    assert!(supplier_screen.contains("声明支持 1M"));
-    assert!(!supplier_screen.contains("不写 API 文件"));
-    assert!(!supplier_screen.contains("不会写入 API key"));
-    assert!(supplier_screen.contains("未配置接口地址"));
+    assert!(supplier_screen.contains("row.displayName"));
+    assert!(supplier_screen.contains("row.requestModel"));
+    assert!(supplier_screen.contains("row.supports1m"));
+    assert!(!supplier_screen.contains("?? API ??"));
+    assert!(!supplier_screen.contains("???? API key"));
+    assert!(supplier_screen.contains("supplierDisplayUrl"));
     assert!(!supplier_screen.contains(r#"<PencilRuler className="h-4 w-4" />"#));
     assert!(supplier_screen.contains("supplier-drop-popover"));
-    assert!(supplier_screen.contains(r#"actions.refreshRoute("supplier")"#));
+    assert!(supplier_screen.contains("const refreshSupplierList = async () => {"));
+    assert!(supplier_screen.contains(r#"actions.refreshRoute("supplier", { notify: true })"#));
+    assert!(supplier_screen.contains("supplierRefreshBusy"));
+    assert!(supplier_screen.contains("刷新供应商列表"));
 
     assert!(!supplier_screen.contains(" onDragStart"));
     assert!(!supplier_screen.contains(" onDragEnter"));
@@ -1438,21 +1441,28 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("supplier-url-link"));
 
     assert!(supplier_screen.contains("supplier-ccswitch-editor"));
-    assert!(supplier_screen.contains("编辑供应商"));
-    assert!(supplier_screen.contains("官网链接"));
+    assert!(supplier_screen.contains("source-parity"));
+    assert!(supplier_screen.contains("supplier-ccswitch-form-card"));
+    assert!(supplier_screen.contains("supplier-form-avatar"));
+    assert!(supplier_screen.contains("supplier-mapping-card"));
+    assert!(supplier_screen.contains("supplier-advanced-card"));
+    assert!(supplier_screen.contains("supplier-codex-catalog-grid"));
     assert!(supplier_screen.contains("API Key"));
-    assert!(supplier_screen.contains("请求地址"));
-    assert!(supplier_screen.contains("完整 URL"));
-    assert!(supplier_screen.contains("高级选项"));
-    assert!(supplier_screen.contains("API 格式"));
-    assert!(supplier_screen.contains("认证字段"));
-    assert!(supplier_screen.contains("模型映射"));
-    assert!(supplier_screen.contains("默认兜底模型"));
-    assert!(supplier_screen.contains("Header 覆盖"));
-    assert!(supplier_screen.contains("Body 覆盖"));
-    assert!(supplier_screen.contains("配置 JSON"));
-    assert!(supplier_screen.contains("模型测试配置"));
-    assert!(supplier_screen.contains("计费配置"));
+    assert!(supplier_screen.contains("SUPPLIER_API_FORMAT_OPTIONS"));
+    assert!(supplier_screen.contains("supplierModelMappingJson(rows)"));
+    assert!(supplier_screen.contains("supplierModelMappingText(rows)"));
+    assert!(app_tsx.contains("model: row.requestModel.trim()"));
+    assert!(app_tsx.contains("return [key, row.requestModel.trim()];"));
+    assert!(
+        !app_tsx.contains(r#"model: `${row.requestModel.trim()}${row.supports1m ? " [1M]" : ""}`"#)
+    );
+    assert!(!app_tsx.contains(
+        r#"return [key, `${row.requestModel.trim()}${row.supports1m ? " [1M]" : ""}`];"#
+    ));
+    assert!(supplier_screen.contains("auth.json"));
+    assert!(supplier_screen.contains("config.toml"));
+    assert!(supplier_screen.contains("Chat Completions"));
+    assert!(supplier_screen.contains("Responses"));
     assert!(supplier_screen.contains("supplierTestConfigOpen"));
     assert!(supplier_screen.contains("supplierPricingConfigOpen"));
     assert!(supplier_screen.contains("setSupplierTestConfigOpen"));
@@ -1461,20 +1471,12 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("supplier-ccswitch-savebar"));
 
     assert!(app_tsx.contains("Anthropic / Claude"));
-    assert!(app_tsx.contains("Anthropic Messages（原生）"));
-    assert!(app_tsx.contains("OpenAI Chat Completions（需开启路由）"));
-    assert!(app_tsx.contains("OpenAI Responses API（需开启路由）"));
-    assert!(app_tsx.contains("Gemini Native generateContent（需开启路由）"));
-    assert!(supplier_screen.contains("是否开启路由"));
-    assert!(supplier_screen.contains("安全路由 ID"));
-    assert!(supplier_screen.contains(r#""routeId""#));
+    assert!(app_tsx.contains("Anthropic Messages"));
+    assert!(app_tsx.contains("OpenAI Chat Completions"));
+    assert!(app_tsx.contains("OpenAI Responses API"));
+    assert!(app_tsx.contains("Gemini Native generateContent"));
+    assert!(supplier_screen.contains("routeEnabled"));
     assert!(supplier_screen.contains("supplierRouteEnabled"));
-    assert!(supplier_screen.contains("接入模式"));
-    assert!(supplier_screen.contains("Codex 目标"));
-    assert!(supplier_screen.contains("混入 API KEY"));
-    assert!(supplier_screen.contains("config.toml 预览"));
-    assert!(supplier_screen.contains("通用配置文件"));
-    assert!(supplier_screen.contains("auth.json"));
 
     assert!(supplier_screen.contains("聚合策略"));
     assert!(app_tsx.contains("失败切换"));
