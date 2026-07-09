@@ -1,4 +1,4 @@
-﻿name: Release assets
+name: Release assets
 # manual-release-assets-9: windows-x64-setup.exe, windows-x64.zip, macos-x64.dmg, macos-x64.zip, macos-arm64.dmg, macos-arm64.zip, latest.json, Source code (zip), Source code (tar.gz)
 
 on:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   windows-installer:
     if: ${{ !contains(github.event.release.body, 'auto-release-installers-managed') }}
-    runs-on: windows-2025
+    runs-on: windows-latest
     env:
       CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ github.event.release.tag_name }}
     steps:
@@ -105,10 +105,10 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-26-intel
+            runner: macos-latest
             target: x86_64-apple-darwin
           - arch: arm64
-            runner: macos-26
+            runner: macos-latest
             target: aarch64-apple-darwin
     steps:
       - name: Checkout release tag

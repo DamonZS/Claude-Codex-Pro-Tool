@@ -63,13 +63,13 @@ for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   mustContain(source, "latest.json", label);
   mustContain(source, "Compress-Archive", label);
   mustContain(source, "ditto -c -k --sequesterRsrc", label);
-  mustContain(source, "runs-on: windows-2025", `${label} Windows runner`);
-  mustContain(source, "runner: macos-26-intel", `${label} macOS Intel runner`);
-  mustContain(source, "runner: macos-26", `${label} macOS arm64 runner`);
+  mustContain(source, "runs-on: windows-latest", `${label} Windows runner`);
+  mustContain(source, "runner: macos-latest", `${label} macOS runner`);
+  assert.ok(source.match(/runner: macos-latest/g)?.length >= 2, `${label} must use macos-latest for both macOS matrix entries`);
   mustContain(source, "uses: actions/checkout@v5", `${label} checkout action`);
   mustContain(source, "uses: actions/setup-node@v5", `${label} setup-node action`);
   mustContain(source, 'node-version: "24"', `${label} Node.js version`);
-  for (const deprecated of ["windows-latest", "macos-15-intel", "macos-14", "actions/checkout@v4", "actions/setup-node@v4", 'node-version: "22"']) {
+  for (const deprecated of ["windows-2025", "macos-15-intel", "macos-14", "macos-26-intel", "macos-26", "actions/checkout@v4", "actions/setup-node@v4", 'node-version: "22"']) {
     mustNotContain(source, deprecated, `${label} deprecated runner/action`);
   }
 }

@@ -207,16 +207,18 @@ fn watcher_install_uses_resolved_existing_launcher_path() {
 }
 
 fn assert_release_workflow_uses_current_hosted_runners(workflow: &str) {
-    assert!(workflow.contains("runs-on: windows-2025"));
-    assert!(workflow.contains("runner: macos-26-intel"));
-    assert!(workflow.contains("runner: macos-26"));
+    assert!(workflow.contains("runs-on: windows-latest"));
+    assert!(workflow.contains("runner: macos-latest"));
+    assert!(workflow.matches("runner: macos-latest").count() >= 2);
     assert!(workflow.contains("uses: actions/checkout@v5"));
     assert!(workflow.contains("uses: actions/setup-node@v5"));
     assert!(workflow.contains("node-version: \"24\""));
     for deprecated in [
-        "windows-latest",
+        "windows-2025",
         "macos-15-intel",
         "macos-14",
+        "macos-26-intel",
+        "macos-26",
         "actions/checkout@v4",
         "actions/setup-node@v4",
         "node-version: \"22\"",

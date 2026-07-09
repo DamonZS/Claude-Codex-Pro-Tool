@@ -1,4 +1,4 @@
-﻿name: Auto release installers
+name: Auto release installers
 
 on:
   push:
@@ -123,7 +123,7 @@ jobs:
 
   windows-installer:
     name: Windows installer
-    runs-on: windows-2025
+    runs-on: windows-latest
     needs: prepare-release
     env:
       CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ needs.prepare-release.outputs.tag }}
@@ -227,10 +227,10 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-26-intel
+            runner: macos-latest
             target: x86_64-apple-darwin
           - arch: arm64
-            runner: macos-26
+            runner: macos-latest
             target: aarch64-apple-darwin
     steps:
       - name: Checkout release tag
