@@ -1,4 +1,4 @@
-name: Auto release installers
+﻿name: Auto release installers
 
 on:
   push:
@@ -21,14 +21,14 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Resolve release version
         id: version
@@ -78,19 +78,19 @@ jobs:
           cat > release-notes.md <<NOTES
           <!-- auto-release-installers-managed -->
 
-          ## ????
+          ## 更新内容
 
-          - ?????????????API????????
-          - ?????????????????????????????
-          - ?? Codex / Claude ???????????????????????????
-          - ?????? Windows x64?macOS x64?macOS arm64???? latest.json ?????
+          - 自动发布说明恢复“更新内容 / 验证 / Assets 9”结构，方便用户直接查看版本变化。
+          - 发布资产补齐 Windows x64、macOS x64、macOS arm64 的安装包与 ZIP 包。
+          - 保持 latest.json 下载索引，便于管理工具检查和获取最新版。
+          - 发布包只包含构建产物，不打包本机供应商配置、API Key、记忆库或用户缓存。
 
-          ## ??
+          ## 验证
 
-          - npm run check ???
-          - npm run vite:build ???
-          - cargo test --workspace ???
-          - Windows ????Windows ZIP?macOS DMG?macOS ZIP ?? GitHub Actions ???????
+          - npm run check 通过。
+          - npm run vite:build 通过。
+          - cargo test --workspace 通过。
+          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均由 GitHub Actions 构建并上传。
 
           ## Assets 9
 
@@ -123,20 +123,20 @@ jobs:
 
   windows-installer:
     name: Windows installer
-    runs-on: windows-latest
+    runs-on: windows-2025
     needs: prepare-release
     env:
       CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ needs.prepare-release.outputs.tag }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare-release.outputs.tag }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -227,21 +227,21 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-15-intel
+            runner: macos-26-intel
             target: x86_64-apple-darwin
           - arch: arm64
-            runner: macos-14
+            runner: macos-26
             target: aarch64-apple-darwin
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare-release.outputs.tag }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -280,7 +280,7 @@ jobs:
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
-          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro 管理工具.app"; do
+          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro Manager.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
@@ -299,7 +299,7 @@ jobs:
           rm -rf "$zip_stage" "$zip_path"
           mkdir -p "$zip_stage"
           cp -R "dist/macos/stage/Claude Codex Pro.app" "$zip_stage/"
-          cp -R "dist/macos/stage/Claude Codex Pro ????.app" "$zip_stage/"
+          cp -R "dist/macos/stage/Claude Codex Pro Manager.app" "$zip_stage/"
           ln -s /Applications "$zip_stage/Applications"
           ditto -c -k --sequesterRsrc "$zip_stage" "$zip_path"
 

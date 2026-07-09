@@ -1,4 +1,4 @@
-name: Release assets
+﻿name: Release assets
 # manual-release-assets-9: windows-x64-setup.exe, windows-x64.zip, macos-x64.dmg, macos-x64.zip, macos-arm64.dmg, macos-arm64.zip, latest.json, Source code (zip), Source code (tar.gz)
 
 on:
@@ -11,19 +11,19 @@ permissions:
 jobs:
   windows-installer:
     if: ${{ !contains(github.event.release.body, 'auto-release-installers-managed') }}
-    runs-on: windows-latest
+    runs-on: windows-2025
     env:
       CLAUDE_CODEX_PRO_RELEASE_VERSION: ${{ github.event.release.tag_name }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,21 +105,21 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-15-intel
+            runner: macos-26-intel
             target: x86_64-apple-darwin
           - arch: arm64
-            runner: macos-14
+            runner: macos-26
             target: aarch64-apple-darwin
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -150,7 +150,7 @@ jobs:
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
-          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro 管理工具.app"; do
+          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro Manager.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
@@ -170,7 +170,7 @@ jobs:
           rm -rf "$zip_stage" "$zip_path"
           mkdir -p "$zip_stage"
           cp -R "dist/macos/stage/Claude Codex Pro.app" "$zip_stage/"
-          cp -R "dist/macos/stage/Claude Codex Pro ????.app" "$zip_stage/"
+          cp -R "dist/macos/stage/Claude Codex Pro Manager.app" "$zip_stage/"
           ln -s /Applications "$zip_stage/Applications"
           ditto -c -k --sequesterRsrc "$zip_stage" "$zip_path"
 

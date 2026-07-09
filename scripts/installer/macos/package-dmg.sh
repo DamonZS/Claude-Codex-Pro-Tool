@@ -119,14 +119,14 @@ verify_app() {
 
 prepare_icon
 create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "true"
-create_app "Claude Codex Pro 管理工具" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-manager" "com.damonzs.claudecodexpro.manager" "false"
+create_app "Claude Codex Pro Manager" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-manager" "com.damonzs.claudecodexpro.manager" "false"
 ln -s /Applications "$STAGE/Applications"
 
 sign_app "$STAGE/Claude Codex Pro.app"
-sign_app "$STAGE/Claude Codex Pro 管理工具.app"
+sign_app "$STAGE/Claude Codex Pro Manager.app"
 
 verify_app "$STAGE/Claude Codex Pro.app"
-verify_app "$STAGE/Claude Codex Pro 管理工具.app"
+verify_app "$STAGE/Claude Codex Pro Manager.app"
 
 hdiutil create -volname "Claude Codex Pro" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 echo "$DMG"

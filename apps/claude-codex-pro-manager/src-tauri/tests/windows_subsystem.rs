@@ -206,6 +206,28 @@ fn watcher_install_uses_resolved_existing_launcher_path() {
     assert!(!watcher_section.contains("companion_binary_path("));
 }
 
+fn assert_release_workflow_uses_current_hosted_runners(workflow: &str) {
+    assert!(workflow.contains("runs-on: windows-2025"));
+    assert!(workflow.contains("runner: macos-26-intel"));
+    assert!(workflow.contains("runner: macos-26"));
+    assert!(workflow.contains("uses: actions/checkout@v5"));
+    assert!(workflow.contains("uses: actions/setup-node@v5"));
+    assert!(workflow.contains("node-version: \"24\""));
+    for deprecated in [
+        "windows-latest",
+        "macos-15-intel",
+        "macos-14",
+        "actions/checkout@v4",
+        "actions/setup-node@v4",
+        "node-version: \"22\"",
+    ] {
+        assert!(
+            !workflow.contains(deprecated),
+            "release workflow should not use deprecated/low-availability runner or action: {deprecated}"
+        );
+    }
+}
+
 #[test]
 fn macos_packager_hides_silent_launcher_but_not_manager() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -225,8 +247,76 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
         "create_app \"Claude Codex Pro\" \"ClaudeCodexPro\" \"$BINARY_DIR/claude-codex-pro\" \"com.damonzs.claudecodexpro\" \"true\""
     ));
     assert!(script.contains(
-        "create_app \"Claude Codex Pro 管理工具\" \"ClaudeCodexProManager\" \"$BINARY_DIR/claude-codex-pro-manager\" \"com.damonzs.claudecodexpro.manager\" \"false\""
+        "create_app \"Claude Codex Pro Manager\" \"ClaudeCodexProManager\" \"$BINARY_DIR/claude-codex-pro-manager\" \"com.damonzs.claudecodexpro.manager\" \"false\""
     ));
+}
+
+#[test]
+fn public_release_packages_do_not_include_user_supplier_or_memory_state() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let auto_workflow =
+        std::fs::read_to_string(repo_root.join(".github/workflows/auto-release-installers.yml"))
+            .expect("read auto release workflow");
+    let manual_workflow =
+        std::fs::read_to_string(repo_root.join(".github/workflows/release-assets.yml"))
+            .expect("read release assets workflow");
+    let windows_installer =
+        std::fs::read_to_string(repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"))
+            .expect("read Windows installer");
+    let macos_packager =
+        std::fs::read_to_string(repo_root.join("scripts/installer/macos/package-dmg.sh"))
+            .expect("read macOS packager");
+
+    for release_source in [&auto_workflow, &manual_workflow] {
+        assert!(release_source.contains("dist/windows/app/*"));
+        assert!(release_source.contains("dist/macos/stage"));
+        for forbidden in [
+            "settings.json",
+            "relayProfiles",
+            "memory_assist.sqlite",
+            "auth.json",
+            "credentials",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "sk-",
+            "%APPDATA%",
+            "$HOME/.codex",
+            "$HOME/.claude",
+            "Library/Application Support",
+        ] {
+            assert!(
+                !release_source.contains(forbidden),
+                "release workflow must not package user data marker: {forbidden}"
+            );
+        }
+    }
+
+    assert!(windows_installer.contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro.exe""#));
+    assert!(
+        windows_installer
+            .contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe""#)
+    );
+    assert!(windows_installer.contains("Claude Codex Pro Manager.lnk"));
+    assert!(windows_installer.contains("Uninstall Claude Codex Pro.lnk"));
+    for forbidden in [
+        "settings.json",
+        "relayProfiles",
+        "memory_assist.sqlite",
+        "auth.json",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "sk-",
+    ] {
+        assert!(!windows_installer.contains(forbidden));
+        assert!(!macos_packager.contains(forbidden));
+    }
+    assert!(macos_packager.contains("create_app \"Claude Codex Pro Manager\""));
+    assert!(macos_packager.contains("$BINARY_DIR/claude-codex-pro-manager"));
 }
 
 #[test]
@@ -240,9 +330,8 @@ fn github_release_workflow_builds_separate_macos_x64_and_arm64_dmgs() {
         .join(".github/workflows/release-assets.yml");
     let workflow = std::fs::read_to_string(&workflow).expect("read release assets workflow");
 
-    assert!(workflow.contains("macos-15-intel"));
+    assert_release_workflow_uses_current_hosted_runners(&workflow);
     assert!(workflow.contains("x86_64-apple-darwin"));
-    assert!(workflow.contains("macos-14"));
     assert!(workflow.contains("aarch64-apple-darwin"));
     assert!(workflow.contains("working-directory: apps/claude-codex-pro-manager"));
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
@@ -299,9 +388,8 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("cargo test --workspace"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
-    assert!(workflow.contains("macos-15-intel"));
+    assert_release_workflow_uses_current_hosted_runners(&workflow);
     assert!(workflow.contains("x86_64-apple-darwin"));
-    assert!(workflow.contains("macos-14"));
     assert!(workflow.contains("aarch64-apple-darwin"));
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
     assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
@@ -312,8 +400,8 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("data.isDraft ? \"true\" : \"false\""));
     assert!(workflow.contains("gh api --method DELETE \"repos/$REPO/releases/$release_id\""));
     assert!(workflow.contains("version: tag"));
-    assert!(workflow.contains("## ????"));
-    assert!(workflow.contains("## ??"));
+    assert!(workflow.contains("## 更新内容"));
+    assert!(workflow.contains("## 验证"));
     assert!(workflow.contains("Assets 9"));
     assert!(workflow.contains("windows-x64-setup.exe"));
     assert!(workflow.contains("windows-x64.zip"));
@@ -1283,10 +1371,10 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
         supplier_screen.contains("const next = normalizeDraftProfile({ ...current, id: nextId });")
     );
     assert!(supplier_screen.contains(
-        "onBlur={(event) => updateDraftId(event.currentTarget.value || draft.name, { normalize: true })}"
+        "onBlur={(event) => updateDraftId(event.currentTarget.value || generated.name, { normalize: true })}"
     ));
     assert!(supplier_screen.contains(
-        "onChange={(event) => updateDraftId(event.currentTarget.value)} value={draft.id}"
+        "onChange={(event) => updateDraftId(event.currentTarget.value)} value={generated.id}"
     ));
     assert!(!supplier_screen.contains("onChange={(event) => setDraft((current) => current ? { ...current, id: event.currentTarget.value } : current)} value={draft.id}"));
     assert!(!supplier_screen.contains("onChange={(event) => updateDraft({ id: supplierIdFromName(event.currentTarget.value) })} value={generated.id}"));
