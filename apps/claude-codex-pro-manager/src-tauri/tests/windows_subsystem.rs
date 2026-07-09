@@ -400,6 +400,20 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("git tag -a \"$TAG\" -m \"Release $TAG\""));
     assert!(workflow.contains("gh release create \"$TAG\""));
     assert!(workflow.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
+    assert!(workflow.contains("git fetch --force --tags origin"));
+    assert!(
+        workflow
+            .contains(r#"gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases"#)
+    );
+    assert!(
+        workflow.contains(r#"node scripts/release/next-release-tag.js "${published_tags[@]}""#)
+    );
+    assert!(
+        workflow.contains("Deleting orphan release tag $tag before recreating it for this build.")
+    );
+    assert!(workflow.contains(r#"git push origin ":refs/tags/$tag""#));
+    assert!(workflow.contains("name: Prepare auto release tag"));
+    assert!(!workflow.contains("Prepare V0.01 release tag"));
     assert!(workflow.contains("npm run check"));
     assert!(workflow.contains("run: npm run vite:build"));
     assert!(workflow.contains("cargo test --workspace"));
@@ -429,12 +443,18 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("macOS arm64"));
     assert!(workflow.contains("Compress-Archive"));
     assert!(workflow.contains("ditto -c -k --sequesterRsrc"));
+    assert!(workflow.contains("uses: actions/upload-artifact@v5"));
+    assert!(workflow.contains("name: windows-x64-release-assets"));
+    assert!(workflow.contains("uses: actions/download-artifact@v5"));
+    assert!(workflow.contains("Upload build assets to release"));
+    assert!(workflow.contains(
+        "asset_count=\"$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')\""
+    ));
+    assert!(workflow.contains("Expected 6 build assets before latest.json"));
     assert!(
-        workflow.contains("gh release upload $env:TAG $asset.FullName $zip.FullName --clobber")
+        workflow.contains("gh release upload \"$TAG\" release-assets/* --clobber --repo \"$REPO\"")
     );
-    assert!(
-        workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg dist/macos/*.zip --clobber")
-    );
+    assert!(workflow.contains("name: macos-${{ matrix.arch }}-release-assets"));
 
     assert!(release_assets.contains("auto-release-installers-managed"));
     assert!(release_assets.contains("if: ${{ !contains(github.event.release.body"));
@@ -451,7 +471,10 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(version_script.contains("assert.equal(nextReleaseTag([\"V0.99\"]), \"V1.00\")"));
 
     assert!(version_rs.contains("CLAUDE_CODEX_PRO_RELEASE_VERSION"));
-    assert!(version_rs.contains("DEFAULT_RELEASE_VERSION: &str = \"V0.12\""));
+    assert!(version_rs.contains(
+        "DEFAULT_RELEASE_VERSION: &str = concat!(\"dev-\", env!(\"CARGO_PKG_VERSION\"))"
+    ));
+    assert!(!version_rs.contains("DEFAULT_RELEASE_VERSION: &str = \"V0.12\""));
     assert!(!version_rs.contains("None => env!(\"CARGO_PKG_VERSION\")"));
 }
 

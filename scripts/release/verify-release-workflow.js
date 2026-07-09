@@ -72,8 +72,8 @@ for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   }
 }
 
-mustContain(auto, "dist/macos/*.dmg", "auto macOS DMG upload");
-mustContain(auto, "dist/macos/*.zip", "auto macOS ZIP upload");
+mustContain(auto, "dist/macos/*.dmg", "auto macOS DMG artifact upload");
+mustContain(auto, "dist/macos/*.zip", "auto macOS ZIP artifact upload");
 mustContain(auto, "macos-${{ matrix.arch }}.zip", "auto macOS ZIP naming");
 mustContain(manual, "macos-${{ matrix.arch }}.dmg", "manual macOS DMG artifact path");
 mustContain(manual, "macos-${{ matrix.arch }}.zip", "manual macOS ZIP artifact path");
@@ -85,8 +85,22 @@ mustNotContain(auto, "## Assets 9", "auto release notes");
 mustNotContain(auto, "Source code (zip)", "auto release notes");
 mustNotContain(auto, "Source code (tar.gz)", "auto release notes");
 mustNotContain(auto, "claude-codex-pro-${version}-macos-arm64.dmg", "auto release notes");
-mustContain(auto, 'version="${TAG#v}"', "auto release version variable");
+mustContain(auto, 'version="${tag#v}"', "auto release version variable");
 mustContain(auto, 'gh release edit "$TAG"', "auto release update existing notes");
 assert.ok(!auto.includes('Release $TAG already exists; assets will be replaced.\n            exit 0'), "auto release must not skip notes update for existing draft");
+
+mustContain(auto, "gh release list --repo \"$REPO\" --exclude-drafts --exclude-pre-releases", "auto release published-tag source");
+mustContain(auto, "node scripts/release/next-release-tag.js \"${published_tags[@]}\"", "auto release version from published releases");
+mustContain(auto, "Deleting orphan release tag $tag before recreating it for this build.", "auto release orphan tag cleanup");
+mustContain(auto, "git push origin \":refs/tags/$tag\"", "auto release orphan remote tag cleanup");
+mustContain(auto, "gh api --method DELETE \"repos/$REPO/git/refs/tags/$TAG\" || true", "auto release failed tag cleanup");
+
+mustContain(auto, "uses: actions/upload-artifact@v5", "auto workflow artifacts");
+mustContain(auto, "uses: actions/download-artifact@v5", "auto workflow artifacts");
+mustContain(auto, "name: windows-x64-release-assets", "auto Windows workflow artifact");
+mustContain(auto, "name: macos-${{ matrix.arch }}-release-assets", "auto macOS workflow artifact");
+mustContain(auto, "gh release upload \"$TAG\" release-assets/* --clobber --repo \"$REPO\"", "auto release upload from publish job");
+mustContain(auto, "Expected 6 build assets before latest.json", "auto release asset count guard");
+mustNotContain(auto, "gh release upload $env:TAG $asset.FullName $zip.FullName --clobber", "Windows job direct release upload");
 
 console.log("release workflow contract passed");

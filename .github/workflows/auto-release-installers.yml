@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   prepare-release:
-    name: Prepare V0.01 release tag
+    name: Prepare auto release tag
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -32,14 +32,24 @@ jobs:
 
       - name: Resolve release version
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --force --tags origin "refs/tags/*:refs/tags/*"
           existing_tag="$(git tag --points-at HEAD | grep -E '^[vV][0-9]+\.[0-9]{2}$' | sort -V | tail -n 1 || true)"
           if [ -n "$existing_tag" ]; then
             tag="$existing_tag"
           else
-            tag="$(GITHUB_OUTPUT= node scripts/release/next-release-tag.js)"
+            mapfile -t published_tags < <(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName')
+            tag="$(GITHUB_OUTPUT= node scripts/release/next-release-tag.js "${published_tags[@]}")"
+            if git rev-parse "$tag" >/dev/null 2>&1 && ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+              echo "Deleting orphan release tag $tag before recreating it for this build."
+              git tag -d "$tag" || true
+              git push origin ":refs/tags/$tag" || true
+            fi
           fi
           version="${tag#v}"
           version="${version#V}"
@@ -73,27 +83,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${TAG#v}"
-          version="${version#V}"
           cat > release-notes.md <<NOTES
           <!-- auto-release-installers-managed -->
 
           ## 更新内容
 
-          - GitHub Actions builds Windows and macOS installers for this release.
-          - Packages include only built application files; no local provider config, API keys, memory DB, or user cache.
-          - latest.json remains the update index for the manager.
+          - 本次发布由 GitHub Actions 自动构建 Windows 与 macOS 安装产物。
+          - 发布版本号由自动递增 tag 注入到构建环境，应用“关于”页显示的就是本次发布版本。
+          - latest.json 保持为管理工具检查和获取最新版的下载索引。
+          - 发布包只包含应用构建产物，不打包本机供应商配置、API Key、记忆库或用户缓存。
 
           ## 验证
 
-          - npm run check passed.
-          - npm run vite:build passed.
-          - cargo test --workspace passed.
-          - Windows installer/ZIP and macOS DMG/ZIP are built by GitHub Actions.
+          - npm run check 通过。
+          - npm run vite:build 通过。
+          - cargo test --workspace 通过。
+          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均由 GitHub Actions 构建并上传。
 
           ## 构建产物说明
 
-          The GitHub Assets area below is the only download list. App artifacts cover Windows x64, macOS x64, and macOS arm64. latest.json is an update index. GitHub-generated repository archives are not application builds and are not counted as app versions.
+          下方 GitHub Assets 区域是唯一下载列表；应用产物覆盖 Windows x64、macOS x64、macOS arm64。latest.json 是更新索引。GitHub 自动附带的 Source code 压缩包不是应用构建版本。
 
           Source commit: $SHA
           NOTES
@@ -178,6 +187,10 @@ jobs:
           }
           Push-Location scripts/installer/windows
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
+          if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            exit $LASTEXITCODE
+          }
           Pop-Location
 
       - name: Package Windows ZIP
@@ -190,22 +203,14 @@ jobs:
           }
           Compress-Archive -Path dist/windows/app/* -DestinationPath $zip -Force
 
-      - name: Upload Windows installer to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-          REPO: ${{ github.repository }}
-        shell: pwsh
-        run: |
-          $asset = Get-ChildItem dist/windows -Filter '*windows-x64-setup.exe' | Select-Object -First 1
-          $zip = Get-ChildItem dist/windows -Filter '*windows-x64.zip' | Select-Object -First 1
-          if (-not $asset) {
-            throw "Windows installer was not generated."
-          }
-          if (-not $zip) {
-            throw "Windows ZIP was not generated."
-          }
-          gh release upload $env:TAG $asset.FullName $zip.FullName --clobber --repo $env:REPO
+      - name: Upload Windows workflow artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-x64-release-assets
+          path: |
+            dist/windows/*windows-x64-setup.exe
+            dist/windows/*windows-x64.zip
+          if-no-files-found: error
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
@@ -294,13 +299,14 @@ jobs:
           ln -s /Applications "$zip_stage/Applications"
           ditto -c -k --sequesterRsrc "$zip_stage" "$zip_path"
 
-      - name: Upload macOS DMG to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-          REPO: ${{ github.repository }}
-        shell: bash
-        run: gh release upload "$TAG" dist/macos/*.dmg dist/macos/*.zip --clobber --repo "$REPO"
+      - name: Upload macOS workflow artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-${{ matrix.arch }}-release-assets
+          path: |
+            dist/macos/*.dmg
+            dist/macos/*.zip
+          if-no-files-found: error
 
   publish-release:
     name: Publish release and latest.json
@@ -310,13 +316,28 @@ jobs:
       - windows-installer
       - macos-dmg
     steps:
-      - name: Publish release
+      - name: Download release artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          pattern: '*-release-assets'
+          merge-multiple: true
+
+      - name: Upload build assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare-release.outputs.tag }}
           REPO: ${{ github.repository }}
         shell: bash
-        run: gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 1 -type f -print | sort
+          asset_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "$asset_count" != "6" ]; then
+            echo "::error title=Release asset count mismatch::Expected 6 build assets before latest.json, got $asset_count."
+            exit 1
+          fi
+          gh release upload "$TAG" release-assets/* --clobber --repo "$REPO"
 
       - name: Generate latest.json
         env:
@@ -355,6 +376,14 @@ jobs:
         shell: bash
         run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
 
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: gh release edit "$TAG" --repo "$REPO" --draft=false --latest
+
   cleanup-failed-draft:
     name: Cleanup failed draft release
     runs-on: ubuntu-latest
@@ -386,3 +415,5 @@ jobs:
           release_id="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.databaseId)' "$release_json")"
           echo "Deleting failed draft release $TAG ($release_id)."
           gh api --method DELETE "repos/$REPO/releases/$release_id"
+          echo "Deleting failed release tag $TAG."
+          gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" || true
