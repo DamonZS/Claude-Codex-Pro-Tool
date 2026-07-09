@@ -15,12 +15,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -78,14 +78,14 @@ jobs:
           Pop-Location
 
       - name: Upload Windows binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: claude-codex-pro-windows-binaries
           path: dist/windows/app/*
           if-no-files-found: error
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: claude-codex-pro-windows-installer
           path: dist/windows/*.exe
@@ -99,19 +99,19 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-15-intel
+            runner: macos-latest
             target: x86_64-apple-darwin
           - arch: arm64
-            runner: macos-14
+            runner: macos-latest
             target: aarch64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -155,7 +155,7 @@ jobs:
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
-          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro 管理工具.app"; do
+          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro Manager.app"; do
             test -f "$app/Contents/Info.plist"
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
@@ -165,7 +165,7 @@ jobs:
           done
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: claude-codex-pro-macos-${{ matrix.arch }}-dmg
           path: dist/macos/*.dmg

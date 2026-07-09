@@ -235,6 +235,7 @@ fn assert_release_workflow_uses_current_hosted_runners(workflow: &str) {
         "macos-26",
         "actions/checkout@v4",
         "actions/setup-node@v4",
+        "actions/upload-artifact@v4",
         "node-version: \"22\"",
     ] {
         assert!(
@@ -496,11 +497,32 @@ fn pr_build_workflow_refreshes_manager_frontend_before_packaging() {
         .and_then(std::path::Path::parent)
         .and_then(std::path::Path::parent)
         .unwrap();
-    let workflow = std::fs::read_to_string(repo_root.join(".github/workflows/pr-build.yml"))
-        .expect("read pr build workflow");
+    let workflow = read_source_file(&repo_root.join(".github/workflows/pr-build.yml"));
 
     assert!(workflow.contains("run: npm run vite:build"));
     assert!(workflow.contains("run: cargo build --release"));
+    assert!(workflow.contains("uses: actions/checkout@v5"));
+    assert!(workflow.contains("uses: actions/setup-node@v5"));
+    assert!(workflow.contains("uses: actions/upload-artifact@v5"));
+    assert!(workflow.contains("node-version: \"24\""));
+    assert!(workflow.contains("runner: macos-latest"));
+    assert!(workflow.matches("runner: macos-latest").count() >= 2);
+    assert!(workflow.contains("dist/macos/stage/Claude Codex Pro Manager.app"));
+    assert!(!workflow.contains("Claude Codex Pro 绠＄悊宸ュ叿.app"));
+    assert!(!workflow.contains("Claude Codex Pro 管理工具.app"));
+    for deprecated in [
+        "macos-15-intel",
+        "macos-14",
+        "actions/checkout@v4",
+        "actions/setup-node@v4",
+        "actions/upload-artifact@v4",
+        "node-version: \"22\"",
+    ] {
+        assert!(
+            !workflow.contains(deprecated),
+            "deprecated PR workflow value: {deprecated}"
+        );
+    }
 }
 
 #[test]
