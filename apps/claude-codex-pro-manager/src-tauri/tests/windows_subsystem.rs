@@ -304,7 +304,6 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("macos-14"));
     assert!(workflow.contains("aarch64-apple-darwin"));
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
-    assert!(workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg --clobber"));
     assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
     assert!(workflow.contains("gh release edit \"$TAG\" --repo \"$REPO\" --draft=false --latest"));
     assert!(workflow.contains("cleanup-failed-draft:"));
@@ -313,11 +312,32 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("data.isDraft ? \"true\" : \"false\""));
     assert!(workflow.contains("gh api --method DELETE \"repos/$REPO/releases/$release_id\""));
     assert!(workflow.contains("version: tag"));
+    assert!(workflow.contains("## ????"));
+    assert!(workflow.contains("## ??"));
+    assert!(workflow.contains("Assets 9"));
+    assert!(workflow.contains("windows-x64-setup.exe"));
+    assert!(workflow.contains("windows-x64.zip"));
+    assert!(workflow.contains("macos-x64.dmg"));
+    assert!(workflow.contains("macos-x64.zip"));
+    assert!(workflow.contains("macos-arm64.dmg"));
+    assert!(workflow.contains("macos-arm64.zip"));
+    assert!(workflow.contains("Compress-Archive"));
+    assert!(workflow.contains("ditto -c -k --sequesterRsrc"));
+    assert!(
+        workflow.contains("gh release upload $env:TAG $asset.FullName $zip.FullName --clobber")
+    );
+    assert!(
+        workflow.contains("gh release upload \"$TAG\" dist/macos/*.dmg dist/macos/*.zip --clobber")
+    );
 
     assert!(release_assets.contains("auto-release-installers-managed"));
     assert!(release_assets.contains("if: ${{ !contains(github.event.release.body"));
     assert!(release_assets.contains("run: npm run vite:build"));
     assert!(release_assets.contains("version: tag"));
+    assert!(release_assets.contains("Compress-Archive"));
+    assert!(release_assets.contains("dist/windows/*windows-x64.zip"));
+    assert!(release_assets.contains("ditto -c -k --sequesterRsrc"));
+    assert!(release_assets.contains("dist/macos/*macos-${{ matrix.arch }}.zip"));
 
     assert!(version_script.contains("RELEASE_TAG_PATTERN = /^[vV](\\d+)\\.(\\d{2})$/"));
     assert!(version_script.contains("assert.equal(nextReleaseTag([]), \"V0.01\")"));

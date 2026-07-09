@@ -1,4 +1,5 @@
 name: Release assets
+# manual-release-assets-9: windows-x64-setup.exe, windows-x64.zip, macos-x64.dmg, macos-x64.zip, macos-arm64.dmg, macos-arm64.zip, latest.json, Source code (zip), Source code (tar.gz)
 
 on:
   release:
@@ -75,11 +76,23 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
           Pop-Location
 
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
+          $zip = "dist/windows/claude-codex-pro-$version-windows-x64.zip"
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+          Compress-Archive -Path dist/windows/app/* -DestinationPath $zip -Force
+
       - name: Upload Windows installer
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: dist/windows/*.exe
+          files: |
+            dist/windows/*windows-x64-setup.exe
+            dist/windows/*windows-x64.zip
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
@@ -146,11 +159,28 @@ jobs:
             echo "verified: $app"
           done
 
+      - name: Package macOS ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          version="${version#V}"
+          zip_path="dist/macos/claude-codex-pro-${version}-macos-${{ matrix.arch }}.zip"
+          zip_stage="dist/macos/zip-stage"
+          rm -rf "$zip_stage" "$zip_path"
+          mkdir -p "$zip_stage"
+          cp -R "dist/macos/stage/Claude Codex Pro.app" "$zip_stage/"
+          cp -R "dist/macos/stage/Claude Codex Pro ????.app" "$zip_stage/"
+          ln -s /Applications "$zip_stage/Applications"
+          ditto -c -k --sequesterRsrc "$zip_stage" "$zip_path"
+
       - name: Upload macOS DMG
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: dist/macos/*.dmg
+          files: |
+            dist/macos/*macos-${{ matrix.arch }}.dmg
+            dist/macos/*macos-${{ matrix.arch }}.zip
 
   latest-json:
     name: Upload static latest.json

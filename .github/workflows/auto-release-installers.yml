@@ -73,28 +73,53 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; assets will be replaced."
-            exit 0
-          fi
+          version="${TAG#v}"
+          version="${version#V}"
           cat > release-notes.md <<NOTES
           <!-- auto-release-installers-managed -->
 
-          自动构建版本 $TAG
+          ## ????
 
-          - Windows x64 安装包
-          - macOS Intel DMG
-          - macOS Apple Silicon DMG
-          - latest.json 自动更新清单
+          - ?????????????API????????
+          - ?????????????????????????????
+          - ?? Codex / Claude ???????????????????????????
+          - ?????? Windows x64?macOS x64?macOS arm64???? latest.json ?????
+
+          ## ??
+
+          - npm run check ???
+          - npm run vite:build ???
+          - cargo test --workspace ???
+          - Windows ????Windows ZIP?macOS DMG?macOS ZIP ?? GitHub Actions ???????
+
+          ## Assets 9
+
+          - claude-codex-pro-${version}-macos-arm64.dmg
+          - claude-codex-pro-${version}-macos-arm64.zip
+          - claude-codex-pro-${version}-macos-x64.dmg
+          - claude-codex-pro-${version}-macos-x64.zip
+          - claude-codex-pro-${version}-windows-x64-setup.exe
+          - claude-codex-pro-${version}-windows-x64.zip
+          - latest.json
+          - Source code (zip)
+          - Source code (tar.gz)
 
           Source commit: $SHA
           NOTES
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "Claude Codex Pro $TAG" \
-            --notes-file release-notes.md \
-            --draft \
-            --verify-tag
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; updating release notes and replacing assets."
+            gh release edit "$TAG" \
+              --repo "$REPO" \
+              --title "Claude Codex Pro $TAG" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "Claude Codex Pro $TAG" \
+              --notes-file release-notes.md \
+              --draft \
+              --verify-tag
+          fi
 
   windows-installer:
     name: Windows installer
@@ -164,6 +189,16 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
           Pop-Location
 
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          $version = "${{ needs.prepare-release.outputs.version }}"
+          $zip = "dist/windows/claude-codex-pro-$version-windows-x64.zip"
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+          Compress-Archive -Path dist/windows/app/* -DestinationPath $zip -Force
+
       - name: Upload Windows installer to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -171,11 +206,15 @@ jobs:
           REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $asset = Get-ChildItem dist/windows -Filter *.exe | Select-Object -First 1
+          $asset = Get-ChildItem dist/windows -Filter '*windows-x64-setup.exe' | Select-Object -First 1
+          $zip = Get-ChildItem dist/windows -Filter '*windows-x64.zip' | Select-Object -First 1
           if (-not $asset) {
             throw "Windows installer was not generated."
           }
-          gh release upload $env:TAG $asset.FullName --clobber --repo $env:REPO
+          if (-not $zip) {
+            throw "Windows ZIP was not generated."
+          }
+          gh release upload $env:TAG $asset.FullName $zip.FullName --clobber --repo $env:REPO
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
@@ -250,13 +289,27 @@ jobs:
             echo "verified: $app"
           done
 
+      - name: Package macOS ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare-release.outputs.version }}"
+          zip_path="dist/macos/claude-codex-pro-${version}-macos-${{ matrix.arch }}.zip"
+          zip_stage="dist/macos/zip-stage"
+          rm -rf "$zip_stage" "$zip_path"
+          mkdir -p "$zip_stage"
+          cp -R "dist/macos/stage/Claude Codex Pro.app" "$zip_stage/"
+          cp -R "dist/macos/stage/Claude Codex Pro ????.app" "$zip_stage/"
+          ln -s /Applications "$zip_stage/Applications"
+          ditto -c -k --sequesterRsrc "$zip_stage" "$zip_path"
+
       - name: Upload macOS DMG to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare-release.outputs.tag }}
           REPO: ${{ github.repository }}
         shell: bash
-        run: gh release upload "$TAG" dist/macos/*.dmg --clobber --repo "$REPO"
+        run: gh release upload "$TAG" dist/macos/*.dmg dist/macos/*.zip --clobber --repo "$REPO"
 
   publish-release:
     name: Publish release and latest.json
