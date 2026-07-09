@@ -781,13 +781,22 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .and_then(|rest| rest.split("function SupplierScreen").next())
         .expect("overview screen source");
     assert!(!overview_screen.contains("relay-banner"));
-    assert!(!overview_screen.contains("官方中转站"));
     assert!(!overview_screen.contains("拓扑熵减API"));
-    assert!(!overview_screen.contains("https://api.toporeduce.cn"));
     assert!(!overview_screen.contains("Codex 诊断"));
     assert!(!overview_screen.contains("Claude 诊断"));
     assert!(!overview_screen.contains("installKind ?? \"unknown\""));
     assert!(!overview_screen.contains("cdpStatus ?? \"unknown\""));
+    let announcement_panel = overview_screen
+        .split("className=\"overview-announcement-card\"")
+        .nth(1)
+        .and_then(|rest| rest.split("<div className=\"ops-matrix\">").next())
+        .expect("overview announcement card source");
+    assert!(announcement_panel.contains("\u{516c}\u{544a}"));
+    assert!(announcement_panel.contains("CCP\u{5b98}\u{65b9}\u{4e2d}\u{8f6c}\u{7ad9}"));
+    assert!(!announcement_panel.contains("<h2>\u{62d3}\u{6251}API"));
+    assert!(announcement_panel.contains("\u{62d3}\u{6251}API"));
+    assert!(announcement_panel.contains("https://api.toporeduce.cn"));
+    assert!(!announcement_panel.contains("\u{6253}\u{5f00}\u{62d3}\u{6251}API"));
     let memory_panel = overview_screen
         .split("title=\"盘古记忆总览\"")
         .nth(1)
@@ -832,6 +841,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("manager.memory.selfcheck.failed"));
     assert!(commands_rs.contains("\"historyScan\": \"all_visible_workspaces_and_sessions\""));
     assert!(styles.contains(".overview-side-stack"));
+    assert!(styles.contains(".overview-announcement-card"));
+    assert!(styles.contains(".overview-announcement-kicker"));
     assert!(styles.contains(".overview-memory-list"));
     assert!(styles.contains(".memory-overview-matrix"));
     assert!(styles.contains("grid-template-columns: repeat(2, minmax(0, 1fr));"));

@@ -229,6 +229,19 @@ export function OverviewScreen({
   };
   return (
     <div className="ops-dashboard">
+      <section className="overview-announcement-card" aria-label="公告">
+        <div className="overview-announcement-copy">
+          <span className="overview-announcement-kicker">公告</span>
+          <div>
+            <h2>CCP官方中转站</h2>
+            <p>拓扑API是CCP官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。</p>
+          </div>
+        </div>
+        <Button onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} variant="outline">
+          <ExternalLink className="h-4 w-4" />
+          拓扑API
+        </Button>
+      </section>
       <div className="ops-matrix">
         <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
         <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />
