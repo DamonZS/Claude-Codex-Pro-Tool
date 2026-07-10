@@ -957,12 +957,16 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .nth(1)
         .and_then(|rest| rest.split("<div className=\"ops-matrix\">").next())
         .expect("overview announcement card source");
-    assert!(announcement_panel.contains("\u{516c}\u{544a}"));
-    assert!(announcement_panel.contains("CCP\u{5b98}\u{65b9}\u{4e2d}\u{8f6c}\u{7ad9}"));
-    assert!(!announcement_panel.contains("<h2>\u{62d3}\u{6251}API"));
-    assert!(announcement_panel.contains("\u{62d3}\u{6251}API"));
-    assert!(announcement_panel.contains("https://api.toporeduce.cn"));
-    assert!(!announcement_panel.contains("\u{6253}\u{5f00}\u{62d3}\u{6251}API"));
+    assert!(announcement_panel.contains("announcement.badge"));
+    assert!(announcement_panel.contains("announcement.title"));
+    assert!(announcement_panel.contains("announcement.description"));
+    assert!(announcement_panel.contains("announcement.buttonLabel"));
+    assert!(announcement_panel.contains("actions.openExternalUrl(announcement.url)"));
+    assert!(!announcement_panel.contains("拓扑API是CCP官方中转站"));
+    assert!(!announcement_panel.contains("https://api.toporeduce.cn"));
+    assert!(!announcement_panel.contains("dangerouslySetInnerHTML"));
+    assert!(app_tsx.contains("call<AdsResult>(\"load_ads\")"));
+    assert!(app_tsx.contains("ads={ads}"));
     let memory_panel = overview_screen
         .split("title=\"盘古记忆总览\"")
         .nth(1)
@@ -1253,7 +1257,7 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);"
+        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);"
     ));
     assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy ? \"写入中...\" : devModeConfigured ? \"已写入\" : \"写入开发配置\";"));
     assert!(
@@ -2468,13 +2472,18 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         })
         .expect("restart_codex_for_frontend_repair source");
     assert!(restart.contains("stop_launcher_processes_for_codex_restart()"));
+    assert!(restart.contains("let old_codex_pids ="));
     assert!(restart.contains("stop_codex_processes()"));
-    assert!(restart.contains("tokio::time::sleep(Duration::from_millis(800)).await"));
+    assert!(restart.contains("wait_for_codex_pids_to_exit(&old_codex_pids"));
+    assert!(restart.contains("force_kill_process_tree_for_frontend_repair(&old_codex_pids)"));
+    assert!(restart.contains("旧 Codex 进程仍未退出"));
     assert!(
         restart
             .contains("wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await")
     );
     assert!(restart.contains("正在等待 Codex 自启完成"));
+    assert!(commands_rs.contains("taskkill.exe"));
+    assert!(commands_rs.contains(".args([\"/PID\", &pid.to_string(), \"/F\", \"/T\"])"));
 
     let wait_ports = commands_rs
         .split("async fn wait_for_codex_launch_ports")

@@ -178,6 +178,7 @@ import type {
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
   CommandResult,
+  AdsResult,
   ContextEntries,
   ContextEntriesResult,
   ContextEntry,
@@ -236,6 +237,7 @@ export function App() {
   const [busyCount, setBusyCount] = useState(0);
   const busy = busyCount > 0;
   const [overview, setOverview] = useState<OverviewResult | null>(null);
+  const [ads, setAds] = useState<AdsResult | null>(null);
   const [claudeDesktop, setClaudeDesktop] = useState<ClaudeDesktopResult | null>(null);
   const [claudeChinese, setClaudeChinese] = useState<ClaudeChineseWindowResult | null>(null);
   const [claudeZhPatch, setClaudeZhPatch] = useState<ClaudeZhPatchResult | null>(null);
@@ -336,6 +338,12 @@ export function App() {
       setOverview(result);
       if (!silent) notifyIfNeedsAttention({ title: "概览", message: result.message, status: result.status });
     }
+  };
+
+  const refreshAds = async (silent = false) => {
+    const result = await run(() => call<AdsResult>("load_ads"), "公告", { trackBusy: !silent, notify: !silent });
+    if (result) setAds(result);
+    return result;
   };
 
   const refreshClaude = async (silent = false) => {
@@ -1373,7 +1381,7 @@ export function App() {
       }, delay);
     };
     if (target === "overview") {
-      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
+      await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
         void refreshMemoryAssistStatus(true);
       }, 250);
@@ -1717,7 +1725,7 @@ export function App() {
           </div>
         </header>
         <section className="ops-screen">
-          {route === "overview" ? <OverviewScreen actions={actions} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} memoryItems={memoryItems} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} memoryItems={memoryItems} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}

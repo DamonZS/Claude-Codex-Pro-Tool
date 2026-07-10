@@ -44,6 +44,22 @@ export type OverviewResult = CommandResult<{
   logs_path: string;
 }>;
 
+export type AnnouncementItem = {
+  id: string;
+  type: string;
+  badge?: string;
+  title: string;
+  description: string;
+  buttonLabel?: string;
+  url: string;
+  highlights?: string[];
+};
+
+export type AdsResult = CommandResult<{
+  version: number;
+  ads: AnnouncementItem[];
+}>;
+
 export type ClaudeDesktopResult = CommandResult<{
   processCount: number;
   executablePaths: string[];

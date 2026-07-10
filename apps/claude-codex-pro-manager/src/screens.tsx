@@ -119,6 +119,7 @@ import {
   updateStatusLabel,
 } from "@/lib/update";
 import type {
+  AdsResult,
   BackendSettings,
   ClaudeChineseWindowResult,
   ClaudeContextEntriesResult,
@@ -161,6 +162,7 @@ import type {
 
 export function OverviewScreen({
   actions,
+  ads,
   overview,
   claudeDesktop,
   claudeZhPatch,
@@ -171,6 +173,7 @@ export function OverviewScreen({
   settings,
 }: {
   actions: AppActions;
+  ads: AdsResult | null;
   overview: OverviewResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
   claudeZhPatch: ClaudeZhPatchResult | null;
@@ -181,6 +184,7 @@ export function OverviewScreen({
   settings: BackendSettings | null;
 }) {
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
+  const announcement = ads?.ads.find((item) => item.id === "official-toporeduce-api") ?? ads?.ads[0] ?? null;
   const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
   const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
@@ -229,19 +233,21 @@ export function OverviewScreen({
   };
   return (
     <div className="ops-dashboard">
-      <section className="overview-announcement-card" aria-label="公告">
-        <div className="overview-announcement-copy">
-          <span className="overview-announcement-kicker">公告</span>
-          <div>
-            <h2>CCP官方中转站</h2>
-            <p>拓扑API是CCP官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。</p>
+      {announcement ? (
+        <section className="overview-announcement-card" aria-label={announcement.badge?.trim() || "公告"}>
+          <div className="overview-announcement-copy">
+            <span className="overview-announcement-kicker">{announcement.badge?.trim() || "公告"}</span>
+            <div>
+              <h2>{announcement.title}</h2>
+              <p>{announcement.description}</p>
+            </div>
           </div>
-        </div>
-        <Button onClick={() => void actions.openExternalUrl("https://api.toporeduce.cn")} variant="outline">
-          <ExternalLink className="h-4 w-4" />
-          拓扑API
-        </Button>
-      </section>
+          <Button onClick={() => void actions.openExternalUrl(announcement.url)} variant="outline">
+            <ExternalLink className="h-4 w-4" />
+            {announcement.buttonLabel?.trim() || "查看详情"}
+          </Button>
+        </section>
+      ) : null}
       <div className="ops-matrix">
         <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
         <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />

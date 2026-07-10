@@ -108,6 +108,32 @@ fn app_paths_extracts_codex_version_from_windows_package_app_dir() {
 }
 
 #[test]
+fn app_paths_support_windows_chatgpt_shell_and_resources_codex_helper() {
+    let temp = tempfile::tempdir().unwrap();
+    let app_dir = temp
+        .path()
+        .join("OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0")
+        .join("app");
+    let resources = app_dir.join("resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    std::fs::write(app_dir.join("ChatGPT.exe"), "").unwrap();
+    std::fs::write(resources.join("codex.exe"), "").unwrap();
+
+    assert_eq!(
+        normalize_codex_app_path(&app_dir.join("ChatGPT.exe")).as_deref(),
+        Some(app_dir.as_path())
+    );
+    assert_eq!(
+        normalize_codex_app_path(&resources.join("codex.exe")).as_deref(),
+        Some(app_dir.as_path())
+    );
+    assert_eq!(
+        build_codex_executable(&app_dir),
+        app_dir.join("ChatGPT.exe")
+    );
+}
+
+#[test]
 fn app_paths_extracts_codex_version_from_macos_bundle_plist() {
     let temp = tempfile::tempdir().unwrap();
     let app = temp.path().join("OpenAI Codex.app");

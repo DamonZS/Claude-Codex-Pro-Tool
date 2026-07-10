@@ -238,7 +238,10 @@ pub fn find_running_codex_app_dir() -> Option<PathBuf> {
     let processes = crate::windows_integration::enumerate_processes();
     processes
         .iter()
-        .filter(|process| process.exe_file.eq_ignore_ascii_case("codex.exe"))
+        .filter(|process| {
+            process.exe_file.eq_ignore_ascii_case("codex.exe")
+                || process.exe_file.eq_ignore_ascii_case("ChatGPT.exe")
+        })
         .filter_map(|process| process.executable_path.as_deref())
         .filter_map(normalize_codex_app_path)
         .find(|path| codex_app_version(path).is_some())
@@ -256,6 +259,17 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
 
     let file_name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
     if file_name.eq_ignore_ascii_case("Codex.exe") || file_name.eq_ignore_ascii_case("codex.exe") {
+        if path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case("resources"))
+        {
+            return path.parent().and_then(Path::parent).map(Path::to_path_buf);
+        }
+        return path.parent().map(Path::to_path_buf);
+    }
+    if file_name.eq_ignore_ascii_case("ChatGPT.exe") {
         return path.parent().map(Path::to_path_buf);
     }
 
@@ -267,6 +281,22 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
         return path.parent().map(Path::to_path_buf);
     }
 
+    if path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("resources"))
+        && path
+            .parent()
+            .is_some_and(|parent| parent.join("ChatGPT.exe").exists())
+    {
+        return path.parent().map(Path::to_path_buf);
+    }
+
+    let shell = path.join("ChatGPT.exe");
+    if shell.exists() {
+        return Some(path.to_path_buf());
+    }
+
     let upper = path.join("Codex.exe");
     let lower = path.join("codex.exe");
     if upper.exists() || lower.exists() {
@@ -275,6 +305,10 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
 
     let nested_app = path.join("app");
     if nested_app.is_dir() {
+        let shell = nested_app.join("ChatGPT.exe");
+        if shell.exists() {
+            return Some(nested_app);
+        }
         let upper = nested_app.join("Codex.exe");
         let lower = nested_app.join("codex.exe");
         if upper.exists() || lower.exists() {
@@ -292,6 +326,10 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
 pub fn build_codex_executable(app_dir: &Path) -> PathBuf {
     if app_dir.extension() == Some(OsStr::new("app")) {
         return app_dir.join("Contents").join("MacOS").join("Codex");
+    }
+    let shell = app_dir.join("ChatGPT.exe");
+    if shell.exists() {
+        return shell;
     }
     let upper = app_dir.join("Codex.exe");
     if upper.exists() {

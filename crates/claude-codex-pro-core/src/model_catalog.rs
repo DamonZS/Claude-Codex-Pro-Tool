@@ -64,7 +64,13 @@ pub async fn read_codex_model_catalog() -> Value {
 }
 
 fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Value {
-    let models = relay_profile_model_ids(profile);
+    let (catalog_models, catalog_statuses) = models_from_default_model_catalog_json_files(home);
+    let models = unique_strings(
+        relay_profile_model_ids(profile)
+            .into_iter()
+            .chain(catalog_models)
+            .collect(),
+    );
     let model = profile.model.trim().to_string();
     let default_model = if models.iter().any(|item| item == &model) {
         model.clone()
@@ -76,7 +82,17 @@ fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Val
     } else {
         profile.name.trim()
     };
-    let model_count = models.len();
+    let mut sources = vec![json!({
+        "id": format!("relay-profile:{}", profile.id),
+        "type": "relay_profile_model_list",
+        "name": provider_name,
+        "base_url": profile.base_url.trim(),
+        "status": "ok",
+        "models": relay_profile_model_ids(profile).len(),
+        "responses_api": responses_api_status("unknown", "", "")
+    })];
+    sources.extend(catalog_statuses);
+
     json!({
         "status": if models.is_empty() { "not_configured" } else { "ok" },
         "path": home.join("config.toml").to_string_lossy(),
@@ -85,17 +101,7 @@ fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Val
         "provider_name": provider_name,
         "default_model": default_model,
         "models": models,
-        "sources": [
-            {
-                "id": format!("relay-profile:{}", profile.id),
-                "type": "relay_profile_model_list",
-                "name": provider_name,
-                "base_url": profile.base_url.trim(),
-                "status": "ok",
-                "models": model_count,
-                "responses_api": responses_api_status("unknown", "", "")
-            }
-        ],
+        "sources": sources,
         "responses_api": responses_api_status("unknown", "", "")
     })
 }
@@ -668,6 +674,75 @@ fn models_from_config_model_catalog_json(
             "models": count,
             "responses_api": responses_api_status("unknown", "", "")
         })),
+    )
+}
+
+fn models_from_default_model_catalog_json_files(home: &Path) -> (Vec<String>, Vec<Value>) {
+    let mut models = Vec::new();
+    let mut statuses = Vec::new();
+    for filename in ["model-catalog.gpt-5.6.json", "model-catalog.json"] {
+        let path = home.join(filename);
+        if !path.exists() {
+            continue;
+        }
+        let (file_models, status) = models_from_model_catalog_json_file(&path);
+        models.extend(file_models);
+        statuses.push(status);
+    }
+    (unique_strings(models), statuses)
+}
+
+fn models_from_model_catalog_json_file(path: &Path) -> (Vec<String>, Value) {
+    let safe_path = path.to_string_lossy().to_string();
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return (
+                Vec::new(),
+                json!({
+                    "id": format!("file:{}", safe_path),
+                    "type": "model_catalog_json",
+                    "name": "Codex local model catalog",
+                    "path": safe_path,
+                    "status": "failed",
+                    "message": error.to_string(),
+                    "models": 0,
+                    "responses_api": responses_api_status("unknown", "", "")
+                }),
+            );
+        }
+    };
+    let payload = match serde_json::from_str::<Value>(&contents) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                Vec::new(),
+                json!({
+                    "id": format!("file:{}", safe_path),
+                    "type": "model_catalog_json",
+                    "name": "Codex local model catalog",
+                    "path": safe_path,
+                    "status": "failed",
+                    "message": error.to_string(),
+                    "models": 0,
+                    "responses_api": responses_api_status("unknown", "", "")
+                }),
+            );
+        }
+    };
+    let models = unique_strings(parse_model_catalog_json_models(&payload));
+    let count = models.len();
+    (
+        models,
+        json!({
+            "id": format!("file:{}", safe_path),
+            "type": "model_catalog_json",
+            "name": "Codex local model catalog",
+            "path": safe_path,
+            "status": "ok",
+            "models": count,
+            "responses_api": responses_api_status("unknown", "", "")
+        }),
     )
 }
 

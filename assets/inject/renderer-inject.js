@@ -83,8 +83,9 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
-  const codexAppServerModelRequestPatchVersion = "1";
+  const codexAppServerModelRequestPatchVersion = "2";
   const codexPluginMarketplaceUnlockVersion = "13";
+  const codexInjectedModelSelectionKey = "claudeCodexPro.injectedCodexModelSelection";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -1501,6 +1502,8 @@
     });
     refreshConversationViewControls();
     refreshCodexServiceTierControls();
+    installCodexModelDropdownObserver();
+    scheduleCodexModelDropdownPatch();
   }
 
   let claudeCodexProBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
@@ -2181,44 +2184,43 @@
   }
 
   function codexServiceTierRequestOverride(message) {
-    if (!claudeCodexProSettings().serviceTierControls) return message;
     if (!message || typeof message !== "object") return message;
     if (message.type === "send-cli-request-for-host") {
       const method = String(message.method || "");
-      const params = applyCodexServiceTierRequestOverride(method, message.params);
+      const params = applyCodexRequestOverrides(method, message.params);
       return params === message.params ? message : { ...message, params };
     }
     if (message.type === "mcp-request" && message.request && typeof message.request === "object") {
       const method = String(message.request.method || "");
-      const params = applyCodexServiceTierRequestOverride(method, message.request.params);
+      const params = applyCodexRequestOverrides(method, message.request.params);
       if (params === message.request.params) return message;
       return { ...message, request: { ...message.request, params } };
     }
     if (message.type === "worker-request" && message.request && typeof message.request === "object") {
       const method = String(message.request.method || "");
-      const params = applyCodexServiceTierRequestOverride(method, message.request.params);
+      const params = applyCodexRequestOverrides(method, message.request.params);
       if (params === message.request.params) return message;
       return { ...message, request: { ...message.request, params } };
     }
     if (message.type === "thread-prewarm-start" && message.request && typeof message.request === "object") {
-      const params = applyCodexServiceTierRequestOverride("thread/start", message.request.params);
+      const params = applyCodexRequestOverrides("thread/start", message.request.params);
       if (params === message.request.params) return message;
       return { ...message, request: { ...message.request, params } };
     }
     if (message.type === "start-conversation") {
-      const nextMessage = applyCodexServiceTierRequestOverride("thread/start", message);
+      const nextMessage = applyCodexRequestOverrides("thread/start", message);
       return nextMessage === message ? message : nextMessage;
     }
     if (message.type === "prewarm-thread-start-for-host" && message.params && typeof message.params === "object") {
-      const params = applyCodexServiceTierRequestOverride("thread/start", message.params);
+      const params = applyCodexRequestOverrides("thread/start", message.params);
       return params === message.params ? message : { ...message, params };
     }
     if (message.type === "start-thread-for-host") {
-      const params = applyCodexServiceTierRequestOverride("thread/start", message);
+      const params = applyCodexRequestOverrides("thread/start", message);
       return params === message ? message : params;
     }
     if (message.type === "start-turn-for-host" && message.params && typeof message.params === "object") {
-      const params = applyCodexServiceTierRequestOverride("turn/start", message.params, message.conversationId);
+      const params = applyCodexRequestOverrides("turn/start", message.params, message.conversationId);
       return params === message.params ? message : { ...message, params };
     }
     return message;
@@ -5263,6 +5265,57 @@
     ]);
   }
 
+
+  function readCodexInjectedModelSelection() {
+    try {
+      const selected = String(localStorage.getItem(codexInjectedModelSelectionKey) || "").trim();
+      return claudeCodexProModelNames().includes(selected) ? selected : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function writeCodexInjectedModelSelection(modelName) {
+    const selected = String(modelName || "").trim();
+    if (!selected || !claudeCodexProModelNames().includes(selected)) return false;
+    try {
+      localStorage.setItem(codexInjectedModelSelectionKey, selected);
+    } catch {
+    }
+    window.__claudeCodexProInjectedCodexModel = selected;
+    sendClaudeCodexProDiagnostic("model_dom_selection_saved", {
+      model: selected,
+      provider: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "",
+    });
+    return true;
+  }
+
+  function applyCodexModelSelectionRequestOverride(method, params, threadIdHint = "") {
+    if (!claudeCodexProModelUnlockEnabled()) return params;
+    if (!codexServiceTierRequestMethods().has(method) || !params || typeof params !== "object") return params;
+    const selected = readCodexInjectedModelSelection();
+    if (!selected) return params;
+    const nextParams = { ...(params || {}), model: selected };
+    if (Object.prototype.hasOwnProperty.call(nextParams, "model_slug")) nextParams.model_slug = selected;
+    if (Object.prototype.hasOwnProperty.call(nextParams, "modelId")) nextParams.modelId = selected;
+    sendClaudeCodexProDiagnostic("model_request_override_applied", {
+      method,
+      threadId: codexServiceTierThreadIdForRequest(method, params, threadIdHint) || "",
+      model: selected,
+      provider: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "",
+    });
+    return nextParams;
+  }
+
+  function applyCodexRequestOverrides(method, params, threadIdHint = "") {
+    let nextParams = params;
+    if (claudeCodexProSettings().serviceTierControls) {
+      nextParams = applyCodexServiceTierRequestOverride(method, nextParams, threadIdHint);
+    }
+    nextParams = applyCodexModelSelectionRequestOverride(method, nextParams, threadIdHint);
+    return nextParams;
+  }
+
   async function loadCodexModelCatalog(force = false) {
     if (!force && codexModelCatalogPromise) return codexModelCatalogPromise;
     if (!force && codexModelCatalogLoadedAt && Date.now() - codexModelCatalogLoadedAt < 10000) return codexModelCatalog;
@@ -5272,6 +5325,7 @@
         codexModelCatalogLoadedAt = Date.now();
         renderClaudeCodexProMenu();
         patchCodexModelWhitelist();
+        scheduleCodexModelDropdownPatch();
         return codexModelCatalog;
       })
       .catch((error) => {
@@ -5527,6 +5581,154 @@
     return changed;
   }
 
+
+  function codexModelMenuCandidates() {
+    return Array.from(document.querySelectorAll([
+      "[role='menu']",
+      "[role='listbox']",
+      "[role='dialog']",
+      "[data-radix-popper-content-wrapper]",
+      "[data-side][data-align]",
+    ].join(", "))).filter((node) => {
+      const rect = node.getBoundingClientRect?.();
+      if (!rect || rect.width < 120 || rect.height < 40) return false;
+      const text = String(node.textContent || "");
+      const known = claudeCodexProModelNames();
+      return /GPT-|gpt-|Model/.test(text) || text.includes("??") || known.some((name) => text.includes(name));
+    });
+  }
+
+  function codexModelMenuHasModel(surface, modelName) {
+    return Array.from(surface.querySelectorAll("button, [role='menuitem'], [role='option'], [data-value]")).some((node) => String(node.textContent || node.getAttribute?.("data-value") || "").includes(modelName));
+  }
+
+  function codexModelMenuDismiss(surface) {
+    try {
+      surface.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+    } catch {
+    }
+  }
+
+  function codexModelMenuMarkCurrentSelection() {
+    const selected = readCodexInjectedModelSelection();
+    if (!selected) return;
+    document.querySelectorAll("button, [role='button']").forEach((button) => {
+      const text = String(button.textContent || "");
+      if ((/GPT-|gpt-|Model/.test(text) || text.includes("??")) && button.querySelector?.("svg")) {
+        button.setAttribute("data-claude-codex-pro-selected-model", selected);
+        button.title = `CCP 已选择模型：${selected}`;
+      }
+    });
+  }
+
+
+  let codexModelDropdownPatchTimer = null;
+
+  function scheduleCodexModelDropdownPatch(delayMs = 80) {
+    if (codexModelDropdownPatchTimer) clearTimeout(codexModelDropdownPatchTimer);
+    codexModelDropdownPatchTimer = setTimeout(() => {
+      codexModelDropdownPatchTimer = null;
+      try {
+        patchCodexModelDropdownDom();
+      } catch (error) {
+        sendClaudeCodexProDiagnostic("model_dropdown_dom_patch_failed", {
+          errorName: error?.name || "",
+          errorMessage: error?.message || String(error),
+        });
+      }
+    }, delayMs);
+  }
+
+  function installCodexModelDropdownObserver() {
+    if (window.__claudeCodexProModelDropdownObserverInstalled) return;
+    window.__claudeCodexProModelDropdownObserverInstalled = true;
+    const root = document.body || document.documentElement;
+    if (root && window.MutationObserver) {
+      new MutationObserver(() => scheduleCodexModelDropdownPatch(30)).observe(root, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
+    if (window.__claudeCodexProModelDropdownPatchInterval) {
+      clearInterval(window.__claudeCodexProModelDropdownPatchInterval);
+    }
+    window.__claudeCodexProModelDropdownPatchInterval = setInterval(() => {
+      if (document.querySelector("[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper], [data-side][data-align]")) {
+        scheduleCodexModelDropdownPatch(0);
+      }
+    }, 800);
+  }
+
+  function createCodexInjectedModelMenuItem(modelName) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.dataset.claudeCodexProInjectedModel = modelName;
+    button.title = `CCP 模型增强：${modelName}`;
+    Object.assign(button.style, {
+      width: "100%",
+      border: "0",
+      borderRadius: "8px",
+      background: "transparent",
+      color: "inherit",
+      cursor: "pointer",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      gap: "2px",
+      padding: "8px 12px",
+      textAlign: "left",
+      font: "inherit",
+    });
+    button.innerHTML = `<span style="font-weight:600">${escapeHtml(modelName)}</span><span style="font-size:12px;opacity:.68">CCP 模型增强</span>`;
+    button.addEventListener("mouseenter", () => { button.style.background = "rgba(127,127,127,.12)"; });
+    button.addEventListener("mouseleave", () => { button.style.background = "transparent"; });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!writeCodexInjectedModelSelection(modelName)) return;
+      patchReactModelState();
+      codexModelMenuMarkCurrentSelection();
+      window.dispatchEvent(new CustomEvent("claude-codex-pro-model-selected", { detail: { model: modelName } }));
+      showToast(`已选择 CCP 模型：${modelName}`, null);
+      codexModelMenuDismiss(button.closest("[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper]") || document.body);
+    }, true);
+    return button;
+  }
+
+  function patchCodexModelDropdownDom() {
+    if (!claudeCodexProModelUnlockEnabled()) return false;
+    const names = claudeCodexProModelNames();
+    if (!names.length) {
+      void loadCodexModelCatalog();
+      return false;
+    }
+    let changed = false;
+    for (const surface of codexModelMenuCandidates()) {
+      let group = surface.querySelector("[data-claude-codex-pro-model-group]");
+      if (!group) {
+        group = document.createElement("div");
+        group.dataset.claudeCodexProModelGroup = "true";
+        group.style.borderTop = "1px solid rgba(127,127,127,.18)";
+        group.style.marginTop = "6px";
+        group.style.paddingTop = "6px";
+        surface.appendChild(group);
+      }
+      names.forEach((modelName) => {
+        if (codexModelMenuHasModel(surface, modelName)) return;
+        group.appendChild(createCodexInjectedModelMenuItem(modelName));
+        changed = true;
+      });
+    }
+    codexModelMenuMarkCurrentSelection();
+    if (changed) {
+      sendClaudeCodexProDiagnostic("model_dropdown_dom_patched", { modelCount: names.length });
+    }
+    return changed;
+  }
+
   function patchAppServerModelMessages() {
     if (window.__claudeCodexProModelMessagePatchInstalled) return;
     window.__claudeCodexProModelMessagePatchInstalled = true;
@@ -5660,6 +5862,8 @@
     }
     patchStatsigModelWhitelist();
     patchReactModelState();
+    installCodexModelDropdownObserver();
+    scheduleCodexModelDropdownPatch();
   }
 
   function threadIdVariants(sessionId) {

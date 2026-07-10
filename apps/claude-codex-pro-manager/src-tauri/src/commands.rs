@@ -2219,13 +2219,43 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
             .map(refresh_launch_port_status);
     };
 
+    let old_codex_pids = claude_codex_pro_core::watcher::find_codex_processes();
     let stopped_launchers =
         claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
     let stopped_codex = claude_codex_pro_core::watcher::stop_codex_processes();
     details.push(format!(
         "已请求结束 {stopped_codex} 个 Codex 进程、{stopped_launchers} 个启动器进程。"
     ));
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    if !old_codex_pids.is_empty() {
+        if !wait_for_codex_pids_to_exit(&old_codex_pids, Duration::from_secs(3)).await {
+            details.push(format!(
+                "旧 Codex 进程未按预期退出，正在强制结束 PID：{}。",
+                old_codex_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            let killed = force_kill_process_tree_for_frontend_repair(&old_codex_pids);
+            details.push(format!(
+                "已发起 taskkill 兜底结束 {killed} 个旧 Codex 进程。"
+            ));
+            if !wait_for_codex_pids_to_exit(&old_codex_pids, Duration::from_secs(8)).await {
+                details.push(
+                    "旧 Codex 进程仍未退出，本次不会继续启动新 Codex，避免复用旧注入状态。"
+                        .to_string(),
+                );
+                return StatusStore::default()
+                    .load_latest()
+                    .ok()
+                    .flatten()
+                    .map(refresh_launch_port_status);
+            }
+        }
+        details.push("旧 Codex 进程已确认退出，开始启动新的 Codex。".to_string());
+    } else {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
 
     let request = LaunchRequest {
         app_path: app_path.to_string_lossy().to_string(),
@@ -2266,6 +2296,41 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         .ok()
         .flatten()
         .map(refresh_launch_port_status)
+}
+
+async fn wait_for_codex_pids_to_exit(pids: &[u32], timeout: Duration) -> bool {
+    if pids.is_empty() {
+        return true;
+    }
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let running = claude_codex_pro_core::watcher::find_codex_processes();
+        if !pids.iter().any(|pid| running.contains(pid)) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let running = claude_codex_pro_core::watcher::find_codex_processes();
+    !pids.iter().any(|pid| running.contains(pid))
+}
+
+#[cfg(windows)]
+fn force_kill_process_tree_for_frontend_repair(pids: &[u32]) -> usize {
+    let mut killed = 0;
+    for pid in pids {
+        let status = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/F", "/T"])
+            .status();
+        if status.as_ref().is_ok_and(|status| status.success()) {
+            killed += 1;
+        }
+    }
+    killed
+}
+
+#[cfg(not(windows))]
+fn force_kill_process_tree_for_frontend_repair(_pids: &[u32]) -> usize {
+    0
 }
 
 async fn wait_for_codex_launch_ports(
@@ -4534,10 +4599,7 @@ pub async fn load_ads() -> CommandResult<AdsPayload> {
         Ok(payload) => ok("推荐内容已加载。", ads_payload(payload)),
         Err(error) => failed(
             &format!("推荐内容加载失败：{error}"),
-            AdsPayload {
-                version: 1,
-                ads: Vec::new(),
-            },
+            ads_payload(claude_codex_pro_core::ads::normalize_ad_payload(json!({}))),
         ),
     }
 }
@@ -7499,10 +7561,35 @@ fn codex_debug_json_ready(port: u16) -> bool {
     if stream.write_all(request).is_err() {
         return false;
     }
-    let mut response = String::new();
-    stream.read_to_string(&mut response).is_ok()
-        && response.starts_with("HTTP/1.1 200")
-        && response.contains("webSocketDebuggerUrl")
+    const READY_MARKER: &[u8] = b"webSocketDebuggerUrl";
+    const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+    let mut response = Vec::with_capacity(4096);
+    let mut buffer = [0_u8; 4096];
+    while response.len() < MAX_RESPONSE_BYTES {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&buffer[..read]);
+                if response
+                    .windows(READY_MARKER.len())
+                    .any(|window| window == READY_MARKER)
+                {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(_) => return false,
+        }
+    }
+    let response = String::from_utf8_lossy(&response);
+    response.starts_with("HTTP/1.1 200") && response.contains("webSocketDebuggerUrl")
 }
 
 fn tcp_port_open(port: u16) -> bool {
@@ -8368,6 +8455,36 @@ mod tests {
             resolve_helper_port_status(Some(57321), false, 57321, false),
             (Some(57321), false)
         );
+    }
+
+    #[test]
+    fn codex_debug_json_ready_accepts_valid_response_without_eof() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 59\r\n\r\n[{\"webSocketDebuggerUrl\":\"ws://127.0.0.1/devtools/page/1\"}]";
+            stream.write_all(response).unwrap();
+            std::thread::sleep(Duration::from_millis(750));
+        });
+
+        assert!(codex_debug_json_ready(port));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn codex_debug_json_ready_rejects_response_without_websocket_target() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]")
+                .unwrap();
+        });
+
+        assert!(!codex_debug_json_ready(port));
+        server.join().unwrap();
     }
 
     #[test]

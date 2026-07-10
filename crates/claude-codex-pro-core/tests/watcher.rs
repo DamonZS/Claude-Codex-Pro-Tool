@@ -78,10 +78,14 @@ fn codex_process_filter_keeps_windowsapps_and_normal_codex_processes() {
             13,
             r"C:\Program Files\WindowsApps\Other.App_1.0.0.0_x64__abc\app\Codex.exe",
         ),
+        (
+            15,
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.707.3748.0_x64__abc\app\ChatGPT.exe",
+        ),
         (14, r"C:\Tools\not-codex.exe"),
     ];
 
-    assert_eq!(codex_process_ids(processes), vec![11, 12, 13]);
+    assert_eq!(codex_process_ids(processes), vec![11, 12, 13, 15]);
 }
 
 #[test]

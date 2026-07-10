@@ -756,6 +756,14 @@ fn injection_script_unlocks_custom_model_catalog() {
     assert!(script.contains("Response.prototype.json"));
     assert!(script.contains("available_models"));
     assert!(script.contains("modelWhitelistUnlock"));
+    assert!(script.contains("patchCodexModelDropdownDom"));
+    assert!(script.contains("installCodexModelDropdownObserver"));
+    assert!(script.contains("scheduleCodexModelDropdownPatch"));
+    assert!(script.contains("claudeCodexPro.injectedCodexModelSelection"));
+    assert!(script.contains("CCP 模型增强"));
+    assert!(script.contains("model_dropdown_dom_patched"));
+    assert!(script.contains("model_request_override_applied"));
+    assert!(script.contains("applyCodexModelSelectionRequestOverride"));
 }
 
 #[test]

@@ -1,5 +1,7 @@
 ﻿import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
+import announcementConfig from "../../../assets/config/announcement.json";
+
 type Status = "ok" | "failed" | "not_checked" | string;
 
 type CommandResult<T extends Record<string, unknown>> = T & {
@@ -590,6 +592,12 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       update_status: "preview",
       settings_path: "~\\.claude-codex-pro\\settings.json",
       logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
+    });
+  }
+  if (command === "load_ads") {
+    return ok("预览模式已加载公告。", {
+      version: announcementConfig.version,
+      ads: announcementConfig.ads,
     });
   }
   if (command === "load_claude_desktop_status" || command === "load_claude_desktop_status_light") {

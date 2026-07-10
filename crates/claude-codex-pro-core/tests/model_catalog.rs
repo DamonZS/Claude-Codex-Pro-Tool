@@ -124,6 +124,74 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
 }
 
 #[tokio::test]
+async fn model_catalog_merges_local_catalog_file_for_active_relay_profile() {
+    let temp = tempfile::tempdir().unwrap();
+    let codex_home = temp.path().join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    std::fs::write(
+        codex_home.join("model-catalog.gpt-5.6.json"),
+        serde_json::to_vec(&json!({
+            "models": [
+                {"slug": "gpt-5.6-sol", "display_name": "GPT-5.6 Sol", "visibility": "list", "supported_in_api": true},
+                {"slug": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra", "visibility": "list", "supported_in_api": true},
+                {"slug": "gpt-5.6-hidden", "display_name": "Hidden", "visibility": "hide", "supported_in_api": true},
+                {"slug": "gpt-5.6-disabled", "display_name": "Disabled", "visibility": "list", "supported_in_api": false}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let settings_path = temp.path().join("settings.json");
+    let previous_codex_home = std::env::var_os("CODEX_HOME");
+    let previous_settings_path =
+        claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path.clone()));
+    unsafe {
+        std::env::set_var("CODEX_HOME", &codex_home);
+    }
+
+    let result = async {
+        SettingsStore::new(settings_path)
+            .save(&BackendSettings {
+                active_relay_id: "relay-a".to_string(),
+                relay_profiles: vec![RelayProfile {
+                    id: "relay-a".to_string(),
+                    name: "Relay A".to_string(),
+                    model: "gpt-5.5".to_string(),
+                    base_url: "https://example.test/v1".to_string(),
+                    protocol: RelayProtocol::Responses,
+                    relay_mode: RelayMode::PureApi,
+                    model_list: "gpt-5.5".to_string(),
+                    ..RelayProfile::default()
+                }],
+                ..BackendSettings::default()
+            })
+            .unwrap();
+
+        read_codex_model_catalog().await
+    }
+    .await;
+
+    match previous_codex_home {
+        Some(value) => unsafe {
+            std::env::set_var("CODEX_HOME", value);
+        },
+        None => unsafe {
+            std::env::remove_var("CODEX_HOME");
+        },
+    }
+    claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings_path);
+
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["default_model"], "gpt-5.5");
+    assert_eq!(
+        result["models"],
+        json!(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra"])
+    );
+    assert_eq!(result["sources"][1]["type"], "model_catalog_json");
+    assert_eq!(result["sources"][1]["models"], 2);
+}
+
+#[tokio::test]
 async fn model_catalog_uses_single_provider_when_root_model_provider_is_absent() {
     let temp = tempfile::tempdir().unwrap();
     let server = spawn_models_server(json!({

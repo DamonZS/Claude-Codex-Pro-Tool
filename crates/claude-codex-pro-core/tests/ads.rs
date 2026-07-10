@@ -13,8 +13,8 @@ fn default_ad_urls_match_owned_recommendation_sources() {
     assert_eq!(
         DEFAULT_AD_LIST_URLS,
         [
-            "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json",
-            "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
+            "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool/main/assets/config/announcement.json",
+            "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool@main/assets/config/announcement.json",
         ]
     );
 }
@@ -69,22 +69,25 @@ fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
     assert_eq!(payload["ads"].as_array().unwrap().len(), 2);
     assert_eq!(payload["ads"][0]["type"], json!("normal"));
     assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
-    assert_eq!(payload["ads"][0]["title"], json!("官方中转站"));
+    assert_eq!(payload["ads"][0]["title"], json!("CCP官方中转站"));
+    assert_eq!(payload["ads"][0]["buttonLabel"], json!("拓扑API"));
     assert_eq!(payload["ads"][0]["url"], json!("https://api.toporeduce.cn"));
     assert_eq!(payload["ads"][1]["id"], json!("normal"));
 }
 
 #[test]
-fn normalizes_remote_ads_without_duplicating_official_recommendation() {
+fn remote_official_announcement_overrides_bundled_fallback_without_duplication() {
     let payload = normalize_ad_payload(json!({
-        "version": 1,
+        "version": 2,
         "ads": [
             {
                 "id": OFFICIAL_TOPOREDUCE_AD_ID,
                 "type": "normal",
-                "title": "远端重复",
-                "description": "重复内容",
-                "url": "https://example.test"
+                "badge": "最新公告",
+                "title": "远程公告标题",
+                "description": "远程公告正文",
+                "buttonLabel": "查看远程公告",
+                "url": "https://api.toporeduce.cn"
             },
             {
                 "id": "duplicate-url",
@@ -98,6 +101,36 @@ fn normalizes_remote_ads_without_duplicating_official_recommendation() {
 
     assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
     assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+    assert_eq!(payload["ads"][0]["badge"], json!("最新公告"));
+    assert_eq!(payload["ads"][0]["title"], json!("远程公告标题"));
+    assert_eq!(payload["ads"][0]["description"], json!("远程公告正文"));
+    assert_eq!(payload["ads"][0]["buttonLabel"], json!("查看远程公告"));
+}
+
+#[test]
+fn repository_announcement_config_is_valid_and_remotely_editable() {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/config/announcement.json");
+    let configured: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
+    let announcement = &configured["ads"][0];
+
+    assert_eq!(announcement["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+    assert_eq!(announcement["type"], json!("normal"));
+    for field in ["badge", "title", "description", "buttonLabel", "url"] {
+        assert!(
+            announcement[field]
+                .as_str()
+                .is_some_and(|value| !value.trim().is_empty()),
+            "missing announcement field: {field}"
+        );
+    }
+    assert!(
+        announcement["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://")
+    );
 }
 
 #[tokio::test]
