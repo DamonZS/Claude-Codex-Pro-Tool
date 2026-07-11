@@ -2,7 +2,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -15,6 +15,8 @@ const LOCAL_AGENT_SESSIONS_SOURCE_KIND: &str = "local-agent-mode-sessions";
 const AUDIT_SOURCE_KIND: &str = "claude-audit";
 const LOCAL_SOURCE_KIND: &str = "claude-local";
 const TITLE_MAX_CHARS: usize = 120;
+const DEFAULT_CONTEXT_PAGE_SIZE: usize = 80;
+const MAX_CONTEXT_PAGE_SIZE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +39,29 @@ pub struct ClaudeSessionsInventory {
     pub source_paths: Vec<String>,
     pub sessions: Vec<ClaudeSession>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSessionContextMessage {
+    pub sequence: usize,
+    pub role: String,
+    pub text: String,
+    pub timestamp_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSessionContextPage {
+    pub session_id: String,
+    pub title: String,
+    pub cwd: String,
+    pub source_path: String,
+    pub source_kind: String,
+    pub total_messages: usize,
+    pub offset: usize,
+    pub messages: Vec<ClaudeSessionContextMessage>,
+    pub has_more_before: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +180,66 @@ struct SourceFingerprint {
     digest: [u8; 32],
 }
 
+#[derive(Debug)]
+struct ContextCollector {
+    requested_offset: Option<usize>,
+    limit: usize,
+    total_messages: usize,
+    messages: VecDeque<ClaudeSessionContextMessage>,
+}
+
+impl ContextCollector {
+    fn new(offset: Option<usize>, limit: Option<usize>) -> Self {
+        Self {
+            requested_offset: offset,
+            limit: limit
+                .unwrap_or(DEFAULT_CONTEXT_PAGE_SIZE)
+                .clamp(1, MAX_CONTEXT_PAGE_SIZE),
+            total_messages: 0,
+            messages: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, role: &str, text: String, timestamp_ms: Option<i64>) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let index = self.total_messages;
+        self.total_messages = self.total_messages.saturating_add(1);
+        let message = ClaudeSessionContextMessage {
+            sequence: index.saturating_add(1),
+            role: role.to_string(),
+            text,
+            timestamp_ms,
+        };
+        if let Some(offset) = self.requested_offset {
+            if index >= offset && index < offset.saturating_add(self.limit) {
+                self.messages.push_back(message);
+            }
+        } else {
+            self.messages.push_back(message);
+            while self.messages.len() > self.limit {
+                self.messages.pop_front();
+            }
+        }
+    }
+
+    fn finish(self) -> (usize, usize, Vec<ClaudeSessionContextMessage>, bool) {
+        let message_count = self.messages.len();
+        let offset = self
+            .requested_offset
+            .map(|offset| offset.min(self.total_messages))
+            .unwrap_or_else(|| self.total_messages.saturating_sub(message_count));
+        (
+            self.total_messages,
+            offset,
+            self.messages.into_iter().collect(),
+            offset > 0,
+        )
+    }
+}
+
 pub fn list_claude_sessions() -> anyhow::Result<ClaudeSessionsInventory> {
     let home = default_user_home()?;
     list_claude_sessions_from_home(&home)
@@ -200,6 +285,51 @@ pub fn list_claude_sessions_from_home(home: &Path) -> anyhow::Result<ClaudeSessi
     })
 }
 
+pub fn load_claude_session_context(
+    session_id: &str,
+    source_path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> anyhow::Result<ClaudeSessionContextPage> {
+    let home = default_user_home()?;
+    load_claude_session_context_from_home(&home, session_id, source_path, offset, limit)
+}
+
+pub fn load_claude_session_context_from_home(
+    home: &Path,
+    session_id: &str,
+    source_path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> anyhow::Result<ClaudeSessionContextPage> {
+    if session_id.trim().is_empty() {
+        bail!("Claude session id must not be empty");
+    }
+
+    let source = rediscover_trusted_source(home, source_path)?;
+    let parsed = parse_source(&source);
+    let session = parsed
+        .sessions
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| anyhow!("Claude session was not found in the requested source"))?;
+    let mut collector = ContextCollector::new(offset, limit);
+    read_context_source(&source, session_id, &mut collector)?;
+    let (total_messages, offset, messages, has_more_before) = collector.finish();
+
+    Ok(ClaudeSessionContextPage {
+        session_id: session.id,
+        title: session.title,
+        cwd: session.cwd,
+        source_path: session.source_path,
+        source_kind: session.source_kind,
+        total_messages,
+        offset,
+        messages,
+        has_more_before,
+    })
+}
+
 pub fn delete_claude_session(
     backup_root: &Path,
     session_id: &str,
@@ -219,20 +349,11 @@ pub fn delete_claude_session_from_home(
         bail!("Claude session id must not be empty");
     }
 
-    let requested_path = fs::canonicalize(source_path)
-        .with_context(|| "failed to canonicalize the requested Claude session source")?;
-    let discovery = discover_sources(home);
-    let source = discovery
-        .sources
-        .iter()
-        .find(|candidate| candidate.path == requested_path)
-        .ok_or_else(|| anyhow!("Claude session source is not a trusted rediscovered path"))?;
-    if !requested_path.starts_with(&source.trusted_root) {
-        bail!("Claude session source is outside its trusted root");
-    }
+    let source = rediscover_trusted_source(home, source_path)?;
+    let requested_path = source.path.clone();
 
     let before_validation = fingerprint_file(&source.path)?;
-    let parsed = parse_source(source);
+    let parsed = parse_source(&source);
     let after_validation = fingerprint_file(&source.path)?;
     if before_validation != after_validation {
         bail!("Claude session source changed while it was being validated");
@@ -294,6 +415,21 @@ pub fn delete_claude_session_from_home(
         backup_path: path_string(&backup_path),
         message: "Claude session deleted after a verified backup.".to_string(),
     })
+}
+
+fn rediscover_trusted_source(home: &Path, source_path: &Path) -> anyhow::Result<SessionSource> {
+    let requested_path = fs::canonicalize(source_path)
+        .with_context(|| "failed to canonicalize the requested Claude session source")?;
+    let discovery = discover_sources(home);
+    let source = discovery
+        .sources
+        .into_iter()
+        .find(|candidate| candidate.path == requested_path)
+        .ok_or_else(|| anyhow!("Claude session source is not a trusted rediscovered path"))?;
+    if !requested_path.starts_with(&source.trusted_root) {
+        bail!("Claude session source is outside its trusted root");
+    }
+    Ok(source)
 }
 
 fn default_user_home() -> anyhow::Result<PathBuf> {
@@ -615,6 +751,221 @@ fn insert_source(
             source_kind,
             fallback_project,
         });
+}
+
+fn read_context_source(
+    source: &SessionSource,
+    session_id: &str,
+    collector: &mut ContextCollector,
+) -> anyhow::Result<()> {
+    if has_extension(&source.path, "jsonl") {
+        let file = File::open(&source.path)
+            .with_context(|| "failed to open the Claude session context source")?;
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = reader
+                .read_until(b'\n', &mut line)
+                .with_context(|| "failed while reading the Claude session context source")?;
+            if read == 0 {
+                break;
+            }
+            let trimmed = trim_ascii_whitespace(&line);
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_slice::<Value>(trimmed) {
+                process_context_json_value(&value, None, source, session_id, collector);
+            }
+        }
+    } else {
+        let file = File::open(&source.path)
+            .with_context(|| "failed to open the Claude session context source")?;
+        let value = serde_json::from_reader::<_, Value>(BufReader::new(file))
+            .with_context(|| "failed to parse the Claude session context source")?;
+        process_context_json_value(&value, None, source, session_id, collector);
+    }
+    Ok(())
+}
+
+fn process_context_json_value(
+    value: &Value,
+    inherited_id: Option<&str>,
+    source: &SessionSource,
+    session_id: &str,
+    collector: &mut ContextCollector,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                process_context_json_value(value, inherited_id, source, session_id, collector);
+            }
+        }
+        Value::Object(object) => {
+            if let Some(collection) = object
+                .get("sessions")
+                .or_else(|| object.get("conversations"))
+            {
+                match collection {
+                    Value::Array(sessions) => {
+                        for session in sessions {
+                            process_context_json_value(
+                                session, None, source, session_id, collector,
+                            );
+                        }
+                    }
+                    Value::Object(sessions) => {
+                        for (collection_id, session) in sessions {
+                            process_context_json_value(
+                                session,
+                                Some(collection_id),
+                                source,
+                                session_id,
+                                collector,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            if let Some(messages) = object.get("messages").and_then(Value::as_array) {
+                let container_id = explicit_session_id(object)
+                    .or_else(|| generic_container_id(object))
+                    .or_else(|| inherited_id.map(str::to_string));
+                for message in messages {
+                    process_context_json_value(
+                        message,
+                        container_id.as_deref(),
+                        source,
+                        session_id,
+                        collector,
+                    );
+                }
+                return;
+            }
+            if let Some(data) = object.get("data") {
+                if object.len() == 1 && (data.is_array() || data.is_object()) {
+                    process_context_json_value(data, inherited_id, source, session_id, collector);
+                    return;
+                }
+            }
+            process_context_record(object, inherited_id, source, session_id, collector);
+        }
+        _ => {}
+    }
+}
+
+fn process_context_record(
+    object: &Map<String, Value>,
+    inherited_id: Option<&str>,
+    source: &SessionSource,
+    session_id: &str,
+    collector: &mut ContextCollector,
+) {
+    let record_session_id =
+        explicit_session_id(object).or_else(|| inherited_id.map(str::to_string));
+    let belongs_to_session = source.source_kind == PROJECT_SOURCE_KIND
+        || record_session_id.as_deref() == Some(session_id)
+        || (record_session_id.is_none() && file_stem(&source.path) == session_id);
+    if !belongs_to_session {
+        return;
+    }
+
+    let record_type = string_field(object, &["type", "recordType", "record_type"])
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        record_type.as_str(),
+        "custom-title" | "custom_title" | "customtitle" | "ai-title" | "ai_title" | "aititle"
+    ) {
+        return;
+    }
+    let Some(role) = context_role(record_role(object).as_deref(), &record_type) else {
+        return;
+    };
+    let timestamp_ms =
+        timestamp_field(object).or_else(|| message_object(object).and_then(timestamp_field));
+    let content = message_object(object)
+        .and_then(|message| message.get("content"))
+        .or_else(|| object.get("content"))
+        .or_else(|| object.get("summary"))
+        .or_else(|| object.get("text"));
+    let Some(content) = content else {
+        return;
+    };
+    let mut parts = Vec::new();
+    extract_context_parts(content, role, &mut parts);
+    for (part_role, text) in parts {
+        collector.push(part_role, text, timestamp_ms);
+    }
+}
+
+fn context_role(role: Option<&str>, record_type: &str) -> Option<&'static str> {
+    let role = role.unwrap_or_default().to_ascii_lowercase();
+    match role.as_str() {
+        "user" => Some("user"),
+        "assistant" => Some("assistant"),
+        "tool" => Some("tool"),
+        "system" => Some("system"),
+        "developer" => Some("developer"),
+        _ => match record_type {
+            "user" => Some("user"),
+            "assistant" => Some("assistant"),
+            "tool" | "tool_result" | "tool-result" | "tool_use" | "tool-use" => Some("tool"),
+            "system" | "summary" => Some("system"),
+            "developer" => Some("developer"),
+            _ => None,
+        },
+    }
+}
+
+fn extract_context_parts(
+    value: &Value,
+    fallback_role: &'static str,
+    output: &mut Vec<(&'static str, String)>,
+) {
+    match value {
+        Value::String(text) => output.push((fallback_role, text.clone())),
+        Value::Array(values) => {
+            for value in values {
+                extract_context_parts(value, fallback_role, output);
+            }
+        }
+        Value::Object(object) => {
+            let block_type = string_field(object, &["type"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            match block_type.as_str() {
+                "thinking" | "redacted_thinking" | "image" | "document" => {}
+                "tool_use" | "tool-use" => {
+                    if let Some(name) = string_field(object, &["name", "toolName", "tool_name"]) {
+                        output.push(("tool", format!("Tool call: {name}")));
+                    }
+                }
+                "tool_result" | "tool-result" => {
+                    if let Some(content) = object
+                        .get("content")
+                        .or_else(|| object.get("output"))
+                        .or_else(|| object.get("text"))
+                    {
+                        extract_context_parts(content, "tool", output);
+                    }
+                }
+                _ => {
+                    if let Some(text) = object.get("text").and_then(Value::as_str) {
+                        output.push((fallback_role, text.to_string()));
+                    } else if let Some(content) = object.get("content") {
+                        extract_context_parts(content, fallback_role, output);
+                    } else if let Some(output_value) = object.get("output") {
+                        extract_context_parts(output_value, fallback_role, output);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_source(source: &SessionSource) -> SourceParse {
@@ -1882,5 +2233,163 @@ mod tests {
             .expect_err("backup failure must stop deletion");
 
         assert!(source.exists());
+    }
+
+    #[test]
+    fn loads_latest_context_page_with_resumed_history_and_roles() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let source = project_session_path(temp.path(), "repo", "current-session");
+        write_jsonl(
+            &source,
+            &[
+                json!({
+                    "type": "user",
+                    "sessionId": "previous-session",
+                    "timestamp": "2026-07-10T10:00:00Z",
+                    "cwd": "D:/Project/repo",
+                    "message": { "role": "user", "content": "older prompt" }
+                }),
+                json!({
+                    "type": "assistant",
+                    "sessionId": "previous-session",
+                    "timestamp": "2026-07-10T10:01:00Z",
+                    "message": { "role": "assistant", "content": [{"type": "text", "text": "older response"}] }
+                }),
+                json!({
+                    "type": "user",
+                    "sessionId": "current-session",
+                    "timestamp": "2026-07-11T10:00:00Z",
+                    "message": { "role": "user", "content": "current prompt" }
+                }),
+                json!({
+                    "type": "assistant",
+                    "sessionId": "current-session",
+                    "timestamp": "2026-07-11T10:01:00Z",
+                    "message": { "role": "assistant", "content": [{"type": "text", "text": "current response"}] }
+                }),
+                json!({
+                    "type": "user",
+                    "sessionId": "current-session",
+                    "timestamp": "2026-07-11T10:02:00Z",
+                    "message": { "role": "user", "content": [{"type": "tool_result", "content": "tool output"}] }
+                }),
+                json!({
+                    "type": "system",
+                    "sessionId": "current-session",
+                    "timestamp": "2026-07-11T10:03:00Z",
+                    "message": { "role": "system", "content": "system note" }
+                }),
+            ],
+        );
+
+        let page = load_claude_session_context_from_home(
+            temp.path(),
+            "current-session",
+            &source,
+            None,
+            Some(3),
+        )
+        .expect("load latest context page");
+
+        assert_eq!(page.session_id, "current-session");
+        assert_eq!(page.cwd, "D:/Project/repo");
+        assert_eq!(page.total_messages, 6);
+        assert_eq!(page.offset, 3);
+        assert!(page.has_more_before);
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| (
+                    message.sequence,
+                    message.role.as_str(),
+                    message.text.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (4, "assistant", "current response"),
+                (5, "tool", "tool output"),
+                (6, "system", "system note"),
+            ]
+        );
+    }
+
+    #[test]
+    fn loads_earlier_context_page_without_repeating_messages() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let source = project_session_path(temp.path(), "repo", "paged-session");
+        let records = (1..=6)
+            .map(|index| {
+                json!({
+                    "type": if index % 2 == 0 { "assistant" } else { "user" },
+                    "sessionId": "paged-session",
+                    "message": {
+                        "role": if index % 2 == 0 { "assistant" } else { "user" },
+                        "content": format!("message {index}")
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        write_jsonl(&source, &records);
+
+        let page = load_claude_session_context_from_home(
+            temp.path(),
+            "paged-session",
+            &source,
+            Some(2),
+            Some(2),
+        )
+        .expect("load earlier context page");
+
+        assert_eq!(page.total_messages, 6);
+        assert_eq!(page.offset, 2);
+        assert!(page.has_more_before);
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message 3", "message 4"]
+        );
+    }
+
+    #[test]
+    fn context_loading_filters_shared_sources_and_rejects_untrusted_paths() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let source = temp.path().join(".claude/sessions/shared.jsonl");
+        write_jsonl(
+            &source,
+            &[
+                json!({
+                    "type": "user",
+                    "sessionId": "session-a",
+                    "message": { "role": "user", "content": "only A" }
+                }),
+                json!({
+                    "type": "assistant",
+                    "sessionId": "session-b",
+                    "message": { "role": "assistant", "content": "only B" }
+                }),
+            ],
+        );
+
+        let page =
+            load_claude_session_context_from_home(temp.path(), "session-a", &source, None, None)
+                .expect("load one session from shared source");
+        assert_eq!(page.total_messages, 1);
+        assert_eq!(page.messages[0].text, "only A");
+
+        let untrusted = temp.path().join("outside.jsonl");
+        write_jsonl(
+            &untrusted,
+            &[json!({
+                "type": "user",
+                "sessionId": "outside",
+                "message": { "role": "user", "content": "outside" }
+            })],
+        );
+        let error =
+            load_claude_session_context_from_home(temp.path(), "outside", &untrusted, None, None)
+                .expect_err("untrusted context source must fail");
+        assert!(error.to_string().contains("trusted"));
     }
 }

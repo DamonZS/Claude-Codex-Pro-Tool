@@ -471,6 +471,25 @@ export type LocalSessionsResult = CommandResult<{
   sessions: LocalSession[];
 }>;
 
+export type CodexSessionContextMessage = {
+  sequence: number;
+  role: "user" | "assistant" | string;
+  text: string;
+  timestamp: string | null;
+};
+
+export type CodexSessionContextPage = CommandResult<{
+  sessionId: string;
+  title: string;
+  cwd: string;
+  dbPath: string;
+  rolloutPath: string;
+  totalMessages: number;
+  offset: number;
+  messages: CodexSessionContextMessage[];
+  hasMoreBefore: boolean;
+}>;
+
 export type ClaudeSession = {
   id: string;
   title: string;
@@ -488,6 +507,25 @@ export type ClaudeSessionsResult = CommandResult<{
   sourcePaths: string[];
   sessions: ClaudeSession[];
   warnings: string[];
+}>;
+
+export type ClaudeSessionContextMessage = {
+  sequence: number;
+  role: "user" | "assistant" | "tool" | "system" | "developer" | string;
+  text: string;
+  timestampMs: number | null;
+};
+
+export type ClaudeSessionContextPage = CommandResult<{
+  sessionId: string;
+  title: string;
+  cwd: string;
+  sourcePath: string;
+  sourceKind: string;
+  totalMessages: number;
+  offset: number;
+  messages: ClaudeSessionContextMessage[];
+  hasMoreBefore: boolean;
 }>;
 
 export type LocalSessionProjectGroup = {

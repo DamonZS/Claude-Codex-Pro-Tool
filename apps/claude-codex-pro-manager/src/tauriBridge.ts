@@ -1154,6 +1154,40 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       warnings: [],
     });
   }
+  if (command === "load_claude_session_context") {
+    return ok("预览模式已加载 Claude 会话上下文。", {
+      sessionId: "preview-claude-session",
+      title: "Claude 会话管理真实接入",
+      cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+      sourcePath: "~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl",
+      sourceKind: "claude-projects",
+      totalMessages: 4,
+      offset: 0,
+      hasMoreBefore: false,
+      messages: [
+        { sequence: 1, role: "user", text: "为什么 Claude 会话点击后没有内容？", timestampMs: Date.now() - 60_000 },
+        { sequence: 2, role: "assistant", text: "列表目前只加载元数据，需要按需读取正文。", timestampMs: Date.now() - 45_000 },
+        { sequence: 3, role: "tool", text: "会话来源校验通过。", timestampMs: Date.now() - 30_000 },
+        { sequence: 4, role: "system", text: "预览模式上下文。", timestampMs: Date.now() - 15_000 },
+      ],
+    });
+  }
+  if (command === "load_codex_session_context") {
+    return ok("预览模式已加载 Codex 会话上下文。", {
+      sessionId: "preview-codex-session",
+      title: "Codex 会话上下文查看器",
+      cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+      dbPath: "~\\.codex\\sqlite\\codex.db",
+      rolloutPath: "~\\.codex\\sessions\\preview-codex-session.jsonl",
+      totalMessages: 2,
+      offset: 0,
+      hasMoreBefore: false,
+      messages: [
+        { sequence: 1, role: "user", text: "请查看这个 Codex 会话。", timestamp: "2026-07-11 10:00:00" },
+        { sequence: 2, role: "assistant", text: "已加载真实 rollout 上下文。", timestamp: "2026-07-11 10:00:01" },
+      ],
+    });
+  }
   if (command === "delete_local_session") {
     return ok("预览模式已模拟删除 Codex 会话。", {
       sessionId: "preview-session",

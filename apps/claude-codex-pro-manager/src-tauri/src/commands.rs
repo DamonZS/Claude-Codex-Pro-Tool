@@ -257,6 +257,24 @@ pub struct DeleteClaudeSessionRequest {
     pub source_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadClaudeSessionContextRequest {
+    pub session_id: String,
+    pub source_path: String,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadCodexSessionContextRequest {
+    pub session_id: String,
+    pub db_path: Option<String>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteClaudeSessionPayload {
@@ -2844,6 +2862,89 @@ pub async fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
 }
 
 #[tauri::command]
+pub async fn load_codex_session_context(
+    request: LoadCodexSessionContextRequest,
+) -> CommandResult<claude_codex_pro_data::CodexSessionContextPage> {
+    let fallback = empty_codex_session_context(&request);
+    tauri::async_runtime::spawn_blocking(move || load_codex_session_context_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("读取 Codex 会话上下文任务失败：{join_error}"),
+                fallback,
+            )
+        })
+}
+
+fn load_codex_session_context_blocking(
+    request: LoadCodexSessionContextRequest,
+) -> CommandResult<claude_codex_pro_data::CodexSessionContextPage> {
+    let session_id = request.session_id.trim();
+    if session_id.is_empty() {
+        return failed(
+            "Codex 会话 ID 不能为空。",
+            empty_codex_session_context(&request),
+        );
+    }
+    let candidates = session_candidate_db_paths(None);
+    let db_path = match request
+        .db_path
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(requested) => {
+            let requested = PathBuf::from(requested);
+            if !candidates.iter().any(|candidate| candidate == &requested) {
+                return failed(
+                    "Codex 会话数据库不是受信任的已发现路径。",
+                    empty_codex_session_context(&request),
+                );
+            }
+            requested
+        }
+        None => candidates
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .unwrap_or_default(),
+    };
+    match claude_codex_pro_data::load_codex_session_context(
+        &db_path,
+        session_id,
+        request.offset,
+        request.limit,
+    ) {
+        Ok(Some(page)) => ok(
+            &format!("已加载 {} 条 Codex 会话消息。", page.messages.len()),
+            page,
+        ),
+        Ok(None) => failed(
+            "未找到对应的 Codex 会话或 rollout 文件。",
+            empty_codex_session_context(&request),
+        ),
+        Err(error) => failed(
+            &format!("读取 Codex 会话上下文失败：{error}"),
+            empty_codex_session_context(&request),
+        ),
+    }
+}
+
+fn empty_codex_session_context(
+    request: &LoadCodexSessionContextRequest,
+) -> claude_codex_pro_data::CodexSessionContextPage {
+    claude_codex_pro_data::CodexSessionContextPage {
+        session_id: request.session_id.clone(),
+        title: String::new(),
+        cwd: String::new(),
+        db_path: request.db_path.clone().unwrap_or_default(),
+        rollout_path: String::new(),
+        total_messages: 0,
+        offset: request.offset.unwrap_or_default(),
+        messages: Vec::new(),
+        has_more_before: false,
+    }
+}
+
+#[tauri::command]
 pub async fn list_claude_sessions()
 -> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory> {
     log_manager_event("manager.list_claude_sessions.start", json!({}));
@@ -2915,6 +3016,97 @@ fn empty_claude_sessions_inventory()
         source_paths: Vec::new(),
         sessions: Vec::new(),
         warnings: Vec::new(),
+    }
+}
+
+#[tauri::command]
+pub async fn load_claude_session_context(
+    request: LoadClaudeSessionContextRequest,
+) -> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionContextPage> {
+    let fallback = empty_claude_session_context(&request);
+    tauri::async_runtime::spawn_blocking(move || load_claude_session_context_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            let message = format!("读取 Claude 会话上下文任务失败：{join_error}");
+            failed(&message, fallback)
+        })
+}
+
+fn load_claude_session_context_blocking(
+    request: LoadClaudeSessionContextRequest,
+) -> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionContextPage> {
+    let session_id = request.session_id.trim();
+    let source_path = request.source_path.trim();
+    if session_id.is_empty() || source_path.is_empty() {
+        return failed(
+            "Claude 会话 ID 和来源路径不能为空。",
+            empty_claude_session_context(&request),
+        );
+    }
+    log_manager_event(
+        "manager.load_claude_session_context.start",
+        json!({
+            "session_id": session_id,
+            "offset": request.offset,
+            "limit": request.limit,
+        }),
+    );
+    match claude_codex_pro_core::claude_sessions::load_claude_session_context(
+        session_id,
+        Path::new(source_path),
+        request.offset,
+        request.limit,
+    ) {
+        Ok(page) => {
+            log_manager_event(
+                "manager.load_claude_session_context.finish",
+                json!({
+                    "session_id": session_id,
+                    "status": "ok",
+                    "offset": page.offset,
+                    "message_count": page.messages.len(),
+                    "total_messages": page.total_messages,
+                }),
+            );
+            ok(
+                &format!(
+                    "已加载 Claude 会话上下文：本页 {} 条，共 {} 条。",
+                    page.messages.len(),
+                    page.total_messages
+                ),
+                page,
+            )
+        }
+        Err(error) => {
+            let message = format!("读取 Claude 会话上下文失败：{error}");
+            log_manager_event(
+                "manager.load_claude_session_context.finish",
+                json!({
+                    "session_id": session_id,
+                    "status": "failed",
+                    "offset": request.offset,
+                    "limit": request.limit,
+                    "message": message,
+                }),
+            );
+            failed(&message, empty_claude_session_context(&request))
+        }
+    }
+}
+
+fn empty_claude_session_context(
+    request: &LoadClaudeSessionContextRequest,
+) -> claude_codex_pro_core::claude_sessions::ClaudeSessionContextPage {
+    claude_codex_pro_core::claude_sessions::ClaudeSessionContextPage {
+        session_id: request.session_id.clone(),
+        title: String::new(),
+        cwd: String::new(),
+        source_path: request.source_path.clone(),
+        source_kind: String::new(),
+        total_messages: 0,
+        offset: request.offset.unwrap_or(0),
+        messages: Vec::new(),
+        has_more_before: false,
     }
 }
 

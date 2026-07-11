@@ -1,5 +1,6 @@
 use claude_codex_pro_core::models::{ExportResult, ExportStatus, SessionRef};
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,68 @@ pub struct SessionMessage {
     pub timestamp: Option<String>,
     /// Plain-text body with newlines normalized.
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexSessionContextMessage {
+    pub sequence: usize,
+    pub role: String,
+    pub text: String,
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexSessionContextPage {
+    pub session_id: String,
+    pub title: String,
+    pub cwd: String,
+    pub db_path: String,
+    pub rollout_path: String,
+    pub total_messages: usize,
+    pub offset: usize,
+    pub messages: Vec<CodexSessionContextMessage>,
+    pub has_more_before: bool,
+}
+
+pub fn load_codex_session_context(
+    db_path: &Path,
+    session_id: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> anyhow::Result<Option<CodexSessionContextPage>> {
+    let Some(thread) = resolve_codex_thread(db_path, session_id)? else {
+        return Ok(None);
+    };
+    let all_messages = load_session_messages(&thread.rollout_path)?;
+    let total_messages = all_messages.len();
+    let limit = limit.unwrap_or(80).clamp(1, 200);
+    let offset = offset
+        .map(|value| value.min(total_messages))
+        .unwrap_or_else(|| total_messages.saturating_sub(limit));
+    let end = offset.saturating_add(limit).min(total_messages);
+    let messages = all_messages[offset..end]
+        .iter()
+        .enumerate()
+        .map(|(index, message)| CodexSessionContextMessage {
+            sequence: offset + index + 1,
+            role: message.role.clone(),
+            text: message.body.clone(),
+            timestamp: message.timestamp.clone(),
+        })
+        .collect();
+    Ok(Some(CodexSessionContextPage {
+        session_id: normalize_session_id(session_id),
+        title: thread.title,
+        cwd: thread.cwd,
+        db_path: db_path.to_string_lossy().to_string(),
+        rollout_path: thread.rollout_path.to_string_lossy().to_string(),
+        total_messages,
+        offset,
+        messages,
+        has_more_before: offset > 0,
+    }))
 }
 
 /// Parse a Codex rollout JSONL file into an ordered list of user/assistant

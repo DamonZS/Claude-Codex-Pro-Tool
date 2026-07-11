@@ -2518,6 +2518,219 @@ body {
   background: rgba(255, 107, 129, 0.13);
 }
 
+.claude-session-context-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 4, 8, 0.78);
+  padding: 18px;
+}
+
+.claude-session-context-dialog {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(940px, calc(100vw - 36px));
+  height: min(780px, calc(100vh - 36px));
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: #0b0d12;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+  color: hsl(var(--foreground));
+  outline: none;
+}
+
+.claude-session-context-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 16px;
+  align-items: start;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 18px 20px 15px;
+}
+
+.claude-session-context-header > div {
+  min-width: 0;
+}
+
+.claude-session-context-header span,
+.claude-session-context-header p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.claude-session-context-header h2 {
+  margin: 4px 0 6px;
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-session-context-close {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+}
+
+.claude-session-context-close:hover,
+.claude-session-context-close:focus-visible {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: hsl(var(--foreground));
+}
+
+.claude-session-context-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 9px 20px;
+  font-size: 12px;
+}
+
+.claude-session-context-meta span {
+  border: 1px solid rgba(45, 212, 191, 0.28);
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.08);
+  color: #8de5d5;
+  padding: 3px 7px;
+}
+
+.claude-session-context-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-session-context-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 18px 20px;
+}
+
+.claude-session-context-loading,
+.claude-session-context-error {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 52px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.claude-session-context-error {
+  border-color: rgba(248, 113, 113, 0.26);
+  color: #fca5a5;
+}
+
+.claude-session-context-error span {
+  min-width: 0;
+  flex: 1;
+}
+
+.claude-session-context-message {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-left: 3px solid rgba(148, 163, 184, 0.55);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 11px 13px 13px;
+}
+
+.claude-session-context-message.role-user {
+  border-left-color: #2dd4bf;
+}
+
+.claude-session-context-message.role-assistant {
+  border-left-color: #60a5fa;
+}
+
+.claude-session-context-message.role-tool {
+  border-left-color: #f59e0b;
+}
+
+.claude-session-context-message.role-system,
+.claude-session-context-message.role-developer {
+  border-left-color: #a78bfa;
+}
+
+.claude-session-context-message > header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.claude-session-context-message > header strong {
+  color: hsl(var(--foreground));
+  font-size: 12px;
+}
+
+.claude-session-context-message > header time {
+  margin-left: auto;
+}
+
+.claude-session-context-message pre {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--foreground));
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .claude-session-context-overlay {
+    padding: 0;
+  }
+
+  .claude-session-context-dialog {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .claude-session-context-header {
+    padding: 14px 14px 12px;
+  }
+
+  .claude-session-context-meta {
+    padding: 8px 14px;
+  }
+
+  .claude-session-context-body {
+    padding: 12px 12px 18px;
+  }
+}
+
 .script-market-card {
   display: grid;
   gap: 10px;

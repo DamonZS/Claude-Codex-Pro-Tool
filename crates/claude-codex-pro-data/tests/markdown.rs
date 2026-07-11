@@ -1,5 +1,5 @@
 use claude_codex_pro_core::models::{ExportStatus, SessionRef};
-use claude_codex_pro_data::MarkdownExportService;
+use claude_codex_pro_data::{MarkdownExportService, load_codex_session_context};
 use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
@@ -82,4 +82,56 @@ fn markdown_exporter_returns_failed_for_missing_or_empty_rollout() {
     let result = MarkdownExportService::new(Some(&empty_db)).export(&session("t1", "Codex Thread"));
 
     assert_eq!(result.status, ExportStatus::Failed);
+}
+
+#[test]
+fn codex_context_loads_latest_and_earlier_pages_without_duplicates() {
+    let tmp = tempdir().unwrap();
+    let db_path = tmp.path().join("state.sqlite");
+    let rollout_path = tmp.path().join("rollout.jsonl");
+    let records = (1..=6)
+        .map(|index| format!(
+            "{{\"type\":\"response_item\",\"timestamp\":\"2026-07-11T10:0{index}:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"{}\",\"content\":[{{\"type\":\"{}_text\",\"text\":\"message {index}\"}}]}}}}",
+            if index % 2 == 0 { "assistant" } else { "user" },
+            if index % 2 == 0 { "output" } else { "input" },
+        ))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&rollout_path, records).unwrap();
+    create_codex_thread_db(&db_path, &rollout_path, "thread-1", "Context Thread");
+
+    let latest = load_codex_session_context(&db_path, "thread-1", None, Some(3))
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.total_messages, 6);
+    assert_eq!(latest.offset, 3);
+    assert!(latest.has_more_before);
+    assert_eq!(
+        latest
+            .messages
+            .iter()
+            .map(|item| item.sequence)
+            .collect::<Vec<_>>(),
+        vec![4, 5, 6]
+    );
+
+    let earlier = load_codex_session_context(&db_path, "thread-1", Some(1), Some(2))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        earlier
+            .messages
+            .iter()
+            .map(|item| item.sequence)
+            .collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+    assert_eq!(
+        earlier
+            .messages
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["message 2", "message 3"]
+    );
 }

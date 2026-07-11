@@ -160,6 +160,7 @@ import type {
   ClaudeChineseWindowResult,
   ClaudeContextEntriesResult,
   ClaudeSession,
+  ClaudeSessionContextPage,
   ClaudeSessionsResult,
   ClaudeDesktopDevModeConfigureResult,
   ClaudeDesktopDevModeStatusResult,
@@ -175,6 +176,7 @@ import type {
   ClaudeZhPatchResult,
   ClaudeZhPatchStatus,
   CodexHookTrustResult,
+  CodexSessionContextPage,
   CodexPluginMarketplaceRepairResult,
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
@@ -266,6 +268,14 @@ export function App() {
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
   const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionsResult | null>(null);
+  const [claudeSessionContext, setClaudeSessionContext] = useState<ClaudeSessionContextPage | null>(null);
+  const [claudeSessionContextTarget, setClaudeSessionContextTarget] = useState<ClaudeSession | null>(null);
+  const [claudeSessionContextLoading, setClaudeSessionContextLoading] = useState(false);
+  const [claudeSessionContextError, setClaudeSessionContextError] = useState("");
+  const [codexSessionContext, setCodexSessionContext] = useState<CodexSessionContextPage | null>(null);
+  const [codexSessionContextTarget, setCodexSessionContextTarget] = useState<LocalSession | null>(null);
+  const [codexSessionContextLoading, setCodexSessionContextLoading] = useState(false);
+  const [codexSessionContextError, setCodexSessionContextError] = useState("");
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
   const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
   const [memorySelfCheck, setMemorySelfCheck] = useState<MemorySelfCheckResult | null>(null);
@@ -286,6 +296,8 @@ export function App() {
   // after the user had already navigated away; capturing the token and checking
   // it before the trailing side-effect discards stale route loads.
   const routeLoadEpochRef = useRef(0);
+  const claudeSessionContextEpochRef = useRef(0);
+  const codexSessionContextEpochRef = useRef(0);
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invokeCommand<T>(command, args);
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
@@ -473,6 +485,136 @@ export function App() {
       if (!silent) setNotice({ title: "Claude 会话管理", message: result.message, status: result.status });
     }
     return result;
+  };
+
+  const loadCodexSessionContext = async (session: LocalSession) => {
+    const requestEpoch = ++codexSessionContextEpochRef.current;
+    setCodexSessionContextTarget(session);
+    setCodexSessionContext(null);
+    setCodexSessionContextError("");
+    setCodexSessionContextLoading(true);
+    const result = await run(
+      () => call<CodexSessionContextPage>("load_codex_session_context", {
+        request: { sessionId: session.id, dbPath: session.dbPath || null, offset: null, limit: 80 },
+      }),
+      "Codex 会话上下文",
+      { trackBusy: false, notify: false },
+    );
+    if (requestEpoch !== codexSessionContextEpochRef.current) return;
+    if (result && statusOk(result.status)) setCodexSessionContext(result);
+    else setCodexSessionContextError(result?.message || "读取 Codex 会话上下文失败。");
+    setCodexSessionContextLoading(false);
+  };
+
+  const loadEarlierCodexSessionContext = async () => {
+    const current = codexSessionContext;
+    const session = codexSessionContextTarget;
+    if (!current || !session || codexSessionContextLoading || !current.hasMoreBefore || current.offset <= 0) return;
+    const nextOffset = Math.max(0, current.offset - 80);
+    const requestEpoch = codexSessionContextEpochRef.current;
+    setCodexSessionContextError("");
+    setCodexSessionContextLoading(true);
+    const result = await run(
+      () => call<CodexSessionContextPage>("load_codex_session_context", {
+        request: { sessionId: session.id, dbPath: session.dbPath || null, offset: nextOffset, limit: current.offset - nextOffset },
+      }),
+      "加载更早的 Codex 会话上下文",
+      { trackBusy: false, notify: false },
+    );
+    if (requestEpoch !== codexSessionContextEpochRef.current) return;
+    if (result && statusOk(result.status)) {
+      setCodexSessionContext((previous) => previous && previous.sessionId === result.sessionId ? {
+        ...result,
+        messages: [...result.messages, ...previous.messages]
+          .filter((message, index, all) => all.findIndex((item) => item.sequence === message.sequence) === index)
+          .sort((left, right) => left.sequence - right.sequence),
+      } : result);
+    } else setCodexSessionContextError(result?.message || "加载更早的 Codex 会话上下文失败。");
+    setCodexSessionContextLoading(false);
+  };
+
+  const closeCodexSessionContext = () => {
+    codexSessionContextEpochRef.current += 1;
+    setCodexSessionContext(null);
+    setCodexSessionContextTarget(null);
+    setCodexSessionContextError("");
+    setCodexSessionContextLoading(false);
+  };
+
+  const loadClaudeSessionContext = async (session: ClaudeSession) => {
+    const requestEpoch = ++claudeSessionContextEpochRef.current;
+    setClaudeSessionContextTarget(session);
+    setClaudeSessionContext(null);
+    setClaudeSessionContextError("");
+    setClaudeSessionContextLoading(true);
+    const result = await run(
+      () => call<ClaudeSessionContextPage>("load_claude_session_context", {
+        request: {
+          sessionId: session.id,
+          sourcePath: session.sourcePath,
+          offset: null,
+          limit: 80,
+        },
+      }),
+      "Claude 会话上下文",
+      { trackBusy: false, notify: false },
+    );
+    if (requestEpoch !== claudeSessionContextEpochRef.current) return;
+    if (result && statusOk(result.status)) {
+      setClaudeSessionContext(result);
+    } else {
+      setClaudeSessionContextError(result?.message || "读取 Claude 会话上下文失败。");
+    }
+    setClaudeSessionContextLoading(false);
+  };
+
+  const loadEarlierClaudeSessionContext = async () => {
+    const current = claudeSessionContext;
+    const session = claudeSessionContextTarget;
+    if (!current || !session || claudeSessionContextLoading || !current.hasMoreBefore || current.offset <= 0) return;
+    const nextOffset = Math.max(0, current.offset - 80);
+    const pageLimit = current.offset - nextOffset;
+    if (pageLimit <= 0) return;
+
+    const requestEpoch = claudeSessionContextEpochRef.current;
+    setClaudeSessionContextError("");
+    setClaudeSessionContextLoading(true);
+    const result = await run(
+      () => call<ClaudeSessionContextPage>("load_claude_session_context", {
+        request: {
+          sessionId: session.id,
+          sourcePath: session.sourcePath,
+          offset: nextOffset,
+          limit: pageLimit,
+        },
+      }),
+      "加载更早的 Claude 会话上下文",
+      { trackBusy: false, notify: false },
+    );
+    if (requestEpoch !== claudeSessionContextEpochRef.current) return;
+    if (result && statusOk(result.status)) {
+      setClaudeSessionContext((previous) => {
+        if (!previous || previous.sessionId !== result.sessionId) return result;
+        const messages = [...result.messages, ...previous.messages]
+          .filter((message, index, all) => all.findIndex((item) => item.sequence === message.sequence) === index)
+          .sort((left, right) => left.sequence - right.sequence);
+        return {
+          ...result,
+          messages,
+        };
+      });
+    } else {
+      setClaudeSessionContextError(result?.message || "加载更早的 Claude 会话上下文失败。");
+    }
+    setClaudeSessionContextLoading(false);
+  };
+
+  const closeClaudeSessionContext = () => {
+    claudeSessionContextEpochRef.current += 1;
+    setClaudeSessionContext(null);
+    setClaudeSessionContextTarget(null);
+    setClaudeSessionContextError("");
+    setClaudeSessionContextLoading(false);
   };
 
   const refreshMemoryAssistStatus = async (silent = false) => {
@@ -1062,6 +1204,7 @@ export function App() {
     );
     if (result) {
       notifyResult({ title: "删除 Codex 会话", message: result.message, status: result.status });
+      if (statusOk(result.status) && codexSessionContextTarget?.id === session.id) closeCodexSessionContext();
       await refreshLocalSessions(true);
     }
   };
@@ -1077,7 +1220,12 @@ export function App() {
     );
     if (result) {
       setNotice({ title: "删除 Claude 会话", message: result.message, status: result.status });
-      if (statusOk(result.status)) await refreshClaudeSessions(true);
+      if (statusOk(result.status)) {
+        if (claudeSessionContextTarget?.id === session.id && claudeSessionContextTarget.sourcePath === session.sourcePath) {
+          closeClaudeSessionContext();
+        }
+        await refreshClaudeSessions(true);
+      }
     }
   };
 
@@ -1581,6 +1729,11 @@ export function App() {
     document.title = routeDocumentTitle(route);
   }, [route]);
 
+  useEffect(() => {
+    if (route !== "sessions" && claudeSessionContextTarget) closeClaudeSessionContext();
+    if (route !== "sessions" && codexSessionContextTarget) closeCodexSessionContext();
+  }, [route]);
+
   const actionsRef = useRef<AppActions | null>(null);
   actionsRef.current = {
       refreshRoute,
@@ -1623,8 +1776,14 @@ export function App() {
       repairBackend,
       repairHistorySessions,
       refreshLocalSessions,
+      loadCodexSessionContext,
+      loadEarlierCodexSessionContext,
+      closeCodexSessionContext,
       deleteLocalSession,
       refreshClaudeSessions,
+      loadClaudeSessionContext,
+      loadEarlierClaudeSessionContext,
+      closeClaudeSessionContext,
       deleteClaudeSession,
       refreshMemoryAssist,
       learnMemoryAssistItem,
@@ -1715,8 +1874,14 @@ export function App() {
       repairBackend: (...args) => actionsRef.current!.repairBackend(...args),
       repairHistorySessions: (...args) => actionsRef.current!.repairHistorySessions(...args),
       refreshLocalSessions: (...args) => actionsRef.current!.refreshLocalSessions(...args),
+      loadCodexSessionContext: (...args) => actionsRef.current!.loadCodexSessionContext(...args),
+      loadEarlierCodexSessionContext: (...args) => actionsRef.current!.loadEarlierCodexSessionContext(...args),
+      closeCodexSessionContext: (...args) => actionsRef.current!.closeCodexSessionContext(...args),
       deleteLocalSession: (...args) => actionsRef.current!.deleteLocalSession(...args),
       refreshClaudeSessions: (...args) => actionsRef.current!.refreshClaudeSessions(...args),
+      loadClaudeSessionContext: (...args) => actionsRef.current!.loadClaudeSessionContext(...args),
+      loadEarlierClaudeSessionContext: (...args) => actionsRef.current!.loadEarlierClaudeSessionContext(...args),
+      closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
       refreshMemoryAssist: (...args) => actionsRef.current!.refreshMemoryAssist(...args),
       learnMemoryAssistItem: (...args) => actionsRef.current!.learnMemoryAssistItem(...args),
@@ -1844,6 +2009,14 @@ export function App() {
           {route === "sessions" ? (
             <SessionManagementScreen
               actions={actions}
+              codexSessionContext={codexSessionContext}
+              codexSessionContextError={codexSessionContextError}
+              codexSessionContextLoading={codexSessionContextLoading}
+              codexSessionContextTarget={codexSessionContextTarget}
+              claudeSessionContext={claudeSessionContext}
+              claudeSessionContextError={claudeSessionContextError}
+              claudeSessionContextLoading={claudeSessionContextLoading}
+              claudeSessionContextTarget={claudeSessionContextTarget}
               claudeSessions={claudeSessions}
               localSessions={localSessions}
               providerSync={providerSync}

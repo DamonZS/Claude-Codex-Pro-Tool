@@ -6,7 +6,8 @@ pub mod storage;
 
 pub use backup::BackupStore;
 pub use markdown::{
-    MarkdownExportService, ResolvedCodexThread, SessionMessage, load_session_messages,
+    CodexSessionContextMessage, CodexSessionContextPage, MarkdownExportService,
+    ResolvedCodexThread, SessionMessage, load_codex_session_context, load_session_messages,
     resolve_codex_thread,
 };
 pub use provider_sync::{

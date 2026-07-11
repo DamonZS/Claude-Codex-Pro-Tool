@@ -34,6 +34,7 @@ import {
   ShieldCheck,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -129,9 +130,11 @@ import type {
   ClaudeDesktopProviderPreviewResult,
   ClaudeDesktopResult,
   ClaudeSession,
+  ClaudeSessionContextPage,
   ClaudeSessionsResult,
   ClaudeZhPatchResult,
   CodexPluginMarketplaceStatusResult,
+  CodexSessionContextPage,
   ContextKind,
   LocalSession,
   LocalSessionsResult,
@@ -2802,12 +2805,28 @@ export function MemoryScreen({
 
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
+  codexSessionContext,
+  codexSessionContextError,
+  codexSessionContextLoading,
+  codexSessionContextTarget,
+  claudeSessionContext,
+  claudeSessionContextError,
+  claudeSessionContextLoading,
+  claudeSessionContextTarget,
   claudeSessions,
   localSessions,
   providerSync,
   settings,
 }: {
   actions: AppActions;
+  codexSessionContext: CodexSessionContextPage | null;
+  codexSessionContextError: string;
+  codexSessionContextLoading: boolean;
+  codexSessionContextTarget: LocalSession | null;
+  claudeSessionContext: ClaudeSessionContextPage | null;
+  claudeSessionContextError: string;
+  claudeSessionContextLoading: boolean;
+  claudeSessionContextTarget: ClaudeSession | null;
   claudeSessions: ClaudeSessionsResult | null;
   localSessions: LocalSessionsResult | null;
   providerSync: ProviderSyncResult | null;
@@ -2817,6 +2836,30 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   const codexSessionProjectGroups = useMemo(() => groupLocalSessionsByProject(codexSessions), [codexSessions]);
   const claudeSessionsList = useMemo(() => claudeSessions?.sessions ?? [], [claudeSessions]);
   const claudeSessionProjectGroups = useMemo(() => groupClaudeSessionsByProject(claudeSessionsList), [claudeSessionsList]);
+  const claudeContextPayload = claudeSessionContext;
+  const showingCodexContext = Boolean(codexSessionContextTarget);
+  const sessionContextTarget = codexSessionContextTarget ?? claudeSessionContextTarget;
+  const sessionContextPayload = codexSessionContext ?? claudeSessionContext;
+  const sessionContextLoading = showingCodexContext ? codexSessionContextLoading : claudeSessionContextLoading;
+  const sessionContextError = showingCodexContext ? codexSessionContextError : claudeSessionContextError;
+  const closeSessionContext = showingCodexContext ? actions.closeCodexSessionContext : actions.closeClaudeSessionContext;
+  const loadEarlierSessionContext = showingCodexContext ? actions.loadEarlierCodexSessionContext : actions.loadEarlierClaudeSessionContext;
+  const claudeContextDialogRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!sessionContextTarget) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => claudeContextDialogRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeSessionContext();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [closeSessionContext, sessionContextTarget]);
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
@@ -2827,6 +2870,7 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
     data,
     groups,
     onRefresh,
+    onOpen,
     onDelete,
     sourceLabel = "数据库",
     sourceCountLabel = "候选库",
@@ -2838,6 +2882,7 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
     data: LocalSessionsResult | ClaudeSessionsResult | null;
     groups: Array<{ key: string; label: string; subtitle: string; sessions: T[] }>;
     onRefresh?: () => void;
+    onOpen?: (session: T) => void;
     onDelete?: (session: T) => void;
     sourceLabel?: string;
     sourceCountLabel?: string;
@@ -2880,14 +2925,22 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
               <div className="codex-session-project-list">
                 {group.sessions.map((session) => (
                   <div className="codex-session-row" key={`${title}:${"sourcePath" in session ? session.sourcePath : session.dbPath}:${session.id}`}>
-                    <button className="codex-session-main" title={session.title || session.id} type="button">
+                    <button
+                      className="codex-session-main"
+                      onClick={() => onOpen?.(session)}
+                      title={session.title || session.id}
+                      type="button"
+                    >
                       <span>{session.title || "未命名会话"}</span>
                       <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
                     </button>
                     {onDelete ? (
                       <button
                         className="codex-session-delete"
-                        onClick={() => onDelete(session)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDelete(session);
+                        }}
                         title="删除会话"
                         type="button"
                       >
@@ -2905,65 +2958,169 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   };
 
   return (
-    <div className="stack">
-      <Panel title="会话管理" detail="历史会话修复、Codex 会话管理和 Claude 会话管理集中在这里。">
-        <div className="ops-note">
-          <ShieldCheck className="h-4 w-4" />
-          <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
-        </div>
-      </Panel>
-      <div className="session-management-wide-grid">
-        <div className="session-history-card">
-          <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
-            <div className="ops-status-list">
-              <StatusRow label="供应商同步" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
-              <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
-              <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
-            </div>
-            <div className="action-row">
-              <Button onClick={() => void actions.repairHistorySessions()}>
-                <Wrench className="h-4 w-4" />
-                修复历史会话
-              </Button>
-              <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                刷新会话
-              </Button>
-            </div>
-            {providerSync?.encryptedContentWarning ? (
-              <div className="ops-danger-zone">
-                <AlertTriangle className="h-4 w-4" />
-                <span>{providerSync.encryptedContentWarning}</span>
+    <>
+      <div className="stack">
+        <Panel title="会话管理" detail="历史会话修复、Codex 会话管理和 Claude 会话管理集中在这里。">
+          <div className="ops-note">
+            <ShieldCheck className="h-4 w-4" />
+            <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
+          </div>
+        </Panel>
+        <div className="session-management-wide-grid">
+          <div className="session-history-card">
+            <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
+              <div className="ops-status-list">
+                <StatusRow label="供应商同步" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
+                <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
+                <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
               </div>
-            ) : null}
-          </Panel>
-        </div>
-        <div className="session-codex-card">
-          {renderSessionBrowserPanel({
-            title: "Codex 会话管理",
-            ariaLabel: "Codex 本地会话项目列表",
-            emptyText: "暂未读取到 Codex 本地会话。",
-            data: localSessions,
-            groups: codexSessionProjectGroups,
-            onRefresh: () => void actions.refreshLocalSessions(),
-            onDelete: (session) => void actions.deleteLocalSession(session),
-          })}
-        </div>
-        <div className="session-claude-card">
-          {renderSessionBrowserPanel({
-            title: "Claude 会话管理",
-            ariaLabel: "Claude 本地会话项目列表",
-            emptyText: "暂未读取到 Claude 本地会话。",
-            data: claudeSessions,
-            groups: claudeSessionProjectGroups,
-            onRefresh: () => void actions.refreshClaudeSessions(),
-            onDelete: (session) => void actions.deleteClaudeSession(session),
-            sourceLabel: "Claude 会话源",
-            sourceCountLabel: "候选源",
-          })}
+              <div className="action-row">
+                <Button onClick={() => void actions.repairHistorySessions()}>
+                  <Wrench className="h-4 w-4" />
+                  修复历史会话
+                </Button>
+                <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
+                  <RefreshCw className="h-4 w-4" />
+                  刷新会话
+                </Button>
+              </div>
+              {providerSync?.encryptedContentWarning ? (
+                <div className="ops-danger-zone">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>{providerSync.encryptedContentWarning}</span>
+                </div>
+              ) : null}
+            </Panel>
+          </div>
+          <div className="session-codex-card">
+            {renderSessionBrowserPanel({
+              title: "Codex 会话管理",
+              ariaLabel: "Codex 本地会话项目列表",
+              emptyText: "暂未读取到 Codex 本地会话。",
+              data: localSessions,
+              groups: codexSessionProjectGroups,
+              onRefresh: () => void actions.refreshLocalSessions(),
+              onOpen: (session) => void actions.loadCodexSessionContext(session),
+              onDelete: (session) => void actions.deleteLocalSession(session),
+            })}
+          </div>
+          <div className="session-claude-card">
+            {renderSessionBrowserPanel({
+              title: "Claude 会话管理",
+              ariaLabel: "Claude 本地会话项目列表",
+              emptyText: "暂未读取到 Claude 本地会话。",
+              data: claudeSessions,
+              groups: claudeSessionProjectGroups,
+              onRefresh: () => void actions.refreshClaudeSessions(),
+              onOpen: (session) => void actions.loadClaudeSessionContext(session),
+              onDelete: (session) => void actions.deleteClaudeSession(session),
+              sourceLabel: "Claude 会话源",
+              sourceCountLabel: "候选源",
+            })}
+          </div>
         </div>
       </div>
-    </div>
+      {sessionContextTarget ? createPortal(
+        <div
+          className="claude-session-context-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSessionContext();
+          }}
+          role="presentation"
+        >
+          <section
+            aria-labelledby="claude-session-context-title"
+            aria-modal="true"
+            className="claude-session-context-dialog"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeSessionContext();
+            }}
+            ref={claudeContextDialogRef}
+            role="dialog"
+            tabIndex={-1}
+          >
+            <header className="claude-session-context-header">
+              <div>
+                <span>{showingCodexContext ? "Codex" : "Claude"} 会话上下文</span>
+                <h2 id="claude-session-context-title">
+                  {sessionContextPayload?.title || sessionContextTarget.title || "未命名会话"}
+                </h2>
+                <p>
+                  {compactPath(sessionContextPayload?.cwd || sessionContextTarget.cwd || "未知项目")}
+                  {sessionContextPayload ? ` · ${sessionContextPayload.totalMessages} 条可读消息` : ""}
+                </p>
+              </div>
+              <button
+                aria-label="关闭会话上下文"
+                className="claude-session-context-close"
+                onClick={closeSessionContext}
+                title="关闭会话上下文"
+                type="button"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+
+            <div className="claude-session-context-meta">
+              <span>{showingCodexContext ? "Codex rollout" : (claudeSessionContext?.sourceKind || claudeSessionContextTarget?.sourceKind)}</span>
+              <strong>{compactPath(showingCodexContext ? (codexSessionContext?.rolloutPath || codexSessionContextTarget?.rolloutPath || "") : (claudeSessionContext?.sourcePath || claudeSessionContextTarget?.sourcePath || ""))}</strong>
+            </div>
+
+            <div className="claude-session-context-body">
+              {sessionContextPayload?.hasMoreBefore ? (
+                <Button
+                  disabled={sessionContextLoading}
+                  onClick={() => void loadEarlierSessionContext()}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RefreshCw className={sessionContextLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+                  加载更早内容
+                </Button>
+              ) : null}
+
+              {sessionContextError ? (
+                <div className="claude-session-context-error">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>{sessionContextError}</span>
+                  {!sessionContextPayload ? (
+                    <Button onClick={() => void (showingCodexContext ? actions.loadCodexSessionContext(codexSessionContextTarget!) : actions.loadClaudeSessionContext(claudeSessionContextTarget!))} size="sm" variant="outline">
+                      重试
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {sessionContextLoading && !sessionContextPayload ? (
+                <div className="claude-session-context-loading">
+                  <RefreshCw className="h-5 w-5 animate-spin" />
+                  <span>正在读取真实会话上下文...</span>
+                </div>
+              ) : null}
+
+              {sessionContextPayload && !sessionContextPayload.messages.length && !sessionContextLoading ? (
+                <Empty text="该会话没有可展示的文本上下文。" />
+              ) : null}
+
+              {sessionContextPayload?.messages.map((message) => (
+                <article
+                  className={`claude-session-context-message role-${message.role}`}
+                  key={`${sessionContextPayload.sessionId}:${message.sequence}`}
+                >
+                  <header>
+                    <strong>{({ user: "用户", assistant: showingCodexContext ? "Codex" : "Claude", tool: "工具", system: "系统", developer: "开发者" } as Record<string, string>)[message.role] || message.role}</strong>
+                    <span>#{message.sequence}</span>
+                    {("timestampMs" in message && message.timestampMs) ? <time>{new Date(message.timestampMs).toLocaleString("zh-CN", { hour12: false })}</time> : ("timestamp" in message && message.timestamp ? <time>{message.timestamp}</time> : null)}
+                  </header>
+                  <pre>{message.text}</pre>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 });
 

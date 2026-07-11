@@ -795,6 +795,7 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("deleteLocalSession"));
     assert!(session_section.contains("refreshClaudeSessions"));
     assert!(session_section.contains("deleteClaudeSession"));
+    assert!(session_section.contains("loadClaudeSessionContext"));
     assert!(session_section.contains("groupLocalSessionsByProject(codexSessions)"));
     assert!(session_section.contains("groupClaudeSessionsByProject(claudeSessionsList)"));
     assert!(session_section.contains("renderSessionBrowserPanel"));
@@ -814,6 +815,7 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(!session_section.contains(r#"renderSessionBrowserPanel("Claude 会话管理""#));
     assert!(session_section.contains("className=\"codex-session-project-header\""));
     assert!(session_section.contains("className=\"codex-session-main\""));
+    assert!(session_section.contains("onClick={() => onOpen?.(session)}"));
     assert!(session_section.contains("formatSessionRelativeTime(session.updatedAtMs)"));
     assert!(
         session_section.contains("onDelete: (session) => void actions.deleteLocalSession(session)")
@@ -822,14 +824,27 @@ fn session_management_route_contains_history_and_codex_claude_session_management
         session_section
             .contains("onDelete: (session) => void actions.deleteClaudeSession(session)")
     );
+    assert!(
+        session_section
+            .contains("onOpen: (session) => void actions.loadClaudeSessionContext(session)")
+    );
+    assert!(session_section.contains("claude-session-context-overlay"));
+    assert!(session_section.contains("claude-session-context-dialog"));
+    assert!(session_section.contains("加载更早内容"));
+    assert!(session_section.contains("关闭会话上下文"));
     assert!(app_shell.contains("const [claudeSessions, setClaudeSessions]"));
+    assert!(app_shell.contains("const [claudeSessionContext, setClaudeSessionContext]"));
     assert!(app_shell.contains("call<ClaudeSessionsResult>(\"list_claude_sessions\")"));
+    assert!(app_shell.contains("call<ClaudeSessionContextPage>(\"load_claude_session_context\""));
     assert!(app_shell.contains("call<DeleteClaudeSessionResult>(\"delete_claude_session\""));
     assert!(commands_rs.contains("pub async fn list_claude_sessions"));
+    assert!(commands_rs.contains("pub async fn load_claude_session_context"));
     assert!(commands_rs.contains("pub async fn delete_claude_session"));
     assert!(lib_rs.contains("commands::list_claude_sessions"));
+    assert!(lib_rs.contains("commands::load_claude_session_context"));
     assert!(lib_rs.contains("commands::delete_claude_session"));
     assert!(tauri_bridge.contains("command === \"list_claude_sessions\""));
+    assert!(tauri_bridge.contains("command === \"load_claude_session_context\""));
     assert!(tauri_bridge.contains("command === \"delete_claude_session\""));
     assert!(session_section.contains("repairHistorySessions"));
     assert!(!session_section.contains("Claude 会话诊断"));
@@ -848,6 +863,28 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(styles.contains(".codex-session-project-header"));
     assert!(styles.contains(".codex-session-main time"));
     assert!(styles.contains(".codex-session-delete"));
+    assert!(styles.contains(".claude-session-context-overlay"));
+    assert!(styles.contains(".claude-session-context-dialog"));
+    assert!(styles.contains(".claude-session-context-message"));
+}
+
+#[test]
+fn codex_session_management_opens_real_context_viewer() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app = read_frontend_file("App.tsx");
+    let screens = read_frontend_file("screens.tsx");
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let bridge = read_frontend_file("tauriBridge.ts");
+
+    assert!(commands.contains("pub async fn load_codex_session_context"));
+    assert!(commands.contains("Codex 会话数据库不是受信任的已发现路径"));
+    assert!(lib.contains("commands::load_codex_session_context"));
+    assert!(app.contains("loadEarlierCodexSessionContext"));
+    assert!(screens.contains("actions.loadCodexSessionContext(session)"));
+    assert!(screens.contains("Codex rollout"));
+    assert!(screens.contains("assistant: showingCodexContext ? \"Codex\" : \"Claude\""));
+    assert!(bridge.contains("load_codex_session_context"));
 }
 
 #[test]
