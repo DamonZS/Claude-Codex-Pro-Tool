@@ -774,6 +774,10 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
     let app_tsx = read_frontend_file("screens.tsx");
+    let app_shell = read_frontend_file("App.tsx");
+    let tauri_bridge = read_frontend_file("tauriBridge.ts");
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
 
@@ -789,7 +793,10 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("Claude 会话管理"));
     assert!(session_section.contains("refreshLocalSessions"));
     assert!(session_section.contains("deleteLocalSession"));
+    assert!(session_section.contains("refreshClaudeSessions"));
+    assert!(session_section.contains("deleteClaudeSession"));
     assert!(session_section.contains("groupLocalSessionsByProject(codexSessions)"));
+    assert!(session_section.contains("groupClaudeSessionsByProject(claudeSessionsList)"));
     assert!(session_section.contains("renderSessionBrowserPanel"));
     assert!(session_section.contains("session-management-wide-grid"));
     assert!(session_section.contains("session-history-card"));
@@ -799,10 +806,11 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(session_section.contains("Codex 本地会话项目列表"));
     assert!(session_section.contains("Claude 本地会话项目列表"));
     assert!(session_section.contains("data: localSessions"));
-    assert!(session_section.contains("data: null"));
-    assert!(session_section.contains("Claude 会话扫描尚未接入，不会复用 Codex 会话。"));
+    assert!(session_section.contains("data: claudeSessions"));
+    assert!(!session_section.contains("data: null"));
+    assert!(!session_section.contains("Claude 会话扫描尚未接入"));
     assert!(session_section.contains(r#"sourceLabel: "Claude 会话源""#));
-    assert!(session_section.contains(r#"statusLabel: "待接入""#));
+    assert!(!session_section.contains(r#"statusLabel: "待接入""#));
     assert!(!session_section.contains(r#"renderSessionBrowserPanel("Claude 会话管理""#));
     assert!(session_section.contains("className=\"codex-session-project-header\""));
     assert!(session_section.contains("className=\"codex-session-main\""));
@@ -810,6 +818,19 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(
         session_section.contains("onDelete: (session) => void actions.deleteLocalSession(session)")
     );
+    assert!(
+        session_section
+            .contains("onDelete: (session) => void actions.deleteClaudeSession(session)")
+    );
+    assert!(app_shell.contains("const [claudeSessions, setClaudeSessions]"));
+    assert!(app_shell.contains("call<ClaudeSessionsResult>(\"list_claude_sessions\")"));
+    assert!(app_shell.contains("call<DeleteClaudeSessionResult>(\"delete_claude_session\""));
+    assert!(commands_rs.contains("pub async fn list_claude_sessions"));
+    assert!(commands_rs.contains("pub async fn delete_claude_session"));
+    assert!(lib_rs.contains("commands::list_claude_sessions"));
+    assert!(lib_rs.contains("commands::delete_claude_session"));
+    assert!(tauri_bridge.contains("command === \"list_claude_sessions\""));
+    assert!(tauri_bridge.contains("command === \"delete_claude_session\""));
     assert!(session_section.contains("repairHistorySessions"));
     assert!(!session_section.contains("Claude 会话诊断"));
     assert!(!session_section.contains("launchClaudeDesktop"));
@@ -827,6 +848,29 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(styles.contains(".codex-session-project-header"));
     assert!(styles.contains(".codex-session-main time"));
     assert!(styles.contains(".codex-session-delete"));
+}
+
+#[test]
+fn manager_startup_commands_run_blocking_work_off_ui_thread() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let settings_section = commands_rs
+        .split("pub async fn load_settings()")
+        .nth(1)
+        .and_then(|rest| rest.split("#[tauri::command]").next())
+        .expect("async load_settings source");
+    let claude_window_section = commands_rs
+        .split("pub async fn load_claude_chinese_window_status(")
+        .nth(1)
+        .and_then(|rest| rest.split("#[tauri::command]").next())
+        .expect("async Claude window status source");
+
+    assert!(commands_rs.contains("pub async fn load_settings()"));
+    assert!(settings_section.contains("spawn_blocking"));
+    assert!(settings_section.contains("settings_payload("));
+    assert!(commands_rs.contains("pub async fn load_claude_chinese_window_status("));
+    assert!(claude_window_section.contains("spawn_blocking"));
+    assert!(claude_window_section.contains("detect_status_light"));
 }
 
 #[test]

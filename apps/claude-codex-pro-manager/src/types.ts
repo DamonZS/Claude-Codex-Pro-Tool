@@ -471,11 +471,37 @@ export type LocalSessionsResult = CommandResult<{
   sessions: LocalSession[];
 }>;
 
+export type ClaudeSession = {
+  id: string;
+  title: string;
+  cwd: string;
+  modelProvider: string;
+  archived: boolean;
+  updatedAtMs: number | null;
+  sourcePath: string;
+  sourceKind: string;
+  messageCount: number;
+};
+
+export type ClaudeSessionsResult = CommandResult<{
+  sourceRoot: string;
+  sourcePaths: string[];
+  sessions: ClaudeSession[];
+  warnings: string[];
+}>;
+
 export type LocalSessionProjectGroup = {
   key: string;
   label: string;
   subtitle: string;
   sessions: LocalSession[];
+};
+
+export type ClaudeSessionProjectGroup = {
+  key: string;
+  label: string;
+  subtitle: string;
+  sessions: ClaudeSession[];
 };
 
 export type MemoryItem = {
@@ -603,6 +629,11 @@ export type DeleteLocalSessionResult = CommandResult<{
   undoToken?: string | null;
   backup_path?: string | null;
   backupPath?: string | null;
+}>;
+
+export type DeleteClaudeSessionResult = CommandResult<{
+  sessionId: string;
+  backupPath: string | null;
 }>;
 
 export type PluginInstallKind =

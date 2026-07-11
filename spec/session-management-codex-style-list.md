@@ -30,7 +30,7 @@
 - 第一行使用红框式紧凑排布：左侧 `历史会话修复`，右侧 `Codex 会话管理`。
 - `Codex 会话管理` 在卡片内部滚动，避免撑高第一行导致历史修复下方出现大面积空白。
 - `Claude 会话管理` 放在下一整行，继续复用同一套会话列表结构。
-- `Claude 会话管理` 当前复用 Codex 会话管理的项目分组列表结构与刷新/删除交互，不新增后端命令。
+- `Claude 会话管理` 复用 Codex 风格的项目分组视觉结构，但使用独立 Claude 数据状态、刷新命令和带备份删除命令；细节见 `spec/claude-session-management.md`。
 
 ## 功能要求
 
@@ -51,16 +51,15 @@
 
 ## 数据与接口要求
 
-- 继续使用 `list_local_sessions` 返回的 `LocalSession[]`。
-- 继续使用 `delete_local_session` 删除会话。
-- 不新增 Tauri command。
+- Codex 继续使用 `list_local_sessions` / `delete_local_session`。
+- Claude 使用独立 `list_claude_sessions` / `delete_claude_session`，不得复用 Codex 数据结果。
 
 ## 技术约束
 
 - 优先修改 `apps/claude-codex-pro-manager/src/App.tsx` 和 `apps/claude-codex-pro-manager/src/styles.css`。
 - 不新增 npm 依赖。
 - 不修改 `assets/inject/claude-chinese-inject.js`。
-- 不修改后端数据库结构。
+- 不修改 Codex 后端数据库结构。
 
 ## 交付范围
 

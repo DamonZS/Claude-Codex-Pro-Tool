@@ -16,12 +16,12 @@
    - 通过标准：页面包含 `codex-session-browser`、项目组、项目标题行、会话行、右侧相对时间等结构，并包含 `Claude 会话管理`。
    - 证据：`windows_subsystem` 回归测试和 CSS 检查。
 
-4. 删除行为保持原功能。
-   - 通过标准：会话行仍调用 `actions.deleteLocalSession(session)`，不修改后端删除接口。
+4. 删除行为保持原功能并隔离数据源。
+   - 通过标准：Codex 会话调用 `actions.deleteLocalSession(session)`；Claude 会话调用 `actions.deleteClaudeSession(session)`。
    - 证据：源码检查。
 
-5. 不新增后端命令或依赖。
-   - 通过标准：不新增 Tauri command，不新增 npm 依赖。
+5. Claude 使用独立后端命令且不新增前端依赖。
+   - 通过标准：注册 `list_claude_sessions` / `delete_claude_session`，不新增 npm 依赖。
    - 证据：源码和配置检查。
 
 6. 前端类型检查通过。

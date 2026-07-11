@@ -159,6 +159,8 @@ import type {
   CcswitchImportResult,
   ClaudeChineseWindowResult,
   ClaudeContextEntriesResult,
+  ClaudeSession,
+  ClaudeSessionsResult,
   ClaudeDesktopDevModeConfigureResult,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopLocalBundleResult,
@@ -182,6 +184,7 @@ import type {
   ContextEntriesResult,
   ContextEntry,
   ContextKind,
+  DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
   InstallEntrypointsResult,
   LaunchStatus,
@@ -262,6 +265,7 @@ export function App() {
   const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
   const [localSessions, setLocalSessions] = useState<LocalSessionsResult | null>(null);
+  const [claudeSessions, setClaudeSessions] = useState<ClaudeSessionsResult | null>(null);
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
   const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
   const [memorySelfCheck, setMemorySelfCheck] = useState<MemorySelfCheckResult | null>(null);
@@ -454,6 +458,19 @@ export function App() {
     if (result) {
       setLocalSessions(result);
       if (!silent) notifyIfNeedsAttention({ title: "Codex 会话管理", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeSessions = async (silent = false) => {
+    if (!silent) {
+      setNotice({ title: "Claude 会话管理", message: "正在扫描本机 Claude 会话源...", status: "running" });
+      await waitForPaint();
+    }
+    const result = await run(() => call<ClaudeSessionsResult>("list_claude_sessions"), "Claude 会话管理", { trackBusy: !silent, notify: !silent });
+    if (result) {
+      setClaudeSessions(result);
+      if (!silent) setNotice({ title: "Claude 会话管理", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1049,6 +1066,21 @@ export function App() {
     }
   };
 
+  const deleteClaudeSession = async (session: ClaudeSession) => {
+    const title = session.title || session.id;
+    if (!window.confirm(`确认删除 Claude 本地会话？\n\n${title}\n${session.id}\n\n删除前会自动备份源文件。`)) return;
+    setNotice({ title: "删除 Claude 会话", message: "正在备份并删除 Claude 会话...", status: "running" });
+    await waitForPaint();
+    const result = await run(
+      () => call<DeleteClaudeSessionResult>("delete_claude_session", { request: { sessionId: session.id, sourcePath: session.sourcePath } }),
+      "删除 Claude 会话",
+    );
+    if (result) {
+      setNotice({ title: "删除 Claude 会话", message: result.message, status: result.status });
+      if (statusOk(result.status)) await refreshClaudeSessions(true);
+    }
+  };
+
   const learnMemoryAssistItem = async (text: string, category = "manual") => {
     const result = await run(
       () => call<MemoryItemResult>("learn_memory_assist_item", { request: { text, category, workspace: MEMORY_GLOBAL_WORKSPACE, source: "manager" } }),
@@ -1474,6 +1506,7 @@ export function App() {
     } else if (target === "sessions") {
       await Promise.all([
         refreshLocalSessions(true),
+        refreshClaudeSessions(true),
         refreshSettings(true),
       ]);
       afterFirstPaintIfFresh(() => {
@@ -1591,6 +1624,8 @@ export function App() {
       repairHistorySessions,
       refreshLocalSessions,
       deleteLocalSession,
+      refreshClaudeSessions,
+      deleteClaudeSession,
       refreshMemoryAssist,
       learnMemoryAssistItem,
       updateMemoryAssistItem,
@@ -1681,6 +1716,8 @@ export function App() {
       repairHistorySessions: (...args) => actionsRef.current!.repairHistorySessions(...args),
       refreshLocalSessions: (...args) => actionsRef.current!.refreshLocalSessions(...args),
       deleteLocalSession: (...args) => actionsRef.current!.deleteLocalSession(...args),
+      refreshClaudeSessions: (...args) => actionsRef.current!.refreshClaudeSessions(...args),
+      deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
       refreshMemoryAssist: (...args) => actionsRef.current!.refreshMemoryAssist(...args),
       learnMemoryAssistItem: (...args) => actionsRef.current!.learnMemoryAssistItem(...args),
       updateMemoryAssistItem: (...args) => actionsRef.current!.updateMemoryAssistItem(...args),
@@ -1807,6 +1844,7 @@ export function App() {
           {route === "sessions" ? (
             <SessionManagementScreen
               actions={actions}
+              claudeSessions={claudeSessions}
               localSessions={localSessions}
               providerSync={providerSync}
               settings={settings}

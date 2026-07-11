@@ -1,6 +1,8 @@
 import { PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX } from "@/constants";
 import type {
   BackendSettings,
+  ClaudeSession,
+  ClaudeSessionProjectGroup,
   ClaudeDesktopMarketplaceStatusResult,
   ClaudeDesktopResult,
   ClaudeZhPatchResult,
@@ -61,6 +63,34 @@ export function groupLocalSessionsByProject(sessions: LocalSession[]) {
       key,
       label,
       subtitle: session.cwd || session.rolloutPath || session.dbPath || "",
+      sessions: [],
+    };
+    group.sessions.push(session);
+    groups.set(key, group);
+  }
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      sessions: group.sessions
+        .slice()
+        .sort((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
+    }))
+    .sort((left, right) => (right.sessions[0]?.updatedAtMs ?? 0) - (left.sessions[0]?.updatedAtMs ?? 0));
+}
+
+export function claudeSessionProjectLabel(session: ClaudeSession) {
+  return pathTail(session.cwd) || pathTail(session.sourcePath) || "未归类项目";
+}
+
+export function groupClaudeSessionsByProject(sessions: ClaudeSession[]) {
+  const groups = new Map<string, ClaudeSessionProjectGroup>();
+  for (const session of sessions) {
+    const label = claudeSessionProjectLabel(session);
+    const key = (session.cwd || session.sourcePath || label).toLowerCase();
+    const group = groups.get(key) ?? {
+      key,
+      label,
+      subtitle: session.cwd || session.sourcePath || "",
       sessions: [],
     };
     group.sessions.push(session);

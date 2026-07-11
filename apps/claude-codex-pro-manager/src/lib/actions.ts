@@ -1,6 +1,8 @@
 import type {
   BackendSettings,
   CcswitchImportResult,
+  ClaudeSession,
+  ClaudeSessionsResult,
   ClaudeContextEntriesResult,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopMarketplaceStatusResult,
@@ -74,6 +76,8 @@ export function createActionsShape() {
     repairHistorySessions: async () => {},
     refreshLocalSessions: async () => null as LocalSessionsResult | null,
     deleteLocalSession: async (_session: LocalSession) => {},
+    refreshClaudeSessions: async () => null as ClaudeSessionsResult | null,
+    deleteClaudeSession: async (_session: ClaudeSession) => {},
     refreshMemoryAssist: async (_silent?: boolean, _includeArchived?: boolean) => null as MemoryStatusResult | null,
     learnMemoryAssistItem: async (_text: string, _category?: string) => false,
     updateMemoryAssistItem: async (_id: string, _item: MemoryItemEditRequest) => false,

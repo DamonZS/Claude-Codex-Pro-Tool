@@ -67,6 +67,7 @@ import {
   compactDisplayPath,
   compactPath,
   formatSessionRelativeTime,
+  groupClaudeSessionsByProject,
   groupLocalSessionsByProject,
   memoryOverviewStatus,
   statusFailed,
@@ -127,6 +128,8 @@ import type {
   ClaudeDesktopProviderApplyResult,
   ClaudeDesktopProviderPreviewResult,
   ClaudeDesktopResult,
+  ClaudeSession,
+  ClaudeSessionsResult,
   ClaudeZhPatchResult,
   CodexPluginMarketplaceStatusResult,
   ContextKind,
@@ -2799,22 +2802,25 @@ export function MemoryScreen({
 
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
+  claudeSessions,
   localSessions,
   providerSync,
   settings,
 }: {
   actions: AppActions;
+  claudeSessions: ClaudeSessionsResult | null;
   localSessions: LocalSessionsResult | null;
   providerSync: ProviderSyncResult | null;
   settings: SettingsResult | null;
 }) {
   const codexSessions = useMemo(() => localSessions?.sessions ?? [], [localSessions]);
   const codexSessionProjectGroups = useMemo(() => groupLocalSessionsByProject(codexSessions), [codexSessions]);
-  const claudeSessionProjectGroups = useMemo(() => [], []);
+  const claudeSessionsList = useMemo(() => claudeSessions?.sessions ?? [], [claudeSessions]);
+  const claudeSessionProjectGroups = useMemo(() => groupClaudeSessionsByProject(claudeSessionsList), [claudeSessionsList]);
   const syncSummary = providerSync
     ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
     : "尚未执行";
-  const renderSessionBrowserPanel = ({
+  const renderSessionBrowserPanel = <T extends LocalSession | ClaudeSession,>({
     title,
     ariaLabel,
     emptyText,
@@ -2823,29 +2829,34 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
     onRefresh,
     onDelete,
     sourceLabel = "数据库",
+    sourceCountLabel = "候选库",
     statusLabel,
   }: {
     title: string;
     ariaLabel: string;
     emptyText: string;
-    data: LocalSessionsResult | null;
-    groups: ReturnType<typeof groupLocalSessionsByProject>;
+    data: LocalSessionsResult | ClaudeSessionsResult | null;
+    groups: Array<{ key: string; label: string; subtitle: string; sessions: T[] }>;
     onRefresh?: () => void;
-    onDelete?: (session: LocalSession) => void;
+    onDelete?: (session: T) => void;
     sourceLabel?: string;
+    sourceCountLabel?: string;
     statusLabel?: string;
   }) => {
     const sessionCount = data?.sessions.length ?? 0;
+    const sourceRoot = data ? ("sourceRoot" in data ? data.sourceRoot : data.dbPath) : "";
+    const sourcePaths = data ? ("sourcePaths" in data ? data.sourcePaths : data.dbPaths) : [];
+    const warningCount = data && "warnings" in data ? data.warnings.length : 0;
     return (
-      <Panel title={title} detail={`${sessionCount} 个本地会话；删除会先写备份。`}>
+      <Panel title={title} detail={`${sessionCount} 个本地会话；删除会先写备份。${warningCount ? ` ${warningCount} 个来源需要检查。` : ""}`}>
         <div className="codex-session-toolbar">
           <div>
             <span>{sourceLabel}</span>
-            <strong>{data?.dbPath ? compactPath(data.dbPath) : statusLabel || "尚未接入"}</strong>
+            <strong>{sourceRoot ? compactPath(sourceRoot) : statusLabel || "尚未读取"}</strong>
           </div>
           <div>
-            <span>候选库</span>
-            <strong>{data?.dbPaths.length ?? 0} 个</strong>
+            <span>{sourceCountLabel}</span>
+            <strong>{sourcePaths.length} 个</strong>
           </div>
           <div>
             <span>会话数</span>
@@ -2868,7 +2879,7 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
               </div>
               <div className="codex-session-project-list">
                 {group.sessions.map((session) => (
-                  <div className="codex-session-row" key={`${title}:${session.dbPath}:${session.id}`}>
+                  <div className="codex-session-row" key={`${title}:${"sourcePath" in session ? session.sourcePath : session.dbPath}:${session.id}`}>
                     <button className="codex-session-main" title={session.title || session.id} type="button">
                       <span>{session.title || "未命名会话"}</span>
                       <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
@@ -2942,11 +2953,13 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
           {renderSessionBrowserPanel({
             title: "Claude 会话管理",
             ariaLabel: "Claude 本地会话项目列表",
-            emptyText: "Claude 会话扫描尚未接入，不会复用 Codex 会话。",
-            data: null,
+            emptyText: "暂未读取到 Claude 本地会话。",
+            data: claudeSessions,
             groups: claudeSessionProjectGroups,
+            onRefresh: () => void actions.refreshClaudeSessions(),
+            onDelete: (session) => void actions.deleteClaudeSession(session),
             sourceLabel: "Claude 会话源",
-            statusLabel: "待接入",
+            sourceCountLabel: "候选源",
           })}
         </div>
       </div>

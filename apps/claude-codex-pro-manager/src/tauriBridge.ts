@@ -1134,11 +1134,37 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       ],
     });
   }
+  if (command === "list_claude_sessions") {
+    return ok("预览模式 Claude 会话列表。", {
+      sourceRoot: "~\\.claude",
+      sourcePaths: ["~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl"],
+      sessions: [
+        {
+          id: "preview-claude-session",
+          title: "Claude 会话管理真实接入",
+          cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+          modelProvider: "claude",
+          archived: false,
+          updatedAtMs: Date.now(),
+          sourcePath: "~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl",
+          sourceKind: "claude-code-project",
+          messageCount: 12,
+        },
+      ],
+      warnings: [],
+    });
+  }
   if (command === "delete_local_session") {
     return ok("预览模式已模拟删除 Codex 会话。", {
       sessionId: "preview-session",
       undoToken: "preview-undo-token",
       backupPath: "~\\.codex\\backups\\preview-session.json",
+    });
+  }
+  if (command === "delete_claude_session") {
+    return ok("预览模式已模拟备份并删除 Claude 会话。", {
+      sessionId: "preview-claude-session",
+      backupPath: "~\\.claude-codex-pro\\backups\\claude-sessions\\preview-claude-session.jsonl",
     });
   }
   if (command === "load_settings") {

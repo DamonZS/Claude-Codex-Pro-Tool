@@ -250,6 +250,20 @@ pub struct LocalSessionsPayload {
     pub sessions: Vec<claude_codex_pro_data::LocalSession>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteClaudeSessionRequest {
+    pub session_id: String,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteClaudeSessionPayload {
+    pub session_id: String,
+    pub backup_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZedRemoteProjectsPayload {
@@ -1268,10 +1282,14 @@ pub async fn open_prompt_optimizer_window(
 }
 
 #[tauri::command]
-pub fn load_claude_chinese_window_status(
+pub async fn load_claude_chinese_window_status(
     app: tauri::AppHandle,
 ) -> CommandResult<ClaudeChineseWindowPayload> {
-    let status = claude_codex_pro_core::claude_desktop::detect_status_light();
+    let status = tauri::async_runtime::spawn_blocking(
+        claude_codex_pro_core::claude_desktop::detect_status_light,
+    )
+    .await
+    .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
     ok(
         "Claude 汉化状态已加载。",
         claude_chinese_window_payload(&app, &status),
@@ -2751,8 +2769,15 @@ pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
 }
 
 #[tauri::command]
-pub fn load_settings() -> CommandResult<SettingsPayload> {
-    settings_payload("设置已加载。", "加载设置失败。")
+pub async fn load_settings() -> CommandResult<SettingsPayload> {
+    tauri::async_runtime::spawn_blocking(|| settings_payload("设置已加载。", "加载设置失败。"))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("加载设置任务失败：{join_error}"),
+                fallback_settings_payload(),
+            )
+        })
 }
 
 #[tauri::command]
@@ -2816,6 +2841,81 @@ pub async fn list_local_sessions() -> CommandResult<LocalSessionsPayload> {
                 },
             )
         })
+}
+
+#[tauri::command]
+pub async fn list_claude_sessions()
+-> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory> {
+    log_manager_event("manager.list_claude_sessions.start", json!({}));
+    tauri::async_runtime::spawn_blocking(list_claude_sessions_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            let message = format!("读取 Claude 会话任务失败：{join_error}");
+            log_manager_event(
+                "manager.list_claude_sessions.finish",
+                json!({ "status": "failed", "message": message }),
+            );
+            failed(&message, empty_claude_sessions_inventory())
+        })
+}
+
+fn list_claude_sessions_blocking()
+-> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory> {
+    match claude_codex_pro_core::claude_sessions::list_claude_sessions() {
+        Ok(inventory) => {
+            let warning_count = inventory.warnings.len();
+            let message = if warning_count == 0 {
+                format!(
+                    "已从 {} 个来源加载 {} 条 Claude 会话。",
+                    inventory.source_paths.len(),
+                    inventory.sessions.len()
+                )
+            } else {
+                format!(
+                    "已从 {} 个来源加载 {} 条 Claude 会话，另有 {} 个来源需要检查。",
+                    inventory.source_paths.len(),
+                    inventory.sessions.len(),
+                    warning_count
+                )
+            };
+            log_manager_event(
+                "manager.list_claude_sessions.finish",
+                json!({
+                    "status": if warning_count == 0 { "ok" } else { "needs_review" },
+                    "source_count": inventory.source_paths.len(),
+                    "session_count": inventory.sessions.len(),
+                    "warning_count": warning_count,
+                }),
+            );
+            CommandResult {
+                status: if warning_count == 0 {
+                    "ok".to_string()
+                } else {
+                    "needs_review".to_string()
+                },
+                message,
+                payload: inventory,
+            }
+        }
+        Err(error) => {
+            let message = format!("读取 Claude 会话失败：{error}");
+            log_manager_event(
+                "manager.list_claude_sessions.finish",
+                json!({ "status": "failed", "message": message }),
+            );
+            failed(&message, empty_claude_sessions_inventory())
+        }
+    }
+}
+
+fn empty_claude_sessions_inventory()
+-> claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory {
+    claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory {
+        source_root: String::new(),
+        source_paths: Vec::new(),
+        sessions: Vec::new(),
+        warnings: Vec::new(),
+    }
 }
 
 fn list_local_sessions_blocking() -> CommandResult<LocalSessionsPayload> {
@@ -3965,6 +4065,78 @@ pub async fn delete_local_session(
                 },
             )
         })
+}
+
+#[tauri::command]
+pub async fn delete_claude_session(
+    request: DeleteClaudeSessionRequest,
+) -> CommandResult<DeleteClaudeSessionPayload> {
+    tauri::async_runtime::spawn_blocking(move || delete_claude_session_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            let message = format!("删除 Claude 会话任务失败：{join_error}");
+            failed(
+                &message,
+                DeleteClaudeSessionPayload {
+                    session_id: String::new(),
+                    backup_path: None,
+                },
+            )
+        })
+}
+
+fn delete_claude_session_blocking(
+    request: DeleteClaudeSessionRequest,
+) -> CommandResult<DeleteClaudeSessionPayload> {
+    let session_id = request.session_id.trim();
+    let source_path = request.source_path.trim();
+    if session_id.is_empty() || source_path.is_empty() {
+        return failed(
+            "Claude 会话 ID 和来源路径不能为空。",
+            DeleteClaudeSessionPayload {
+                session_id: session_id.to_string(),
+                backup_path: None,
+            },
+        );
+    }
+    log_manager_event(
+        "manager.delete_claude_session.start",
+        json!({ "session_id": session_id }),
+    );
+    let result = claude_codex_pro_core::claude_sessions::delete_claude_session(
+        &claude_codex_pro_core::paths::default_app_state_dir().join("backups"),
+        session_id,
+        Path::new(source_path),
+    );
+    match result {
+        Ok(outcome) => {
+            log_manager_event(
+                "manager.delete_claude_session.finish",
+                json!({ "session_id": session_id, "status": "ok" }),
+            );
+            ok(
+                &outcome.message,
+                DeleteClaudeSessionPayload {
+                    session_id: outcome.session_id,
+                    backup_path: Some(outcome.backup_path),
+                },
+            )
+        }
+        Err(error) => {
+            let message = format!("删除 Claude 会话失败：{error}");
+            log_manager_event(
+                "manager.delete_claude_session.finish",
+                json!({ "session_id": session_id, "status": "failed", "message": message }),
+            );
+            failed(
+                &message,
+                DeleteClaudeSessionPayload {
+                    session_id: session_id.to_string(),
+                    backup_path: None,
+                },
+            )
+        }
+    }
 }
 
 fn delete_local_session_blocking(

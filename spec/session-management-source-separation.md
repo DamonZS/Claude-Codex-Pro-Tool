@@ -8,23 +8,19 @@
 
 - Codex 会话面板只显示 Codex 本地 SQLite / rollout 会话。
 - Claude 会话面板不得复用 Codex 会话数据。
-- 若 Claude 真实会话扫描尚未接入，Claude 面板必须显示独立的“待接入/未读取”状态，而不是展示 Codex 内容。
+- Claude 面板必须使用 `spec/claude-session-management.md` 定义的独立真实数据源，不得显示 Codex 内容。
 - 刷新历史会话仍刷新 Codex 本地会话与设置，不改变现有删除 Codex 会话能力。
 
 ## 非目标
 
-- 本次不实现完整 Claude 会话文件扫描和删除。
+- Claude 会话文件扫描和删除由 `spec/claude-session-management.md` 单独约束；本规格不重复定义其解析细节。
 - 本次不删除用户会话数据。
 - 本次不改变盘古记忆采集层。
 
 ## UI 要求
 
 - Codex 面板显示 Codex 数据库路径、候选库数量、会话数、项目和会话列表。
-- Claude 面板如果没有独立 Claude 数据源，应显示：
-  - 来源：Claude 会话源
-  - 状态：待接入
-  - 会话数：0 个
-  - 空态说明：Claude 会话扫描尚未接入，不会复用 Codex 会话。
+- Claude 面板显示独立 Claude 会话源、候选源数量、真实会话数和项目列表。
 - Claude 面板不得出现 Codex 数据库路径和 Codex 项目列表。
 
 ## 技术约束
