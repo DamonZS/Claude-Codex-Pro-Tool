@@ -5,6 +5,7 @@ pub mod bridge;
 pub mod cdp;
 pub mod claude_desktop;
 pub mod claude_desktop_provider;
+pub mod claude_provider;
 pub mod claude_zh_patch;
 pub mod cli_wrapper;
 pub mod codex_plugin_marketplace;

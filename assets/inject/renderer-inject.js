@@ -5212,7 +5212,7 @@
     return Array.from(new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0)));
   }
 
-  let codexModelCatalog = { status: "loading", model: "", default_model: "", model_provider: "", provider_name: "", models: [], sources: [], responses_api: { status: "unknown", message: "" } };
+  let codexModelCatalog = { status: "loading", model: "", default_model: "", model_provider: "", provider_name: "", models: [], model_descriptors: [], sources: [], responses_api: { status: "unknown", message: "" } };
   let codexModelCatalogLoadedAt = 0;
   let codexModelCatalogPromise = null;
   const claudeCodexProModelListRequestIds = new Set();
@@ -5230,6 +5230,7 @@
           model_provider: "",
           provider_name: "",
           models: [],
+          model_descriptors: [],
           sources: [],
           responses_api: { status: "unknown", message: "" },
           ...catalog,
@@ -5262,6 +5263,9 @@
       codexModelCatalog.default_model,
       codexModelCatalog.model,
       ...(Array.isArray(codexModelCatalog.models) ? codexModelCatalog.models : []),
+      ...(Array.isArray(codexModelCatalog.model_descriptors)
+        ? codexModelCatalog.model_descriptors.map((descriptor) => descriptor?.model)
+        : []),
     ]);
   }
 
@@ -5321,7 +5325,7 @@
     if (!force && codexModelCatalogLoadedAt && Date.now() - codexModelCatalogLoadedAt < 10000) return codexModelCatalog;
     codexModelCatalogPromise = postJson("/codex-model-catalog", {})
       .then((result) => {
-        codexModelCatalog = result && typeof result === "object" ? result : { status: "failed", model: "", default_model: "", model_provider: "", provider_name: "", models: [], sources: [], responses_api: { status: "unknown", message: "" } };
+        codexModelCatalog = result && typeof result === "object" ? result : { status: "failed", model: "", default_model: "", model_provider: "", provider_name: "", models: [], model_descriptors: [], sources: [], responses_api: { status: "unknown", message: "" } };
         codexModelCatalogLoadedAt = Date.now();
         renderClaudeCodexProMenu();
         patchCodexModelWhitelist();
@@ -5329,7 +5333,7 @@
         return codexModelCatalog;
       })
       .catch((error) => {
-        codexModelCatalog = { status: "failed", message: String(error?.message || error), model: "", default_model: "", model_provider: "", provider_name: "", models: [], sources: [], responses_api: { status: "unknown", message: "" } };
+        codexModelCatalog = { status: "failed", message: String(error?.message || error), model: "", default_model: "", model_provider: "", provider_name: "", models: [], model_descriptors: [], sources: [], responses_api: { status: "unknown", message: "" } };
         codexModelCatalogLoadedAt = Date.now();
         return codexModelCatalog;
       })
@@ -5343,18 +5347,57 @@
     return ["minimal", "low", "medium", "high", "xhigh"].map((reasoningEffort) => ({ reasoningEffort, description: `${reasoningEffort} effort` }));
   }
 
+  function codexConfiguredModelDescriptor(modelName) {
+    if (!Array.isArray(codexModelCatalog.model_descriptors)) return null;
+    return codexModelCatalog.model_descriptors.find((descriptor) => descriptor && descriptor.model === modelName) || null;
+  }
+
+  function applyCodexConfiguredModelDescriptor(target, modelName) {
+    const descriptor = codexConfiguredModelDescriptor(modelName);
+    if (!descriptor || !target || typeof target !== "object") return false;
+    const displayName = String(descriptor.display_name || descriptor.displayName || "").trim();
+    const contextWindow = Number(descriptor.context_window || descriptor.contextWindow || 0);
+    let changed = false;
+    if (displayName) {
+      for (const key of ["name", "displayName", "display_name"]) {
+        if (target[key] !== displayName) {
+          target[key] = displayName;
+          changed = true;
+        }
+      }
+    }
+    if (Number.isFinite(contextWindow) && contextWindow > 0) {
+      for (const key of ["contextWindow", "context_window", "maxContextWindow", "max_context_window"]) {
+        if (target[key] !== contextWindow) {
+          target[key] = contextWindow;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
   function claudeCodexProModelDescriptor(modelName) {
+    const descriptor = codexConfiguredModelDescriptor(modelName) || {};
+    const displayName = String(descriptor.display_name || descriptor.displayName || modelName).trim() || modelName;
+    const contextWindow = Number(descriptor.context_window || descriptor.contextWindow || 0);
     return {
       model: modelName,
       id: modelName,
       slug: modelName,
-      name: modelName,
-      displayName: modelName,
+      name: displayName,
+      displayName,
       description: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "Custom model",
       hidden: false,
       isDefault: (codexModelCatalog.default_model || codexModelCatalog.model) === modelName,
       defaultReasoningEffort: "medium",
       supportedReasoningEfforts: modelReasoningEfforts(),
+      ...(Number.isFinite(contextWindow) && contextWindow > 0 ? {
+        contextWindow,
+        context_window: contextWindow,
+        maxContextWindow: contextWindow,
+        max_context_window: contextWindow,
+      } : {}),
     };
   }
 
@@ -5389,9 +5432,12 @@
     let changed = false;
     const existing = new Map(models.map((item) => [item.model, item]));
     models.forEach((item) => {
-      if (customModels.includes(item.model) && item.hidden !== false) {
-        item.hidden = false;
-        changed = true;
+      if (customModels.includes(item.model)) {
+        if (item.hidden !== false) {
+          item.hidden = false;
+          changed = true;
+        }
+        if (applyCodexConfiguredModelDescriptor(item, item.model)) changed = true;
       }
     });
     customModels.forEach((modelName) => {

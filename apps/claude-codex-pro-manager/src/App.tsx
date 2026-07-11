@@ -100,7 +100,6 @@ import {
   supplierIdFromName,
   supplierProfileHasApiKey,
   supplierProfileIsCcswitch,
-  supplierProfileResolvedApiKey,
   supplierProtocolLabel,
   supplierRelayModeLabel,
   tomlString,
@@ -225,6 +224,7 @@ import type {
   StatusChip,
   SupplierPreset,
   SupplierSaveResult,
+  SupplierTargetApp,
   UpdateReleasePayload,
   UpdateResult,
   UserScriptInventory,
@@ -852,9 +852,10 @@ export function App() {
     }
   };
   const configureClaudeDesktopDevMode = async () => {
-    const request = claudeDesktopProviderDraft.baseUrl.trim()
-      ? { request: claudeDesktopProviderDraft }
-      : undefined;
+    const providerRequest = claudeDesktopProviderDraft.apiKey.trim()
+      ? claudeDesktopProviderDraft
+      : null;
+    const request = providerRequest?.baseUrl.trim() ? { request: providerRequest } : undefined;
     setClaudeDevModeBusy(true);
     setNotice({ title: "Claude 一键开发模式", message: "正在写入 Claude Desktop 开发配置...", status: "running" });
     try {
@@ -1237,6 +1238,48 @@ export function App() {
     }
   };
 
+  const switchSupplierProfile = async (
+    targetApp: SupplierTargetApp,
+    profileId: string,
+    sourceSettings?: BackendSettings,
+  ): Promise<SettingsResult | null> => {
+    const current = sourceSettings ?? settings?.settings;
+    const targetLabel = targetApp === "claude-desktop" ? "Claude Desktop" : targetApp === "claude" ? "Claude" : "Codex";
+    if (!current) {
+      setNotice({ title: `${targetLabel} 供应商切换`, message: "设置尚未加载，无法切换供应商。", status: "failed" });
+      return null;
+    }
+    const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);
+    if (!targetProfile) {
+      setNotice({ title: `${targetLabel} 供应商切换`, message: "目标供应商不存在，请刷新后重试。", status: "failed" });
+      return null;
+    }
+    if (!supplierProfileHasApiKey(targetProfile)) {
+      setNotice({ title: `${targetLabel} 供应商切换`, message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
+      return null;
+    }
+    const previousActiveProfile = current.relayProfiles.find((profile) => profile.id === current.activeRelayId);
+    const previousActiveRelayId = !previousActiveProfile || !previousActiveProfile.targetApp || previousActiveProfile.targetApp === "codex"
+      ? current.activeRelayId
+      : "";
+    setNotice({ title: `${targetLabel} 供应商切换`, message: `正在切换到「${targetProfile.name || targetProfile.id}」...`, status: "running" });
+    const result = await run(
+      () => call<SettingsResult>("switch_supplier_profile", {
+        request: { settings: current, targetApp, profileId, previousActiveRelayId },
+      }),
+      `切换 ${targetLabel} 供应商`,
+    );
+    if (!result) return null;
+    setSettings(result);
+    setSettingsDraft(result.settings);
+    notifyResult({ title: `${targetLabel} 供应商切换`, message: result.message, status: result.status });
+    await refreshSettings(true);
+    if (targetApp === "claude-desktop" && !statusFailed(result.status)) {
+      await refreshClaudeDesktopDevMode(true);
+    }
+    return result;
+  };
+
   const fetchRelayProfileModels = async (profile: RelayProfile) => {
     const result = await run(() => call<RelayProfileModelsResult>("fetch_relay_profile_models", { profile }), "获取供应商模型");
     if (result) {
@@ -1555,6 +1598,7 @@ export function App() {
       applyPureApiMode,
       clearRelayMode,
       switchCodexRelayProfile,
+      switchSupplierProfile,
       fetchRelayProfileModels,
       importCcswitchCodexProviders,
       previewClaudeDesktopProvider,
@@ -1643,6 +1687,7 @@ export function App() {
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
       switchCodexRelayProfile: (...args) => actionsRef.current!.switchCodexRelayProfile(...args),
+      switchSupplierProfile: (...args) => actionsRef.current!.switchSupplierProfile(...args),
       fetchRelayProfileModels: (...args) => actionsRef.current!.fetchRelayProfileModels(...args),
       importCcswitchCodexProviders: (...args) => actionsRef.current!.importCcswitchCodexProviders(...args),
       previewClaudeDesktopProvider: (...args) => actionsRef.current!.previewClaudeDesktopProvider(...args),

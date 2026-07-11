@@ -1,4 +1,5 @@
 import { type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, memo, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity,
   ArrowLeft,
@@ -75,6 +76,7 @@ import {
   createSupplierProfile,
   normalizeSupplierProfile,
   redactSupplierAuth,
+  redactSupplierConfig,
   supplierIdFromName,
   supplierProfileHasApiKey,
   supplierProfileIsCcswitch,
@@ -84,8 +86,15 @@ import {
   supplierApiFormatLabel,
   supplierApiFormatOption,
   supplierApiFormatRequiresRoute,
-  supplierRouteEnabled,
   SUPPLIER_API_FORMAT_OPTIONS,
+  supplierCodexCatalogJson,
+  supplierCodexCatalogModelList,
+  supplierCodexCatalogRows,
+  type SupplierCodexCatalogRow,
+  supplierDirectModelIsClaudeDesktopSafe,
+  supplierDirectModelList,
+  supplierDirectModelRows,
+  type SupplierDirectModelRow,
   supplierModelMappingJson,
   supplierModelMappingRows,
   supplierModelMappingText,
@@ -156,9 +165,26 @@ import type {
   Status,
   SupplierPreset,
   SupplierSaveResult,
+  SupplierTargetApp,
   UpdateResult,
   WatcherResult,
 } from "@/types";
+
+type SupplierDirectModelDraftRow = SupplierDirectModelRow & {
+  rowId: string;
+};
+
+type SupplierCodexCatalogDraftRow = SupplierCodexCatalogRow & {
+  rowId: string;
+};
+
+const SUPPLIER_USER_AGENT_PRESETS = [
+  "claude-cli/2.1.161 (external, cli)",
+  "claude-cli/2.1.161",
+  "claude-code/1.0.0",
+  "claude-code/0.1.0",
+  "Kilo-Code/1.0",
+] as const;
 
 export function OverviewScreen({
   actions,
@@ -462,6 +488,118 @@ export function OverviewMemoryDetails({
   );
 }
 
+function SupplierModelDropdown({
+  options,
+  value,
+  placeholder,
+  onChange,
+  compact = false,
+  iconOnly = false,
+  showAvailabilityWarning = true,
+  triggerLabel,
+}: {
+  options: string[];
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  compact?: boolean;
+  iconOnly?: boolean;
+  showAvailabilityWarning?: boolean;
+  triggerLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<CSSProperties>({});
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const valueAvailable = !showAvailabilityWarning || !value || options.includes(value);
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const gap = 8;
+      const spaceBelow = Math.max(0, viewportHeight - rect.bottom - gap);
+      const spaceAbove = Math.max(0, rect.top - gap);
+      const opensUp = spaceBelow < 180 && spaceAbove > spaceBelow;
+      const availableSpace = opensUp ? spaceAbove : spaceBelow;
+      const width = Math.min(Math.max(rect.width, 220), Math.max(120, viewportWidth - 16));
+      const left = Math.min(Math.max(8, rect.left), Math.max(8, viewportWidth - width - 8));
+      setPosition({
+        left,
+        width,
+        maxHeight: Math.max(24, Math.min(320, availableSpace)),
+        ...(opensUp
+          ? { bottom: Math.max(8, viewportHeight - rect.top + gap) }
+          : { top: Math.min(viewportHeight - 8, rect.bottom + gap) }),
+      });
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    updatePosition();
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    document.addEventListener("keydown", closeOnEscape, true);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      document.removeEventListener("keydown", closeOnEscape, true);
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
+
+  const menu = open ? createPortal(
+    <div className="supplier-model-dropdown-menu" ref={menuRef} style={{ ...position, position: "fixed" }} role="listbox">
+      {!valueAvailable && value ? <div className="supplier-model-dropdown-warning">当前配置不可用：{value}</div> : null}
+      {options.length ? options.map((option) => (
+        <button
+          aria-selected={option === value}
+          className={option === value ? "selected" : ""}
+          key={option}
+          onClick={() => {
+            onChange(option);
+            setOpen(false);
+          }}
+          role="option"
+          type="button"
+        >{option}</button>
+      )) : <div className="supplier-model-dropdown-empty">暂无可用模型</div>}
+    </div>,
+    document.body,
+  ) : null;
+
+  return (
+    <div className={`supplier-model-dropdown ${compact ? "compact" : ""} ${iconOnly ? "icon-only" : ""}`}>
+      <button
+        aria-label={triggerLabel || placeholder}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={`supplier-model-dropdown-trigger ${!valueAvailable ? "unavailable" : ""}`}
+        onClick={() => setOpen((current) => !current)}
+        ref={triggerRef}
+        type="button"
+      >
+        {iconOnly ? <span aria-hidden="true">▾</span> : <><span>{triggerLabel || value || placeholder}</span><span aria-hidden="true">▾</span></>}
+      </button>
+      {!valueAvailable && value ? <small className="supplier-model-dropdown-warning-inline">当前配置不可用</small> : null}
+      {menu}
+    </div>
+  );
+}
+
 export function SupplierScreen({
   // 供应商主列表 / 编辑 / 聚合配置
   actions,
@@ -499,7 +637,10 @@ export function SupplierScreen({
   const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
   const [supplierTestConfigOpen, setSupplierTestConfigOpen] = useState(false);
   const [supplierPricingConfigOpen, setSupplierPricingConfigOpen] = useState(false);
-  const [supplierTargetFilter, setSupplierTargetFilter] = useState<"codex" | "claude" | "claude-desktop">("codex");
+  const [supplierDirectModelsOpen, setSupplierDirectModelsOpen] = useState(true);
+  const [supplierDirectModels, setSupplierDirectModels] = useState<SupplierDirectModelDraftRow[]>([]);
+  const [supplierCodexCatalogModels, setSupplierCodexCatalogModels] = useState<SupplierCodexCatalogDraftRow[]>([]);
+  const [supplierTargetFilter, setSupplierTargetFilter] = useState<SupplierTargetApp>("codex");
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [supplierOrderIds, setSupplierOrderIds] = useState<string[]>([]);
@@ -512,6 +653,9 @@ export function SupplierScreen({
     offsetY: number;
   } | null>(null);
   const supplierCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const supplierModelFetchRequestRef = useRef(0);
+  const supplierDirectModelRowIdRef = useRef(0);
+  const supplierCodexCatalogRowIdRef = useRef(0);
   const supplierPointerDragRef = useRef<{
     sourceId: string;
     latestIds: string[];
@@ -520,15 +664,50 @@ export function SupplierScreen({
   const appSettings = settings?.settings ?? null;
   const profiles = useMemo(() => appSettings?.relayProfiles ?? [], [appSettings]);
   const profileIdsKey = profiles.map((profile) => profile.id).join("\u001f");
-  const active = profiles.find((profile) => profile.id === appSettings?.activeRelayId) ?? profiles[0];
   const editingExisting = draft && editingId ? profiles.find((profile) => profile.id === editingId) : null;
   const isNewDraft = !!draft && !editingExisting;
   const aggregateProfiles = useMemo(() => profiles.filter((profile) => profile.aggregateEnabled), [profiles]);
   const apiProfiles = useMemo(() => profiles.filter((profile) => !profile.aggregateEnabled && profile.relayMode !== "official"), [profiles]);
-  const supplierTargetForProfile = (profile: RelayProfile) => profile.targetApp || "codex";
+  const supplierTargetForProfile = (profile: RelayProfile): SupplierTargetApp => profile.targetApp || "codex";
+  const activeSupplierIdForTarget = (targetApp: SupplierTargetApp) => {
+    if (!appSettings) return "";
+    return targetApp === "claude"
+      ? appSettings.activeClaudeRelayId
+      : targetApp === "claude-desktop"
+        ? appSettings.activeClaudeDesktopRelayId
+        : appSettings.activeRelayId;
+  };
+  const supplierRoutingEnabledForTarget = (targetApp: SupplierTargetApp, sourceProfiles = profiles) => {
+    return sourceProfiles.some((profile) => {
+      const target = supplierTargetForProfile(profile);
+      return (targetApp === "codex" ? target === "codex" : target === "claude" || target === "claude-desktop") && !!profile.routeEnabled;
+    });
+  };
+  const withSupplierRoutingState = (profile: RelayProfile, targetApp: SupplierTargetApp, enabled: boolean) => normalizeSupplierProfile({
+    ...profile,
+    targetApp,
+    routeEnabled: enabled,
+    claudeDesktopMode: targetApp === "codex" ? "" : enabled ? "proxy" : "direct",
+    routeMode: targetApp === "codex"
+      ? (enabled ? "Codex Proxy" : "Codex Direct")
+      : (enabled ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
+  });
+  const withActiveSupplierId = (current: BackendSettings, targetApp: SupplierTargetApp, profileId: string): BackendSettings => {
+    if (targetApp === "claude") return { ...current, activeClaudeRelayId: profileId };
+    if (targetApp === "claude-desktop") return { ...current, activeClaudeDesktopRelayId: profileId };
+    return { ...current, activeRelayId: profileId };
+  };
   const updateClaudeDraft = (field: keyof typeof claudeDesktopProviderDraft, value: string) => {
     onClaudeDesktopProviderDraftChange((current) => ({ ...current, [field]: value }));
   };
+  const createSupplierDirectModelRows = (rows: SupplierDirectModelRow[]): SupplierDirectModelDraftRow[] => rows.map((row) => ({
+    ...row,
+    rowId: `direct-model-${supplierDirectModelRowIdRef.current += 1}`,
+  }));
+  const createSupplierCodexCatalogModelRows = (rows: SupplierCodexCatalogRow[]): SupplierCodexCatalogDraftRow[] => rows.map((row) => ({
+    ...row,
+    rowId: `codex-catalog-${supplierCodexCatalogRowIdRef.current += 1}`,
+  }));
   useEffect(() => {
     setSupplierOrderIds(profiles.map((profile) => profile.id));
   }, [profileIdsKey]);
@@ -542,20 +721,35 @@ export function SupplierScreen({
     return result.settings;
   };
   const openProfileEditor = (profile: RelayProfile) => {
+    supplierModelFetchRequestRef.current += 1;
     setModelFetch(null);
+    setShowSupplierApiKey(false);
+    setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(profile.modelList)));
+    setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(profile)));
+    setSupplierDirectModelsOpen(true);
     setEditingId(profile.id);
-    setDraft(normalizeSupplierProfile(profile));
+    const targetApp = supplierTargetForProfile(profile);
+    setDraft(withSupplierRoutingState(profile, targetApp, supplierRoutingEnabledForTarget(targetApp)));
   };
   const createProfile = () => {
     if (!appSettings) return;
+    supplierModelFetchRequestRef.current += 1;
     setModelFetch(null);
+    setShowSupplierApiKey(false);
     setEditingId(null);
-    setDraft(createSupplierProfile(appSettings));
+    const targetApp = supplierTargetFilter;
+    const profile = withSupplierRoutingState({ ...createSupplierProfile(appSettings), targetApp }, targetApp, supplierRoutingEnabledForTarget(targetApp));
+    setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(profile.modelList)));
+    setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(profile)));
+    setSupplierDirectModelsOpen(true);
+    setDraft(profile);
   };
   const createAggregateProfile = () => {
     if (!appSettings) return;
+    supplierModelFetchRequestRef.current += 1;
     const profile = createAggregateSupplierProfile(appSettings);
     setModelFetch(null);
+    setShowSupplierApiKey(false);
     setEditingId(null);
     setDraft(profile);
     if (!apiProfiles.length) {
@@ -564,12 +758,18 @@ export function SupplierScreen({
   };
   const duplicateProfile = (profile: RelayProfile) => {
     if (!appSettings) return;
+    supplierModelFetchRequestRef.current += 1;
+    setShowSupplierApiKey(false);
+    const targetApp = supplierTargetForProfile(profile);
     const copy = {
-      ...normalizeSupplierProfile(profile),
+      ...withSupplierRoutingState(profile, targetApp, supplierRoutingEnabledForTarget(targetApp)),
       id: uniqueSupplierProfileId(appSettings.relayProfiles, `${profile.id || "provider"}-copy`),
       name: `${profile.name || profile.id || "供应商"} 副本`,
     };
     setModelFetch(null);
+    setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(copy.modelList)));
+    setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(copy)));
+    setSupplierDirectModelsOpen(true);
     setEditingId(null);
     setDraft(copy);
   };
@@ -577,14 +777,25 @@ export function SupplierScreen({
     ? normalizeSupplierProfile(profile)
     : normalizeSupplierProfile(withSupplierGeneratedFiles(profile));
   const updateDraft = (patch: Partial<RelayProfile>) => {
+    supplierModelFetchRequestRef.current += 1;
     setDraft((current) => current ? normalizeDraftProfile({ ...current, ...patch }) : current);
   };
-  const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {
+  const closeSupplierEditor = () => {
+    supplierModelFetchRequestRef.current += 1;
+    setModelFetch(null);
+    setDraft(null);
+    setEditingId(null);
+    setShowSupplierApiKey(false);
+    setSupplierCodexCatalogModels([]);
+  };
+  const updateNewDraftIdFromName = (value: string) => {
+    if (!isNewDraft) return;
+    supplierModelFetchRequestRef.current += 1;
     setDraft((current) => {
       if (!current) return current;
-      const nextId = options.normalize ? supplierIdFromName(value || current.name) : value;
+      const nextId = uniqueSupplierProfileId(profiles, value || current.name);
       const next = normalizeDraftProfile({ ...current, id: nextId });
-      return options.normalize ? normalizeSupplierProfile(next) : { ...next, id: nextId };
+      return normalizeSupplierProfile(next);
     });
   };
   const updateSupplierModelMapping = (role: string, field: "routeId" | "displayName" | "requestModel" | "supports1m", value: string | boolean) => {
@@ -596,16 +807,73 @@ export function SupplierScreen({
       modelMapping: supplierModelMappingText(rows),
     });
   };
+  const writeSupplierDirectModels = (rows: SupplierDirectModelDraftRow[]) => {
+    setSupplierDirectModels(rows);
+    const modelList = supplierDirectModelList(rows);
+    const firstModel = rows.find((row) => row.model.trim())?.model.trim() || "";
+    updateDraft({
+      modelList,
+      ...(firstModel && (!draft?.model.trim() || !rows.some((row) => row.model.trim() === draft.model.trim()))
+        ? { model: firstModel, testModel: firstModel }
+        : {}),
+    });
+  };
+  const addSupplierDirectModel = () => {
+    writeSupplierDirectModels([...supplierDirectModels, {
+      model: "",
+      rowId: `direct-model-${supplierDirectModelRowIdRef.current += 1}`,
+      supports1m: false,
+    }]);
+  };
+  const updateSupplierDirectModel = (rowId: string, patch: Partial<SupplierDirectModelRow>) => {
+    const nextRows = supplierDirectModels.map((row) => row.rowId === rowId ? { ...row, ...patch } : row);
+    writeSupplierDirectModels(nextRows);
+  };
+  const removeSupplierDirectModel = (rowId: string) => {
+    writeSupplierDirectModels(supplierDirectModels.filter((row) => row.rowId !== rowId));
+  };
+  const writeSupplierCodexCatalogModels = (rows: SupplierCodexCatalogDraftRow[]) => {
+    setSupplierCodexCatalogModels(rows);
+    const codexCatalogJson = supplierCodexCatalogJson(rows);
+    const modelList = supplierCodexCatalogModelList(rows);
+    const firstRow = rows.find((row) => row.model.trim());
+    updateDraft({
+      codexCatalogJson,
+      modelList,
+      ...(firstRow ? {
+        model: firstRow.model.trim(),
+        testModel: firstRow.model.trim(),
+        contextWindow: firstRow.contextWindow,
+      } : {}),
+    });
+  };
+  const addSupplierCodexCatalogModel = () => {
+    writeSupplierCodexCatalogModels([...supplierCodexCatalogModels, {
+      displayName: "",
+      model: "",
+      contextWindow: "",
+      rowId: `codex-catalog-${supplierCodexCatalogRowIdRef.current += 1}`,
+    }]);
+  };
+  const updateSupplierCodexCatalogModel = (rowId: string, patch: Partial<SupplierCodexCatalogRow>) => {
+    writeSupplierCodexCatalogModels(supplierCodexCatalogModels.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
+  };
+  const removeSupplierCodexCatalogModel = (rowId: string) => {
+    writeSupplierCodexCatalogModels(supplierCodexCatalogModels.filter((row) => row.rowId !== rowId));
+  };
 
-  const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {
+  const saveDraft = async (options: { stayInEditor?: boolean; applySupplier?: boolean } = {}): Promise<SupplierSaveResult | null> => {
     if (!appSettings || !draft || supplierSaveBusy) return null;
     const aggregateDraft = !!draft.aggregateEnabled;
     const requestedId = draft.id.trim();
     const normalizedId = supplierIdFromName(requestedId || draft.name);
     const idWasNormalized = requestedId !== normalizedId;
-    const normalized = supplierProfileIsCcswitch(draft)
-      ? withSupplierPreservedImportedFiles({ ...draft, id: normalizedId })
-      : normalizeSupplierProfile(withSupplierGeneratedFiles({ ...draft, id: normalizedId }));
+    const targetApp = supplierTargetForProfile(draft);
+    const inheritedRouting = supplierRoutingEnabledForTarget(targetApp);
+    const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId }, targetApp, inheritedRouting);
+    const normalized = supplierProfileIsCcswitch(routedDraft)
+      ? withSupplierPreservedImportedFiles(routedDraft)
+      : normalizeSupplierProfile(withSupplierGeneratedFiles(routedDraft));
     if (!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())) {
       window.alert(aggregateDraft ? "请填写聚合供应商名称后再保存。" : "请填写供应商名称和 Base URL 后再保存。API Key 可以后续补入。");
       return null;
@@ -613,6 +881,18 @@ export function SupplierScreen({
     if (aggregateDraft && !(normalized.aggregateMembers ?? []).length) {
       actions.showNotice({ title: "添加聚合供应商", message: "请先添加或选择至少 1 个普通 API 供应商的 Base URL / Key，再勾选为成员。", status: "failed" });
       return null;
+    }
+    if (targetApp === "claude-desktop" && !normalized.modelMappingEnabled) {
+      const invalidModel = supplierDirectModelRows(normalized.modelList)
+        .find((row) => !supplierDirectModelIsClaudeDesktopSafe(row.model));
+      if (invalidModel) {
+        actions.showNotice({
+          title: "供应商保存",
+          message: `Claude Desktop 直连模型 ID 无效：${invalidModel.model}。请使用 claude-/anthropic/claude- 的 Sonnet、Opus、Haiku 或 Fable 模型，或开启模型映射。`,
+          status: "failed",
+        });
+        return null;
+      }
     }
     const originalId = editingId;
     const conflicts = profiles.some((profile) => profile.id === normalized.id && profile.id !== originalId);
@@ -625,28 +905,58 @@ export function SupplierScreen({
       : profiles.some((profile) => profile.id === normalized.id)
         ? profiles.map((profile) => (profile.id === normalized.id ? normalized : profile))
         : [...profiles, normalized];
-    const nextActiveRelayId = !aggregateDraft && (appSettings.activeRelayId === originalId || !appSettings.activeRelayId)
+    const currentActiveId = activeSupplierIdForTarget(targetApp);
+    const nextActiveRelayId = !aggregateDraft && originalId && currentActiveId === originalId
       ? normalized.id
-      : appSettings.activeRelayId;
+      : currentActiveId;
+    const nextSettings = withActiveSupplierId({
+      ...appSettings,
+      relayProfilesEnabled: true,
+      relayProfiles: nextProfiles,
+    }, targetApp, nextActiveRelayId);
+    const shouldApplySupplier = !aggregateDraft && (
+      options.applySupplier === true
+      || (targetApp === "claude-desktop" && !!originalId && currentActiveId === originalId)
+    );
+    if (shouldApplySupplier && !supplierProfileHasApiKey(normalized)) {
+      actions.showNotice({
+        title: "供应商应用",
+        message: "该供应商缺少 API Key，未修改当前生效配置。可取消“保存并使用”，先作为非活动配置保存。",
+        status: "failed",
+      });
+      return null;
+    }
     setSupplierSaveBusy(true);
     try {
-      actions.showNotice({ title: "供应商保存", message: `正在保存供应商「${normalized.name || normalized.id}」...`, status: "running" });
-      const saved = await saveSupplierSettings({
-        ...appSettings,
-        relayProfilesEnabled: true,
-        relayProfiles: nextProfiles,
-        activeRelayId: nextActiveRelayId,
+      actions.showNotice({
+        title: shouldApplySupplier ? "供应商保存并应用" : "供应商保存",
+        message: shouldApplySupplier
+          ? `正在保存并应用供应商「${normalized.name || normalized.id}」...`
+          : `正在保存供应商「${normalized.name || normalized.id}」...`,
+        status: "running",
       });
+      const applied = shouldApplySupplier
+        ? await actions.switchSupplierProfile(targetApp, normalized.id, nextSettings)
+        : null;
+      const saved = shouldApplySupplier
+        ? applied && !statusFailed(applied.status) ? applied.settings : null
+        : await saveSupplierSettings(nextSettings);
       if (saved) {
         const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;
         if (options.stayInEditor) {
           setEditingId(savedProfile.id);
           setDraft(normalizeDraftProfile(savedProfile));
+          setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(savedProfile)));
         } else {
-          setEditingId(null);
-          setDraft(null);
+          closeSupplierEditor();
         }
-        actions.showNotice({ title: "供应商保存", message: `已保存供应商「${savedProfile.name || savedProfile.id}」。`, status: "ok" });
+        actions.showNotice({
+          title: shouldApplySupplier ? "供应商保存并应用" : "供应商保存",
+          message: shouldApplySupplier
+            ? `已保存并应用供应商「${savedProfile.name || savedProfile.id}」。`
+            : `已保存供应商「${savedProfile.name || savedProfile.id}」。`,
+          status: "ok",
+        });
         if (idWasNormalized) {
           actions.showNotice({ title: "供应商保存", message: `供应商 ID 已自动整理为「${savedProfile.id}」。`, status: "ok" });
         }
@@ -663,15 +973,7 @@ export function SupplierScreen({
       actions.showNotice({ title: "供应商切换", message: "聚合供应商已经保存为真实配置记录；当前版本还没有聚合轮转代理，不能直接写入 Codex。", status: "failed" });
       return;
     }
-    const saved = await saveDraft({ stayInEditor: true });
-    if (saved) {
-      const savedProfile = normalizeSupplierProfile(saved.profile);
-      if (!supplierProfileHasApiKey(savedProfile)) {
-        actions.showNotice({ title: "供应商切换", message: "供应商已保存。请先补入 API Key，再写入为当前供应商。", status: "failed" });
-        return;
-      }
-      await actions.switchCodexRelayProfile(savedProfile.id, saved.settings);
-    }
+    await saveDraft({ stayInEditor: true, applySupplier: true });
   };
   const removeProfile = async (profile: RelayProfile) => {
     if (!appSettings || profiles.length <= 1) {
@@ -682,8 +984,14 @@ export function SupplierScreen({
     const nextProfiles = profiles
       .filter((item) => item.id !== profile.id)
       .map((item) => item.aggregateEnabled ? { ...item, aggregateMembers: (item.aggregateMembers ?? []).filter((id) => id !== profile.id) } : item);
-    const nextActive = appSettings.activeRelayId === profile.id ? nextProfiles.find((item) => !item.aggregateEnabled)?.id ?? nextProfiles[0]?.id ?? "" : appSettings.activeRelayId;
-    const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles, activeRelayId: nextActive });
+    const nextForTarget = (_targetApp: SupplierTargetApp, currentId: string) => currentId === profile.id ? "" : currentId;
+    const saved = await saveSupplierSettings({
+      ...appSettings,
+      relayProfiles: nextProfiles,
+      activeRelayId: nextForTarget("codex", appSettings.activeRelayId),
+      activeClaudeRelayId: nextForTarget("claude", appSettings.activeClaudeRelayId || ""),
+      activeClaudeDesktopRelayId: nextForTarget("claude-desktop", appSettings.activeClaudeDesktopRelayId || ""),
+    });
     if (saved && editingId === profile.id) {
       setEditingId(null);
       setDraft(null);
@@ -691,17 +999,34 @@ export function SupplierScreen({
   };
   const applyPreset = (preset: SupplierPreset) => {
     if (!draft) return;
+    setModelFetch(null);
+    const targetApp = preset.targetApp ?? "codex";
+    const modelList = preset.modelList?.join("\n") ?? preset.model;
+    const codexCatalogJson = targetApp === "codex" ? "" : draft.codexCatalogJson ?? "";
+    setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(modelList)));
+    setSupplierCodexCatalogModels(targetApp === "codex"
+      ? createSupplierCodexCatalogModelRows(supplierCodexCatalogRows({
+        ...draft,
+        targetApp,
+        model: preset.model,
+        testModel: preset.model,
+        modelList,
+        codexCatalogJson,
+      }))
+      : []);
     updateDraft({
       id: isNewDraft ? uniqueSupplierProfileId(profiles, preset.id) : draft.id,
       name: preset.name,
       baseUrl: preset.baseUrl,
       upstreamBaseUrl: preset.baseUrl,
       protocol: preset.protocol,
-      targetApp: preset.targetApp ?? "codex",
+      targetApp,
       apiFormat: preset.apiFormat ?? "",
-      claudeDesktopMode: preset.claudeDesktopMode ?? "",
-      routeEnabled: preset.routeEnabled ?? supplierApiFormatRequiresRoute(preset.apiFormat),
-      routeMode: preset.routeMode ?? "",
+      routeEnabled: supplierRoutingEnabledForTarget(targetApp),
+      claudeDesktopMode: targetApp === "codex" ? "" : supplierRoutingEnabledForTarget(targetApp) ? "proxy" : "direct",
+      routeMode: targetApp === "codex"
+        ? (supplierRoutingEnabledForTarget(targetApp) ? "Codex Proxy" : "Codex Direct")
+        : (supplierRoutingEnabledForTarget(targetApp) ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
       modelMappingEnabled: preset.modelMappingEnabled ?? false,
       modelMappingJson: preset.modelMappingJson ?? "",
       modelMapping: preset.modelMappingJson ? supplierModelMappingText(supplierModelMappingRows({ ...draft, modelMappingJson: preset.modelMappingJson })) : "",
@@ -711,18 +1036,40 @@ export function SupplierScreen({
       aggregateStrategy: "",
       model: preset.model,
       testModel: preset.model,
-      modelList: preset.modelList?.join("\n") ?? preset.model,
+      modelList,
+      codexCatalogJson,
     });
   };
   const fetchModels = async () => {
     if (!draft) return;
+    const requestId = ++supplierModelFetchRequestRef.current;
     const normalized = normalizeSupplierProfile(withSupplierGeneratedFiles(draft));
     const result = await actions.fetchRelayProfileModels(normalized);
+    if (requestId !== supplierModelFetchRequestRef.current) return;
     if (result) {
       setModelFetch(result);
       if (result.models.length) {
+        if (draft.targetApp === "codex") return;
+        const isClaudeTarget = draft.targetApp === "claude" || draft.targetApp === "claude-desktop";
+        if (isClaudeTarget && draft.modelMappingEnabled) return;
+        const existingRows = supplierDirectModels.length
+          ? supplierDirectModels
+          : createSupplierDirectModelRows(supplierDirectModelRows(draft.modelList));
+        const existingModels = new Set(existingRows.map((row) => row.model.trim().toLowerCase()).filter(Boolean));
+        const mergedRows = [
+          ...existingRows,
+          ...result.models
+            .map((model) => model.trim())
+            .filter((model) => model && !existingModels.has(model.toLowerCase()))
+            .map((model) => ({
+              model,
+              rowId: `direct-model-${supplierDirectModelRowIdRef.current += 1}`,
+              supports1m: false,
+            })),
+        ];
+        setSupplierDirectModels(mergedRows);
         updateDraft({
-          modelList: result.models.join("\n"),
+          modelList: supplierDirectModelList(mergedRows),
           model: normalized.model || result.models[0],
           testModel: normalized.testModel || result.models[0],
         });
@@ -739,19 +1086,9 @@ export function SupplierScreen({
     const nextProfiles = appSettings.relayProfiles.map((profile) => {
       if (!visibleIds.has(profile.id)) return profile;
       if (supplierRouteGroup === "codex") {
-        return normalizeSupplierProfile({
-          ...profile,
-          routeEnabled: enabled,
-          routeMode: enabled ? (profile.routeMode || "Codex Proxy") : "Codex Direct",
-        });
+        return withSupplierRoutingState(profile, "codex", enabled);
       }
-      return normalizeSupplierProfile({
-        ...profile,
-        routeEnabled: enabled,
-        claudeDesktopMode: enabled ? "proxy" : "direct",
-        routeMode: enabled ? (profile.routeMode || "Claude Desktop Proxy") : "Claude Desktop Direct",
-        modelMappingEnabled: enabled ? true : profile.modelMappingEnabled,
-      });
+      return withSupplierRoutingState(profile, supplierTargetForProfile(profile), enabled);
     });
     actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
     const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
@@ -964,7 +1301,8 @@ export function SupplierScreen({
   };
 
   const renderSupplierCard = (profile: RelayProfile, options: { overlay?: boolean; style?: CSSProperties } = {}) => {
-    const selected = profile.id === appSettings?.activeRelayId;
+    const targetApp = supplierTargetForProfile(profile);
+    const selected = profile.id === activeSupplierIdForTarget(targetApp);
     const aggregate = !!profile.aggregateEnabled;
     const imported = supplierProfileIsCcswitch(profile);
     const appLabel = imported ? supplierTargetAppLabel(profile.targetApp) : supplierRelayModeLabel(profile.relayMode);
@@ -995,7 +1333,7 @@ export function SupplierScreen({
           <button className="supplier-url-link" disabled type="button">{displayUrl}</button>
         </div>
         <div className="supplier-card-actions">
-          <button className={`supplier-card-action-button supplier-card-use-button ${selected ? "current" : ""}`} disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false || options.overlay} onClick={() => void actions.switchCodexRelayProfile(profile.id)} type="button">
+          <button className={`supplier-card-action-button supplier-card-use-button ${selected ? "current" : ""}`} disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false || options.overlay} onClick={() => void actions.switchSupplierProfile(targetApp, profile.id)} type="button">
             <Play className="h-4 w-4" />
             {selected ? "\u4f7f\u7528\u4e2d" : "\u4f7f\u7528"}
           </button>
@@ -1018,7 +1356,7 @@ export function SupplierScreen({
       <div className="supplier-workbench">
         <Panel title={generated.name || "聚合供应商1"} detail="聚合供应商会保存策略和成员关系；当前版本不直接写入 Codex，后续聚合代理会读取这些字段。">
           <div className="supplier-editor-toolbar sticky">
-            <Button onClick={() => { setDraft(null); setEditingId(null); }} variant="outline">返回列表</Button>
+            <Button onClick={closeSupplierEditor} variant="outline">返回列表</Button>
             <Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button">
               <Save className="h-4 w-4" />
               {supplierSaveBusy ? "保存中" : "保存"}
@@ -1056,22 +1394,46 @@ export function SupplierScreen({
   if (draft) {
     const generated = normalizeDraftProfile(draft);
     const canSwitch = !!editingExisting && appSettings?.relayProfilesEnabled !== false;
-    const apiFormatOption = supplierApiFormatOption(generated.apiFormat || "Anthropic Messages");
-    const routeRequired = supplierApiFormatRequiresRoute(generated.apiFormat);
-    const routeEnabled = supplierRouteEnabled(generated);
     const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
     const isCodexSupplier = generated.targetApp === "codex" || !generated.targetApp;
+    const apiFormatOption = supplierApiFormatOption(generated.apiFormat || "Anthropic Messages");
+    const selectedApiFormat = isCodexSupplier
+      ? (generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses")
+      : generated.apiFormat;
+    const routeRequired = isCodexSupplier
+      ? selectedApiFormat === "openai_chat"
+      : supplierApiFormatRequiresRoute(selectedApiFormat);
+    const routeEnabled = !!generated.routeEnabled;
     const authField = generated.authField || "ANTHROPIC_AUTH_TOKEN";
     const defaultModel = generated.model || generated.testModel || (isCodexSupplier ? "gpt-5.1" : "claude-sonnet");
     const modelRowsForDraft = supplierModelMappingRows(generated);
-    const supplierModelOptions = Array.from(new Set([
-      ...(modelFetch?.models ?? []),
-      ...String(generated.modelList || "").split(/\r?\n/),
-      generated.model,
-      generated.testModel,
-      defaultModel,
-      ...modelRowsForDraft.flatMap((row) => [row.requestModel, row.displayName]),
-    ].map((model) => String(model || "").trim()).filter(Boolean)));
+    const supplierModelOptions = Array.from(new Set((modelFetch !== null
+      ? modelFetch.models
+      : isCodexSupplier
+        ? supplierCodexCatalogModels.map((row) => row.model)
+        : supplierDirectModelRows(generated.modelList).map((row) => row.model))
+      .map((model) => String(model || "").trim())
+      .filter(Boolean)));
+    const routePrompt = routeRequired && !routeEnabled
+      ? `当前 API 格式需要路由。请返回供应商列表开启${isCodexSupplier ? " Codex" : " Claude / Claude Desktop"} 路由。`
+      : "";
+    const applyOneClickModelMapping = () => {
+      if (!supplierModelOptions.length) {
+        actions.showNotice({ title: "一键设置失败", message: "请先获取模型，或在保存的模型列表中配置可用模型。", status: "failed" });
+        return;
+      }
+      const lowerOptions = supplierModelOptions.map((option) => ({ option, lower: option.toLowerCase() }));
+      const rows = modelRowsForDraft.map((row) => {
+        const current = row.requestModel.trim();
+        const selected = supplierModelOptions.includes(current)
+          ? current
+          : lowerOptions.find(({ lower }) => lower.includes(row.role))?.option
+            || (supplierModelOptions.includes(defaultModel) ? defaultModel : supplierModelOptions[0]);
+        return { ...row, displayName: row.displayName || selected, requestModel: selected };
+      });
+      updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) });
+      actions.showNotice({ title: "一键设置完成", message: `已为 ${rows.length} 个 Claude 角色设置有效的实际请求模型。`, status: "ok" });
+    };
     const cleanName = generated.name.replace(/\s*\(ccswitch\)$/i, "");
     const editorTitle = isNewDraft ? "添加供应商" : "编辑供应商";
     const editorAppLabel = supplierTargetAppLabel(generated.targetApp || "codex");
@@ -1080,24 +1442,27 @@ export function SupplierScreen({
     const baseEndpointHint = isCodexSupplier
       ? "填写兼容 OpenAI Responses 或 Chat Completions 格式的服务端点地址；Chat Completions 按 cc-switch 语义启用路由接管。"
       : "填写兼容 Claude API 的服务端点地址，不要以斜杠结尾。";
-    const routeSummary = routeEnabled
-      ? "已启用 Proxy 路由：安全路由 ID 会映射到上游真实模型。"
-      : "已启用 Direct 直连：不进行本地模型路由转换。";
     const claudeConfigJson = JSON.stringify({
       env: {
         [authField]: generated.apiKey,
         ANTHROPIC_BASE_URL: generated.baseUrl || generated.upstreamBaseUrl,
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: modelRowsForDraft.find((row) => row.role === "haiku")?.requestModel || defaultModel,
-        ANTHROPIC_DEFAULT_OPUS_MODEL: modelRowsForDraft.find((row) => row.role === "opus")?.requestModel || defaultModel,
-        ANTHROPIC_DEFAULT_FABLE_MODEL: modelRowsForDraft.find((row) => row.role === "fable")?.requestModel || defaultModel,
-        ANTHROPIC_DEFAULT_SONNET_MODEL: modelRowsForDraft.find((row) => row.role === "sonnet")?.requestModel || defaultModel,
-        CLAUDE_CODE_SUBAGENT_MODEL: modelRowsForDraft.find((row) => row.role === "subagent")?.requestModel || "",
+        ...(generated.modelMappingEnabled ? {
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: modelRowsForDraft.find((row) => row.role === "haiku")?.requestModel || defaultModel,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: modelRowsForDraft.find((row) => row.role === "opus")?.requestModel || defaultModel,
+          ANTHROPIC_DEFAULT_FABLE_MODEL: modelRowsForDraft.find((row) => row.role === "fable")?.requestModel || defaultModel,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: modelRowsForDraft.find((row) => row.role === "sonnet")?.requestModel || defaultModel,
+          CLAUDE_CODE_SUBAGENT_MODEL: modelRowsForDraft.find((row) => row.role === "subagent")?.requestModel || "",
+        } : {}),
         ANTHROPIC_MODEL: defaultModel,
       },
       ...(generated.headerOverride?.trim() || generated.bodyOverride?.trim()
         ? { localProxyOverrides: { headers: generated.headerOverride || "{}", body: generated.bodyOverride || "{}" } }
         : {}),
     }, null, 2);
+    const supplierConfigJson = generated.configContents || claudeConfigJson;
+    const visibleSupplierConfigJson = showSupplierApiKey
+      ? supplierConfigJson
+      : redactSupplierConfig(supplierConfigJson);
     const codexAuthJson = generated.authContents || JSON.stringify({ OPENAI_API_KEY: generated.apiKey }, null, 2);
     const codexConfigToml = generated.configContents || `model = "${generated.model || defaultModel}"
 model_provider = "${generated.id || "custom"}"
@@ -1119,22 +1484,161 @@ env_key = "OPENAI_API_KEY"
     );
     return (
       <div className="supplier-ccswitch-editor source-parity">
-        <div className="supplier-ccswitch-editor-head"><button className="supplier-back-button" onClick={() => { setDraft(null); setEditingId(null); }} type="button" aria-label="返回供应商列表" title="返回"><ArrowLeft className="h-5 w-5" /></button><strong>{editorTitle}</strong></div>
+        <div className="supplier-ccswitch-editor-head"><button className="supplier-back-button" onClick={closeSupplierEditor} type="button" aria-label="返回供应商列表" title="返回"><ArrowLeft className="h-5 w-5" /></button><strong>{editorTitle}</strong></div>
         <div className="supplier-ccswitch-editor-body"><section className="supplier-ccswitch-form-card">
           <div className="supplier-form-avatar-shell"><div className="supplier-form-avatar">{formAvatar}</div></div>
-          <div className="supplier-preset-strip">{SUPPLIER_PRESETS.map((preset) => <button className={preset.id === generated.id ? "active" : ""} key={preset.id} onClick={() => applyPreset(preset)} type="button"><strong>{preset.name}</strong><span>{preset.targetApp === "claude-desktop" ? "Claude Desktop" : preset.targetApp === "claude" ? "Claude" : "Codex"}</span></button>)}</div>
-          <div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>供应商名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={cleanName} /></label><label className="ops-form-field"><span>供应商 ID</span><input onBlur={(event) => updateDraftId(event.currentTarget.value || generated.name, { normalize: true })} onChange={(event) => updateDraftId(event.currentTarget.value)} value={generated.id} /></label></div>
+          <div className="supplier-preset-strip">{SUPPLIER_PRESETS.filter((preset) => preset.id === "openai" || preset.id === "anthropic").map((preset) => <button className={preset.id === generated.id ? "active" : ""} key={preset.id} onClick={() => applyPreset(preset)} type="button"><strong>{preset.name}</strong><span>{preset.targetApp === "claude-desktop" ? "Claude Desktop" : preset.targetApp === "claude" ? "Claude" : "Codex"}</span></button>)}</div>
+          <label className="ops-form-field"><span>供应商名称</span><input onBlur={(event) => updateNewDraftIdFromName(event.currentTarget.value)} onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={cleanName} /></label>
           <label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label>
           <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || ""} /></label>
           <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
           <label className="ops-form-field"><span>{baseEndpointLabel} <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder={isCodexSupplier ? "https://api.example.com/v1" : "https://api.example.com"} value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
           <div className="supplier-route-note">提示：{baseEndpointHint}</div>
-          {isClaudeSupplier ? <section className="supplier-mapping-card"><div><strong>需要模型映射</strong><p>Claude / Claude Desktop 只接收 Claude 安全路由 ID；cc-switch model_mapper 会映射到上游真实模型。</p></div><ToggleSwitch checked={generated.modelMappingEnabled !== false} onChange={(value) => updateDraft({ modelMappingEnabled: value })} /></section> : <section className="supplier-mapping-card"><div><strong>启用 Codex 路由</strong><p>对齐 cc-switch CodexFormFields：Chat Completions 走本地路由转换，Responses 可以直连。</p></div><ToggleSwitch checked={routeEnabled} onChange={(value) => updateDraft({ routeEnabled: value, routeMode: value ? (generated.routeMode || "Codex Proxy") : "Codex Direct", protocol: value ? "chatCompletions" : (generated.protocol || "responses") })} /></section>}
+          {isClaudeSupplier ? <section className="supplier-mapping-card"><div><strong>需要模型映射</strong><p>关闭时按原始模型 ID 直传；供应商不接受 Claude 安全路由 ID 时请开启映射。</p></div><ToggleSwitch checked={!!generated.modelMappingEnabled} onChange={(value) => updateDraft({ modelMappingEnabled: value })} /></section> : null}
           <details className="supplier-ccswitch-section supplier-advanced-card" open><summary><span>&gt;</span>高级选项</summary>
-            {isClaudeSupplier ? <><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>API 格式</span><select className="ops-select" onChange={(event) => { const nextApiFormat = event.currentTarget.value; const nextRequiresRoute = supplierApiFormatRequiresRoute(nextApiFormat); updateDraft({ apiFormat: nextApiFormat, claudeDesktopMode: nextRequiresRoute ? "proxy" : "direct", routeEnabled: nextRequiresRoute ? true : generated.routeEnabled, routeMode: nextRequiresRoute ? (generated.routeMode || "Claude Desktop Proxy") : (generated.routeMode || "Claude Desktop Direct"), modelMappingEnabled: nextRequiresRoute ? true : generated.modelMappingEnabled }); }} value={generated.apiFormat || "Anthropic Messages"}>{SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>{apiFormatOption?.detail || "选择供应商 API 的输入格式"}</small></label><label className="ops-form-field"><span>认证字段</span><select className="ops-select" onChange={(event) => updateDraft({ authField: event.currentTarget.value })} value={authField}><option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN</option><option value="ANTHROPIC_API_KEY">ANTHROPIC_API_KEY</option></select><small>生成配置使用的环境变量名。</small></label></div><label className="supplier-model-mapping-switch"><div><strong>是否开启路由</strong><span>{routeSummary}</span></div><ToggleSwitch checked={routeEnabled} disabled={routeRequired} onChange={(value) => updateDraft({ routeEnabled: value, claudeDesktopMode: value ? "proxy" : "direct", modelMappingEnabled: value ? true : generated.modelMappingEnabled })} /></label><label className="ops-form-field"><span>路由</span><input onChange={(event) => updateDraft({ routeMode: event.currentTarget.value })} placeholder="Claude Desktop Proxy / Direct" value={generated.routeMode || (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct")} /></label><div className="supplier-ccswitch-divider" /><div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => { const rows = modelRowsForDraft.map((row) => ({ ...row, displayName: row.displayName || defaultModel, requestModel: row.requestModel || defaultModel })); updateDraft({ modelMappingEnabled: true, modelMappingJson: supplierModelMappingJson(rows), modelMapping: supplierModelMappingText(rows) }); }} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button></div></div><p className="supplier-inline-note">显示名称只影响模型菜单；实际请求模型会发送到上游；1M 是本地能力声明。</p><div className="supplier-model-map-grid header claude"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>{modelRowsForDraft.map((row) => <div className="supplier-model-map-grid claude" key={row.role}><input disabled value={row.label} /><input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} /><select className="supplier-model-map-select" onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)} value={row.requestModel || ""}><option value="">选择实际请求模型</option>{supplierModelOptions.map((model) => <option key={`${row.role}:${model}`} value={model}>{model}</option>)}</select><label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label></div>)}<label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /></label></> : <><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>上游格式</span><select className="ops-select" onChange={(event) => { const next = event.currentTarget.value; updateDraft({ apiFormat: next, protocol: next === "openai_chat" ? "chatCompletions" : "responses", routeEnabled: next === "openai_chat" ? true : generated.routeEnabled }); }} value={generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses"}><option value="openai_chat">Chat Completions（需开启路由）</option><option value="openai_responses">Responses（原生）</option></select><small>Responses 可直连；Chat Completions 需要路由接管。</small></label><label className="ops-form-field"><span>模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} placeholder="gpt-5.1" value={generated.model} /></label></div><div className="supplier-ccswitch-divider" /><div className="supplier-model-map-head"><strong>模型映射</strong><div className="supplier-toolbar"><Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button></div></div><p className="supplier-inline-note">对齐 cc-switch CodexFormFields：显示名称用于 Codex 模型菜单，实际请求模型发送到上游。</p><div className="supplier-codex-catalog-grid header"><span>显示名称</span><span>实际请求模型</span><span>上下文窗口</span></div><div className="supplier-codex-catalog-grid"><input onChange={(event) => updateDraft({ testModel: event.currentTarget.value })} placeholder="DeepSeek V4 Pro" value={generated.testModel || generated.model || ""} /><select className="supplier-model-map-select" onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={generated.model || ""}><option value="">选择实际请求模型</option>{supplierModelOptions.map((model) => <option key={`codex:${model}`} value={model}>{model}</option>)}</select><input onChange={(event) => updateDraft({ contextWindow: event.currentTarget.value })} placeholder="128000" value={generated.contextWindow || ""} /></div><label className="ops-form-field"><span>自定义 User-Agent</span><input onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })} placeholder="Mozilla/5.0 ..." value={generated.userAgent || ""} /></label></>}
-            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={generated.configContents || claudeConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" onChange={(event) => updateDraft({ authContents: event.currentTarget.value })} value={redactSupplierAuth(codexAuthJson)} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={codexConfigToml} /></label></>}{renderSourceCollapse(supplierTestConfigOpen, setSupplierTestConfigOpen, <Activity className="h-4 w-4" />, "模型 Test Config", <><p>为此供应商配置单独的模型测试参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label><label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label><label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label></div></>)}{renderSourceCollapse(supplierPricingConfigOpen, setSupplierPricingConfigOpen, <BarChart3 className="h-4 w-4" />, "计费配置", <><p>为此供应商配置单独的计费参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认" /></label><label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select></label></div></>)}
+            {isClaudeSupplier ? (
+              generated.modelMappingEnabled ? (
+                <>
+                  <label className="ops-form-field">
+                    <span>API 格式</span>
+                    <select className="ops-select" onChange={(event) => updateDraft({ apiFormat: event.currentTarget.value })} value={generated.apiFormat || "Anthropic Messages"}>
+                      {SUPPLIER_API_FORMAT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                    <small>{apiFormatOption?.detail || "选择供应商 API 的输入格式"}</small>
+                  </label>
+                  {routePrompt ? <div className="supplier-route-note">{routePrompt}</div> : null}
+                  <div className="supplier-ccswitch-divider" />
+                  <div className="supplier-model-map-head">
+                    <strong>模型映射</strong>
+                    <div className="supplier-toolbar">
+                      <Button onClick={applyOneClickModelMapping} type="button" variant="outline"><Wrench className="h-4 w-4" />一键设置</Button>
+                      <Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button>
+                    </div>
+                  </div>
+                  <p className="supplier-inline-note">显示名称只影响模型菜单；实际请求模型会发送到上游；1M 是本地能力声明。</p>
+                  <div className="supplier-model-map-grid header claude"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span><span>声明支持 1M</span></div>
+                  {modelRowsForDraft.map((row) => (
+                    <div className="supplier-model-map-grid claude" key={row.role}>
+                      <input disabled value={row.label} />
+                      <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} />
+                      <SupplierModelDropdown
+                        onChange={(value) => updateSupplierModelMapping(row.role, "requestModel", value)}
+                        options={supplierModelOptions}
+                        placeholder="选择实际请求模型"
+                        value={row.requestModel || ""}
+                      />
+                      <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
+                    </div>
+                  ))}
+                  <label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /></label>
+                </>
+              ) : (
+                <details className="supplier-direct-model-list" onToggle={(event) => setSupplierDirectModelsOpen(event.currentTarget.open)} open={supplierDirectModelsOpen}>
+                  <summary><span>{supplierDirectModelsOpen ? "⌄" : ">"}</span>手动指定 Claude Desktop 模型列表（高级，可选）</summary>
+                  <div className="supplier-direct-model-list-body">
+                    <div className="supplier-direct-model-list-head">
+                      <p>仅当供应商的 /v1/models 不可用或没有返回 Claude Desktop 可识别的 Sonnet / Opus / Haiku 模型名时填写；勾选 1M 会向 Claude Desktop 声明支持 1M 上下文。</p>
+                      <div className="supplier-toolbar">
+                        <Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型列表</Button>
+                        <Button onClick={addSupplierDirectModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
+                      </div>
+                    </div>
+                    {supplierDirectModels.length ? <div className="supplier-direct-model-rows">
+                      {supplierDirectModels.map((row, index) => (
+                        <div className="supplier-direct-model-row" key={row.rowId}>
+                          <input aria-label={`Claude Desktop 模型 ${index + 1}`} onChange={(event) => updateSupplierDirectModel(row.rowId, { model: event.currentTarget.value })} placeholder="claude-sonnet-4-6" value={row.model} />
+                          <label><input checked={row.supports1m} onChange={(event) => updateSupplierDirectModel(row.rowId, { supports1m: event.currentTarget.checked })} type="checkbox" />1M</label>
+                          <button aria-label="删除模型" className="supplier-direct-model-remove" onClick={() => removeSupplierDirectModel(row.rowId)} title="删除模型" type="button"><Trash2 className="h-4 w-4" /></button>
+                        </div>
+                      ))}
+                    </div> : <p className="supplier-direct-model-empty">尚未指定手动模型；Claude Desktop 会优先读取供应商模型目录。</p>}
+                  </div>
+                </details>
+              )
+            ) : (
+              <>
+                <label className="ops-form-field">
+                  <span>上游格式</span>
+                  <select className="ops-select" onChange={(event) => {
+                    const next = event.currentTarget.value;
+                    updateDraft({ apiFormat: next, protocol: next === "openai_chat" ? "chatCompletions" : "responses" });
+                  }} value={generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses"}>
+                    <option value="openai_chat">Chat Completions（需开启路由）</option>
+                    <option value="openai_responses">Responses（原生）</option>
+                  </select>
+                  <small>Responses 可直连；Chat Completions 需要路由接管。</small>
+                </label>
+                {routePrompt ? <div className="supplier-route-note">{routePrompt}</div> : null}
+                <div className="supplier-ccswitch-divider" />
+                <div className="supplier-model-map-head">
+                  <strong>模型映射</strong>
+                  <div className="supplier-toolbar">
+                    <Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button>
+                    <Button onClick={addSupplierCodexCatalogModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
+                  </div>
+                </div>
+                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；上下文窗口用于本地模型能力说明。</p>
+                <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>上下文窗口</span><span /></div>
+                {supplierCodexCatalogModels.length ? supplierCodexCatalogModels.map((row, index) => (
+                  <div className="supplier-codex-catalog-grid" key={row.rowId}>
+                    <input
+                      aria-label={`菜单显示名 ${index + 1}`}
+                      onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { displayName: event.currentTarget.value })}
+                      placeholder="例如: DeepSeek V4 Flash"
+                      value={row.displayName}
+                    />
+                    <div className="supplier-model-input-dropdown">
+                      <input
+                        aria-label={`实际请求模型 ${index + 1}`}
+                        onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { model: event.currentTarget.value })}
+                        placeholder="例如: deepseek-v4-flash"
+                        value={row.model}
+                      />
+                      <SupplierModelDropdown
+                        compact
+                        iconOnly
+                        onChange={(value) => updateSupplierCodexCatalogModel(row.rowId, {
+                          model: value,
+                          ...(row.displayName.trim() ? {} : { displayName: value }),
+                        })}
+                        options={supplierModelOptions}
+                        placeholder="选择已获取模型"
+                        showAvailabilityWarning={false}
+                        triggerLabel="选择已获取模型"
+                        value={row.model}
+                      />
+                    </div>
+                    <input
+                      aria-label={`上下文窗口 ${index + 1}`}
+                      inputMode="numeric"
+                      onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { contextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
+                      placeholder="例如: 128000"
+                      value={row.contextWindow}
+                    />
+                    <button aria-label="删除模型" className="supplier-codex-catalog-remove" onClick={() => removeSupplierCodexCatalogModel(row.rowId)} title="删除模型" type="button"><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                )) : <p className="supplier-codex-catalog-empty">尚未添加模型；可手动添加，或先获取上游模型后从列表选择。</p>}
+                <label className="ops-form-field">
+                  <span>自定义 User-Agent</span>
+                  <div className="supplier-user-agent-control">
+                    <input onChange={(event) => updateDraft({ userAgent: event.currentTarget.value })} placeholder="Mozilla/5.0 ..." value={generated.userAgent || ""} />
+                    <SupplierModelDropdown
+                      compact
+                      onChange={(value) => updateDraft({ userAgent: value })}
+                      options={[...SUPPLIER_USER_AGENT_PRESETS]}
+                      placeholder="选择 User-Agent 预设"
+                      showAvailabilityWarning={false}
+                      triggerLabel="预设"
+                      value={generated.userAgent || ""}
+                    />
+                  </div>
+                  <small>仅在本地路由或代理接管后生效，用于替换发送到供应商 API 的 User-Agent。</small>
+                </label>
+              </>
+            )}
+            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} readOnly={!showSupplierApiKey} value={visibleSupplierConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" onChange={(event) => updateDraft({ authContents: event.currentTarget.value })} value={redactSupplierAuth(codexAuthJson)} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={codexConfigToml} /></label></>}{renderSourceCollapse(supplierTestConfigOpen, setSupplierTestConfigOpen, <Activity className="h-4 w-4" />, "模型 Test Config", <><p>为此供应商配置单独的模型测试参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label><label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label><label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label></div></>)}{renderSourceCollapse(supplierPricingConfigOpen, setSupplierPricingConfigOpen, <BarChart3 className="h-4 w-4" />, "计费配置", <><p>为此供应商配置单独的计费参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认" /></label><label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select></label></div></>)}
           </details></section></div>
-        <div className="supplier-ccswitch-savebar"><span>{modelFetch?.models.length ? `已获取 ${modelFetch.models.length} 个模型，来源：${modelFetch.endpoint || "模型接口"}` : "请检查并保存供应商配置"}</span><div className="action-row"><Button onClick={() => { setDraft(null); setEditingId(null); }} type="button" variant="outline">取消</Button><Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button><Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />保存并使用</Button></div></div>
+        <div className="supplier-ccswitch-savebar"><span>{modelFetch?.models.length ? `已获取 ${modelFetch.models.length} 个模型，来源：${modelFetch.endpoint || "模型接口"}` : "请检查并保存供应商配置"}</span><div className="action-row"><Button onClick={closeSupplierEditor} type="button" variant="outline">取消</Button><Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button><Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />保存并使用</Button></div></div>
       </div>
     );
   }

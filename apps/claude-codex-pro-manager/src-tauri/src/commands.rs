@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -25,7 +25,9 @@ use claude_codex_pro_core::plugin_hub::{
     PluginInstallPreview,
 };
 use claude_codex_pro_core::script_market::{self, MarketScript, ScriptMarketManifest};
-use claude_codex_pro_core::settings::{BackendSettings, RelayProfile, SettingsStore};
+use claude_codex_pro_core::settings::{
+    BackendSettings, RelayProfile, SettingsStore, relay_profile_resolved_api_key,
+};
 use claude_codex_pro_core::status::{LaunchStatus, StatusStore};
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
@@ -992,6 +994,24 @@ async fn ensure_claude_desktop_proxy_helper() -> anyhow::Result<u16> {
             );
             Ok(fallback)
         }
+    }
+}
+
+pub(crate) async fn ensure_claude_desktop_proxy_on_startup() {
+    match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => log_manager_event(
+            "manager.claude_proxy.startup_ok",
+            json!({
+                "port": port,
+                "address": format!("http://127.0.0.1:{port}/claude-desktop")
+            }),
+        ),
+        Err(error) => log_manager_event(
+            "manager.claude_proxy.startup_failed",
+            json!({
+                "error": error.to_string()
+            }),
+        ),
     }
 }
 
@@ -5692,6 +5712,16 @@ pub struct RelayProfileSwitchRequest {
     pub previous_active_relay_id: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupplierProfileSwitchRequest {
+    pub settings: BackendSettings,
+    pub target_app: String,
+    pub profile_id: String,
+    #[serde(default)]
+    pub previous_active_relay_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CcswitchImportPayload {
@@ -5756,6 +5786,265 @@ pub async fn switch_relay_profile(
                 ),
             )
         })
+}
+
+#[tauri::command]
+pub async fn switch_supplier_profile(
+    request: SupplierProfileSwitchRequest,
+) -> CommandResult<SettingsPayload> {
+    let target_app = match normalized_supplier_target(&request.target_app) {
+        Ok(target_app) => target_app.to_string(),
+        Err(error) => {
+            return failed(&error.to_string(), fallback_settings_payload());
+        }
+    };
+    if target_app == "claude-desktop" {
+        let proxy_port = match ensure_claude_desktop_proxy_helper().await {
+            Ok(port) => port,
+            Err(error) => {
+                return failed(
+                    &format!("切换 Claude Desktop 供应商前启动本地代理失败：{error}"),
+                    fallback_settings_payload(),
+                );
+            }
+        };
+        return tauri::async_runtime::spawn_blocking(move || {
+            switch_claude_desktop_supplier_blocking(request, proxy_port)
+        })
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("切换 Claude Desktop 供应商任务失败：{join_error}"),
+                fallback_settings_payload(),
+            )
+        });
+    }
+
+    tauri::async_runtime::spawn_blocking(move || match target_app.as_str() {
+        "codex" => switch_codex_supplier_blocking(request),
+        "claude" => switch_claude_supplier_blocking(request),
+        _ => unreachable!("target was normalized before spawning"),
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("切换供应商任务失败：{join_error}"),
+            fallback_settings_payload(),
+        )
+    })
+}
+
+fn switch_codex_supplier_blocking(
+    mut request: SupplierProfileSwitchRequest,
+) -> CommandResult<SettingsPayload> {
+    if let Err(error) =
+        set_active_supplier_profile_for_target(&mut request.settings, "codex", &request.profile_id)
+    {
+        return failed(&error.to_string(), fallback_settings_payload());
+    }
+    let result = switch_relay_profile_blocking(RelayProfileSwitchRequest {
+        settings: request.settings,
+        previous_active_relay_id: request.previous_active_relay_id,
+    });
+    CommandResult {
+        status: result.status,
+        message: if result.message.is_empty() {
+            "Codex 供应商已切换。".to_string()
+        } else {
+            result.message
+        },
+        payload: SettingsPayload {
+            settings: result.payload.settings,
+            settings_path: result.payload.settings_path,
+            user_scripts: result.payload.user_scripts,
+        },
+    }
+}
+
+fn switch_claude_supplier_blocking(
+    mut request: SupplierProfileSwitchRequest,
+) -> CommandResult<SettingsPayload> {
+    let store = SettingsStore::default();
+    let previous = store.load().unwrap_or_default();
+    request.settings = normalize_settings_before_save(request.settings);
+    if let Err(error) =
+        set_active_supplier_profile_for_target(&mut request.settings, "claude", &request.profile_id)
+    {
+        return failed(&error.to_string(), fallback_settings_payload());
+    }
+    let profile = request.settings.active_relay_profile_for_target("claude");
+    log_manager_event(
+        "manager.switch_supplier_profile.start",
+        json!({ "targetApp": "claude", "profileId": profile.id }),
+    );
+    if let Err(error) = store.save(&request.settings) {
+        return failed(
+            &format!("保存 Claude 当前供应商失败：{error}"),
+            fallback_settings_payload(),
+        );
+    }
+    match claude_codex_pro_core::claude_provider::apply_claude_provider(&profile) {
+        Ok(outcome) => {
+            log_manager_event(
+                "manager.switch_supplier_profile.ok",
+                json!({
+                    "targetApp": "claude",
+                    "profileId": profile.id,
+                    "settingsPath": outcome.settings_path,
+                    "mergedEnvKeys": outcome.merged_env_keys
+                }),
+            );
+            settings_payload("Claude 供应商已切换并新增式写入配置。", "刷新设置失败")
+        }
+        Err(error) => {
+            let rollback_error = store.save(&previous).err();
+            log_manager_event(
+                "manager.switch_supplier_profile.failed",
+                json!({
+                    "targetApp": "claude",
+                    "profileId": profile.id,
+                    "error": error.to_string(),
+                    "settingsRollbackFailed": rollback_error.is_some()
+                }),
+            );
+            failed(
+                &format!(
+                    "切换 Claude 供应商失败：{error}{}",
+                    rollback_error
+                        .map(|error| format!("；管理工具设置回滚失败：{error}"))
+                        .unwrap_or_default()
+                ),
+                fallback_settings_payload(),
+            )
+        }
+    }
+}
+
+fn switch_claude_desktop_supplier_blocking(
+    mut request: SupplierProfileSwitchRequest,
+    proxy_port: u16,
+) -> CommandResult<SettingsPayload> {
+    let store = SettingsStore::default();
+    let previous = store.load().unwrap_or_default();
+    request.settings = normalize_settings_before_save(request.settings);
+    if let Err(error) = set_active_supplier_profile_for_target(
+        &mut request.settings,
+        "claude-desktop",
+        &request.profile_id,
+    ) {
+        return failed(&error.to_string(), fallback_settings_payload());
+    }
+    let profile = request
+        .settings
+        .active_relay_profile_for_target("claude-desktop");
+    let api_key = relay_profile_resolved_api_key(&profile);
+    if api_key.trim().is_empty() {
+        return failed(
+            "Claude Desktop 供应商缺少 API Key，未写入不完整配置。",
+            fallback_settings_payload(),
+        );
+    }
+    log_manager_event(
+        "manager.switch_supplier_profile.start",
+        json!({
+            "targetApp": "claude-desktop",
+            "profileId": profile.id,
+            "modelLines": profile.model_list.lines().filter(|line| !line.trim().is_empty()).count(),
+            "modelMappingEnabled": profile.model_mapping_enabled,
+            "proxyPort": proxy_port
+        }),
+    );
+    if let Err(error) = store.save(&request.settings) {
+        return failed(
+            &format!("保存 Claude Desktop 当前供应商失败：{error}"),
+            fallback_settings_payload(),
+        );
+    }
+    match plugin_hub::configure_claude_desktop_supplier_with_proxy_port(
+        &profile,
+        &request.settings,
+        proxy_port,
+    ) {
+        Ok(outcome) => {
+            log_manager_event(
+                "manager.switch_supplier_profile.ok",
+                json!({
+                    "targetApp": "claude-desktop",
+                    "profileId": profile.id,
+                    "profilePath": outcome.profile_path,
+                    "proxyPort": proxy_port
+                }),
+            );
+            settings_payload(
+                "Claude Desktop 供应商已切换，模型目录已写入；请完全退出并重启 Claude Desktop。",
+                "刷新设置失败",
+            )
+        }
+        Err(error) => {
+            let rollback_error = store.save(&previous).err();
+            log_manager_event(
+                "manager.switch_supplier_profile.failed",
+                json!({
+                    "targetApp": "claude-desktop",
+                    "profileId": profile.id,
+                    "error": error.to_string(),
+                    "settingsRollbackFailed": rollback_error.is_some()
+                }),
+            );
+            failed(
+                &format!(
+                    "切换 Claude Desktop 供应商失败：{error}{}",
+                    rollback_error
+                        .map(|error| format!("；管理工具设置回滚失败：{error}"))
+                        .unwrap_or_default()
+                ),
+                fallback_settings_payload(),
+            )
+        }
+    }
+}
+
+fn normalized_supplier_target(target_app: &str) -> anyhow::Result<&'static str> {
+    match target_app.trim().to_ascii_lowercase().as_str() {
+        "codex" | "" => Ok("codex"),
+        "claude" => Ok("claude"),
+        "claude-desktop" | "claude_desktop" | "claudedesktop" => Ok("claude-desktop"),
+        _ => bail!("不支持的供应商目标：{target_app}"),
+    }
+}
+
+fn set_active_supplier_profile_for_target(
+    settings: &mut BackendSettings,
+    target_app: &str,
+    profile_id: &str,
+) -> anyhow::Result<()> {
+    let target_app = normalized_supplier_target(target_app)?;
+    let profile = settings
+        .relay_profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| anyhow::anyhow!("供应商不存在：{profile_id}"))?;
+    let profile_target = normalized_supplier_target(&profile.target_app)?;
+    if profile_target != target_app {
+        bail!(
+            "供应商目标不匹配：{} 属于 {}，不能用于 {}",
+            profile.name,
+            profile_target,
+            target_app
+        );
+    }
+    if profile.aggregate_enabled {
+        bail!("聚合供应商尚不能直接切换使用。");
+    }
+    if relay_profile_resolved_api_key(profile).trim().is_empty() {
+        bail!("该供应商缺少 API Key，请补入后再切换。");
+    }
+    match target_app {
+        "claude" => settings.active_claude_relay_id = profile_id.to_string(),
+        "claude-desktop" => settings.active_claude_desktop_relay_id = profile_id.to_string(),
+        _ => settings.active_relay_id = profile_id.to_string(),
+    }
+    Ok(())
 }
 
 fn switch_relay_profile_blocking(
@@ -5884,7 +6173,19 @@ pub async fn apply_claude_desktop_provider(
             "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
         }),
     );
-    let _ = plugin_hub::persist_claude_desktop_provider_request_to_settings(&request);
+    if let Err(error) = plugin_hub::persist_claude_desktop_provider_request_to_settings(&request) {
+        log_manager_event(
+            "manager.claude_desktop_provider.apply.settings_failed",
+            json!({ "error": error.to_string() }),
+        );
+        return failed(
+            &format!("保存 Claude Desktop 当前供应商失败：{error}"),
+            ClaudeDesktopProviderApplyPayload {
+                outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+            },
+        );
+    }
     let proxy_port = match ensure_claude_desktop_proxy_helper().await {
         Ok(port) => port,
         Err(error) => {
@@ -7788,8 +8089,10 @@ fn ccswitch_codex_profile_from_settings(
         .or_else(|| string_at(&parsed, &["apiKey", "api_key", "OPENAI_API_KEY"]))
         .or_else(|| codex_config_api_key(config))
         .unwrap_or_default();
+    let (codex_catalog_json, model_list) = ccswitch_codex_catalog(&parsed);
     let model = codex_config_model(config)
         .or_else(|| string_at(&parsed, &["model", "testModel"]))
+        .or_else(|| model_list.lines().next().map(str::to_string))
         .unwrap_or_else(|| "gpt-5.5".to_string());
     let mut profile = RelayProfile {
         id: format!("{}-ccswitch", supplier_id_from_import(id)),
@@ -7805,6 +8108,8 @@ fn ccswitch_codex_profile_from_settings(
         api_format: codex_config_api_format(config)
             .unwrap_or_else(|| "OpenAI Responses".to_string()),
         route_mode: "Codex provider config".to_string(),
+        model_list,
+        codex_catalog_json,
         ..RelayProfile::default()
     };
     profile.test_model = profile.model.clone();
@@ -7827,6 +8132,38 @@ fn ccswitch_codex_profile_from_settings(
             )
         };
     Some(profile)
+}
+
+fn ccswitch_codex_catalog(settings: &Value) -> (String, String) {
+    let Some(models) = settings
+        .get("modelCatalog")
+        .and_then(|catalog| catalog.get("models"))
+        .and_then(Value::as_array)
+    else {
+        return (String::new(), String::new());
+    };
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    let mut model_ids = Vec::new();
+    for item in models {
+        let Some(model) = item
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        else {
+            continue;
+        };
+        if !seen.insert(model.to_string()) {
+            continue;
+        }
+        normalized.push(item.clone());
+        model_ids.push(model.to_string());
+    }
+    (
+        serde_json::to_string_pretty(&normalized).unwrap_or_else(|_| "[]".to_string()),
+        model_ids.join("\n"),
+    )
 }
 
 fn ccswitch_claude_profile_from_settings(
@@ -8378,6 +8715,33 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
+    #[test]
+    fn target_supplier_selection_keeps_codex_and_claude_desktop_independent() {
+        let mut settings = BackendSettings {
+            active_relay_id: "codex-a".to_string(),
+            relay_profiles: vec![
+                RelayProfile {
+                    id: "codex-a".to_string(),
+                    target_app: "codex".to_string(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "desktop-a".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    auth_contents: r#"{"ANTHROPIC_AUTH_TOKEN":"test-desktop-key"}"#.to_string(),
+                    ..RelayProfile::default()
+                },
+            ],
+            ..BackendSettings::default()
+        };
+
+        set_active_supplier_profile_for_target(&mut settings, "claude-desktop", "desktop-a")
+            .unwrap();
+
+        assert_eq!(settings.active_relay_id, "codex-a");
+        assert_eq!(settings.active_claude_desktop_relay_id, "desktop-a");
+    }
+
     struct TestEnvVarGuard {
         key: &'static str,
         previous: Option<OsString>,
@@ -8647,7 +9011,21 @@ Authorization = "Bearer sk-from-header"
 [plugins.example]
 enabled = true
 "#,
-            "auth": {}
+            "auth": {},
+            "modelCatalog": {
+                "models": [
+                    {
+                        "displayName": "DeepSeek V4 Flash",
+                        "model": "deepseek-v4-flash",
+                        "contextWindow": 128000
+                    },
+                    {
+                        "displayName": "Qwen 3 Coder",
+                        "model": "qwen3-coder",
+                        "contextWindow": "200000"
+                    }
+                ]
+            }
         });
 
         let profile = ccswitch_codex_profile_from_settings(
@@ -8662,6 +9040,14 @@ enabled = true
         assert!(profile.config_contents.contains("model_instructions_file"));
         assert!(profile.config_contents.contains("[plugins.example]"));
         assert!(profile.auth_contents.contains("sk-from-header"));
+        assert_eq!(profile.model_list, "deepseek-v4-flash\nqwen3-coder");
+        let catalog: Value = serde_json::from_str(&profile.codex_catalog_json).unwrap();
+        assert_eq!(catalog[0]["displayName"], "DeepSeek V4 Flash");
+        assert_eq!(catalog[0]["model"], "deepseek-v4-flash");
+        assert_eq!(catalog[0]["contextWindow"], 128000);
+        assert_eq!(catalog[1]["displayName"], "Qwen 3 Coder");
+        assert_eq!(catalog[1]["model"], "qwen3-coder");
+        assert_eq!(catalog[1]["contextWindow"], "200000");
     }
 
     #[test]

@@ -998,6 +998,8 @@ async fn handle_helper_connection(
     // so it is answered normally by the handlers below.
     let is_proxy_path = crate::protocol_proxy::is_responses_proxy_path(path)
         || crate::protocol_proxy::is_chat_completions_proxy_path(path)
+        || crate::protocol_proxy::is_claude_desktop_gateway_health_path(path)
+        || crate::protocol_proxy::is_claude_desktop_count_tokens_proxy_path(path)
         || crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
         || crate::protocol_proxy::is_claude_desktop_models_proxy_path(path)
         || crate::protocol_proxy::is_models_proxy_path(path);
@@ -1038,6 +1040,29 @@ async fn handle_helper_connection(
     }
     if crate::protocol_proxy::is_chat_completions_proxy_path(path) && method == "POST" {
         return handle_chat_completions_proxy_connection(
+            &mut stream,
+            request_body,
+            method,
+            path,
+            remote_addr_text,
+        )
+        .await;
+    }
+    if crate::protocol_proxy::is_claude_desktop_gateway_health_path(path)
+        && matches!(method, "HEAD" | "GET" | "OPTIONS")
+    {
+        return handle_claude_desktop_gateway_health_connection(
+            &mut stream,
+            method,
+            path,
+            remote_addr_text,
+        )
+        .await;
+    }
+    if crate::protocol_proxy::is_claude_desktop_count_tokens_proxy_path(path)
+        && matches!(method, "POST" | "OPTIONS")
+    {
+        return handle_claude_desktop_count_tokens_proxy_connection(
             &mut stream,
             request_body,
             method,
@@ -1349,6 +1374,86 @@ async fn handle_claude_desktop_models_proxy_connection(
         &response.status,
         remote_addr_text,
     );
+    stream.shutdown().await?;
+    Ok(())
+}
+
+async fn handle_claude_desktop_gateway_health_connection(
+    stream: &mut tokio::net::TcpStream,
+    method: &str,
+    path: &str,
+    remote_addr_text: Option<String>,
+) -> anyhow::Result<()> {
+    if method == "OPTIONS" {
+        write_http_response(
+            stream,
+            "204 No Content",
+            "application/json; charset=utf-8",
+            &[],
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    let response = crate::protocol_proxy::local_claude_desktop_gateway_health_response()?;
+    let body = if method == "HEAD" {
+        &[][..]
+    } else {
+        response.body.as_slice()
+    };
+    write_http_response(stream, &response.status, &response.content_type, body).await?;
+    log_helper_response(
+        "helper.claude_desktop_gateway_health",
+        method,
+        path,
+        &response.status,
+        remote_addr_text,
+    );
+    stream.shutdown().await?;
+    Ok(())
+}
+
+async fn handle_claude_desktop_count_tokens_proxy_connection(
+    stream: &mut tokio::net::TcpStream,
+    request_body: &str,
+    method: &str,
+    path: &str,
+    remote_addr_text: Option<String>,
+) -> anyhow::Result<()> {
+    if method == "OPTIONS" {
+        write_http_response(
+            stream,
+            "204 No Content",
+            "application/json; charset=utf-8",
+            &[],
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    let (status, body, event) =
+        match crate::protocol_proxy::claude_desktop_count_tokens_response(request_body) {
+            Ok(response) => (
+                "200 OK",
+                serde_json::to_vec(&response)?,
+                "helper.claude_desktop_count_tokens_ok",
+            ),
+            Err(error) => (
+                "400 Bad Request",
+                serde_json::to_vec(&serde_json::json!({
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": error.to_string()
+                    }
+                }))?,
+                "helper.claude_desktop_count_tokens_failed",
+            ),
+        };
+    write_http_response(stream, status, "application/json; charset=utf-8", &body).await?;
+    log_helper_response(event, method, path, status, remote_addr_text);
     stream.shutdown().await?;
     Ok(())
 }

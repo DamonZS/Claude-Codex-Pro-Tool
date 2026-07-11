@@ -1,4 +1,7 @@
-use crate::claude_desktop_provider::ClaudeDesktopProviderRequest;
+use crate::claude_desktop_provider::{
+    ClaudeDesktopProviderRequest, claude_desktop_provider_profile_id,
+    is_claude_codex_pro_profile_id,
+};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -25,10 +28,7 @@ const PONYTAIL_CODEX_HOOKS_RELATIVE_PATH: &str = "hooks/claude-codex-hooks.json"
 const PONYTAIL_CLAUDE_DESKTOP_ORG_ID: &str = "ponytail:claude-desktop-org-plugin";
 const PONYTAIL_ORG_PLUGIN_DIR_NAME: &str = "ponytail";
 const PONYTAIL_CLAUDE_DESKTOP_MARKETPLACE_DEEP_LINK: &str = "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail";
-const CLAUDE_DESKTOP_DEV_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
 const CLAUDE_DESKTOP_DEV_PROFILE_NAME: &str = "Claude Codex Pro";
-const CLAUDE_DESKTOP_DEFAULT_GATEWAY_BASE_URL: &str =
-    crate::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_UPSTREAM_BASE_URL;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,7 +262,6 @@ struct ClaudeDesktopThreepPaths {
     config_path: PathBuf,
     config_library_dir: PathBuf,
     profile_meta_path: PathBuf,
-    profile_path: PathBuf,
 }
 
 impl ClaudeDesktopThreepPaths {
@@ -270,13 +269,15 @@ impl ClaudeDesktopThreepPaths {
         let config_path = root.join("claude_desktop_config.json");
         let config_library_dir = root.join("configLibrary");
         let profile_meta_path = config_library_dir.join("_meta.json");
-        let profile_path = claude_desktop_dev_mode_profile_path(&config_library_dir);
         Self {
             config_path,
             config_library_dir,
             profile_meta_path,
-            profile_path,
         }
+    }
+
+    fn profile_path(&self, profile_id: &str) -> PathBuf {
+        self.config_library_dir.join(format!("{profile_id}.json"))
     }
 }
 
@@ -303,6 +304,8 @@ struct ClaudeDesktopDevModeProfile {
     base_url: String,
     api_key: String,
     model_list: String,
+    model_mapping_enabled: Option<bool>,
+    model_mapping_json: String,
 }
 
 pub async fn fetch_catalog() -> PluginHubCatalog {
@@ -2326,11 +2329,34 @@ pub fn configure_claude_desktop_dev_mode_with_proxy_port(
     provider_request: Option<&ClaudeDesktopProviderRequest>,
     proxy_port: u16,
 ) -> anyhow::Result<ClaudeDesktopDevModeOutcome> {
+    let provider = resolve_claude_desktop_dev_mode_profile(provider_request)?;
+    configure_claude_desktop_dev_mode_with_resolved_profile(provider, proxy_port)
+}
+
+pub fn configure_claude_desktop_supplier_with_proxy_port(
+    relay: &crate::settings::RelayProfile,
+    settings: &crate::settings::BackendSettings,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopDevModeOutcome> {
+    let provider = resolve_claude_desktop_dev_mode_profile_from_relay(
+        relay,
+        settings,
+        Some(relay.model_mapping_enabled),
+    )?;
+    configure_claude_desktop_dev_mode_with_resolved_profile(provider, proxy_port)
+}
+
+fn configure_claude_desktop_dev_mode_with_resolved_profile(
+    provider: Option<ClaudeDesktopDevModeProfile>,
+    proxy_port: u16,
+) -> anyhow::Result<ClaudeDesktopDevModeOutcome> {
     let status = load_claude_desktop_dev_mode_status();
     if !status.supported {
         anyhow::bail!("{}", status.message);
     }
-    let provider = resolve_claude_desktop_dev_mode_profile(provider_request)?;
+    let profile_id = provider
+        .as_ref()
+        .map(|profile| claude_desktop_provider_profile_id(&profile.name, &profile.base_url));
 
     let normal_config_path = PathBuf::from(&status.normal_config_path);
     let normal_config_paths = claude_desktop_normal_config_paths();
@@ -2354,8 +2380,10 @@ pub fn configure_claude_desktop_dev_mode_with_proxy_port(
         if let Some(path) = backup_claude_desktop_config(&threep.profile_meta_path)? {
             backup_paths.push(path);
         }
-        if let Some(path) = backup_claude_desktop_config(&threep.profile_path)? {
-            backup_paths.push(path);
+        if let Some(profile_id) = profile_id.as_deref() {
+            if let Some(path) = backup_claude_desktop_config(&threep.profile_path(profile_id))? {
+                backup_paths.push(path);
+            }
         }
     }
 
@@ -2367,16 +2395,20 @@ pub fn configure_claude_desktop_dev_mode_with_proxy_port(
     )?;
 
     let next = load_claude_desktop_dev_mode_status();
+    let profile_path = profile_id
+        .as_deref()
+        .map(|profile_id| primary_threep.profile_path(profile_id))
+        .unwrap_or_else(|| primary_threep.config_library_dir.clone());
     Ok(ClaudeDesktopDevModeOutcome {
         configured: next.configured,
         normal_config_path: next.normal_config_path,
         threep_config_path: next.threep_config_path,
-        profile_path: primary_threep.profile_path.to_string_lossy().to_string(),
+        profile_path: profile_path.to_string_lossy().to_string(),
         profile_meta_path: next.profile_meta_path,
         backup_paths,
         message: match provider {
             Some(provider) => format!(
-                "Claude Desktop 开发模式已写入 {} gateway profile。请完全退出并重启 Claude Desktop。",
+                "Claude Desktop 已新增或更新 {} 开发配置，其他供应商配置均已保留。请完全退出并重启 Claude Desktop。",
                 provider.name
             ),
             None if next.configured => "Claude Desktop 开发模式外壳已开启。当前还没有写入供应商 URL 和 Key，后续补全供应商后即可继续写入完整 gateway profile。".to_string(),
@@ -3042,10 +3074,11 @@ fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>
 fn read_existing_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
+            let text = strip_json_bom(&text);
             if text.trim().is_empty() {
                 return Ok(json!({}));
             }
-            let value: Value = serde_json::from_str(&text).with_context(|| {
+            let value: Value = serde_json::from_str(text).with_context(|| {
                 format!(
                     "解析现有配置失败，已中止写入以避免覆盖用户数据：{}",
                     path.display()
@@ -3065,15 +3098,21 @@ fn read_existing_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
     }
 }
 
+fn strip_json_bom(raw: &str) -> &str {
+    raw.strip_prefix('\u{feff}').unwrap_or(raw)
+}
+
 fn read_deployment_mode(path: &Path) -> Option<String> {
-    let raw: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let raw: Value = serde_json::from_str(strip_json_bom(&text)).ok()?;
     raw.get("deploymentMode")
         .and_then(Value::as_str)
         .map(str::to_string)
 }
 
 fn read_claude_desktop_meta_applied_id(path: &Path) -> Option<String> {
-    let raw: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let raw: Value = serde_json::from_str(strip_json_bom(&text)).ok()?;
     raw.get("appliedId")
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -3212,25 +3251,31 @@ fn ensure_claude_desktop_marketplaces_config(path: &Path) -> anyhow::Result<()> 
     write_verified_json_file(path, &config, "Claude Desktop plugin marketplace config")
 }
 
-fn claude_desktop_dev_mode_profile_path(config_library_dir: &Path) -> PathBuf {
-    config_library_dir.join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"))
-}
-
 fn claude_desktop_dev_mode_is_configured(
     normal_config_paths: &[PathBuf],
     threep_paths: &[ClaudeDesktopThreepPaths],
 ) -> bool {
-    !normal_config_paths.is_empty()
-        && !threep_paths.is_empty()
-        && normal_config_paths
+    if normal_config_paths.is_empty()
+        || threep_paths.is_empty()
+        || !normal_config_paths
             .iter()
             .all(|path| read_deployment_mode(path).as_deref() == Some("3p"))
-        && threep_paths.iter().all(|threep| {
-            read_deployment_mode(&threep.config_path).as_deref() == Some("3p")
-                && read_claude_desktop_meta_applied_id(&threep.profile_meta_path).as_deref()
-                    == Some(CLAUDE_DESKTOP_DEV_PROFILE_ID)
-                && threep.profile_path.is_file()
-        })
+    {
+        return false;
+    }
+    let Some(expected_profile_id) = threep_paths
+        .first()
+        .and_then(|threep| read_claude_desktop_meta_applied_id(&threep.profile_meta_path))
+        .filter(|profile_id| is_claude_codex_pro_profile_id(profile_id))
+    else {
+        return false;
+    };
+    threep_paths.iter().all(|threep| {
+        read_deployment_mode(&threep.config_path).as_deref() == Some("3p")
+            && read_claude_desktop_meta_applied_id(&threep.profile_meta_path).as_deref()
+                == Some(expected_profile_id.as_str())
+            && threep.profile_path(&expected_profile_id).is_file()
+    })
 }
 
 fn configure_claude_desktop_dev_mode_at_paths(
@@ -3239,30 +3284,26 @@ fn configure_claude_desktop_dev_mode_at_paths(
     provider: Option<&ClaudeDesktopDevModeProfile>,
     proxy_port: u16,
 ) -> anyhow::Result<()> {
+    let profile_id = provider
+        .map(|profile| claude_desktop_provider_profile_id(&profile.name, &profile.base_url));
     for path in normal_config_paths {
         write_claude_desktop_deployment_mode(path, "3p")?;
     }
     for threep in threep_paths {
         write_claude_desktop_deployment_mode(&threep.config_path, "3p")?;
         ensure_claude_desktop_marketplaces_config(&threep.config_path)?;
-        if let Some(provider) = provider {
+        if let (Some(provider), Some(profile_id)) = (provider, profile_id.as_deref()) {
             write_claude_desktop_dev_mode_profile_with_proxy_port(
-                &threep.profile_path,
+                &threep.profile_path(profile_id),
                 provider,
                 proxy_port,
             )?;
-        } else if threep.profile_path.exists() {
-            std::fs::remove_file(&threep.profile_path).with_context(|| {
-                format!(
-                    "remove stale Claude Desktop gateway profile {}",
-                    threep.profile_path.display()
-                )
-            })?;
+            write_claude_desktop_dev_mode_meta(
+                &threep.profile_meta_path,
+                Some(profile_id),
+                Some(&provider.name),
+            )?;
         }
-        write_claude_desktop_dev_mode_meta(
-            &threep.profile_meta_path,
-            provider.map(|_| CLAUDE_DESKTOP_DEV_PROFILE_ID),
-        )?;
     }
     Ok(())
 }
@@ -3292,6 +3333,9 @@ fn resolve_claude_desktop_dev_mode_profile(
             return Ok(None);
         }
         validate_claude_desktop_gateway_url(&base_url)?;
+        if api_key.is_empty() {
+            anyhow::bail!("Claude Desktop 供应商 API Key 不能为空。");
+        }
         return Ok(Some(ClaudeDesktopDevModeProfile {
             name: if request.name.trim().is_empty() {
                 CLAUDE_DESKTOP_DEV_PROFILE_NAME.to_string()
@@ -3301,18 +3345,48 @@ fn resolve_claude_desktop_dev_mode_profile(
             base_url,
             api_key,
             model_list: claude_desktop_model_list_or_default(&request.model_list),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
         }));
     }
     let settings = crate::settings::SettingsStore::default()
         .load()
         .context("读取 Claude Desktop 开发模式供应商设置失败")?;
-    let relay = settings.active_relay_profile();
-    let base_url = relay_profile_base_url_for_claude_desktop(&relay, &settings);
-    let api_key = relay_profile_api_key_for_claude_desktop(&relay, &settings);
+    resolve_claude_desktop_dev_mode_profile_from_settings(&settings)
+}
+
+fn resolve_claude_desktop_dev_mode_profile_from_settings(
+    settings: &crate::settings::BackendSettings,
+) -> anyhow::Result<Option<ClaudeDesktopDevModeProfile>> {
+    let relay = settings.active_relay_profile_for_target("claude-desktop");
+    // A generic refresh with no hand-entered request still targets the active
+    // supplier.  Preserve its explicit direct/mapping mode rather than
+    // rebuilding an old compatibility catalogue from model_list alone.
+    let has_saved_desktop_supplier = settings
+        .relay_profiles
+        .iter()
+        .any(|profile| profile.id == relay.id && profile.target_app.trim() == "claude-desktop");
+    resolve_claude_desktop_dev_mode_profile_from_relay(
+        &relay,
+        &settings,
+        has_saved_desktop_supplier.then_some(relay.model_mapping_enabled),
+    )
+}
+
+fn resolve_claude_desktop_dev_mode_profile_from_relay(
+    relay: &crate::settings::RelayProfile,
+    settings: &crate::settings::BackendSettings,
+    model_mapping_enabled: Option<bool>,
+) -> anyhow::Result<Option<ClaudeDesktopDevModeProfile>> {
+    let base_url = relay_profile_base_url_for_claude_desktop(relay, settings);
+    let api_key = relay_profile_api_key_for_claude_desktop(relay, settings);
     if base_url.trim().is_empty() {
         return Ok(None);
     }
     validate_claude_desktop_gateway_url(&base_url)?;
+    if api_key.trim().is_empty() {
+        anyhow::bail!("Claude Desktop 供应商 API Key 不能为空。");
+    }
     Ok(Some(ClaudeDesktopDevModeProfile {
         name: if relay.name.trim().is_empty() {
             CLAUDE_DESKTOP_DEV_PROFILE_NAME.to_string()
@@ -3321,7 +3395,15 @@ fn resolve_claude_desktop_dev_mode_profile(
         },
         base_url,
         api_key,
-        model_list: claude_desktop_model_list_or_default(&relay.model_list),
+        model_list: if model_mapping_enabled.is_some() {
+            relay.model_list.clone()
+        } else {
+            claude_desktop_model_list_or_default(&relay.model_list)
+        },
+        model_mapping_enabled,
+        model_mapping_json: model_mapping_enabled
+            .map(|_| relay.model_mapping_json.clone())
+            .unwrap_or_default(),
     }))
 }
 
@@ -3342,41 +3424,58 @@ pub fn persist_claude_desktop_provider_request_to_settings(
         request.name.trim().to_string()
     };
     let api_key = request.api_key.trim().to_string();
+    if api_key.is_empty() {
+        anyhow::bail!("Claude Desktop 供应商 API Key 不能为空。");
+    }
     let model_list = claude_desktop_model_list_or_default(&request.model_list);
 
     settings.relay_profiles_enabled = true;
-    settings.relay_base_url = base_url.to_string();
-    settings.relay_api_key = api_key.clone();
-
-    if settings.relay_profiles.is_empty() {
-        settings
-            .relay_profiles
-            .push(crate::settings::RelayProfile::default());
-    }
-
-    let active_id = if settings.active_relay_id.trim().is_empty() {
-        settings.relay_profiles[0].id.clone()
-    } else {
-        settings.active_relay_id.clone()
-    };
     let index = settings
         .relay_profiles
         .iter()
-        .position(|profile| profile.id == active_id)
-        .unwrap_or(0);
-    settings.active_relay_id = settings.relay_profiles[index].id.clone();
+        .position(|profile| {
+            profile.target_app == "claude-desktop"
+                && ((!settings.active_claude_desktop_relay_id.is_empty()
+                    && profile.id == settings.active_claude_desktop_relay_id)
+                    || profile.base_url.trim().trim_end_matches('/')
+                        == base_url.trim_end_matches('/')
+                    || profile.upstream_base_url.trim().trim_end_matches('/')
+                        == base_url.trim_end_matches('/'))
+        })
+        .unwrap_or_else(|| {
+            let id =
+                crate::claude_desktop_provider::claude_desktop_provider_profile_id(&name, base_url);
+            settings.relay_profiles.push(crate::settings::RelayProfile {
+                id,
+                name: name.clone(),
+                target_app: "claude-desktop".to_string(),
+                relay_mode: crate::settings::RelayMode::PureApi,
+                ..crate::settings::RelayProfile::default()
+            });
+            settings.relay_profiles.len() - 1
+        });
 
     let profile = &mut settings.relay_profiles[index];
     profile.name = name;
+    profile.target_app = "claude-desktop".to_string();
+    profile.relay_mode = crate::settings::RelayMode::PureApi;
     profile.base_url = base_url.to_string();
     profile.upstream_base_url = base_url.to_string();
     profile.api_key = api_key.clone();
     profile.model_list = model_list;
+    profile.config_contents = serde_json::to_string_pretty(&json!({
+        "app_type": "claude-desktop",
+        "env": {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": api_key,
+        }
+    }))?;
     profile.auth_contents = if api_key.is_empty() {
         String::new()
     } else {
-        serde_json::to_string(&json!({ "OPENAI_API_KEY": api_key }))?
+        serde_json::to_string(&json!({ "ANTHROPIC_AUTH_TOKEN": api_key }))?
     };
+    settings.active_claude_desktop_relay_id = profile.id.clone();
 
     store.save(&settings)
 }
@@ -3385,46 +3484,16 @@ fn relay_profile_base_url_for_claude_desktop(
     relay: &crate::settings::RelayProfile,
     settings: &crate::settings::BackendSettings,
 ) -> String {
-    let provider_base_url = provider_string_from_toml(&relay.config_contents, "base_url")
-        .filter(|value| !value.trim().is_empty());
-    provider_base_url
-        .or_else(|| {
-            if relay.upstream_base_url.trim().is_empty() {
-                None
-            } else {
-                Some(relay.upstream_base_url.trim().to_string())
-            }
-        })
-        .or_else(|| {
-            if relay.base_url.trim().is_empty() {
-                None
-            } else {
-                Some(relay.base_url.trim().to_string())
-            }
-        })
-        .or_else(|| {
-            if settings.relay_base_url.trim().is_empty() {
-                None
-            } else {
-                Some(settings.relay_base_url.trim().to_string())
-            }
-        })
-        .unwrap_or_else(|| CLAUDE_DESKTOP_DEFAULT_GATEWAY_BASE_URL.to_string())
+    crate::protocol_proxy::claude_desktop_resolved_upstream_base_url(relay, settings)
 }
 
 fn relay_profile_api_key_for_claude_desktop(
     relay: &crate::settings::RelayProfile,
     settings: &crate::settings::BackendSettings,
 ) -> String {
-    experimental_bearer_token_from_toml(&relay.config_contents)
-        .or_else(|| openai_api_key_from_json(&relay.auth_contents))
-        .or_else(|| {
-            if relay.api_key.trim().is_empty() {
-                None
-            } else {
-                Some(relay.api_key.trim().to_string())
-            }
-        })
+    let profile_key = crate::settings::relay_profile_resolved_api_key(relay);
+    (!profile_key.trim().is_empty())
+        .then_some(profile_key)
         .or_else(|| {
             if settings.relay_api_key.trim().is_empty() {
                 None
@@ -3433,39 +3502,6 @@ fn relay_profile_api_key_for_claude_desktop(
             }
         })
         .unwrap_or_default()
-}
-
-fn provider_string_from_toml(contents: &str, key: &str) -> Option<String> {
-    let doc = contents.parse::<toml_edit::DocumentMut>().ok()?;
-    let value = doc
-        .get("model_providers")
-        .and_then(toml_edit::Item::as_table)
-        .and_then(|providers| {
-            providers.iter().find_map(|(_, item)| {
-                item.get(key)
-                    .and_then(toml_edit::Item::as_value)
-                    .and_then(toml_edit::Value::as_str)
-            })
-        })
-        .or_else(|| {
-            doc.get(key)
-                .and_then(toml_edit::Item::as_value)
-                .and_then(toml_edit::Value::as_str)
-        })?;
-    Some(value.trim().to_string()).filter(|value| !value.is_empty())
-}
-
-fn experimental_bearer_token_from_toml(contents: &str) -> Option<String> {
-    provider_string_from_toml(contents, "experimental_bearer_token")
-}
-
-fn openai_api_key_from_json(contents: &str) -> Option<String> {
-    let auth: Value = serde_json::from_str(contents).ok()?;
-    auth.get("OPENAI_API_KEY")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 fn validate_claude_desktop_gateway_url(base_url: &str) -> anyhow::Result<()> {
@@ -3495,19 +3531,48 @@ fn write_claude_desktop_dev_mode_profile_with_proxy_port(
         std::fs::create_dir_all(parent)?;
     }
     validate_claude_desktop_gateway_url(&provider.base_url)?;
-    let mut profile = json!({
-        "coworkEgressAllowedHosts": ["*"],
-        "disableDeploymentModeChooser": true,
-        "inferenceCredentialKind": "static",
-        "inferenceGatewayApiKey": provider.api_key.trim(),
-        "inferenceGatewayAuthScheme": "bearer",
-        "inferenceGatewayBaseUrl": crate::protocol_proxy::local_claude_desktop_proxy_base_url(
+    let inference_models = crate::protocol_proxy::claude_desktop_inference_models(
+        &provider.model_list,
+        provider.model_mapping_enabled,
+        &provider.model_mapping_json,
+    );
+    if provider.model_mapping_enabled == Some(false) {
+        if inference_models.is_empty() {
+            anyhow::bail!(
+                "Claude Desktop 直连模式至少需要一个安全模型 ID；请添加模型或开启模型映射。"
+            );
+        }
+        if let Some(invalid) = inference_models.iter().find_map(|model| {
+            let name = model.get("name")?.as_str()?;
+            (!crate::protocol_proxy::is_claude_desktop_safe_model_id(name)).then_some(name)
+        }) {
+            anyhow::bail!(
+                "Claude Desktop 直连模型 ID 无效：{invalid}；请使用 claude-/anthropic/claude- 的 Sonnet、Opus、Haiku 或 Fable ID，或开启模型映射。"
+            );
+        }
+    }
+    let mut profile = read_existing_json_object_or_empty(path)?;
+    let root = profile
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop gateway profile must be a JSON object"))?;
+    root.insert("coworkEgressAllowedHosts".to_string(), json!(["*"]));
+    root.insert("disableDeploymentModeChooser".to_string(), json!(true));
+    root.insert("inferenceCredentialKind".to_string(), json!("static"));
+    root.insert(
+        "inferenceGatewayApiKey".to_string(),
+        json!(provider.api_key.trim()),
+    );
+    root.insert("inferenceGatewayAuthScheme".to_string(), json!("bearer"));
+    root.insert(
+        "inferenceGatewayBaseUrl".to_string(),
+        json!(crate::protocol_proxy::local_claude_desktop_proxy_base_url(
             proxy_port
-        ),
-        "inferenceProvider": "gateway"
-    });
-    profile["inferenceModels"] = Value::Array(
-        crate::protocol_proxy::claude_desktop_safe_models_with_labels(&provider.model_list),
+        )),
+    );
+    root.insert("inferenceProvider".to_string(), json!("gateway"));
+    root.insert(
+        "inferenceModels".to_string(),
+        Value::Array(inference_models),
     );
     write_verified_json_file(path, &profile, "Claude Desktop gateway profile")
 }
@@ -3535,6 +3600,7 @@ fn write_claude_desktop_dev_mode_profile(
 fn write_claude_desktop_dev_mode_meta(
     path: &Path,
     applied_profile_id: Option<&str>,
+    profile_name: Option<&str>,
 ) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -3548,28 +3614,31 @@ fn write_claude_desktop_dev_mode_meta(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    entries.retain(|entry| {
-        entry.get("id").and_then(Value::as_str) != Some(CLAUDE_DESKTOP_DEV_PROFILE_ID)
-    });
     if let Some(id) = applied_profile_id {
-        entries.push(json!({
-            "id": CLAUDE_DESKTOP_DEV_PROFILE_ID,
-            "name": CLAUDE_DESKTOP_DEV_PROFILE_NAME
-        }));
+        let mut current_entry = None;
+        entries.retain(|entry| {
+            if entry.get("id").and_then(Value::as_str) == Some(id) {
+                if current_entry.is_none() {
+                    current_entry = entry.as_object().cloned();
+                }
+                false
+            } else {
+                true
+            }
+        });
+        let mut current_entry = current_entry.unwrap_or_default();
+        current_entry.insert("id".to_string(), json!(id));
+        current_entry.insert(
+            "name".to_string(),
+            json!(
+                profile_name
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(CLAUDE_DESKTOP_DEV_PROFILE_NAME)
+            ),
+        );
+        entries.push(Value::Object(current_entry));
         root.insert("appliedId".to_string(), json!(id));
-    } else if root
-        .get("appliedId")
-        .and_then(Value::as_str)
-        .is_some_and(|id| id == CLAUDE_DESKTOP_DEV_PROFILE_ID)
-    {
-        if let Some(next_id) = entries
-            .iter()
-            .find_map(|entry| entry.get("id").and_then(Value::as_str))
-        {
-            root.insert("appliedId".to_string(), json!(next_id));
-        } else {
-            root.remove("appliedId");
-        }
     }
     root.insert("entries".to_string(), Value::Array(entries));
     write_verified_json_file(path, &raw, "Claude Desktop profile metadata")
@@ -3839,6 +3908,50 @@ impl InstallStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_desktop_dev_mode_rejects_empty_provider_api_key() {
+        let error = resolve_claude_desktop_dev_mode_profile(Some(&ClaudeDesktopProviderRequest {
+            name: "Invalid provider".to_string(),
+            base_url: "https://provider.example/v1".to_string(),
+            api_key: String::new(),
+            model_list: "claude-sonnet-test".to_string(),
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("API Key"));
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_uses_saved_supplier_mapping_mode() {
+        for enabled in [false, true] {
+            let relay = crate::settings::RelayProfile {
+                id: format!("desktop-{enabled}"),
+                name: "Mode aware supplier".to_string(),
+                target_app: "claude-desktop".to_string(),
+                base_url: "https://provider.example/v1".to_string(),
+                upstream_base_url: "https://provider.example/v1".to_string(),
+                api_key: "sk-test-secret".to_string(),
+                model_list: "claude-sonnet-4-6 [1M]".to_string(),
+                model_mapping_enabled: enabled,
+                model_mapping_json: r#"[{"role":"sonnet","routeId":"claude-sonnet-4-6","requestModel":"gpt-5.6","supports1m":false}]"#.to_string(),
+                ..crate::settings::RelayProfile::default()
+            };
+            let settings = crate::settings::BackendSettings {
+                active_claude_desktop_relay_id: relay.id.clone(),
+                relay_profiles: vec![relay.clone()],
+                ..crate::settings::BackendSettings::default()
+            };
+
+            let resolved = resolve_claude_desktop_dev_mode_profile_from_settings(&settings)
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(resolved.model_mapping_enabled, Some(enabled));
+            assert_eq!(resolved.model_mapping_json, relay.model_mapping_json);
+            assert_eq!(resolved.model_list, relay.model_list);
+        }
+    }
 
     fn empty_test_plugin_outcome(id: &str) -> PluginInstallOutcome {
         let item = PluginCatalogItem {
@@ -4550,6 +4663,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("claude_desktop_config.json");
         let meta_path = dir.path().join("configLibrary").join("_meta.json");
+        let profile_name = "TopoReduce";
+        let profile_id =
+            claude_desktop_provider_profile_id(profile_name, "https://api.toporeduce.cn");
+        let cc_switch_profile_id = "00000000-0000-4000-8000-000000157210";
         std::fs::create_dir_all(meta_path.parent().unwrap()).unwrap();
         std::fs::write(
             &config_path,
@@ -4561,7 +4678,8 @@ mod tests {
             json!({
                 "entries": [
                     {"id": "existing-profile", "name": "Existing"},
-                    {"id": CLAUDE_DESKTOP_DEV_PROFILE_ID, "name": "Old Name"}
+                    {"id": cc_switch_profile_id, "name": "CC Switch"},
+                    {"id": profile_id, "name": "Old Name", "customEntry": "keep"}
                 ],
                 "other": true
             })
@@ -4570,7 +4688,7 @@ mod tests {
         .unwrap();
 
         write_claude_desktop_deployment_mode(&config_path, "3p").unwrap();
-        write_claude_desktop_dev_mode_meta(&meta_path, Some(CLAUDE_DESKTOP_DEV_PROFILE_ID))
+        write_claude_desktop_dev_mode_meta(&meta_path, Some(&profile_id), Some(profile_name))
             .unwrap();
 
         let config: Value =
@@ -4580,10 +4698,10 @@ mod tests {
         assert_eq!(config["deploymentMode"], "3p");
         assert_eq!(config["windowBounds"]["width"], 1200);
         assert_eq!(config["mcpServers"]["existing"]["command"], "node");
-        assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_DEV_PROFILE_ID);
+        assert_eq!(meta["appliedId"], profile_id);
         assert_eq!(meta["other"], true);
         let entries = meta["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         assert!(
             entries
                 .iter()
@@ -4592,31 +4710,32 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|entry| entry["id"] == CLAUDE_DESKTOP_DEV_PROFILE_ID
-                    && entry["name"] == CLAUDE_DESKTOP_DEV_PROFILE_NAME)
+                .any(|entry| entry["id"] == cc_switch_profile_id && entry["name"] == "CC Switch")
         );
+        assert!(entries.iter().any(|entry| entry["id"] == profile_id
+            && entry["name"] == profile_name
+            && entry["customEntry"] == "keep"));
     }
 
     #[test]
     fn claude_desktop_dev_mode_profile_writes_gateway_provider_shape() {
         let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn/v1/".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: "claude-fable-5\nclaude-haiku-4-5\nclaude-opus-4-8 [1m]\nclaude-sonnet-4-6"
+                .to_string(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&provider.name, &provider.base_url);
         let profile_path = dir
             .path()
             .join("configLibrary")
-            .join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"));
+            .join(format!("{profile_id}.json"));
 
-        write_claude_desktop_dev_mode_profile(
-            &profile_path,
-            &ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn/v1/".to_string(),
-                api_key: "sk-test-secret".to_string(),
-                model_list:
-                    "claude-fable-5\nclaude-haiku-4-5\nclaude-opus-4-8 [1m]\nclaude-sonnet-4-6"
-                        .to_string(),
-            },
-        )
-        .unwrap();
+        write_claude_desktop_dev_mode_profile(&profile_path, &provider).unwrap();
 
         let profile: Value =
             serde_json::from_str(&std::fs::read_to_string(profile_path).unwrap()).unwrap();
@@ -4638,24 +4757,97 @@ mod tests {
     }
 
     #[test]
+    fn claude_desktop_dev_mode_profile_direct_mode_uses_manual_model_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "Direct".to_string(),
+            base_url: "https://api.example.test".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: "claude-sonnet-5 [1M]\nclaude-opus-4-8".to_string(),
+            model_mapping_enabled: Some(false),
+            model_mapping_json: r#"[{"routeId":"claude-sonnet-stale","requestModel":"stale"}]"#
+                .to_string(),
+        };
+        let profile_path = dir.path().join("profile.json");
+
+        write_claude_desktop_dev_mode_profile(&profile_path, &provider).unwrap();
+
+        let profile: Value =
+            serde_json::from_str(&std::fs::read_to_string(profile_path).unwrap()).unwrap();
+        assert_eq!(profile["inferenceModels"][0]["name"], "claude-sonnet-5");
+        assert_eq!(profile["inferenceModels"][0]["supports1m"], true);
+        assert_eq!(profile["inferenceModels"][1]["name"], "claude-opus-4-8");
+        assert!(profile.to_string().contains("claude-sonnet-5"));
+        assert!(!profile.to_string().contains("stale"));
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_profile_mapping_mode_ignores_manual_model_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "Mapped".to_string(),
+            base_url: "https://api.example.test".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: "claude-sonnet-stale [1M]".to_string(),
+            model_mapping_enabled: Some(true),
+            model_mapping_json: json!([{
+                "role": "sonnet",
+                "routeId": "claude-sonnet-4-6",
+                "displayName": "GPT Sonnet",
+                "requestModel": "gpt-5.6",
+                "supports1m": false
+            }])
+            .to_string(),
+        };
+        let profile_path = dir.path().join("profile.json");
+
+        write_claude_desktop_dev_mode_profile(&profile_path, &provider).unwrap();
+
+        let profile: Value =
+            serde_json::from_str(&std::fs::read_to_string(profile_path).unwrap()).unwrap();
+        assert_eq!(profile["inferenceModels"][0]["name"], "claude-sonnet-4-6");
+        assert_eq!(profile["inferenceModels"][0]["labelOverride"], "GPT Sonnet");
+        assert!(!profile.to_string().contains("stale"));
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_profile_rejects_unsafe_direct_model_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "Invalid direct".to_string(),
+            base_url: "https://api.example.test".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: "gpt-5.6".to_string(),
+            model_mapping_enabled: Some(false),
+            model_mapping_json: String::new(),
+        };
+
+        let error =
+            write_claude_desktop_dev_mode_profile(&dir.path().join("profile.json"), &provider)
+                .unwrap_err();
+
+        assert!(error.to_string().contains("直连模型 ID 无效"));
+    }
+
+    #[test]
     fn claude_desktop_dev_mode_profile_writes_custom_proxy_port() {
         let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn/v1/".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&provider.name, &provider.base_url);
         let profile_path = dir
             .path()
             .join("configLibrary")
-            .join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"));
+            .join(format!("{profile_id}.json"));
 
-        write_claude_desktop_dev_mode_profile_with_proxy_port(
-            &profile_path,
-            &ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn/v1/".to_string(),
-                api_key: "sk-test-secret".to_string(),
-                model_list: String::new(),
-            },
-            58433,
-        )
-        .unwrap();
+        write_claude_desktop_dev_mode_profile_with_proxy_port(&profile_path, &provider, 58433)
+            .unwrap();
 
         let profile: Value =
             serde_json::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
@@ -4668,21 +4860,21 @@ mod tests {
     #[test]
     fn claude_desktop_dev_mode_profile_allows_empty_api_key_for_first_open() {
         let dir = tempfile::tempdir().unwrap();
+        let provider = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn".to_string(),
+            api_key: String::new(),
+            model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&provider.name, &provider.base_url);
         let profile_path = dir
             .path()
             .join("configLibrary")
-            .join(format!("{CLAUDE_DESKTOP_DEV_PROFILE_ID}.json"));
+            .join(format!("{profile_id}.json"));
 
-        write_claude_desktop_dev_mode_profile(
-            &profile_path,
-            &ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn".to_string(),
-                api_key: String::new(),
-                model_list: String::new(),
-            },
-        )
-        .unwrap();
+        write_claude_desktop_dev_mode_profile(&profile_path, &provider).unwrap();
 
         let profile: Value =
             serde_json::from_str(&std::fs::read_to_string(profile_path).unwrap()).unwrap();
@@ -4705,16 +4897,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let normal_config_path = dir.path().join("Claude").join("claude_desktop_config.json");
         let threep = ClaudeDesktopThreepPaths::from_root(dir.path().join("Claude-3p"));
+        let profile = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn".to_string(),
+            api_key: String::new(),
+            model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&profile.name, &profile.base_url);
 
         configure_claude_desktop_dev_mode_with_paths_for_test(
             &[normal_config_path.clone()],
             std::slice::from_ref(&threep),
-            Some(&ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn".to_string(),
-                api_key: String::new(),
-                model_list: String::new(),
-            }),
+            Some(&profile),
             58433,
         )
         .unwrap();
@@ -4722,11 +4918,14 @@ mod tests {
         let meta: Value =
             serde_json::from_str(&std::fs::read_to_string(&threep.profile_meta_path).unwrap())
                 .unwrap();
-        assert_eq!(meta["appliedId"], CLAUDE_DESKTOP_DEV_PROFILE_ID);
-        assert!(meta["entries"].as_array().unwrap().iter().any(|entry| {
-            entry["id"] == CLAUDE_DESKTOP_DEV_PROFILE_ID
-                && entry["name"] == CLAUDE_DESKTOP_DEV_PROFILE_NAME
-        }));
+        assert_eq!(meta["appliedId"], profile_id);
+        assert!(
+            meta["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| { entry["id"] == profile_id && entry["name"] == profile.name })
+        );
         assert!(claude_desktop_dev_mode_is_configured(
             std::slice::from_ref(&normal_config_path),
             std::slice::from_ref(&threep)
@@ -4738,11 +4937,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let normal_config_path = dir.path().join("Claude").join("claude_desktop_config.json");
         let threep = ClaudeDesktopThreepPaths::from_root(dir.path().join("Claude-3p"));
+        let profile = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&profile.name, &profile.base_url);
         write_claude_desktop_deployment_mode(&normal_config_path, "3p").unwrap();
         write_claude_desktop_deployment_mode(&threep.config_path, "3p").unwrap();
         write_claude_desktop_dev_mode_meta(
             &threep.profile_meta_path,
-            Some(CLAUDE_DESKTOP_DEV_PROFILE_ID),
+            Some(&profile_id),
+            Some(&profile.name),
         )
         .unwrap();
 
@@ -4751,16 +4960,7 @@ mod tests {
             std::slice::from_ref(&threep)
         ));
 
-        write_claude_desktop_dev_mode_profile(
-            &threep.profile_path,
-            &ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn".to_string(),
-                api_key: "sk-test-secret".to_string(),
-                model_list: String::new(),
-            },
-        )
-        .unwrap();
+        write_claude_desktop_dev_mode_profile(&threep.profile_path(&profile_id), &profile).unwrap();
         assert!(claude_desktop_dev_mode_is_configured(
             std::slice::from_ref(&normal_config_path),
             std::slice::from_ref(&threep)
@@ -4780,24 +4980,25 @@ mod tests {
             .join("Claude")
             .join("claude_desktop_config.json");
         let threep = ClaudeDesktopThreepPaths::from_root(dir.path().join("Claude-3p"));
+        let profile = ClaudeDesktopDevModeProfile {
+            name: "TopoReduce".to_string(),
+            base_url: "https://api.toporeduce.cn".to_string(),
+            api_key: "sk-test-secret".to_string(),
+            model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
+        };
+        let profile_id = claude_desktop_provider_profile_id(&profile.name, &profile.base_url);
 
         write_claude_desktop_deployment_mode(&normal_a, "3p").unwrap();
         write_claude_desktop_deployment_mode(&threep.config_path, "3p").unwrap();
         write_claude_desktop_dev_mode_meta(
             &threep.profile_meta_path,
-            Some(CLAUDE_DESKTOP_DEV_PROFILE_ID),
+            Some(&profile_id),
+            Some(&profile.name),
         )
         .unwrap();
-        write_claude_desktop_dev_mode_profile(
-            &threep.profile_path,
-            &ClaudeDesktopDevModeProfile {
-                name: "TopoReduce".to_string(),
-                base_url: "https://api.toporeduce.cn".to_string(),
-                api_key: "sk-test-secret".to_string(),
-                model_list: String::new(),
-            },
-        )
-        .unwrap();
+        write_claude_desktop_dev_mode_profile(&threep.profile_path(&profile_id), &profile).unwrap();
 
         assert!(!claude_desktop_dev_mode_is_configured(
             &[normal_a.clone(), normal_b.clone()],
@@ -4829,29 +5030,78 @@ mod tests {
             base_url: "https://api.toporeduce.cn".to_string(),
             api_key: "sk-test-secret".to_string(),
             model_list: String::new(),
+            model_mapping_enabled: None,
+            model_mapping_json: String::new(),
         };
+        let profile_id = claude_desktop_provider_profile_id(&profile.name, &profile.base_url);
 
         write_claude_desktop_deployment_mode(&normal_config_path, "3p").unwrap();
         for threep in [&primary, &packaged] {
             write_claude_desktop_deployment_mode(&threep.config_path, "3p").unwrap();
             write_claude_desktop_dev_mode_meta(
                 &threep.profile_meta_path,
-                Some(CLAUDE_DESKTOP_DEV_PROFILE_ID),
+                Some(&profile_id),
+                Some(&profile.name),
             )
             .unwrap();
         }
-        write_claude_desktop_dev_mode_profile(&primary.profile_path, &profile).unwrap();
+        write_claude_desktop_dev_mode_profile(&primary.profile_path(&profile_id), &profile)
+            .unwrap();
 
         assert!(!claude_desktop_dev_mode_is_configured(
             std::slice::from_ref(&normal_config_path),
             &[primary.clone(), packaged.clone()]
         ));
 
-        write_claude_desktop_dev_mode_profile(&packaged.profile_path, &profile).unwrap();
+        write_claude_desktop_dev_mode_profile(&packaged.profile_path(&profile_id), &profile)
+            .unwrap();
         assert!(claude_desktop_dev_mode_is_configured(
             std::slice::from_ref(&normal_config_path),
             &[primary, packaged]
         ));
+    }
+
+    #[test]
+    fn claude_desktop_dev_mode_without_provider_preserves_existing_profiles_and_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let normal_config_path = dir.path().join("Claude").join("claude_desktop_config.json");
+        let threep = ClaudeDesktopThreepPaths::from_root(dir.path().join("Claude-3p"));
+        let existing_profile_id = "00000000-0000-4000-8000-000000157210";
+        let existing_profile_path = threep.profile_path(existing_profile_id);
+        std::fs::create_dir_all(&threep.config_library_dir).unwrap();
+        std::fs::write(
+            &existing_profile_path,
+            r#"{"owner":"cc-switch","customSetting":"keep"}"#,
+        )
+        .unwrap();
+        let original_meta = json!({
+            "appliedId": existing_profile_id,
+            "customMeta": "keep",
+            "entries": [{"id": existing_profile_id, "name": "CC Switch"}]
+        });
+        std::fs::write(
+            &threep.profile_meta_path,
+            serde_json::to_string_pretty(&original_meta).unwrap(),
+        )
+        .unwrap();
+
+        configure_claude_desktop_dev_mode_with_paths_for_test(
+            std::slice::from_ref(&normal_config_path),
+            std::slice::from_ref(&threep),
+            None,
+            58433,
+        )
+        .unwrap();
+
+        let profile: Value =
+            serde_json::from_str(&std::fs::read_to_string(&existing_profile_path).unwrap())
+                .unwrap();
+        let meta: Value =
+            serde_json::from_str(&std::fs::read_to_string(&threep.profile_meta_path).unwrap())
+                .unwrap();
+        assert_eq!(profile["owner"], "cc-switch");
+        assert_eq!(profile["customSetting"], "keep");
+        assert_eq!(meta, original_meta);
     }
 
     #[test]
@@ -5175,6 +5425,33 @@ mod tests {
 
         // The corrupt file is left exactly as-is, not clobbered with `{}`.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt);
+    }
+
+    #[test]
+    fn claude_desktop_writers_accept_utf8_bom_prefixed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude_desktop_config.json");
+        let meta_path = dir.path().join("_meta.json");
+        let mut bom_prefixed = vec![0xef, 0xbb, 0xbf];
+        bom_prefixed
+            .extend_from_slice(br#"{"deploymentMode":"1p","customSetting":{"enabled":true}}"#);
+        std::fs::write(&path, bom_prefixed).unwrap();
+        let mut bom_prefixed_meta = vec![0xef, 0xbb, 0xbf];
+        bom_prefixed_meta.extend_from_slice(br#"{"appliedId":"cc120012-test"}"#);
+        std::fs::write(&meta_path, bom_prefixed_meta).unwrap();
+
+        assert_eq!(read_deployment_mode(&path).as_deref(), Some("1p"));
+        assert_eq!(
+            read_claude_desktop_meta_applied_id(&meta_path).as_deref(),
+            Some("cc120012-test")
+        );
+
+        write_claude_desktop_deployment_mode(&path, "3p").unwrap();
+
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["deploymentMode"], "3p");
+        assert_eq!(written["customSetting"]["enabled"], true);
     }
 
     #[test]

@@ -83,6 +83,30 @@ fn manager_release_binary_uses_embedded_frontend_assets() {
 }
 
 #[test]
+fn manager_startup_restores_claude_desktop_proxy_helper() {
+    let lib = include_str!("../src/lib.rs");
+    let commands = include_str!("../src/commands.rs");
+
+    assert!(lib.contains("ensure_claude_desktop_proxy_on_startup"));
+    assert!(lib.contains("tauri::async_runtime::spawn"));
+    assert!(commands.contains("pub(crate) async fn ensure_claude_desktop_proxy_on_startup"));
+    assert!(commands.contains("manager.claude_proxy.startup_ok"));
+    assert!(commands.contains("manager.claude_proxy.startup_failed"));
+}
+
+#[test]
+fn claude_desktop_default_mapping_does_not_reuse_stale_model_list_for_profile() {
+    let commands = include_str!("../src/commands.rs");
+    let protocol_proxy =
+        include_str!("../../../../crates/claude-codex-pro-core/src/protocol_proxy.rs");
+
+    assert!(commands.contains("profile.model_mapping_enabled"));
+    assert!(commands.contains("configure_claude_desktop_supplier_with_proxy_port"));
+    assert!(protocol_proxy.contains("Some(relay.model_mapping_enabled)"));
+    assert!(protocol_proxy.contains("&relay.model_mapping_json"));
+}
+
+#[test]
 fn claude_chinese_window_can_call_manager_backend_commands() {
     let capability = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -732,10 +756,11 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     assert!(styles.contains("height: 26px;"));
     assert!(styles.contains("align-items: center;"));
     assert!(styles.contains("flex: 0 0 20px;"));
-    // 拨钮垂直居中改用 top/bottom:0 + margin-block:auto（不再靠 translate 的 -50% 兜底，
-    // 那种写法会因 box-shadow 显得偏下）；选中态只做水平位移 translate(22px, 0)。
-    assert!(styles.contains("transform: translate(22px, 0);"));
-    assert!(styles.contains("margin-block: auto;"));
+    // 拨钮使用几何中心定位，避免按钮行高与阴影把白色滑块视觉上向下推移。
+    assert!(styles.contains("top: 50%;"));
+    assert!(styles.contains("transform: translate(0, -50%);"));
+    assert!(styles.contains("transform: translate(22px, -50%);"));
+    assert!(!styles.contains("margin-block: auto;"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch.checked .toggle-switch-thumb"));
     assert!(!styles.contains(".context-entry-actions .toggle-switch-thumb"));
     assert!(styles.contains("grid-template-columns: minmax(0, 1fr) 124px;"));
@@ -1395,20 +1420,43 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
         .expect("supplier screen source");
 
     assert!(supplier_screen.contains("actions.saveSettings(next)"));
-    assert!(supplier_screen.contains("actions.switchCodexRelayProfile"));
-    assert!(supplier_screen.contains("switchCodexRelayProfile(savedProfile.id, saved.settings)"));
+    assert!(supplier_screen.contains("actions.switchSupplierProfile"));
+    assert!(
+        supplier_screen
+            .contains("actions.switchSupplierProfile(targetApp, normalized.id, nextSettings)")
+    );
+    assert!(supplier_screen.contains("applySupplier?: boolean"));
+    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true, applySupplier: true })"));
+    assert!(supplier_screen.contains(
+        "targetApp === \"claude-desktop\" && !!originalId && currentActiveId === originalId"
+    ));
+    assert!(!supplier_screen.contains(
+        "switchSupplierProfile(savedProfile.targetApp || \"codex\", savedProfile.id, saved.settings)"
+    ));
+    assert!(
+        !supplier_screen
+            .contains("onClick={() => void actions.switchCodexRelayProfile(profile.id)}")
+    );
     assert!(supplier_screen.contains("actions.fetchRelayProfileModels"));
     assert!(supplier_screen.contains("const originalId = editingId;"));
     assert!(supplier_screen.contains("profile.id === originalId ? normalized : profile"));
-    assert!(supplier_screen.contains("activeRelayId: nextActiveRelayId"));
+    assert!(supplier_screen.contains("withActiveSupplierId({"));
+    assert!(supplier_screen.contains("activeClaudeRelayId"));
+    assert!(supplier_screen.contains("activeClaudeDesktopRelayId"));
+    assert!(supplier_screen.contains(
+        "const nextActiveRelayId = !aggregateDraft && originalId && currentActiveId === originalId"
+    ));
+    assert!(supplier_screen.contains(
+        "const nextForTarget = (_targetApp: SupplierTargetApp, currentId: string) => currentId === profile.id ? \"\" : currentId;"
+    ));
     assert!(
         supplier_screen
-            .contains("actions.showNotice({ title: \"供应商保存\", message: `正在保存供应商")
+            .contains("title: shouldApplySupplier ? \"供应商保存并应用\" : \"供应商保存\"")
     );
     assert!(supplier_screen.contains("const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;"));
-    assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
+    assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean; applySupplier?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
     assert!(supplier_screen.contains("setDraft(null);"));
-    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true })"));
+    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true, applySupplier: true })"));
     assert!(
         supplier_screen
             .contains("!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())")
@@ -1417,7 +1465,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
         "!normalized.name.trim() || !normalized.baseUrl.trim() || !normalized.apiKey.trim()"
     ));
     assert!(supplier_screen.contains("API Key 可以后续补入"));
-    assert!(supplier_screen.contains("请先补入 API Key"));
+    assert!(supplier_screen.contains("该供应商缺少 API Key，未修改当前生效配置。"));
     assert!(app_tsx.contains(
         "const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);"
     ));
@@ -1427,24 +1475,30 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(!supplier_screen.contains("if (!requestedId || requestedId !== normalizedId)"));
     assert!(supplier_screen.contains("const idWasNormalized = requestedId !== normalizedId;"));
     assert!(supplier_screen.contains("actions.showNotice({ title: \"供应商保存\", message: `供应商 ID 已自动整理为「${savedProfile.id}」。`, status: \"ok\" });"));
-    assert!(supplier_screen.contains(
-        "const updateDraftId = (value: string, options: { normalize?: boolean } = {}) => {"
-    ));
+    assert!(supplier_screen.contains("const updateNewDraftIdFromName = (value: string) => {"));
+    assert!(supplier_screen.contains("if (!isNewDraft) return;"));
     assert!(
         supplier_screen.contains("const next = normalizeDraftProfile({ ...current, id: nextId });")
     );
+    assert!(
+        supplier_screen
+            .contains("const nextId = uniqueSupplierProfileId(profiles, value || current.name);")
+    );
     assert!(supplier_screen.contains(
-        "onBlur={(event) => updateDraftId(event.currentTarget.value || generated.name, { normalize: true })}"
+        "SUPPLIER_PRESETS.filter((preset) => preset.id === \"openai\" || preset.id === \"anthropic\").map"
     ));
-    assert!(supplier_screen.contains(
-        "onChange={(event) => updateDraftId(event.currentTarget.value)} value={generated.id}"
-    ));
+    assert!(
+        supplier_screen
+            .contains("onBlur={(event) => updateNewDraftIdFromName(event.currentTarget.value)}")
+    );
+    assert!(!supplier_screen.contains("<span>供应商 ID</span>"));
+    assert!(!supplier_screen.contains("value={generated.id}"));
     assert!(!supplier_screen.contains("onChange={(event) => setDraft((current) => current ? { ...current, id: event.currentTarget.value } : current)} value={draft.id}"));
     assert!(!supplier_screen.contains("onChange={(event) => updateDraft({ id: supplierIdFromName(event.currentTarget.value) })} value={generated.id}"));
     assert!(!supplier_screen.contains("input disabled={!isNewDraft} onChange={(event) => updateDraft({ id: supplierIdFromName(event.currentTarget.value) })}"));
     assert!(supplier_screen.contains("createSupplierProfile(appSettings)"));
     assert!(supplier_screen.contains("withSupplierGeneratedFiles"));
-    assert!(supplier_screen.contains("SUPPLIER_PRESETS.map"));
+    assert!(!supplier_screen.contains("SUPPLIER_PRESETS.map"));
     assert!(supplier_screen.contains("添加供应商"));
     assert!(supplier_screen.contains("编辑"));
     assert!(supplier_screen.contains("删除供应商"));
@@ -1453,13 +1507,20 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(!supplier_screen.contains("[model_providers.custom]"));
     assert!(app_tsx.contains("OPENAI_API_KEY"));
     assert!(app_tsx.contains("fetch_relay_profile_models"));
-    assert!(app_tsx.contains("const modelList = profile.modelList ?? \"\";"));
+    assert!(
+        app_tsx.contains("const hasExplicitModelList = typeof profile.modelList === \"string\";")
+    );
+    assert!(app_tsx.contains("modelList: hasExplicitModelList ? modelList : model,"));
     assert!(app_tsx.contains("const apiKey = supplierProfileResolvedApiKey(profile);"));
     assert!(app_tsx.contains("function supplierProfileResolvedApiKey(profile: RelayProfile)"));
     assert!(app_tsx.contains("function supplierApiKeyFromAuthContents(contents: string)"));
     assert!(app_tsx.contains("function supplierApiKeyFromConfigContents(contents: string)"));
+    assert!(app_tsx.contains("ANTHROPIC_API_KEY"));
+    assert!(app_tsx.contains("parsed.env"));
     assert!(app_tsx.contains("supplierProfileHasApiKey(targetProfile)"));
-    assert!(app_tsx.contains("supplierProfileHasApiKey(savedProfile)"));
+    assert!(
+        supplier_screen.contains("shouldApplySupplier && !supplierProfileHasApiKey(normalized)")
+    );
     assert!(app_tsx.contains("function supplierProfileIsCcswitch(profile: RelayProfile)"));
     assert!(app_tsx.contains(
         "const importedById = new Map(imported.map((profile) => [profile.id, profile]));"
@@ -1487,6 +1548,7 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
+    let supplier_lib = read_frontend_file("lib/supplier.ts").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let commands_rs =
@@ -1522,13 +1584,17 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     ));
     assert!(supplier_screen.contains("supplierRouteGroup === \"codex\" ? target === \"codex\" : target === \"claude\" || target === \"claude-desktop\""));
     assert!(supplier_screen.contains("if (supplierRouteGroup === \"codex\")"));
-    assert!(supplier_screen.contains(
-        "routeMode: enabled ? (profile.routeMode || \"Codex Proxy\") : \"Codex Direct\""
-    ));
+    assert!(supplier_screen.contains("const withSupplierRoutingState = (profile: RelayProfile"));
+    assert!(supplier_screen.contains("routeMode: targetApp === \"codex\""));
+    assert!(
+        supplier_screen.contains("return withSupplierRoutingState(profile, \"codex\", enabled);")
+    );
     assert!(supplier_screen.contains("supplierRouteGroupLabel"));
     assert!(!supplier_screen.contains("?????"));
     assert!(supplier_screen.contains("routeEnabled: enabled"));
-    assert!(supplier_screen.contains("claudeDesktopMode: enabled ? \"proxy\" : \"direct\""));
+    assert!(supplier_screen.contains(
+        "claudeDesktopMode: targetApp === \"codex\" ? \"\" : enabled ? \"proxy\" : \"direct\""
+    ));
     assert!(supplier_screen.contains("supplierTargetFilter"));
     assert!(supplier_screen.contains("Codex"));
     assert!(supplier_screen.contains("Claude"));
@@ -1537,17 +1603,35 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains(r#"<Edit className="h-4 w-4" />"#));
     assert!(supplier_screen.contains(r#"<Activity className="h-4 w-4" />"#));
     assert!(supplier_screen.contains(r#"<BarChart3 className="h-4 w-4" />"#));
-    assert!(supplier_screen.contains("const supplierModelOptions = Array.from(new Set(["));
-    assert!(supplier_screen.contains("...(modelFetch?.models ?? [])"));
-    assert!(supplier_screen.contains("...String(generated.modelList || \"\").split(/\\r?\\n/)"));
     assert!(
         supplier_screen
+            .contains("const supplierModelOptions = Array.from(new Set((modelFetch !== null")
+    );
+    assert!(supplier_screen.contains("? modelFetch.models"));
+    assert!(
+        supplier_screen
+            .contains(": supplierDirectModelRows(generated.modelList).map((row) => row.model)")
+    );
+    assert!(!supplier_screen.contains("...(modelFetch?.models ?? [])"));
+    assert!(
+        !supplier_screen
             .contains("...modelRowsForDraft.flatMap((row) => [row.requestModel, row.displayName])")
     );
-    assert!(supplier_screen.contains("supplier-model-map-select"));
-    assert!(supplier_screen.contains(
-        "updateSupplierModelMapping(row.role, \"requestModel\", event.currentTarget.value)"
-    ));
+    assert!(supplier_screen.contains("const applyOneClickModelMapping = () => {"));
+    assert!(
+        supplier_screen
+            .contains("lowerOptions.find(({ lower }) => lower.includes(row.role))?.option")
+    );
+    assert!(supplier_screen.contains("请先获取模型"));
+    assert!(!supplier_screen.contains("<strong>是否开启路由</strong>"));
+    assert!(!supplier_screen.contains("<span>路由</span><input"));
+    assert!(!supplier_screen.contains("routeEnabled: nextRequiresRoute ? true"));
+    assert!(supplier_screen.contains("请返回供应商列表开启"));
+    assert!(screens_file.contains("function SupplierModelDropdown"));
+    assert!(screens_file.contains("window.innerHeight"));
+    assert!(screens_file.contains("role=\"listbox\""));
+    assert!(supplier_screen.contains("<SupplierModelDropdown"));
+    assert!(!supplier_screen.contains("<select className=\"supplier-model-map-select\""));
     assert!(supplier_screen.contains("row.displayName"));
     assert!(supplier_screen.contains("row.requestModel"));
     assert!(supplier_screen.contains("row.supports1m"));
@@ -1635,12 +1719,90 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("supplier-ccswitch-form-card"));
     assert!(supplier_screen.contains("supplier-form-avatar"));
     assert!(supplier_screen.contains("supplier-mapping-card"));
+    assert!(supplier_screen.contains("关闭时按原始模型 ID 直传"));
+    assert!(supplier_screen.contains(
+        "checked={!!generated.modelMappingEnabled} onChange={(value) => updateDraft({ modelMappingEnabled: value })}"
+    ));
+    assert!(
+        !supplier_screen.contains("<ToggleSwitch checked disabled onChange={() => undefined} />")
+    );
+    assert!(supplier_lib.contains(
+        "const modelMappingEnabled = typeof profile.modelMappingEnabled === \"boolean\""
+    ));
+    assert!(supplier_lib.contains("modelMappingEnabled,"));
+    assert!(supplier_lib.contains("const routeRows = generated.modelMappingEnabled"));
+    assert!(supplier_lib.contains("? supplierModelMappingRows(generated).filter"));
+    assert!(
+        !supplier_screen
+            .contains("modelMappingEnabled: enabled ? true : profile.modelMappingEnabled")
+    );
     assert!(supplier_screen.contains("supplier-advanced-card"));
     assert!(supplier_screen.contains("supplier-codex-catalog-grid"));
+    assert!(supplier_lib.contains("export type SupplierCodexCatalogRow"));
+    assert!(supplier_lib.contains("export function supplierCodexCatalogRows"));
+    assert!(supplier_lib.contains("export function supplierCodexCatalogJson"));
+    assert!(supplier_lib.contains("codexCatalogJson: profile.codexCatalogJson ?? \"\""));
+    assert!(app_tsx.contains("codexCatalogJson?: string;"));
+    assert!(supplier_screen.contains("const addSupplierCodexCatalogModel = () =>"));
+    assert!(supplier_screen.contains("const updateSupplierCodexCatalogModel = ("));
+    assert!(supplier_screen.contains("const removeSupplierCodexCatalogModel = ("));
+    assert!(supplier_screen.contains("supplierCodexCatalogJson(rows)"));
+    assert!(supplier_screen.contains("if (draft.targetApp === \"codex\") return;"));
+    assert!(supplier_screen.contains("例如: DeepSeek V4 Flash"));
+    assert!(supplier_screen.contains("例如: deepseek-v4-flash"));
+    assert!(supplier_screen.contains("例如: 128000"));
+    assert!(supplier_screen.contains("SUPPLIER_USER_AGENT_PRESETS"));
+    assert!(screens_file.contains("claude-cli/2.1.161 (external, cli)"));
+    assert!(screens_file.contains("claude-cli/2.1.161"));
+    assert!(screens_file.contains("claude-code/1.0.0"));
+    assert!(screens_file.contains("claude-code/0.1.0"));
+    assert!(screens_file.contains("Kilo-Code/1.0"));
     assert!(supplier_screen.contains("API Key"));
     assert!(supplier_screen.contains("SUPPLIER_API_FORMAT_OPTIONS"));
     assert!(supplier_screen.contains("supplierModelMappingJson(rows)"));
     assert!(supplier_screen.contains("supplierModelMappingText(rows)"));
+    assert!(
+        supplier_lib
+            .contains("{ role: \"subagent\", label: \"Subagent\", routeId: \"claude-subagent\"")
+    );
+    assert!(
+        supplier_screen
+            .contains("modelRowsForDraft.find((row) => row.role === \"subagent\")?.requestModel")
+    );
+    assert!(supplier_lib.contains("export type SupplierDirectModelRow"));
+    assert!(supplier_lib.contains("export function supplierDirectModelRows"));
+    assert!(supplier_lib.contains("export function supplierDirectModelList"));
+    assert!(supplier_lib.contains("export function supplierDirectModelIsClaudeDesktopSafe"));
+    assert!(
+        supplier_lib
+            .contains("const hasExplicitModelList = typeof profile.modelList === \"string\";")
+    );
+    assert!(supplier_lib.contains("modelList: hasExplicitModelList ? modelList : model,"));
+    assert!(supplier_screen.contains("generated.modelMappingEnabled ? ("));
+    assert!(supplier_screen.contains("手动指定 Claude Desktop 模型列表（高级，可选）"));
+    assert!(supplier_screen.contains("supplier-direct-model-list"));
+    assert!(supplier_screen.contains("const addSupplierDirectModel = () =>"));
+    assert!(supplier_screen.contains("const updateSupplierDirectModel = ("));
+    assert!(supplier_screen.contains("const removeSupplierDirectModel = ("));
+    assert!(supplier_screen.contains("supplierDirectModelList(rows)"));
+    assert!(supplier_screen.contains("if (isClaudeTarget && draft.modelMappingEnabled) return;"));
+    assert!(supplier_screen.contains("supplierModelFetchRequestRef"));
+    assert!(
+        supplier_screen.contains("if (requestId !== supplierModelFetchRequestRef.current) return;")
+    );
+    assert!(supplier_screen.contains("row.rowId"));
+    assert!(supplier_screen.contains("supplierDirectModelIsClaudeDesktopSafe"));
+    assert!(supplier_screen.contains("Claude Desktop 直连模型 ID 无效"));
+    assert!(supplier_screen.contains("redactSupplierConfig"));
+    assert!(supplier_screen.contains("readOnly={!showSupplierApiKey}"));
+    assert!(supplier_lib.contains("\"clientsecret\""));
+    assert!(supplier_lib.contains("\"password\""));
+    assert!(supplier_lib.contains("\"privatekey\""));
+    assert!(supplier_lib.contains("normalized.endsWith(\"secret\")"));
+    assert!(supplier_screen.contains("获取模型列表"));
+    assert!(supplier_screen.contains("添加模型"));
+    assert!(supplier_screen.contains("aria-label=\"删除模型\""));
+    assert!(!supplier_screen.contains("modelMappingEnabled: true, modelList:"));
     assert!(app_tsx.contains("model: row.requestModel.trim()"));
     assert!(app_tsx.contains("return [key, row.requestModel.trim()];"));
     assert!(
@@ -1666,7 +1828,14 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(app_tsx.contains("OpenAI Responses API"));
     assert!(app_tsx.contains("Gemini Native generateContent"));
     assert!(supplier_screen.contains("routeEnabled"));
-    assert!(supplier_screen.contains("supplierRouteEnabled"));
+    assert!(supplier_screen.contains("const routeEnabled = !!generated.routeEnabled;"));
+    assert!(supplier_lib.contains("export function supplierRouteEnabled(profile: RelayProfile)"));
+    assert!(supplier_lib.contains("return !!profile.routeEnabled;"));
+    assert!(
+        supplier_lib.contains(
+            "claudeDesktopMode: supplierRouteEnabled(generated) ? \"proxy\" : \"direct\""
+        )
+    );
 
     assert!(supplier_screen.contains("聚合策略"));
     assert!(app_tsx.contains("失败切换"));
@@ -1700,8 +1869,17 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(styles.contains("padding: 32px max(16px, calc((100% - 880px) / 2));"));
     assert!(styles.contains("textarea.supplier-config-json"));
     assert!(styles.contains(".supplier-route-master-toggle"));
-    assert!(styles.contains(".supplier-model-map-grid select"));
-    assert!(styles.contains(".supplier-model-map-select"));
+    assert!(!styles.contains(".supplier-model-map-select"));
+    assert!(styles.contains(".supplier-model-dropdown-trigger"));
+    assert!(styles.contains(".supplier-model-dropdown-menu"));
+    assert!(styles.contains("position: fixed;"));
+    assert!(styles.contains("overflow-y: auto;"));
+    assert!(styles.contains(".supplier-ccswitch-form-grid.two"));
+    assert!(styles.contains("align-items: start;"));
+    assert!(styles.contains("align-content: start;"));
+    assert!(styles.contains("top: 50%;"));
+    assert!(styles.contains("transform: translate(0, -50%);"));
+    assert!(styles.contains("transform: translate(22px, -50%);"));
     assert!(styles.contains(
         ".supplier-ccswitch-collapse-card:not(.expanded) .supplier-ccswitch-collapse-head"
     ));
@@ -1709,20 +1887,32 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
 }
 
 #[test]
-fn claude_dev_mode_button_uses_the_current_provider_draft() {
+fn claude_dev_mode_button_preserves_the_active_supplier_mode() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
     let app_tsx = app_tsx.replace("\r\n", "\n");
+    let core_plugin_hub =
+        manifest_dir.join("../../../crates/claude-codex-pro-core/src/plugin_hub.rs");
+    let core_plugin_hub =
+        std::fs::read_to_string(core_plugin_hub).expect("read core plugin_hub.rs");
 
-    assert!(app_tsx.contains("claudeDesktopProviderDraft.baseUrl.trim()"));
+    assert!(app_tsx.contains("const providerRequest = claudeDesktopProviderDraft.apiKey.trim()"));
+    assert!(app_tsx.contains("? claudeDesktopProviderDraft\n      : null;"));
+    assert!(app_tsx.contains(
+        "const request = providerRequest?.baseUrl.trim() ? { request: providerRequest } : undefined;"
+    ));
     assert!(app_tsx.contains(
         "call<ClaudeDesktopDevModeConfigureResult>(\"configure_claude_desktop_dev_mode\", request)"
     ));
-    assert!(app_tsx.contains("? { request: claudeDesktopProviderDraft }\n      : undefined;"));
-    assert!(!app_tsx.contains(
-        "claudeDesktopProviderDraft.baseUrl.trim() && claudeDesktopProviderDraft.apiKey.trim()"
-    ));
+    assert!(!app_tsx.contains("activeDesktopProfile"));
+    assert!(!app_tsx.contains("supplierProfileResolvedApiKey"));
+    assert!(core_plugin_hub.contains("active_relay_profile_for_target(\"claude-desktop\")"));
+    assert!(
+        core_plugin_hub
+            .contains("has_saved_desktop_supplier.then_some(relay.model_mapping_enabled)")
+    );
+    assert!(core_plugin_hub.contains("relay.model_mapping_json.clone()"));
 }
 
 #[test]

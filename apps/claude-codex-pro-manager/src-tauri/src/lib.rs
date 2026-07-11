@@ -48,6 +48,9 @@ pub fn run() {
                     );
                 }
             }
+            tauri::async_runtime::spawn(async {
+                commands::ensure_claude_desktop_proxy_on_startup().await;
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -171,6 +174,7 @@ pub fn run() {
             commands::fetch_relay_profile_models,
             commands::import_ccswitch_codex_providers,
             commands::switch_relay_profile,
+            commands::switch_supplier_profile,
             commands::preview_claude_desktop_provider,
             commands::apply_claude_desktop_provider,
             commands::restore_claude_desktop_provider_official,

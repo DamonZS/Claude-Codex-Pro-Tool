@@ -170,6 +170,8 @@ export type BackendSettings = {
   relayCommonConfigContents: string;
   relayContextConfigContents: string;
   activeRelayId: string;
+  activeClaudeRelayId: string;
+  activeClaudeDesktopRelayId: string;
   relayTestModel: string;
   cliWrapperEnabled: boolean;
   cliWrapperBaseUrl: string;
@@ -200,6 +202,7 @@ export type RelayProfile = {
   contextWindow: string;
   autoCompactLimit: string;
   modelList: string;
+  codexCatalogJson?: string;
   userAgent: string;
   notes?: string;
   websiteUrl?: string;
@@ -212,7 +215,7 @@ export type RelayProfile = {
   maxThinkingEnabled?: boolean;
   disableAutoUpdate?: boolean;
   importSource?: string;
-  targetApp?: string;
+  targetApp?: SupplierTargetApp;
   apiFormat?: string;
   claudeDesktopMode?: string;
   routeEnabled?: boolean;
@@ -300,7 +303,7 @@ export type SupplierPreset = {
   modelList?: string[];
   websiteUrl?: string;
   apiKeyUrl?: string;
-  targetApp?: string;
+  targetApp?: SupplierTargetApp;
   apiFormat?: string;
   claudeDesktopMode?: string;
   routeEnabled?: boolean;
@@ -308,6 +311,8 @@ export type SupplierPreset = {
   modelMappingEnabled?: boolean;
   modelMappingJson?: string;
 };
+
+export type SupplierTargetApp = "codex" | "claude" | "claude-desktop";
 
 export type AggregateStrategy = {
   id: string;

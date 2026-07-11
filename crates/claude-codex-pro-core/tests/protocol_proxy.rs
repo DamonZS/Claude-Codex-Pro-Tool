@@ -1,9 +1,11 @@
 use claude_codex_pro_core::protocol_proxy::{
     ChatSseToResponsesConverter, chat_completion_to_response,
     chat_completion_to_response_with_request, chat_completions_url, chat_sse_to_responses_sse,
-    chat_sse_to_responses_sse_with_request, claude_desktop_default_model_list,
-    claude_desktop_model_mapping_for, claude_desktop_models_response,
+    chat_sse_to_responses_sse_with_request, claude_desktop_count_tokens_response,
+    claude_desktop_default_model_list, claude_desktop_model_mapping_for,
+    claude_desktop_models_response, claude_desktop_models_response_for_settings,
     claude_desktop_resolved_upstream_base_url, claude_messages_url, is_chat_completions_proxy_path,
+    is_claude_desktop_count_tokens_proxy_path, is_claude_desktop_gateway_health_path,
     is_claude_desktop_messages_proxy_path, is_claude_desktop_models_proxy_path,
     is_models_proxy_path, is_responses_proxy_path, models_url, responses_error_from_upstream,
     responses_to_chat_completions,
@@ -142,11 +144,58 @@ fn proxy_route_matchers_accept_ccswitch_codex_aliases() {
 }
 
 #[test]
+fn claude_desktop_gateway_routes_cover_health_and_count_tokens() {
+    for path in ["/claude-desktop", "/claude-desktop?check=true"] {
+        assert!(is_claude_desktop_gateway_health_path(path), "{path}");
+    }
+
+    for path in [
+        "/claude-desktop/messages/count_tokens",
+        "/claude-desktop/v1/messages/count_tokens?beta=true",
+        "/claude-desktop/v1/v1/messages/count_tokens",
+    ] {
+        assert!(is_claude_desktop_count_tokens_proxy_path(path), "{path}");
+        assert!(!is_claude_desktop_messages_proxy_path(path), "{path}");
+    }
+}
+
+#[test]
+fn claude_desktop_count_tokens_returns_anthropic_shape_and_grows_with_content() {
+    let short = claude_desktop_count_tokens_response(
+        r#"{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}"#,
+    )
+    .unwrap();
+    let long = claude_desktop_count_tokens_response(
+        r#"{"model":"claude-sonnet-4-6","system":"You are a careful coding assistant.","messages":[{"role":"user","content":"Please inspect this project and explain the root cause with concrete evidence."}]}"#,
+    )
+    .unwrap();
+
+    let short_tokens = short["input_tokens"].as_u64().unwrap();
+    let long_tokens = long["input_tokens"].as_u64().unwrap();
+    assert!(short_tokens > 0);
+    assert!(long_tokens > short_tokens);
+    assert_eq!(short.as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn claude_desktop_count_tokens_rejects_invalid_json() {
+    assert!(claude_desktop_count_tokens_response("not-json").is_err());
+}
+
+#[test]
 fn claude_desktop_model_mapping_maps_safe_roles_to_upstream_models() {
     let relay = RelayProfile {
+        model_mapping_enabled: true,
         model: "deepseek-v4-pro".to_string(),
         test_model: "deepseek-v4-pro".to_string(),
         model_list: "deepseek-v4-pro\nkimi-k2\nqwen3-coder [1M]\nmoonshot-v1".to_string(),
+        model_mapping_json: serde_json::json!([
+            { "role": "fable", "routeId": "claude-fable-5", "requestModel": "deepseek-v4-pro" },
+            { "role": "sonnet", "routeId": "claude-sonnet-4-6", "requestModel": "moonshot-v1" },
+            { "role": "opus", "routeId": "claude-opus-4-8", "requestModel": "qwen3-coder [1M]" },
+            { "role": "haiku", "routeId": "claude-haiku-4-5", "requestModel": "kimi-k2" }
+        ])
+        .to_string(),
         ..Default::default()
     };
 
@@ -171,27 +220,45 @@ fn claude_desktop_model_mapping_maps_safe_roles_to_upstream_models() {
 #[test]
 fn claude_desktop_model_mapping_uses_single_model_for_all_roles() {
     let relay = RelayProfile {
+        model_mapping_enabled: true,
         model_list: "gpt-5.5".to_string(),
+        model_mapping_json: serde_json::json!([
+            { "role": "fable", "routeId": "claude-fable-5", "requestModel": "gpt-5.5" },
+            { "role": "sonnet", "routeId": "claude-sonnet-4-6", "requestModel": "gpt-5.5" },
+            { "role": "opus", "routeId": "claude-opus-4-8", "requestModel": "gpt-5.5" },
+            { "role": "haiku", "routeId": "claude-haiku-4-5", "requestModel": "gpt-5.5" }
+        ])
+        .to_string(),
+        ..Default::default()
+    };
+
+    for route_id in [
+        "claude-fable-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-8",
+        "claude-haiku-4-5",
+    ] {
+        assert_eq!(
+            claude_desktop_model_mapping_for(route_id, &relay).as_deref(),
+            Some("gpt-5.5")
+        );
+    }
+}
+
+#[test]
+fn claude_desktop_model_mapping_has_requested_defaults_when_empty() {
+    let relay = RelayProfile {
+        model_mapping_enabled: true,
         ..Default::default()
     };
 
     assert_eq!(
-        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
-        Some("gpt-5.5")
-    );
-}
-
-#[test]
-fn claude_desktop_model_mapping_has_default_safe_models_when_empty() {
-    let relay = RelayProfile::default();
-
-    assert_eq!(
         claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
-        Some("claude-fable-5")
+        Some("claude-Fable-5")
     );
     assert_eq!(
         claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
-        Some("claude-haiku-4-5")
+        Some("claude-opus-4-7")
     );
     assert_eq!(
         claude_desktop_model_mapping_for("claude-opus-4-8", &relay).as_deref(),
@@ -199,13 +266,14 @@ fn claude_desktop_model_mapping_has_default_safe_models_when_empty() {
     );
     assert_eq!(
         claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
-        Some("claude-sonnet-4-6")
+        Some("claude-opus-4-6")
     );
 }
 
 #[test]
 fn claude_desktop_model_mapping_prefers_ccswitch_route_json() {
     let relay = RelayProfile {
+        model_mapping_enabled: true,
         model_list: "fallback-model".to_string(),
         model_mapping_json: serde_json::json!([
             {
@@ -246,6 +314,7 @@ fn claude_desktop_model_mapping_prefers_ccswitch_route_json() {
 #[test]
 fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback() {
     let relay = RelayProfile {
+        model_mapping_enabled: true,
         model_list: "fallback-model".to_string(),
         model_mapping_json: serde_json::json!([
             {
@@ -283,7 +352,105 @@ fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback
 fn claude_desktop_default_model_list_matches_expected_ui_order() {
     assert_eq!(
         claude_desktop_default_model_list(),
-        "claude-fable-5\nclaude-haiku-4-5\nclaude-opus-4-8\nclaude-sonnet-4-6"
+        "claude-Fable-5\nclaude-opus-4-7\nclaude-opus-4-8\nclaude-opus-4-6"
+    );
+}
+
+#[test]
+fn claude_desktop_empty_profile_uses_requested_default_role_mapping() {
+    let relay = RelayProfile {
+        model_mapping_enabled: true,
+        ..Default::default()
+    };
+    for (route_id, expected) in [
+        ("claude-sonnet-4-6", "claude-opus-4-6"),
+        ("claude-opus-4-8", "claude-opus-4-8"),
+        ("claude-fable-5", "claude-Fable-5"),
+        ("claude-haiku-4-5", "claude-opus-4-7"),
+    ] {
+        assert_eq!(
+            claude_desktop_model_mapping_for(route_id, &relay).as_deref(),
+            Some(expected),
+            "{route_id}"
+        );
+    }
+
+    let body = claude_desktop_models_response("");
+    let expected_labels = [
+        "claude-Fable-5",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6",
+    ];
+    for (index, expected) in expected_labels.into_iter().enumerate() {
+        let display_name = body["data"][index]
+            .get("display_name")
+            .or_else(|| body["data"][index].get("id"))
+            .and_then(|value| value.as_str());
+        assert_eq!(display_name, Some(expected));
+        assert_eq!(body["data"][index]["supports1m"], json!(true));
+    }
+}
+
+#[test]
+fn claude_desktop_expanded_default_list_keeps_role_order_and_all_1m_flags() {
+    let body = claude_desktop_models_response(&claude_desktop_default_model_list());
+    let expected_labels = [
+        "claude-Fable-5",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6",
+    ];
+
+    for (index, expected) in expected_labels.into_iter().enumerate() {
+        let display_name = body["data"][index]
+            .get("display_name")
+            .or_else(|| body["data"][index].get("id"))
+            .and_then(|value| value.as_str());
+        assert_eq!(display_name, Some(expected));
+        assert_eq!(body["data"][index]["supports1m"], json!(true));
+    }
+}
+
+#[test]
+fn claude_desktop_enabled_mapping_without_custom_json_ignores_stale_single_model() {
+    let relay = RelayProfile {
+        model_mapping_enabled: true,
+        model_list: "claude-sonnet".to_string(),
+        test_model: "claude-sonnet".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
+        Some("claude-opus-4-6")
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
+        Some("claude-opus-4-7")
+    );
+}
+
+#[test]
+fn claude_desktop_disabled_mapping_preserves_original_model_even_with_saved_routes() {
+    let relay = RelayProfile {
+        model_mapping_enabled: false,
+        model_list: "gpt-5.5".to_string(),
+        model_mapping_json: serde_json::json!([{
+            "role": "sonnet",
+            "label": "Sonnet",
+            "routeId": "claude-sonnet-4-6",
+            "displayName": "GPT Sonnet",
+            "requestModel": "gpt-5.5",
+            "supports1m": true
+        }])
+        .to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay),
+        None
     );
 }
 
@@ -1457,6 +1624,107 @@ fn claude_desktop_models_proxy_response_uses_safe_ids_and_upstream_labels() {
     assert_eq!(body["data"][2]["supports1m"], json!(true));
     assert_eq!(body["data"][3]["id"], json!("claude-sonnet-4-6"));
     assert_eq!(body["data"][3]["display_name"], json!("sonnet-v1"));
+}
+
+#[test]
+fn claude_desktop_models_proxy_response_preserves_per_model_1m_declarations() {
+    let body = claude_desktop_models_response("fable-v1 [1M]\nhaiku-v1\nopus-v1\nsonnet-v1 [1M]");
+
+    assert_eq!(body["data"][0]["supports1m"], json!(true));
+    assert!(body["data"][1].get("supports1m").is_none());
+    assert!(body["data"][2].get("supports1m").is_none());
+    assert_eq!(body["data"][3]["supports1m"], json!(true));
+}
+
+#[test]
+fn claude_desktop_direct_mode_catalog_uses_manual_ids_without_request_rewrite() {
+    let relay = RelayProfile {
+        id: "desktop-direct".to_string(),
+        target_app: "claude-desktop".to_string(),
+        model_mapping_enabled: false,
+        model_list: "claude-sonnet-5 [1M]\nclaude-opus-4-8".to_string(),
+        ..Default::default()
+    };
+    let settings = BackendSettings {
+        active_claude_desktop_relay_id: relay.id.clone(),
+        relay_profiles: vec![relay.clone()],
+        ..Default::default()
+    };
+
+    let body = claude_desktop_models_response_for_settings(&settings);
+    assert_eq!(body["data"][0]["id"], json!("claude-sonnet-5"));
+    assert_eq!(body["data"][0]["supports1m"], json!(true));
+    assert_eq!(body["data"][1]["id"], json!("claude-opus-4-8"));
+    assert!(body["data"][1].get("supports1m").is_none());
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-sonnet-5", &relay),
+        None
+    );
+}
+
+#[test]
+fn claude_desktop_mapping_mode_catalog_ignores_stale_manual_list() {
+    let relay = RelayProfile {
+        id: "desktop-mapped".to_string(),
+        target_app: "claude-desktop".to_string(),
+        model_mapping_enabled: true,
+        model_list: "claude-sonnet-stale [1M]".to_string(),
+        model_mapping_json: json!([
+            {
+                "role": "sonnet",
+                "routeId": "claude-sonnet-4-6",
+                "displayName": "GPT Sonnet",
+                "requestModel": "gpt-5.6",
+                "supports1m": false
+            },
+            {
+                "role": "opus",
+                "routeId": "claude-opus-4-8",
+                "displayName": "GPT Opus",
+                "requestModel": "gpt-5.6-pro",
+                "supports1m": true
+            }
+        ])
+        .to_string(),
+        ..Default::default()
+    };
+    let settings = BackendSettings {
+        active_claude_desktop_relay_id: relay.id.clone(),
+        relay_profiles: vec![relay],
+        ..Default::default()
+    };
+
+    let body = claude_desktop_models_response_for_settings(&settings);
+    assert_eq!(body["data"][0]["id"], json!("claude-sonnet-4-6"));
+    assert_eq!(body["data"][0]["display_name"], json!("GPT Sonnet"));
+    assert!(body["data"][0].get("supports1m").is_none());
+    assert_eq!(body["data"][1]["id"], json!("claude-opus-4-8"));
+    assert_eq!(body["data"][1]["display_name"], json!("GPT Opus"));
+    assert_eq!(body["data"][1]["supports1m"], json!(true));
+    assert!(!body.to_string().contains("stale"));
+}
+
+#[test]
+fn claude_desktop_direct_default_names_respect_individual_1m_flags() {
+    let relay = RelayProfile {
+        id: "desktop-default-names".to_string(),
+        target_app: "claude-desktop".to_string(),
+        model_mapping_enabled: false,
+        model_list: "claude-Fable-5 [1M]\nclaude-opus-4-7\nclaude-opus-4-8\nclaude-opus-4-6"
+            .to_string(),
+        ..Default::default()
+    };
+    let settings = BackendSettings {
+        active_claude_desktop_relay_id: relay.id.clone(),
+        relay_profiles: vec![relay],
+        ..Default::default()
+    };
+
+    let body = claude_desktop_models_response_for_settings(&settings);
+    assert_eq!(body["data"][0]["supports1m"], json!(true));
+    for index in 1..4 {
+        assert!(body["data"][index].get("supports1m").is_none());
+    }
 }
 
 #[test]

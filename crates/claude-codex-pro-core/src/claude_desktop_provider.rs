@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
-pub const CLAUDE_DESKTOP_PROVIDER_PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
 pub const CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME: &str = "Claude Codex Pro";
+pub const CLAUDE_CODEX_PRO_PROFILE_ID_PREFIX: &str = "cc120012-";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,8 +69,9 @@ impl ClaudeDesktopProviderPaths {
         threep_config_path: PathBuf,
         config_library_dir: PathBuf,
     ) -> Self {
-        let profile_path =
-            config_library_dir.join(format!("{CLAUDE_DESKTOP_PROVIDER_PROFILE_ID}.json"));
+        let default_profile_id =
+            claude_desktop_provider_profile_id(CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME, "");
+        let profile_path = config_library_dir.join(format!("{default_profile_id}.json"));
         let meta_path = config_library_dir.join("_meta.json");
         Self {
             normal_config_path,
@@ -78,6 +79,16 @@ impl ClaudeDesktopProviderPaths {
             config_library_dir,
             profile_path,
             meta_path,
+        }
+    }
+
+    pub fn with_profile_id(&self, profile_id: &str) -> Self {
+        Self {
+            normal_config_path: self.normal_config_path.clone(),
+            threep_config_path: self.threep_config_path.clone(),
+            config_library_dir: self.config_library_dir.clone(),
+            profile_path: self.config_library_dir.join(format!("{profile_id}.json")),
+            meta_path: self.meta_path.clone(),
         }
     }
 }
@@ -170,6 +181,8 @@ pub fn preview_claude_desktop_provider_at_paths_with_proxy_port(
 ) -> anyhow::Result<ClaudeDesktopProviderPreview> {
     validate_request(request)?;
     let profile_name = display_provider_name(request);
+    let profile_id = claude_desktop_provider_profile_id(&profile_name, &request.base_url);
+    let paths = paths.with_profile_id(&profile_id);
     let profile = build_gateway_profile(request, proxy_port);
     let redacted_profile = redact_profile(profile.clone());
     let redacted_profile_text =
@@ -183,13 +196,13 @@ pub fn preview_claude_desktop_provider_at_paths_with_proxy_port(
         redacted_profile_text
     );
     Ok(ClaudeDesktopProviderPreview {
-        profile_id: CLAUDE_DESKTOP_PROVIDER_PROFILE_ID.to_string(),
+        profile_id,
         profile_name,
         normal_config_path: path_string(&paths.normal_config_path),
         threep_config_path: path_string(&paths.threep_config_path),
         profile_path: path_string(&paths.profile_path),
         meta_path: path_string(&paths.meta_path),
-        write_targets: write_targets(paths),
+        write_targets: write_targets(&paths),
         config_diff,
         redacted_profile: redacted_profile_text,
     })
@@ -230,18 +243,15 @@ pub fn apply_claude_desktop_provider_at_paths_with_proxy_port(
 ) -> anyhow::Result<ClaudeDesktopProviderOutcome> {
     validate_request(request)?;
     let profile_name = display_provider_name(request);
-    let profile = build_gateway_profile(request, proxy_port);
-    let snapshots = snapshot_files(paths)?;
-    let backup_paths = backup_existing_files(paths)?;
+    let profile_id = claude_desktop_provider_profile_id(&profile_name, &request.base_url);
+    let paths = paths.with_profile_id(&profile_id);
+    let snapshots = snapshot_files(&paths)?;
+    let backup_paths = backup_existing_files(&paths)?;
     let result = (|| {
         write_deployment_mode(&paths.normal_config_path, "3p")?;
         write_deployment_mode(&paths.threep_config_path, "3p")?;
-        write_json(&paths.profile_path, &profile)?;
-        write_meta(
-            &paths.meta_path,
-            Some(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID),
-            Some(&profile_name),
-        )?;
+        write_gateway_profile(&paths.profile_path, request, proxy_port)?;
+        write_meta(&paths.meta_path, Some(&profile_id), Some(&profile_name))?;
         Ok::<(), anyhow::Error>(())
     })();
 
@@ -259,8 +269,7 @@ pub fn apply_claude_desktop_provider_at_paths_with_proxy_port(
         profile_path: path_string(&paths.profile_path),
         meta_path: path_string(&paths.meta_path),
         backup_paths,
-        message: "Claude Desktop 开发模式供应商已写入。请完全退出并重启 Claude Desktop。"
-            .to_string(),
+        message: "Claude Desktop 开发配置已新增或更新；其他供应商配置均已保留。请完全退出并重启 Claude Desktop。".to_string(),
     })
 }
 
@@ -276,8 +285,6 @@ pub fn restore_claude_desktop_provider_official_at_paths(
     let result = (|| {
         write_deployment_mode(&paths.normal_config_path, "1p")?;
         write_deployment_mode(&paths.threep_config_path, "1p")?;
-        remove_file_if_exists(&paths.profile_path)?;
-        write_meta(&paths.meta_path, None, None)?;
         Ok::<(), anyhow::Error>(())
     })();
 
@@ -295,7 +302,7 @@ pub fn restore_claude_desktop_provider_official_at_paths(
         profile_path: path_string(&paths.profile_path),
         meta_path: path_string(&paths.meta_path),
         backup_paths,
-        message: "Claude Desktop 已切回官方部署模式。请完全退出并重启 Claude Desktop。".to_string(),
+        message: "Claude Desktop 已切回官方部署模式；已有第三方开发配置均已保留。请完全退出并重启 Claude Desktop。".to_string(),
     })
 }
 
@@ -339,9 +346,28 @@ fn build_gateway_profile(request: &ClaudeDesktopProviderRequest, proxy_port: u16
     });
 
     profile["inferenceModels"] = Value::Array(
-        crate::protocol_proxy::claude_desktop_safe_models_with_labels(&request.model_list),
+        crate::protocol_proxy::claude_desktop_inference_models(&request.model_list, None, ""),
     );
     profile
+}
+
+fn write_gateway_profile(
+    path: &Path,
+    request: &ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> anyhow::Result<()> {
+    let desired = build_gateway_profile(request, proxy_port);
+    let mut profile = read_json_object_or_empty(path)?;
+    let target = profile
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop profile must be a JSON object"))?;
+    for (key, value) in desired
+        .as_object()
+        .expect("gateway profile is always a JSON object")
+    {
+        target.insert(key.clone(), value.clone());
+    }
+    write_json(path, &profile)
 }
 
 fn redact_profile(mut profile: Value) -> Value {
@@ -363,6 +389,38 @@ fn display_provider_name(request: &ClaudeDesktopProviderRequest) -> String {
     } else {
         name.to_string()
     }
+}
+
+pub fn claude_desktop_provider_profile_id(name: &str, base_url: &str) -> String {
+    let normalized_name = name.trim().to_lowercase();
+    let normalized_url = normalized_profile_base_url(base_url);
+    let identity = format!("{normalized_name}\n{normalized_url}");
+    let first = stable_fnv1a64(identity.as_bytes(), 0xcbf29ce484222325);
+    let second = stable_fnv1a64(identity.as_bytes(), 0x84222325cbf29ce4);
+    let group_two = (first >> 48) & 0xffff;
+    let group_three = 0x4000 | ((first >> 36) & 0x0fff);
+    let group_four = 0x8000 | ((second >> 48) & 0x3fff);
+    let group_five = second & 0x0000_ffff_ffff_ffff;
+    format!("cc120012-{group_two:04x}-{group_three:04x}-{group_four:04x}-{group_five:012x}")
+}
+
+pub fn is_claude_codex_pro_profile_id(profile_id: &str) -> bool {
+    profile_id.starts_with(CLAUDE_CODEX_PRO_PROFILE_ID_PREFIX)
+}
+
+fn normalized_profile_base_url(base_url: &str) -> String {
+    Url::parse(base_url.trim())
+        .map(|mut url| {
+            url.set_fragment(None);
+            url.to_string().trim_end_matches('/').to_string()
+        })
+        .unwrap_or_else(|_| base_url.trim().trim_end_matches('/').to_string())
+}
+
+fn stable_fnv1a64(bytes: &[u8], seed: u64) -> u64 {
+    bytes.iter().fold(seed, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
 }
 
 fn write_targets(paths: &ClaudeDesktopProviderPaths) -> Vec<String> {
@@ -395,25 +453,31 @@ fn write_meta(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    entries.retain(|entry| {
-        entry.get("id").and_then(Value::as_str) != Some(CLAUDE_DESKTOP_PROVIDER_PROFILE_ID)
-    });
-
     if let Some(id) = applied_profile_id {
-        entries.push(json!({
-            "id": CLAUDE_DESKTOP_PROVIDER_PROFILE_ID,
-            "name": profile_name
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .unwrap_or(CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME)
-        }));
+        let mut current_entry = None;
+        entries.retain(|entry| {
+            if entry.get("id").and_then(Value::as_str) == Some(id) {
+                if current_entry.is_none() {
+                    current_entry = entry.as_object().cloned();
+                }
+                false
+            } else {
+                true
+            }
+        });
+        let mut current_entry = current_entry.unwrap_or_default();
+        current_entry.insert("id".to_string(), json!(id));
+        current_entry.insert(
+            "name".to_string(),
+            json!(
+                profile_name
+                    .map(|value| value.trim())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(CLAUDE_DESKTOP_PROVIDER_PROFILE_NAME)
+            ),
+        );
+        entries.push(Value::Object(current_entry));
         object.insert("appliedId".to_string(), Value::String(id.to_string()));
-    } else if object
-        .get("appliedId")
-        .and_then(Value::as_str)
-        .is_some_and(|id| id == CLAUDE_DESKTOP_PROVIDER_PROFILE_ID)
-    {
-        object.remove("appliedId");
     }
 
     object.insert("entries".to_string(), Value::Array(entries));

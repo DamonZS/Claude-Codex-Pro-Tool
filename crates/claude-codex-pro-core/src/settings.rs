@@ -82,6 +82,12 @@ pub struct RelayProfile {
     #[serde(rename = "modelList", default)]
     pub model_list: String,
     #[serde(
+        rename = "codexCatalogJson",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub codex_catalog_json: String,
+    #[serde(
         rename = "userAgent",
         default,
         skip_serializing_if = "String::is_empty"
@@ -223,6 +229,7 @@ impl Default for RelayProfile {
             auto_compact_limit: String::new(),
             model_insert_mode: RelayModelInsertMode::Patch,
             model_list: String::new(),
+            codex_catalog_json: String::new(),
             user_agent: String::new(),
             notes: String::new(),
             website_url: String::new(),
@@ -428,6 +435,10 @@ pub struct BackendSettings {
     pub relay_context_config_contents: String,
     #[serde(rename = "activeRelayId", default = "default_active_relay_id")]
     pub active_relay_id: String,
+    #[serde(rename = "activeClaudeRelayId", default)]
+    pub active_claude_relay_id: String,
+    #[serde(rename = "activeClaudeDesktopRelayId", default)]
+    pub active_claude_desktop_relay_id: String,
     #[serde(rename = "relayTestModel", default = "default_relay_test_model")]
     pub relay_test_model: String,
     #[serde(rename = "cliWrapperEnabled", default)]
@@ -496,6 +507,8 @@ impl Default for BackendSettings {
             relay_common_config_contents: String::new(),
             relay_context_config_contents: String::new(),
             active_relay_id: default_active_relay_id(),
+            active_claude_relay_id: String::new(),
+            active_claude_desktop_relay_id: String::new(),
             relay_test_model: default_relay_test_model(),
             cli_wrapper_enabled: false,
             cli_wrapper_base_url: String::new(),
@@ -508,6 +521,42 @@ impl Default for BackendSettings {
 }
 
 impl BackendSettings {
+    pub fn active_relay_id_for_target(&self, target_app: &str) -> &str {
+        match normalized_target_app(target_app) {
+            "claude" => self.active_claude_relay_id.as_str(),
+            "claude-desktop" => self.active_claude_desktop_relay_id.as_str(),
+            _ => self.active_relay_id.as_str(),
+        }
+    }
+
+    pub fn active_relay_profile_for_target(&self, target_app: &str) -> RelayProfile {
+        let target_app = normalized_target_app(target_app);
+        if target_app == "codex" {
+            return self.active_relay_profile();
+        }
+
+        let active_id = self.active_relay_id_for_target(target_app);
+        self.relay_profiles
+            .iter()
+            .find(|profile| {
+                !active_id.trim().is_empty()
+                    && profile.id == active_id
+                    && relay_profile_matches_target(profile, target_app)
+            })
+            .or_else(|| {
+                self.relay_profiles
+                    .iter()
+                    .find(|profile| relay_profile_matches_target(profile, target_app))
+            })
+            .cloned()
+            .unwrap_or_else(|| RelayProfile {
+                id: active_id.to_string(),
+                name: "未配置供应商".to_string(),
+                target_app: target_app.to_string(),
+                ..RelayProfile::default()
+            })
+    }
+
     pub fn active_relay_profile(&self) -> RelayProfile {
         if self.active_relay_id == default_active_relay_id()
             && self.relay_profiles.len() == 1
@@ -591,6 +640,83 @@ impl BackendSettings {
             ..RelayProfile::default()
         }
     }
+}
+
+fn normalized_target_app(target_app: &str) -> &str {
+    match target_app.trim().to_ascii_lowercase().as_str() {
+        "claude" => "claude",
+        "claude-desktop" | "claude_desktop" | "claudedesktop" => "claude-desktop",
+        _ => "codex",
+    }
+}
+
+fn relay_profile_matches_target(profile: &RelayProfile, target_app: &str) -> bool {
+    let profile_target = profile.target_app.trim();
+    if profile_target.is_empty() {
+        target_app == "codex"
+    } else {
+        normalized_target_app(profile_target) == target_app
+    }
+}
+
+pub fn relay_profile_resolved_api_key(profile: &RelayProfile) -> String {
+    non_empty_setting(&profile.api_key)
+        .or_else(|| api_key_from_json_text(&profile.auth_contents))
+        .or_else(|| api_key_from_json_text(&profile.config_contents))
+        .or_else(|| api_key_from_toml_text(&profile.config_contents))
+        .unwrap_or_default()
+}
+
+fn non_empty_setting(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn api_key_from_json_text(contents: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(contents.trim()).ok()?;
+    api_key_from_json_value(&value)
+}
+
+fn api_key_from_json_value(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "api_key",
+        "apiKey",
+    ] {
+        if let Some(value) = object.get(key).and_then(Value::as_str) {
+            if let Some(value) = non_empty_setting(value) {
+                return Some(value);
+            }
+        }
+    }
+    for container in ["env", "auth", "credentials"] {
+        if let Some(value) = object.get(container).and_then(api_key_from_json_value) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn api_key_from_toml_text(contents: &str) -> Option<String> {
+    let document = contents.parse::<DocumentMut>().ok()?;
+    for key in [
+        "experimental_bearer_token",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "api_key",
+        "apiKey",
+    ] {
+        if let Some(value) = document.get(key).and_then(Item::as_str) {
+            if let Some(value) = non_empty_setting(value) {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 pub fn default_api_key_env() -> String {
@@ -925,6 +1051,21 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     if let Some(value) = source.get("activeRelayId").and_then(Value::as_str) {
         target.insert(
             "activeRelayId".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
+    if let Some(value) = source.get("activeClaudeRelayId").and_then(Value::as_str) {
+        target.insert(
+            "activeClaudeRelayId".to_string(),
+            Value::String(value.to_string()),
+        );
+    }
+    if let Some(value) = source
+        .get("activeClaudeDesktopRelayId")
+        .and_then(Value::as_str)
+    {
+        target.insert(
+            "activeClaudeDesktopRelayId".to_string(),
             Value::String(value.to_string()),
         );
     }
@@ -1923,6 +2064,57 @@ experimental_bearer_token = "sk-existing"
         assert_eq!(
             saved["relayProfiles"][1]["aggregateMembers"],
             json!(["relay-a"])
+        );
+    }
+
+    #[test]
+    fn settings_store_update_roundtrips_codex_catalog_json() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+        let catalog = r#"[{"displayName":"DeepSeek V4 Flash","model":"deepseek-v4-flash","contextWindow":"128000"}]"#;
+
+        store
+            .update(json!({
+                "relayProfiles": [{
+                    "id": "codex-catalog",
+                    "name": "Codex Catalog",
+                    "targetApp": "codex",
+                    "codexCatalogJson": catalog
+                }]
+            }))
+            .unwrap();
+
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved["relayProfiles"][0]["codexCatalogJson"],
+            json!(catalog)
+        );
+
+        let reloaded = serde_json::to_value(store.load().unwrap()).unwrap();
+        assert_eq!(
+            reloaded["relayProfiles"][0]["codexCatalogJson"],
+            json!(catalog)
+        );
+
+        store
+            .update(json!({
+                "relayProfiles": [{
+                    "id": "codex-catalog",
+                    "name": "Codex Catalog",
+                    "targetApp": "codex",
+                    "model": "legacy-model",
+                    "modelList": "legacy-model",
+                    "codexCatalogJson": "[]"
+                }]
+            }))
+            .unwrap();
+
+        let reloaded = serde_json::to_value(store.load().unwrap()).unwrap();
+        assert_eq!(
+            reloaded["relayProfiles"][0]["codexCatalogJson"],
+            json!("[]")
         );
     }
 

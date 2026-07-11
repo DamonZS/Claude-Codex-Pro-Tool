@@ -58,10 +58,18 @@ export function createAggregateSupplierProfile(settings: BackendSettings): Relay
 }
 
 export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
-  const modelList = profile.modelList ?? "";
+  const hasExplicitModelList = typeof profile.modelList === "string";
+  const modelList = hasExplicitModelList ? profile.modelList : "";
   const apiKey = supplierProfileResolvedApiKey(profile);
   const baseUrl = profile.baseUrl || profile.upstreamBaseUrl || "";
   const model = profile.model || profile.testModel || firstSupplierModel(modelList) || "gpt-5.5";
+  const targetApp = profile.targetApp || "codex";
+  const modelMappingEnabled = typeof profile.modelMappingEnabled === "boolean"
+    ? profile.modelMappingEnabled
+    : !!profile.modelMapping || !!profile.modelMappingJson;
+  const routeEnabled = typeof profile.routeEnabled === "boolean"
+    ? profile.routeEnabled
+    : profile.claudeDesktopMode === "proxy" || /\bproxy\b/i.test(profile.routeMode || "");
   return {
     ...profile,
     id: supplierIdFromName(profile.id || profile.name),
@@ -76,7 +84,8 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
     officialMixApiKey: false,
     configContents: profile.configContents ?? "",
     authContents: profile.authContents ?? "",
-    modelList: modelList || model,
+    modelList: hasExplicitModelList ? modelList : model,
+    codexCatalogJson: profile.codexCatalogJson ?? "",
     contextWindow: profile.contextWindow ?? "",
     autoCompactLimit: profile.autoCompactLimit ?? "",
     userAgent: profile.userAgent ?? "",
@@ -91,15 +100,15 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
     maxThinkingEnabled: !!profile.maxThinkingEnabled,
     disableAutoUpdate: !!profile.disableAutoUpdate,
     importSource: profile.importSource ?? "",
-    targetApp: profile.targetApp ?? "",
+    targetApp,
     apiFormat: profile.apiFormat ?? "",
-    claudeDesktopMode: profile.claudeDesktopMode ?? "",
-    routeEnabled: typeof profile.routeEnabled === "boolean"
-      ? profile.routeEnabled
-      : supplierApiFormatRequiresRoute(profile.apiFormat) || !!profile.modelMappingEnabled,
-    routeMode: profile.routeMode ?? "",
+    claudeDesktopMode: targetApp === "codex" ? "" : routeEnabled ? "proxy" : "direct",
+    routeEnabled,
+    routeMode: targetApp === "codex"
+      ? (routeEnabled ? "Codex Proxy" : "Codex Direct")
+      : (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
     modelMapping: profile.modelMapping ?? "",
-    modelMappingEnabled: !!profile.modelMappingEnabled || !!profile.modelMapping || !!profile.modelMappingJson,
+    modelMappingEnabled,
     modelMappingJson: profile.modelMappingJson ?? supplierModelMappingJsonFromText(profile.modelMapping ?? ""),
     aggregateEnabled: !!profile.aggregateEnabled,
     aggregateStrategy: profile.aggregateStrategy || (profile.aggregateEnabled ? "failover" : ""),
@@ -118,11 +127,135 @@ export type SupplierModelMappingRow = {
   supports1m: boolean;
 };
 
+export type SupplierDirectModelRow = {
+  model: string;
+  supports1m: boolean;
+};
+
+export type SupplierCodexCatalogRow = {
+  displayName: string;
+  model: string;
+  contextWindow: string;
+};
+
+export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCatalogRow[] {
+  const raw = String(profile.codexCatalogJson ?? "").trim();
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        const seen = new Set<string>();
+        return parsed.flatMap((item) => {
+          if (!item || typeof item !== "object") return [];
+          const value = item as Record<string, unknown>;
+          const model = typeof value.model === "string" ? value.model.trim() : "";
+          if (!model || seen.has(model)) return [];
+          seen.add(model);
+          const displayName = typeof value.displayName === "string"
+            ? value.displayName.trim()
+            : typeof value.display_name === "string"
+              ? value.display_name.trim()
+              : "";
+          const contextWindow = String(value.contextWindow ?? value.context_window ?? "")
+            .replace(/[^\d]/g, "");
+          return [{ displayName, model, contextWindow }];
+        });
+      }
+    } catch {
+      // Invalid legacy metadata falls back to the existing model list below.
+    }
+  }
+
+  const fallbackModels = supplierDirectModelRows(profile.modelList).map((row) => row.model);
+  const model = profile.model?.trim() || profile.testModel?.trim() || "";
+  const models = fallbackModels.length ? fallbackModels : model ? [model] : [];
+  const seen = new Set<string>();
+  return models.flatMap((item) => {
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) return [];
+    seen.add(normalized);
+    return [{
+      displayName: normalized,
+      model: normalized,
+      contextWindow: String(profile.contextWindow || "").replace(/[^\d]/g, ""),
+    }];
+  });
+}
+
+export function supplierCodexCatalogJson(rows: SupplierCodexCatalogRow[]) {
+  const seen = new Set<string>();
+  const normalized = rows.flatMap((row) => {
+    const model = row.model.trim();
+    if (!model || seen.has(model)) return [];
+    seen.add(model);
+    const displayName = row.displayName.trim();
+    const contextWindow = String(row.contextWindow || "").replace(/[^\d]/g, "");
+    return [{
+      model,
+      ...(displayName ? { displayName } : {}),
+      ...(contextWindow && Number.parseInt(contextWindow, 10) > 0
+        ? { contextWindow: Number.parseInt(contextWindow, 10) }
+        : {}),
+    }];
+  });
+  return JSON.stringify(normalized, null, 2);
+}
+
+export function supplierCodexCatalogModelList(rows: SupplierCodexCatalogRow[]) {
+  const serialized = supplierCodexCatalogJson(rows);
+  try {
+    const parsed = JSON.parse(serialized) as Array<{ model?: unknown }>;
+    return parsed
+      .map((row) => typeof row.model === "string" ? row.model : "")
+      .filter(Boolean)
+      .join("\n");
+  } catch {
+    return "";
+  }
+}
+
+export function supplierDirectModelRows(modelList: string): SupplierDirectModelRow[] {
+  return String(modelList || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const supports1m = /\s*\[1m\]\s*$/i.test(line);
+      return {
+        model: line.replace(/\s*\[1m\]\s*$/i, "").trim(),
+        supports1m,
+      };
+    })
+    .filter((row) => row.model);
+}
+
+export function supplierDirectModelList(rows: SupplierDirectModelRow[]) {
+  return rows
+    .map((row) => ({ model: row.model.trim(), supports1m: row.supports1m }))
+    .filter((row) => row.model)
+    .map((row) => `${row.model}${row.supports1m ? " [1M]" : ""}`)
+    .join("\n");
+}
+
+/**
+ * Claude Desktop rejects a whole gateway catalogue when one direct route is
+ * malformed.  Keep this in sync with cc-switch's route whitelist.
+ */
+export function supplierDirectModelIsClaudeDesktopSafe(model: string) {
+  const normalized = model.trim().toLowerCase();
+  if (!normalized || normalized.includes("[1m]")) return false;
+  const routeTail = normalized.startsWith("anthropic/claude-")
+    ? normalized.slice("anthropic/claude-".length)
+    : normalized.startsWith("claude-")
+      ? normalized.slice("claude-".length)
+      : "";
+  return ["sonnet-", "opus-", "haiku-", "fable-"]
+    .some((prefix) => routeTail.startsWith(prefix) && routeTail.length > prefix.length);
+}
+
 export const SUPPLIER_MODEL_MAPPING_DEFAULTS: SupplierModelMappingRow[] = [
-  { role: "sonnet", label: "Sonnet", routeId: "claude-sonnet-4-6", displayName: "", requestModel: "", supports1m: true },
-  { role: "opus", label: "Opus", routeId: "claude-opus-4-8", displayName: "", requestModel: "", supports1m: true },
-  { role: "fable", label: "Fable", routeId: "claude-fable-5", displayName: "", requestModel: "", supports1m: true },
-  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "", requestModel: "", supports1m: false },
+  { role: "sonnet", label: "Sonnet", routeId: "claude-sonnet-4-6", displayName: "claude-opus-4-6", requestModel: "claude-opus-4-6", supports1m: true },
+  { role: "opus", label: "Opus", routeId: "claude-opus-4-8", displayName: "claude-opus-4-8", requestModel: "claude-opus-4-8", supports1m: true },
+  { role: "fable", label: "Fable", routeId: "claude-fable-5", displayName: "claude-Fable-5", requestModel: "claude-Fable-5", supports1m: true },
+  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "claude-opus-4-7", requestModel: "claude-opus-4-7", supports1m: true },
   { role: "subagent", label: "Subagent", routeId: "claude-subagent", displayName: "", requestModel: "", supports1m: true },
 ];
 
@@ -174,7 +307,7 @@ export function supplierApiFormatRequiresRoute(value?: string) {
 }
 
 export function supplierRouteEnabled(profile: RelayProfile) {
-  return !!profile.routeEnabled || supplierApiFormatRequiresRoute(profile.apiFormat);
+  return !!profile.routeEnabled;
 }
 
 export function supplierModelMappingRows(profile: RelayProfile): SupplierModelMappingRow[] {
@@ -279,7 +412,9 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
   const apiKey = supplierProfileResolvedApiKey(normalized);
   const generated = { ...normalized, apiKey };
   if (generated.targetApp === "claude" || generated.targetApp === "claude-desktop") {
-    const routeRows = supplierModelMappingRows(generated).filter((row) => row.routeId.trim() && row.requestModel.trim());
+    const routeRows = generated.modelMappingEnabled
+      ? supplierModelMappingRows(generated).filter((row) => row.routeId.trim() && row.requestModel.trim())
+      : [];
     const claudeDesktopModelRoutes = Object.fromEntries(routeRows.map((row) => [row.routeId.trim(), {
       model: row.requestModel.trim(),
       labelOverride: row.displayName.trim() || undefined,
@@ -308,7 +443,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
         },
         meta: {
           apiFormat: normalizedSupplierApiFormat(generated.apiFormat || "Anthropic Messages"),
-          claudeDesktopMode: generated.claudeDesktopMode || (supplierRouteEnabled(generated) ? "proxy" : "direct"),
+          claudeDesktopMode: supplierRouteEnabled(generated) ? "proxy" : "direct",
           claudeDesktopModelRoutes,
         },
       }, null, 2)}\n`,
@@ -355,12 +490,12 @@ export function supplierApiKeyFromAuthContents(contents: string) {
   if (!text) return "";
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    for (const key of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "api_key", "apiKey"]) {
+    for (const key of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "api_key", "apiKey"]) {
       const value = parsed[key];
       if (typeof value === "string" && value.trim()) return value.trim();
     }
   } catch {
-    const match = text.match(/"(?:OPENAI_API_KEY|api_key|apiKey)"\s*:\s*"([^"]+)"/);
+    const match = text.match(/"(?:OPENAI_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|api_key|apiKey)"\s*:\s*"([^"]+)"/);
     if (match?.[1]?.trim()) return match[1].trim();
   }
   return "";
@@ -368,6 +503,18 @@ export function supplierApiKeyFromAuthContents(contents: string) {
 
 export function supplierApiKeyFromConfigContents(contents: string) {
   const text = String(contents || "");
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown> & { env?: Record<string, unknown> };
+    for (const source of [parsed, parsed.env]) {
+      if (!source) continue;
+      for (const key of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "api_key", "apiKey"]) {
+        const value = source[key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+    }
+  } catch {
+    // Codex profiles use TOML; fall through to the existing TOML-compatible extraction.
+  }
   const bearer = text.match(/experimental_bearer_token\s*=\s*["']([^"']+)["']/);
   if (bearer?.[1]?.trim()) return bearer[1].trim();
   const authorization = text.match(/Authorization\s*=\s*["']Bearer\s+([^"']+)["']/i);
@@ -399,13 +546,13 @@ export function tomlString(value: string) {
 }
 
 export function firstSupplierModel(modelList: string) {
-  return modelList.split(/\r?\n/).map((item) => item.trim()).find(Boolean) || "";
+  return supplierDirectModelRows(modelList)[0]?.model || "";
 }
 
 export function redactSupplierAuth(contents: string) {
   try {
     const parsed = JSON.parse(contents || "{}") as Record<string, unknown>;
-    for (const key of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "api_key", "apiKey"]) {
+    for (const key of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "api_key", "apiKey"]) {
       const value = parsed[key];
       if (typeof value === "string" && value) {
         parsed[key] = `${value.slice(0, 6)}...${value.slice(-4)}`;
@@ -414,6 +561,62 @@ export function redactSupplierAuth(contents: string) {
     return `${JSON.stringify(parsed, null, 2)}\n`;
   } catch {
     return "{\n  \"OPENAI_API_KEY\": \"***\"\n}\n";
+  }
+}
+
+const SUPPLIER_SECRET_CONFIG_KEYS = new Set([
+  "apikey",
+  "openaiapikey",
+  "anthropicapikey",
+  "anthropicauthtoken",
+  "authorization",
+  "bearertoken",
+  "accesstoken",
+  "token",
+  "cookie",
+  "clientsecret",
+  "password",
+  "privatekey",
+  "secret",
+]);
+
+function supplierConfigKeyIsSecret(key: string) {
+  const normalized = key.replace(/[^a-z]/gi, "").toLowerCase();
+  return SUPPLIER_SECRET_CONFIG_KEYS.has(normalized)
+    || normalized.endsWith("apikey")
+    || normalized.endsWith("authtoken")
+    || normalized.endsWith("secret")
+    || normalized.endsWith("privatekey");
+}
+
+function redactSupplierConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSupplierConfigValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+    key,
+    supplierConfigKeyIsSecret(key) && typeof child === "string"
+      ? "***redacted***"
+      : redactSupplierConfigValue(child),
+  ]));
+}
+
+/** Redacts credentials before a hidden API-key configuration preview is shown. */
+export function redactSupplierConfig(contents: string) {
+  const text = String(contents || "");
+  try {
+    const value = JSON.parse(text);
+    const suffix = text.endsWith("\n") ? "\n" : "";
+    return `${JSON.stringify(redactSupplierConfigValue(value), null, 2)}${suffix}`;
+  } catch {
+    return text
+      .replace(
+        /((?:OPENAI_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|api_key|apiKey)\s*[=:]\s*["']?)([^"'\s,}\]]+)/gi,
+        "$1***redacted***",
+      )
+      .replace(
+        /(Authorization\s*[=:]\s*["']?(?:Bearer\s+)?)([^"'\s,}\]]+)/gi,
+        "$1***redacted***",
+      );
   }
 }
 

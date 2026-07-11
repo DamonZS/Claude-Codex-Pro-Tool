@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
+use std::sync::Mutex;
 use std::thread;
 
 use claude_codex_pro_core::model_catalog::{
@@ -11,6 +12,8 @@ use claude_codex_pro_core::settings::{
     BackendSettings, RelayMode, RelayProfile, RelayProtocol, SettingsStore,
 };
 use serde_json::json;
+
+static MODEL_CATALOG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[tokio::test]
 async fn model_catalog_fetches_models_from_codex_config_provider() {
@@ -69,6 +72,7 @@ experimental_bearer_token = "relay-key"
 
 #[tokio::test]
 async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
+    let _guard = MODEL_CATALOG_ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let codex_home = temp.path().join("codex-home");
     std::fs::create_dir_all(&codex_home).unwrap();
@@ -92,6 +96,11 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
                     protocol: RelayProtocol::Responses,
                     relay_mode: RelayMode::PureApi,
                     model_list: "deepseek-coder\nqwen3-coder\nclaude-compatible".to_string(),
+                    codex_catalog_json: r#"[
+                        {"displayName":"DeepSeek V4 Flash","model":"deepseek-coder","contextWindow":128000},
+                        {"displayName":"Qwen 3 Coder","model":"qwen3-coder","contextWindow":"200000"}
+                    ]"#
+                    .to_string(),
                     ..RelayProfile::default()
                 }],
                 ..BackendSettings::default()
@@ -121,10 +130,26 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
         json!(["qwen3-coder", "deepseek-coder", "claude-compatible"])
     );
     assert_eq!(result["sources"][0]["type"], "relay_profile_model_list");
+    assert_eq!(
+        result["model_descriptors"],
+        json!([
+            {
+                "model": "deepseek-coder",
+                "display_name": "DeepSeek V4 Flash",
+                "context_window": 128000
+            },
+            {
+                "model": "qwen3-coder",
+                "display_name": "Qwen 3 Coder",
+                "context_window": 200000
+            }
+        ])
+    );
 }
 
 #[tokio::test]
 async fn model_catalog_merges_local_catalog_file_for_active_relay_profile() {
+    let _guard = MODEL_CATALOG_ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let codex_home = temp.path().join("codex-home");
     std::fs::create_dir_all(&codex_home).unwrap();

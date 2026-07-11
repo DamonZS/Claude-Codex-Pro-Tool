@@ -27,6 +27,13 @@ struct ModelSource {
     api_key: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RelayProfileCatalogModel {
+    model: String,
+    display_name: String,
+    context_window: Option<u64>,
+}
+
 #[derive(Debug, Default)]
 struct CodexConfig {
     root: HashMap<String, String>,
@@ -55,6 +62,7 @@ pub async fn read_codex_model_catalog() -> Value {
                 "provider_name": "",
                 "default_model": "",
                 "models": [],
+                "model_descriptors": [],
                 "sources": [],
                 "responses_api": responses_api_status("unknown", "", "")
             });
@@ -64,6 +72,7 @@ pub async fn read_codex_model_catalog() -> Value {
 }
 
 fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Value {
+    let model_descriptors = relay_profile_catalog_models(profile);
     let (catalog_models, catalog_statuses) = models_from_default_model_catalog_json_files(home);
     let models = unique_strings(
         relay_profile_model_ids(profile)
@@ -101,6 +110,16 @@ fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Val
         "provider_name": provider_name,
         "default_model": default_model,
         "models": models,
+        "model_descriptors": model_descriptors.iter().map(|entry| {
+            let mut descriptor = json!({
+                "model": entry.model,
+                "display_name": entry.display_name,
+            });
+            if let Some(context_window) = entry.context_window {
+                descriptor["context_window"] = json!(context_window);
+            }
+            descriptor
+        }).collect::<Vec<_>>(),
         "sources": sources,
         "responses_api": responses_api_status("unknown", "", "")
     })
@@ -113,8 +132,57 @@ fn relay_profile_model_ids(profile: &RelayProfile) -> Vec<String> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
+            .chain(
+                relay_profile_catalog_models(profile)
+                    .into_iter()
+                    .map(|entry| entry.model),
+            )
             .collect(),
     )
+}
+
+fn relay_profile_catalog_models(profile: &RelayProfile) -> Vec<RelayProfileCatalogModel> {
+    let Ok(Value::Array(rows)) = serde_json::from_str::<Value>(&profile.codex_catalog_json) else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    rows.into_iter()
+        .filter_map(|row| {
+            let model = row.get("model")?.as_str()?.trim();
+            if model.is_empty() || !seen.insert(model.to_string()) {
+                return None;
+            }
+            let display_name = row
+                .get("displayName")
+                .or_else(|| row.get("display_name"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(model)
+                .to_string();
+            let context_window = row
+                .get("contextWindow")
+                .or_else(|| row.get("context_window"))
+                .and_then(|value| {
+                    value.as_u64().or_else(|| {
+                        value
+                            .as_str()
+                            .map(|text| {
+                                text.chars()
+                                    .filter(char::is_ascii_digit)
+                                    .collect::<String>()
+                            })
+                            .and_then(|text| text.parse::<u64>().ok())
+                    })
+                })
+                .filter(|value| *value > 0);
+            Some(RelayProfileCatalogModel {
+                model: model.to_string(),
+                display_name,
+                context_window,
+            })
+        })
+        .collect()
 }
 
 pub async fn read_codex_model_catalog_from_home(

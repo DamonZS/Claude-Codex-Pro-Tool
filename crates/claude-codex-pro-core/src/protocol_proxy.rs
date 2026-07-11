@@ -16,6 +16,10 @@ const CLAUDE_DESKTOP_SAFE_FABLE_MODEL: &str = "claude-fable-5";
 const CLAUDE_DESKTOP_SAFE_SONNET_MODEL: &str = "claude-sonnet-4-6";
 const CLAUDE_DESKTOP_SAFE_OPUS_MODEL: &str = "claude-opus-4-8";
 const CLAUDE_DESKTOP_SAFE_HAIKU_MODEL: &str = "claude-haiku-4-5";
+const CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL: &str = "claude-opus-4-6";
+const CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL: &str = "claude-opus-4-8";
+const CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL: &str = "claude-Fable-5";
+const CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL: &str = "claude-opus-4-7";
 const THINK_OPEN_TAG: &str = "<think>";
 const THINK_CLOSE_TAG: &str = "</think>";
 const EXTRA_CHAT_PASSTHROUGH_FIELDS: &[&str] = &[
@@ -451,62 +455,197 @@ pub fn is_claude_desktop_messages_proxy_path(path: &str) -> bool {
     )
 }
 
+pub fn is_claude_desktop_count_tokens_proxy_path(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    matches!(
+        path,
+        "/claude-desktop/messages/count_tokens"
+            | "/claude-desktop/v1/messages/count_tokens"
+            | "/claude-desktop/v1/v1/messages/count_tokens"
+    )
+}
+
+pub fn is_claude_desktop_gateway_health_path(path: &str) -> bool {
+    path.split_once('?').map_or(path, |(path, _)| path) == "/claude-desktop"
+}
+
 pub fn claude_desktop_safe_models() -> Vec<Value> {
     claude_desktop_safe_models_with_labels("")
 }
 
 pub fn claude_desktop_default_model_list() -> String {
     [
-        CLAUDE_DESKTOP_SAFE_FABLE_MODEL,
-        CLAUDE_DESKTOP_SAFE_HAIKU_MODEL,
-        CLAUDE_DESKTOP_SAFE_OPUS_MODEL,
-        CLAUDE_DESKTOP_SAFE_SONNET_MODEL,
+        CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL,
+        CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL,
+        CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL,
+        CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL,
     ]
     .join("\n")
 }
 
 pub fn claude_desktop_safe_models_with_labels(model_list: &str) -> Vec<Value> {
-    let models = non_empty_model_list_or_default(model_list);
+    let parsed_models = parse_claude_desktop_model_list(model_list);
+    let default_models = parse_claude_desktop_model_list(&claude_desktop_default_model_list());
+    // An explicitly supplied [1M] declaration is meaningful.  Do not collapse
+    // it into the legacy all-1M default merely because the model names happen
+    // to match the default role names.
+    let uses_default_mapping = model_list.trim().is_empty()
+        || (parsed_models
+            .iter()
+            .map(|entry| entry.model.as_str())
+            .eq(default_models.iter().map(|entry| entry.model.as_str()))
+            && parsed_models.iter().all(|entry| !entry.supports_1m));
+    if uses_default_mapping {
+        return vec![
+            claude_desktop_model_entry(
+                CLAUDE_DESKTOP_SAFE_FABLE_MODEL,
+                Some(CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL),
+                true,
+            ),
+            claude_desktop_model_entry(
+                CLAUDE_DESKTOP_SAFE_HAIKU_MODEL,
+                Some(CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL),
+                true,
+            ),
+            claude_desktop_model_entry(
+                CLAUDE_DESKTOP_SAFE_OPUS_MODEL,
+                Some(CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL),
+                true,
+            ),
+            claude_desktop_model_entry(
+                CLAUDE_DESKTOP_SAFE_SONNET_MODEL,
+                Some(CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL),
+                true,
+            ),
+        ];
+    }
+    let models = non_empty_model_entries_or_default(model_list);
     let fallback = models.first().cloned();
-    let fable = pick_model_by_keyword(&models, "fable")
+    let fable = pick_model_entry_by_keyword(&models, "fable")
         .or_else(|| models.first().cloned())
         .or_else(|| fallback.clone());
-    let haiku = pick_model_by_keyword(&models, "haiku")
+    let haiku = pick_model_entry_by_keyword(&models, "haiku")
         .or_else(|| models.get(1).cloned())
         .or_else(|| fallback.clone());
-    let opus = pick_model_by_keyword(&models, "opus")
+    let opus = pick_model_entry_by_keyword(&models, "opus")
         .or_else(|| models.get(2).cloned())
         .or_else(|| fallback.clone());
-    let sonnet = pick_model_by_keyword(&models, "sonnet")
+    let sonnet = pick_model_entry_by_keyword(&models, "sonnet")
         .or_else(|| models.get(3).cloned())
         .or_else(|| fallback.clone());
 
     let mut result = Vec::new();
     result.push(claude_desktop_model_entry(
         CLAUDE_DESKTOP_SAFE_FABLE_MODEL,
-        fable.as_deref(),
-        false,
+        fable.as_ref().map(|entry| entry.model.as_str()),
+        fable.as_ref().is_some_and(|entry| entry.supports_1m),
     ));
     result.push(claude_desktop_model_entry(
         CLAUDE_DESKTOP_SAFE_HAIKU_MODEL,
-        haiku.as_deref(),
-        false,
+        haiku.as_ref().map(|entry| entry.model.as_str()),
+        haiku.as_ref().is_some_and(|entry| entry.supports_1m),
     ));
     result.push(claude_desktop_model_entry(
         CLAUDE_DESKTOP_SAFE_OPUS_MODEL,
-        opus.as_deref(),
-        true,
+        opus.as_ref().map(|entry| entry.model.as_str()),
+        opus.as_ref().is_some_and(|entry| entry.supports_1m),
     ));
     result.push(claude_desktop_model_entry(
         CLAUDE_DESKTOP_SAFE_SONNET_MODEL,
-        sonnet.as_deref(),
-        false,
+        sonnet.as_ref().map(|entry| entry.model.as_str()),
+        sonnet.as_ref().is_some_and(|entry| entry.supports_1m),
     ));
     result
 }
 
+/// Builds the model catalogue that Claude Desktop reads from a configured
+/// supplier.  `None` preserves the historical provider-request behaviour;
+/// supplier profiles always pass an explicit mode so their mapping and direct
+/// lists cannot leak into one another.
+pub fn claude_desktop_inference_models(
+    model_list: &str,
+    model_mapping_enabled: Option<bool>,
+    model_mapping_json: &str,
+) -> Vec<Value> {
+    match model_mapping_enabled {
+        None => claude_desktop_safe_models_with_labels(model_list),
+        Some(false) => parse_claude_desktop_model_list(model_list)
+            .into_iter()
+            .map(|entry| claude_desktop_model_entry(&entry.model, None, entry.supports_1m))
+            .collect(),
+        Some(true) => claude_desktop_mapping_inference_models(model_mapping_json)
+            .unwrap_or_else(|| claude_desktop_safe_models_with_labels("")),
+    }
+}
+
+/// Mirrors the route whitelist enforced by Claude Desktop.  A profile with an
+/// invalid route causes Claude Desktop to reject its complete model catalogue,
+/// therefore direct mode never accepts an arbitrary upstream ID here.
+pub fn is_claude_desktop_safe_model_id(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.contains("[1m]") {
+        return false;
+    }
+    let Some(route_tail) = normalized
+        .strip_prefix("anthropic/claude-")
+        .or_else(|| normalized.strip_prefix("claude-"))
+    else {
+        return false;
+    };
+    ["sonnet-", "opus-", "haiku-", "fable-"]
+        .into_iter()
+        .any(|prefix| {
+            route_tail
+                .strip_prefix(prefix)
+                .is_some_and(|version| !version.is_empty())
+        })
+}
+
+fn claude_desktop_mapping_inference_models(model_mapping_json: &str) -> Option<Vec<Value>> {
+    let entries = serde_json::from_str::<Value>(model_mapping_json.trim())
+        .ok()?
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            let route_id = entry.get("routeId")?.as_str()?.trim();
+            if route_id.is_empty() || !is_claude_desktop_safe_model_id(route_id) {
+                return None;
+            }
+            let request_model = entry
+                .get("requestModel")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty());
+            let display_name = entry
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .or(request_model);
+            let supports_1m = entry
+                .get("supports1m")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || request_model
+                    .is_some_and(|model| model.ends_with("[1M]") || model.ends_with("[1m]"));
+            Some(claude_desktop_model_entry(
+                route_id,
+                display_name.map(strip_one_m_suffix),
+                supports_1m,
+            ))
+        })
+        .collect::<Vec<_>>();
+    (!entries.is_empty()).then_some(entries)
+}
+
 pub fn claude_desktop_models_response(model_list: &str) -> Value {
-    let data = claude_desktop_safe_models_with_labels(model_list)
+    claude_desktop_models_response_from_inference_models(claude_desktop_safe_models_with_labels(
+        model_list,
+    ))
+}
+
+fn claude_desktop_models_response_from_inference_models(inference_models: Vec<Value>) -> Value {
+    let data = inference_models
         .into_iter()
         .filter_map(|item| {
             let object = item.as_object()?;
@@ -628,10 +767,59 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
 
 pub fn local_claude_desktop_models_proxy_response() -> anyhow::Result<ProxyHttpResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    let relay = settings.active_relay_profile();
-    let body = serde_json::to_vec(&claude_desktop_models_response(&relay.model_list))?;
+    let body = serde_json::to_vec(&claude_desktop_models_response_for_settings(&settings))?;
     Ok(ProxyHttpResponse {
         status: "200 OK".to_string(),
+        content_type: "application/json; charset=utf-8".to_string(),
+        body,
+    })
+}
+
+pub fn claude_desktop_models_response_for_settings(
+    settings: &crate::settings::BackendSettings,
+) -> Value {
+    let relay = settings.active_relay_profile_for_target("claude-desktop");
+    claude_desktop_models_response_from_inference_models(claude_desktop_inference_models(
+        &relay.model_list,
+        Some(relay.model_mapping_enabled),
+        &relay.model_mapping_json,
+    ))
+}
+
+pub fn claude_desktop_count_tokens_response(body: &str) -> anyhow::Result<Value> {
+    let request: Value = serde_json::from_str(body)?;
+    if !request.is_object() {
+        anyhow::bail!("Claude Desktop count_tokens 请求必须是 JSON 对象");
+    }
+    Ok(json!({
+        "input_tokens": estimate_json_tokens(&request)
+    }))
+}
+
+pub fn local_claude_desktop_gateway_health_response() -> anyhow::Result<ProxyHttpResponse> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let relay = settings.active_relay_profile_for_target("claude-desktop");
+    let base_url = claude_desktop_resolved_upstream_base_url(&relay, &settings);
+    let api_key = claude_desktop_upstream_api_key(&relay, &settings);
+    let model_count = claude_desktop_inference_models(
+        &relay.model_list,
+        Some(relay.model_mapping_enabled),
+        &relay.model_mapping_json,
+    )
+    .len();
+    let ready = !base_url.trim().is_empty() && !api_key.trim().is_empty() && model_count > 0;
+    let status = if ready {
+        "200 OK"
+    } else {
+        "503 Service Unavailable"
+    };
+    let body = serde_json::to_vec(&json!({
+        "status": if ready { "ok" } else { "failed" },
+        "service": "claude-desktop-gateway",
+        "model_count": model_count
+    }))?;
+    Ok(ProxyHttpResponse {
+        status: status.to_string(),
         content_type: "application/json; charset=utf-8".to_string(),
         body,
     })
@@ -641,7 +829,7 @@ pub async fn open_claude_desktop_messages_proxy_request(
     body: &str,
 ) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
-    let relay = settings.active_relay_profile();
+    let relay = settings.active_relay_profile_for_target("claude-desktop");
     let base_url = claude_desktop_resolved_upstream_base_url(&relay, &settings);
     if base_url.trim().is_empty() {
         anyhow::bail!("Claude Desktop 上游 Base URL 不能为空");
@@ -686,32 +874,47 @@ pub fn claude_desktop_resolved_upstream_base_url(
     relay: &crate::settings::RelayProfile,
     settings: &crate::settings::BackendSettings,
 ) -> String {
-    provider_string_from_toml(&relay.config_contents, "base_url")
-        .or_else(|| non_empty_string(&relay.upstream_base_url))
-        .or_else(|| {
-            let value = non_empty_string(&relay.base_url)?;
-            if value == local_claude_desktop_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT) {
-                None
-            } else {
-                Some(value)
-            }
-        })
-        .or_else(|| non_empty_string(&settings.relay_base_url))
-        .unwrap_or_else(|| DEFAULT_CLAUDE_DESKTOP_UPSTREAM_BASE_URL.to_string())
+    provider_string_from_json_env(
+        &relay.config_contents,
+        &[
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_BASE_URL",
+            "base_url",
+            "baseUrl",
+        ],
+    )
+    .or_else(|| provider_string_from_toml(&relay.config_contents, "base_url"))
+    .or_else(|| non_empty_string(&relay.upstream_base_url))
+    .or_else(|| {
+        let value = non_empty_string(&relay.base_url)?;
+        if value == local_claude_desktop_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT) {
+            None
+        } else {
+            Some(value)
+        }
+    })
+    .or_else(|| non_empty_string(&settings.relay_base_url))
+    .unwrap_or_else(|| DEFAULT_CLAUDE_DESKTOP_UPSTREAM_BASE_URL.to_string())
 }
 
 fn claude_desktop_upstream_api_key(
     relay: &crate::settings::RelayProfile,
     settings: &crate::settings::BackendSettings,
 ) -> String {
-    provider_string_from_toml(&relay.config_contents, "experimental_bearer_token")
-        .or_else(|| openai_api_key_from_json(&relay.auth_contents))
-        .or_else(|| non_empty_string(&relay.api_key))
+    non_empty_string(&crate::settings::relay_profile_resolved_api_key(relay))
         .or_else(|| non_empty_string(&settings.relay_api_key))
         .or_else(|| {
-            std::env::var("OPENAI_API_KEY")
-                .ok()
-                .and_then(|value| non_empty_string(&value))
+            [
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+            ]
+            .into_iter()
+            .find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .and_then(|value| non_empty_string(&value))
+            })
         })
         .unwrap_or_default()
 }
@@ -732,10 +935,19 @@ pub fn claude_desktop_model_mapping_for(
     original_model: &str,
     relay: &crate::settings::RelayProfile,
 ) -> Option<String> {
+    if !relay.model_mapping_enabled {
+        return None;
+    }
     if let Some(mapped) = claude_desktop_model_mapping_json_for(original_model, relay) {
         return Some(mapped);
     }
+    if relay.model_mapping_enabled && relay.model_mapping_json.trim().is_empty() {
+        return default_claude_desktop_upstream_model(original_model).map(ToOwned::to_owned);
+    }
     let models = parse_plain_model_list(&relay.model_list);
+    if models.is_empty() && relay_model_fallback(relay).is_none() {
+        return default_claude_desktop_upstream_model(original_model).map(ToOwned::to_owned);
+    }
     let default_models = non_empty_model_list_or_default(&relay.model_list);
     let fallback = relay_model_fallback(relay)
         .or_else(|| models.first().cloned())
@@ -765,6 +977,16 @@ pub fn claude_desktop_model_mapping_for(
         fallback
     }?;
     Some(strip_one_m_suffix(&mapped).to_string())
+}
+
+fn default_claude_desktop_upstream_model(model: &str) -> Option<&'static str> {
+    match claude_route_role_keyword(model)? {
+        "sonnet" => Some(CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL),
+        "opus" => Some(CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL),
+        "fable" => Some(CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL),
+        "haiku" => Some(CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL),
+        _ => None,
+    }
 }
 
 fn claude_desktop_model_mapping_json_for(
@@ -870,15 +1092,38 @@ fn relay_model_fallback(relay: &crate::settings::RelayProfile) -> Option<String>
         .or_else(|| root_string_from_toml(&relay.config_contents, "model"))
 }
 
-fn parse_plain_model_list(raw: &str) -> Vec<String> {
+#[derive(Clone)]
+struct ClaudeDesktopModelListEntry {
+    model: String,
+    supports_1m: bool,
+}
+
+fn parse_claude_desktop_model_list(raw: &str) -> Vec<ClaudeDesktopModelListEntry> {
     raw.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(strip_one_m_suffix)
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToString::to_string)
+        .map(|line| ClaudeDesktopModelListEntry {
+            supports_1m: line.ends_with("[1M]") || line.ends_with("[1m]"),
+            model: strip_one_m_suffix(line).trim().to_string(),
+        })
+        .filter(|entry| !entry.model.is_empty())
         .collect()
+}
+
+fn parse_plain_model_list(raw: &str) -> Vec<String> {
+    parse_claude_desktop_model_list(raw)
+        .into_iter()
+        .map(|entry| entry.model)
+        .collect()
+}
+
+fn non_empty_model_entries_or_default(raw: &str) -> Vec<ClaudeDesktopModelListEntry> {
+    let models = parse_claude_desktop_model_list(raw);
+    if models.is_empty() {
+        parse_claude_desktop_model_list(&claude_desktop_default_model_list())
+    } else {
+        models
+    }
 }
 
 fn non_empty_model_list_or_default(raw: &str) -> Vec<String> {
@@ -888,6 +1133,16 @@ fn non_empty_model_list_or_default(raw: &str) -> Vec<String> {
     } else {
         models
     }
+}
+
+fn pick_model_entry_by_keyword(
+    models: &[ClaudeDesktopModelListEntry],
+    keyword: &str,
+) -> Option<ClaudeDesktopModelListEntry> {
+    models
+        .iter()
+        .find(|entry| entry.model.to_ascii_lowercase().contains(keyword))
+        .cloned()
 }
 
 fn pick_model_by_keyword(models: &[String], keyword: &str) -> Option<String> {
@@ -904,6 +1159,43 @@ fn strip_one_m_suffix(model: &str) -> &str {
         .or_else(|| trimmed.strip_suffix("[1m]"))
         .map(str::trim)
         .unwrap_or(trimmed)
+}
+
+fn estimate_json_tokens(value: &Value) -> u64 {
+    match value {
+        Value::Null => 0,
+        Value::Bool(_) | Value::Number(_) => 1,
+        Value::String(text) => estimate_text_tokens(text),
+        Value::Array(items) => items.iter().map(estimate_json_tokens).sum(),
+        Value::Object(object) => object
+            .iter()
+            .map(|(key, value)| estimate_text_tokens(key) + estimate_json_tokens(value))
+            .sum(),
+    }
+}
+
+fn estimate_text_tokens(text: &str) -> u64 {
+    let mut tokens = 0_u64;
+    let mut ascii_run = 0_u64;
+    let flush_ascii_run = |tokens: &mut u64, run: &mut u64| {
+        if *run > 0 {
+            *tokens += (*run).div_ceil(4);
+            *run = 0;
+        }
+    };
+
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+            ascii_run += 1;
+        } else if character.is_ascii_whitespace() {
+            flush_ascii_run(&mut tokens, &mut ascii_run);
+        } else {
+            flush_ascii_run(&mut tokens, &mut ascii_run);
+            tokens += 1;
+        }
+    }
+    flush_ascii_run(&mut tokens, &mut ascii_run);
+    tokens
 }
 
 fn claude_desktop_model_entry(
@@ -951,11 +1243,24 @@ fn root_string_from_toml(contents: &str, key: &str) -> Option<String> {
         .and_then(non_empty_string)
 }
 
-fn openai_api_key_from_json(contents: &str) -> Option<String> {
-    let auth: Value = serde_json::from_str(contents).ok()?;
-    auth.get("OPENAI_API_KEY")
-        .and_then(Value::as_str)
-        .and_then(non_empty_string)
+fn provider_string_from_json_env(contents: &str, keys: &[&str]) -> Option<String> {
+    let value: Value = serde_json::from_str(contents.trim().trim_start_matches('\u{feff}')).ok()?;
+    let objects = [
+        value.as_object(),
+        value.get("env").and_then(Value::as_object),
+    ];
+    for object in objects.into_iter().flatten() {
+        for key in keys {
+            if let Some(value) = object
+                .get(*key)
+                .and_then(Value::as_str)
+                .and_then(non_empty_string)
+            {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn non_empty_string(value: &str) -> Option<String> {
