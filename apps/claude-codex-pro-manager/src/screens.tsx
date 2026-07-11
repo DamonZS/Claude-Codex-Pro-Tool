@@ -38,6 +38,8 @@ import {
 
 import { Button } from "@/components/ui/button";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
+import claudeLogo from "@/assets/claude.svg";
+import codexLogo from "@/assets/openai.svg";
 import { MemoryActivityWave } from "@/components/MemoryActivityWave";
 import {
   AGGREGATE_STRATEGIES,
@@ -102,19 +104,7 @@ import {
   withSupplierGeneratedFiles,
   withSupplierPreservedImportedFiles,
 } from "@/lib/supplier";
-import {
-  claudeContextSummary,
-  claudeStatusContextEntries,
-  contextEntriesByKind,
-  contextKindLabel,
-  defaultClaudeContextBody,
-  defaultContextToml,
-  emptyContextEntries,
-  mergeContextEntries,
-  normalizeContextKind,
-  setContextEnabled,
-  setJsonEnabled,
-} from "@/lib/context";
+import { contextKindLabel, defaultClaudeContextBody, defaultContextToml } from "@/lib/context";
 import {
   pluginCanInstall,
   pluginInstallButtonLabel,
@@ -131,7 +121,6 @@ import type {
   AdsResult,
   BackendSettings,
   ClaudeChineseWindowResult,
-  ClaudeContextEntriesResult,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopMarketplaceStatusResult,
   ClaudeDesktopOrgPluginStatusResult,
@@ -140,11 +129,7 @@ import type {
   ClaudeDesktopResult,
   ClaudeZhPatchResult,
   CodexPluginMarketplaceStatusResult,
-  ContextEntries,
-  ContextEntriesResult,
-  ContextEntry,
   ContextKind,
-  LiveContextEntriesResult,
   LocalSession,
   LocalSessionsResult,
   LogsResult,
@@ -167,6 +152,8 @@ import type {
   SupplierSaveResult,
   SupplierTargetApp,
   UpdateResult,
+  UnifiedToolAsset,
+  UnifiedToolInventoryResult,
   WatcherResult,
 } from "@/types";
 
@@ -1816,32 +1803,16 @@ export function LegacySupplierScreen({
 
 export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
   actions,
-  claudeContextEntries,
-  claudeDesktopDevMode,
   claudeDesktopMarketplace,
-  claudeDesktopOrgPlugin,
-  codexContextEntries,
   codexPluginMarketplace,
-  hub,
-  liveCodexContextEntries,
-  overview,
-  preview,
   settings,
-  watcher,
+  unifiedInventory,
 }: {
   actions: AppActions;
-  claudeContextEntries: ClaudeContextEntriesResult | null;
-  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
-  claudeDesktopOrgPlugin: ClaudeDesktopOrgPluginStatusResult | null;
-  codexContextEntries: ContextEntriesResult | null;
   codexPluginMarketplace: CodexPluginMarketplaceStatusResult | null;
-  hub: PluginHubResult | null;
-  liveCodexContextEntries: LiveContextEntriesResult | null;
-  overview: OverviewResult | null;
-  preview: PluginInstallPreviewResult | null;
   settings: SettingsResult | null;
-  watcher: WatcherResult | null;
+  unifiedInventory: UnifiedToolInventoryResult | null;
 }) {
   return (
     <div className="stack">
@@ -1849,26 +1820,228 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
         <CodexPluginRepositoryPanel actions={actions} marketplace={codexPluginMarketplace} />
         <ClaudePluginRepositoryPanel actions={actions} marketplace={claudeDesktopMarketplace} />
       </div>
-      <ContextManagerPanel
+      <UnifiedToolInventoryPanel
         actions={actions}
-        entries={codexContextEntries?.entries ?? emptyContextEntries()}
-        liveEntries={liveCodexContextEntries?.entries ?? emptyContextEntries()}
-        scope="codex"
-        settings={settings?.settings ?? null}
-      />
-      <ContextManagerPanel
-        actions={actions}
-        claudeDesktopDevMode={claudeDesktopDevMode}
-        claudeDesktopMarketplace={claudeDesktopMarketplace}
-        claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
-        entries={mergeContextEntries(claudeContextEntries?.entries ?? emptyContextEntries(), claudeStatusContextEntries(claudeDesktopDevMode, claudeDesktopMarketplace, claudeDesktopOrgPlugin))}
-        configPath={claudeContextEntries?.configPath}
-        scope="claude"
+        result={unifiedInventory}
         settings={settings?.settings ?? null}
       />
     </div>
   );
 });
+
+function UnifiedToolInventoryPanel({
+  actions,
+  result,
+  settings,
+}: {
+  actions: AppActions;
+  result: UnifiedToolInventoryResult | null;
+  settings: BackendSettings | null;
+}) {
+  const [tab, setTab] = useState<ContextKind>("mcp");
+  const [pending, setPending] = useState<string | null>(null);
+  const [creatingMcp, setCreatingMcp] = useState(false);
+  const [mcpTarget, setMcpTarget] = useState<"claude" | "codex">("codex");
+  const [mcpId, setMcpId] = useState("");
+  const [mcpBody, setMcpBody] = useState(defaultContextToml("mcp"));
+  const inventory = result?.inventory;
+  const entries = useMemo(
+    () => (inventory?.assets ?? []).filter((asset) => asset.kind === tab),
+    [inventory, tab],
+  );
+  const countFor = (kind: ContextKind) => {
+    if (kind === "skill") return inventory?.counts.skills ?? 0;
+    if (kind === "plugin") return inventory?.counts.plugins ?? 0;
+    return inventory?.counts.mcp ?? 0;
+  };
+  const toggle = async (asset: UnifiedToolAsset, app: "claude" | "codex") => {
+    const state = asset[app];
+    const key = `${asset.kind}:${asset.id}:${app}`;
+    setPending(key);
+    try {
+      await actions.toggleUnifiedToolAsset(asset.id, asset.kind, app, !state.enabled);
+    } finally {
+      setPending(null);
+    }
+  };
+  const resetMcpDraft = () => {
+    setCreatingMcp(false);
+    setMcpTarget("codex");
+    setMcpId("");
+    setMcpBody(defaultContextToml("mcp"));
+  };
+  const beginCreateMcp = () => {
+    setTab("mcp");
+    setCreatingMcp(true);
+    setMcpTarget("codex");
+    setMcpId("");
+    setMcpBody(defaultContextToml("mcp"));
+  };
+  const saveMcp = async () => {
+    const id = mcpId.trim();
+    if (!id || !mcpBody.trim() || pending !== null) return;
+    setPending("create:mcp");
+    try {
+      const saved = mcpTarget === "codex"
+        ? settings
+          ? await actions.saveContextEntry("mcp", id, mcpBody, settings)
+          : null
+        : await actions.saveClaudeContextEntry("mcp", id, mcpBody);
+      if (saved) {
+        await actions.refreshUnifiedToolInventory(true);
+        if (statusOk(saved.status)) resetMcpDraft();
+      }
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <section className="context-manager-card unified-tool-inventory">
+      <header className="context-manager-head">
+        <div>
+          <h2>Claude、Codex 工具与插件</h2>
+          <p>完整检测两端本地资产；同一资产只显示一行，点亮应用图标即启用到对应应用。</p>
+        </div>
+        <div className="action-row">
+          <Button
+            aria-controls="unified-mcp-editor"
+            aria-expanded={creatingMcp}
+            disabled={pending !== null}
+            onClick={creatingMcp ? resetMcpDraft : beginCreateMcp}
+            size="sm"
+          >
+            <Plus className="h-4 w-4" />
+            {creatingMcp ? "收起新增 MCP" : "新增 MCP"}
+          </Button>
+          <Button disabled={pending !== null} onClick={async () => {
+            setPending("scan");
+            try {
+              await actions.refreshUnifiedToolInventory(false);
+            } finally {
+              setPending(null);
+            }
+          }} size="sm" variant="outline">
+            <RefreshCw className={`h-4 w-4${pending === "scan" ? " spin" : ""}`} />
+            {pending === "scan" ? "检测中" : "重新检测"}
+          </Button>
+        </div>
+      </header>
+      {creatingMcp ? (
+        <div aria-label="新增 MCP" className="context-editor" id="unified-mcp-editor" role="region">
+          <div className="context-editor-grid">
+            <label className="ops-form-field">
+              <span>目标应用</span>
+              <select
+                className="ops-select"
+                disabled={pending !== null}
+                onChange={(event) => {
+                  const target = event.currentTarget.value as "claude" | "codex";
+                  setMcpTarget(target);
+                  setMcpBody(target === "codex" ? defaultContextToml("mcp") : defaultClaudeContextBody("mcp"));
+                }}
+                value={mcpTarget}
+              >
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+              </select>
+            </label>
+            <label className="ops-form-field">
+              <span>MCP ID</span>
+              <input
+                autoComplete="off"
+                disabled={pending !== null}
+                onChange={(event) => setMcpId(event.currentTarget.value)}
+                placeholder="例如：filesystem"
+                value={mcpId}
+              />
+            </label>
+          </div>
+          <label className="ops-form-field">
+            <span>{mcpTarget === "codex" ? "TOML 配置体" : "JSON 配置体"}</span>
+            <textarea
+              className="ops-textarea context-toml-editor mono"
+              disabled={pending !== null}
+              onChange={(event) => setMcpBody(event.currentTarget.value)}
+              spellCheck={false}
+              value={mcpBody}
+            />
+          </label>
+          <p className={`context-manager-note${mcpTarget === "codex" && !settings ? " warning" : ""}`}>
+            {mcpTarget === "codex" && !settings
+              ? "Codex 设置尚未加载，重新检测后再保存。"
+              : `只写入 ${mcpTarget === "codex" ? "Codex" : "Claude"}，不会改变另一端。`}
+          </p>
+          <div className="action-row">
+            <Button
+              disabled={pending !== null || !mcpId.trim() || !mcpBody.trim() || (mcpTarget === "codex" && !settings)}
+              onClick={() => void saveMcp()}
+              size="sm"
+            >
+              <Save className="h-4 w-4" />
+              {pending === "create:mcp" ? "保存中" : "保存 MCP"}
+            </Button>
+            <Button disabled={pending !== null} onClick={resetMcpDraft} size="sm" variant="outline">
+              取消
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      <div className="unified-tool-countbar">
+        <span>共 {inventory?.counts.total ?? 0} 项</span>
+        <span>原始发现 {inventory?.counts.rawDiscoveries ?? 0}</span>
+        <span>已合并 {inventory?.counts.deduplicated ?? 0}</span>
+        <span className="claude-count">Claude {inventory?.counts.claudeEnabled ?? 0}</span>
+        <span className="codex-count">Codex {inventory?.counts.codexEnabled ?? 0}</span>
+      </div>
+      <div className="context-tabs">
+        {(["mcp", "skill", "plugin"] as ContextKind[]).map((kind) => (
+          <button className={tab === kind ? "active" : ""} key={kind} onClick={() => setTab(kind)} type="button">
+            <strong>{contextKindLabel(kind)}</strong>
+            <span>{countFor(kind)}</span>
+          </button>
+        ))}
+      </div>
+      {inventory?.diagnostics.length ? (
+        <p className="context-manager-note warning">检测到 {inventory.diagnostics.length} 项非致命诊断；其余可读来源仍已加载。</p>
+      ) : (
+        <p className="context-manager-note">已扫描 {inventory?.scannedSources.length ?? 0} 个配置或目录来源。</p>
+      )}
+      <div className="context-entry-list unified-tool-list">
+        {entries.length ? entries.map((asset) => (
+          <div className="context-entry-row unified-tool-row" key={`${asset.kind}:${asset.id}`}>
+            <div className="unified-tool-copy">
+              <strong>{asset.title || asset.id}</strong>
+              {asset.summary ? <span title={asset.summary}>{asset.summary}</span> : null}
+              {asset.source ? <small title={asset.source}>{compactPath(asset.source)}</small> : null}
+            </div>
+            <div className="agent-toggle-group" aria-label={`${asset.title} 应用状态`}>
+              {(["claude", "codex"] as const).map((app) => {
+                const state = asset[app];
+                const appName = app === "claude" ? "Claude" : "Codex";
+                const key = `${asset.kind}:${asset.id}:${app}`;
+                const isPending = pending === key;
+                return (
+                  <button
+                    aria-label={`${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
+                    className={`agent-toggle ${app} ${state.enabled ? "enabled" : "disabled"}${isPending ? " pending" : ""}`}
+                    disabled={!state.toggleSupported || pending !== null}
+                    key={app}
+                    onClick={() => void toggle(asset, app)}
+                    title={`${appName}${state.enabled ? " ✓（点击关闭）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
+                    type="button"
+                  >
+                    <img alt="" aria-hidden="true" src={app === "claude" ? claudeLogo : codexLogo} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )) : <Empty text={result ? `未发现${contextKindLabel(tab)}；可点击重新检测查看最新本地状态。` : "尚未检测本地工具与插件。"} />}
+      </div>
+    </section>
+  );
+}
 
 export function CodexPluginRepositoryPanel({
   actions,
@@ -1903,13 +2076,15 @@ export function CodexPluginRepositoryPanel({
     <Panel title="Codex 插件仓库" detail="自动下载、校验并把 OpenAI 与第三方插件仓库注册到 Codex 配置；具体插件安装仍在 Codex 内确认。">
       <div className="ops-status-list">
         <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Codex 插件仓库"} />
-        <StatusRow label="注册状态" status={status?.configRegistered ? "ok" : status?.needsRepair ? "needs_review" : "not_checked"} value={status?.configRegistered ? "已注册到 Codex 配置" : "未注册或待检测"} />
+        <StatusRow label="配置写入" status={status?.configRegistered ? "ok" : status?.needsRepair ? "needs_review" : "not_checked"} value={status?.configRegistered ? "已写入 Codex 配置" : "未写入或待检测"} />
+        <StatusRow label="本地来源" status={status?.localSourcesReady ? "ok" : "needs_review"} value={status?.localSourcesReady ? "仓库快照存在并可读取" : "部分仓库只有配置，缺少本地来源"} />
+        <StatusRow label="应用可见" status={status?.configRegistered && status?.localSourcesReady ? "needs_review" : "not_checked"} value={status?.runtimeConfirmation || "尚未确认"} />
         {repositories.map((repository) => (
           <StatusRow
             key={`${repository.name}:${repository.source}`}
             label={repository.label}
             status={repository.configured ? "ok" : "needs_review"}
-            value={`${repository.name} / ${repository.sourceType} / ${repository.configured ? "已注册" : "未注册"} / ${repository.source}`}
+            value={`${repository.name} / ${repository.sourceType} / ${repository.configured ? "配置已写入" : "配置未写入"} / ${repository.source}`}
           />
         ))}
         <StatusRow label="本地目录" status={status?.marketplaceRoot ? "found" : "not_checked"} value={compactPath(status?.marketplaceRoot)} />
@@ -1947,13 +2122,14 @@ export function ClaudePluginRepositoryPanel({
       <div className="ops-status-list">
         <StatusRow label="仓库状态" status={health} value={status?.message || marketplace?.message || "尚未检测 Claude 插件仓库"} />
         <StatusRow label="配置方式" status={status?.canAutoWrite ? "ok" : status?.supported ? "needs_review" : "not_checked"} value={status?.canAutoWrite ? "可自动写入" : status?.supported ? "待修复" : "未检测"} />
+        <StatusRow label="应用可见" status={allConfigured ? "needs_review" : "not_checked"} value={allConfigured ? "配置已写入，待重启 Claude 确认" : "尚未确认"} />
         <StatusRow label="仓库列表" status={repositories.length ? (allConfigured ? "ok" : "needs_review") : "not_checked"} value={repositorySummary} />
         {repositories.map((repository) => (
           <StatusRow
             key={repository.repository}
             label={repository.label}
             status={repository.configured ? "ok" : "needs_review"}
-            value={`${repository.repository} / ${repository.configured ? "已写入" : "未写入"}`}
+            value={`${repository.repository} / ${repository.configured ? "配置已写入" : "配置未写入"}`}
           />
         ))}
         <StatusRow label="配置路径" status={status?.configPath ? "found" : "not_checked"} value={compactPath(status?.configPath)} />
@@ -1971,211 +2147,6 @@ export function ClaudePluginRepositoryPanel({
     </Panel>
   );
 }
-export const ContextManagerPanel = memo(function ContextManagerPanel({
-  actions,
-  claudeDesktopDevMode,
-  claudeDesktopMarketplace,
-  claudeDesktopOrgPlugin,
-  configPath,
-  entries,
-  liveEntries,
-  scope,
-  settings,
-}: {
-  actions: AppActions;
-  claudeDesktopDevMode?: ClaudeDesktopDevModeStatusResult | null;
-  claudeDesktopMarketplace?: ClaudeDesktopMarketplaceStatusResult | null;
-  claudeDesktopOrgPlugin?: ClaudeDesktopOrgPluginStatusResult | null;
-  configPath?: string;
-  entries: ContextEntries;
-  liveEntries?: ContextEntries;
-  scope: "codex" | "claude";
-  settings: BackendSettings | null;
-}) {
-  const [tab, setTab] = useState<ContextKind>("mcp");
-  const [editing, setEditing] = useState<ContextEntry | null>(null);
-  const [draftKind, setDraftKind] = useState<ContextKind>("mcp");
-  const [draftId, setDraftId] = useState("");
-  const [draftToml, setDraftToml] = useState(defaultContextToml("mcp"));
-  const isCodex = scope === "codex";
-  const sourceEntries = useMemo(
-    () => (isCodex ? mergeContextEntries(entries, liveEntries) : entries),
-    [isCodex, entries, liveEntries],
-  );
-  const currentEntries = useMemo(() => contextEntriesByKind(sourceEntries, tab), [sourceEntries, tab]);
-  const title = isCodex ? "Codex 工具与插件" : "Claude 工具与插件";
-  const detail = isCodex
-    ? "独立管理 Codex 的 MCP、Skills、Plugins；切换任意供应商都会带上。"
-    : "管理 Claude Desktop 的 MCP；Skills 和插件显示当前本地写入/官方入口状态。";
-  const canEditCurrentTab = isCodex || tab === "mcp";
-  const editorLabel = isCodex ? "TOML 配置体" : "JSON 配置体";
-
-  const beginEdit = (entry: ContextEntry) => {
-    const kind = normalizeContextKind(entry.kind);
-    setTab(kind);
-    setDraftKind(kind);
-    setDraftId(entry.id);
-    setDraftToml(entry.tomlBody || defaultContextToml(kind));
-    setEditing(entry);
-  };
-  const beginCreate = () => {
-    setDraftKind(tab);
-    setDraftId("");
-    setDraftToml(isCodex ? defaultContextToml(tab) : defaultClaudeContextBody(tab));
-    setEditing({
-      id: "",
-      kind: tab,
-      title: "",
-      summary: "",
-      tomlBody: isCodex ? defaultContextToml(tab) : defaultClaudeContextBody(tab),
-      enabled: true,
-    });
-  };
-  const cancelEdit = () => {
-    setEditing(null);
-    setDraftKind(tab);
-    setDraftId("");
-    setDraftToml(defaultContextToml(tab));
-  };
-  const saveDraft = async () => {
-    if (!draftId.trim()) return;
-    const result = isCodex
-      ? settings ? await actions.saveContextEntry(draftKind, draftId.trim(), draftToml, settings) : null
-      : await actions.saveClaudeContextEntry(draftKind, draftId.trim(), draftToml);
-    if (result) cancelEdit();
-  };
-  const toggleEntry = async (entry: ContextEntry) => {
-    const kind = normalizeContextKind(entry.kind);
-    if (isCodex) {
-      if (!settings) return;
-      await actions.saveContextEntry(kind, entry.id, setContextEnabled(entry.tomlBody, !entry.enabled), settings);
-      return;
-    }
-    if (kind !== "mcp") return;
-    await actions.saveClaudeContextEntry(kind, entry.id, setJsonEnabled(entry.tomlBody, !entry.enabled));
-  };
-  const removeEntry = async (entry: ContextEntry) => {
-    if (!window.confirm(`删除 ${entry.id}？`)) return;
-    const kind = normalizeContextKind(entry.kind);
-    if (isCodex) {
-      if (!settings) return;
-      await actions.deleteContextEntry(kind, entry.id, settings);
-      return;
-    }
-    if (kind !== "mcp") return;
-    await actions.deleteClaudeContextEntry(kind, entry.id);
-  };
-
-  return (
-    <section className="context-manager-card">
-      <header className="context-manager-head">
-        <div>
-          <h2>{title}</h2>
-          <p>{detail}</p>
-        </div>
-        <div className="action-row">
-          {isCodex ? (
-            <>
-              <Button onClick={() => void actions.refreshContextEntries()} size="sm" variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                检测
-              </Button>
-              <Button onClick={() => void actions.syncLiveContextEntries(settings ?? undefined)} size="sm" variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                同步到当前 Codex
-              </Button>
-              <Button disabled={!settings} onClick={beginCreate} size="sm">
-                <Plus className="h-4 w-4" />
-                新增{contextKindLabel(tab)}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={() => void actions.refreshClaudeContextEntries()} size="sm" variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                检测
-              </Button>
-              <Button disabled={tab !== "mcp"} onClick={beginCreate} size="sm" variant="outline">
-                <Plus className="h-4 w-4" />
-                新增MCP
-              </Button>
-              <Button onClick={() => void actions.installPonytailClaudeDesktopLocalBundle()} size="sm">
-                <Plus className="h-4 w-4" />
-                写入 Claude 本地插件
-              </Button>
-            </>
-          )}
-        </div>
-      </header>
-      <div className="context-tabs">
-        {(["mcp", "skill", "plugin"] as ContextKind[]).map((kind) => (
-          <button className={tab === kind ? "active" : ""} key={kind} onClick={() => setTab(kind)} type="button">
-            <strong>{contextKindLabel(kind)}</strong>
-            <span>{contextEntriesByKind(sourceEntries, kind).length}</span>
-          </button>
-        ))}
-      </div>
-      <p className="context-manager-note">
-        {isCodex
-          ? `当前共有 ${currentEntries.length} 个${contextKindLabel(tab)}；这些条目独立于供应商保存，会写入所有供应商切换后的 config.toml。`
-          : `${claudeContextSummary(claudeDesktopDevMode ?? null, claudeDesktopMarketplace ?? null, claudeDesktopOrgPlugin ?? null)}${tab === "mcp" && configPath ? ` MCP 配置：${compactPath(configPath)}。` : " Skills/插件由 Claude Desktop 组织插件目录和官方插件入口管理。"}`}
-      </p>
-      <div className="context-entry-list">
-        {currentEntries.length ? currentEntries.map((entry) => (
-          <div className="context-entry-row" key={`${entry.kind}:${entry.id}`}>
-            <div>
-              <strong>{entry.title || entry.id}</strong>
-              {entry.summary ? <span>{entry.summary}</span> : null}
-            </div>
-            <div className="context-entry-actions">
-              <ToggleSwitch checked={entry.enabled} disabled={!canEditCurrentTab || (isCodex && !settings)} onChange={() => void toggleEntry(entry)} />
-              <button className="context-entry-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => beginEdit(entry)} title="编辑" type="button">
-                <Pencil className="h-4 w-4 tilted-pen-icon" />
-              </button>
-              <button className="context-entry-icon-button danger-icon-button" disabled={!canEditCurrentTab || (isCodex && !settings)} onClick={() => void removeEntry(entry)} title="删除" type="button">
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )) : <Empty text={`暂无${contextKindLabel(tab)}，可以从通用配置文件或这里新增。`} />}
-      </div>
-      {editing ? (
-        <div className="context-editor">
-          <div className="context-editor-grid">
-            <label className="ops-form-field">
-              <span>类型</span>
-              <select className="ops-select" disabled={!isCodex && editing.id !== ""} onChange={(event) => {
-                const next = event.currentTarget.value as ContextKind;
-                setDraftKind(next);
-                if (!draftToml.trim()) setDraftToml(isCodex ? defaultContextToml(next) : defaultClaudeContextBody(next));
-              }} value={draftKind}>
-                <option value="mcp">MCP</option>
-                <option value="skill">Skills</option>
-                <option value="plugin">插件</option>
-              </select>
-            </label>
-            <label className="ops-form-field">
-              <span>ID</span>
-              <input disabled={Boolean(editing.id)} onChange={(event) => setDraftId(event.currentTarget.value)} value={draftId} />
-            </label>
-          </div>
-          <label className="ops-form-field">
-            <span>{editorLabel}</span>
-            <textarea className="ops-textarea context-toml-editor mono" disabled={!canEditCurrentTab} onChange={(event) => setDraftToml(event.currentTarget.value)} value={draftToml} />
-          </label>
-          <div className="action-row">
-            <Button disabled={!canEditCurrentTab || (isCodex && !settings) || !draftId.trim()} onClick={() => void saveDraft()} size="sm">
-              <Save className="h-4 w-4" />
-              保存扩展项
-            </Button>
-            <Button onClick={cancelEdit} size="sm" variant="outline">取消</Button>
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-});
-
 export function MemoryAssistPanel({
   actions,
   exported,

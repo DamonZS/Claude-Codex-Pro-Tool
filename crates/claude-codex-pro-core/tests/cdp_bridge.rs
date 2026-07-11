@@ -627,6 +627,21 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
 }
 
 #[test]
+fn injection_script_merges_real_local_marketplace_snapshots_into_plugin_results() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("window.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__"));
+    assert!(script.contains("function localPluginMarketplaces()"));
+    assert!(script.contains("function mergeLocalPluginMarketplaces(result)"));
+    assert!(script.contains(
+        "const locals = localPluginMarketplaces().map(prepareLocalPluginMarketplace).filter(Boolean)"
+    ));
+    assert!(script.contains("result.marketplaces.push(local)"));
+    assert!(script.contains("patchedCount += mergeLocalPluginMarketplaces(result)"));
+    assert!(script.contains("plugin_marketplace_local_merged"));
+}
+
+#[test]
 fn injection_script_deletes_marketplace_kinds_to_request_default_catalog() {
     let script = assets::injection_script(57321);
 

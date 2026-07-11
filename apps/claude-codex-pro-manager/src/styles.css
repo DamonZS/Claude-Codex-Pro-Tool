@@ -5974,6 +5974,37 @@ body {
   gap: 8px;
 }
 
+.unified-tool-countbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.unified-tool-countbar span {
+  border: 1px solid var(--ops-hairline);
+  border-radius: 999px;
+  background: var(--ops-surface-2);
+  color: var(--ops-muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 10px;
+}
+
+.unified-tool-countbar .claude-count {
+  border-color: rgb(217 119 87 / 0.38);
+  color: #e49a7e;
+}
+
+.unified-tool-countbar .codex-count {
+  border-color: rgb(52 211 153 / 0.34);
+  color: #6ee7b7;
+}
+
+.context-manager-note.warning {
+  color: #fbbf24;
+}
+
 .context-entry-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 124px;
@@ -7042,6 +7073,92 @@ body {
   background: var(--ops-text-strong);
   transform: translate(0, -50%);
   transition: transform 140ms ease;
+}
+
+.unified-tool-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 58px;
+}
+
+.unified-tool-copy {
+  min-width: 0;
+}
+
+.unified-tool-copy small {
+  display: block;
+  min-width: 0;
+  margin-top: 3px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--ops-muted) 72%, transparent);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-toggle-group {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  align-items: center;
+}
+
+.agent-toggle {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.35;
+  padding: 0;
+  transition: opacity 150ms ease, border-color 150ms ease, background 150ms ease, transform 120ms ease;
+}
+
+.agent-toggle:hover:not(:disabled) {
+  opacity: 0.72;
+  transform: translateY(-1px);
+}
+
+.agent-toggle:active:not(:disabled) {
+  transform: translateY(0) scale(0.94);
+}
+
+.agent-toggle img {
+  width: 17px;
+  height: 17px;
+}
+
+.agent-toggle.codex img {
+  filter: brightness(0) invert(1);
+}
+
+.agent-toggle.enabled {
+  opacity: 1;
+}
+
+.agent-toggle.claude.enabled {
+  border-color: rgb(217 119 87 / 0.42);
+  background: rgb(217 119 87 / 0.16);
+}
+
+.agent-toggle.codex.enabled {
+  border-color: rgb(52 211 153 / 0.38);
+  background: rgb(52 211 153 / 0.14);
+}
+
+.agent-toggle:disabled {
+  cursor: not-allowed;
+}
+
+.agent-toggle.pending img,
+.spin {
+  animation: unified-tool-spin 0.85s linear infinite;
+}
+
+@keyframes unified-tool-spin {
+  to { transform: rotate(360deg); }
 }
 
 .toggle-switch.checked .toggle-switch-thumb {

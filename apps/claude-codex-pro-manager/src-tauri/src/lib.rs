@@ -163,6 +163,8 @@ pub fn run() {
             commands::backfill_relay_profile_from_live,
             commands::list_context_entries,
             commands::read_live_context_entries,
+            commands::scan_unified_tool_inventory,
+            commands::toggle_unified_tool_asset,
             commands::sync_live_context_entries,
             commands::upsert_context_entry,
             commands::delete_context_entry,

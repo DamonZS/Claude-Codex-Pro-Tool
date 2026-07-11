@@ -281,6 +281,43 @@ export type ClaudeContextEntriesResult = CommandResult<{
   entries: ContextEntries;
 }>;
 
+export type UnifiedToolAppState = {
+  enabled: boolean;
+  available: boolean;
+  toggleSupported: boolean;
+  sourcePath: string;
+};
+
+export type UnifiedToolAsset = {
+  id: string;
+  kind: ContextKind;
+  title: string;
+  summary: string;
+  source: string;
+  claude: UnifiedToolAppState;
+  codex: UnifiedToolAppState;
+};
+
+export type UnifiedToolInventory = {
+  assets: UnifiedToolAsset[];
+  counts: {
+    total: number;
+    rawDiscoveries: number;
+    deduplicated: number;
+    mcp: number;
+    skills: number;
+    plugins: number;
+    codexEnabled: number;
+    claudeEnabled: number;
+  };
+  scannedSources: string[];
+  diagnostics: string[];
+};
+
+export type UnifiedToolInventoryResult = CommandResult<{
+  inventory: UnifiedToolInventory;
+}>;
+
 // 阶段4 模块D：一键注册盘古记忆 MCP 到 Claude Desktop 与 Codex 两端的返回。
 export type MemoryMcpRegisterPayload = {
   mcpBinaryPath: string;
@@ -389,6 +426,8 @@ export type CodexPluginMarketplaceStatus = {
   configRegistered: boolean;
   needsRepair: boolean;
   message: string;
+  localSourcesReady: boolean;
+  runtimeConfirmation: string;
   repositories?: Array<{
     label: string;
     name: string;

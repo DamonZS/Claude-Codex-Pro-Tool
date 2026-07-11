@@ -227,6 +227,7 @@ import type {
   SupplierTargetApp,
   UpdateReleasePayload,
   UpdateResult,
+  UnifiedToolInventoryResult,
   UserScriptInventory,
   WatcherResult,
 } from "@/types";
@@ -273,6 +274,7 @@ export function App() {
   const [codexContextEntries, setCodexContextEntries] = useState<ContextEntriesResult | null>(null);
   const [liveCodexContextEntries, setLiveCodexContextEntries] = useState<LiveContextEntriesResult | null>(null);
   const [claudeContextEntries, setClaudeContextEntries] = useState<ClaudeContextEntriesResult | null>(null);
+  const [unifiedToolInventory, setUnifiedToolInventory] = useState<UnifiedToolInventoryResult | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
   const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
   // Monotonic token bumped on every refreshRoute call. Rapid tab switches used
@@ -518,7 +520,6 @@ export function App() {
       setSettingsDraft(result.settings);
       notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
-      await refreshContextEntries(true, result.settings);
     }
     return result;
   };
@@ -534,20 +535,6 @@ export function App() {
       setSettingsDraft(result.settings);
       notifyResult({ title: "删除工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
-      await refreshContextEntries(true, result.settings);
-    }
-    return result;
-  };
-
-  const syncLiveContextEntries = async (sourceSettings = settings?.settings ?? settingsDraft) => {
-    if (!sourceSettings) return null;
-    const result = await run(
-      () => call<LiveContextEntriesResult>("sync_live_context_entries", { request: { settings: sourceSettings } }),
-      "同步当前 Codex 配置",
-    );
-    if (result) {
-      setLiveCodexContextEntries(result);
-      notifyResult({ title: "同步当前 Codex 配置", message: result.message, status: result.status });
     }
     return result;
   };
@@ -557,6 +544,37 @@ export function App() {
     if (result) {
       setClaudeContextEntries(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude 工具与插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshUnifiedToolInventory = async (silent = false) => {
+    const result = await run(
+      () => call<UnifiedToolInventoryResult>("scan_unified_tool_inventory"),
+      "Claude、Codex 工具与插件",
+      { trackBusy: true, notify: !silent },
+    );
+    if (result) {
+      setUnifiedToolInventory(result);
+      if (!silent) notifyResult({ title: "工具与插件检测", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const toggleUnifiedToolAsset = async (id: string, kind: ContextKind, app: "claude" | "codex", enabled: boolean) => {
+    const appLabel = app === "claude" ? "Claude" : "Codex";
+    const result = await run(
+      () => call<UnifiedToolInventoryResult>("toggle_unified_tool_asset", { request: { id, kind, app, enabled } }),
+      `${enabled ? "启用" : "关闭"} ${appLabel} 工具或插件`,
+    );
+    if (result) {
+      setUnifiedToolInventory(result);
+      notifyResult({
+        title: `${appLabel} ${enabled ? "启用" : "关闭"}结果`,
+        message: result.message,
+        status: result.status,
+      });
+      if (!statusOk(result.status)) await refreshUnifiedToolInventory(true);
     }
     return result;
   };
@@ -1439,16 +1457,9 @@ export function App() {
     } else if (target === "supplier") {
       await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
     } else if (target === "tools") {
-      const loadedSettings = await refreshSettings(true);
-      await Promise.all([
-        refreshPluginHub(true),
-        refreshClaudeDesktopOrgPlugin(true),
-        refreshClaudeDesktopDevMode(true),
-        refreshClaudeContextEntries(true),
-      ]);
+      await refreshSettings(true);
+      await refreshUnifiedToolInventory(true);
       if (isStaleRouteLoad()) return;
-      const sourceSettings = loadedSettings?.settings ?? settings?.settings ?? settingsDraft;
-      if (sourceSettings) await refreshContextEntries(true, sourceSettings);
       afterFirstPaintIfFresh(async () => {
         const [codexMarketplaceStatus, claudeMarketplaceStatus] = await Promise.all([
           refreshCodexPluginMarketplace(true),
@@ -1621,10 +1632,11 @@ export function App() {
       refreshContextEntries,
       saveContextEntry,
       deleteContextEntry,
-      syncLiveContextEntries,
       refreshClaudeContextEntries,
       saveClaudeContextEntry,
       deleteClaudeContextEntry,
+      refreshUnifiedToolInventory,
+      toggleUnifiedToolAsset,
   };
 
   const actions = useMemo<AppActions>(() => ({
@@ -1710,10 +1722,11 @@ export function App() {
       refreshContextEntries: (...args) => actionsRef.current!.refreshContextEntries(...args),
       saveContextEntry: (...args) => actionsRef.current!.saveContextEntry(...args),
       deleteContextEntry: (...args) => actionsRef.current!.deleteContextEntry(...args),
-      syncLiveContextEntries: (...args) => actionsRef.current!.syncLiveContextEntries(...args),
       refreshClaudeContextEntries: (...args) => actionsRef.current!.refreshClaudeContextEntries(...args),
       saveClaudeContextEntry: (...args) => actionsRef.current!.saveClaudeContextEntry(...args),
       deleteClaudeContextEntry: (...args) => actionsRef.current!.deleteClaudeContextEntry(...args),
+      refreshUnifiedToolInventory: (...args) => actionsRef.current!.refreshUnifiedToolInventory(...args),
+      toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
   }), []);
 
   return (
@@ -1785,18 +1798,10 @@ export function App() {
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}
-              claudeContextEntries={claudeContextEntries}
-              claudeDesktopDevMode={claudeDesktopDevMode}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
-              claudeDesktopOrgPlugin={claudeDesktopOrgPlugin}
               codexPluginMarketplace={codexPluginMarketplace}
-              codexContextEntries={codexContextEntries}
-              hub={pluginHub}
-              liveCodexContextEntries={liveCodexContextEntries}
-              overview={overview}
-              preview={pluginPreview}
               settings={settings}
-              watcher={watcher}
+              unifiedInventory={unifiedToolInventory}
             />
           ) : null}
           {route === "sessions" ? (

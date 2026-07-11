@@ -2123,13 +2123,28 @@ pub fn load_claude_desktop_marketplace_status() -> ClaudeDesktopMarketplaceStatu
         DesktopPlatform::Windows | DesktopPlatform::Macos
     );
     let threep_paths = claude_desktop_threep_paths();
-    let primary_threep = threep_paths
-        .first()
+    let fallback = ClaudeDesktopThreepPaths::from_root(PathBuf::from("Claude-3p"));
+    let status_paths = if threep_paths.is_empty() {
+        vec![fallback.config_path.clone()]
+    } else {
+        threep_paths
+            .iter()
+            .map(|paths| paths.config_path.clone())
+            .collect::<Vec<_>>()
+    };
+    let repositories = claude_desktop_marketplace_repository_statuses_for_paths(&status_paths);
+    let config_path = status_paths
+        .iter()
+        .find(|path| path.exists())
+        .or_else(|| status_paths.first())
         .cloned()
-        .unwrap_or_else(|| ClaudeDesktopThreepPaths::from_root(PathBuf::from("Claude-3p")));
-    let repositories = claude_desktop_marketplace_repository_statuses(&primary_threep.config_path);
-    let message = if supported {
-        "Claude Desktop 插件仓库由 Claude 官方账户或组织界面管理；此入口会打开 Ponytail 插件仓库添加页，仍需在 Claude Desktop 中确认。".to_string()
+        .unwrap_or(fallback.config_path);
+    let all_configured = repositories.iter().all(|repository| repository.configured);
+    let message = if supported && all_configured {
+        "Claude 插件仓库配置已写入；应用是否已加载仍需在重启 Claude 后确认。".to_string()
+    } else if supported {
+        "Claude 插件仓库尚未写入全部候选配置路径；修复后仍需重启 Claude 确认应用可见性。"
+            .to_string()
     } else {
         "Claude Desktop 插件仓库深链目前支持 Windows 和 macOS。".to_string()
     };
@@ -2140,7 +2155,7 @@ pub fn load_claude_desktop_marketplace_status() -> ClaudeDesktopMarketplaceStatu
         plugin: PONYTAIL_MARKETPLACE_NAME.to_string(),
         deep_link: PONYTAIL_CLAUDE_DESKTOP_MARKETPLACE_DEEP_LINK.to_string(),
         can_auto_write: supported,
-        config_path: primary_threep.config_path.to_string_lossy().to_string(),
+        config_path: config_path.to_string_lossy().to_string(),
         repositories,
         message,
     }
@@ -3159,24 +3174,37 @@ fn claude_desktop_marketplace_repository_summary(
         .join(", ")
 }
 
-fn claude_desktop_marketplace_repository_statuses(
-    config_path: &Path,
+fn claude_desktop_marketplace_repository_statuses_for_paths(
+    config_paths: &[PathBuf],
 ) -> Vec<ClaudeDesktopMarketplaceRepositoryStatus> {
-    let raw = std::fs::read_to_string(config_path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .unwrap_or_else(|| json!({}));
     desired_claude_desktop_marketplaces()
         .into_iter()
-        .map(
-            |(name, label, repository)| ClaudeDesktopMarketplaceRepositoryStatus {
+        .map(|(name, label, repository)| {
+            let configured = config_paths.iter().any(|config_path| {
+                std::fs::read_to_string(config_path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    .is_some_and(|raw| {
+                        claude_desktop_marketplace_is_configured(&raw, name, repository)
+                    })
+            });
+            ClaudeDesktopMarketplaceRepositoryStatus {
                 label: label.to_string(),
                 repository: repository.to_string(),
                 url: claude_desktop_marketplace_url(repository),
-                configured: claude_desktop_marketplace_is_configured(&raw, name, repository),
-            },
-        )
+                configured,
+            }
+        })
         .collect()
+}
+
+#[cfg(test)]
+fn claude_desktop_marketplace_repository_statuses(
+    config_path: &Path,
+) -> Vec<ClaudeDesktopMarketplaceRepositoryStatus> {
+    claude_desktop_marketplace_repository_statuses_for_paths(std::slice::from_ref(
+        &config_path.to_path_buf(),
+    ))
 }
 
 fn claude_desktop_marketplace_is_configured(raw: &Value, name: &str, repository: &str) -> bool {

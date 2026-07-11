@@ -23,6 +23,7 @@ pub const CODEX_SKILLS_ALTERNATIVE_ZIP_URL: &str =
     "https://codeload.github.com/DKeken/codex-skills-alternative/zip/refs/heads/main";
 const OPENAI_PLUGINS_DOWNLOAD_LIMIT_BYTES: usize = 128 * 1024 * 1024;
 const OPENAI_PLUGINS_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
+const GIT_MARKETPLACE_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(90);
 const CODEX_SKILLS_ALTERNATIVE_DOWNLOAD_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME: &str = "codex-skills-alternative";
 const OPENAI_CURATED_MARKETPLACE_ALIASES: [&str; 2] =
@@ -37,6 +38,8 @@ pub struct CodexPluginMarketplaceStatus {
     pub needs_repair: bool,
     pub message: String,
     pub repositories: Vec<CodexPluginMarketplaceRepositoryStatus>,
+    pub local_sources_ready: bool,
+    pub runtime_confirmation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,13 +95,18 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
         .unwrap_or(false);
     let config_registered =
         openai_config_registered && hashgraph_config_registered && product_design_config_registered;
-    let needs_repair = marketplace_root.is_none() || !config_registered;
+    let local_sources_ready = marketplace_root.is_some()
+        && product_design_marketplace_root.is_some()
+        && hashgraph_marketplace_local_snapshot_ready(home);
+    let needs_repair = marketplace_root.is_none() || !config_registered || !local_sources_ready;
     let message = match (
         marketplace_root.is_some(),
         openai_config_registered,
         hashgraph_config_registered,
     ) {
-        (true, true, true) => "Codex OpenAI 与第三方插件仓库已注册到 config.toml。".to_string(),
+        (true, true, true) => {
+            "Codex 插件仓库配置已写入；应用是否已加载仍需重启 Codex 后确认。".to_string()
+        }
         (true, false, true) => {
             "Codex OpenAI 插件仓库已下载，但尚未完整注册到 config.toml。".to_string()
         }
@@ -154,7 +162,185 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
         needs_repair,
         message,
         repositories,
+        local_sources_ready,
+        runtime_confirmation: if config_registered && local_sources_ready {
+            "待重启 Codex 确认应用可见".to_string()
+        } else {
+            "配置或本地来源尚未就绪".to_string()
+        },
     }
+}
+
+fn hashgraph_marketplace_local_snapshot_ready(home: &Path) -> bool {
+    [
+        home.join("plugins")
+            .join("cache")
+            .join(HASHGRAPH_AWESOME_CODEX_MARKETPLACE),
+        home.join(".tmp")
+            .join("plugins")
+            .join(HASHGRAPH_AWESOME_CODEX_MARKETPLACE),
+    ]
+    .iter()
+    .any(|root| marketplace_snapshot_ready_at_root(root))
+}
+
+async fn ensure_git_marketplace_snapshot(
+    home: &Path,
+    name: &str,
+    source: &str,
+    reference: &str,
+    sparse_paths: &[&str],
+) -> anyhow::Result<bool> {
+    validate_marketplace_cache_name(name)?;
+    if source.trim().is_empty() {
+        anyhow::bail!("marketplace {name} has no git source");
+    }
+    let destination = home.join("plugins").join("cache").join(name);
+    if marketplace_snapshot_ready_at_root(&destination) {
+        return Ok(false);
+    }
+
+    let temporary_root = home.join(".tmp");
+    std::fs::create_dir_all(&temporary_root)?;
+    let hooks = temporary_root.join("ccp-empty-git-hooks");
+    std::fs::create_dir_all(&hooks)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let staging = temporary_root.join(format!("marketplace-{name}-{stamp}"));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+
+    let mut clone = safe_git_command(&hooks);
+    clone
+        .arg("clone")
+        .arg("--depth")
+        .arg("1")
+        .arg("--single-branch")
+        .arg("--branch")
+        .arg(reference);
+    if !sparse_paths.is_empty() {
+        clone.arg("--filter=blob:none").arg("--sparse");
+    }
+    clone.arg("--").arg(source).arg(&staging);
+    let status = tokio::time::timeout(GIT_MARKETPLACE_SNAPSHOT_TIMEOUT, clone.status())
+        .await
+        .map_err(|_| anyhow::anyhow!("git snapshot timed out for marketplace {name}"))?
+        .with_context(|| format!("failed to start git for marketplace {name}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(&staging);
+        anyhow::bail!("git snapshot failed for marketplace {name} ({status})");
+    }
+
+    if !sparse_paths.is_empty() {
+        let mut paths = BTreeSet::new();
+        paths.insert(".agents/plugins");
+        for path in sparse_paths
+            .iter()
+            .map(|path| path.trim())
+            .filter(|path| !path.is_empty())
+        {
+            paths.insert(path);
+        }
+        let mut sparse = safe_git_command(&hooks);
+        sparse
+            .arg("-C")
+            .arg(&staging)
+            .arg("sparse-checkout")
+            .arg("set")
+            .arg("--no-cone")
+            .arg("--");
+        for path in paths {
+            sparse.arg(path);
+        }
+        let status = tokio::time::timeout(GIT_MARKETPLACE_SNAPSHOT_TIMEOUT, sparse.status())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("git sparse checkout timed out for marketplace {name}")
+            })??;
+        if !status.success() {
+            let _ = std::fs::remove_dir_all(&staging);
+            anyhow::bail!("git sparse checkout failed for marketplace {name} ({status})");
+        }
+    }
+
+    if !marketplace_snapshot_ready_at_root(&staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        anyhow::bail!("marketplace {name} snapshot has no readable marketplace.json");
+    }
+    let git_metadata = staging.join(".git");
+    if git_metadata.is_dir() {
+        std::fs::remove_dir_all(&git_metadata)?;
+    } else if git_metadata.exists() {
+        std::fs::remove_file(&git_metadata)?;
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    replace_directory_with_backup_name(
+        &staging,
+        &destination,
+        &format!("{name}.previous-claude-codex-pro"),
+    )?;
+    Ok(true)
+}
+
+fn safe_git_command(hooks: &Path) -> tokio::process::Command {
+    let null_config = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut command = tokio::process::Command::new("git");
+    #[cfg(windows)]
+    command.creation_flags(crate::windows_create_no_window());
+    command
+        .arg("-c")
+        .arg(format!("core.hooksPath={}", hooks.to_string_lossy()))
+        .arg("-c")
+        .arg("core.symlinks=false")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", null_config)
+        .env("GIT_CONFIG_SYSTEM", null_config)
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    command
+}
+
+fn validate_marketplace_cache_name(name: &str) -> anyhow::Result<()> {
+    let valid = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        });
+    if !valid {
+        anyhow::bail!("invalid marketplace cache name")
+    }
+    Ok(())
+}
+
+fn marketplace_snapshot_ready_at_root(root: &Path) -> bool {
+    let Some(manifest) = marketplace_manifest_in_root(root) else {
+        return false;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(&manifest) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|marketplace| {
+            marketplace
+                .get("plugins")
+                .and_then(serde_json::Value::as_array)
+                .map(|plugins| !plugins.is_empty())
+        })
+        .unwrap_or(false)
 }
 
 pub async fn repair() -> anyhow::Result<CodexPluginMarketplaceRepair> {
@@ -171,6 +357,47 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
         initialize_product_design_marketplace_from_github(home).await?;
         initialized = true;
     }
+    initialized |= ensure_git_marketplace_snapshot(
+        home,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SOURCE,
+        HASHGRAPH_AWESOME_CODEX_MARKETPLACE_REF,
+        &HASHGRAPH_AWESOME_CODEX_MARKETPLACE_SPARSE_PATHS,
+    )
+    .await?;
+    let custom = crate::settings::SettingsStore::default()
+        .load()
+        .map(|settings| settings.codex_custom_marketplaces)
+        .unwrap_or_default();
+    for marketplace in &custom {
+        if marketplace.source_type.trim().eq_ignore_ascii_case("git") {
+            let reference = if marketplace.git_ref.trim().is_empty() {
+                "main"
+            } else {
+                marketplace.git_ref.trim()
+            };
+            let sparse_paths = marketplace
+                .sparse_paths
+                .iter()
+                .map(|path| path.trim())
+                .filter(|path| !path.is_empty())
+                .collect::<Vec<_>>();
+            initialized |= ensure_git_marketplace_snapshot(
+                home,
+                marketplace.name.trim(),
+                marketplace.source.trim(),
+                reference,
+                &sparse_paths,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to prepare local snapshot for marketplace {}",
+                    marketplace.name
+                )
+            })?;
+        }
+    }
     let mut configured = ensure_openai_curated_marketplace_config(home)?
         | ensure_hashgraph_awesome_codex_marketplace_config(home)?
         | ensure_product_design_skill_marketplace_config(home)?;
@@ -178,10 +405,6 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
     // path that made third-party repos never take effect: without it, a user's
     // custom marketplace was only ever persisted to settings and never landed in
     // config.toml. Failures are surfaced rather than silently swallowed.
-    let custom = crate::settings::SettingsStore::default()
-        .load()
-        .map(|settings| settings.codex_custom_marketplaces)
-        .unwrap_or_default();
     let (custom_changed, custom_errors) = apply_custom_marketplaces_from_home(home, &custom);
     if !custom_changed.is_empty() {
         configured = true;
@@ -213,57 +436,135 @@ pub fn local_plugin_marketplaces() -> serde_json::Value {
 
 pub fn local_plugin_marketplaces_from_home(home: &Path) -> serde_json::Value {
     let installed_plugins = installed_plugins_from_config(home);
-    let candidates = [home
-        .join(".tmp")
-        .join("plugins")
-        .join(".agents")
-        .join("plugins")
-        .join("marketplace.json")];
-    let marketplaces = candidates
-        .iter()
-        .filter_map(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
+    let marketplaces = configured_local_marketplace_manifests(home)
+        .into_iter()
+        .filter_map(|(marketplace_name, path)| {
+            let text = std::fs::read_to_string(&path).ok()?;
             let mut marketplace: serde_json::Value = serde_json::from_str(&text).ok()?;
             expand_local_plugin_marketplace(
                 &mut marketplace,
-                path,
+                &path,
                 home,
                 &installed_plugins,
-                OPENAI_CURATED_MARKETPLACE,
+                &marketplace_name,
             );
             if let Some(object) = marketplace.as_object_mut() {
+                object.insert(
+                    "name".to_string(),
+                    serde_json::Value::String(marketplace_name),
+                );
                 object.entry("path").or_insert_with(|| {
                     serde_json::Value::String(path.to_string_lossy().to_string())
                 });
             }
-            let mut marketplaces = Vec::with_capacity(OPENAI_CURATED_MARKETPLACE_ALIASES.len());
-            marketplaces.push(marketplace.clone());
-            let original_name = marketplace
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            if original_name == OPENAI_CURATED_MARKETPLACE {
-                let mut alias = marketplace;
-                if let Some(object) = alias.as_object_mut() {
-                    object.insert(
-                        "name".to_string(),
-                        serde_json::Value::String(OPENAI_API_CURATED_MARKETPLACE.to_string()),
-                    );
-                }
-                expand_local_plugin_marketplace(
-                    &mut alias,
-                    path,
-                    home,
-                    &installed_plugins,
-                    OPENAI_API_CURATED_MARKETPLACE,
-                );
-                marketplaces.push(alias);
-            }
-            Some(marketplaces)
+            Some(marketplace)
         })
-        .flatten()
         .collect::<Vec<_>>();
     serde_json::Value::Array(marketplaces)
+}
+
+fn configured_local_marketplace_manifests(home: &Path) -> Vec<(String, PathBuf)> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+    let openai_manifest = home
+        .join(".tmp")
+        .join("plugins")
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    if openai_manifest.is_file() {
+        for name in OPENAI_CURATED_MARKETPLACE_ALIASES {
+            let candidate = (name.to_string(), openai_manifest.clone());
+            if seen.insert(candidate.clone()) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    let config = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    let document = config
+        .trim_start_matches('\u{feff}')
+        .parse::<DocumentMut>()
+        .ok();
+    let marketplaces = document
+        .as_ref()
+        .and_then(|document| document.get("marketplaces"))
+        .and_then(Item::as_table);
+    if let Some(marketplaces) = marketplaces {
+        for (name, item) in marketplaces {
+            let Some(table) = item.as_table() else {
+                continue;
+            };
+            let source_type = table
+                .get("source_type")
+                .and_then(Item::as_str)
+                .unwrap_or_default();
+            let roots = match source_type {
+                "local" => table
+                    .get("source")
+                    .and_then(Item::as_str)
+                    .map(normalize_windows_extended_path)
+                    .map(PathBuf::from)
+                    .map(|path| {
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            home.join(path)
+                        }
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "git" => configured_git_marketplace_snapshot_roots(home, name),
+                _ => Vec::new(),
+            };
+            for root in roots {
+                if let Some(manifest) = marketplace_manifest_in_root(&root) {
+                    let candidate = (name.to_string(), manifest);
+                    if seen.insert(candidate.clone()) {
+                        candidates.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    candidates
+}
+
+fn configured_git_marketplace_snapshot_roots(home: &Path, name: &str) -> Vec<PathBuf> {
+    let mut roots = vec![
+        home.join("plugins").join("cache").join(name),
+        home.join("plugins")
+            .join("cache")
+            .join(format!("{name}-marketplace")),
+        home.join(".tmp").join("plugins").join(name),
+        home.join(".tmp").join("bundled-marketplaces").join(name),
+    ];
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn marketplace_manifest_in_root(root: &Path) -> Option<PathBuf> {
+    if is_regular_file(root)
+        && root.file_name().and_then(|name| name.to_str()) == Some("marketplace.json")
+    {
+        return Some(root.to_path_buf());
+    }
+    [
+        root.join(".agents")
+            .join("plugins")
+            .join("marketplace.json"),
+        root.join("marketplace.json"),
+        root.join("plugins").join("marketplace.json"),
+    ]
+    .into_iter()
+    .find(|path| is_regular_file(path))
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 pub fn ensure_openai_curated_marketplace_config(home: &Path) -> anyhow::Result<bool> {
@@ -1085,10 +1386,7 @@ fn expand_local_plugin_marketplace(
     else {
         return;
     };
-    let marketplace_root = marketplace_path
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
+    let marketplace_root = marketplace_root_for_manifest(marketplace_path)
         .unwrap_or_else(|| home.join(".tmp").join("plugins"));
     for plugin in plugins {
         let source_path = plugin_marketplace_entry_source_path(plugin).map(str::to_string);
@@ -1149,17 +1447,33 @@ fn expand_local_plugin_marketplace(
     }
 }
 
+fn marketplace_root_for_manifest(marketplace_path: &Path) -> Option<PathBuf> {
+    let parent = marketplace_path.parent()?;
+    if parent.file_name().and_then(|name| name.to_str()) == Some("plugins") {
+        let agents = parent.parent()?;
+        if agents.file_name().and_then(|name| name.to_str()) == Some(".agents") {
+            return agents.parent().map(Path::to_path_buf);
+        }
+    }
+    Some(parent.to_path_buf())
+}
+
 fn plugin_installed_under_any_openai_curated_alias(
     installed_plugins: &BTreeSet<String>,
     plugin_name: &str,
     marketplace_name: &str,
     original_marketplace_name: &str,
 ) -> bool {
-    installed_plugins.contains(&format!("{plugin_name}@{marketplace_name}"))
-        || installed_plugins.contains(&format!("{plugin_name}@{original_marketplace_name}"))
-        || OPENAI_CURATED_MARKETPLACE_ALIASES
-            .iter()
-            .any(|name| installed_plugins.contains(&format!("{plugin_name}@{name}")))
+    let exact = installed_plugins.contains(&format!("{plugin_name}@{marketplace_name}"))
+        || installed_plugins.contains(&format!("{plugin_name}@{original_marketplace_name}"));
+    let is_openai_alias = OPENAI_CURATED_MARKETPLACE_ALIASES
+        .iter()
+        .any(|name| *name == marketplace_name || *name == original_marketplace_name);
+    exact
+        || (is_openai_alias
+            && OPENAI_CURATED_MARKETPLACE_ALIASES
+                .iter()
+                .any(|name| installed_plugins.contains(&format!("{plugin_name}@{name}"))))
 }
 
 fn absolutize_plugin_icon_paths(
@@ -1209,11 +1523,13 @@ fn absolutize_plugin_asset_path(value: &str, root: &Path) -> Option<String> {
     {
         return None;
     }
-    let relative = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    Some(root.join(relative).to_string_lossy().to_string())
+    plugin_marketplace_entry_path(root, trimmed).map(|path| path.to_string_lossy().to_string())
 }
 
 fn plugin_manifest(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if !is_regular_file(path) {
+        return None;
+    }
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()?
@@ -1337,6 +1653,39 @@ mod tests {
         validate_product_design_marketplace_root(&destination).unwrap();
     }
 
+    fn write_simple_marketplace(root: &Path, name: &str, plugin: &str) {
+        let marketplace_path = root
+            .join(".agents")
+            .join("plugins")
+            .join("marketplace.json");
+        std::fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("plugins").join(plugin).join(".codex-plugin")).unwrap();
+        std::fs::write(
+            root.join("plugins")
+                .join(plugin)
+                .join(".codex-plugin")
+                .join("plugin.json"),
+            format!(r#"{{"name":"{plugin}","description":"{name} plugin"}}"#),
+        )
+        .unwrap();
+        std::fs::write(
+            marketplace_path,
+            format!(
+                r#"{{"name":"{name}","plugins":[{{"name":"{plugin}","source":{{"source":"local","path":"./plugins/{plugin}"}}}}]}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn run_git(working_dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(working_dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
+    }
+
     #[test]
     fn status_detects_missing_snapshot() {
         let temp = tempfile::tempdir().unwrap();
@@ -1346,6 +1695,30 @@ mod tests {
         assert!(status.needs_repair);
         assert!(status.marketplace_root.is_none());
         assert!(!status.config_registered);
+    }
+
+    #[test]
+    fn status_does_not_treat_an_empty_git_cache_directory_as_a_local_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        write_product_design_marketplace(temp.path());
+        ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+        ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+        ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+        std::fs::create_dir_all(
+            temp.path()
+                .join("plugins")
+                .join("cache")
+                .join(HASHGRAPH_AWESOME_CODEX_MARKETPLACE),
+        )
+        .unwrap();
+
+        let status = status_from_home(temp.path());
+
+        assert!(status.config_registered);
+        assert!(status.needs_repair);
+        assert!(!status.local_sources_ready);
+        assert_eq!(status.runtime_confirmation, "配置或本地来源尚未就绪");
     }
 
     #[test]
@@ -1364,8 +1737,9 @@ mod tests {
         assert!(third_party_changed);
         assert!(product_design_changed);
         let status = status_from_home(temp.path());
-        assert!(!status.needs_repair);
         assert!(status.config_registered);
+        assert!(status.needs_repair);
+        assert!(!status.local_sources_ready);
         let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
         assert!(config.contains("[marketplaces.openai-curated]"));
         assert!(config.contains("[marketplaces.openai-api-curated]"));
@@ -1547,7 +1921,8 @@ mod tests {
         ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
         let status = status_from_home(temp.path());
 
-        assert!(!status.needs_repair);
+        assert!(status.needs_repair);
+        assert!(!status.local_sources_ready);
         assert!(
             temp.path()
                 .join(".tmp/plugins/.agents/plugins/marketplace.json")
@@ -1679,6 +2054,149 @@ enabled = true
 
         assert_eq!(marketplaces[0]["plugins"][0]["installed"], true);
         assert_eq!(marketplaces[1]["plugins"][0]["installed"], true);
+    }
+
+    #[test]
+    fn plugin_asset_paths_reject_parent_directory_escape() {
+        let root = Path::new("marketplace/plugins/demo");
+
+        assert!(absolutize_plugin_asset_path("../../secret.txt", root).is_none());
+        assert_eq!(
+            absolutize_plugin_asset_path("./assets/logo.png", root),
+            Some(
+                root.join("assets")
+                    .join("logo.png")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn local_marketplaces_include_configured_snapshots_and_skip_missing_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+
+        write_product_design_marketplace(temp.path());
+        ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+
+        let third_party_root = temp
+            .path()
+            .join("plugins")
+            .join("cache")
+            .join(HASHGRAPH_AWESOME_CODEX_MARKETPLACE);
+        write_simple_marketplace(
+            &third_party_root,
+            HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
+            "third-party-demo",
+        );
+        ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+
+        let custom_local_root = temp.path().join("custom-local-marketplace");
+        write_simple_marketplace(&custom_local_root, "custom-local", "custom-local-demo");
+        ensure_custom_marketplace_config(
+            temp.path(),
+            &crate::settings::CodexCustomMarketplace {
+                name: "custom-local".to_string(),
+                source_type: "local".to_string(),
+                source: custom_local_root.to_string_lossy().to_string(),
+                git_ref: String::new(),
+                sparse_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let custom_git_root = temp.path().join("plugins").join("cache").join("custom-git");
+        write_simple_marketplace(&custom_git_root, "custom-git", "custom-git-demo");
+        ensure_custom_marketplace_config(
+            temp.path(),
+            &crate::settings::CodexCustomMarketplace {
+                name: "custom-git".to_string(),
+                source_type: "git".to_string(),
+                source: "https://example.invalid/custom-git.git".to_string(),
+                git_ref: "main".to_string(),
+                sparse_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        ensure_custom_marketplace_config(
+            temp.path(),
+            &crate::settings::CodexCustomMarketplace {
+                name: "missing-local".to_string(),
+                source_type: "local".to_string(),
+                source: temp
+                    .path()
+                    .join("does-not-exist")
+                    .to_string_lossy()
+                    .to_string(),
+                git_ref: String::new(),
+                sparse_paths: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let marketplaces = local_plugin_marketplaces_from_home(temp.path());
+        let names = marketplaces
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|marketplace| marketplace.get("name").and_then(serde_json::Value::as_str))
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains(OPENAI_CURATED_MARKETPLACE));
+        assert!(names.contains(OPENAI_API_CURATED_MARKETPLACE));
+        assert!(names.contains(CODEX_SKILLS_ALTERNATIVE_MARKETPLACE));
+        assert!(names.contains(HASHGRAPH_AWESOME_CODEX_MARKETPLACE));
+        assert!(names.contains("custom-local"));
+        assert!(names.contains("custom-git"));
+        assert!(!names.contains("missing-local"));
+    }
+
+    #[tokio::test]
+    async fn git_marketplace_snapshot_is_created_without_running_repository_scripts() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let home = temp.path().join("codex-home");
+        std::fs::create_dir_all(&source).unwrap();
+        write_simple_marketplace(&source, "local-git", "local-git-demo");
+        run_git(&source, &["init"]);
+        run_git(&source, &["config", "user.email", "test@example.invalid"]);
+        run_git(&source, &["config", "user.name", "CCP Test"]);
+        run_git(&source, &["add", "."]);
+        run_git(&source, &["commit", "-m", "fixture"]);
+        run_git(&source, &["branch", "-M", "main"]);
+
+        let first = ensure_git_marketplace_snapshot(
+            &home,
+            "local-git",
+            &source.to_string_lossy(),
+            "main",
+            &[],
+        )
+        .await
+        .unwrap();
+        let second = ensure_git_marketplace_snapshot(
+            &home,
+            "local-git",
+            &source.to_string_lossy(),
+            "main",
+            &[],
+        )
+        .await
+        .unwrap();
+        let snapshot = home.join("plugins").join("cache").join("local-git");
+
+        assert!(first);
+        assert!(!second);
+        assert!(
+            snapshot
+                .join(".agents")
+                .join("plugins")
+                .join("marketplace.json")
+                .is_file()
+        );
+        assert!(!snapshot.join(".git").exists());
     }
 
     #[test]

@@ -9,7 +9,6 @@ import type {
   CodexPluginMarketplaceStatusResult,
   ContextEntriesResult,
   ContextKind,
-  LiveContextEntriesResult,
   LocalSession,
   LocalSessionsResult,
   LogsResult,
@@ -26,6 +25,7 @@ import type {
   SupplierTargetApp,
   UpdateReleasePayload,
   UpdateResult,
+  UnifiedToolInventoryResult,
   WatcherResult,
 } from "@/types";
 
@@ -115,10 +115,11 @@ export function createActionsShape() {
     refreshContextEntries: async (_silent?: boolean, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
     saveContextEntry: async (_kind: ContextKind, _id: string, _tomlBody: string, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
     deleteContextEntry: async (_kind: ContextKind, _id: string, _settings?: BackendSettings | null) => null as ContextEntriesResult | null,
-    syncLiveContextEntries: async (_settings?: BackendSettings | null) => null as LiveContextEntriesResult | null,
     refreshClaudeContextEntries: async (_silent?: boolean) => null as ClaudeContextEntriesResult | null,
     saveClaudeContextEntry: async (_kind: ContextKind, _id: string, _body: string) => null as ClaudeContextEntriesResult | null,
     deleteClaudeContextEntry: async (_kind: ContextKind, _id: string) => null as ClaudeContextEntriesResult | null,
+    refreshUnifiedToolInventory: async (_silent?: boolean) => null as UnifiedToolInventoryResult | null,
+    toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: "claude" | "codex", _enabled: boolean) => null as UnifiedToolInventoryResult | null,
   };
 }
 

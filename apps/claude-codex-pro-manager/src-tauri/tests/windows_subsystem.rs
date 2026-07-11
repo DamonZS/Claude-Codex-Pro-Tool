@@ -2278,7 +2278,7 @@ fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
 }
 
 #[test]
-fn plugin_hub_and_worktree_git_spawns_suppress_console_window() {
+fn plugin_hub_marketplace_and_worktree_git_spawns_suppress_console_window() {
     // 回归护栏：Windows 下所有会 spawn 外部程序（git clone/pull、npm install、
     // 官方插件安装、上游 worktree 的 git 调用）的代码路径都必须带 CREATE_NO_WINDOW，
     // 否则每次调用都会闪出黑色终端窗并抢焦点，进而打断供应商列表的拖拽排序。
@@ -2310,6 +2310,18 @@ fn plugin_hub_and_worktree_git_spawns_suppress_console_window() {
         .and_then(|rest| rest.split("\nfn ").next())
         .expect("install_official_claude_plugin source");
     assert!(official_install.contains("child.creation_flags(crate::windows_create_no_window())"));
+
+    // Codex marketplace 自动修复会在管理器启动时执行多个 Git 子命令；该异步
+    // helper 同样必须隐藏窗口，否则每个 clone / sparse-checkout 都会弹出终端。
+    let codex_marketplace = std::fs::read_to_string(core_dir.join("codex_plugin_marketplace.rs"))
+        .expect("read core codex_plugin_marketplace.rs");
+    let safe_git_command = codex_marketplace
+        .split("fn safe_git_command(hooks: &Path) -> tokio::process::Command")
+        .nth(1)
+        .and_then(|rest| rest.split("\nfn ").next())
+        .expect("safe_git_command source");
+    assert!(safe_git_command.contains("tokio::process::Command::new(\"git\")"));
+    assert!(safe_git_command.contains("creation_flags(crate::windows_create_no_window())"));
 
     // 上游 worktree 的 git 调用统一走 git_command()，且该 helper 带隐藏窗口标志。
     let worktree_git = std::fs::read_to_string(core_dir.join("upstream_worktree/git.rs"))

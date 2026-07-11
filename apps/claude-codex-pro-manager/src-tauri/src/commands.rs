@@ -346,6 +346,12 @@ pub struct ClaudeContextEntriesPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UnifiedToolInventoryPayload {
+    pub inventory: claude_codex_pro_core::unified_tool_inventory::UnifiedToolInventory,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtractRelayCommonConfigPayload {
     pub common_config_contents: String,
     pub profile_config_contents: String,
@@ -416,6 +422,15 @@ pub struct ClaudeContextEntryRequest {
 pub struct ClaudeContextDeleteRequest {
     pub kind: String,
     pub id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnifiedToolToggleRequest {
+    pub id: String,
+    pub kind: String,
+    pub app: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -6385,6 +6400,139 @@ pub async fn read_live_context_entries() -> CommandResult<LiveContextEntriesPayl
                 },
             )
         })
+}
+
+#[tauri::command]
+pub async fn scan_unified_tool_inventory() -> CommandResult<UnifiedToolInventoryPayload> {
+    tauri::async_runtime::spawn_blocking(scan_unified_tool_inventory_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("检测 Claude、Codex 工具与插件任务失败：{join_error}"),
+                UnifiedToolInventoryPayload {
+                    inventory: Default::default(),
+                },
+            )
+        })
+}
+
+fn scan_unified_tool_inventory_blocking() -> CommandResult<UnifiedToolInventoryPayload> {
+    let roots = claude_codex_pro_core::unified_tool_inventory::UnifiedToolInventoryRoots::default();
+    match claude_codex_pro_core::unified_tool_inventory::scan_unified_tool_inventory(&roots) {
+        Ok(inventory) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.scan.ok",
+                json!({
+                    "total": inventory.counts.total,
+                    "rawDiscoveries": inventory.counts.raw_discoveries,
+                    "deduplicated": inventory.counts.deduplicated,
+                    "mcp": inventory.counts.mcp,
+                    "skills": inventory.counts.skills,
+                    "plugins": inventory.counts.plugins,
+                    "codexEnabled": inventory.counts.codex_enabled,
+                    "claudeEnabled": inventory.counts.claude_enabled,
+                    "diagnosticCount": inventory.diagnostics.len()
+                }),
+            );
+            ok(
+                &format!(
+                    "检测完成：原始发现 {}，合并重复 {}，统一条目 {}；MCP {}、Skills {}、插件 {}；Codex 已启用 {}，Claude 已启用 {}。",
+                    inventory.counts.raw_discoveries,
+                    inventory.counts.deduplicated,
+                    inventory.counts.total,
+                    inventory.counts.mcp,
+                    inventory.counts.skills,
+                    inventory.counts.plugins,
+                    inventory.counts.codex_enabled,
+                    inventory.counts.claude_enabled
+                ),
+                UnifiedToolInventoryPayload { inventory },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.scan.failed",
+                json!({ "error": error.to_string() }),
+            );
+            failed(
+                &format!("检测 Claude、Codex 工具与插件失败：{error}"),
+                UnifiedToolInventoryPayload {
+                    inventory: Default::default(),
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn toggle_unified_tool_asset(
+    request: UnifiedToolToggleRequest,
+) -> CommandResult<UnifiedToolInventoryPayload> {
+    tauri::async_runtime::spawn_blocking(move || toggle_unified_tool_asset_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("切换工具或插件任务失败：{join_error}"),
+                UnifiedToolInventoryPayload {
+                    inventory: Default::default(),
+                },
+            )
+        })
+}
+
+fn toggle_unified_tool_asset_blocking(
+    request: UnifiedToolToggleRequest,
+) -> CommandResult<UnifiedToolInventoryPayload> {
+    let roots = claude_codex_pro_core::unified_tool_inventory::UnifiedToolInventoryRoots::default();
+    let core_request = claude_codex_pro_core::unified_tool_inventory::UnifiedToolToggleRequest {
+        id: request.id.clone(),
+        kind: request.kind.clone(),
+        app: request.app.clone(),
+        enabled: request.enabled,
+    };
+    match claude_codex_pro_core::unified_tool_inventory::set_unified_tool_asset_enabled(
+        &roots,
+        &core_request,
+    ) {
+        Ok(inventory) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.toggle.ok",
+                json!({
+                    "assetId": request.id,
+                    "kind": request.kind,
+                    "app": request.app,
+                    "enabled": request.enabled
+                }),
+            );
+            ok(
+                if request.enabled {
+                    "已为目标应用启用该工具或插件。"
+                } else {
+                    "已为目标应用关闭该工具或插件，可随时恢复。"
+                },
+                UnifiedToolInventoryPayload { inventory },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.toggle.failed",
+                json!({
+                    "assetId": request.id,
+                    "kind": request.kind,
+                    "app": request.app,
+                    "enabled": request.enabled,
+                    "error": error.to_string()
+                }),
+            );
+            let inventory =
+                claude_codex_pro_core::unified_tool_inventory::scan_unified_tool_inventory(&roots)
+                    .unwrap_or_default();
+            failed(
+                &format!("切换工具或插件失败：{error}"),
+                UnifiedToolInventoryPayload { inventory },
+            )
+        }
+    }
 }
 
 fn read_live_context_entries_blocking() -> CommandResult<LiveContextEntriesPayload> {
