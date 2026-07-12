@@ -5,7 +5,7 @@ use std::iter::once;
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -172,8 +172,18 @@ pub fn desktop_dir() -> Option<PathBuf> {
 
 #[cfg(windows)]
 pub fn open_url(url: &str) -> anyhow::Result<()> {
+    shell_open(url)
+}
+
+#[cfg(windows)]
+pub fn open_path(path: &Path) -> anyhow::Result<()> {
+    shell_open(path.as_os_str())
+}
+
+#[cfg(windows)]
+fn shell_open(target: impl AsRef<OsStr>) -> anyhow::Result<()> {
     let operation = wide_null("open");
-    let file = wide_null(url);
+    let file = wide_null(target);
     let result = unsafe {
         ShellExecuteW(
             None,

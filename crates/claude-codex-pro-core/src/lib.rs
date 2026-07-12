@@ -53,6 +53,11 @@ pub fn windows_open_url(url: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
+pub fn windows_open_path(path: &std::path::Path) -> anyhow::Result<()> {
+    windows_integration::open_path(path)
+}
+
+#[cfg(windows)]
 pub fn windows_activate_process_window(process_id: u32) -> bool {
     windows_integration::activate_process_window(process_id)
 }

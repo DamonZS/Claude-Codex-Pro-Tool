@@ -52,10 +52,12 @@
   const chatsSortRefreshIntervalMs = 1500;
   const chatsSortDbRefreshIntervalMs = 5000;
   const styleId = "codex-delete-style";
-  const codexDeleteStyleVersion = "13";
+  const codexDeleteStyleVersion = "14";
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
-  const claudeCodexProMenuVersion = "9";
+  const claudeCodexProMenuVersion = "11";
+  const claudeCodexProTriggerVersion = "6";
+  const claudeCodexProModalTheme = "pangu-control-deck";
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
@@ -72,6 +74,7 @@
   const codexMemoryPanelId = "codex-memory-assist-panel";
   const codexMemoryAssistVersion = "1";
   let claudeCodexProVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
+  window.__CLAUDE_CODEX_PRO_MODAL_THEME__ = claudeCodexProModalTheme;
   const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
   const claudeCodexProSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
   const claudeCodexProContactWechatQr = window.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ || "";
@@ -684,7 +687,7 @@
       .claude-codex-pro-modal-overlay {
         position: fixed;
         inset: 0;
-        z-index: 2147483646;
+        z-index: 2147483647;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -814,221 +817,212 @@
       .claude-codex-pro-service-tier-button { border: 1px solid #cbd5e1; border-radius: 7px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 5px 8px; white-space: nowrap; }
       .claude-codex-pro-service-tier-button[data-active="true"] { border-color: #0f766e; background: #eef6f5; color: #0f766e; }
       .claude-codex-pro-service-tier-button:disabled { opacity: .55; cursor: not-allowed; }
-      .claude-codex-pro-comic-shell {
-        --ccp-comic-ink: #172033;
-        --ccp-comic-paper: #fff8df;
-        --ccp-comic-paper-deep: #ffe7a8;
-        --ccp-comic-pink: #ff4da6;
-        --ccp-comic-cyan: #24d7ff;
-        --ccp-comic-yellow: #ffd43b;
-        --ccp-comic-green: #22c55e;
-        --ccp-comic-blue: #4f46e5;
-        --ccp-comic-halftone: rgba(23,32,51,.08);
+      .claude-codex-pro-control-deck {
+        --ccp-deck-bg: #090f13;
+        --ccp-deck-panel: #10191e;
+        --ccp-deck-panel-raised: #142127;
+        --ccp-deck-line: rgba(122, 214, 196, .17);
+        --ccp-deck-text: #e7f2ef;
+        --ccp-deck-muted: #8ea49f;
+        --ccp-deck-energy: #43d6b5;
+        --ccp-deck-amber: #f3b85b;
       }
-      .claude-codex-pro-modal-overlay:has(.claude-codex-pro-comic-shell) {
-        background:
-          radial-gradient(circle at 18% 18%, rgba(255,77,166,.22) 0 9%, transparent 23%),
-          radial-gradient(circle at 82% 16%, rgba(36,215,255,.20) 0 10%, transparent 24%),
-          radial-gradient(circle at 50% 100%, rgba(255,212,59,.18) 0 12%, transparent 32%),
-          rgba(15,23,42,.42);
-        backdrop-filter: blur(7px) saturate(1.12);
-      }
-      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell {
-        width: min(560px, calc(100vw - 48px));
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 22px;
-        background:
-          radial-gradient(circle at 12px 12px, var(--ccp-comic-halftone) 0 1.2px, transparent 1.4px) 0 0 / 13px 13px,
-          linear-gradient(135deg, #fffdf4 0%, var(--ccp-comic-paper) 54%, #fff2be 100%);
-        color: var(--ccp-comic-ink);
-        font-family: "Comic Sans MS", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-        box-shadow: 8px 8px 0 var(--ccp-comic-ink), 0 24px 90px rgba(15,23,42,.35);
-        position: relative;
+      .claude-codex-pro-modal-overlay:has(.claude-codex-pro-control-deck) {
+        background: rgba(2, 8, 11, .72);
+        backdrop-filter: blur(10px) saturate(.8);
         isolation: isolate;
       }
-      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell::before {
-        content: "POWER PANEL";
-        position: absolute;
-        right: 22px;
-        top: -15px;
-        z-index: 1;
-        transform: rotate(2deg);
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 999px;
-        background: var(--ccp-comic-yellow);
-        color: var(--ccp-comic-ink);
-        box-shadow: 4px 4px 0 var(--ccp-comic-ink);
-        font: 900 11px/1 "Segoe UI", system-ui, sans-serif;
-        letter-spacing: .08em;
-        padding: 7px 12px;
-      }
-      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="support"],
-      .claude-codex-pro-modal-content.claude-codex-pro-comic-shell[data-claude-codex-pro-active-tab="contact"] { width: min(840px, calc(100vw - 48px)); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-modal-header {
-        margin: 12px 12px 0;
-        padding: 14px 16px 12px;
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 18px;
-        background:
-          linear-gradient(90deg, rgba(255,77,166,.18), rgba(36,215,255,.16)),
-          #fffef8;
-        box-shadow: 5px 5px 0 rgba(23,32,51,.92);
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-modal-title {
-        gap: 10px;
-        font-size: 19px;
-        font-weight: 900;
-        letter-spacing: -.02em;
-        text-shadow: 1.5px 1.5px 0 rgba(255,212,59,.9);
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator {
-        width: 12px;
-        height: 12px;
-        border: 2px solid var(--ccp-comic-ink);
-        box-shadow: 2px 2px 0 var(--ccp-comic-ink);
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator[data-status="ok"] { background: var(--ccp-comic-green); box-shadow: 2px 2px 0 var(--ccp-comic-ink), 0 0 14px rgba(34,197,94,.75); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-backend-indicator[data-status="failed"] { background: #ff3b30; box-shadow: 2px 2px 0 var(--ccp-comic-ink), 0 0 14px rgba(255,59,48,.65); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-modal-close {
-        width: 30px;
-        height: 30px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 999px;
-        background: #fff;
-        color: var(--ccp-comic-ink);
-        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
-        font-weight: 900;
-        line-height: 1;
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-modal-close:hover { transform: translate(-1px, -1px); background: #ffe4ef; }
-      .claude-codex-pro-comic-shell .claude-codex-pro-tabs {
-        gap: 10px;
-        padding: 14px 18px 8px;
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-tab-button {
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 999px;
-        background: #ffffff;
-        color: var(--ccp-comic-ink);
-        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
-        font: 900 12px/1 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-        padding: 8px 13px;
-        cursor: pointer;
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-tab-button[data-active="true"] {
-        background: linear-gradient(135deg, var(--ccp-comic-pink), var(--ccp-comic-blue));
-        color: #fff;
-        text-shadow: 1px 1px 0 rgba(23,32,51,.8);
-        transform: translate(-1px, -1px) rotate(-1deg);
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-modal-body {
-        padding: 8px 18px 18px;
-        scrollbar-color: rgba(23,32,51,.55) transparent;
-      }
-      .claude-codex-pro-comic-shell .claude-codex-pro-row {
-        margin: 0 0 10px;
-        padding: 12px 13px;
-        border: 2px solid rgba(23,32,51,.86);
+      .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
+        width: min(920px, calc(100vw - 44px));
+        height: min(700px, calc(100vh - 40px));
+        max-height: calc(100vh - 40px);
+        display: grid;
+        grid-template-columns: 190px minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+        border: 1px solid rgba(91, 217, 190, .25);
         border-radius: 16px;
         background:
-          radial-gradient(circle at 10px 10px, rgba(23,32,51,.055) 0 1px, transparent 1.2px) 0 0 / 10px 10px,
-          rgba(255,255,255,.72);
-        box-shadow: 4px 4px 0 rgba(23,32,51,.82);
+          linear-gradient(rgba(67, 214, 181, .025) 1px, transparent 1px) 0 0 / 24px 24px,
+          linear-gradient(90deg, rgba(67, 214, 181, .025) 1px, transparent 1px) 0 0 / 24px 24px,
+          var(--ccp-deck-bg);
+        color: var(--ccp-deck-text);
+        font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        box-shadow: 0 36px 110px rgba(0, 0, 0, .58), 0 0 48px rgba(67, 214, 181, .06);
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-row:first-child { border-top: 2px solid rgba(23,32,51,.86); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-row-title {
-        font-weight: 900;
-        color: var(--ccp-comic-ink);
+      .claude-codex-pro-control-deck .claude-codex-pro-modal-header {
+        grid-column: 1 / -1;
+        min-height: 74px;
+        box-sizing: border-box;
+        padding: 15px 18px;
+        border-bottom: 1px solid var(--ccp-deck-line);
+        background: rgba(10, 19, 23, .94);
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-row-description,
-      .claude-codex-pro-comic-shell .claude-codex-pro-about,
-      .claude-codex-pro-comic-shell .claude-codex-pro-status-note,
-      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-status,
-      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-thread-label,
-      .claude-codex-pro-comic-shell .claude-codex-pro-support-text,
-      .claude-codex-pro-comic-shell .claude-codex-pro-contact-text,
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-description {
-        color: #3d4a62;
+      .claude-codex-pro-deck-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .claude-codex-pro-deck-mark {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(67, 214, 181, .42);
+        border-radius: 10px;
+        background: linear-gradient(145deg, rgba(67, 214, 181, .18), rgba(67, 214, 181, .03));
+        color: var(--ccp-deck-energy);
+        font: 750 12px/1 ui-monospace, "Cascadia Code", monospace;
+        letter-spacing: .04em;
+        box-shadow: inset 0 0 20px rgba(67, 214, 181, .08);
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-toggle {
-        width: 46px;
-        height: 26px;
-        border: 3px solid var(--ccp-comic-ink);
-        background: #cbd5e1;
-        box-shadow: 3px 3px 0 rgba(23,32,51,.92);
-        padding: 2px;
+      .claude-codex-pro-deck-heading { min-width: 0; }
+      .claude-codex-pro-deck-kicker {
+        color: var(--ccp-deck-energy);
+        font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace;
+        letter-spacing: .16em;
+      }
+      .claude-codex-pro-control-deck .claude-codex-pro-modal-title {
+        margin-top: 5px;
+        gap: 8px;
+        color: var(--ccp-deck-text);
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .claude-codex-pro-deck-version { color: var(--ccp-deck-muted); font: 500 11px/1 ui-monospace, "Cascadia Code", monospace; }
+      .claude-codex-pro-control-deck .claude-codex-pro-backend-indicator { width: 7px; height: 7px; }
+      .claude-codex-pro-control-deck .claude-codex-pro-modal-close {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(142, 164, 159, .25);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, .025);
+        color: var(--ccp-deck-muted);
+        font-size: 18px;
+      }
+      .claude-codex-pro-control-deck .claude-codex-pro-modal-close:hover { border-color: rgba(67, 214, 181, .45); color: var(--ccp-deck-text); background: rgba(67, 214, 181, .08); }
+      .claude-codex-pro-control-deck .claude-codex-pro-tabs {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
+        padding: 18px 12px;
+        border-right: 1px solid var(--ccp-deck-line);
+        background: rgba(10, 17, 21, .74);
+      }
+      .claude-codex-pro-control-deck .claude-codex-pro-tab-button {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--ccp-deck-muted);
+        font: 550 12px/1.2 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        padding: 10px 11px;
+        text-align: left;
         cursor: pointer;
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-toggle span {
-        width: 16px;
-        height: 16px;
-        border: 2px solid var(--ccp-comic-ink);
-        background: #fff;
-        box-shadow: 1px 1px 0 var(--ccp-comic-ink);
+      .claude-codex-pro-control-deck .claude-codex-pro-tab-button::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #52635f; box-shadow: 0 0 0 3px rgba(82, 99, 95, .12); }
+      .claude-codex-pro-control-deck .claude-codex-pro-tab-button:hover { color: var(--ccp-deck-text); background: rgba(255, 255, 255, .025); }
+      .claude-codex-pro-control-deck .claude-codex-pro-tab-button[data-active="true"] {
+        border-color: rgba(67, 214, 181, .2);
+        background: linear-gradient(90deg, rgba(67, 214, 181, .14), rgba(67, 214, 181, .035));
+        color: #dffbf4;
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-enabled="true"] { background: linear-gradient(135deg, var(--ccp-comic-green), var(--ccp-comic-cyan)); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-enabled="true"] span { transform: translateX(20px); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-toggle[data-relay-unneeded="true"] {
-        width: 82px;
-        border-color: var(--ccp-comic-ink);
-        background: #e7fff1;
-        color: var(--ccp-comic-ink);
+      .claude-codex-pro-control-deck .claude-codex-pro-tab-button[data-active="true"]::before { background: var(--ccp-deck-energy); box-shadow: 0 0 10px rgba(67, 214, 181, .7); }
+      .claude-codex-pro-deck-sidebar-note { margin: auto 8px 2px; color: #62746f; font: 500 9px/1.55 ui-monospace, "Cascadia Code", monospace; letter-spacing: .08em; }
+      .claude-codex-pro-control-deck .claude-codex-pro-modal-body {
+        grid-column: 2;
+        grid-row: 2;
+        min-height: 0;
+        padding: 20px 22px 24px;
+        background: rgba(11, 18, 22, .46);
+        scrollbar-color: rgba(67, 214, 181, .28) transparent;
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-action-button,
-      .claude-codex-pro-comic-shell .claude-codex-pro-issue-button,
-      .claude-codex-pro-comic-shell .claude-codex-pro-backend-repair,
-      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button,
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-link {
-        border: 2px solid var(--ccp-comic-ink);
+      .claude-codex-pro-deck-hero {
+        margin-bottom: 18px;
+        padding: 17px 18px;
+        border: 1px solid rgba(67, 214, 181, .2);
         border-radius: 12px;
-        background: #ffffff;
-        color: var(--ccp-comic-ink);
-        box-shadow: 3px 3px 0 var(--ccp-comic-ink);
-        font-weight: 900;
+        background: linear-gradient(125deg, rgba(67, 214, 181, .115), rgba(20, 33, 39, .72) 55%, rgba(243, 184, 91, .04));
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-action-button:hover,
-      .claude-codex-pro-comic-shell .claude-codex-pro-issue-button:hover,
-      .claude-codex-pro-comic-shell .claude-codex-pro-backend-repair:hover,
-      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button:hover,
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-link:hover { transform: translate(-1px, -1px); }
-      .claude-codex-pro-comic-shell .claude-codex-pro-service-tier-button[data-active="true"] {
-        background: var(--ccp-comic-yellow);
-        color: var(--ccp-comic-ink);
-        border-color: var(--ccp-comic-ink);
+      .claude-codex-pro-deck-hero-label { color: var(--ccp-deck-energy); font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace; letter-spacing: .14em; }
+      .claude-codex-pro-deck-hero h2 { margin: 7px 0 6px; color: #f2fbf8; font-size: 19px; line-height: 1.25; font-weight: 650; }
+      .claude-codex-pro-deck-hero p { margin: 0; color: var(--ccp-deck-muted); font-size: 12px; line-height: 1.55; }
+      .claude-codex-pro-deck-capabilities { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+      .claude-codex-pro-deck-capabilities span { border: 1px solid rgba(142, 164, 159, .18); border-radius: 6px; background: rgba(4, 10, 13, .34); color: #b8cbc6; font-size: 10px; padding: 5px 8px; }
+      .claude-codex-pro-deck-section-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 18px 2px 9px;
+        color: #bcd0cb;
+        font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace;
+        letter-spacing: .12em;
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-width-input,
-      .claude-codex-pro-comic-shell .claude-codex-pro-form-field input {
-        border: 2px solid var(--ccp-comic-ink);
-        border-radius: 12px;
-        background: #fffef7;
-        color: var(--ccp-comic-ink);
-        box-shadow: 3px 3px 0 rgba(23,32,51,.84);
+      .claude-codex-pro-deck-section-title::after { content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, var(--ccp-deck-line), transparent); }
+      .claude-codex-pro-control-deck .claude-codex-pro-row {
+        margin: 0 0 8px;
+        padding: 12px 13px;
+        border: 1px solid rgba(142, 164, 159, .12);
+        border-radius: 10px;
+        background: rgba(19, 30, 35, .72);
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-section-title,
-      .claude-codex-pro-comic-shell .claude-codex-pro-support-title,
-      .claude-codex-pro-comic-shell .claude-codex-pro-contact-title {
-        color: var(--ccp-comic-ink);
-        font-weight: 900;
-        text-shadow: 1.5px 1.5px 0 rgba(255,212,59,.82);
+      .claude-codex-pro-control-deck .claude-codex-pro-row:first-child { border-top: 1px solid rgba(142, 164, 159, .12); }
+      .claude-codex-pro-control-deck .claude-codex-pro-row:hover { border-color: rgba(67, 214, 181, .2); background: rgba(21, 35, 40, .82); }
+      .claude-codex-pro-control-deck .claude-codex-pro-row-title { color: #e2efec; font-weight: 600; }
+      .claude-codex-pro-control-deck .claude-codex-pro-row-description,
+      .claude-codex-pro-control-deck .claude-codex-pro-about,
+      .claude-codex-pro-control-deck .claude-codex-pro-status-note,
+      .claude-codex-pro-control-deck .claude-codex-pro-service-tier-status,
+      .claude-codex-pro-control-deck .claude-codex-pro-service-tier-thread-label,
+      .claude-codex-pro-control-deck .claude-codex-pro-support-text,
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-text,
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-description { color: var(--ccp-deck-muted); }
+      .claude-codex-pro-control-deck .claude-codex-pro-toggle { border: 1px solid rgba(142, 164, 159, .28); background: #263630; cursor: pointer; }
+      .claude-codex-pro-control-deck .claude-codex-pro-toggle[data-enabled="true"] { background: var(--ccp-deck-energy); box-shadow: 0 0 14px rgba(67, 214, 181, .18); }
+      .claude-codex-pro-control-deck .claude-codex-pro-action-button,
+      .claude-codex-pro-control-deck .claude-codex-pro-issue-button,
+      .claude-codex-pro-control-deck .claude-codex-pro-backend-repair,
+      .claude-codex-pro-control-deck .claude-codex-pro-service-tier-button,
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-link {
+        border: 1px solid rgba(67, 214, 181, .24);
+        border-radius: 7px;
+        background: rgba(67, 214, 181, .07);
+        color: #bcebe0;
+        box-shadow: none;
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-card,
-      .claude-codex-pro-comic-shell .claude-codex-pro-support-qr-wrap,
-      .claude-codex-pro-comic-shell .claude-codex-pro-support-empty,
-      .claude-codex-pro-comic-shell .claude-codex-pro-contact-card,
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-empty {
-        border: 3px solid var(--ccp-comic-ink);
-        border-radius: 18px;
-        background: rgba(255,255,255,.74);
-        box-shadow: 5px 5px 0 rgba(23,32,51,.9);
+      .claude-codex-pro-control-deck .claude-codex-pro-service-tier-button[data-active="true"] { border-color: rgba(67, 214, 181, .55); background: rgba(67, 214, 181, .17); color: #dcfaf3; }
+      .claude-codex-pro-control-deck .claude-codex-pro-width-input,
+      .claude-codex-pro-control-deck .claude-codex-pro-form-field input { border-color: rgba(142, 164, 159, .25); background: #0d171b; color: var(--ccp-deck-text); box-shadow: none; }
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-card,
+      .claude-codex-pro-control-deck .claude-codex-pro-support-qr-wrap,
+      .claude-codex-pro-control-deck .claude-codex-pro-support-empty,
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-card,
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-empty { border-color: rgba(67, 214, 181, .18); background: rgba(19, 30, 35, .72); box-shadow: none; }
+      .claude-codex-pro-control-deck :is(button, input, a):focus-visible { outline: 2px solid var(--ccp-deck-energy); outline-offset: 2px; }
+      @media (max-width: 720px) {
+        .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
+          width: min(calc(100vw - 20px), 620px);
+          height: min(760px, calc(100vh - 20px));
+          max-height: calc(100vh - 20px);
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto auto minmax(0, 1fr);
+        }
+        .claude-codex-pro-control-deck .claude-codex-pro-modal-header { grid-column: 1; padding: 12px 14px; }
+        .claude-codex-pro-control-deck .claude-codex-pro-tabs { grid-column: 1; grid-row: 2; flex-direction: row; overflow-x: auto; padding: 9px 12px; border-right: 0; border-bottom: 1px solid var(--ccp-deck-line); }
+        .claude-codex-pro-control-deck .claude-codex-pro-tab-button { width: auto; flex: 0 0 auto; padding: 8px 10px; }
+        .claude-codex-pro-deck-sidebar-note { display: none; }
+        .claude-codex-pro-control-deck .claude-codex-pro-modal-body { grid-column: 1; grid-row: 3; padding: 14px; }
+        .claude-codex-pro-deck-kicker { letter-spacing: .1em; }
+        .claude-codex-pro-control-deck .claude-codex-pro-service-tier-control { min-width: 0; }
       }
-      .claude-codex-pro-comic-shell .claude-codex-pro-ad-highlights span {
-        border: 2px solid var(--ccp-comic-ink);
-        background: #e9fff4;
-        color: var(--ccp-comic-ink);
-        font-weight: 800;
+      @media (prefers-reduced-motion: reduce) {
+        .claude-codex-pro-control-deck *, .claude-codex-pro-control-deck *::before, .claude-codex-pro-control-deck *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
       }
       .${codexServiceTierBadgeClass} {
         display: inline-flex;
@@ -2314,9 +2308,15 @@
   let claudeChineseOverlayScheduled = false;
   let claudeChineseOverlayFullRefreshDone = false;
   let claudeChineseOverlaySortedMap = null;
+  let claudeChineseOverlayDirectMap = null;
   const claudeChineseOverlayQueue = [];
   const claudeChineseOverlayQueued = new Set();
   const claudeChineseOverlayBatchSize = 80;
+  const claudeChineseOverlayProtectedBrands = [
+    ["Claude Code", "__CCP_BRAND_CLAUDE_CODE__"],
+    ["Codex", "__CCP_BRAND_CODEX__"],
+    ["Claude", "__CCP_BRAND_CLAUDE__"],
+  ];
 
   const claudeChineseOverlayMap = [
     ["Settings", "设置"],
@@ -2352,7 +2352,6 @@
     ["Workspace restrictions", "工作区限制"],
     ["Allowed surfaces", "允许的界面"],
     ["Cowork", "协作"],
-    ["Code", "代码"],
     ["General restrictions", "通用限制"],
     ["Allowed egress hosts", "允许出站主机"],
     ["Hostnames the agent's tools may reach from the Cowork and Code tabs.", "代理工具可从协作和代码页访问的主机名。"],
@@ -2708,12 +2707,33 @@
   }
 
   function translateClaudeChineseText(value) {
-    let next = String(value || "");
-    if (/\bCodex\b/.test(next)) return next;
+    const original = String(value || "");
+    const direct = claudeChineseOverlayDirectMap || (claudeChineseOverlayDirectMap = new Map(claudeChineseOverlayMap));
+    if (direct.has(original)) return direct.get(original);
+    const protectedBrands = protectClaudeChineseOverlayBrands(original);
+    let next = protectedBrands.value;
     const map = claudeChineseOverlaySortedMap || (claudeChineseOverlaySortedMap = [...claudeChineseOverlayMap].sort((a, b) => b[0].length - a[0].length));
     map.forEach(([source, target]) => {
-      if (/\bCodex\b/.test(next)) return;
       next = next.replaceAll(source, target);
+    });
+    return restoreClaudeChineseOverlayBrands(next, protectedBrands.tokens);
+  }
+
+  function protectClaudeChineseOverlayBrands(value) {
+    let next = String(value || "");
+    const tokens = [];
+    claudeChineseOverlayProtectedBrands.forEach(([brand, token]) => {
+      if (!next.includes(brand)) return;
+      next = next.replaceAll(brand, token);
+      tokens.push([token, brand]);
+    });
+    return { value: next, tokens };
+  }
+
+  function restoreClaudeChineseOverlayBrands(value, tokens) {
+    let next = String(value || "");
+    (tokens || []).forEach(([token, brand]) => {
+      next = next.replaceAll(token, brand);
     });
     return next;
   }
@@ -2994,14 +3014,23 @@
   }
 
   function openClaudeCodexProModal() {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", code: "Escape", bubbles: true }));
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     document.querySelectorAll(".claude-codex-pro-modal-overlay").forEach((node) => node.remove());
     document.querySelectorAll('[data-claude-codex-pro-dialog="true"]').forEach((node) => node.remove());
     const overlay = document.createElement("div");
     overlay.className = "claude-codex-pro-modal-overlay";
     overlay.innerHTML = `
-      <div class="claude-codex-pro-modal-content claude-codex-pro-comic-shell" data-claude-codex-pro-dialog="true" role="dialog" aria-modal="true" aria-label="Claude Codex Pro">
+      <div class="claude-codex-pro-modal-content claude-codex-pro-control-deck" data-claude-codex-pro-dialog="true" role="dialog" aria-modal="true" aria-label="盘古本地控制舱">
         <div class="claude-codex-pro-modal-header">
-          <div class="claude-codex-pro-modal-title"><span class="claude-codex-pro-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-claude-codex-pro-version="true">Claude Codex Pro ${claudeCodexProVersion}</span></div>
+          <div class="claude-codex-pro-deck-brand">
+            <div class="claude-codex-pro-deck-mark" aria-hidden="true">CCP</div>
+            <div class="claude-codex-pro-deck-heading">
+              <div class="claude-codex-pro-deck-kicker">PANGU LOCAL CONTROL DECK</div>
+              <div class="claude-codex-pro-modal-title"><span class="claude-codex-pro-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span>盘古本地控制舱</span><span class="claude-codex-pro-deck-version" data-claude-codex-pro-version="true">${claudeCodexProVersion}</span></div>
+            </div>
+          </div>
           <button type="button" class="claude-codex-pro-modal-close" aria-label="关闭">×</button>
         </div>
         <div class="claude-codex-pro-tabs" role="tablist" aria-label="Claude Codex Pro">
@@ -3009,9 +3038,17 @@
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">支持</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="contact" data-active="false">联系我</button>
+          <div class="claude-codex-pro-deck-sidebar-note">LOCAL FIRST<br>REVIEWABLE · REVERSIBLE</div>
         </div>
         <div class="claude-codex-pro-modal-body">
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
+            <div class="claude-codex-pro-deck-hero">
+              <div class="claude-codex-pro-deck-hero-label">CCP / LOCAL OPERATIONS</div>
+              <h2>把模型、记忆与工作流留在你的控制范围内</h2>
+              <p>这是 CCP 的本地能力控制面：集中查看桥接状态，按需启用增强，并保留可审查、可修复与可回退的操作路径。</p>
+              <div class="claude-codex-pro-deck-capabilities" aria-label="核心能力"><span>本机运行</span><span>模型桥接</span><span>盘古记忆</span><span>可审查回退</span></div>
+            </div>
+            <div class="claude-codex-pro-deck-section-title">模型与插件通道</div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">连接状态</div><div class="claude-codex-pro-row-description">状态灯同步显示当前注入连接，异常时可尝试修复运行。</div></div>
               <div class="claude-codex-pro-status-note" data-codex-backend-status="true" data-status="checking">检查中</div>
@@ -3058,6 +3095,7 @@
                 </div>
               </div>
             </div>
+            <div class="claude-codex-pro-deck-section-title">会话与工作流</div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">会话删除</div><div class="claude-codex-pro-row-description">在会话列表悬停显示删除按钮，并支持撤销。</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="sessionDelete"><span></span></button>
@@ -3085,6 +3123,7 @@
               <div><div class="claude-codex-pro-row-title">切换对话保留位置</div><div class="claude-codex-pro-row-description">开启后在不同 thread 之间切换时恢复到上一次浏览位置，不再自动跳到底部。</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="threadScrollRestore"><span></span></button>
             </div>
+            <div class="claude-codex-pro-deck-section-title">本地运维与诊断</div>
             <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Zed Remote open</div><div class="claude-codex-pro-row-description">Open supported remote SSH file references in Zed without patching Codex.app.</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="zedRemoteOpen"><span></span></button>
@@ -3314,8 +3353,8 @@
     if (!trigger) return;
     trigger.className = "claude-codex-pro-trigger";
     setClaudeCodexProTriggerLabel(trigger);
-    if (trigger.dataset.claudeCodexProTriggerInstalled === "5") return;
-    trigger.dataset.claudeCodexProTriggerInstalled = "5";
+    if (trigger.dataset.claudeCodexProTriggerInstalled === claudeCodexProTriggerVersion) return;
+    trigger.dataset.claudeCodexProTriggerInstalled = claudeCodexProTriggerVersion;
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -5615,9 +5654,18 @@
     return Object.keys(element).filter((key) => key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance") || key.startsWith("__reactProps"));
   }
 
+  const codexModelMenuSurfaceSelector = "[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper], [data-side][data-align]";
+
+  function isClaudeCodexProDialogNode(node) {
+    if (!(node instanceof Element)) return false;
+    const selector = '[data-claude-codex-pro-dialog="true"], .claude-codex-pro-modal-overlay, .claude-codex-pro-modal-content, .claude-codex-pro-control-deck';
+    return !!node.matches?.(selector) || !!node.closest?.(selector);
+  }
+
   function patchReactModelState() {
     const visited = new WeakSet();
-    const nodes = [document.body, ...document.querySelectorAll("button, [role='menu'], [role='dialog'], [data-radix-popper-content-wrapper]")].filter(Boolean);
+    const nodes = [document.body, ...document.querySelectorAll("button, [role='menu'], [role='dialog'], [data-radix-popper-content-wrapper]")]
+      .filter((node) => node && !isClaudeCodexProDialogNode(node));
     let changed = false;
     for (const node of nodes.slice(0, 220)) {
       for (const key of reactFiberKeys(node)) {
@@ -5629,13 +5677,8 @@
 
 
   function codexModelMenuCandidates() {
-    return Array.from(document.querySelectorAll([
-      "[role='menu']",
-      "[role='listbox']",
-      "[role='dialog']",
-      "[data-radix-popper-content-wrapper]",
-      "[data-side][data-align]",
-    ].join(", "))).filter((node) => {
+    return Array.from(document.querySelectorAll(codexModelMenuSurfaceSelector)).filter((node) => {
+      if (isClaudeCodexProDialogNode(node)) return false;
       const rect = node.getBoundingClientRect?.();
       if (!rect || rect.width < 120 || rect.height < 40) return false;
       const text = String(node.textContent || "");
@@ -5701,7 +5744,7 @@
       clearInterval(window.__claudeCodexProModelDropdownPatchInterval);
     }
     window.__claudeCodexProModelDropdownPatchInterval = setInterval(() => {
-      if (document.querySelector("[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper], [data-side][data-align]")) {
+      if (codexModelMenuCandidates().length) {
         scheduleCodexModelDropdownPatch(0);
       }
     }, 800);

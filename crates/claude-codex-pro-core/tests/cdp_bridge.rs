@@ -53,6 +53,34 @@ fn injection_script_prefixes_helper_url() {
 }
 
 #[test]
+fn injection_script_excludes_ccp_dialog_from_codex_model_menu_candidates() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("function isClaudeCodexProDialogNode(node)"));
+    assert!(script.contains("[data-claude-codex-pro-dialog=\"true\"]"));
+    assert!(script.contains(".claude-codex-pro-modal-overlay"));
+    assert!(script.contains(".claude-codex-pro-modal-content"));
+    assert!(script.contains(".claude-codex-pro-control-deck"));
+    assert!(script.contains(".filter((node) => node && !isClaudeCodexProDialogNode(node))"));
+    assert!(script.contains("if (isClaudeCodexProDialogNode(node)) return false;"));
+    assert!(script.contains("if (codexModelMenuCandidates().length) {"));
+}
+
+#[test]
+fn injection_script_protects_codex_brand_from_chinese_overlay_translation() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("const claudeChineseOverlayProtectedBrands = ["));
+    assert!(script.contains("[\"Claude Code\", \"__CCP_BRAND_CLAUDE_CODE__\"]"));
+    assert!(script.contains("[\"Codex\", \"__CCP_BRAND_CODEX__\"]"));
+    assert!(script.contains("[\"Claude\", \"__CCP_BRAND_CLAUDE__\"]"));
+    assert!(script.contains("function protectClaudeChineseOverlayBrands(value)"));
+    assert!(script.contains("function restoreClaudeChineseOverlayBrands(value, tokens)"));
+    assert!(script.contains("if (direct.has(original)) return direct.get(original);"));
+    assert!(!script.contains("[\"Code\", \"代码\"]"));
+}
+
+#[test]
 fn injection_script_exposes_image_overlay_config() {
     let temp = tempfile::tempdir().unwrap();
     let image_path = temp.path().join("overlay.png");
@@ -102,7 +130,8 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 fn injection_script_exposes_left_anchored_codex_status_entry() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("const claudeCodexProMenuVersion = \"9\""));
+    assert!(script.contains("const claudeCodexProMenuVersion = \""));
+    assert!(script.contains("menu.dataset.claudeCodexProMenuVersion = claudeCodexProMenuVersion;"));
     assert!(script.contains("findCodexStatusLeftAnchor"));
     assert!(script.contains("findCodexWindowLeftAnchor"));
     assert!(script.contains("normalizeStatusAnchorText"));
@@ -192,14 +221,25 @@ fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
 }
 
 #[test]
-fn injection_script_uses_comic_modal_theme() {
+fn injection_script_uses_pangu_control_deck_theme() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("claude-codex-pro-comic-shell"));
-    assert!(script.contains("--ccp-comic-halftone"));
-    assert!(script.contains("box-shadow: 8px 8px 0 var(--ccp-comic-ink)"));
-    assert!(script.contains("radial-gradient(circle at 12px 12px"));
-    assert!(script.contains("POWER PANEL"));
+    assert!(script.contains("claude-codex-pro-control-deck"));
+    assert!(script.contains("PANGU LOCAL CONTROL DECK"));
+    assert!(script.contains("盘古本地控制舱"));
+    assert!(script.contains("模型桥接"));
+    assert!(script.contains("盘古记忆"));
+    assert!(script.contains("模型与插件通道"));
+    assert!(script.contains("会话与工作流"));
+    assert!(script.contains("本地运维与诊断"));
+    assert!(script.contains("z-index: 2147483647"));
+    assert!(script.contains("new KeyboardEvent(\"keydown\", { key: \"Escape\""));
+    assert!(script.contains("document.activeElement.blur()"));
+    assert!(script.contains("@media (max-width: 720px)"));
+    assert!(script.contains("@media (prefers-reduced-motion: reduce)"));
+    assert!(script.contains(":focus-visible"));
+    assert!(!script.contains("claude-codex-pro-comic-shell"));
+    assert!(!script.contains("POWER PANEL"));
 
     assert!(script.contains("data-claude-codex-pro-dialog=\"true\""));
     assert!(script.contains("data-claude-codex-pro-tab=\"home\""));
@@ -1163,6 +1203,8 @@ fn bridge_health_check_script_uses_real_backend_round_trip() {
     let script = bridge::bridge_health_check_script();
 
     assert!(script.contains("__codexSessionDeleteBridge"));
+    assert!(script.contains("__CLAUDE_CODEX_PRO_MODAL_THEME__"));
+    assert!(script.contains("pangu-control-deck"));
     assert!(script.contains("/backend/status"));
     assert!(script.contains("Promise.race"));
     assert!(script.contains("setTimeout"));

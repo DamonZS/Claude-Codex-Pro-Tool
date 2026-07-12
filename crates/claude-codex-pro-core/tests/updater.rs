@@ -156,3 +156,27 @@ fn download_asset_to_writes_bytes() {
     assert_eq!(path, dir.path().join("pkg.zip"));
     assert_eq!(std::fs::read(path).unwrap(), b"abcdef");
 }
+
+#[test]
+fn windows_update_launch_uses_shell_open_path_contract() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("core crate should live under crates/claude-codex-pro-core");
+
+    let update_source =
+        std::fs::read_to_string(repo.join("crates/claude-codex-pro-core/src/update.rs")).unwrap();
+    let lib_source =
+        std::fs::read_to_string(repo.join("crates/claude-codex-pro-core/src/lib.rs")).unwrap();
+    let windows_source = std::fs::read_to_string(
+        repo.join("crates/claude-codex-pro-core/src/windows_integration.rs"),
+    )
+    .unwrap();
+
+    assert!(update_source.contains("crate::windows_open_path(path)"));
+    assert!(!update_source.contains("Command::new(path)"));
+    assert!(lib_source.contains("pub fn windows_open_path(path: &std::path::Path)"));
+    assert!(lib_source.contains("windows_integration::open_path(path)"));
+    assert!(windows_source.contains("pub fn open_path(path: &Path) -> anyhow::Result<()>"));
+    assert!(windows_source.contains("ShellExecuteW("));
+}

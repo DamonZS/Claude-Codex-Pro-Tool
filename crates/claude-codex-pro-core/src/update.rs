@@ -304,12 +304,7 @@ fn is_project_release_asset(name: &str) -> bool {
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new(path)
-            .creation_flags(crate::windows_integration::CREATE_NO_WINDOW)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!("启动安装包失败：{error}"))
+        crate::windows_open_path(path).map_err(|error| anyhow::anyhow!("启动安装包失败：{error}"))
     }
 
     #[cfg(target_os = "macos")]

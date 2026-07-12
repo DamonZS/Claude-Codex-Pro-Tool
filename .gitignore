@@ -6,6 +6,7 @@ venv/
 build/
 dist/
 target/
+target-rebuild/
 target-next/
 output/
 node_modules/

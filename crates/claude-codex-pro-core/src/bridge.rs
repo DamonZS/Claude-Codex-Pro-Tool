@@ -56,7 +56,9 @@ pub fn bridge_health_check_script() -> &'static str {
     r#"
 (() => {
   const bridge = window.__codexSessionDeleteBridge;
+  const modalTheme = window.__CLAUDE_CODEX_PRO_MODAL_THEME__;
   if (typeof bridge !== "function") return false;
+  if (modalTheme !== "pangu-control-deck") return false;
   try {
     return Promise.race([
       Promise.resolve(bridge("/backend/status", {})).then((result) => !!result && result.status === "ok"),
