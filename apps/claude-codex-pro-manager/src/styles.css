@@ -5382,6 +5382,289 @@ body {
   gap: 14px;
 }
 
+.memory-outcome-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memory-start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.memory-start-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 10px;
+  background: var(--ops-surface-1);
+}
+
+.memory-start-card > div:first-child,
+.memory-new-project-prompt > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.memory-start-card > div:first-child span,
+.memory-start-card > p {
+  color: var(--ops-muted);
+  font-size: 12px;
+}
+
+.memory-start-card > .memory-start-updated {
+  margin-top: -6px;
+  color: var(--ops-muted);
+  font-size: 11px;
+}
+
+.memory-outcome-item.compact {
+  padding: 9px 10px;
+}
+
+.memory-outcome-item.compact p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.memory-new-project-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ops-hairline);
+}
+
+.memory-guide-stats {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-new-project-preview > section {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 10px;
+  background: var(--ops-surface-0);
+}
+
+.memory-new-project-preview ul {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: var(--ops-muted);
+  font-size: 13px;
+}
+
+.memory-new-project-prompt {
+  grid-column: 1 / -1;
+}
+
+.memory-new-project-prompt pre {
+  max-height: 360px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 8px;
+  background: var(--ops-surface-1);
+  color: var(--ops-ink);
+  font: 12px/1.65 "JetBrains Mono", Consolas, monospace;
+  white-space: pre-wrap;
+}
+
+.memory-outcome-subtitle {
+  margin: 4px 0 0;
+  color: var(--ops-ink);
+  font-size: 14px;
+}
+
+.memory-project-list {
+  overflow: hidden;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 10px;
+  background: var(--ops-surface-1);
+}
+
+.memory-project-list > summary {
+  padding: 11px 12px;
+  color: var(--ops-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.memory-project-list[open] > summary {
+  border-bottom: 1px solid var(--ops-hairline);
+}
+
+.memory-project-list > .memory-assist-list {
+  padding: 10px;
+}
+
+.memory-outcome-stats,
+.memory-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.memory-handoff-list,
+.memory-outcome-list,
+.memory-recall-list,
+.memory-breakdown-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-outcome-item,
+.memory-recall-card,
+.memory-breakdown-list {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 10px;
+  background: var(--ops-surface-1);
+}
+
+.memory-outcome-item > span,
+.memory-outcome-item > em,
+.memory-recall-card span,
+.memory-breakdown-list em {
+  color: var(--ops-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.memory-outcome-item p,
+.memory-recall-card p,
+.memory-recall-card blockquote {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-recall-card > div,
+.memory-breakdown-list > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memory-recall-card blockquote {
+  padding-left: 10px;
+  border-left: 2px solid rgb(var(--ops-primary-rgb) / 0.55);
+  color: var(--ops-ink);
+  font-size: 13px;
+}
+
+.memory-trend-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+  min-height: 150px;
+  padding: 12px 6px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--ops-hairline);
+}
+
+.memory-trend-column {
+  display: grid;
+  flex: 1 0 24px;
+  grid-template-rows: 112px auto;
+  gap: 5px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.memory-trend-bars {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 2px;
+}
+
+.memory-trend-bars i {
+  width: 5px;
+  min-height: 0;
+  border-radius: 4px 4px 0 0;
+}
+
+.memory-trend-bars .capture { background: #60a5fa; }
+.memory-trend-bars .learned { background: #34d399; }
+.memory-trend-bars .recall { background: #f59e0b; }
+
+.memory-trend-column > span {
+  color: var(--ops-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.memory-trend-legend {
+  display: flex;
+  gap: 14px;
+  color: var(--ops-muted);
+  font-size: 12px;
+}
+
+.memory-trend-legend span::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #60a5fa;
+  content: "";
+}
+
+.memory-trend-legend span:nth-child(2)::before { background: #34d399; }
+.memory-trend-legend span:nth-child(3)::before { background: #f59e0b; }
+
+.memory-breakdown-list > span b {
+  color: var(--ops-ink);
+  font-size: 12px;
+}
+
+.memory-diagnostics {
+  overflow: hidden;
+  border: 1px solid var(--ops-hairline);
+  border-radius: 10px;
+  background: var(--ops-surface-0);
+}
+
+.memory-diagnostics > summary {
+  padding: 14px 16px;
+  color: var(--ops-ink);
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.memory-diagnostics[open] > summary {
+  border-bottom: 1px solid var(--ops-hairline);
+}
+
+.memory-diagnostics-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
 .memory-layer-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5506,6 +5789,11 @@ body {
 
   .memory-layer-grid,
   .memory-stat-grid,
+  .memory-start-grid,
+  .memory-new-project-preview,
+  .memory-guide-stats,
+  .memory-outcome-stats,
+  .memory-breakdown-grid,
   .memory-manual-meta,
   .memory-tier-preview,
   .memory-tool-grid {
@@ -8748,6 +9036,14 @@ body {
   .supplier-model-map-grid.claude,
   .supplier-direct-model-row {
     grid-template-columns: 1fr;
+  }
+
+  .memory-new-project-prompt {
+    grid-column: auto;
+  }
+
+  .memory-guide-stats {
+    grid-column: auto;
   }
   .supplier-direct-model-list-head {
     align-items: stretch;

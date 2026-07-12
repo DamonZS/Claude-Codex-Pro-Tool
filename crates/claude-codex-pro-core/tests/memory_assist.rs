@@ -1,6 +1,6 @@
 use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStore, MemoryCandidateRequest, MemoryImportRequest, MemoryItemRequest,
-    MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
+    MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryImportRequest,
+    MemoryItemRequest, MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
 use rusqlite::{Connection, params};
 use std::sync::{Mutex, OnceLock};
@@ -566,6 +566,53 @@ fn redaction_handles_bearer_case_whitespace_and_source_metadata() {
             "raw SQLite contents must not contain secret fragment: {leaked}"
         );
     }
+}
+
+#[test]
+fn redaction_handles_named_credentials_and_basic_authorization() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    let secrets = [
+        "api_key=private-api-key",
+        "apikey: private-apikey",
+        "api-key='private-dash-key'",
+        "token=ghp_private-token",
+        "access_token: private-access-token",
+        "auth_token=private-auth-token",
+        "password=private-password",
+        "secret: private-secret",
+        "Authorization: Basic dXNlcjpwYXNz",
+    ]
+    .join(" ");
+    let item = store
+        .learn_item(MemoryItemRequest {
+            text: format!("保存前必须过滤 {secrets}"),
+            workspace: "repo-a".into(),
+            category: "secret-test".into(),
+            tags: vec![],
+            source: "test".into(),
+            source_session_id: format!("session {secrets}"),
+        })
+        .unwrap();
+    for leaked in [
+        "private-api-key",
+        "private-apikey",
+        "private-dash-key",
+        "ghp_private-token",
+        "private-access-token",
+        "private-auth-token",
+        "private-password",
+        "private-secret",
+        "dXNlcjpwYXNz",
+    ] {
+        assert!(!item.text.contains(leaked), "item leaked {leaked}");
+        assert!(
+            !item.source_session_id.contains(leaked),
+            "session leaked {leaked}"
+        );
+    }
+    assert!(item.text.contains("Basic ***"));
 }
 
 #[test]
@@ -1276,4 +1323,878 @@ fn import_redacts_secret_values_before_storage_and_search() {
             "raw SQLite contents must not contain secret fragment: {leaked}"
         );
     }
+}
+
+fn learn_dashboard_item(
+    store: &MemoryAssistStore,
+    workspace: &str,
+    category: &str,
+    text: &str,
+) -> String {
+    store
+        .learn_item(MemoryItemRequest {
+            text: text.into(),
+            workspace: workspace.into(),
+            category: category.into(),
+            tags: vec!["dashboard".into()],
+            source: "test".into(),
+            source_session_id: "fixture-session".into(),
+        })
+        .unwrap()
+        .id
+}
+
+#[test]
+fn sourced_recall_records_each_hit_in_the_request_workspace_and_list_is_silent() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "成果看板真实召回必须记录项目规则",
+    );
+    learn_dashboard_item(
+        &store,
+        "global",
+        "preference",
+        "成果看板真实召回必须记录全局偏好",
+    );
+
+    store
+        .list_items(MemoryQueryRequest {
+            query: String::new(),
+            workspace: "repo-a".into(),
+            include_global: true,
+            include_archived: false,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(
+        store.outcome_dashboard("repo-a", 7).unwrap().today_recalls,
+        0
+    );
+
+    let result = store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "成果看板真实召回".into(),
+                workspace: "repo-a".into(),
+                include_global: true,
+                include_archived: false,
+                limit: 10,
+            },
+            "manager",
+            "search",
+            Some("manager-session"),
+        )
+        .unwrap();
+    assert_eq!(result.results.len(), 2);
+
+    let dashboard = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(dashboard.today_recalls, 2);
+    assert_eq!(dashboard.recent_recalls.len(), 2);
+    let workspaces = dashboard
+        .recent_recalls
+        .iter()
+        .map(|event| event.workspace.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(workspaces, vec!["repo-a", "repo-a"]);
+    assert!(dashboard.recent_recalls.iter().all(|event| {
+        event.agent == "manager"
+            && event.event_type == "search"
+            && event.memory_id.is_some()
+            && event.memory.is_some()
+            && event.workspace != "__all__"
+    }));
+}
+
+#[test]
+fn activity_query_and_session_are_redacted_truncated_and_source_attributed() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    learn_dashboard_item(
+        &store,
+        "repo-a",
+        "lesson-learned",
+        "构建失败后必须重新运行定向测试",
+    );
+    let secret_query = format!(
+        "构建 {} sk-query-secret Authorization: Bearer query.token api_key=query-api-secret token=query-token-secret",
+        "很长的查询摘要".repeat(40)
+    );
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: secret_query,
+                workspace: "repo-a".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            Some("session sk-session-secret Bearer session.token"),
+        )
+        .unwrap();
+
+    let first = store.outcome_dashboard("repo-a", 7).unwrap();
+    let event = first.recent_recalls.first().unwrap();
+    assert!(event.query_summary.chars().count() <= 160);
+    assert!(event.query_summary.ends_with('…'));
+    assert!(!event.query_summary.contains("sk-query-secret"));
+    assert!(!event.query_summary.contains("query.token"));
+    assert!(!event.query_summary.contains("query-api-secret"));
+    assert!(!event.query_summary.contains("query-token-secret"));
+    let source_session = event.source_session_id.as_deref().unwrap();
+    assert!(!source_session.contains("sk-session-secret"));
+    assert!(!source_session.contains("session.token"));
+
+    with_codex_home_env(|| {
+        store.session_summary(MemorySessionRequest {
+            workspace: "repo-a".into(),
+            query: "构建失败 定向测试".into(),
+            max_items: 1,
+        })
+    })
+    .unwrap();
+    let dashboard = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert!(
+        dashboard
+            .recent_recalls
+            .iter()
+            .any(|event| event.agent == "codex" && event.event_type == "inject")
+    );
+}
+
+#[test]
+fn global_memory_recall_is_isolated_by_request_workspace() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    learn_dashboard_item(
+        &store,
+        "global",
+        "safety-rule",
+        "共享规则要求在交付前运行真实测试",
+    );
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "repo-b-private-query 共享规则 真实测试".into(),
+                workspace: "repo-b".into(),
+                include_global: true,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+
+    let repo_b = store.outcome_dashboard("repo-b", 7).unwrap();
+    assert_eq!(repo_b.today_recalls, 1);
+    assert_eq!(repo_b.recent_recalls[0].workspace, "repo-b");
+    assert!(
+        repo_b.recent_recalls[0]
+            .query_summary
+            .contains("repo-b-private-query")
+    );
+    assert_eq!(
+        repo_b.recent_recalls[0].memory.as_ref().unwrap().workspace,
+        "global"
+    );
+
+    let repo_a = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(repo_a.today_recalls, 0);
+    assert!(
+        !serde_json::to_string(&repo_a)
+            .unwrap()
+            .contains("repo-b-private-query")
+    );
+    let global = store.outcome_dashboard("global", 7).unwrap();
+    assert_eq!(global.today_recalls, 0);
+    assert!(
+        !serde_json::to_string(&global)
+            .unwrap()
+            .contains("repo-b-private-query")
+    );
+}
+
+#[test]
+fn dashboard_uses_real_7_and_30_day_records_and_isolates_workspaces() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    let current_id = learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "当前项目规则要求运行成果看板测试",
+    );
+    let old_id = learn_dashboard_item(
+        &store,
+        "repo-a",
+        "lesson-learned",
+        "历史修复要求运行成果看板测试",
+    );
+    learn_dashboard_item(&store, "repo-b", "decision", "其他项目私有成果看板测试记录");
+    store
+        .create_candidate(MemoryCandidateRequest {
+            text: "待确认的成果看板候选".into(),
+            workspace: "repo-a".into(),
+            category: "decision".into(),
+            tags: vec![],
+            source: "test".into(),
+            reason: "fixture".into(),
+            source_session_id: "candidate-session".into(),
+        })
+        .unwrap();
+    store
+        .record_capture(MemoryCaptureRequest {
+            text: "今天采集的成果看板上下文".into(),
+            workspace: "repo-a".into(),
+            source: "test".into(),
+            source_session_id: "capture-today".into(),
+            candidate_triggered: false,
+            candidate_reason: String::new(),
+            skip_reason: String::new(),
+        })
+        .unwrap();
+    let old_capture = store
+        .record_capture(MemoryCaptureRequest {
+            text: "十天前采集的成果看板上下文".into(),
+            workspace: "repo-a".into(),
+            source: "test".into(),
+            source_session_id: "capture-old".into(),
+            candidate_triggered: false,
+            candidate_reason: String::new(),
+            skip_reason: String::new(),
+        })
+        .unwrap();
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "当前项目规则".into(),
+                workspace: "repo-a".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "历史修复".into(),
+                workspace: "repo-a".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "其他项目私有".into(),
+                workspace: "repo-b".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+
+    let conn = Connection::open(&db_path).unwrap();
+    let ten_days_ago: i64 = conn
+        .query_row(
+            "SELECT CAST(strftime('%s', 'now', '-10 days') AS INTEGER)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE memory_items SET created_at = ?1 WHERE id = ?2",
+        params![ten_days_ago, old_id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE memory_captures SET captured_at = ?1 WHERE id = ?2",
+        params![ten_days_ago, old_capture.id],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE memory_activity_events SET created_at = ?1
+         WHERE memory_id = ?2 AND event_type = 'search'",
+        params![ten_days_ago, old_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let seven = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(seven.range_days, 7);
+    assert_eq!(seven.trend.len(), 7);
+    assert_eq!(seven.today_captures, 1);
+    assert_eq!(seven.today_learned, 1);
+    assert_eq!(seven.today_recalls, 1);
+    assert_eq!(seven.pending_candidates, 1);
+    assert_eq!(
+        seven.trend.iter().map(|point| point.captures).sum::<i64>(),
+        1
+    );
+    assert_eq!(
+        seven.trend.iter().map(|point| point.learned).sum::<i64>(),
+        1
+    );
+    assert_eq!(
+        seven.trend.iter().map(|point| point.recalls).sum::<i64>(),
+        1
+    );
+    assert!(
+        seven
+            .recent_recalls
+            .iter()
+            .all(|event| event.workspace != "repo-b")
+    );
+    assert!(seven.handoff_items.iter().any(|item| item.id == current_id));
+    assert_eq!(seven.handoff_items[0].category, "project-rule");
+    assert!(
+        seven
+            .workspace_breakdown
+            .iter()
+            .all(|entry| entry.key != "repo-b")
+    );
+    assert!(
+        seven
+            .category_breakdown
+            .iter()
+            .any(|entry| entry.key == "lesson-learned")
+    );
+    let serialized = serde_json::to_value(&seven).unwrap();
+    assert!(serialized["workspaceBreakdown"][0].get("key").is_some());
+    assert!(serialized["workspaceBreakdown"][0].get("label").is_none());
+
+    let thirty = store.outcome_dashboard("repo-a", 30).unwrap();
+    assert_eq!(thirty.range_days, 30);
+    assert_eq!(thirty.trend.len(), 30);
+    assert_eq!(
+        thirty.trend.iter().map(|point| point.captures).sum::<i64>(),
+        2
+    );
+    assert_eq!(
+        thirty.trend.iter().map(|point| point.learned).sum::<i64>(),
+        2
+    );
+    assert_eq!(
+        thirty.trend.iter().map(|point| point.recalls).sum::<i64>(),
+        2
+    );
+
+    let all = store.outcome_dashboard("__all__", 7).unwrap();
+    assert!(
+        all.recent_recalls
+            .iter()
+            .any(|event| event.workspace == "repo-b")
+    );
+}
+
+#[test]
+fn activity_insert_failure_does_not_block_recall() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "事件失败时主查询仍必须返回命中",
+    );
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_activity_insert
+         BEFORE INSERT ON memory_activity_events
+         BEGIN SELECT RAISE(FAIL, 'forced activity failure'); END;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let result = store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "事件失败 主查询 命中".into(),
+                workspace: "repo-a".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 5,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(
+        store.outcome_dashboard("repo-a", 7).unwrap().today_recalls,
+        0
+    );
+}
+
+#[test]
+fn v5_database_migrates_activity_schema_without_losing_memory() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    let item_id = learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "旧数据库升级必须保留这条记忆",
+    );
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch("DROP TABLE memory_activity_events; PRAGMA user_version = 5;")
+        .unwrap();
+    drop(conn);
+
+    let reopened = store_at(&db_path);
+    let items = reopened
+        .list_items(MemoryQueryRequest {
+            query: String::new(),
+            workspace: "repo-a".into(),
+            include_global: false,
+            include_archived: false,
+            limit: 10,
+        })
+        .unwrap();
+    assert!(items.iter().any(|item| item.id == item_id));
+    assert_eq!(
+        reopened
+            .outcome_dashboard("repo-a", 7)
+            .unwrap()
+            .today_recalls,
+        0
+    );
+    let conn = Connection::open(&db_path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let activity_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'memory_activity_events'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 7);
+    assert_eq!(activity_table, 1);
+}
+
+#[test]
+fn v6_database_migrates_recall_snapshot_column_and_preserves_old_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "v6 升级后必须继续保留旧召回事件",
+    );
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE memory_activity_events RENAME TO memory_activity_events_v7;
+         CREATE TABLE memory_activity_events (
+             id TEXT PRIMARY KEY,
+             event_type TEXT NOT NULL,
+             workspace TEXT NOT NULL,
+             agent TEXT NOT NULL,
+             memory_id TEXT,
+             query_summary TEXT NOT NULL DEFAULT '',
+             source_session_id TEXT,
+             metadata_json TEXT NOT NULL DEFAULT '{}',
+             created_at INTEGER NOT NULL
+         );
+         INSERT INTO memory_activity_events
+             (id, event_type, workspace, agent, memory_id, query_summary,
+              source_session_id, metadata_json, created_at)
+         VALUES ('old-event', 'search', 'repo-a', 'manager', NULL,
+                 '旧查询摘要', NULL, '{}', strftime('%s', 'now'));
+         DROP TABLE memory_activity_events_v7;
+         PRAGMA user_version = 6;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let dashboard = store_at(&db_path).outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(dashboard.today_recalls, 1);
+    assert_eq!(dashboard.recent_recalls[0].query_summary, "旧查询摘要");
+    assert!(dashboard.recent_recalls[0].memory.is_none());
+    let conn = Connection::open(&db_path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let snapshot_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memory_activity_events')
+             WHERE name = 'memory_snapshot_json'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(version, 7);
+    assert_eq!(snapshot_column, 1);
+}
+
+#[test]
+fn repeated_identical_recall_in_same_second_keeps_each_activity_event() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "相同查询重复执行也必须保留每次真实召回证据",
+    );
+    let request = MemoryQueryRequest {
+        query: "相同查询 重复执行 真实召回证据".into(),
+        workspace: "repo-a".into(),
+        include_global: false,
+        include_archived: false,
+        limit: 1,
+    };
+    // A pair can straddle a Unix-second boundary even when both calls are
+    // immediate. Retry only that pair so the fixture deterministically proves
+    // two otherwise identical inserts made in one second both survive.
+    let mut same_second_pair = false;
+    for _ in 0..5 {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "DELETE FROM memory_activity_events WHERE event_type = 'search'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        store
+            .query_with_activity(request.clone(), "manager", "search", Some("same-session"))
+            .unwrap();
+        store
+            .query_with_activity(request.clone(), "manager", "search", Some("same-session"))
+            .unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        let distinct_seconds: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT created_at) FROM memory_activity_events
+                 WHERE event_type = 'search'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        if distinct_seconds == 1 {
+            same_second_pair = true;
+            break;
+        }
+    }
+    assert!(same_second_pair, "could not establish same-second fixture");
+
+    let dashboard = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(dashboard.today_recalls, 2);
+    assert_eq!(dashboard.recent_recalls.len(), 2);
+    assert_ne!(
+        dashboard.recent_recalls[0].id,
+        dashboard.recent_recalls[1].id
+    );
+    assert_eq!(
+        dashboard.recent_recalls[0].created_at, dashboard.recent_recalls[1].created_at,
+        "fixture should exercise duplicate recalls within one Unix second"
+    );
+}
+
+#[test]
+fn new_project_guide_selects_safe_cross_project_experience_deterministically() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    let alpha_id = learn_dashboard_item(
+        &store,
+        "secret-repo-alpha",
+        "lesson-learned",
+        "经验教训：修改功能前必须先建立可复现验证，否则容易引入回归",
+    );
+    let beta_id = learn_dashboard_item(
+        &store,
+        "secret-repo-beta",
+        "lesson-learned",
+        "修改功能前必须先建立可复现验证，否则容易引入回归",
+    );
+    let global_id = learn_dashboard_item(
+        &store,
+        "global",
+        "safety-rule",
+        "处理用户数据时必须先备份并验证恢复路径",
+    );
+    let gamma_id = learn_dashboard_item(
+        &store,
+        "secret-repo-gamma",
+        "project-rule",
+        "完成改动后应该提供真实测试证据并说明未验证风险",
+    );
+    let delta_id = learn_dashboard_item(
+        &store,
+        "secret-repo-delta",
+        "project-rule",
+        "完成改动后应该提供真实测试证据并说明未验证风险",
+    );
+    learn_dashboard_item(
+        &store,
+        "secret-repo-phoenix",
+        "project-rule",
+        "发布前必须通知 Alice 并检查 phoenix 数据库",
+    );
+    let archived = learn_dashboard_item(
+        &store,
+        "secret-repo-archived",
+        "lesson-learned",
+        "经验教训：归档经验不应该进入新项目指南",
+    );
+    store.archive_item(&archived).unwrap();
+    for unsafe_text in [
+        "必须执行 cargo test -p private-project 才能交付",
+        "必须执行 ./scripts/deploy-private.ps1 才能交付",
+        "发布前必须运行 make deploy-private 完成验证",
+        "必须读取 D:\\Secret\\repo\\config.toml 后再修改",
+        "必须访问 https://private.example.test/api 进行验证",
+        "认证时必须使用 sk-private-secret 和 Bearer private.token",
+        "认证前必须检查 api_key=private-api-key 和 token=ghp_private-token",
+        "认证前必须使用 Authorization: Basic dXNlcjpwYXNz",
+        "必须沿用 session_id=private-session-42 的上下文",
+        "在 secret-repo-unsafe 中必须先完成可复现验证",
+    ] {
+        learn_dashboard_item(&store, "secret-repo-unsafe", "project-rule", unsafe_text);
+    }
+    store
+        .learn_item(MemoryItemRequest {
+            text: "必须沿用 naked-private-session-42 才能完成真实验证".into(),
+            workspace: "secret-repo-unsafe".into(),
+            category: "project-rule".into(),
+            tags: vec![],
+            source: "test".into(),
+            source_session_id: "naked-private-session-42".into(),
+        })
+        .unwrap();
+    store
+        .learn_item(MemoryItemRequest {
+            text: "交付前必须确认 secret-repo-alpha 的规则并完成真实验证".into(),
+            workspace: "global".into(),
+            category: "safety-rule".into(),
+            tags: vec![],
+            source: "test".into(),
+            source_session_id: "global-cross-workspace-fixture".into(),
+        })
+        .unwrap();
+    store
+        .learn_item(MemoryItemRequest {
+            text: "发布前必须沿用 cross-private-session-beta 才能验证".into(),
+            workspace: "secret-repo-alpha".into(),
+            category: "project-rule".into(),
+            tags: vec![],
+            source: "test".into(),
+            source_session_id: "alpha-own-session".into(),
+        })
+        .unwrap();
+    store
+        .learn_item(MemoryItemRequest {
+            text: "发布前必须完成独立验证".into(),
+            workspace: "secret-repo-beta".into(),
+            category: "project-rule".into(),
+            tags: vec![],
+            source: "test".into(),
+            source_session_id: "cross-private-session-beta".into(),
+        })
+        .unwrap();
+
+    let recalls_before = store.outcome_dashboard("__all__", 7).unwrap().today_recalls;
+    let first = store.new_project_guide().unwrap();
+    let second = store.new_project_guide().unwrap();
+    let recalls_after = store.outcome_dashboard("__all__", 7).unwrap().today_recalls;
+
+    assert_eq!(first, second);
+    assert_eq!(recalls_before, recalls_after);
+    assert!(first.pitfalls.len() <= 12);
+    assert!(first.best_practices.len() <= 12);
+    assert_eq!(first.project_count, 4);
+    assert_eq!(first.source_item_count, 5);
+    assert_eq!(first.source_workspace_count, 5);
+    let conn = Connection::open(&db_path).unwrap();
+    let expected_generated_at = [alpha_id, beta_id, global_id, gamma_id, delta_id]
+        .iter()
+        .map(|id| {
+            conn.query_row(
+                "SELECT updated_at FROM memory_items WHERE id = ?1",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+        })
+        .max()
+        .unwrap();
+    assert_eq!(first.generated_at, expected_generated_at);
+    assert!(first.generated_at > 0);
+    let all_text = serde_json::to_string(&first).unwrap();
+    for private in [
+        "secret-repo-alpha",
+        "secret-repo-beta",
+        "secret-repo-gamma",
+        "secret-repo-delta",
+        "secret-repo-phoenix",
+        "secret-repo-unsafe",
+        "private-project",
+        "D:\\Secret",
+        "private.example.test",
+        "sk-private-secret",
+        "private.token",
+        "private-api-key",
+        "ghp_private-token",
+        "dXNlcjpwYXNz",
+        "private-session-42",
+        "naked-private-session-42",
+        "cross-private-session-beta",
+        "deploy-private",
+        "归档经验",
+        "Alice",
+        "phoenix 数据库",
+    ] {
+        assert!(!all_text.contains(private), "guide leaked: {private}");
+    }
+    let deduped = first
+        .pitfalls
+        .iter()
+        .find(|item| item.text.contains("可复现验证"))
+        .expect("cross-project duplicate lesson should be retained once");
+    assert_eq!(deduped.source_count, 2);
+    assert!(
+        first
+            .best_practices
+            .iter()
+            .any(|item| item.text.contains("真实测试证据"))
+    );
+    for experience in first.pitfalls.iter().chain(&first.best_practices) {
+        assert!(
+            first.prompt.contains(&experience.text),
+            "prompt omits selected experience: {}",
+            experience.text
+        );
+    }
+    assert!(first.prompt.contains("优先避坑"));
+    assert!(first.prompt.contains("优秀处理方式"));
+    for required in [
+        "项目说明",
+        "规格",
+        "验收标准",
+        "源码",
+        "实施前总结",
+        "最小必要修改",
+        "可复现",
+        "真实运行",
+        "新项目",
+    ] {
+        assert!(first.prompt.contains(required), "prompt misses {required}");
+    }
+}
+
+#[test]
+fn dashboard_keeps_redacted_recall_snapshot_after_memory_is_edited_and_moved() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("memory.sqlite");
+    let store = store_at(&db_path);
+    let item_id = learn_dashboard_item(
+        &store,
+        "repo-a",
+        "project-rule",
+        "发布前必须运行真实测试并保留证据",
+    );
+    store
+        .query_with_activity(
+            MemoryQueryRequest {
+                query: "真实测试 证据".into(),
+                workspace: "repo-a".into(),
+                include_global: false,
+                include_archived: false,
+                limit: 1,
+            },
+            "manager",
+            "search",
+            None,
+        )
+        .unwrap();
+    let original = store
+        .list_items(MemoryQueryRequest {
+            query: String::new(),
+            workspace: "repo-a".into(),
+            include_global: false,
+            include_archived: false,
+            limit: 10,
+        })
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == item_id)
+        .unwrap();
+    store
+        .update_item(
+            &item_id,
+            MemoryItemRequest {
+                text: "repo-b 当前私有修复内容不得返回 repo-a".into(),
+                workspace: "repo-b".into(),
+                category: original.category,
+                tags: original.tags,
+                source: original.source,
+                source_session_id: original.source_session_id,
+            },
+        )
+        .unwrap();
+
+    let dashboard = store.outcome_dashboard("repo-a", 7).unwrap();
+    assert_eq!(dashboard.recent_recalls.len(), 1);
+    let snapshot = dashboard.recent_recalls[0]
+        .memory
+        .as_ref()
+        .expect("recall-time snapshot should survive later edits and moves");
+    assert_eq!(snapshot.text, "发布前必须运行真实测试并保留证据");
+    assert_eq!(snapshot.workspace, "repo-a");
+    assert!(snapshot.tags.is_empty());
+    assert!(snapshot.source_session_id.is_empty());
+    assert!(
+        !serde_json::to_string(&dashboard)
+            .unwrap()
+            .contains("repo-b 当前私有")
+    );
+}
+
+#[test]
+fn new_project_guide_returns_complete_truthful_empty_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store_at(&temp.path().join("memory.sqlite"));
+    let guide = store.new_project_guide().unwrap();
+    assert_eq!(guide.generated_at, 0);
+    assert_eq!(guide.source_item_count, 0);
+    assert_eq!(guide.source_workspace_count, 0);
+    assert_eq!(guide.project_count, 0);
+    assert!(guide.pitfalls.is_empty());
+    assert!(guide.best_practices.is_empty());
+    assert!(!guide.prompt.is_empty());
+    assert!(guide.prompt.contains("暂无合格的历史经验"));
+    assert_eq!(
+        store.outcome_dashboard("__all__", 7).unwrap().today_recalls,
+        0
+    );
 }

@@ -630,6 +630,47 @@ export type MemoryStatusResult = CommandResult<{
 export type MemoryItemsResult = CommandResult<{ items: MemoryItem[] }>;
 export type MemoryItemResult = CommandResult<{ item: MemoryItem }>;
 export type MemoryCandidateResult = CommandResult<{ candidate: MemoryCandidate }>;
+export type MemoryCandidatesResult = CommandResult<{ candidates: MemoryCandidate[] }>;
+export type MemoryActivityEvent = {
+  id: string;
+  eventType: string;
+  workspace: string;
+  agent: string;
+  memoryId: string | null;
+  querySummary: string;
+  sourceSessionId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: number;
+  memory: MemoryItem | null;
+};
+export type MemoryOutcomeDashboard = {
+  workspace: string;
+  rangeDays: number;
+  todayCaptures: number;
+  todayLearned: number;
+  pendingCandidates: number;
+  todayRecalls: number;
+  trend: Array<{ date: string; captures: number; learned: number; recalls: number }>;
+  workspaceBreakdown: Array<{ key: string; count: number }>;
+  categoryBreakdown: Array<{ key: string; count: number }>;
+  recentRecalls: MemoryActivityEvent[];
+  handoffItems: MemoryItem[];
+};
+export type MemoryOutcomeDashboardResult = CommandResult<{ dashboard: MemoryOutcomeDashboard }>;
+export type MemoryNewProjectExperience = {
+  text: string;
+  sourceCount: number;
+  category: string;
+};
+export type MemoryNewProjectGuide = {
+  generatedAt: number;
+  sourceItemCount: number;
+  sourceWorkspaceCount: number;
+  pitfalls: MemoryNewProjectExperience[];
+  bestPractices: MemoryNewProjectExperience[];
+  prompt: string;
+};
+export type MemoryNewProjectGuideResult = CommandResult<{ guide: MemoryNewProjectGuide }>;
 export type MemoryQueryResult = CommandResult<{
   memory: {
     query: string;

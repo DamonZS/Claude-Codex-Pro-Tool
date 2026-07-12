@@ -15,8 +15,8 @@ use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest,
     MemoryCaptureProgressStatus, MemoryExport, MemoryImportRequest, MemoryItem, MemoryItemRequest,
-    MemoryQueryRequest, MemoryQueryResult, MemorySelfCheckRequest, MemorySelfCheckResult,
-    MemorySessionRequest, MemorySessionSummary,
+    MemoryNewProjectGuide, MemoryOutcomeDashboard, MemoryQueryRequest, MemoryQueryResult,
+    MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
@@ -651,6 +651,18 @@ pub struct MemoryAssistQueryPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MemoryOutcomeDashboardPayload {
+    pub dashboard: MemoryOutcomeDashboard,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryNewProjectGuidePayload {
+    pub guide: MemoryNewProjectGuide,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryAssistItemsPayload {
     pub items: Vec<MemoryItem>,
 }
@@ -698,6 +710,15 @@ pub struct MemoryCandidateListRequest {
     pub workspace: String,
     #[serde(default = "default_true")]
     pub include_global: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryOutcomeDashboardRequest {
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default = "default_memory_outcome_range_days")]
+    pub range_days: usize,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -752,6 +773,24 @@ pub fn startup_should_show_update() -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_memory_outcome_range_days() -> usize {
+    30
+}
+
+fn restrict_manager_memory_workspace(workspace: &str) -> String {
+    let workspace = workspace.trim();
+    if workspace.is_empty() || workspace == "__all__" {
+        "global".to_string()
+    } else {
+        workspace.to_string()
+    }
+}
+
+fn restrict_manager_memory_query(request: &mut MemoryQueryRequest) {
+    request.workspace = restrict_manager_memory_workspace(&request.workspace);
+    request.include_global = true;
 }
 
 pub fn current_exe_path_string() -> String {
@@ -3189,14 +3228,16 @@ pub async fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayl
 
 #[tauri::command]
 pub async fn query_memory_assist(
-    request: MemoryQueryRequest,
+    mut request: MemoryQueryRequest,
 ) -> CommandResult<MemoryAssistQueryPayload> {
     // SQLite query with keyword scoring/ranking; keep it off the UI thread.
+    restrict_manager_memory_query(&mut request);
     let query = request.query.clone();
     let workspace = request.workspace.clone();
-    let computed =
-        tauri::async_runtime::spawn_blocking(move || MemoryAssistStore::default().query(request))
-            .await;
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().query_with_activity(request, "manager", "search", None)
+    })
+    .await;
     match computed {
         Ok(Ok(memory)) => ok("记忆查询已完成。", MemoryAssistQueryPayload { memory }),
         Ok(Err(error)) => failed(
@@ -3223,10 +3264,73 @@ pub async fn query_memory_assist(
 }
 
 #[tauri::command]
+pub async fn load_memory_outcome_dashboard(
+    request: MemoryOutcomeDashboardRequest,
+) -> CommandResult<MemoryOutcomeDashboardPayload> {
+    let workspace = restrict_manager_memory_workspace(&request.workspace);
+    let range_days = if request.range_days <= 7 { 7 } else { 30 };
+    let empty_dashboard = || MemoryOutcomeDashboard {
+        workspace: workspace.clone(),
+        range_days,
+        ..MemoryOutcomeDashboard::default()
+    };
+    let requested_workspace = workspace.clone();
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().outcome_dashboard(&requested_workspace, range_days)
+    })
+    .await;
+    match computed {
+        Ok(Ok(dashboard)) => ok(
+            "盘古记忆成果看板已加载。",
+            MemoryOutcomeDashboardPayload { dashboard },
+        ),
+        Ok(Err(error)) => failed(
+            &format!("加载盘古记忆成果看板失败：{error}"),
+            MemoryOutcomeDashboardPayload {
+                dashboard: empty_dashboard(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("盘古记忆成果看板任务失败：{error}"),
+            MemoryOutcomeDashboardPayload {
+                dashboard: empty_dashboard(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn load_memory_new_project_guide() -> CommandResult<MemoryNewProjectGuidePayload> {
+    let computed = tauri::async_runtime::spawn_blocking(move || {
+        MemoryAssistStore::default().new_project_guide()
+    })
+    .await;
+    match computed {
+        Ok(Ok(guide)) => ok(
+            "新项目启动指南已生成。",
+            MemoryNewProjectGuidePayload { guide },
+        ),
+        Ok(Err(error)) => failed(
+            &format!("生成新项目启动指南失败：{error}"),
+            MemoryNewProjectGuidePayload {
+                guide: MemoryNewProjectGuide::default(),
+            },
+        ),
+        Err(error) => failed(
+            &format!("新项目启动指南任务失败：{error}"),
+            MemoryNewProjectGuidePayload {
+                guide: MemoryNewProjectGuide::default(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
 pub async fn list_memory_assist_items(
-    request: MemoryQueryRequest,
+    mut request: MemoryQueryRequest,
 ) -> CommandResult<MemoryAssistItemsPayload> {
     // SQLite read; keep it off the UI thread.
+    restrict_manager_memory_query(&mut request);
     let computed = tauri::async_runtime::spawn_blocking(move || {
         MemoryAssistStore::default().list_items(request)
     })
@@ -3453,8 +3557,9 @@ pub async fn create_memory_assist_candidate(
 pub async fn list_memory_assist_candidates(
     request: MemoryCandidateListRequest,
 ) -> CommandResult<MemoryAssistCandidatesPayload> {
+    let workspace = restrict_manager_memory_workspace(&request.workspace);
     let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().list_candidates(&request.workspace, request.include_global)
+        MemoryAssistStore::default().list_candidates(&workspace, true)
     })
     .await;
     match computed {
@@ -10015,9 +10120,10 @@ enabled = true
 
     #[test]
     fn delete_local_session_falls_back_when_requested_db_no_longer_contains_thread() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous_codex_home = std::env::var_os("CODEX_HOME");
         let codex_home = temp.path().join("codex-home");
+        let _codex_home = set_test_codex_home(&codex_home);
         let sqlite_dir = codex_home.join("sqlite");
         std::fs::create_dir_all(&sqlite_dir).unwrap();
         let stale_db = sqlite_dir.join("codex-dev.db");
@@ -10047,22 +10153,12 @@ enabled = true
             .unwrap();
         drop(active);
 
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-        }
         let result =
             tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
                 session_id: "t1".to_string(),
                 title: "Active Thread".to_string(),
                 db_path: Some(stale_db.to_string_lossy().to_string()),
             }));
-        unsafe {
-            if let Some(value) = previous_codex_home {
-                std::env::set_var("CODEX_HOME", value);
-            } else {
-                std::env::remove_var("CODEX_HOME");
-            }
-        }
 
         assert_eq!(result.status, "ok");
         assert_eq!(
@@ -10082,9 +10178,10 @@ enabled = true
 
     #[test]
     fn list_local_sessions_deduplicates_threads_across_current_and_legacy_dbs() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous_codex_home = std::env::var_os("CODEX_HOME");
         let codex_home = temp.path().join("codex-home");
+        let _codex_home = set_test_codex_home(&codex_home);
         let sqlite_dir = codex_home.join("sqlite");
         std::fs::create_dir_all(&sqlite_dir).unwrap();
         let current_db = sqlite_dir.join("state_5.sqlite");
@@ -10092,11 +10189,7 @@ enabled = true
         create_minimal_thread_db(&current_db, "t1", "Current Copy", 100);
         create_minimal_thread_db(&legacy_db, "t1", "Legacy Copy", 200);
 
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-        }
         let result = tauri::async_runtime::block_on(list_local_sessions());
-        restore_codex_home(previous_codex_home);
 
         assert_eq!(result.status, "ok");
         assert_eq!(result.payload.sessions.len(), 1);
@@ -10110,9 +10203,10 @@ enabled = true
 
     #[test]
     fn delete_local_session_removes_duplicate_threads_from_all_candidate_dbs() {
+        let _guard = test_path_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous_codex_home = std::env::var_os("CODEX_HOME");
         let codex_home = temp.path().join("codex-home");
+        let _codex_home = set_test_codex_home(&codex_home);
         let sqlite_dir = codex_home.join("sqlite");
         std::fs::create_dir_all(&sqlite_dir).unwrap();
         let current_db = sqlite_dir.join("state_5.sqlite");
@@ -10120,16 +10214,12 @@ enabled = true
         create_minimal_thread_db(&current_db, "t1", "Current Copy", 100);
         create_minimal_thread_db(&legacy_db, "t1", "Legacy Copy", 200);
 
-        unsafe {
-            std::env::set_var("CODEX_HOME", &codex_home);
-        }
         let result =
             tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
                 session_id: "t1".to_string(),
                 title: "Legacy Copy".to_string(),
                 db_path: Some(legacy_db.to_string_lossy().to_string()),
             }));
-        restore_codex_home(previous_codex_home);
 
         assert_eq!(result.status, "ok");
         assert_eq!(thread_count(&current_db, "t1"), 0);
@@ -10156,16 +10246,6 @@ enabled = true
             row.get::<_, i64>(0)
         })
         .unwrap()
-    }
-
-    fn restore_codex_home(previous: Option<std::ffi::OsString>) {
-        unsafe {
-            if let Some(value) = previous {
-                std::env::set_var("CODEX_HOME", value);
-            } else {
-                std::env::remove_var("CODEX_HOME");
-            }
-        }
     }
 
     #[test]

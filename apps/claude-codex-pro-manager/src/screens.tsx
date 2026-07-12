@@ -140,9 +140,13 @@ import type {
   LocalSession,
   LocalSessionsResult,
   LogsResult,
+  MemoryCandidatesResult,
   MemoryExportResult,
   MemoryItem,
   MemoryItemsResult,
+  MemoryNewProjectExperience,
+  MemoryNewProjectGuideResult,
+  MemoryOutcomeDashboardResult,
   MemoryQueryResult,
   MemorySelfCheckResult,
   MemoryStatusResult,
@@ -2447,6 +2451,9 @@ function fallbackMemoryManual(status: MemoryStatusResult | null) {
 
 export function MemoryScreen({
   actions,
+  candidates,
+  dashboard,
+  newProjectGuide,
   exported,
   items,
   search,
@@ -2455,6 +2462,9 @@ export function MemoryScreen({
   status,
 }: {
   actions: AppActions;
+  candidates: MemoryCandidatesResult | null;
+  dashboard: MemoryOutcomeDashboardResult | null;
+  newProjectGuide: MemoryNewProjectGuideResult | null;
   exported: MemoryExportResult | null;
   items: MemoryItemsResult | null;
   search: MemoryQueryResult | null;
@@ -2490,6 +2500,20 @@ export function MemoryScreen({
   const latestScanAt = captureProgress?.lastScanAt || latestWorkspaceCapture;
   const firstBaselineAt = captureProgress?.firstBaselineAt || 0;
   const workspaceSummary = status?.memory.codexWorkspace || status?.memory.workspaces?.[0]?.workspace || "global";
+  const outcome = dashboard?.dashboard;
+  const pendingCandidates = candidates?.candidates ?? [];
+  const handoffItems = outcome?.handoffItems ?? [];
+  const continueItems = handoffItems.slice(0, 3);
+  const guide = newProjectGuide?.guide;
+  const guidePitfalls = guide?.pitfalls ?? [];
+  const guideApproaches = guide?.bestPractices ?? [];
+  const guidePrompt = guide?.prompt ?? "";
+  const guideSelectedCount = guidePitfalls.length + guideApproaches.length;
+  const projectWorkspace = outcome?.workspace || workspaceSummary;
+  const latestHandoffUpdatedAt = handoffItems.reduce((latest, item) => Math.max(latest, item.updatedAt || 0), 0);
+  const projectItems = sourceItems.filter((item) => item.workspace === projectWorkspace || item.workspace === "global");
+  const trend = outcome?.trend ?? [];
+  const trendMax = Math.max(1, ...trend.map((point) => point.captures + point.learned + point.recalls));
   const mcpEnabled = Boolean(settings?.settings.memoryAssistMcpEnabled);
   const memoryEnabled = status?.memory.enabled ?? Boolean(settings?.settings.memoryAssistEnabled);
   const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
@@ -2547,9 +2571,174 @@ export function MemoryScreen({
     await navigator.clipboard?.writeText(manualEditing ? manualDraft : manualText);
     actions.showNotice({ title: "复制注入手册", message: "已复制会话经验教训注入手册全文。", status: "ok" });
   };
+  const copyHandoff = async () => {
+    const text = [
+      `# 项目接续：${projectWorkspace}`,
+      "",
+      ...continueItems.map((item) => `- [${item.category}] ${item.text}`),
+    ].join("\n");
+    await navigator.clipboard?.writeText(text);
+    actions.showNotice({ title: "复制项目接续", message: "已复制当前看板中的项目接续摘要。", status: "ok" });
+  };
+  const recallMethodLabel = (eventType: string) => {
+    if (eventType === "inject") return "会话注入";
+    if (eventType === "search") return "搜索命中";
+    return eventType || "召回";
+  };
+  const guideText = (item: MemoryNewProjectExperience) => `${item.text}（${item.category} · ${item.sourceCount} 条来源）`;
+  const copyNewProjectPrompt = async () => {
+    if (!guidePrompt) return;
+    await navigator.clipboard?.writeText(guidePrompt);
+    actions.showNotice({ title: "复制新项目提示词", message: "已复制完整的新项目启动提示词。", status: "ok" });
+  };
 
   return (
     <div className="stack memory-page">
+      <Panel title="开始工作" detail="选择继续当前项目，或按需生成一份基于既有记忆的新项目启动指南。">
+        <div className="memory-start-grid">
+          <section className="memory-start-card">
+            <div><strong>继续当前项目</strong><span>{projectWorkspace}</span></div>
+            <span className="memory-start-updated">最近更新：{latestHandoffUpdatedAt ? new Date(latestHandoffUpdatedAt * 1000).toLocaleString() : "暂无接续更新时间"}</span>
+            <div className="memory-handoff-list">
+              {continueItems.length ? continueItems.map((item) => (
+                <article className="memory-outcome-item compact" key={`handoff-${item.id}`}>
+                  <span>{item.category}</span>
+                  <p>{item.text}</p>
+                </article>
+              )) : <Empty text="当前项目尚无可用于接续的关键记录。" />}
+            </div>
+            <Button disabled={!continueItems.length} onClick={() => void copyHandoff()} size="sm" variant="outline"><Copy className="h-4 w-4" />复制项目接续</Button>
+          </section>
+          <section className="memory-start-card">
+            <div><strong>开启新项目</strong><span>跨项目经验指南</span></div>
+            <p>需要时再从已有记忆中整理避坑、优秀方式与完整提示词，不会在进入页面时自动生成。</p>
+            <Button onClick={() => void actions.loadMemoryNewProjectGuide()} size="sm">{newProjectGuide ? "重新生成预览" : "生成启动指南"}</Button>
+          </section>
+        </div>
+        {newProjectGuide ? (
+          <div className="memory-new-project-preview">
+            <div className="memory-guide-stats">
+              <InfoRow label="来源范围" value={`${guide?.sourceWorkspaceCount ?? 0} 个`} />
+              <InfoRow label="源记忆" value={`${guide?.sourceItemCount ?? 0} 条`} />
+              <InfoRow label="精选经验" value={`${guideSelectedCount} 条`} />
+              <InfoRow label="来源更新截至" value={guide?.generatedAt ? new Date(guide.generatedAt * 1000).toLocaleString() : "未记录"} />
+            </div>
+            <section><strong>避坑</strong>{guidePitfalls.length ? <ul>{guidePitfalls.map((item, index) => <li key={`pitfall-${index}`}>{guideText(item)}</li>)}</ul> : <Empty text="暂无可提炼的避坑记录。" />}</section>
+            <section><strong>优秀方式</strong>{guideApproaches.length ? <ul>{guideApproaches.map((item, index) => <li key={`approach-${index}`}>{guideText(item)}</li>)}</ul> : <Empty text="暂无可提炼的优秀方式。" />}</section>
+            <section className="memory-new-project-prompt"><div><strong>完整提示词</strong><Button disabled={!guidePrompt} onClick={() => void copyNewProjectPrompt()} size="sm" variant="outline"><Copy className="h-4 w-4" />复制提示词</Button></div>{guidePrompt ? <pre>{guidePrompt}</pre> : <Empty text="当前记忆不足，尚未生成完整提示词。" />}</section>
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel title="记忆成果" detail="今日结果、7/30 天趋势与真实召回证据均来自本地记忆库记录。">
+        <div className="memory-outcome-stats">
+          <InfoRow label="今日采集" value={`${outcome?.todayCaptures ?? 0} 条`} />
+          <InfoRow label="新增长期记忆" value={`${outcome?.todayLearned ?? 0} 条`} />
+          <InfoRow label="待确认" value={`${outcome?.pendingCandidates ?? pendingCandidates.length} 条`} />
+          <InfoRow label="真实命中" value={`${outcome?.todayRecalls ?? 0} 条`} />
+        </div>
+        <div className="memory-outcome-toolbar">
+          <span>最近 {outcome?.rangeDays ?? 30} 天</span>
+          <div className="action-row">
+            <Button onClick={() => void actions.refreshMemoryOutcomeDashboard(7)} size="sm" variant={(outcome?.rangeDays ?? 30) === 7 ? "default" : "outline"}>7 天</Button>
+            <Button onClick={() => void actions.refreshMemoryOutcomeDashboard(30)} size="sm" variant={(outcome?.rangeDays ?? 30) === 30 ? "default" : "outline"}>30 天</Button>
+          </div>
+        </div>
+        {trend.length ? (
+          <div className="memory-trend-chart" aria-label={`${outcome?.rangeDays ?? 30} 天记忆趋势`}>
+            {trend.map((point) => (
+              <div className="memory-trend-column" key={point.date} title={`${point.date}：采集 ${point.captures}，新增 ${point.learned}，召回 ${point.recalls}`}>
+                <div className="memory-trend-bars">
+                  <i className="capture" style={{ height: point.captures ? `${Math.max(3, (point.captures / trendMax) * 100)}%` : 0 }} />
+                  <i className="learned" style={{ height: point.learned ? `${Math.max(3, (point.learned / trendMax) * 100)}%` : 0 }} />
+                  <i className="recall" style={{ height: point.recalls ? `${Math.max(3, (point.recalls / trendMax) * 100)}%` : 0 }} />
+                </div>
+                <span>{point.date.slice(5)}</span>
+              </div>
+            ))}
+          </div>
+        ) : <Empty text="所选时间范围内暂无趋势记录。" />}
+        <div className="memory-trend-legend"><span>采集</span><span>新增</span><span>命中条目</span></div>
+        <div className="memory-breakdown-grid">
+          <div className="memory-breakdown-list">
+            <strong>项目分布</strong>
+            {(outcome?.workspaceBreakdown ?? []).map((item) => <span key={`workspace-${item.key}`}>{item.key}<b>{item.count}</b></span>)}
+            {outcome?.workspaceBreakdown.length ? null : <em>暂无项目分布</em>}
+          </div>
+          <div className="memory-breakdown-list">
+            <strong>类别分布</strong>
+            {(outcome?.categoryBreakdown ?? []).map((item) => <span key={`category-${item.key}`}>{item.key}<b>{item.count}</b></span>)}
+            {outcome?.categoryBreakdown.length ? null : <em>暂无类别分布</em>}
+          </div>
+        </div>
+        <h3 className="memory-outcome-subtitle">最近真实召回</h3>
+        <div className="memory-recall-list">
+          {outcome?.recentRecalls.length ? outcome.recentRecalls.map((event) => (
+            <article className="memory-recall-card" key={event.id}>
+              <div><strong>{event.agent || "unknown"}</strong><span>{recallMethodLabel(event.eventType)} · {new Date(event.createdAt * 1000).toLocaleString()}</span></div>
+              <p>查询：{event.querySummary || "未记录查询摘要"}</p>
+              <blockquote>{event.memory?.text || "命中记忆当前不可用"}</blockquote>
+            </article>
+          )) : <Empty text="尚无可验证召回记录" />}
+        </div>
+      </Panel>
+
+      <Panel title="待确认" detail="候选记忆在确认后才会进入长期记忆；忽略不会删除其他记忆。">
+        <div className="memory-outcome-list">
+          {pendingCandidates.length ? pendingCandidates.map((candidate) => (
+            <article className="memory-outcome-item" key={candidate.id}>
+              <span>{candidate.category} · {candidate.workspace} · {candidate.source}</span>
+              <p>{candidate.text}</p>
+              {candidate.reason ? <em>{candidate.reason}</em> : null}
+              <div className="action-row">
+                <Button onClick={() => void actions.approveMemoryAssistCandidate(candidate.id)} size="sm">确认记忆</Button>
+                <Button onClick={() => void actions.rejectMemoryAssistCandidate(candidate.id)} size="sm" variant="outline">忽略</Button>
+              </div>
+            </article>
+          )) : <Empty text="当前没有待确认记忆。" />}
+        </div>
+      </Panel>
+
+      <Panel title="项目记忆" detail="搜索、编辑以及归档或恢复当前项目与 global 记忆。">
+        <div className="memory-source-toolbar">
+          <label className="memory-archive-toggle">
+            <input checked={showArchived} onChange={(event) => { const next = event.currentTarget.checked; setShowArchived(next); void actions.refreshMemoryAssist(false, next); }} type="checkbox" />
+            <span>显示归档</span>
+          </label>
+          <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline"><RefreshCw className="h-4 w-4" />刷新</Button>
+        </div>
+        <div className="memory-assist-search">
+          <label className="ops-form-field">
+            <span>搜索项目记忆</span>
+            <input onChange={(event) => setSearchQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived); }} placeholder="搜索项目约定、历史修复或进度" value={searchQuery} />
+          </label>
+          <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">搜索</Button>
+        </div>
+        {matches.length ? (
+          <div className="memory-assist-list">
+            <strong>搜索结果：{search?.memory.query}</strong>
+            {matches.slice(0, 8).map((match) => <div className="memory-assist-row" key={`outcome-match-${match.item.id}`}><span>{match.item.category} · {match.item.workspace}</span><p>{match.item.text}</p></div>)}
+          </div>
+        ) : search ? <Empty text="没有匹配到项目记忆。" /> : null}
+        <details className="memory-project-list">
+          <summary>查看项目记忆（{projectItems.length}）</summary>
+          <div className="memory-assist-list">
+          {projectItems.length ? projectItems.map((item) => {
+            const editing = editingMemoryId === item.id;
+            return (
+              <article className={`memory-assist-row memory-lesson-card${item.tier === "archived" ? " memory-archived" : ""}`} key={`project-${item.id}`}>
+                <span>{item.category} · {item.workspace}</span>
+                {editing ? <><label className="ops-form-field"><span>分类</span><input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} /></label><label className="ops-form-field"><span>记忆内容</span><textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} /></label><div className="action-row"><Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm"><Save className="h-4 w-4" />保存</Button><Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button></div></> : <><p>{item.text}</p><MemoryTierControls actions={actions} item={item} /><Button onClick={() => beginEditMemory(item)} size="sm" variant="outline"><Pencil className="h-4 w-4" />编辑</Button></>}
+              </article>
+            );
+          }) : <Empty text="当前项目暂无记忆。" />}
+          </div>
+        </details>
+      </Panel>
+
+      <details className="memory-diagnostics">
+        <summary>高级诊断</summary>
+        <div className="memory-diagnostics-body">
       <section className="memory-layer-grid" aria-label="盘古记忆三层链路状态">
         <Panel title="历史会话采集层" detail="主路径：从 Codex / Claude 本地可解析会话源建立采集证据。">
           <div className="ops-status-list">
@@ -2823,6 +3012,8 @@ export function MemoryScreen({
           </>
         ) : <Empty text="来源条目已折叠。点击展开后可审查、搜索、编辑和归档恢复。" />}
       </Panel>
+        </div>
+      </details>
     </div>
   );
 }
@@ -2980,7 +3171,6 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
       </Panel>
     );
   };
-
   return (
     <>
       <div className="stack">

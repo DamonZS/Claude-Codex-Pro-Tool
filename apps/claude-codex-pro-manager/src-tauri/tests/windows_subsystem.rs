@@ -1147,7 +1147,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let memory_assist_panel = screens_file
         .split("function MemoryAssistPanel")
         .nth(1)
-        .and_then(|rest| rest.split("function SessionManagementScreen").next())
+        .and_then(|rest| rest.split("export function MemoryScreen").next())
         .expect("memory assist panel source");
     assert!(memory_assist_panel.contains("<strong>经验教训手册</strong>"));
     assert!(memory_assist_panel.contains("memory-lesson-card"));
@@ -2900,4 +2900,81 @@ fn about_screen_exposes_contact_entrypoints() {
     assert!(styles.contains(".contact-link"));
     assert!(styles.contains(".contact-wechat"));
     assert!(styles.contains(".contact-qr"));
+}
+
+#[test]
+fn pangu_memory_new_project_guide_keeps_lazy_loading_and_complete_contract() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manager_root = manifest_dir.parent().expect("manager root");
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let command_registry = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let app = read_frontend_file("App.tsx");
+    let screens = read_frontend_file("screens.tsx");
+    let types = read_frontend_file("types.ts");
+
+    assert!(commands.contains("pub async fn load_memory_new_project_guide()"));
+    assert!(commands.contains("MemoryAssistStore::default().new_project_guide()"));
+    assert!(commands.contains("guide: MemoryNewProjectGuide::default()"));
+    assert!(command_registry.contains("commands::load_memory_new_project_guide"));
+    assert!(commands.contains("fn restrict_manager_memory_workspace(workspace: &str) -> String"));
+    assert!(
+        commands
+            .contains("request.workspace = restrict_manager_memory_workspace(&request.workspace);")
+    );
+    assert!(
+        commands.contains("let workspace = restrict_manager_memory_workspace(&request.workspace);")
+    );
+    assert!(commands.contains("let range_days = if request.range_days <= 7 { 7 } else { 30 };"));
+    assert!(commands.contains(
+        "MemoryAssistStore::default().outcome_dashboard(&requested_workspace, range_days)"
+    ));
+    assert!(commands.contains("MemoryAssistStore::default().list_candidates(&workspace, true)"));
+
+    for field in [
+        "generatedAt: number",
+        "sourceItemCount: number",
+        "sourceWorkspaceCount: number",
+        "pitfalls: MemoryNewProjectExperience[]",
+        "bestPractices: MemoryNewProjectExperience[]",
+        "prompt: string",
+    ] {
+        assert!(
+            types.contains(field),
+            "missing frontend guide field: {field}"
+        );
+    }
+    assert!(types.contains("workspaceBreakdown: Array<{ key: string; count: number }>"));
+    assert!(types.contains("categoryBreakdown: Array<{ key: string; count: number }>"));
+    assert!(screens.contains("workspace-${item.key}"));
+    assert!(screens.contains("category-${item.key}"));
+
+    let initial_memory_refresh = app
+        .split("const refreshMemoryAssist = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const refreshMemoryOutcomeDashboard").next())
+        .expect("initial memory refresh source");
+    assert!(!initial_memory_refresh.contains("load_memory_new_project_guide"));
+    assert!(!initial_memory_refresh.contains("workspace: MEMORY_ALL_WORKSPACES"));
+    assert!(app.contains("call<MemoryNewProjectGuideResult>(\"load_memory_new_project_guide\")"));
+    assert!(app.contains("guide && statusOk(guide.status)"));
+
+    for copy in [
+        "继续当前项目",
+        "开启新项目",
+        "最近更新：",
+        "来源范围",
+        "源记忆",
+        "精选经验",
+        "完整提示词",
+        "真实命中",
+        "高级诊断",
+    ] {
+        assert!(screens.contains(copy), "missing memory UI copy: {copy}");
+    }
+    assert!(screens.contains("<details className=\"memory-diagnostics\">"));
+
+    let styles = read_source_file(&manager_root.join("src/styles.css"));
+    assert!(styles.contains(".memory-start-grid"));
+    assert!(styles.contains(".memory-new-project-preview"));
+    assert!(styles.contains("@media (max-width:"));
 }

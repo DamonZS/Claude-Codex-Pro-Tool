@@ -200,6 +200,7 @@ import type {
   McpbPackageResult,
   MemoryCandidate,
   MemoryCandidateResult,
+  MemoryCandidatesResult,
   MemoryExport,
   MemoryExportResult,
   MemoryItem,
@@ -207,6 +208,8 @@ import type {
   MemoryItemResult,
   MemoryItemsResult,
   MemoryMcpRegisterPayload,
+  MemoryNewProjectGuideResult,
+  MemoryOutcomeDashboardResult,
   MemoryQueryResult,
   MemorySelfCheckResult,
   MemoryStatusResult,
@@ -280,6 +283,9 @@ export function App() {
   const [codexSessionContextError, setCodexSessionContextError] = useState("");
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
   const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
+  const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidatesResult | null>(null);
+  const [memoryOutcomeDashboard, setMemoryOutcomeDashboard] = useState<MemoryOutcomeDashboardResult | null>(null);
+  const [memoryNewProjectGuide, setMemoryNewProjectGuide] = useState<MemoryNewProjectGuideResult | null>(null);
   const [memorySelfCheck, setMemorySelfCheck] = useState<MemorySelfCheckResult | null>(null);
   const [memorySearch, setMemorySearch] = useState<MemoryQueryResult | null>(null);
   const [memoryExport, setMemoryExport] = useState<MemoryExportResult | null>(null);
@@ -654,12 +660,47 @@ export function App() {
   };
 
   const refreshMemoryAssist = async (silent = false, includeArchived = false) => {
-    const [status, items] = await Promise.all([
-      refreshMemoryAssistStatus(silent),
-      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 80, includeArchived } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
+    const status = await refreshMemoryAssistStatus(silent);
+    const detectedWorkspace = status?.memory.codexWorkspace?.trim();
+    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
+      ? detectedWorkspace
+      : MEMORY_GLOBAL_WORKSPACE;
+    const [items, dashboard, candidates] = await Promise.all([
+      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace, includeGlobal: true, limit: 80, includeArchived } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
+      run(() => call<MemoryOutcomeDashboardResult>("load_memory_outcome_dashboard", { request: { workspace, rangeDays: 30 } }), "成果看板", { trackBusy: !silent, notify: !silent }),
+      run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace, includeGlobal: true } }), "待确认记忆", { trackBusy: !silent, notify: !silent }),
     ]);
     if (items) setMemoryItems(items);
+    if (dashboard) setMemoryOutcomeDashboard(dashboard);
+    if (candidates) setMemoryCandidates(candidates);
     return status;
+  };
+
+  const refreshMemoryOutcomeDashboard = async (rangeDays = 30, silent = false) => {
+    const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
+    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
+      ? detectedWorkspace
+      : MEMORY_GLOBAL_WORKSPACE;
+    const dashboard = await run(
+      () => call<MemoryOutcomeDashboardResult>("load_memory_outcome_dashboard", { request: { workspace, rangeDays } }),
+      "成果看板",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (dashboard) setMemoryOutcomeDashboard(dashboard);
+    return dashboard;
+  };
+
+  const loadMemoryNewProjectGuide = async () => {
+    const guide = await run(
+      () => call<MemoryNewProjectGuideResult>("load_memory_new_project_guide"),
+      "新项目启动指南",
+    );
+    if (guide && statusOk(guide.status)) {
+      setMemoryNewProjectGuide(guide);
+    } else if (guide) {
+      notifyResult({ title: "新项目启动指南", message: guide.message, status: guide.status });
+    }
+    return guide;
   };
 
   const refreshLogs = async (silent = false) => {
@@ -1281,8 +1322,12 @@ export function App() {
   };
 
   const searchMemoryAssist = async (query: string, includeArchived = false) => {
+    const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
+    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
+      ? detectedWorkspace
+      : MEMORY_GLOBAL_WORKSPACE;
     const result = await run(
-      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace: MEMORY_ALL_WORKSPACES, includeGlobal: true, limit: 12, includeArchived } }),
+      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace, includeGlobal: true, limit: 12, includeArchived } }),
       "搜索记忆",
     );
     if (result) {
@@ -1813,6 +1858,8 @@ export function App() {
       closeClaudeSessionContext,
       deleteClaudeSession,
       refreshMemoryAssist,
+      refreshMemoryOutcomeDashboard,
+      loadMemoryNewProjectGuide,
       learnMemoryAssistItem,
       updateMemoryAssistItem,
       searchMemoryAssist,
@@ -1913,6 +1960,8 @@ export function App() {
       closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
       refreshMemoryAssist: (...args) => actionsRef.current!.refreshMemoryAssist(...args),
+      refreshMemoryOutcomeDashboard: (...args) => actionsRef.current!.refreshMemoryOutcomeDashboard(...args),
+      loadMemoryNewProjectGuide: (...args) => actionsRef.current!.loadMemoryNewProjectGuide(...args),
       learnMemoryAssistItem: (...args) => actionsRef.current!.learnMemoryAssistItem(...args),
       updateMemoryAssistItem: (...args) => actionsRef.current!.updateMemoryAssistItem(...args),
       searchMemoryAssist: (...args) => actionsRef.current!.searchMemoryAssist(...args),
@@ -2058,6 +2107,9 @@ export function App() {
           {route === "memory" ? (
             <MemoryScreen
               actions={actions}
+              candidates={memoryCandidates}
+              dashboard={memoryOutcomeDashboard}
+              newProjectGuide={memoryNewProjectGuide}
               exported={memoryExport}
               items={memoryItems}
               search={memorySearch}

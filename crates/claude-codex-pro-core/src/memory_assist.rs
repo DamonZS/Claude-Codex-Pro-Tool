@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 7;
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
 /// Tiering (phase 2). Items live in one of two tiers; archived is a soft,
@@ -38,8 +39,16 @@ const LOCAL_EMBEDDING_DIM: usize = 256;
 /// embedding model can detect and re-embed rows produced by this offline scheme.
 const LOCAL_EMBEDDING_MODEL: &str = "local-hash-v1";
 const ALL_WORKSPACES: &str = "__all__";
+const ACTIVITY_QUERY_SUMMARY_MAX_CHARS: usize = 160;
+const ACTIVITY_SOURCE_SESSION_MAX_CHARS: usize = 160;
+const ACTIVITY_METADATA_STRING_MAX_CHARS: usize = 256;
+const ACTIVITY_MEMORY_SNAPSHOT_TEXT_MAX_CHARS: usize = 480;
+const OUTCOME_RECENT_RECALL_LIMIT: usize = 20;
+const OUTCOME_HANDOFF_LIMIT: usize = 8;
+const NEW_PROJECT_GUIDE_LIMIT: usize = 12;
 const LESSON_MANUAL_CATEGORY: &str = "lesson-manual";
 const LESSON_MANUAL_SOURCE: &str = "lesson-manual-compiler";
+static ACTIVITY_EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const CAPTURE_USER_EVIDENCE_SQL: &str = "summary NOT LIKE '<environment_context%'
     AND summary NOT LIKE '<codex_internal_context%'
     AND summary NOT LIKE '<system%'
@@ -131,6 +140,87 @@ pub struct MemoryQueryResult {
     pub query: String,
     pub workspace: String,
     pub results: Vec<MemoryQueryMatch>,
+}
+
+/// A durable, source-attributed memory activity record. Recall activity is
+/// written once per actual hit. `memory` is the redacted, bounded snapshot that
+/// was surfaced at hit time, so later edits or workspace moves cannot rewrite
+/// the evidence shown by the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryActivityEvent {
+    pub id: String,
+    pub event_type: String,
+    pub workspace: String,
+    pub agent: String,
+    pub memory_id: Option<String>,
+    pub query_summary: String,
+    pub source_session_id: Option<String>,
+    pub metadata: Value,
+    pub created_at: i64,
+    pub memory: Option<MemoryItem>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryTrendPoint {
+    pub date: String,
+    pub captures: i64,
+    pub learned: i64,
+    pub recalls: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryBreakdown {
+    pub key: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryOutcomeDashboard {
+    pub workspace: String,
+    pub range_days: usize,
+    pub today_captures: i64,
+    pub today_learned: i64,
+    pub pending_candidates: i64,
+    pub today_recalls: i64,
+    pub trend: Vec<MemoryTrendPoint>,
+    pub workspace_breakdown: Vec<MemoryBreakdown>,
+    pub category_breakdown: Vec<MemoryBreakdown>,
+    pub recent_recalls: Vec<MemoryActivityEvent>,
+    pub handoff_items: Vec<MemoryItem>,
+}
+
+/// One generalized, locally-derived experience exposed by the new-project
+/// guide. It intentionally carries no workspace, item, or session identifier.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryNewProjectExperience {
+    pub text: String,
+    pub source_count: usize,
+    pub category: String,
+}
+
+/// Deterministic, read-only guidance distilled from active memories across all
+/// projects. Empty vectors are the truthful empty state; no fallback experience
+/// is invented when the database has no reusable lessons.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryNewProjectGuide {
+    /// Stable source-data timestamp: the greatest `updated_at` among the
+    /// unique memories represented in this guide, or zero for the empty state.
+    pub generated_at: i64,
+    /// Number of unique memory items represented by the selected experiences.
+    pub source_item_count: usize,
+    /// Number of unique source workspaces represented, including `global`.
+    pub source_workspace_count: usize,
+    /// Backward-compatible count of represented non-global projects.
+    pub project_count: usize,
+    pub pitfalls: Vec<MemoryNewProjectExperience>,
+    pub best_practices: Vec<MemoryNewProjectExperience>,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -437,6 +527,16 @@ impl MemoryAssistStore {
     pub fn learn_item(&self, request: MemoryItemRequest) -> anyhow::Result<MemoryItem> {
         let conn = self.open()?;
         let item = learn_item_with_conn(&conn, request)?;
+        let _ = record_activity_event(
+            &conn,
+            "learn",
+            &item.workspace,
+            &item.source,
+            Some(&item.id),
+            "",
+            Some(&item.source_session_id),
+            &json!({ "category": item.category }),
+        );
         let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
@@ -528,6 +628,16 @@ impl MemoryAssistStore {
             &item.workspace,
             &json!({ "reason": "manual" }),
         )?;
+        let _ = record_activity_event(
+            &conn,
+            "archive",
+            &item.workspace,
+            "manager",
+            Some(&item.id),
+            "",
+            None,
+            &json!({ "reason": "manual" }),
+        );
         let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
@@ -558,6 +668,16 @@ impl MemoryAssistStore {
             &item.workspace,
             &json!({ "reason": "manual" }),
         )?;
+        let _ = record_activity_event(
+            &conn,
+            "restore",
+            &item.workspace,
+            "manager",
+            Some(&item.id),
+            "",
+            None,
+            &json!({ "reason": "manual" }),
+        );
         let _ = self.sync_inject_summary_cache(&conn, &item.workspace);
         Ok(item)
     }
@@ -569,6 +689,43 @@ impl MemoryAssistStore {
 
     pub fn query(&self, request: MemoryQueryRequest) -> anyhow::Result<MemoryQueryResult> {
         self.query_items(request, true)
+    }
+
+    /// Runs a normal recall query and records one best-effort activity row for
+    /// each returned memory. Activity failures never change the query result.
+    pub fn query_with_activity(
+        &self,
+        request: MemoryQueryRequest,
+        agent: &str,
+        event_type: &str,
+        source_session_id: Option<&str>,
+    ) -> anyhow::Result<MemoryQueryResult> {
+        let result = self.query_items(request, true)?;
+        let event_type = normalize_activity_event_type(event_type);
+        let is_real_recall = event_type == "inject" || !result.query.trim().is_empty();
+        if is_real_recall && !result.results.is_empty() {
+            if let Ok(conn) = self.open() {
+                let agent = normalize_redacted_label(agent, "unknown");
+                for hit in &result.results {
+                    let _ = record_recall_activity_event(
+                        &conn,
+                        &event_type,
+                        &result.workspace,
+                        &agent,
+                        Some(&hit.item.id),
+                        &result.query,
+                        source_session_id,
+                        &json!({
+                            "category": hit.item.category,
+                            "score": hit.score,
+                            "matched_keywords": hit.matched_keywords,
+                        }),
+                        Some(&hit.item),
+                    );
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn query_items(
@@ -770,6 +927,16 @@ impl MemoryAssistStore {
                 &candidate.workspace,
                 &json!({"source": candidate.source, "reason": candidate.reason}),
             )?;
+            let _ = record_activity_event(
+                &conn,
+                "candidate",
+                &candidate.workspace,
+                &candidate.source,
+                None,
+                "",
+                Some(&candidate.source_session_id),
+                &json!({ "candidate_id": candidate.id, "action": "updated" }),
+            );
             let _ = self.sync_inject_summary_cache(&conn, &candidate.workspace);
             return Ok(candidate);
         }
@@ -801,6 +968,16 @@ impl MemoryAssistStore {
             &candidate.workspace,
             &json!({"source": candidate.source, "reason": candidate.reason}),
         )?;
+        let _ = record_activity_event(
+            &conn,
+            "candidate",
+            &candidate.workspace,
+            &candidate.source,
+            None,
+            "",
+            Some(&candidate.source_session_id),
+            &json!({ "candidate_id": candidate.id, "action": "created" }),
+        );
         let _ = self.sync_inject_summary_cache(&conn, &candidate.workspace);
         Ok(candidate)
     }
@@ -878,6 +1055,19 @@ impl MemoryAssistStore {
                 "skip_reason": capture.skip_reason,
             }),
         )?;
+        let _ = record_activity_event(
+            &conn,
+            "capture",
+            &capture.workspace,
+            &capture.source,
+            None,
+            "",
+            Some(&capture.source_session_id),
+            &json!({
+                "text_length": capture.text_length,
+                "candidate_triggered": capture.candidate_triggered,
+            }),
+        );
         let _ = self.sync_inject_summary_cache(&conn, &capture.workspace);
         Ok(capture)
     }
@@ -1191,15 +1381,20 @@ impl MemoryAssistStore {
         let max_items = clamp_limit(request.max_items);
         let history_report = self.backfill_codex_history(&workspace, 8, true);
         let status = self.status()?;
-        let query = self.query(MemoryQueryRequest {
-            query: request.query,
-            workspace: workspace.clone(),
-            include_global: true,
-            limit: max_items,
-            // Injection only ever surfaces active memories — decayed/archived
-            // items must not leak back into the session-start summary.
-            include_archived: false,
-        })?;
+        let query = self.query_with_activity(
+            MemoryQueryRequest {
+                query: request.query,
+                workspace: workspace.clone(),
+                include_global: true,
+                limit: max_items,
+                // Injection only ever surfaces active memories — decayed/archived
+                // items must not leak back into the session-start summary.
+                include_archived: false,
+            },
+            "codex",
+            "inject",
+            None,
+        )?;
         let conn = self.open()?;
         let _ = self.sync_inject_summary_cache(&conn, &workspace);
         let recent_captures = recent_captures(&conn, &workspace, 5)?;
@@ -1239,6 +1434,24 @@ impl MemoryAssistStore {
             capture_summary,
             summary,
         })
+    }
+
+    /// Aggregates outcome evidence from SQLite for the selected workspace (plus
+    /// global), or every real workspace when `workspace == "__all__"`.
+    pub fn outcome_dashboard(
+        &self,
+        workspace: &str,
+        range_days: usize,
+    ) -> anyhow::Result<MemoryOutcomeDashboard> {
+        let conn = self.open()?;
+        outcome_dashboard_from_conn(&conn, workspace, range_days)
+    }
+
+    /// Builds a local, cross-project startup guide without performing a recall
+    /// query or writing activity/access records.
+    pub fn new_project_guide(&self) -> anyhow::Result<MemoryNewProjectGuide> {
+        let conn = self.open()?;
+        new_project_guide_from_conn(&conn)
     }
 
     pub fn export_json(&self) -> anyhow::Result<MemoryExport> {
@@ -1845,7 +2058,9 @@ pub fn set_memory_assist_db_path_for_tests(path: Option<PathBuf>) -> Option<Path
 
 pub fn redact_secrets(input: &str) -> String {
     let with_sk = redact_prefixed_token(input, "sk-", "sk-***");
-    redact_bearer_tokens(&with_sk)
+    let with_bearer = redact_bearer_tokens(&with_sk);
+    let with_basic = redact_authorization_basic(&with_bearer);
+    redact_named_secret_assignments(&with_basic)
 }
 
 fn learn_item_with_conn(
@@ -1988,6 +2203,23 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_memory_events_workspace ON memory_events(workspace);
 
+        CREATE TABLE IF NOT EXISTS memory_activity_events (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            memory_id TEXT,
+            query_summary TEXT NOT NULL DEFAULT '',
+            source_session_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            memory_snapshot_json TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_activity_workspace_created
+            ON memory_activity_events(workspace, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_activity_type_created
+            ON memory_activity_events(event_type, created_at DESC);
+
         CREATE TABLE IF NOT EXISTS memory_captures (
             id TEXT PRIMARY KEY,
             workspace TEXT NOT NULL,
@@ -2045,6 +2277,12 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     }
     if user_version < 5 {
         migrate_to_v5(conn)?;
+    }
+    if user_version < 6 {
+        migrate_to_v6(conn)?;
+    }
+    if user_version < 7 {
+        migrate_to_v7(conn)?;
     }
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     Ok(())
@@ -2150,6 +2388,45 @@ fn migrate_to_v5(conn: &Connection) -> anyhow::Result<()> {
     if !column_exists(conn, "memory_capture_progress", "last_scan_id")? {
         conn.execute_batch(
             "ALTER TABLE memory_capture_progress ADD COLUMN last_scan_id TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    Ok(())
+}
+
+/// v5 -> v6 migration: add source-attributed outcome activity without touching
+/// the existing memory/event/export tables. `IF NOT EXISTS` keeps partial or
+/// repeated migrations safe.
+fn migrate_to_v6(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS memory_activity_events (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            memory_id TEXT,
+            query_summary TEXT NOT NULL DEFAULT '',
+            source_session_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_activity_workspace_created
+            ON memory_activity_events(workspace, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_activity_type_created
+            ON memory_activity_events(event_type, created_at DESC);
+        ",
+    )?;
+    Ok(())
+}
+
+/// v6 -> v7 migration: persist a bounded, redacted recall-time snapshot. Old
+/// activity rows remain valid with an empty snapshot and continue to render as
+/// unavailable evidence instead of being joined to mutable current memory.
+fn migrate_to_v7(conn: &Connection) -> anyhow::Result<()> {
+    if !column_exists(conn, "memory_activity_events", "memory_snapshot_json")? {
+        conn.execute_batch(
+            "ALTER TABLE memory_activity_events
+             ADD COLUMN memory_snapshot_json TEXT NOT NULL DEFAULT '';",
         )?;
     }
     Ok(())
@@ -2468,6 +2745,362 @@ fn build_lesson_manual_text(items: &[MemoryItem]) -> String {
                 .join("\n")
         )
     }
+}
+
+#[derive(Debug)]
+struct NewProjectGuideCandidate {
+    text: String,
+    category: String,
+    score: i32,
+    source_updated_at: BTreeMap<String, i64>,
+    workspaces: BTreeSet<String>,
+    pitfall: bool,
+}
+
+fn new_project_guide_from_conn(conn: &Connection) -> anyhow::Result<MemoryNewProjectGuide> {
+    let (private_workspaces, private_session_ids) = private_memory_identifiers(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, source_session_id,
+                created_at, updated_at, last_accessed_at, access_count,
+                tier, strength, archived_at
+         FROM memory_items
+         WHERE tier = 'active'
+           AND category IN ('lesson-learned', 'lesson-manual', 'safety-rule', 'project-rule')
+         ORDER BY id ASC",
+    )?;
+    let items = stmt
+        .query_map([], row_to_item)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut raw = Vec::<NewProjectGuideCandidate>::new();
+    for item in items {
+        for candidate in lesson_manual_candidates(&item.text) {
+            if new_project_guide_line_is_unsafe(
+                &candidate,
+                &private_workspaces,
+                &private_session_ids,
+            ) {
+                continue;
+            }
+            let line = compact_lesson_manual_line(&candidate);
+            if line.chars().count() < 8
+                || lesson_manual_line_is_noise(&line)
+                || new_project_guide_line_is_unsafe(
+                    &line,
+                    &private_workspaces,
+                    &private_session_ids,
+                )
+                || !contains_any_case_insensitive(&line, LESSON_ACTION_WORDS)
+            {
+                continue;
+            }
+            let mut score = lesson_sentence_score(&line);
+            score += match item.category.as_str() {
+                "lesson-learned" | LESSON_MANUAL_CATEGORY => 4,
+                "safety-rule" => 3,
+                "project-rule" => 2,
+                _ => 0,
+            };
+            if score < 5 {
+                continue;
+            }
+            let mut source_updated_at = BTreeMap::new();
+            source_updated_at.insert(item.id.clone(), item.updated_at);
+            let mut workspaces = BTreeSet::new();
+            workspaces.insert(item.workspace.clone());
+            raw.push(NewProjectGuideCandidate {
+                pitfall: new_project_guide_is_pitfall(&line, &item.category),
+                text: line,
+                category: item.category.clone(),
+                score,
+                source_updated_at,
+                workspaces,
+            });
+        }
+    }
+
+    raw.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.text.cmp(&right.text))
+            .then_with(|| left.category.cmp(&right.category))
+    });
+    let mut merged = Vec::<NewProjectGuideCandidate>::new();
+    for candidate in raw {
+        if let Some(existing) = merged.iter_mut().find(|existing| {
+            existing.pitfall == candidate.pitfall
+                && duplicate_memory_score(&existing.text, &candidate.text).is_some()
+        }) {
+            existing
+                .source_updated_at
+                .extend(candidate.source_updated_at);
+            existing.workspaces.extend(candidate.workspaces);
+            continue;
+        }
+        merged.push(candidate);
+    }
+
+    // Global memories are explicitly curated for reuse and may stand alone.
+    // Private workspace memories must be independently corroborated by at
+    // least two projects before they can cross a project boundary. This keeps
+    // a one-off project name or private convention out of new-project guides
+    // even when it does not match one of the syntax-based secret filters.
+    merged.retain(|candidate| {
+        candidate.workspaces.contains(GLOBAL_WORKSPACE)
+            || candidate
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.as_str() != GLOBAL_WORKSPACE)
+                .count()
+                >= 2
+    });
+
+    merged.sort_by(|left, right| {
+        right
+            .source_updated_at
+            .len()
+            .cmp(&left.source_updated_at.len())
+            .then_with(|| right.score.cmp(&left.score))
+            .then_with(|| left.text.cmp(&right.text))
+            .then_with(|| left.category.cmp(&right.category))
+    });
+
+    let selected_pitfalls = merged
+        .iter()
+        .filter(|candidate| candidate.pitfall)
+        .take(NEW_PROJECT_GUIDE_LIMIT)
+        .collect::<Vec<_>>();
+    let selected_best_practices = merged
+        .iter()
+        .filter(|candidate| !candidate.pitfall)
+        .take(NEW_PROJECT_GUIDE_LIMIT)
+        .collect::<Vec<_>>();
+    let selected = selected_pitfalls
+        .iter()
+        .chain(selected_best_practices.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    let source_updated_at = selected
+        .iter()
+        .flat_map(|candidate| candidate.source_updated_at.iter())
+        .map(|(id, updated_at)| (id.clone(), *updated_at))
+        .collect::<BTreeMap<_, _>>();
+    let source_workspaces = selected
+        .iter()
+        .flat_map(|candidate| candidate.workspaces.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let generated_at = source_updated_at.values().copied().max().unwrap_or(0);
+    let source_item_count = source_updated_at.len();
+    let source_workspace_count = source_workspaces.len();
+    let project_count = source_workspaces
+        .iter()
+        .filter(|workspace| workspace.as_str() != GLOBAL_WORKSPACE)
+        .count();
+    let to_experience = |candidate: &&NewProjectGuideCandidate| MemoryNewProjectExperience {
+        text: candidate.text.clone(),
+        source_count: candidate.source_updated_at.len(),
+        category: candidate.category.clone(),
+    };
+    let pitfalls = selected_pitfalls
+        .iter()
+        .map(|candidate| MemoryNewProjectExperience {
+            text: candidate.text.clone(),
+            source_count: candidate.source_updated_at.len(),
+            category: candidate.category.clone(),
+        })
+        .collect::<Vec<_>>();
+    let best_practices = selected_best_practices
+        .iter()
+        .map(to_experience)
+        .collect::<Vec<_>>();
+    let prompt = new_project_guide_prompt(&pitfalls, &best_practices);
+
+    Ok(MemoryNewProjectGuide {
+        generated_at,
+        source_item_count,
+        source_workspace_count,
+        project_count,
+        pitfalls,
+        best_practices,
+        prompt,
+    })
+}
+
+fn new_project_guide_prompt(
+    pitfalls: &[MemoryNewProjectExperience],
+    best_practices: &[MemoryNewProjectExperience],
+) -> String {
+    let mut sections = vec![
+        "你正在启动一个新项目，请先阅读项目说明、相关规格、验收标准和源码，再开始实施。",
+        "实施前总结当前目标、预计改动、禁止改动区域、验收标准与关键风险。",
+        "坚持最小必要修改，不做无关重构，不擅自改变架构或生产配置。",
+        "先建立可复现的验证方式，再按验证结果实施和修正。",
+        "完成后列出真实运行的测试、构建或检查证据，不编造结果。",
+        "历史经验仅作为参考，必须按新项目的技术栈、规则与上下文调整后再采用。",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    sections.push(new_project_guide_prompt_experiences("优先避坑", pitfalls));
+    sections.push(new_project_guide_prompt_experiences(
+        "优秀处理方式",
+        best_practices,
+    ));
+    sections.join("\n")
+}
+
+fn new_project_guide_prompt_experiences(
+    heading: &str,
+    experiences: &[MemoryNewProjectExperience],
+) -> String {
+    if experiences.is_empty() {
+        return format!("{heading}：暂无合格的历史经验。请以新项目资料和真实验证为准。");
+    }
+    let items = experiences
+        .iter()
+        .map(|experience| {
+            format!(
+                "- {}（类别：{}；唯一来源记忆：{} 条）",
+                experience.text, experience.category, experience.source_count
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{heading}：\n{items}")
+}
+
+fn new_project_guide_is_pitfall(line: &str, category: &str) -> bool {
+    category == "lesson-learned"
+        || category == LESSON_MANUAL_CATEGORY
+        || contains_any_case_insensitive(
+            line,
+            &[
+                "踩坑",
+                "教训",
+                "根因",
+                "失败",
+                "错误",
+                "不要",
+                "不能",
+                "避免",
+                "否则",
+                "不然",
+                "never",
+                "avoid",
+                "failure",
+                "error",
+                "otherwise",
+            ],
+        )
+}
+
+fn private_memory_identifiers(
+    conn: &Connection,
+) -> anyhow::Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let mut workspaces = BTreeSet::new();
+    let mut session_ids = BTreeSet::new();
+    let mut stmt = conn.prepare("SELECT workspace, source_session_id FROM memory_items")?;
+    for row in stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (workspace, session_id) = row?;
+        let workspace = normalize_memory_text(&workspace).to_lowercase();
+        if workspace != GLOBAL_WORKSPACE && workspace.chars().count() >= 3 {
+            workspaces.insert(workspace);
+        }
+        let session_id = normalize_memory_text(&session_id).to_lowercase();
+        if session_id.chars().count() >= 8 {
+            session_ids.insert(session_id);
+        }
+    }
+    Ok((workspaces, session_ids))
+}
+
+fn new_project_guide_line_is_unsafe(
+    line: &str,
+    private_workspaces: &BTreeSet<String>,
+    private_session_ids: &BTreeSet<String>,
+) -> bool {
+    let normalized = normalize_memory_text(line);
+    let lower = normalized.to_lowercase();
+    let redacted = redact_secrets(&normalized);
+    redacted != normalized
+        || private_workspaces.iter().any(|value| lower.contains(value))
+        || private_session_ids
+            .iter()
+            .any(|value| lower.contains(value))
+        || lower.contains("sk-***")
+        || lower.contains("bearer ***")
+        || lower.contains("basic ***")
+        || contains_any_case_insensitive(
+            &lower,
+            &[
+                "api_key",
+                "api-key",
+                "apikey",
+                "access_token",
+                "auth_token",
+                "authorization:",
+                "password=",
+                "password:",
+                "token=",
+                "token:",
+                "secret=",
+                "secret:",
+            ],
+        )
+        || contains_concrete_filesystem_path(&lower)
+        || contains_project_specific_command(&lower)
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("base url")
+        || lower.contains("base_url")
+        || lower.contains("source_session")
+        || lower.contains("session id")
+        || lower.contains("session_id")
+        || contains_any_case_insensitive(
+            &lower,
+            &[
+                "cargo ",
+                "npm ",
+                "pnpm ",
+                "yarn ",
+                "git ",
+                "dotnet ",
+                "mvn ",
+                "gradle ",
+                "powershell ",
+                "cmd /c",
+                ".exe",
+                "--manifest-path",
+            ],
+        )
+}
+
+fn contains_project_specific_command(lower: &str) -> bool {
+    let script_or_executable = lower.split_whitespace().any(|word| {
+        let word = word.trim_matches(|ch: char| {
+            matches!(ch, '`' | '"' | '\'' | '(' | ')' | '[' | ']' | ',' | ';')
+        });
+        word.starts_with("./")
+            || word.starts_with("../")
+            || word.ends_with(".ps1")
+            || word.ends_with(".sh")
+            || word.ends_with(".bat")
+            || word.ends_with(".cmd")
+    });
+    script_or_executable
+        || contains_any_case_insensitive(
+            lower,
+            &[
+                "make ",
+                "just ",
+                "task ",
+                "private-deploy ",
+                "deploy-private",
+            ],
+        )
 }
 
 fn lesson_manual_candidates(text: &str) -> Vec<String> {
@@ -4441,6 +5074,401 @@ fn record_event(
     Ok(())
 }
 
+fn normalize_activity_event_type(event_type: &str) -> String {
+    match event_type.trim() {
+        "search" | "inject" | "learn" | "candidate" | "capture" | "archive" | "restore" => {
+            event_type.trim().to_string()
+        }
+        _ => "search".to_string(),
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        let keep = max_chars.saturating_sub(1);
+        format!("{}…", truncated.chars().take(keep).collect::<String>())
+    } else {
+        truncated
+    }
+}
+
+fn sanitize_activity_text(value: &str, max_chars: usize) -> String {
+    truncate_chars(&normalize_memory_text(&redact_secrets(value)), max_chars)
+}
+
+fn sanitize_activity_metadata(value: &Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(sanitize_activity_text(
+            value,
+            ACTIVITY_METADATA_STRING_MAX_CHARS,
+        )),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .take(32)
+                .map(sanitize_activity_metadata)
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .take(32)
+                .map(|(key, value)| {
+                    (
+                        sanitize_activity_text(key, 64),
+                        sanitize_activity_metadata(value),
+                    )
+                })
+                .collect(),
+        ),
+        value => value.clone(),
+    }
+}
+
+fn sanitize_memory_snapshot(item: &MemoryItem) -> MemoryItem {
+    let mut snapshot = item.clone();
+    snapshot.text = sanitize_activity_text(&snapshot.text, ACTIVITY_MEMORY_SNAPSHOT_TEXT_MAX_CHARS);
+    snapshot.workspace = sanitize_activity_text(&snapshot.workspace, 160);
+    snapshot.category = sanitize_activity_text(&snapshot.category, 64);
+    // The dashboard only renders the hit text/category. Do not duplicate tags
+    // or the originating session id into durable activity evidence.
+    snapshot.tags.clear();
+    snapshot.source = sanitize_activity_text(&snapshot.source, 64);
+    snapshot.source_session_id.clear();
+    snapshot
+}
+
+fn record_activity_event(
+    conn: &Connection,
+    event_type: &str,
+    workspace: &str,
+    agent: &str,
+    memory_id: Option<&str>,
+    query: &str,
+    source_session_id: Option<&str>,
+    metadata: &Value,
+) -> anyhow::Result<()> {
+    record_activity_event_with_snapshot(
+        conn,
+        event_type,
+        workspace,
+        agent,
+        memory_id,
+        query,
+        source_session_id,
+        metadata,
+        None,
+    )
+}
+
+fn record_recall_activity_event(
+    conn: &Connection,
+    event_type: &str,
+    workspace: &str,
+    agent: &str,
+    memory_id: Option<&str>,
+    query: &str,
+    source_session_id: Option<&str>,
+    metadata: &Value,
+    memory: Option<&MemoryItem>,
+) -> anyhow::Result<()> {
+    record_activity_event_with_snapshot(
+        conn,
+        event_type,
+        workspace,
+        agent,
+        memory_id,
+        query,
+        source_session_id,
+        metadata,
+        memory,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_activity_event_with_snapshot(
+    conn: &Connection,
+    event_type: &str,
+    workspace: &str,
+    agent: &str,
+    memory_id: Option<&str>,
+    query: &str,
+    source_session_id: Option<&str>,
+    metadata: &Value,
+    memory: Option<&MemoryItem>,
+) -> anyhow::Result<()> {
+    let now = now_unix();
+    let workspace = normalize_workspace(workspace);
+    let event_type = normalize_activity_event_type(event_type);
+    let agent = sanitize_activity_text(agent, 64);
+    let query_summary = sanitize_activity_text(query, ACTIVITY_QUERY_SUMMARY_MAX_CHARS);
+    let source_session_id = source_session_id
+        .map(|value| sanitize_activity_text(value, ACTIVITY_SOURCE_SESSION_MAX_CHARS))
+        .filter(|value| !value.is_empty());
+    let metadata = sanitize_activity_metadata(metadata);
+    let memory_snapshot_json = memory
+        .map(sanitize_memory_snapshot)
+        .map(|snapshot| serde_json::to_string(&snapshot))
+        .transpose()?
+        .unwrap_or_default();
+    let unique_nonce = format!(
+        "{}:{}:{}",
+        now_nanos(),
+        std::process::id(),
+        ACTIVITY_EVENT_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed)
+    );
+    let event_id = stable_id(
+        "act",
+        &[
+            &event_type,
+            &workspace,
+            memory_id.unwrap_or(""),
+            &query_summary,
+            &agent,
+            &now.to_string(),
+            &unique_nonce,
+        ],
+    );
+    conn.execute(
+        "INSERT INTO memory_activity_events
+         (id, event_type, workspace, agent, memory_id, query_summary,
+          source_session_id, metadata_json, memory_snapshot_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            event_id,
+            event_type,
+            workspace,
+            agent,
+            memory_id,
+            query_summary,
+            source_session_id,
+            serde_json::to_string(&metadata)?,
+            memory_snapshot_json,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+fn activity_scope_matches(selected: &str, actual: &str) -> bool {
+    is_all_workspaces(selected)
+        || actual == selected
+        || (selected != GLOBAL_WORKSPACE && actual == GLOBAL_WORKSPACE)
+}
+
+fn recall_activity_scope_matches(selected: &str, actual: &str) -> bool {
+    is_all_workspaces(selected) || actual == selected
+}
+
+fn outcome_dashboard_from_conn(
+    conn: &Connection,
+    workspace: &str,
+    range_days: usize,
+) -> anyhow::Result<MemoryOutcomeDashboard> {
+    let workspace = normalize_workspace(workspace);
+    let range_days = if range_days <= 7 { 7 } else { 30 };
+    let today_start: i64 = conn.query_row(
+        "SELECT CAST(strftime('%s', 'now', 'localtime', 'start of day', 'utc') AS INTEGER)",
+        [],
+        |row| row.get(0),
+    )?;
+    let range_start: i64 = conn.query_row(
+        "SELECT CAST(strftime('%s', 'now', 'localtime', 'start of day', ?1, 'utc') AS INTEGER)",
+        [format!("-{} days", range_days - 1)],
+        |row| row.get(0),
+    )?;
+
+    let mut trend_by_date = BTreeMap::<String, MemoryTrendPoint>::new();
+    for offset in (0..range_days).rev() {
+        let date: String = conn.query_row(
+            "SELECT date('now', 'localtime', 'start of day', ?1)",
+            [format!("-{offset} days")],
+            |row| row.get(0),
+        )?;
+        trend_by_date.insert(
+            date.clone(),
+            MemoryTrendPoint {
+                date,
+                ..Default::default()
+            },
+        );
+    }
+
+    let mut today_captures = 0;
+    let mut capture_stmt = conn.prepare(
+        "SELECT workspace, captured_at, date(captured_at, 'unixepoch', 'localtime')
+         FROM memory_captures WHERE captured_at >= ?1",
+    )?;
+    for row in capture_stmt.query_map([range_start], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })? {
+        let (actual_workspace, created_at, date) = row?;
+        if !activity_scope_matches(&workspace, &actual_workspace) {
+            continue;
+        }
+        if created_at >= today_start {
+            today_captures += 1;
+        }
+        if let Some(point) = trend_by_date.get_mut(&date) {
+            point.captures += 1;
+        }
+    }
+
+    let mut today_learned = 0;
+    let mut workspace_counts = BTreeMap::<String, i64>::new();
+    let mut category_counts = BTreeMap::<String, i64>::new();
+    let mut handoff_items = Vec::new();
+    let mut item_stmt = conn.prepare(
+        "SELECT id, text, workspace, category, tags_json, source, source_session_id,
+                created_at, updated_at, last_accessed_at, access_count,
+                tier, strength, archived_at
+         FROM memory_items ORDER BY
+             CASE category
+                 WHEN 'project-rule' THEN 0 WHEN 'safety-rule' THEN 1
+                 WHEN 'lesson-learned' THEN 2 WHEN 'decision' THEN 3
+                 WHEN 'progress' THEN 4 ELSE 5 END,
+             updated_at DESC, id DESC",
+    )?;
+    for row in item_stmt.query_map([], row_to_item)? {
+        let mut item = row?;
+        if !activity_scope_matches(&workspace, &item.workspace) {
+            continue;
+        }
+        *workspace_counts.entry(item.workspace.clone()).or_default() += 1;
+        *category_counts.entry(item.category.clone()).or_default() += 1;
+        if item.created_at >= range_start {
+            let date: String = conn.query_row(
+                "SELECT date(?1, 'unixepoch', 'localtime')",
+                [item.created_at],
+                |row| row.get(0),
+            )?;
+            if let Some(point) = trend_by_date.get_mut(&date) {
+                point.learned += 1;
+            }
+            if item.created_at >= today_start {
+                today_learned += 1;
+            }
+        }
+        if item.tier == TIER_ACTIVE && handoff_items.len() < OUTCOME_HANDOFF_LIMIT {
+            decorate_item_decay(&mut item, now_unix());
+            handoff_items.push(item);
+        }
+    }
+
+    let mut today_recalls = 0;
+    let mut recent_recalls = Vec::new();
+    let mut activity_stmt = conn.prepare(
+        "SELECT a.id, a.event_type, a.workspace, a.agent, a.memory_id,
+                a.query_summary, a.source_session_id, a.metadata_json,
+                a.memory_snapshot_json, a.created_at
+         FROM memory_activity_events a
+         WHERE a.created_at >= ?1 AND a.event_type IN ('search', 'inject')
+         ORDER BY a.created_at DESC, a.id DESC",
+    )?;
+    let rows = activity_stmt.query_map([range_start], row_to_activity_event)?;
+    for row in rows {
+        let event = row?;
+        if !recall_activity_scope_matches(&workspace, &event.workspace) {
+            continue;
+        }
+        if event.created_at >= today_start {
+            today_recalls += 1;
+        }
+        let date: String = conn.query_row(
+            "SELECT date(?1, 'unixepoch', 'localtime')",
+            [event.created_at],
+            |row| row.get(0),
+        )?;
+        if let Some(point) = trend_by_date.get_mut(&date) {
+            point.recalls += 1;
+        }
+        if recent_recalls.len() < OUTCOME_RECENT_RECALL_LIMIT {
+            recent_recalls.push(event);
+        }
+    }
+
+    let pending_candidates = {
+        let mut stmt = conn.prepare(
+            "SELECT workspace, COUNT(*) FROM memory_candidates
+             WHERE status = 'pending' GROUP BY workspace",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut count = 0;
+        for row in rows {
+            let (actual_workspace, workspace_count) = row?;
+            if activity_scope_matches(&workspace, &actual_workspace) {
+                count += workspace_count;
+            }
+        }
+        count
+    };
+
+    let mut workspace_breakdown = workspace_counts
+        .into_iter()
+        .map(|(key, count)| MemoryBreakdown { key, count })
+        .collect::<Vec<_>>();
+    workspace_breakdown.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    let mut category_breakdown = category_counts
+        .into_iter()
+        .map(|(key, count)| MemoryBreakdown { key, count })
+        .collect::<Vec<_>>();
+    category_breakdown.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+
+    Ok(MemoryOutcomeDashboard {
+        workspace,
+        range_days,
+        today_captures,
+        today_learned,
+        pending_candidates,
+        today_recalls,
+        trend: trend_by_date.into_values().collect(),
+        workspace_breakdown,
+        category_breakdown,
+        recent_recalls,
+        handoff_items,
+    })
+}
+
+fn row_to_activity_event(row: &Row<'_>) -> rusqlite::Result<MemoryActivityEvent> {
+    let metadata_json: String = row.get(7)?;
+    let memory_snapshot_json: String = row.get(8)?;
+    let memory = if memory_snapshot_json.is_empty() {
+        None
+    } else {
+        serde_json::from_str::<MemoryItem>(&memory_snapshot_json).ok()
+    };
+    Ok(MemoryActivityEvent {
+        id: row.get(0)?,
+        event_type: row.get(1)?,
+        workspace: row.get(2)?,
+        agent: row.get(3)?,
+        memory_id: row.get(4)?,
+        query_summary: row.get(5)?,
+        source_session_id: row.get(6)?,
+        metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({})),
+        created_at: row.get(9)?,
+        memory,
+    })
+}
+
 fn stable_id(prefix: &str, parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(now_nanos().to_string().as_bytes());
@@ -4690,6 +5718,154 @@ fn redact_bearer_tokens(input: &str) -> String {
         i = end;
     }
     out.push_str(&input[i..]);
+    out
+}
+
+fn redact_authorization_basic(input: &str) -> String {
+    const MARKER: &str = "basic";
+    const CANONICAL: &str = "Basic ***";
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(relative) = lower[i..].find(MARKER) {
+        let start = i + relative;
+        let after_marker = start + MARKER.len();
+        let before_is_authorization = lower[..start].trim_end().ends_with("authorization:");
+        let Some(first_after) = input[after_marker..].chars().next() else {
+            break;
+        };
+        if !before_is_authorization || !first_after.is_whitespace() {
+            out.push_str(&input[i..after_marker]);
+            i = after_marker;
+            continue;
+        }
+        out.push_str(&input[i..start]);
+        let mut token_start = after_marker;
+        for (offset, ch) in input[after_marker..].char_indices() {
+            if ch.is_whitespace() {
+                token_start = after_marker + offset + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let mut end = token_start;
+        for (offset, ch) in input[token_start..].char_indices() {
+            if ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';') {
+                break;
+            }
+            end = token_start + offset + ch.len_utf8();
+        }
+        if end == token_start {
+            out.push_str(&input[start..token_start]);
+            i = token_start;
+            continue;
+        }
+        out.push_str(CANONICAL);
+        i = end;
+    }
+    out.push_str(&input[i..]);
+    out
+}
+
+fn redact_named_secret_assignments(input: &str) -> String {
+    const NAMES: [&str; 8] = [
+        "access_token",
+        "auth_token",
+        "api_key",
+        "api-key",
+        "apikey",
+        "password",
+        "secret",
+        "token",
+    ];
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let next = NAMES
+            .iter()
+            .filter_map(|name| {
+                lower[cursor..]
+                    .find(name)
+                    .map(|offset| (cursor + offset, *name))
+            })
+            .min_by_key(|(start, name)| (*start, usize::MAX - name.len()));
+        let Some((start, name)) = next else {
+            break;
+        };
+        let end_name = start + name.len();
+        let before_ok = start == 0
+            || !lower[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'));
+        let after_ok = end_name == input.len()
+            || !lower[end_name..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'));
+        if !before_ok || !after_ok {
+            out.push_str(&input[cursor..end_name]);
+            cursor = end_name;
+            continue;
+        }
+
+        let mut value_start = end_name;
+        while input[value_start..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
+            value_start += input[value_start..].chars().next().unwrap().len_utf8();
+        }
+        let mut has_delimiter = false;
+        if input[value_start..]
+            .chars()
+            .next()
+            .is_some_and(|ch| matches!(ch, '=' | ':'))
+        {
+            has_delimiter = true;
+            value_start += 1;
+            while input[value_start..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            {
+                value_start += input[value_start..].chars().next().unwrap().len_utf8();
+            }
+        }
+        let quote = input[value_start..]
+            .chars()
+            .next()
+            .filter(|ch| matches!(ch, '"' | '\''));
+        if !has_delimiter && quote.is_none() {
+            out.push_str(&input[cursor..end_name]);
+            cursor = end_name;
+            continue;
+        }
+        if let Some(quote) = quote {
+            value_start += quote.len_utf8();
+        }
+        let mut value_end = value_start;
+        for (offset, ch) in input[value_start..].char_indices() {
+            if quote.map_or_else(
+                || ch.is_whitespace() || matches!(ch, ',' | ';' | '&' | '，' | '；'),
+                |quote| ch == quote,
+            ) {
+                break;
+            }
+            value_end = value_start + offset + ch.len_utf8();
+        }
+        if value_end == value_start {
+            out.push_str(&input[cursor..value_start]);
+            cursor = value_start;
+            continue;
+        }
+        out.push_str(&input[cursor..value_start]);
+        out.push_str("***");
+        cursor = value_end;
+    }
+    out.push_str(&input[cursor..]);
     out
 }
 

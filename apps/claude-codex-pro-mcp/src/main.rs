@@ -13,7 +13,7 @@
 //!   `memory_learn` 受总开关约束；关闭时返回明确错误，绝不静默写库。
 
 use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStore, MemoryItem, MemoryItemRequest, MemoryQueryRequest,
+    MemoryAssistStore, MemoryItem, MemoryItemRequest, MemoryQueryRequest, MemoryQueryResult,
 };
 use claude_codex_pro_core::settings::SettingsStore;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -82,6 +82,26 @@ fn workspace_or_global(workspace: Option<String>) -> String {
 
 fn clamp_limit(limit: Option<usize>) -> usize {
     limit.filter(|value| *value > 0).unwrap_or(DEFAULT_LIMIT)
+}
+
+fn search_with_mcp_activity(
+    store: &MemoryAssistStore,
+    query: String,
+    workspace: String,
+    limit: usize,
+) -> anyhow::Result<MemoryQueryResult> {
+    store.query_with_activity(
+        MemoryQueryRequest {
+            query,
+            workspace,
+            include_global: true,
+            include_archived: false,
+            limit,
+        },
+        "mcp",
+        "search",
+        None,
+    )
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -162,13 +182,7 @@ impl PanguMemoryServer {
         let limit = clamp_limit(params.limit);
         let store = self.store.clone();
         let result = tokio::task::spawn_blocking(move || {
-            store.query(MemoryQueryRequest {
-                query: params.query,
-                workspace,
-                include_global: true,
-                include_archived: false,
-                limit,
-            })
+            search_with_mcp_activity(&store, params.query, workspace, limit)
         })
         .await
         .map_err(|error| internal_error(format!("检索任务失败：{error}")))?
@@ -439,5 +453,55 @@ mod tests {
             .expect("list all");
         assert!(all.iter().any(|it| it.workspace == codex_key));
         assert!(all.iter().any(|it| it.workspace == agent_key));
+    }
+
+    #[test]
+    fn memory_search_records_mcp_source_while_plain_list_records_no_recall() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        store
+            .learn_item(MemoryItemRequest {
+                text: "MCP 搜索命中后必须留下真实召回来源".to_string(),
+                workspace: "repo-mcp".to_string(),
+                category: "project-rule".to_string(),
+                tags: Vec::new(),
+                source: "test".to_string(),
+                source_session_id: String::new(),
+            })
+            .expect("learn MCP fixture");
+
+        store
+            .list_items(MemoryQueryRequest {
+                query: String::new(),
+                workspace: "repo-mcp".to_string(),
+                include_global: true,
+                include_archived: false,
+                limit: 10,
+            })
+            .expect("plain list");
+        assert_eq!(
+            store
+                .outcome_dashboard("repo-mcp", 7)
+                .expect("dashboard after list")
+                .today_recalls,
+            0
+        );
+
+        let result = search_with_mcp_activity(
+            &store,
+            "MCP 搜索 真实召回来源".to_string(),
+            "repo-mcp".to_string(),
+            10,
+        )
+        .expect("MCP sourced search");
+        assert_eq!(result.results.len(), 1);
+        let dashboard = store
+            .outcome_dashboard("repo-mcp", 7)
+            .expect("dashboard after search");
+        assert_eq!(dashboard.today_recalls, 1);
+        assert_eq!(dashboard.recent_recalls[0].agent, "mcp");
+        assert_eq!(dashboard.recent_recalls[0].event_type, "search");
+        assert_eq!(dashboard.recent_recalls[0].workspace, "repo-mcp");
+        assert!(dashboard.recent_recalls[0].memory.is_some());
     }
 }

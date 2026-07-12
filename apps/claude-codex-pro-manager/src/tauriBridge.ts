@@ -449,7 +449,7 @@ function previewMemoryStatus(message = "预览模式盘古记忆状态。") {
       runtimeMessage: "预览模式：盘古记忆正在监听 Codex 对话。",
       codexInjected: true,
       claudeInjected: false,
-      codexWorkspace: "codex:repo:D:\\Project\\Claude-Codex-Pro-Tool",
+      codexWorkspace: "preview-project",
       active: true,
       activeSource: "stream",
     },
@@ -1028,6 +1028,80 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "list_memory_assist_candidates") {
     return ok("预览模式待确认记忆。", { candidates: previewMemoryCandidates() });
+  }
+  if (command === "load_memory_outcome_dashboard") {
+    const stamp = Math.floor(Date.now() / 1000);
+    const request = (_args?.request ?? {}) as { workspace?: string; rangeDays?: number };
+    return ok("预览模式记忆成果看板。", {
+      dashboard: {
+        workspace: request.workspace || "preview-project",
+        rangeDays: request.rangeDays || 30,
+        todayCaptures: 6,
+        todayLearned: 3,
+        pendingCandidates: 1,
+        todayRecalls: 4,
+        trend: [
+          { date: "2026-07-08", captures: 2, learned: 1, recalls: 0 },
+          { date: "2026-07-09", captures: 3, learned: 1, recalls: 2 },
+          { date: "2026-07-10", captures: 4, learned: 2, recalls: 1 },
+          { date: "2026-07-11", captures: 3, learned: 2, recalls: 3 },
+          { date: "2026-07-12", captures: 6, learned: 3, recalls: 4 },
+        ],
+        workspaceBreakdown: [{ key: "当前项目", count: 8 }, { key: "global", count: 4 }],
+        categoryBreakdown: [{ key: "项目规则", count: 5 }, { key: "经验教训", count: 4 }, { key: "安全规则", count: 3 }],
+        recentRecalls: [{
+          id: "preview-recall-1",
+          eventType: "search",
+          workspace: "preview-project",
+          agent: "manager",
+          memoryId: "preview-handoff-1",
+          querySummary: "发布前如何验证",
+          sourceSessionId: null,
+          metadata: {},
+          createdAt: stamp,
+          memory: { ...previewMemoryItems()[0], id: "preview-handoff-1", workspace: "preview-project", text: "发布前必须运行真实测试，并记录可复核的输出。", category: "project-rule" },
+        }],
+        handoffItems: [
+          { ...previewMemoryItems()[0], id: "preview-handoff-1", workspace: "preview-project", text: "发布前必须运行真实测试，并记录可复核的输出。", category: "project-rule", updatedAt: stamp },
+          { ...previewMemoryItems()[0], id: "preview-handoff-2", workspace: "preview-project", text: "优先做最小必要修改，避免无关重构。", category: "lesson-learned", updatedAt: stamp - 1800 },
+          { ...previewMemoryItems()[0], id: "preview-handoff-3", workspace: "preview-project", text: "先建立可复现步骤，再根据证据定位根因。", category: "lesson-learned", updatedAt: stamp - 3600 },
+        ],
+      },
+    });
+  }
+  if (command === "load_memory_new_project_guide") {
+    const generatedAt = Math.floor(Date.now() / 1000);
+    const pitfalls = [
+      { text: "不要在没有复现问题时直接扩大修改范围。", sourceCount: 3, category: "lesson-learned" },
+      { text: "不要在验证失败后继续宣称任务已经完成。", sourceCount: 2, category: "safety-rule" },
+    ];
+    const bestPractices = [
+      { text: "实施前先总结目标、禁区、验收标准和关键风险。", sourceCount: 4, category: "project-rule" },
+      { text: "完成后运行真实测试并报告可复核证据。", sourceCount: 5, category: "lesson-manual" },
+    ];
+    return ok("预览模式新项目启动指南。", {
+      guide: {
+        generatedAt,
+        sourceItemCount: 9,
+        sourceWorkspaceCount: 3,
+        pitfalls,
+        bestPractices,
+        prompt: [
+          "你正在启动一个新项目，请先阅读项目说明、相关规格、验收标准和源码，再开始实施。",
+          "实施前总结当前目标、预计改动、禁止改动区域、验收标准与关键风险。",
+          "坚持最小必要修改，不做无关重构，不擅自改变架构或生产配置。",
+          "遇到不确定行为时，先建立可复现的验证方式。",
+          "完成后列出真实运行的测试、构建或检查证据，不编造结果。",
+          "历史经验仅作为参考，必须按新项目自身规则调整，不能机械照搬旧项目细节。",
+          "",
+          "优先避坑：",
+          ...pitfalls.map((item) => `- ${item.text}（类别：${item.category}；唯一来源记忆：${item.sourceCount} 条）`),
+          "",
+          "优秀处理方式：",
+          ...bestPractices.map((item) => `- ${item.text}（类别：${item.category}；唯一来源记忆：${item.sourceCount} 条）`),
+        ].join("\n"),
+      },
+    });
   }
   if (command === "learn_memory_assist_item") {
     const request = (_args?.request ?? {}) as { text?: string; workspace?: string; category?: string; source?: string };
