@@ -28,8 +28,9 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 #[cfg(windows)]
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteKeyW,
-    RegDeleteValueW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_ROUTINE_FLAGS, REG_SZ,
+    RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteKeyW,
+    RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
@@ -260,9 +261,67 @@ pub fn delete_current_user_value(subkey: &str, name: &str) -> anyhow::Result<()>
         return Ok(());
     }
     let _guard = RegistryKeyGuard(key);
-    unsafe { RegDeleteValueW(key, PCWSTR(name.as_ptr())) }
+    let result = unsafe { RegDeleteValueW(key, PCWSTR(name.as_ptr())) }
         .ok()
-        .or_else(|_| Ok(()))
+        .or_else(|_| Ok(()));
+    if result.is_ok()
+        && String::from_utf16_lossy(&subkey)
+            .trim_end_matches('\0')
+            .eq_ignore_ascii_case(WINDOWS_USER_ENVIRONMENT_KEY)
+    {
+        broadcast_environment_change();
+    }
+    result
+}
+
+#[cfg(windows)]
+pub fn current_user_string_value(subkey: &str, name: &str) -> Option<String> {
+    registry_string_value(HKEY_CURRENT_USER, subkey, name)
+}
+
+#[cfg(windows)]
+pub fn local_machine_string_value(subkey: &str, name: &str) -> Option<String> {
+    registry_string_value(HKEY_LOCAL_MACHINE, subkey, name)
+}
+
+#[cfg(windows)]
+fn registry_string_value(root: HKEY, subkey: &str, name: &str) -> Option<String> {
+    let subkey = wide_null(subkey);
+    let name = wide_null(name);
+    let flags = REG_ROUTINE_FLAGS(RRF_RT_REG_SZ.0 | RRF_RT_REG_EXPAND_SZ.0);
+    let mut size = 0u32;
+    unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            flags,
+            None,
+            None,
+            Some(&mut size),
+        )
+    }
+    .ok()
+    .ok()?;
+    if size == 0 {
+        return None;
+    }
+    let mut value = vec![0u16; (size as usize).div_ceil(2)];
+    unsafe {
+        RegGetValueW(
+            root,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(name.as_ptr()),
+            flags,
+            None,
+            Some(value.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    }
+    .ok()
+    .ok()?;
+    let len = value.iter().position(|ch| *ch == 0).unwrap_or(value.len());
+    Some(String::from_utf16_lossy(&value[..len])).filter(|value| !value.trim().is_empty())
 }
 
 #[cfg(windows)]

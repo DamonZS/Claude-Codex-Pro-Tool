@@ -128,6 +128,7 @@ import type {
   ClaudeDesktopOrgPluginStatusResult,
   ClaudeDesktopProviderApplyResult,
   ClaudeDesktopProviderPreviewResult,
+  CredentialEnvironmentResult,
   ClaudeDesktopResult,
   ClaudeSession,
   ClaudeSessionContextPage,
@@ -601,6 +602,7 @@ export function SupplierScreen({
   claudeDesktopProviderPreview,
   claudeDesktopProviderApply,
   claudeDesktopProviderDraft,
+  credentialEnvironment,
   onClaudeDesktopProviderDraftChange,
 }: {
   actions: AppActions;
@@ -608,6 +610,7 @@ export function SupplierScreen({
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDesktopProviderPreview: ClaudeDesktopProviderPreviewResult | null;
   claudeDesktopProviderApply: ClaudeDesktopProviderApplyResult | null;
+  credentialEnvironment: CredentialEnvironmentResult | null;
   claudeDesktopProviderDraft: {
     name: string;
     baseUrl: string;
@@ -626,6 +629,7 @@ export function SupplierScreen({
   const [modelFetch, setModelFetch] = useState<RelayProfileModelsResult | null>(null);
   const [supplierSaveBusy, setSupplierSaveBusy] = useState(false);
   const [supplierRefreshBusy, setSupplierRefreshBusy] = useState(false);
+  const [credentialEnvironmentBusy, setCredentialEnvironmentBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
   const [supplierTestConfigOpen, setSupplierTestConfigOpen] = useState(false);
@@ -780,6 +784,26 @@ export function SupplierScreen({
     setEditingId(null);
     setShowSupplierApiKey(false);
     setSupplierCodexCatalogModels([]);
+  };
+  const refreshCredentialEnvironment = async () => {
+    if (credentialEnvironmentBusy) return;
+    setCredentialEnvironmentBusy(true);
+    try {
+      await actions.diagnoseCodexCredentialEnvironment(false);
+    } finally {
+      setCredentialEnvironmentBusy(false);
+    }
+  };
+  const clearCredentialEnvironment = async () => {
+    if (!credentialEnvironment?.canClearUser || credentialEnvironmentBusy) return;
+    const variableName = credentialEnvironment.variableName;
+    if (!window.confirm(`确认删除用户环境变量「${variableName}」？不会修改 CODEX_HOME 或系统级环境变量。`)) return;
+    setCredentialEnvironmentBusy(true);
+    try {
+      await actions.clearCodexUserCredentialEnvironment(variableName);
+    } finally {
+      setCredentialEnvironmentBusy(false);
+    }
   };
   const updateNewDraftIdFromName = (value: string) => {
     if (!isNewDraft) return;
@@ -1639,7 +1663,7 @@ env_key = "OPENAI_API_KEY"
 
   return (
     <div className="supplier-list-shell">
-      <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>检测到 OPENAI 环境变量</strong><p>这些变量可能覆盖当前供应商写入的 config.toml / auth.json；CODEX_HOME 不会被清理。</p><span className="supplier-env-chip">OPENAI_API_KEY 用户环境</span></div><div className="supplier-env-actions"><Button size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button size="sm" variant="outline"><RefreshCw className="h-4 w-4" />检测</Button></div></div>
+      {credentialEnvironment?.present ? <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>{credentialEnvironment.conflict ? "检测到凭据环境变量冲突" : "检测到凭据环境变量"}</strong><p>{credentialEnvironment.conflict ? `${credentialEnvironment.variableName} 与当前 Codex 供应商凭据不一致，可能覆盖 config.toml / auth.json 并导致 401；不会清理 CODEX_HOME。` : `${credentialEnvironment.variableName} 已存在，当前未发现与活动供应商的值冲突。`}{credentialEnvironment.restartRequired ? " 请完全退出并重新启动 Codex。" : ""}</p><span className="supplier-env-chip">{credentialEnvironment.variableName} {credentialEnvironment.userPresent ? "用户环境" : credentialEnvironment.systemPresent ? "系统环境" : "当前进程"}</span></div><div className="supplier-env-actions"><Button disabled={!credentialEnvironment.canClearUser || credentialEnvironmentBusy} onClick={() => void clearCredentialEnvironment()} size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button disabled={credentialEnvironmentBusy} onClick={() => void refreshCredentialEnvironment()} size="sm" variant="outline"><RefreshCw className={`h-4 w-4 ${credentialEnvironmentBusy ? "spin" : ""}`} />{credentialEnvironmentBusy ? "检测中" : "检测"}</Button></div></div> : null}
       <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
       <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
       <div className="supplier-card-list">

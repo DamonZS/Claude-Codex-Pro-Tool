@@ -281,6 +281,18 @@ export type ClaudeContextEntriesResult = CommandResult<{
   entries: ContextEntries;
 }>;
 
+export type CredentialEnvironmentResult = CommandResult<{
+  variableName: string;
+  present: boolean;
+  conflict: boolean;
+  processPresent: boolean;
+  userPresent: boolean;
+  systemPresent: boolean;
+  canClearUser: boolean;
+  profileHasKey: boolean;
+  restartRequired: boolean;
+}>;
+
 export type UnifiedToolAppState = {
   enabled: boolean;
   available: boolean;

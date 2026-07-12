@@ -12,6 +12,7 @@ pub mod cli_wrapper;
 pub mod codex_plugin_marketplace;
 pub mod codex_sqlite;
 mod computer_use_guard;
+pub mod credential_environment;
 pub mod diagnostic_log;
 pub mod helper_auth;
 pub mod http_client;

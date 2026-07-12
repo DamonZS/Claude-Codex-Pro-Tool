@@ -180,6 +180,7 @@ import type {
   CodexPluginMarketplaceRepairResult,
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
+  CredentialEnvironmentResult,
   CommandResult,
   AdsResult,
   ContextEntries,
@@ -249,6 +250,7 @@ export function App() {
   const [claudeZhPatch, setClaudeZhPatch] = useState<ClaudeZhPatchResult | null>(null);
   const [settings, setSettings] = useState<SettingsResult | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<BackendSettings | null>(null);
+  const [credentialEnvironment, setCredentialEnvironment] = useState<CredentialEnvironmentResult | null>(null);
   const [pluginHub, setPluginHub] = useState<PluginHubResult | null>(null);
   const [pluginPreview, setPluginPreview] = useState<PluginInstallPreviewResult | null>(null);
   const [claudeDesktopProviderPreview, setClaudeDesktopProviderPreview] = useState<ClaudeDesktopProviderPreviewResult | null>(null);
@@ -397,6 +399,31 @@ export function App() {
       setSettings(result);
       setSettingsDraft(result.settings);
       if (!silent) notifyIfNeedsAttention({ title: "设置", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const diagnoseCodexCredentialEnvironment = async (silent = false) => {
+    const result = await run(
+      () => call<CredentialEnvironmentResult>("diagnose_codex_credential_environment"),
+      "检测凭据环境变量",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (result) {
+      setCredentialEnvironment(result);
+      if (!silent) notifyResult({ title: "检测凭据环境变量", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const clearCodexUserCredentialEnvironment = async (variableName: string) => {
+    const result = await run(
+      () => call<CredentialEnvironmentResult>("clear_codex_user_credential_environment", { request: { variableName } }),
+      "清理凭据环境变量",
+    );
+    if (result) {
+      setCredentialEnvironment(result);
+      notifyResult({ title: "清理凭据环境变量", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1635,7 +1662,7 @@ export function App() {
         void refreshLogs(true);
       }, 250);
     } else if (target === "supplier") {
-      await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true)]);
+      await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -1806,6 +1833,8 @@ export function App() {
       switchSupplierProfile,
       fetchRelayProfileModels,
       importCcswitchCodexProviders,
+      diagnoseCodexCredentialEnvironment,
+      clearCodexUserCredentialEnvironment,
       previewClaudeDesktopProvider,
       applyClaudeDesktopProvider,
       restoreClaudeDesktopProviderOfficial,
@@ -1904,6 +1933,8 @@ export function App() {
       switchSupplierProfile: (...args) => actionsRef.current!.switchSupplierProfile(...args),
       fetchRelayProfileModels: (...args) => actionsRef.current!.fetchRelayProfileModels(...args),
       importCcswitchCodexProviders: (...args) => actionsRef.current!.importCcswitchCodexProviders(...args),
+      diagnoseCodexCredentialEnvironment: (...args) => actionsRef.current!.diagnoseCodexCredentialEnvironment(...args),
+      clearCodexUserCredentialEnvironment: (...args) => actionsRef.current!.clearCodexUserCredentialEnvironment(...args),
       previewClaudeDesktopProvider: (...args) => actionsRef.current!.previewClaudeDesktopProvider(...args),
       applyClaudeDesktopProvider: (...args) => actionsRef.current!.applyClaudeDesktopProvider(...args),
       restoreClaudeDesktopProviderOfficial: (...args) => actionsRef.current!.restoreClaudeDesktopProviderOfficial(...args),
@@ -1993,6 +2024,7 @@ export function App() {
               claudeDesktopProviderApply={claudeDesktopProviderApply}
               claudeDesktopProviderDraft={claudeDesktopProviderDraft}
               claudeDesktopProviderPreview={claudeDesktopProviderPreview}
+              credentialEnvironment={credentialEnvironment}
               onClaudeDesktopProviderDraftChange={setClaudeDesktopProviderDraft}
               settings={settings}
             />

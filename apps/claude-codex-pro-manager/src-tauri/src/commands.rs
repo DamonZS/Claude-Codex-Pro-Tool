@@ -10,6 +10,7 @@ use anyhow::{Context, bail};
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
+use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest,
@@ -6045,6 +6046,57 @@ pub fn relay_status() -> CommandResult<RelayPayload> {
         "未检测到 ChatGPT 登录状态。你仍可配置 Codex API 模式。"
     };
     ok(message, relay_payload(status, None))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearCredentialEnvironmentRequest {
+    pub variable_name: String,
+}
+
+#[tauri::command]
+pub fn diagnose_codex_credential_environment() -> CommandResult<CredentialEnvironmentDiagnostic> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let diagnostic =
+        claude_codex_pro_core::credential_environment::diagnose_codex_credential_environment(
+            &settings,
+        );
+    let message = if diagnostic.conflict {
+        format!(
+            "检测到 {} 与当前 Codex 供应商凭据不一致，可能导致 401 Invalid token。",
+            diagnostic.variable_name
+        )
+    } else if diagnostic.present {
+        format!(
+            "检测到 {} 环境变量，当前未发现与活动供应商的值冲突。",
+            diagnostic.variable_name
+        )
+    } else {
+        format!("未检测到 {} 环境变量。", diagnostic.variable_name)
+    };
+    ok(&message, diagnostic)
+}
+
+#[tauri::command]
+pub fn clear_codex_user_credential_environment(
+    request: ClearCredentialEnvironmentRequest,
+) -> CommandResult<CredentialEnvironmentDiagnostic> {
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    match claude_codex_pro_core::credential_environment::clear_codex_user_credential_environment(
+        &settings,
+        &request.variable_name,
+    ) {
+        Ok(diagnostic) => ok(
+            "用户级凭据环境变量已清理。当前运行中的 Codex 仍可能保留旧值，请完全退出后重新启动。",
+            diagnostic,
+        ),
+        Err(error) => failed(
+            &format!("清理用户级凭据环境变量失败：{error}"),
+            claude_codex_pro_core::credential_environment::diagnose_codex_credential_environment(
+                &settings,
+            ),
+        ),
+    }
 }
 
 #[tauri::command]

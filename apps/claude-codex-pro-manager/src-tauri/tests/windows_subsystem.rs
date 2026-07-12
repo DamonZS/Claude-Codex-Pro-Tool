@@ -636,12 +636,12 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
         .and_then(|rest| rest.split("function SessionManagementScreen").next())
         .expect("tools screen source");
 
-    assert!(tools_section.contains("ContextManagerPanel"));
-    assert!(tools_section.contains("scope=\"codex\""));
-    assert!(tools_section.contains("scope=\"claude\""));
-    assert!(tools_section.contains("claudeContextEntries"));
-    assert!(app_tsx.contains("Codex 工具与插件"));
-    assert!(app_tsx.contains("Claude 工具与插件"));
+    assert!(tools_section.contains("UnifiedToolInventoryPanel"));
+    assert!(tools_section.contains("CodexPluginRepositoryPanel"));
+    assert!(tools_section.contains("ClaudePluginRepositoryPanel"));
+    assert!(app_tsx.contains("Claude、Codex 工具与插件"));
+    assert!(app_tsx.contains("toggleUnifiedToolAsset"));
+    assert!(app_tsx.contains("mcpTarget === \"codex\""));
     assert!(app_tsx.contains("list_context_entries"));
     assert!(app_tsx.contains("upsert_context_entry"));
     assert!(app_tsx.contains("delete_context_entry"));
@@ -745,24 +745,14 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     assert!(app_tsx.contains("codex-skills-alternative-marketplace"));
     assert!(app_tsx.contains("codexMarketplaceAutoRegisterRef"));
     assert!(app_tsx.contains("repairCodexPluginMarketplace(true)"));
-    assert!(app_tsx.contains("repository.configured ? \"已写入\" : \"未写入\""));
+    assert!(app_tsx.contains("repository.configured ? \"配置已写入\" : \"配置未写入\""));
 
-    assert!(app_tsx.contains("className=\"context-entry-actions\""));
-    assert!(styles.contains(".context-entry-actions"));
-    assert!(styles.contains("grid-template-columns: 48px 32px 32px;"));
-    assert!(styles.contains(".context-entry-actions .toggle-switch"));
-    assert!(styles.contains("grid-column: 1;"));
-    assert!(styles.contains("width: 48px;"));
-    assert!(styles.contains("height: 26px;"));
-    assert!(styles.contains("align-items: center;"));
-    assert!(styles.contains("flex: 0 0 20px;"));
-    // 拨钮使用几何中心定位，避免按钮行高与阴影把白色滑块视觉上向下推移。
-    assert!(styles.contains("top: 50%;"));
-    assert!(styles.contains("transform: translate(0, -50%);"));
-    assert!(styles.contains("transform: translate(22px, -50%);"));
-    assert!(!styles.contains("margin-block: auto;"));
-    assert!(!styles.contains(".context-entry-actions .toggle-switch.checked .toggle-switch-thumb"));
-    assert!(!styles.contains(".context-entry-actions .toggle-switch-thumb"));
+    assert!(app_tsx.contains("className=\"agent-toggle-group\""));
+    assert!(app_tsx.contains("className={`agent-toggle ${app}"));
+    assert!(app_tsx.contains("onClick={() => void toggle(asset, app)}"));
+    assert!(styles.contains(".agent-toggle-group"));
+    assert!(styles.contains(".agent-toggle.claude.enabled"));
+    assert!(styles.contains(".agent-toggle.codex.enabled"));
     assert!(styles.contains("grid-template-columns: minmax(0, 1fr) 124px;"));
     assert!(app_tsx.contains("setNotice({ title: \"Codex 插件仓库\", message: result.message || result.repair.message, status: result.status })"));
     assert!(styles.contains("overflow-wrap: anywhere;"));
@@ -1257,8 +1247,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(styles.contains(".toast-wrap"));
     assert!(styles.contains(".status-action-tile .status-segment-list"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
-    assert!(!app_tsx.contains("role=\"dialog\""));
-    assert!(!app_tsx.contains("aria-modal"));
+    assert!(app_tsx.contains("role=\"dialog\""));
+    assert!(app_tsx.contains("aria-modal=\"true\""));
     assert!(!styles.contains("notice-backdrop"));
     assert!(!styles.contains("notice-card"));
     assert!(lib_rs.contains(".inner_size(1180.0, 820.0)"));

@@ -161,6 +161,8 @@ pub fn run() {
             commands::reset_settings,
             commands::reset_image_overlay_settings,
             commands::relay_status,
+            commands::diagnose_codex_credential_environment,
+            commands::clear_codex_user_credential_environment,
             commands::read_relay_files,
             commands::save_relay_file,
             commands::write_diagnostic_event,
