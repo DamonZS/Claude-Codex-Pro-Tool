@@ -208,6 +208,7 @@ import type {
   MemoryItemResult,
   MemoryItemsResult,
   MemoryMcpRegisterPayload,
+  MemoryAssistMigrationResult,
   MemoryNewProjectGuideResult,
   MemoryOutcomeDashboardResult,
   MemoryQueryResult,
@@ -306,6 +307,22 @@ export function App() {
   const routeLoadEpochRef = useRef(0);
   const claudeSessionContextEpochRef = useRef(0);
   const codexSessionContextEpochRef = useRef(0);
+  const settingsDraftRevisionRef = useRef(0);
+  const memorySearchRequestRef = useRef(0);
+
+  const updateSettingsDraft = useCallback((next: SetStateAction<BackendSettings | null>) => {
+    settingsDraftRevisionRef.current += 1;
+    setSettingsDraft(next);
+  }, []);
+
+  const beginSettingsDraftRequest = () => {
+    settingsDraftRevisionRef.current += 1;
+    return settingsDraftRevisionRef.current;
+  };
+
+  const commitSettingsDraftRequest = (revision: number, next: BackendSettings) => {
+    if (settingsDraftRevisionRef.current === revision) setSettingsDraft(next);
+  };
 
   const call = <T,>(command: string, args?: Record<string, unknown>) => invokeCommand<T>(command, args);
   const notifyIfNeedsAttention = (next: { title: string; message: string; status?: Status }) => {
@@ -400,10 +417,11 @@ export function App() {
   };
 
   const refreshSettings = async (silent = false) => {
+    const draftRevision = beginSettingsDraftRequest();
     const result = await run(() => call<SettingsResult>("load_settings"), "设置", { trackBusy: !silent, notify: !silent });
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      commitSettingsDraftRequest(draftRevision, result.settings);
       if (!silent) notifyIfNeedsAttention({ title: "设置", message: result.message, status: result.status });
     }
     return result;
@@ -676,6 +694,32 @@ export function App() {
     return status;
   };
 
+  const selectMemoryAssistDataDir = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "选择盘古记忆数据目录",
+    });
+    return typeof selected === "string" ? selected : null;
+  };
+
+  const migrateMemoryAssistDataDir = async (targetDir: string) => {
+    const result = await run(
+      () => call<MemoryAssistMigrationResult>("migrate_memory_assist_data_dir", { request: { targetDir } }),
+      "迁移盘古记忆数据",
+    );
+    if (!result) return null;
+    notifyResult({
+      title: "盘古记忆数据迁移",
+      message: result.restartRequired
+        ? "迁移完成，原数据已保留。请重启 Codex、Launcher 和 MCP，使所有进程切换到新目录。"
+        : "目标目录与当前目录相同，无需迁移数据。",
+      status: "ok",
+    });
+    await Promise.all([refreshSettings(true), refreshMemoryAssist(true)]);
+    return result;
+  };
+
   const refreshMemoryOutcomeDashboard = async (rangeDays = 30, silent = false) => {
     const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
     const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
@@ -729,7 +773,7 @@ export function App() {
     ]);
     if (managed) {
       setCodexContextEntries(managed);
-      setSettingsDraft(managed.settings);
+      updateSettingsDraft(managed.settings);
       if (!silent) notifyIfNeedsAttention({ title: "Codex 工具与插件", message: managed.message, status: managed.status });
     }
     if (live) setLiveCodexContextEntries(live);
@@ -744,7 +788,7 @@ export function App() {
     );
     if (result) {
       setCodexContextEntries(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
     }
@@ -759,7 +803,7 @@ export function App() {
     );
     if (result) {
       setCodexContextEntries(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "删除工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
     }
@@ -840,7 +884,10 @@ export function App() {
   };
 
   const performUpdate = async (release?: UpdateReleasePayload | null) => {
-    const result = await run(() => call<UpdateResult>("perform_update", release ? { release } : undefined), "下载并运行安装包");
+    const result = await run(
+      () => call<UpdateResult>("perform_update", release ? { expectedVersion: release.expectedVersion } : undefined),
+      "下载并运行安装包",
+    );
     if (result) {
       setUpdateInfo(result);
       notifyResult({ title: "下载并运行安装包", message: result.message, status: result.status });
@@ -1248,7 +1295,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("repair_backend"), "修复后端");
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "修复后端", message: result.message, status: result.status });
     }
   };
@@ -1322,6 +1369,7 @@ export function App() {
   };
 
   const searchMemoryAssist = async (query: string, includeArchived = false) => {
+    const requestId = ++memorySearchRequestRef.current;
     const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
     const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
       ? detectedWorkspace
@@ -1330,7 +1378,7 @@ export function App() {
       () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace, includeGlobal: true, limit: 12, includeArchived } }),
       "搜索记忆",
     );
-    if (result) {
+    if (result && requestId === memorySearchRequestRef.current) {
       setMemorySearch(result);
       notifyResult({ title: "记忆搜索", message: result.message, status: result.status });
     }
@@ -1502,7 +1550,7 @@ export function App() {
     );
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "切换 Codex 供应商", message: result.message, status: result.status });
       await refreshSettings(true);
     }
@@ -1541,7 +1589,7 @@ export function App() {
     );
     if (!result) return null;
     setSettings(result);
-    setSettingsDraft(result.settings);
+    updateSettingsDraft(result.settings);
     notifyResult({ title: `${targetLabel} 供应商切换`, message: result.message, status: result.status });
     await refreshSettings(true);
     if (targetApp === "claude-desktop" && !statusFailed(result.status)) {
@@ -1617,10 +1665,11 @@ export function App() {
   };
 
   const saveSettings = async (next: BackendSettings) => {
+    const draftRevision = beginSettingsDraftRequest();
     const result = await run(() => call<SettingsResult>("save_settings", { settings: next }), "保存设置");
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      commitSettingsDraftRequest(draftRevision, result.settings);
       notifyResult({ title: "保存设置", message: result.message, status: result.status });
     }
     return result;
@@ -1661,7 +1710,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("reset_settings"), "重置设置");
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "重置设置", message: result.message, status: result.status });
     }
   };
@@ -1670,7 +1719,7 @@ export function App() {
     const result = await run(() => call<SettingsResult>("reset_image_overlay_settings"), "重置图片覆盖");
     if (result) {
       setSettings(result);
-      setSettingsDraft(result.settings);
+      updateSettingsDraft(result.settings);
       notifyResult({ title: "重置图片覆盖", message: result.message, status: result.status });
     }
   };
@@ -2114,12 +2163,14 @@ export function App() {
               items={memoryItems}
               search={memorySearch}
               selfCheck={memorySelfCheck}
+              migrateDataDir={migrateMemoryAssistDataDir}
+              selectDataDir={selectMemoryAssistDataDir}
               settings={settings}
               status={memoryAssist}
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} logs={logs} onDraftChange={setSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} logs={logs} onDraftChange={updateSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
           {route === "about" ? <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} /> : null}
         </section>
       </main>

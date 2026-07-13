@@ -5675,15 +5675,39 @@
     return changed;
   }
 
+  function codexModelMenuAnchorText(surface) {
+    const labelledBy = String(surface.getAttribute?.("aria-labelledby") || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent || "")
+      .join(" ");
+    const trigger = surface.id
+      ? Array.from(document.querySelectorAll("[aria-controls]")).find((node) => node.getAttribute("aria-controls") === surface.id)
+      : null;
+    return `${labelledBy} ${trigger?.textContent || ""} ${trigger?.getAttribute?.("aria-label") || ""}`;
+  }
+
+  function codexModelMenuHasNativeModelStructure(surface) {
+    const nativeItems = Array.from(surface.querySelectorAll("[role='option'], [role='menuitem'], [data-value]"))
+      .filter((node) => !node.hasAttribute("data-claude-codex-pro-injected-model"));
+    if (!nativeItems.length) return false;
+    const anchorText = codexModelMenuAnchorText(surface);
+    const itemText = nativeItems.map((node) => `${node.textContent || ""} ${node.getAttribute?.("data-value") || ""}`).join(" ");
+    const known = claudeCodexProModelNames();
+    const hasSpecificModel = /\bgpt-|\bcodex\b|\bo[1-9](?:\b|-)/i.test(itemText)
+      || known.some((name) => itemText.includes(name));
+    if (surface.getAttribute?.("role") === "dialog") return hasSpecificModel;
+    return hasSpecificModel || /\bmodel\b/i.test(anchorText);
+  }
+
 
   function codexModelMenuCandidates() {
     return Array.from(document.querySelectorAll(codexModelMenuSurfaceSelector)).filter((node) => {
       if (isClaudeCodexProDialogNode(node)) return false;
+      if (!codexModelMenuHasNativeModelStructure(node)) return false;
       const rect = node.getBoundingClientRect?.();
       if (!rect || rect.width < 120 || rect.height < 40) return false;
-      const text = String(node.textContent || "");
-      const known = claudeCodexProModelNames();
-      return /GPT-|gpt-|Model/.test(text) || text.includes("??") || known.some((name) => text.includes(name));
+      return true;
     });
   }
 
@@ -10011,12 +10035,50 @@
     sendClaudeCodexProDiagnostic("memory_auto_suggest", payload);
   }
 
+  const codexMemoryCaptureTtlMs = 30 * 60 * 1000;
+  const codexMemoryCaptureMaxEntries = 128;
+  const codexMemoryCaptureRecent = new Map();
+  const codexMemoryCaptureInFlight = new Map();
+
+  function codexMemoryCaptureFingerprint(payload) {
+    return JSON.stringify({
+      workspace: payload.workspace,
+      text: payload.text,
+      candidateTriggered: payload.candidateTriggered,
+      candidateReason: payload.candidateReason,
+      skipReason: payload.skipReason,
+    });
+  }
+
+  function codexMemoryPruneCaptureHistory(now = Date.now()) {
+    for (const [fingerprint, entry] of codexMemoryCaptureRecent) {
+      if (now - Number(entry?.completedAt || 0) >= codexMemoryCaptureTtlMs) {
+        codexMemoryCaptureRecent.delete(fingerprint);
+      }
+    }
+    while (codexMemoryCaptureRecent.size > codexMemoryCaptureMaxEntries) {
+      const oldest = codexMemoryCaptureRecent.keys().next().value;
+      if (oldest === undefined) break;
+      codexMemoryCaptureRecent.delete(oldest);
+    }
+  }
+
+  function codexMemoryRememberCapture(fingerprint, result) {
+    codexMemoryPruneCaptureHistory();
+    codexMemoryCaptureRecent.delete(fingerprint);
+    codexMemoryCaptureRecent.set(fingerprint, {
+      completedAt: Date.now(),
+      result,
+    });
+    codexMemoryPruneCaptureHistory();
+  }
+
   async function codexMemoryRecordCapture(text, detail = {}) {
     const normalized = String(text || "").replace(/\s+/g, " ").trim();
     if (!normalized) return null;
     try {
       const workspace = await codexMemoryResolvedWorkspace();
-      const result = await postJson("/memory/capture", {
+      const payload = {
         workspace,
         text: normalized.slice(0, 4000),
         source: "codex-dom-capture",
@@ -10024,9 +10086,38 @@
         candidateTriggered: !!detail.candidateTriggered,
         candidateReason: detail.candidateReason || "",
         skipReason: detail.skipReason || "",
-      });
-      if (result?.status !== "ok") throw new Error(result?.message || "capture failed");
-      return result;
+      };
+      const fingerprint = codexMemoryCaptureFingerprint(payload);
+      codexMemoryPruneCaptureHistory();
+      const recent = codexMemoryCaptureRecent.get(fingerprint);
+      if (recent) return recent.result;
+      const inFlight = codexMemoryCaptureInFlight.get(fingerprint);
+      if (inFlight) return inFlight;
+
+      let request;
+      request = Promise.resolve()
+        .then(async () => {
+          const result = await postJson("/memory/capture", payload);
+          if (result?.status !== "ok") throw new Error(result?.message || "capture failed");
+          codexMemoryRememberCapture(fingerprint, result);
+          return result;
+        })
+        .catch((error) => {
+          codexMemoryCaptureRecent.delete(fingerprint);
+          codexMemoryAutoSuggestDiagnostic("database_failed", {
+            operation: "capture",
+            message: String(error?.message || error).slice(0, 240),
+            textLength: normalized.length,
+          });
+          return null;
+        })
+        .finally(() => {
+          if (codexMemoryCaptureInFlight.get(fingerprint) === request) {
+            codexMemoryCaptureInFlight.delete(fingerprint);
+          }
+        });
+      codexMemoryCaptureInFlight.set(fingerprint, request);
+      return request;
     } catch (error) {
       codexMemoryAutoSuggestDiagnostic("database_failed", {
         operation: "capture",

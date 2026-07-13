@@ -585,6 +585,8 @@ function supplierConfigKeyIsSecret(key: string) {
   return SUPPLIER_SECRET_CONFIG_KEYS.has(normalized)
     || normalized.endsWith("apikey")
     || normalized.endsWith("authtoken")
+    || normalized.endsWith("bearertoken")
+    || normalized.endsWith("accesstoken")
     || normalized.endsWith("secret")
     || normalized.endsWith("privatekey");
 }
@@ -610,7 +612,7 @@ export function redactSupplierConfig(contents: string) {
   } catch {
     return text
       .replace(
-        /((?:OPENAI_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|api_key|apiKey)\s*[=:]\s*["']?)([^"'\s,}\]]+)/gi,
+        /((?:OPENAI_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_API_KEY|experimental_bearer_token|bearer_token|access_token|api_key|apiKey)\s*[=:]\s*["']?)([^"'\s,}\]]+)/gi,
         "$1***redacted***",
       )
       .replace(

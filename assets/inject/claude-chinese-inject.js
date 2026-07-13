@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  const existingRuntime = window.__CLAUDE_CODEX_PRO_CHINESE_RUNTIME__;
+  if (existingRuntime?.ready && typeof existingRuntime.refresh === "function") {
+    existingRuntime.refresh();
+    return;
+  }
+  const runtime = { ready: false, refresh: null };
+  window.__CLAUDE_CODEX_PRO_CHINESE_RUNTIME__ = runtime;
   window.__CLAUDE_CODEX_PRO_CHINESE_INJECTED = true;
   document.documentElement.dataset.claudeCodexProChineseInjected = "true";
 
@@ -62,6 +69,7 @@
     ["Message Claude", "\u7ed9 Claude \u53d1\u6d88\u606f"],
     ["What can I help you with today?", "\u4eca\u5929\u6211\u80fd\u5e2e\u4f60\u4ec0\u4e48\uff1f"],
   ]);
+  const TEXT_ENTRIES = Array.from(TEXT.entries()).sort(([left], [right]) => right.length - left.length);
 
   const ATTRS = ["aria-label", "title", "placeholder", "value"];
   const queue = [];
@@ -80,7 +88,7 @@
     const direct = TEXT.get(trimmed);
     if (direct) return value.replace(trimmed, direct);
     let next = value;
-    for (const [from, to] of TEXT.entries()) {
+    for (const [from, to] of TEXT_ENTRIES) {
       if (/\bCodex\b/.test(next)) continue;
       if (next.includes(from)) next = next.split(from).join(to);
     }
@@ -531,7 +539,11 @@
     document.documentElement.appendChild(style);
   }
 
+  let bootstrapped = false;
+
   function bootstrap() {
+    if (bootstrapped) return;
+    bootstrapped = true;
     installStyles();
     ensureStatusPill();
     scheduleBackendHeartbeat();
@@ -543,6 +555,18 @@
       enqueue(document.body || document.documentElement);
     }, 1500);
   }
+
+  runtime.refresh = () => {
+    if (!bootstrapped && document.readyState !== "loading") {
+      bootstrap();
+      return;
+    }
+    if (!bootstrapped) return;
+    ensureStatusPill();
+    enqueue(document.body || document.documentElement);
+    scheduleStatusPosition();
+  };
+  runtime.ready = true;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootstrap, { once: true });

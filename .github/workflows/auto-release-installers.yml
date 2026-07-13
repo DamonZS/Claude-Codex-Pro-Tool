@@ -35,6 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -51,6 +52,20 @@ jobs:
               git push origin ":refs/tags/$tag" || true
             fi
           fi
+          release_json="$(gh release view "$tag" --repo "$REPO" --json databaseId,isDraft 2>/dev/null || true)"
+          if [ -n "$release_json" ]; then
+            is_draft="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.isDraft ? "true" : "false")' "$release_json")"
+            if [ "$is_draft" = "true" ]; then
+              tag_sha="$(git rev-list -n 1 "$tag" 2>/dev/null || true)"
+              if [ "$tag_sha" != "$SHA" ]; then
+                release_id="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.databaseId)' "$release_json")"
+                echo "Draft $tag points to ${tag_sha:-missing}, not current SHA $SHA; recreating it."
+                gh api --method DELETE "repos/$REPO/releases/$release_id"
+                git tag -d "$tag" || true
+                git push origin ":refs/tags/$tag" || true
+              fi
+            fi
+          fi
           version="${tag#v}"
           version="${version#V}"
           {
@@ -62,10 +77,16 @@ jobs:
       - name: Create tag if needed
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
           if git rev-parse "$TAG" >/dev/null 2>&1; then
+            tag_sha="$(git rev-list -n 1 "$TAG")"
+            if [ "$tag_sha" != "$SHA" ]; then
+              echo "::error title=Release tag SHA mismatch::Tag $TAG points to $tag_sha, expected $SHA."
+              exit 1
+            fi
             echo "Tag $TAG already exists; reusing it."
             exit 0
           fi
@@ -176,6 +197,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+          Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
       - name: Build Windows installer
         shell: pwsh
@@ -281,9 +303,11 @@ jobs:
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
             plutil -lint "$app/Contents/Info.plist" >/dev/null
-            codesign -dv "$app" >/dev/null 2>&1
+            codesign --verify --strict "$app"
             echo "verified: $app"
           done
+          test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
+          codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
 
       - name: Package macOS ZIP
         shell: bash
@@ -347,20 +371,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,url > release.json
+          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName > release.json
           node <<'NODE'
           const fs = require("fs");
           const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
           const repo = process.env.REPO;
           const tag = release.tagName || process.env.TAG;
           const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
+          const releaseUrl = `https://github.com/${repo}/releases/tag/${tag}`;
           const assets = (release.assets || [])
             .map((asset) => asset.name)
             .filter((name) => name !== "latest.json")
             .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
           const payload = {
             version: tag,
-            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
+            url: releaseUrl,
             body: release.body || "",
             assets
           };
@@ -385,14 +410,14 @@ jobs:
         run: gh release edit "$TAG" --repo "$REPO" --draft=false --latest
 
   cleanup-failed-draft:
-    name: Cleanup failed draft release
+    name: Cleanup failed or cancelled draft release
     runs-on: ubuntu-latest
     needs:
       - prepare-release
       - windows-installer
       - macos-dmg
       - publish-release
-    if: ${{ failure() }}
+    if: ${{ always() && (failure() || cancelled()) }}
     steps:
       - name: Delete unpublished draft release
         env:
@@ -413,7 +438,7 @@ jobs:
             exit 0
           fi
           release_id="$(node -e 'const data = JSON.parse(process.argv[1]); console.log(data.databaseId)' "$release_json")"
-          echo "Deleting failed draft release $TAG ($release_id)."
+          echo "Deleting failed or cancelled draft release $TAG ($release_id)."
           gh api --method DELETE "repos/$REPO/releases/$release_id"
           echo "Deleting failed release tag $TAG."
           gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" || true

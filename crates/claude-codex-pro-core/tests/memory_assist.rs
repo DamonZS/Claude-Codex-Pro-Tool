@@ -1873,39 +1873,21 @@ fn repeated_identical_recall_in_same_second_keeps_each_activity_event() {
         include_archived: false,
         limit: 1,
     };
-    // A pair can straddle a Unix-second boundary even when both calls are
-    // immediate. Retry only that pair so the fixture deterministically proves
-    // two otherwise identical inserts made in one second both survive.
-    let mut same_second_pair = false;
-    for _ in 0..5 {
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute(
-            "DELETE FROM memory_activity_events WHERE event_type = 'search'",
-            [],
-        )
+    store
+        .query_with_activity(request.clone(), "manager", "search", Some("same-session"))
         .unwrap();
-        drop(conn);
-        store
-            .query_with_activity(request.clone(), "manager", "search", Some("same-session"))
-            .unwrap();
-        store
-            .query_with_activity(request.clone(), "manager", "search", Some("same-session"))
-            .unwrap();
-        let conn = Connection::open(&db_path).unwrap();
-        let distinct_seconds: i64 = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT created_at) FROM memory_activity_events
-                 WHERE event_type = 'search'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        if distinct_seconds == 1 {
-            same_second_pair = true;
-            break;
-        }
-    }
-    assert!(same_second_pair, "could not establish same-second fixture");
+    store
+        .query_with_activity(request, "manager", "search", Some("same-session"))
+        .unwrap();
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute(
+        "UPDATE memory_activity_events
+         SET created_at = CAST(strftime('%s', 'now') AS INTEGER)
+         WHERE event_type = 'search'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
 
     let dashboard = store.outcome_dashboard("repo-a", 7).unwrap();
     assert_eq!(dashboard.today_recalls, 2);

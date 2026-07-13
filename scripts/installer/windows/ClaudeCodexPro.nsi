@@ -32,9 +32,12 @@ Section "Install"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
+  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-mcp.exe /F'
+  Pop $0
 
   File "${ROOT}\dist\windows\app\claude-codex-pro.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe"
+  File "${ROOT}\dist\windows\app\claude-codex-pro-mcp.exe"
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
@@ -65,6 +68,8 @@ Section "Uninstall"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
+  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-mcp.exe /F'
+  Pop $0
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
@@ -75,6 +80,7 @@ Section "Uninstall"
 
   Delete "$INSTDIR\claude-codex-pro.exe"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
+  Delete "$INSTDIR\claude-codex-pro-mcp.exe"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

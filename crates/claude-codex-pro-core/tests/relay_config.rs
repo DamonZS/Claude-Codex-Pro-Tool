@@ -556,6 +556,51 @@ experimental_bearer_token = "sk-a"
     assert_eq!(auth, r#"{"OPENAI_API_KEY":"sk-a"}"#);
 }
 
+#[cfg(unix)]
+#[test]
+fn apply_relay_files_secures_live_files_and_backups() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join(".codex");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(home.join("config.toml"), r#"model = "old""#).unwrap();
+    std::fs::write(home.join("auth.json"), r#"{"old":true}"#).unwrap();
+
+    let result = apply_relay_files_to_home(
+        &home,
+        r#"model_provider = "custom"
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+"#,
+        r#"{"OPENAI_API_KEY":"secret"}"#,
+    )
+    .unwrap();
+    let backup = std::path::Path::new(result.backup_path.as_deref().unwrap());
+
+    for path in [
+        home.join("config.toml"),
+        home.join("auth.json"),
+        backup.join("config.toml"),
+        backup.join("auth.json"),
+    ] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    for path in [home.join("backups"), backup.to_path_buf()] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+}
+
 #[test]
 fn apply_relay_files_allows_empty_isolated_auth_json() {
     let temp = tempfile::tempdir().unwrap();

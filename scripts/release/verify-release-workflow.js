@@ -50,10 +50,19 @@ for (const forbidden of ["settings.json", "relayProfiles", "memory_assist.sqlite
 
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro.exe"', "Windows installer app source");
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer manager source");
+mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-mcp.exe"', "Windows installer MCP source");
+mustContain(windowsInstaller, 'Delete "$INSTDIR\\claude-codex-pro-mcp.exe"', "Windows installer MCP uninstall");
 mustContain(macosPackager, "create_app \"Claude Codex Pro\"", "macOS app bundle");
 mustContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS manager bundle");
+mustContain(macosPackager, 'local binary_path="$BINARY_DIR/claude-codex-pro-mcp"', "macOS MCP source");
+mustContain(macosPackager, 'Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp', "macOS Manager MCP destination");
+mustContain(macosPackager, 'codesign --force --sign - "$app_dir/Contents/MacOS/claude-codex-pro-mcp"', "macOS MCP signing");
+mustContain(macosPackager, 'codesign --verify --strict "$app_dir/Contents/MacOS/claude-codex-pro-mcp"', "macOS MCP signature verification");
 
 for (const [label, source] of [["auto", auto], ["manual", manual]]) {
+  mustContain(source, "Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/", `${label} Windows MCP staging`);
+  mustContain(source, 'test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"', `${label} macOS MCP verification`);
+  mustContain(source, 'codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"', `${label} macOS MCP signature verification`);
   mustContain(source, "windows-x64-setup.exe", label);
   mustContain(source, "windows-x64.zip", label);
   mustContain(source, "latest.json", label);
@@ -94,6 +103,19 @@ mustContain(auto, "node scripts/release/next-release-tag.js \"${published_tags[@
 mustContain(auto, "Deleting orphan release tag $tag before recreating it for this build.", "auto release orphan tag cleanup");
 mustContain(auto, "git push origin \":refs/tags/$tag\"", "auto release orphan remote tag cleanup");
 mustContain(auto, "gh api --method DELETE \"repos/$REPO/git/refs/tags/$TAG\" || true", "auto release failed tag cleanup");
+mustContain(auto, "SHA: ${{ github.sha }}", "auto release current SHA input");
+mustContain(auto, 'tag_sha="$(git rev-list -n 1 "$tag" 2>/dev/null || true)"', "auto draft tag SHA resolution");
+mustContain(auto, 'if [ "$tag_sha" != "$SHA" ]; then', "auto draft tag SHA validation");
+mustContain(auto, 'gh api --method DELETE "repos/$REPO/releases/$release_id"', "auto stale draft cleanup");
+mustContain(auto, "always() && (failure() || cancelled())", "auto failed or cancelled cleanup");
+
+for (const [label, source] of [["auto", auto], ["manual", manual]]) {
+  mustContain(source, 'const releaseUrl = `https://github.com/${repo}/releases/tag/${tag}`;', `${label} stable release URL`);
+  mustContain(source, "url: releaseUrl", `${label} latest.json release URL`);
+  mustNotContain(source, "url: release.url ||", `${label} draft release URL fallback`);
+  mustNotContain(source, "--json assets,body,tagName,url", `${label} release API URL input`);
+  mustNotContain(source, "/untagged-", `${label} draft release URL`);
+}
 
 mustContain(auto, "uses: actions/upload-artifact@v5", "auto workflow artifacts");
 mustContain(auto, "uses: actions/download-artifact@v5", "auto workflow artifacts");

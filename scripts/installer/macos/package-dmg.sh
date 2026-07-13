@@ -89,10 +89,26 @@ create_app() {
 PLIST
 }
 
+install_manager_mcp() {
+  local binary_path="$BINARY_DIR/claude-codex-pro-mcp"
+  local destination="$STAGE/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
+
+  if [ ! -x "$binary_path" ]; then
+    echo "error: MCP binary not found or not executable: $binary_path" >&2
+    return 1
+  fi
+
+  cp "$binary_path" "$destination"
+  chmod +x "$destination"
+}
+
 sign_app() {
   local app_dir="$1"
   local executable
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_dir/Contents/Info.plist")"
+  if [ -f "$app_dir/Contents/MacOS/claude-codex-pro-mcp" ]; then
+    codesign --force --sign - "$app_dir/Contents/MacOS/claude-codex-pro-mcp"
+  fi
   codesign --force --sign - "$app_dir/Contents/MacOS/$executable"
   codesign --force --sign - "$app_dir"
 }
@@ -111,15 +127,22 @@ verify_app() {
     echo "error: missing PkgInfo in $app_dir" >&2
     return 1
   fi
-  codesign -dv "$app_dir" >/dev/null 2>&1 || {
+  codesign --verify --strict "$app_dir" || {
     echo "error: codesign verification failed for $app_dir" >&2
     return 1
   }
+  if [ -f "$app_dir/Contents/MacOS/claude-codex-pro-mcp" ]; then
+    codesign --verify --strict "$app_dir/Contents/MacOS/claude-codex-pro-mcp" || {
+      echo "error: MCP codesign verification failed for $app_dir" >&2
+      return 1
+    }
+  fi
 }
 
 prepare_icon
 create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "true"
 create_app "Claude Codex Pro Manager" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-manager" "com.damonzs.claudecodexpro.manager" "false"
+install_manager_mcp
 ln -s /Applications "$STAGE/Applications"
 
 sign_app "$STAGE/Claude Codex Pro.app"

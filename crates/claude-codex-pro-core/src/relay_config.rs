@@ -1208,7 +1208,7 @@ fn write_codex_live_atomic(
     auth_bytes: Option<&[u8]>,
     preserve_computer_use_guard: bool,
 ) -> anyhow::Result<Option<String>> {
-    std::fs::create_dir_all(home)?;
+    crate::settings::create_private_dir_all(home)?;
     let config_path = home.join("config.toml");
     let auth_path = home.join("auth.json");
     #[cfg(windows)]
@@ -2353,12 +2353,12 @@ fn create_live_backup(
     let backup_dir = home
         .join("backups")
         .join(format!("claude-codex-pro-live-{}", timestamp_millis()));
-    std::fs::create_dir_all(&backup_dir)?;
+    crate::settings::create_private_dir_all(&backup_dir)?;
     if let Some(config) = config {
-        std::fs::write(backup_dir.join("config.toml"), config)?;
+        crate::settings::atomic_write(&backup_dir.join("config.toml"), config)?;
     }
     if let Some(auth) = auth {
-        std::fs::write(backup_dir.join("auth.json"), auth)?;
+        crate::settings::atomic_write(&backup_dir.join("auth.json"), auth)?;
     }
     Ok(Some(backup_dir.to_string_lossy().to_string()))
 }

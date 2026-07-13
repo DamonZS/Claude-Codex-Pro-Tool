@@ -163,6 +163,7 @@ export type BackendSettings = {
   memoryAssistMcpEnabled: boolean;
   memoryAssistMaxInjectedItems: number;
   memoryAssistWorkspaceMode: string;
+  memoryAssistDataDir: string;
   launchMode: "patch" | "relay";
   relayBaseUrl: string;
   relayApiKey: string;
@@ -413,11 +414,7 @@ export type ScriptMarketResult = CommandResult<{
 }>;
 
 export type UpdateReleasePayload = {
-  version: string;
-  url: string;
-  body: string;
-  asset_name: string | null;
-  asset_url: string | null;
+  expectedVersion: string;
 };
 
 export type UpdateResult = CommandResult<{
@@ -697,6 +694,16 @@ export type MemorySelfCheckResult = CommandResult<{
     checks: Array<{ name: string; status: string; message: string }>;
   };
 }>;
+
+export type MemoryAssistMigrationResult = {
+  sourceDir: string;
+  targetDir: string;
+  dbPath: string;
+  migrated: boolean;
+  sourceRetained: boolean;
+  restartRequired: boolean;
+  migratedFiles: string[];
+};
 
 export type ProviderSyncResult = CommandResult<{
   syncStatus?: string;

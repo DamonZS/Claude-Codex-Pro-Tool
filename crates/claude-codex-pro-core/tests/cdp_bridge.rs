@@ -63,6 +63,11 @@ fn injection_script_excludes_ccp_dialog_from_codex_model_menu_candidates() {
     assert!(script.contains(".claude-codex-pro-control-deck"));
     assert!(script.contains(".filter((node) => node && !isClaudeCodexProDialogNode(node))"));
     assert!(script.contains("if (isClaudeCodexProDialogNode(node)) return false;"));
+    assert!(
+        script.contains(
+            "if (surface.getAttribute?.(\"role\") === \"dialog\") return hasSpecificModel;"
+        )
+    );
     assert!(script.contains("if (codexModelMenuCandidates().length) {"));
 }
 
@@ -431,6 +436,39 @@ fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
         ),
         "auto-suggest must stop when DOM memory injection is disabled"
     );
+}
+
+#[test]
+fn injection_script_deduplicates_memory_capture_requests() {
+    let script = assets::injection_script(57321);
+    let start = script
+        .find("const codexMemoryCaptureTtlMs")
+        .expect("memory capture deduplication state exists");
+    let end = script[start..]
+        .find("function codexMemorySetMessage")
+        .map(|offset| start + offset)
+        .expect("memory capture deduplication precedes memory UI helpers");
+    let capture_section = &script[start..end];
+
+    assert!(capture_section.contains("const codexMemoryCaptureTtlMs = 30 * 60 * 1000;"));
+    assert!(capture_section.contains("const codexMemoryCaptureMaxEntries = 128;"));
+    assert!(
+        capture_section
+            .contains("while (codexMemoryCaptureRecent.size > codexMemoryCaptureMaxEntries)")
+    );
+    assert!(capture_section.contains("workspace: payload.workspace"));
+    assert!(capture_section.contains("text: payload.text"));
+    assert!(capture_section.contains("candidateTriggered: payload.candidateTriggered"));
+    assert!(capture_section.contains("candidateReason: payload.candidateReason"));
+    assert!(capture_section.contains("skipReason: payload.skipReason"));
+    assert!(
+        capture_section.contains("const inFlight = codexMemoryCaptureInFlight.get(fingerprint);")
+    );
+    assert!(capture_section.contains("if (inFlight) return inFlight;"));
+    assert!(capture_section.contains("codexMemoryCaptureInFlight.set(fingerprint, request);"));
+    assert!(capture_section.contains("codexMemoryRememberCapture(fingerprint, result);"));
+    assert!(capture_section.contains("codexMemoryCaptureRecent.delete(fingerprint);"));
+    assert!(capture_section.contains("codexMemoryCaptureInFlight.delete(fingerprint);"));
 }
 
 #[test]

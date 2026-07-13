@@ -975,27 +975,7 @@ fn grant_current_user_write_access(
         "/D".to_string(),
         "Y".to_string(),
     ];
-    let user_grant_args = vec![
-        path_text.clone(),
-        "/grant".to_string(),
-        format!("{principal}:(OI)(CI)F"),
-        "/T".to_string(),
-        "/C".to_string(),
-    ];
-    let users_grant_args = vec![
-        path_text.clone(),
-        "/grant".to_string(),
-        "*S-1-5-32-545:(OI)(CI)M".to_string(),
-        "/T".to_string(),
-        "/C".to_string(),
-    ];
-    let admins_grant_args = vec![
-        path_text,
-        "/grant".to_string(),
-        "*S-1-5-32-544:(OI)(CI)F".to_string(),
-        "/T".to_string(),
-        "/C".to_string(),
-    ];
+    let (user_grant_args, admins_grant_args) = elevated_acl_grant_args(path_text, &principal);
 
     let mut warnings = Vec::new();
     if let Err(error) = run_hidden_windows_command("takeown.exe", &takeown_args) {
@@ -1003,20 +983,11 @@ fn grant_current_user_write_access(
     }
     let user_grant = run_hidden_windows_command("icacls.exe", &user_grant_args)
         .map_err(|error| error.to_string());
-    let users_grant = run_hidden_windows_command("icacls.exe", &users_grant_args)
-        .map_err(|error| error.to_string());
     let admins_grant = run_hidden_windows_command("icacls.exe", &admins_grant_args)
         .map_err(|error| error.to_string());
     if let Err(error) = &user_grant {
         warnings.push(format!(
             "icacls 当前用户 {} 授权失败：{}",
-            path.display(),
-            error
-        ));
-    }
-    if let Err(error) = &users_grant {
-        warnings.push(format!(
-            "icacls Users 组 {} 授权失败：{}",
             path.display(),
             error
         ));
@@ -1028,7 +999,7 @@ fn grant_current_user_write_access(
             error
         ));
     }
-    if user_grant.is_err() && users_grant.is_err() && admins_grant.is_err() {
+    if user_grant.is_err() && admins_grant.is_err() {
         anyhow::bail!(
             "WindowsApps 写入授权失败：{}：{}",
             path.display(),
@@ -1036,6 +1007,25 @@ fn grant_current_user_write_access(
         );
     }
     Ok(warnings)
+}
+
+#[cfg(any(windows, test))]
+fn elevated_acl_grant_args(path: String, principal: &str) -> (Vec<String>, Vec<String>) {
+    let user = vec![
+        path.clone(),
+        "/grant".to_string(),
+        format!("{principal}:(OI)(CI)F"),
+        "/T".to_string(),
+        "/C".to_string(),
+    ];
+    let administrators = vec![
+        path,
+        "/grant".to_string(),
+        "*S-1-5-32-544:(OI)(CI)F".to_string(),
+        "/T".to_string(),
+        "/C".to_string(),
+    ];
+    (user, administrators)
 }
 
 #[cfg(windows)]
@@ -2787,6 +2777,28 @@ mod tests {
             assert_eq!(windows_sid_principal("DAMON\\Damon"), None);
             assert_eq!(windows_sid_principal("& whoami"), None);
         }
+    }
+
+    #[test]
+    fn elevated_acl_grants_exclude_builtin_users_group() {
+        let principal = "*S-1-5-21-1-2-3-1001";
+        let (user, administrators) = elevated_acl_grant_args(
+            r"C:\Program Files\WindowsApps\Claude".to_string(),
+            principal,
+        );
+        let grants = user
+            .iter()
+            .chain(administrators.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert!(
+            grants
+                .iter()
+                .any(|arg| arg == &format!("{principal}:(OI)(CI)F"))
+        );
+        assert!(grants.iter().any(|arg| arg == "*S-1-5-32-544:(OI)(CI)F"));
+        assert!(grants.iter().all(|arg| !arg.contains("S-1-5-32-545")));
     }
 
     #[test]

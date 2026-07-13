@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -7,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
+use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -46,9 +47,18 @@ const ACTIVITY_MEMORY_SNAPSHOT_TEXT_MAX_CHARS: usize = 480;
 const OUTCOME_RECENT_RECALL_LIMIT: usize = 20;
 const OUTCOME_HANDOFF_LIMIT: usize = 8;
 const NEW_PROJECT_GUIDE_LIMIT: usize = 12;
+const MEMORY_EVENTS_RETENTION_SECS: i64 = 30 * 24 * 60 * 60;
+const MEMORY_ACTIVITY_RETENTION_SECS: i64 = 90 * 24 * 60 * 60;
+const MEMORY_EVENTS_MAX_ROWS: i64 = 20_000;
+const MEMORY_ACTIVITY_MAX_ROWS: i64 = 50_000;
+const EVENT_PRUNE_INTERVAL: u64 = 256;
+const MEMORY_DB_FILE: &str = "memory_assist.sqlite";
+const MEMORY_CACHE_FILE: &str = "pangu_memory_inject.md";
+const MEMORY_BACKUP_DIR: &str = "memory_assist_backups";
 const LESSON_MANUAL_CATEGORY: &str = "lesson-manual";
 const LESSON_MANUAL_SOURCE: &str = "lesson-manual-compiler";
 static ACTIVITY_EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static EVENT_PRUNE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const CAPTURE_USER_EVIDENCE_SQL: &str = "summary NOT LIKE '<environment_context%'
     AND summary NOT LIKE '<codex_internal_context%'
     AND summary NOT LIKE '<system%'
@@ -426,6 +436,24 @@ pub struct MemorySelfCheckRequest {
     pub repair: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistMigrationRequest {
+    pub target_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAssistMigrationResult {
+    pub source_dir: String,
+    pub target_dir: String,
+    pub db_path: String,
+    pub migrated: bool,
+    pub source_retained: bool,
+    pub restart_required: bool,
+    pub migrated_files: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryAssistStore {
     db_path: PathBuf,
@@ -450,7 +478,119 @@ impl MemoryAssistStore {
         self.db_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join("pangu_memory_inject.md")
+            .join(MEMORY_CACHE_FILE)
+    }
+
+    pub fn migrate_data_dir(
+        &self,
+        target_dir: &Path,
+    ) -> anyhow::Result<MemoryAssistMigrationResult> {
+        if !target_dir.is_absolute() {
+            anyhow::bail!("memory data directory must be an absolute path");
+        }
+        let source_dir = self
+            .db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        if paths_equivalent(&source_dir, target_dir) {
+            return Ok(MemoryAssistMigrationResult {
+                source_dir: source_dir.to_string_lossy().into_owned(),
+                target_dir: target_dir.to_string_lossy().into_owned(),
+                db_path: self.db_path.to_string_lossy().into_owned(),
+                migrated: false,
+                source_retained: true,
+                restart_required: false,
+                migrated_files: Vec::new(),
+            });
+        }
+
+        ensure_writable_directory(target_dir)?;
+        let target_db = target_dir.join(MEMORY_DB_FILE);
+        let target_cache = target_dir.join(MEMORY_CACHE_FILE);
+        let target_backups = target_dir.join(MEMORY_BACKUP_DIR);
+        for path in [&target_db, &target_cache, &target_backups] {
+            if path.exists() {
+                anyhow::bail!(
+                    "target already contains memory data and will not be overwritten: {}",
+                    path.display()
+                );
+            }
+        }
+        ensure_migration_space_available(&source_dir, target_dir)?;
+
+        fs::create_dir_all(&source_dir)?;
+        let lock_path = source_dir.join(".memory-assist-migration.lock");
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("open migration lock {}", lock_path.display()))?;
+        lock.try_lock_exclusive()
+            .with_context(|| "another memory migration is already running")?;
+
+        let source = self.open()?;
+        source
+            .execute_batch("PRAGMA wal_checkpoint(FULL);")
+            .context("checkpoint source memory database")?;
+        let temp_db = target_dir.join(format!(
+            ".{MEMORY_DB_FILE}.migrating-{}-{}",
+            std::process::id(),
+            now_nanos()
+        ));
+        let migration = (|| -> anyhow::Result<Vec<String>> {
+            source
+                .execute(
+                    "VACUUM INTO ?1",
+                    params![temp_db.to_string_lossy().as_ref()],
+                )
+                .with_context(|| format!("copy memory database to {}", temp_db.display()))?;
+            let copied = Connection::open(&temp_db)?;
+            let integrity: String =
+                copied.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                anyhow::bail!("migrated memory database failed integrity check: {integrity}");
+            }
+            drop(copied);
+            fs::rename(&temp_db, &target_db).with_context(|| {
+                format!(
+                    "activate migrated memory database {} -> {}",
+                    temp_db.display(),
+                    target_db.display()
+                )
+            })?;
+
+            let mut migrated_files = vec![MEMORY_DB_FILE.to_string()];
+            let source_cache = source_dir.join(MEMORY_CACHE_FILE);
+            if source_cache.is_file() {
+                fs::copy(&source_cache, &target_cache)?;
+                migrated_files.push(MEMORY_CACHE_FILE.to_string());
+            }
+            let source_backups = source_dir.join(MEMORY_BACKUP_DIR);
+            if source_backups.is_dir() {
+                copy_directory_tree(&source_backups, &target_backups)?;
+                migrated_files.push(MEMORY_BACKUP_DIR.to_string());
+            }
+            Ok(migrated_files)
+        })();
+        if migration.is_err() {
+            let _ = fs::remove_file(&temp_db);
+            let _ = fs::remove_file(&target_db);
+            let _ = fs::remove_file(&target_cache);
+            let _ = fs::remove_dir_all(&target_backups);
+        }
+        let migrated_files = migration?;
+
+        Ok(MemoryAssistMigrationResult {
+            source_dir: source_dir.to_string_lossy().into_owned(),
+            target_dir: target_dir.to_string_lossy().into_owned(),
+            db_path: target_db.to_string_lossy().into_owned(),
+            migrated: true,
+            source_retained: true,
+            restart_required: true,
+            migrated_files,
+        })
     }
 
     pub fn status(&self) -> anyhow::Result<MemoryAssistStatus> {
@@ -986,7 +1126,7 @@ impl MemoryAssistStore {
         &self,
         request: MemoryCaptureRequest,
     ) -> anyhow::Result<MemoryCaptureRecord> {
-        let conn = self.open()?;
+        let mut conn = self.open()?;
         let now = now_unix();
         let redacted = redact_secrets(&request.text);
         let normalized = normalize_memory_text(&redacted);
@@ -1002,7 +1142,8 @@ impl MemoryAssistStore {
         let candidate_reason = normalize_redacted_label(&request.candidate_reason, "");
         let skip_reason = normalize_redacted_label(&request.skip_reason, "");
         let id = stable_id("cap", &[&workspace, &text_hash]);
-        conn.execute(
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
             "INSERT INTO memory_captures
              (id, workspace, source, source_session_id, text_length, text_hash, summary,
               candidate_triggered, candidate_reason, skip_reason, captured_at, updated_at)
@@ -1025,7 +1166,14 @@ impl MemoryAssistStore {
                       OR memory_captures.skip_reason <> excluded.skip_reason
                     THEN excluded.updated_at
                     ELSE memory_captures.updated_at
-                END",
+                END
+             WHERE memory_captures.source <> excluded.source
+                OR memory_captures.source_session_id <> excluded.source_session_id
+                OR memory_captures.text_length <> excluded.text_length
+                OR memory_captures.summary <> excluded.summary
+                OR memory_captures.candidate_triggered <> excluded.candidate_triggered
+                OR memory_captures.candidate_reason <> excluded.candidate_reason
+                OR memory_captures.skip_reason <> excluded.skip_reason",
             params![
                 id,
                 workspace,
@@ -1039,10 +1187,14 @@ impl MemoryAssistStore {
                 skip_reason,
                 now,
             ],
-        )?;
-        let capture = capture_by_workspace_hash(&conn, &workspace, &text_hash)?;
+        )? > 0;
+        let capture = capture_by_workspace_hash(&tx, &workspace, &text_hash)?;
+        if !changed {
+            tx.commit()?;
+            return Ok(capture);
+        }
         record_event(
-            &conn,
+            &tx,
             "capture_recorded",
             None,
             None,
@@ -1056,7 +1208,7 @@ impl MemoryAssistStore {
             }),
         )?;
         let _ = record_activity_event(
-            &conn,
+            &tx,
             "capture",
             &capture.workspace,
             &capture.source,
@@ -1068,6 +1220,7 @@ impl MemoryAssistStore {
                 "candidate_triggered": capture.candidate_triggered,
             }),
         );
+        tx.commit()?;
         let _ = self.sync_inject_summary_cache(&conn, &capture.workspace);
         Ok(capture)
     }
@@ -2004,7 +2157,184 @@ pub fn default_memory_assist_db_path() -> PathBuf {
     if let Some(path) = memory_assist_db_path_for_tests() {
         return path;
     }
-    crate::paths::default_app_state_dir().join("memory_assist.sqlite")
+    resolved_memory_assist_data_dir().join(MEMORY_DB_FILE)
+}
+
+pub fn resolved_memory_assist_data_dir() -> PathBuf {
+    let legacy_dir = crate::paths::default_app_state_dir();
+    let settings = crate::settings::SettingsStore::default()
+        .load()
+        .unwrap_or_default();
+    let configured = settings.memory_assist_data_dir.trim();
+    if !configured.is_empty() {
+        return PathBuf::from(configured);
+    }
+
+    // Existing installations keep using their original database until the
+    // explicit migration flow has produced and verified a consistent copy.
+    if legacy_dir.join(MEMORY_DB_FILE).exists() {
+        return legacy_dir;
+    }
+    if let Some(installed_dir) = installed_memory_assist_data_dir()
+        && ensure_writable_directory(&installed_dir).is_ok()
+    {
+        return installed_dir;
+    }
+    legacy_dir
+}
+
+pub fn migrate_memory_assist_data_dir(
+    request: MemoryAssistMigrationRequest,
+) -> anyhow::Result<MemoryAssistMigrationResult> {
+    let target_dir = PathBuf::from(request.target_dir.trim());
+    if request.target_dir.trim().is_empty() {
+        anyhow::bail!("target memory data directory is empty");
+    }
+    let store = MemoryAssistStore::default();
+    let result = store.migrate_data_dir(&target_dir)?;
+    if let Err(error) = crate::settings::SettingsStore::default()
+        .update(json!({
+            "memoryAssistDataDir": target_dir.to_string_lossy().as_ref()
+        }))
+        .context("save migrated memory data directory")
+    {
+        if result.migrated {
+            cleanup_migrated_target(&target_dir, &result.migrated_files).with_context(|| {
+                format!("{error:#}; additionally failed to remove the uncommitted migrated copy")
+            })?;
+        }
+        return Err(error);
+    }
+    Ok(result)
+}
+
+fn installed_memory_assist_data_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    installed_memory_assist_data_dir_from_exe(&exe)
+}
+
+fn installed_memory_assist_data_dir_from_exe(exe: &Path) -> Option<PathBuf> {
+    let install_dir = exe.parent()?;
+    let normalized = install_dir
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if normalized.ends_with("/target/debug") || normalized.ends_with("/target/release") {
+        return None;
+    }
+
+    let extension = if cfg!(windows) { ".exe" } else { "" };
+    let expected = [
+        format!("claude-codex-pro{extension}"),
+        format!("claude-codex-pro-manager{extension}"),
+        format!("claude-codex-pro-mcp{extension}"),
+    ];
+    if !expected.iter().all(|name| install_dir.join(name).is_file()) {
+        return None;
+    }
+    Some(install_dir.join("data").join("memory-assist"))
+}
+
+fn ensure_writable_directory(path: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("create memory data directory {}", path.display()))?;
+    if !path.is_dir() {
+        anyhow::bail!("memory data path is not a directory: {}", path.display());
+    }
+    let probe = path.join(format!(
+        ".memory-write-probe-{}-{}",
+        std::process::id(),
+        now_nanos()
+    ));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .with_context(|| format!("memory data directory is not writable: {}", path.display()))?;
+    fs::remove_file(&probe)
+        .with_context(|| format!("remove memory write probe {}", probe.display()))?;
+    Ok(())
+}
+
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    let normalize = |path: &Path| {
+        path.to_string_lossy()
+            .trim_end_matches(['/', '\\'])
+            .replace('\\', "/")
+            .to_ascii_lowercase()
+    };
+    normalize(left) == normalize(right)
+}
+
+fn ensure_migration_space_available(source_dir: &Path, target_dir: &Path) -> anyhow::Result<()> {
+    const MIGRATION_SPACE_MARGIN: u64 = 16 * 1024 * 1024;
+
+    let source_bytes = [MEMORY_DB_FILE, MEMORY_CACHE_FILE, MEMORY_BACKUP_DIR]
+        .into_iter()
+        .try_fold(0_u64, |total, name| {
+            Ok::<_, anyhow::Error>(total.saturating_add(directory_size(&source_dir.join(name))?))
+        })?;
+    let required_bytes = source_bytes.saturating_add(MIGRATION_SPACE_MARGIN);
+    let available_bytes = fs2::available_space(target_dir)
+        .with_context(|| format!("read available space for {}", target_dir.display()))?;
+    if available_bytes < required_bytes {
+        anyhow::bail!(
+            "target memory data directory has insufficient space: requires at least {} bytes, available {} bytes",
+            required_bytes,
+            available_bytes
+        );
+    }
+    Ok(())
+}
+
+fn directory_size(path: &Path) -> anyhow::Result<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    if path.is_file() {
+        return Ok(fs::metadata(path)?.len());
+    }
+
+    let mut total = 0_u64;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            total = total.saturating_add(directory_size(&entry.path())?);
+        } else if file_type.is_file() {
+            total = total.saturating_add(entry.metadata()?.len());
+        }
+    }
+    Ok(total)
+}
+
+fn cleanup_migrated_target(target_dir: &Path, migrated_files: &[String]) -> anyhow::Result<()> {
+    for name in migrated_files.iter().rev() {
+        let path = target_dir.join(name);
+        if path.is_dir() {
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("remove migrated directory {}", path.display()))?;
+        } else if path.exists() {
+            fs::remove_file(&path)
+                .with_context(|| format!("remove migrated file {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_directory_tree(source: &Path, target: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_directory_tree(&source_path, &target_path)?;
+        } else if entry.file_type()?.is_file() {
+            fs::copy(&source_path, &target_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn memory_assist_db_path_for_tests() -> Option<PathBuf> {
@@ -2202,6 +2532,7 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             created_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_memory_events_workspace ON memory_events(workspace);
+        CREATE INDEX IF NOT EXISTS idx_memory_events_created ON memory_events(created_at DESC);
 
         CREATE TABLE IF NOT EXISTS memory_activity_events (
             id TEXT PRIMARY KEY,
@@ -2219,6 +2550,8 @@ fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
             ON memory_activity_events(workspace, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_memory_activity_type_created
             ON memory_activity_events(event_type, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_memory_activity_created
+            ON memory_activity_events(created_at DESC);
 
         CREATE TABLE IF NOT EXISTS memory_captures (
             id TEXT PRIMARY KEY,
@@ -5062,7 +5395,10 @@ fn record_event(
          (id, item_id, candidate_id, event, workspace, detail_json, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            stable_id("evt", &[event, workspace, &now.to_string()]),
+            stable_id(
+                "evt",
+                &[event, workspace, &now.to_string(), &now_nanos().to_string()],
+            ),
             item_id,
             candidate_id,
             event,
@@ -5070,6 +5406,45 @@ fn record_event(
             redact_secrets(&detail.to_string()),
             now,
         ],
+    )?;
+    maybe_prune_event_tables(conn, now)?;
+    Ok(())
+}
+
+fn maybe_prune_event_tables(conn: &Connection, now: i64) -> anyhow::Result<()> {
+    let sequence = EVENT_PRUNE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    if sequence % EVENT_PRUNE_INTERVAL != 0 {
+        return Ok(());
+    }
+    prune_event_tables(conn, now)
+}
+
+fn prune_event_tables(conn: &Connection, now: i64) -> anyhow::Result<()> {
+    conn.execute(
+        "DELETE FROM memory_events WHERE created_at < ?1",
+        params![now.saturating_sub(MEMORY_EVENTS_RETENTION_SECS)],
+    )?;
+    conn.execute(
+        "DELETE FROM memory_events
+         WHERE id IN (
+            SELECT id FROM memory_events
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT -1 OFFSET ?1
+         )",
+        params![MEMORY_EVENTS_MAX_ROWS],
+    )?;
+    conn.execute(
+        "DELETE FROM memory_activity_events WHERE created_at < ?1",
+        params![now.saturating_sub(MEMORY_ACTIVITY_RETENTION_SECS)],
+    )?;
+    conn.execute(
+        "DELETE FROM memory_activity_events
+         WHERE id IN (
+            SELECT id FROM memory_activity_events
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT -1 OFFSET ?1
+         )",
+        params![MEMORY_ACTIVITY_MAX_ROWS],
     )?;
     Ok(())
 }
@@ -5249,6 +5624,7 @@ fn record_activity_event_with_snapshot(
             now,
         ],
     )?;
+    maybe_prune_event_tables(conn, now)?;
     Ok(())
 }
 
@@ -6898,5 +7274,229 @@ mod tests {
                 .unwrap();
             assert_eq!(tier, TIER_ACTIVE, "exempt item {id} must stay active");
         }
+    }
+
+    fn capture_request() -> MemoryCaptureRequest {
+        MemoryCaptureRequest {
+            text: "Keep the release build in the default target directory.".to_string(),
+            workspace: "repo-a".to_string(),
+            source: "codex-inject".to_string(),
+            source_session_id: "session-a".to_string(),
+            candidate_triggered: false,
+            candidate_reason: String::new(),
+            skip_reason: "no durable lesson".to_string(),
+        }
+    }
+
+    #[test]
+    fn duplicate_capture_is_event_idempotent_until_fields_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join(MEMORY_DB_FILE));
+        let request = capture_request();
+
+        store.record_capture(request.clone()).unwrap();
+        store.record_capture(request.clone()).unwrap();
+
+        let conn = store.open().unwrap();
+        let captures: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_captures", [], |row| row.get(0))
+            .unwrap();
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_events WHERE event = 'capture_recorded'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let activity: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_activity_events WHERE event_type = 'capture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((captures, events, activity), (1, 1, 1));
+        drop(conn);
+
+        let mut changed = request;
+        changed.candidate_triggered = true;
+        changed.candidate_reason = "explicit user correction".to_string();
+        changed.skip_reason.clear();
+        store.record_capture(changed).unwrap();
+
+        let conn = store.open().unwrap();
+        let events: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_events WHERE event = 'capture_recorded'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let activity: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_activity_events WHERE event_type = 'capture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!((events, activity), (2, 2));
+    }
+
+    #[test]
+    fn event_pruning_is_bounded_without_touching_durable_tables() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join(MEMORY_DB_FILE));
+        store.record_capture(capture_request()).unwrap();
+        let conn = store.open().unwrap();
+        conn.execute_batch(
+            "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 20010)
+             INSERT INTO memory_events(id, event, workspace, detail_json, created_at)
+             SELECT 'old-event-' || x, 'test', 'repo-a', '{}', 1 FROM n;
+             WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM n WHERE x < 50010)
+             INSERT INTO memory_activity_events
+                (id, event_type, workspace, agent, query_summary, metadata_json,
+                 memory_snapshot_json, created_at)
+             SELECT 'old-activity-' || x, 'capture', 'repo-a', 'test', '', '{}', '', 1 FROM n;",
+        )
+        .unwrap();
+
+        prune_event_tables(&conn, now_unix()).unwrap();
+
+        let events: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
+            .unwrap();
+        let activity: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_activity_events", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let captures: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_captures", [], |row| row.get(0))
+            .unwrap();
+        assert!(events <= MEMORY_EVENTS_MAX_ROWS);
+        assert!(activity <= MEMORY_ACTIVITY_MAX_ROWS);
+        assert_eq!(captures, 1);
+    }
+
+    #[test]
+    fn migration_creates_verified_copy_and_retains_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("source");
+        let target_dir = temp.path().join("target");
+        let source_db = source_dir.join(MEMORY_DB_FILE);
+        let store = MemoryAssistStore::new(source_db.clone());
+        store.record_capture(capture_request()).unwrap();
+        fs::write(store.inject_summary_cache_path(), "local inject summary").unwrap();
+        let backup_dir = source_dir.join(MEMORY_BACKUP_DIR);
+        fs::create_dir_all(&backup_dir).unwrap();
+        fs::write(backup_dir.join("known.sqlite"), "backup").unwrap();
+
+        let result = store.migrate_data_dir(&target_dir).unwrap();
+
+        assert!(result.migrated);
+        assert!(result.source_retained);
+        assert!(result.restart_required);
+        assert!(source_db.is_file());
+        assert!(target_dir.join(MEMORY_DB_FILE).is_file());
+        assert!(target_dir.join(MEMORY_CACHE_FILE).is_file());
+        assert!(
+            target_dir
+                .join(MEMORY_BACKUP_DIR)
+                .join("known.sqlite")
+                .is_file()
+        );
+        let copied = Connection::open(target_dir.join(MEMORY_DB_FILE)).unwrap();
+        let integrity: String = copied
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .unwrap();
+        let captures: i64 = copied
+            .query_row("SELECT COUNT(*) FROM memory_captures", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        assert_eq!(captures, 1);
+    }
+
+    #[test]
+    fn migration_refuses_to_overwrite_existing_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("source").join(MEMORY_DB_FILE));
+        store.record_capture(capture_request()).unwrap();
+        let target_dir = temp.path().join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::write(target_dir.join(MEMORY_DB_FILE), "different database").unwrap();
+
+        let error = store.migrate_data_dir(&target_dir).unwrap_err().to_string();
+
+        assert!(error.contains("will not be overwritten"));
+        assert!(store.db_path().is_file());
+    }
+
+    #[test]
+    fn migration_cleanup_removes_only_files_created_by_migration() {
+        let temp = tempfile::tempdir().unwrap();
+        let target_dir = temp.path().join("target");
+        fs::create_dir_all(target_dir.join(MEMORY_BACKUP_DIR)).unwrap();
+        fs::write(target_dir.join(MEMORY_DB_FILE), "database").unwrap();
+        fs::write(target_dir.join(MEMORY_CACHE_FILE), "cache").unwrap();
+        fs::write(
+            target_dir.join(MEMORY_BACKUP_DIR).join("backup.sqlite"),
+            "backup",
+        )
+        .unwrap();
+        fs::write(target_dir.join("keep.txt"), "unrelated").unwrap();
+
+        cleanup_migrated_target(
+            &target_dir,
+            &[
+                MEMORY_DB_FILE.to_string(),
+                MEMORY_CACHE_FILE.to_string(),
+                MEMORY_BACKUP_DIR.to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert!(!target_dir.join(MEMORY_DB_FILE).exists());
+        assert!(!target_dir.join(MEMORY_CACHE_FILE).exists());
+        assert!(!target_dir.join(MEMORY_BACKUP_DIR).exists());
+        assert_eq!(
+            fs::read_to_string(target_dir.join("keep.txt")).unwrap(),
+            "unrelated"
+        );
+    }
+
+    #[test]
+    fn installed_data_dir_requires_all_companion_binaries_and_rejects_target_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path().join("Claude Codex Pro");
+        fs::create_dir_all(&install_dir).unwrap();
+        let extension = if cfg!(windows) { ".exe" } else { "" };
+        for binary in [
+            "claude-codex-pro",
+            "claude-codex-pro-manager",
+            "claude-codex-pro-mcp",
+        ] {
+            fs::write(install_dir.join(format!("{binary}{extension}")), []).unwrap();
+        }
+        let exe = install_dir.join(format!("claude-codex-pro-manager{extension}"));
+        assert_eq!(
+            installed_memory_assist_data_dir_from_exe(&exe),
+            Some(install_dir.join("data").join("memory-assist"))
+        );
+
+        let dev_dir = temp.path().join("target").join("release");
+        fs::create_dir_all(&dev_dir).unwrap();
+        for binary in [
+            "claude-codex-pro",
+            "claude-codex-pro-manager",
+            "claude-codex-pro-mcp",
+        ] {
+            fs::write(dev_dir.join(format!("{binary}{extension}")), []).unwrap();
+        }
+        assert_eq!(
+            installed_memory_assist_data_dir_from_exe(
+                &dev_dir.join(format!("claude-codex-pro-manager{extension}"))
+            ),
+            None
+        );
     }
 }

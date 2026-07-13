@@ -17,6 +17,7 @@ import {
   FileCode2,
   FileDown,
   FileUp,
+  FolderOpen,
   GripVertical,
   Info,
   KeyRound,
@@ -79,7 +80,6 @@ import {
   createAggregateSupplierProfile,
   createSupplierProfile,
   normalizeSupplierProfile,
-  redactSupplierAuth,
   redactSupplierConfig,
   supplierIdFromName,
   supplierProfileHasApiKey,
@@ -144,6 +144,7 @@ import type {
   MemoryExportResult,
   MemoryItem,
   MemoryItemsResult,
+  MemoryAssistMigrationResult,
   MemoryNewProjectExperience,
   MemoryNewProjectGuideResult,
   MemoryOutcomeDashboardResult,
@@ -1494,6 +1495,14 @@ base_url = "${generated.baseUrl || generated.upstreamBaseUrl || "https://api.exa
 wire_api = "${generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "chat" : "responses"}"
 env_key = "OPENAI_API_KEY"
 `;
+    const visibleCodexAuthJson = redactSupplierConfig(codexAuthJson);
+    const visibleCodexConfigToml = redactSupplierConfig(codexConfigToml);
+    const visibleHeaderOverride = showSupplierApiKey
+      ? generated.headerOverride || ""
+      : redactSupplierConfig(generated.headerOverride || "");
+    const visibleBodyOverride = showSupplierApiKey
+      ? generated.bodyOverride || ""
+      : redactSupplierConfig(generated.bodyOverride || "");
     const renderSourceCollapse = (open: boolean, setOpen: Dispatch<SetStateAction<boolean>>, icon: ReactNode, title: string, children: ReactNode) => (
       <div className={`supplier-ccswitch-collapse-card ${open ? "expanded" : ""}`}>
         <div className="supplier-ccswitch-collapse-head" onClick={() => setOpen((value) => !value)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen((value) => !value); } }} role="button" tabIndex={0}>
@@ -1657,7 +1666,7 @@ env_key = "OPENAI_API_KEY"
                 </label>
               </>
             )}
-            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} rows={6} value={generated.headerOverride || ""} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} rows={6} value={generated.bodyOverride || ""} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} readOnly={!showSupplierApiKey} value={visibleSupplierConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" onChange={(event) => updateDraft({ authContents: event.currentTarget.value })} value={redactSupplierAuth(codexAuthJson)} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} value={codexConfigToml} /></label></>}{renderSourceCollapse(supplierTestConfigOpen, setSupplierTestConfigOpen, <Activity className="h-4 w-4" />, "模型 Test Config", <><p>为此供应商配置单独的模型测试参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label><label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label><label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label></div></>)}{renderSourceCollapse(supplierPricingConfigOpen, setSupplierPricingConfigOpen, <BarChart3 className="h-4 w-4" />, "计费配置", <><p>为此供应商配置单独的计费参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认" /></label><label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select></label></div></>)}
+            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleHeaderOverride} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleBodyOverride} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} readOnly={!showSupplierApiKey} value={visibleSupplierConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" readOnly value={visibleCodexAuthJson} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" readOnly value={visibleCodexConfigToml} /></label></>}{renderSourceCollapse(supplierTestConfigOpen, setSupplierTestConfigOpen, <Activity className="h-4 w-4" />, "模型 Test Config", <><p>为此供应商配置单独的模型测试参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>超时时间（秒）</span><input disabled placeholder="8" /></label><label className="ops-form-field"><span>降级阈值（毫秒）</span><input disabled placeholder="6000" /></label><label className="ops-form-field"><span>最大重试次数</span><input disabled placeholder="1" /></label></div></>)}{renderSourceCollapse(supplierPricingConfigOpen, setSupplierPricingConfigOpen, <BarChart3 className="h-4 w-4" />, "计费配置", <><p>为此供应商配置单独的计费参数。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>成本倍率</span><input disabled placeholder="留空使用全局默认" /></label><label className="ops-form-field"><span>计费模式</span><select className="ops-select" disabled value="inherit"><option value="inherit">继承全局默认</option><option value="request">请求模型</option><option value="response">返回模型</option></select></label></div></>)}
           </details></section></div>
         <div className="supplier-ccswitch-savebar"><span>{modelFetch?.models.length ? `已获取 ${modelFetch.models.length} 个模型，来源：${modelFetch.endpoint || "模型接口"}` : "请检查并保存供应商配置"}</span><div className="action-row"><Button onClick={closeSupplierEditor} type="button" variant="outline">取消</Button><Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button><Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />保存并使用</Button></div></div>
       </div>
@@ -2458,6 +2467,8 @@ export function MemoryScreen({
   items,
   search,
   selfCheck,
+  migrateDataDir,
+  selectDataDir,
   settings,
   status,
 }: {
@@ -2469,6 +2480,8 @@ export function MemoryScreen({
   items: MemoryItemsResult | null;
   search: MemoryQueryResult | null;
   selfCheck: MemorySelfCheckResult | null;
+  migrateDataDir: (targetDir: string) => Promise<MemoryAssistMigrationResult | null>;
+  selectDataDir: () => Promise<string | null>;
   settings: SettingsResult | null;
   status: MemoryStatusResult | null;
 }) {
@@ -2482,6 +2495,8 @@ export function MemoryScreen({
   const [editingCategory, setEditingCategory] = useState("");
   const [importText, setImportText] = useState("");
   const [replaceExisting, setReplaceExisting] = useState(false);
+  const [selectedDataDir, setSelectedDataDir] = useState("");
+  const [storageMigrationBusy, setStorageMigrationBusy] = useState(false);
 
   const allItems = items?.items ?? [];
   const activeItems = allItems.filter((item) => item.tier !== "archived");
@@ -2521,6 +2536,32 @@ export function MemoryScreen({
   const selfCheckSummary = selfCheck
     ? selfCheck.report.checks.map((check) => `${check.name}:${check.status}`).join(" / ")
     : "等待自检";
+  const currentDbPath = status?.memory.dbPath?.trim() || "";
+  const currentDataDir = (() => {
+    const separator = Math.max(currentDbPath.lastIndexOf("/"), currentDbPath.lastIndexOf("\\"));
+    if (separator < 0) return currentDbPath || "等待状态加载";
+    if (separator === 0) return currentDbPath.slice(0, 1);
+    if (separator === 2 && /^[A-Za-z]:/.test(currentDbPath)) return currentDbPath.slice(0, 3);
+    return currentDbPath.slice(0, separator);
+  })();
+  const normalizedCurrentDataDir = currentDataDir.replace(/[\\/]+$/, "").toLocaleLowerCase();
+  const normalizedSelectedDataDir = selectedDataDir.trim().replace(/[\\/]+$/, "").toLocaleLowerCase();
+
+  const chooseDataDir = async () => {
+    const selected = await selectDataDir();
+    if (selected) setSelectedDataDir(selected);
+  };
+  const migrateData = async () => {
+    const targetDir = selectedDataDir.trim();
+    if (!targetDir || storageMigrationBusy) return;
+    setStorageMigrationBusy(true);
+    try {
+      const result = await migrateDataDir(targetDir);
+      if (result) setSelectedDataDir("");
+    } finally {
+      setStorageMigrationBusy(false);
+    }
+  };
 
   const beginManualEdit = () => {
     setManualDraft(manualText);
@@ -2739,6 +2780,26 @@ export function MemoryScreen({
       <details className="memory-diagnostics">
         <summary>高级诊断</summary>
         <div className="memory-diagnostics-body">
+      <Panel title="记忆存储" detail="迁移会保留原数据；完成后需要重启正在运行的 Codex、Launcher 和 MCP。">
+        <div className="ops-status-list">
+          <StatusRow label="当前目录" status={currentDbPath ? "ok" : "not_checked"} value={currentDataDir} />
+          <StatusRow label="目标目录" status={selectedDataDir ? "running" : "not_checked"} value={selectedDataDir || "尚未选择"} />
+        </div>
+        <div className="action-row">
+          <Button disabled={storageMigrationBusy} onClick={() => void chooseDataDir()} size="sm" variant="outline">
+            <FolderOpen className="h-4 w-4" />
+            选择目录
+          </Button>
+          <Button
+            disabled={!normalizedSelectedDataDir || normalizedSelectedDataDir === normalizedCurrentDataDir || storageMigrationBusy}
+            onClick={() => void migrateData()}
+            size="sm"
+          >
+            <FileDown className="h-4 w-4" />
+            {storageMigrationBusy ? "迁移中" : "迁移数据"}
+          </Button>
+        </div>
+      </Panel>
       <section className="memory-layer-grid" aria-label="盘古记忆三层链路状态">
         <Panel title="历史会话采集层" detail="主路径：从 Codex / Claude 本地可解析会话源建立采集证据。">
           <div className="ops-status-list">
@@ -3107,6 +3168,7 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
     const sourceRoot = data ? ("sourceRoot" in data ? data.sourceRoot : data.dbPath) : "";
     const sourcePaths = data ? ("sourcePaths" in data ? data.sourcePaths : data.dbPaths) : [];
     const warningCount = data && "warnings" in data ? data.warnings.length : 0;
+    const loadFailed = Boolean(data && statusFailed(data.status));
     return (
       <Panel title={title} detail={`${sessionCount} 个本地会话；删除会先写备份。${warningCount ? ` ${warningCount} 个来源需要检查。` : ""}`}>
         <div className="codex-session-toolbar">
@@ -3129,45 +3191,52 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
             </Button>
           ) : null}
         </div>
-        <div className="codex-session-browser" aria-label={ariaLabel}>
-          <div className="codex-session-browser-title">项目</div>
-          {groups.length ? groups.map((group) => (
-            <section className="codex-session-project" key={`${title}:${group.key}`}>
-              <div className="codex-session-project-header" title={group.subtitle || group.label}>
-                <FileCode2 className="h-4 w-4" />
-                <strong>{group.label}</strong>
-              </div>
-              <div className="codex-session-project-list">
-                {group.sessions.map((session) => (
-                  <div className="codex-session-row" key={`${title}:${"sourcePath" in session ? session.sourcePath : session.dbPath}:${session.id}`}>
-                    <button
-                      className="codex-session-main"
-                      onClick={() => onOpen?.(session)}
-                      title={session.title || session.id}
-                      type="button"
-                    >
-                      <span>{session.title || "未命名会话"}</span>
-                      <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
-                    </button>
-                    {onDelete ? (
+        {loadFailed ? (
+          <div className="ops-danger-zone" role="alert">
+            <AlertTriangle className="h-4 w-4" />
+            <span>{data?.message || "会话加载失败，请刷新后重试。"}</span>
+          </div>
+        ) : (
+          <div className="codex-session-browser" aria-label={ariaLabel}>
+            <div className="codex-session-browser-title">项目</div>
+            {groups.length ? groups.map((group) => (
+              <section className="codex-session-project" key={`${title}:${group.key}`}>
+                <div className="codex-session-project-header" title={group.subtitle || group.label}>
+                  <FileCode2 className="h-4 w-4" />
+                  <strong>{group.label}</strong>
+                </div>
+                <div className="codex-session-project-list">
+                  {group.sessions.map((session) => (
+                    <div className="codex-session-row" key={`${title}:${"sourcePath" in session ? session.sourcePath : session.dbPath}:${session.id}`}>
                       <button
-                        className="codex-session-delete"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDelete(session);
-                        }}
-                        title="删除会话"
+                        className="codex-session-main"
+                        onClick={() => onOpen?.(session)}
+                        title={session.title || session.id}
                         type="button"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <span>{session.title || "未命名会话"}</span>
+                        <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
                       </button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )) : <Empty text={emptyText} />}
-        </div>
+                      {onDelete ? (
+                        <button
+                          className="codex-session-delete"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDelete(session);
+                          }}
+                          title="删除会话"
+                          type="button"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )) : <Empty text={emptyText} />}
+          </div>
+        )}
       </Panel>
     );
   };
@@ -3898,7 +3967,7 @@ export const AboutScreen = memo(function AboutScreen({
               <RefreshCw className="h-4 w-4" />
               检查更新
             </Button>
-            <Button disabled={!release?.asset_url} onClick={() => void actions.performUpdate(release)} variant="outline">
+            <Button disabled={!release || !updateInfo?.assetUrl} onClick={() => void actions.performUpdate(release)} variant="outline">
               <Download className="h-4 w-4" />
               下载并运行安装包
             </Button>

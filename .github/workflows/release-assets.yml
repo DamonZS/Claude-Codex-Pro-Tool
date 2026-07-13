@@ -63,6 +63,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+          Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
       - name: Build Windows installer
         shell: pwsh
@@ -155,9 +156,11 @@ jobs:
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
             plutil -lint "$app/Contents/Info.plist" >/dev/null
-            codesign -dv "$app" >/dev/null 2>&1
+            codesign --verify --strict "$app"
             echo "verified: $app"
           done
+          test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
+          codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
 
       - name: Package macOS ZIP
         shell: bash
@@ -198,20 +201,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName,url > release.json
+          gh release view "$TAG" --repo "$REPO" --json assets,body,tagName > release.json
           node <<'NODE'
           const fs = require("fs");
           const release = JSON.parse(fs.readFileSync("release.json", "utf8"));
           const repo = process.env.REPO;
           const tag = release.tagName || process.env.TAG;
           const baseUrl = `https://github.com/${repo}/releases/download/${tag}`;
+          const releaseUrl = `https://github.com/${repo}/releases/tag/${tag}`;
           const assets = (release.assets || [])
             .map((asset) => asset.name)
             .filter((name) => name !== "latest.json")
             .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
           const payload = {
             version: tag,
-            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
+            url: releaseUrl,
             body: release.body || "",
             assets
           };

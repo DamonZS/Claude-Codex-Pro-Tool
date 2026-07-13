@@ -421,6 +421,8 @@ pub struct BackendSettings {
         default = "default_memory_assist_workspace_mode"
     )]
     pub memory_assist_workspace_mode: String,
+    #[serde(rename = "memoryAssistDataDir", default)]
+    pub memory_assist_data_dir: String,
     #[serde(rename = "launchMode", default)]
     pub launch_mode: LaunchMode,
     #[serde(rename = "relayBaseUrl", default = "default_relay_base_url")]
@@ -498,6 +500,7 @@ impl Default for BackendSettings {
             memory_assist_auto_suggest_enabled: true,
             memory_assist_max_injected_items: default_memory_assist_max_injected_items(),
             memory_assist_workspace_mode: default_memory_assist_workspace_mode(),
+            memory_assist_data_dir: String::new(),
             memory_assist_llm_summary_enabled: false,
             memory_assist_mcp_enabled: false,
             launch_mode: LaunchMode::Patch,
@@ -954,6 +957,12 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "memoryAssistInjectEnabled");
     merge_bool_setting(target, source, "memoryAssistAutoSuggestEnabled");
     merge_bool_setting(target, source, "memoryAssistLlmSummaryEnabled");
+    if let Some(value) = source.get("memoryAssistDataDir").and_then(Value::as_str) {
+        target.insert(
+            "memoryAssistDataDir".to_string(),
+            Value::String(value.trim().to_string()),
+        );
+    }
     merge_bool_setting(target, source, "memoryAssistMcpEnabled");
     if let Some(value) = source
         .get("codexAppImageOverlayPath")
@@ -1301,13 +1310,11 @@ fn normalize_text_config(contents: String) -> String {
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        create_private_dir_all(parent)?;
     }
 
     let temp_path = temp_path_for(path);
-    fs::write(&temp_path, bytes)
-        .with_context(|| format!("failed to write temp file {}", temp_path.display()))?;
+    write_private_file(&temp_path, bytes)?;
     fs::rename(&temp_path, path).with_context(|| {
         format!(
             "failed to replace {} with {}",
@@ -1315,6 +1322,51 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
             temp_path.display()
         )
     })?;
+    Ok(())
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder
+            .create(path)
+            .with_context(|| format!("failed to create directory {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)
+            .with_context(|| format!("failed to create directory {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("failed to write temp file {}", path.display()))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to secure temp file {}", path.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write temp file {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)
+            .with_context(|| format!("failed to write temp file {}", path.display()))?;
+    }
     Ok(())
 }
 
@@ -2448,5 +2500,48 @@ experimental_bearer_token = "sk-existing"
 
         assert!(!updated.provider_sync_enabled);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_creates_private_file_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir();
+        let private_dir = dir.join("private").join("nested");
+        let path = private_dir.join("settings.json");
+
+        atomic_write(&path, br#"{"secret":true}"#).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&private_dir)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn memory_assist_data_dir_round_trips_through_incremental_update() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        std::fs::write(&path, r#"{"futureField":"preserved"}"#).unwrap();
+
+        let updated = store
+            .update(serde_json::json!({"memoryAssistDataDir": "D:/CCP Data"}))
+            .unwrap();
+
+        assert_eq!(updated.memory_assist_data_dir, "D:/CCP Data");
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(raw["memoryAssistDataDir"], "D:/CCP Data");
+        assert_eq!(raw["futureField"], "preserved");
     }
 }

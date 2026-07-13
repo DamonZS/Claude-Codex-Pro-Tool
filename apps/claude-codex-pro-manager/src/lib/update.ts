@@ -4,11 +4,7 @@ import type { ClaudeDesktopResult, UpdateReleasePayload, UpdateResult } from "@/
 export function updateInfoToRelease(updateInfo: UpdateResult | null): UpdateReleasePayload | null {
   if (!updateInfo?.latestVersion) return null;
   return {
-    version: updateInfo.latestVersion,
-    url: "",
-    body: updateInfo.releaseSummary ?? "",
-    asset_name: updateInfo.assetName ?? null,
-    asset_url: updateInfo.assetUrl ?? null,
+    expectedVersion: updateInfo.latestVersion,
   };
 }
 

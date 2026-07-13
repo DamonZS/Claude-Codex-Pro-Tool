@@ -13,10 +13,12 @@ use claude_codex_pro_core::claude_desktop_provider::{
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStatus, MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest,
-    MemoryCaptureProgressStatus, MemoryExport, MemoryImportRequest, MemoryItem, MemoryItemRequest,
-    MemoryNewProjectGuide, MemoryOutcomeDashboard, MemoryQueryRequest, MemoryQueryResult,
-    MemorySelfCheckRequest, MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
+    MemoryAssistMigrationRequest, MemoryAssistMigrationResult, MemoryAssistStatus,
+    MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryCaptureProgressStatus,
+    MemoryExport, MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryNewProjectGuide,
+    MemoryOutcomeDashboard, MemoryQueryRequest, MemoryQueryResult, MemorySelfCheckRequest,
+    MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
+    migrate_memory_assist_data_dir as migrate_memory_assist_data_dir_core,
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::plugin_hub::{
@@ -1241,7 +1243,7 @@ fn claude_chinese_window_shell_html(default_url: &str) -> String {
     .button {{ display: inline-flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 12px; border: 1px solid rgba(45, 212, 191, .56); border-radius: 999px; background: rgba(45, 212, 191, .14); color: #b5fff3; font-size: 12px; font-weight: 800; text-decoration: none; }}
     .frame-wrap {{ position: relative; min-height: 0; }}
     iframe {{ width: 100%; height: 100%; border: 0; background: #ffffff; }}
-    .fallback {{ position: absolute; right: 18px; bottom: 18px; max-width: 360px; padding: 14px 16px; border: 1px solid rgba(248, 181, 75, .38); border-radius: 18px; background: rgba(15, 23, 42, .88); box-shadow: 0 22px 70px rgba(0,0,0,.35); color: #f8fafc; }}
+    .fallback {{ position: absolute; right: 18px; bottom: 18px; max-width: 360px; padding: 14px 16px; border: 1px solid rgba(248, 181, 75, .38); border-radius: 18px; background: rgba(15, 23, 42, .88); box-shadow: 0 22px 70px rgba(0,0,0,.35); color: #f8fafc; pointer-events: none; }}
     .fallback strong {{ display: block; margin-bottom: 6px; font-size: 13px; }}
     .fallback p {{ margin: 0; color: #cbd5e1; font-size: 12px; line-height: 1.55; }}
   </style>
@@ -1259,13 +1261,19 @@ fn claude_chinese_window_shell_html(default_url: &str) -> String {
       </div>
     </section>
     <section class="frame-wrap">
-      <iframe src="{escaped_url}" title="Claude"></iframe>
-      <aside class="fallback">
+      <iframe id="claude-frame" src="{escaped_url}" title="Claude"></iframe>
+      <aside class="fallback" id="claude-frame-fallback">
         <strong>看见白屏时不要等待</strong>
         <p>这是本地诊断兜底层，说明管理工具没有卡死。请点击“在浏览器打开 Claude”，或回到管理工具使用“启动/重启Claude”。</p>
       </aside>
     </section>
   </main>
+  <script>
+    document.getElementById("claude-frame")?.addEventListener("load", () => {{
+      const fallback = document.getElementById("claude-frame-fallback");
+      if (fallback) fallback.hidden = true;
+    }}, {{ once: true }});
+  </script>
 </body>
 </html>"#
     )
@@ -2651,9 +2659,11 @@ pub async fn refresh_claude_third_party_config()
 }
 
 #[tauri::command]
-pub fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
-    let request = normalize_launch_request(request);
-    spawn_claude_codex_pro_launch(request, "启动任务已在后台运行。")
+pub async fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
+    match tauri::async_runtime::spawn_blocking(move || normalize_launch_request(request)).await {
+        Ok(request) => spawn_claude_codex_pro_launch(request, "启动任务已在后台运行。"),
+        Err(error) => failed(&format!("启动 Codex 任务失败：{error}"), json!({})),
+    }
 }
 
 #[tauri::command]
@@ -3223,6 +3233,19 @@ pub async fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayl
                 memory: empty_memory_status(),
             },
         ),
+    }
+}
+
+#[tauri::command]
+pub async fn migrate_memory_assist_data_dir(
+    request: MemoryAssistMigrationRequest,
+) -> Result<MemoryAssistMigrationResult, String> {
+    match tauri::async_runtime::spawn_blocking(move || migrate_memory_assist_data_dir_core(request))
+        .await
+    {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(error) => Err(format!("迁移盘古记忆数据失败：{error}")),
     }
 }
 
@@ -4440,6 +4463,18 @@ fn delete_claude_session_blocking(
 fn delete_local_session_blocking(
     request: DeleteLocalSessionRequest,
 ) -> CommandResult<DeleteResult> {
+    delete_local_session_blocking_with_backup_store(
+        request,
+        claude_codex_pro_data::BackupStore::new(
+            claude_codex_pro_core::paths::default_app_state_dir().join("backups"),
+        ),
+    )
+}
+
+fn delete_local_session_blocking_with_backup_store(
+    request: DeleteLocalSessionRequest,
+    backup_store: claude_codex_pro_data::BackupStore,
+) -> CommandResult<DeleteResult> {
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return failed(
@@ -4485,9 +4520,7 @@ fn delete_local_session_blocking(
     );
     let result = claude_codex_pro_data::delete_local_from_paths(
         candidate_paths.clone(),
-        claude_codex_pro_data::BackupStore::new(
-            claude_codex_pro_core::paths::default_app_state_dir().join("backups"),
-        ),
+        backup_store,
         &session,
     );
     log_manager_event(
@@ -5918,7 +5951,15 @@ pub fn repair_backend() -> CommandResult<SettingsPayload> {
             install.real_codex.to_string_lossy()
         ),
         Ok(None) => "命令封装器已是最新。".to_string(),
-        Err(error) => format!("命令封装器更新失败：{error}"),
+        Err(error) => {
+            return match settings_payload_value() {
+                Ok(payload) => failed(&format!("命令封装器更新失败：{error}"), payload),
+                Err((payload_error, payload)) => failed(
+                    &format!("命令封装器更新失败：{error}；设置读取失败：{payload_error}"),
+                    payload,
+                ),
+            };
+        }
     };
     settings_payload(&message, "后端修复失败")
 }
@@ -5968,17 +6009,44 @@ pub async fn check_update() -> CommandResult<Value> {
 }
 
 #[tauri::command]
-pub async fn perform_update(
-    release: Option<claude_codex_pro_core::update::Release>,
-) -> CommandResult<Value> {
-    let Some(release) = release else {
+pub async fn perform_update(expected_version: Option<String>) -> CommandResult<Value> {
+    let Some(expected_version) = expected_version.filter(|version| !version.trim().is_empty())
+    else {
         return failed(
-            "请先检查更新再安装；当前没有选中的发布资源。",
+            "请先检查更新再安装；当前没有选中的发布版本。",
             json!({
                 "currentVersion": claude_codex_pro_core::version::VERSION,
                 "progress": 0
             }),
         );
+    };
+    let release = match claude_codex_pro_core::update::fetch_latest_release(
+        claude_codex_pro_core::update::DEFAULT_LATEST_JSON_URL,
+    )
+    .await
+    {
+        Ok(release) if release.version == expected_version => release,
+        Ok(release) => {
+            return failed(
+                "发布索引已更新，请重新检查版本后再安装。",
+                json!({
+                    "currentVersion": claude_codex_pro_core::version::VERSION,
+                    "latestVersion": release.version,
+                    "releaseSummary": release.body,
+                    "progress": 0
+                }),
+            );
+        }
+        Err(error) => {
+            return failed(
+                &format!("重新读取发布索引失败：{error}"),
+                json!({
+                    "currentVersion": claude_codex_pro_core::version::VERSION,
+                    "latestVersion": expected_version,
+                    "progress": 0
+                }),
+            );
+        }
     };
     let download_dir = claude_codex_pro_core::paths::default_app_state_dir().join("updates");
     match claude_codex_pro_core::update::perform_update(&release, &download_dir).await {
@@ -10153,14 +10221,16 @@ enabled = true
             .unwrap();
         drop(active);
 
-        let result =
-            tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
+        let result = delete_local_session_blocking_with_backup_store(
+            DeleteLocalSessionRequest {
                 session_id: "t1".to_string(),
                 title: "Active Thread".to_string(),
                 db_path: Some(stale_db.to_string_lossy().to_string()),
-            }));
+            },
+            claude_codex_pro_data::BackupStore::new(temp.path().join("backups")),
+        );
 
-        assert_eq!(result.status, "ok");
+        assert_eq!(result.status, "ok", "{}", result.message);
         assert_eq!(
             result.payload.status,
             claude_codex_pro_core::models::DeleteStatus::LocalDeleted
@@ -10214,14 +10284,16 @@ enabled = true
         create_minimal_thread_db(&current_db, "t1", "Current Copy", 100);
         create_minimal_thread_db(&legacy_db, "t1", "Legacy Copy", 200);
 
-        let result =
-            tauri::async_runtime::block_on(delete_local_session(DeleteLocalSessionRequest {
+        let result = delete_local_session_blocking_with_backup_store(
+            DeleteLocalSessionRequest {
                 session_id: "t1".to_string(),
                 title: "Legacy Copy".to_string(),
                 db_path: Some(legacy_db.to_string_lossy().to_string()),
-            }));
+            },
+            claude_codex_pro_data::BackupStore::new(temp.path().join("backups")),
+        );
 
-        assert_eq!(result.status, "ok");
+        assert_eq!(result.status, "ok", "{}", result.message);
         assert_eq!(thread_count(&current_db, "t1"), 0);
         assert_eq!(thread_count(&legacy_db, "t1"), 0);
     }

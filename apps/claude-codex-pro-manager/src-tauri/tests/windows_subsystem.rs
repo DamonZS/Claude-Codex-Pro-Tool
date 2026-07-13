@@ -450,7 +450,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("gh release upload \"$TAG\" latest.json --clobber"));
     assert!(workflow.contains("gh release edit \"$TAG\" --repo \"$REPO\" --draft=false --latest"));
     assert!(workflow.contains("cleanup-failed-draft:"));
-    assert!(workflow.contains("if: ${{ failure() }}"));
+    assert!(workflow.contains("if: ${{ always() && (failure() || cancelled()) }}"));
     assert!(workflow.contains("--json databaseId,isDraft"));
     assert!(workflow.contains("data.isDraft ? \"true\" : \"false\""));
     assert!(workflow.contains("gh api --method DELETE \"repos/$REPO/releases/$release_id\""));
@@ -529,7 +529,13 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(commands_rs.contains("在浏览器打开 Claude"));
     assert!(commands_rs.contains("claude-codex-pro://open-external?url="));
     assert!(commands_rs.contains("url.host_str() == Some(\"open-external\")"));
-    assert!(commands_rs.contains("<iframe src=\"{escaped_url}\" title=\"Claude\"></iframe>"));
+    assert!(
+        commands_rs.contains(
+            "<iframe id=\"claude-frame\" src=\"{escaped_url}\" title=\"Claude\"></iframe>"
+        )
+    );
+    assert!(commands_rs.contains("pointer-events: none"));
+    assert!(commands_rs.contains("fallback.hidden = true"));
     assert!(commands_rs.contains("https://prompt.always200.com"));
     assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
     assert!(commands_rs.contains("claude-codex-pro-navigate"));
@@ -2026,6 +2032,42 @@ fn injected_status_bars_are_transparent_single_backend_lamp_and_safe_for_codex_t
     assert!(!claude_inject.contains("后端${state.backend}"));
     assert!(claude_inject.contains("if (/\\bCodex\\b/.test(trimmed)) return value;"));
     assert!(claude_inject.contains("if (/\\bCodex\\b/.test(next)) continue;"));
+    assert!(claude_inject.contains("existingRuntime?.ready"));
+    assert!(claude_inject.contains("const runtime = { ready: false, refresh: null };"));
+    assert!(claude_inject.contains("runtime.ready = true;"));
+    assert!(claude_inject.contains("right.length - left.length"));
+}
+
+#[test]
+fn audit_remediation_frontend_contracts_are_locked_down() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app = read_frontend_file("App.tsx");
+    let screens = read_frontend_file("screens.tsx");
+    let update = read_frontend_file("lib/update.ts");
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+
+    assert!(update.contains("expectedVersion: updateInfo.latestVersion"));
+    assert!(app.contains("{ expectedVersion: release.expectedVersion }"));
+    assert!(!app.contains("call<UpdateResult>(\"perform_update\", release ? { release }"));
+    assert!(commands.contains("pub async fn perform_update(expected_version: Option<String>)"));
+    assert!(commands.contains(
+        "fetch_latest_release(\n        claude_codex_pro_core::update::DEFAULT_LATEST_JSON_URL"
+    ));
+
+    assert!(app.contains("const settingsDraftRevisionRef = useRef(0);"));
+    assert!(app.contains("settingsDraftRevisionRef.current += 1;"));
+    assert!(app.contains("const draftRevision = beginSettingsDraftRequest();"));
+    assert!(app.contains("commitSettingsDraftRequest(draftRevision, result.settings);"));
+    assert!(app.contains("const requestId = ++memorySearchRequestRef.current;"));
+    assert!(app.contains("requestId === memorySearchRequestRef.current"));
+
+    assert!(screens.contains("readOnly value={visibleCodexAuthJson}"));
+    assert!(screens.contains("readOnly value={visibleCodexConfigToml}"));
+    assert!(screens.contains("value={visibleHeaderOverride}"));
+    assert!(screens.contains("value={visibleBodyOverride}"));
+    assert!(screens.contains("readOnly={!showSupplierApiKey}"));
+    assert!(screens.contains("const loadFailed = Boolean(data && statusFailed(data.status));"));
+    assert!(screens.contains("role=\"alert\""));
 }
 
 #[test]
@@ -2309,10 +2351,10 @@ fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
     assert!(core_zh_patch.contains("管理员授权后写入 Claude 汉化文件仍失败"));
     assert!(core_zh_patch.contains("授权诊断"));
     assert!(core_zh_patch.contains("icacls 当前用户"));
-    assert!(core_zh_patch.contains("icacls Users 组"));
     assert!(core_zh_patch.contains("icacls Administrators 组"));
     assert!(core_zh_patch.contains("*S-1-5-32-544:(OI)(CI)F"));
-    assert!(core_zh_patch.contains("user_grant.is_err() && users_grant.is_err()"));
+    assert!(!core_zh_patch.contains("*S-1-5-32-545:(OI)(CI)M"));
+    assert!(core_zh_patch.contains("user_grant.is_err() && admins_grant.is_err()"));
     assert!(core_zh_patch.contains("is_real_windows_apps_path(&paths.install_root)"));
     assert!(core_zh_patch.contains("takeown.exe"));
     assert!(core_zh_patch.contains("icacls.exe"));

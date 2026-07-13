@@ -89,6 +89,7 @@ pub fn run() {
             commands::list_claude_sessions,
             commands::load_claude_session_context,
             commands::load_memory_assist_status,
+            commands::migrate_memory_assist_data_dir,
             commands::load_memory_outcome_dashboard,
             commands::load_memory_new_project_guide,
             commands::query_memory_assist,

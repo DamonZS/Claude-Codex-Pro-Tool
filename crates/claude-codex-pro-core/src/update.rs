@@ -171,16 +171,11 @@ pub fn release_from_latest_json_payload(payload: &Value) -> anyhow::Result<Relea
 }
 
 pub fn select_update_asset(assets: &[(String, String)]) -> Option<ReleaseAsset> {
-    let named = assets
-        .iter()
-        .filter(|(name, url)| !name.trim().is_empty() && !url.trim().is_empty())
-        .collect::<Vec<_>>();
-    for (name, url) in &named {
-        let lower = name.to_ascii_lowercase();
-        if platform_asset_rank(&lower) == 0 {
+    for (name, url) in assets {
+        if validate_update_asset(name, url).is_ok() {
             return Some(ReleaseAsset {
-                name: (*name).clone(),
-                browser_download_url: (*url).clone(),
+                name: name.clone(),
+                browser_download_url: url.clone(),
             });
         }
     }
@@ -222,6 +217,11 @@ pub async fn perform_update(
         .asset_url
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
+    let name = release
+        .asset_name
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
+    validate_update_asset(name, url)?;
     let bytes =
         crate::http_client::proxied_client(&format!("ClaudeCodexPro/{}", crate::version::VERSION))?
             .get(url)
@@ -273,32 +273,64 @@ pub fn safe_asset_name(name: &str) -> anyhow::Result<String> {
     Ok(file_name.to_string())
 }
 
-fn platform_asset_rank(name: &str) -> u8 {
-    if cfg!(windows) && is_windows_installer_asset(name) {
-        return 0;
+pub fn validate_update_asset(name: &str, value: &str) -> anyhow::Result<()> {
+    if !is_expected_platform_installer(name) {
+        anyhow::bail!("Release asset 不匹配当前平台安装器：{name}");
     }
-    if cfg!(target_os = "macos") && is_macos_installer_asset(name) {
-        return 0;
+
+    let url = url::Url::parse(value)
+        .map_err(|error| anyhow::anyhow!("Release asset URL 非法：{error}"))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("github.com")
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!("Release asset URL 必须使用 github.com HTTPS 下载地址");
     }
-    2
+
+    let (owner, repository) = DEFAULT_REPOSITORY
+        .split_once('/')
+        .expect("DEFAULT_REPOSITORY must contain owner and repository");
+    let segments = url
+        .path_segments()
+        .ok_or_else(|| anyhow::anyhow!("Release asset URL 缺少路径"))?
+        .collect::<Vec<_>>();
+    let valid_path = segments.len() == 6
+        && segments[0] == owner
+        && segments[1] == repository
+        && segments[2] == "releases"
+        && segments[3] == "download"
+        && !segments[4].is_empty()
+        && segments[5] == name;
+    if !valid_path {
+        anyhow::bail!("Release asset URL 不属于固定仓库下载路径");
+    }
+    Ok(())
 }
 
-fn is_windows_installer_asset(name: &str) -> bool {
-    is_project_release_asset(name)
-        && (name.ends_with(".msi")
-            || name.ends_with("-setup.exe")
-            || name.ends_with("_setup.exe")
-            || name.ends_with("setup.exe")
-            || name.ends_with("installer.exe"))
+fn is_expected_platform_installer(name: &str) -> bool {
+    let Some(suffix) = expected_platform_installer_suffix() else {
+        return false;
+    };
+    name.strip_prefix("claude-codex-pro-")
+        .and_then(|value| value.strip_suffix(suffix))
+        .is_some_and(|version| !version.is_empty())
 }
 
-fn is_macos_installer_asset(name: &str) -> bool {
-    is_project_release_asset(name) && name.ends_with(".dmg")
-}
-
-fn is_project_release_asset(name: &str) -> bool {
-    (name == "claude-codex-pro.msi" || name.starts_with("claude-codex-pro-"))
-        && !name.starts_with("claude-codex-pro-plus")
+fn expected_platform_installer_suffix() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        return Some("-windows-x64-setup.exe");
+    }
+    if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        return Some("-macos-x64.dmg");
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Some("-macos-arm64.dmg");
+    }
+    None
 }
 
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {
