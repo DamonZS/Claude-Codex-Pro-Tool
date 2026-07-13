@@ -361,6 +361,71 @@ fn public_release_packages_do_not_include_user_supplier_or_memory_state() {
 }
 
 #[test]
+fn windows_installer_registers_anonymous_installation_without_blocking_install() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let windows_installer =
+        read_source_file(&repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"));
+    let launcher_main =
+        read_source_file(&repo_root.join("apps/claude-codex-pro-launcher/src/main.rs"));
+
+    let registration_command = concat!(
+        "nsExec::ExecToLog '\"$INSTDIR\\claude-codex-pro.exe\" ",
+        "--register-installation --app-version \"${VERSION}\"'"
+    );
+    assert!(windows_installer.contains(registration_command));
+    let registration_position = windows_installer
+        .find(registration_command)
+        .expect("installation registration command");
+    let uninstall_registration_position = windows_installer
+        .find("WriteRegStr HKCU \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall")
+        .expect("uninstall registration");
+    let ignored_exit_code_position = windows_installer[registration_position..]
+        .find("Pop $0")
+        .map(|offset| registration_position + offset)
+        .expect("registration exit code is discarded");
+    let install_section_end = windows_installer[registration_position..]
+        .find("SectionEnd")
+        .map(|offset| registration_position + offset)
+        .expect("install section end");
+    assert!(uninstall_registration_position < registration_position);
+    assert!(registration_position < ignored_exit_code_position);
+    assert!(ignored_exit_code_position < install_section_end);
+
+    assert!(launcher_main.contains("--register-installation"));
+    assert!(launcher_main.contains("--app-version"));
+    assert!(launcher_main.contains("install_registration::register_current_installation"));
+    let main_body = launcher_main
+        .split("async fn main() -> Result<()> {")
+        .nth(1)
+        .and_then(|rest| rest.split("fn installation_registration_version").next())
+        .expect("launcher main body");
+    let registration_branch = main_body
+        .find("installation_registration_version(&args)")
+        .expect("registration argument branch");
+    let normal_launcher = main_body
+        .find("run_launcher().await")
+        .expect("normal launcher call");
+    assert!(registration_branch < normal_launcher);
+    assert!(!main_body[..registration_branch].contains("acquire_single_instance_guard"));
+
+    for forbidden in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "Bearer ",
+        "Win32_BaseBoard",
+        "SerialNumber",
+        "raw_serial",
+    ] {
+        assert!(!windows_installer.contains(forbidden));
+    }
+}
+
+#[test]
 fn github_release_workflow_builds_separate_macos_x64_and_arm64_dmgs() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workflow = manifest_dir
@@ -2019,6 +2084,10 @@ fn injected_status_bars_are_transparent_single_backend_lamp_and_safe_for_codex_t
     assert!(!codex_inject.contains("data-codex-open-manager"));
     assert!(!codex_inject.contains("openManagerFromCodex();"));
     assert!(!codex_inject.contains("function openManagerFromCodex"));
+    assert!(!codex_inject.contains("chineseOverlayEnabled: \"claudeAppChineseOverlayEnabled\""));
+    assert!(codex_inject.contains("settings.chineseOverlayEnabled = false;"));
+    assert!(!codex_inject.contains("ensureClaudeChineseOverlayObserver();"));
+    assert!(!codex_inject.contains("runScanStep(refreshClaudeChineseOverlay);"));
 
     assert!(claude_inject.contains("#ccp-claude-status-pill"));
     assert!(claude_inject.contains("background: transparent;"));
@@ -2044,15 +2113,22 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
     let app = read_frontend_file("App.tsx");
     let screens = read_frontend_file("screens.tsx");
     let update = read_frontend_file("lib/update.ts");
+    let button = read_frontend_file("components/ui/button.tsx");
+    let styles = read_frontend_file("styles.css");
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
 
     assert!(update.contains("expectedVersion: updateInfo.latestVersion"));
     assert!(app.contains("{ expectedVersion: release.expectedVersion }"));
     assert!(!app.contains("call<UpdateResult>(\"perform_update\", release ? { release }"));
-    assert!(commands.contains("pub async fn perform_update(expected_version: Option<String>)"));
-    assert!(commands.contains(
-        "fetch_latest_release(\n        claude_codex_pro_core::update::DEFAULT_LATEST_JSON_URL"
-    ));
+    assert!(commands.contains("pub async fn perform_update(\n    app: tauri::AppHandle,"));
+    assert!(commands.contains("claude_codex_pro_core::update::fetch_current_release().await"));
+    assert!(commands.contains("app.emit(\"update-download-progress\", progress)"));
+    assert!(app.contains("listen<UpdateDownloadProgress>(\"update-download-progress\""));
+    assert!(screens.contains("className=\"update-download-progress-track\""));
+    assert!(screens.contains("disabled={updateRunning || !release || !updateInfo?.assetUrl}"));
+    assert!(screens.contains("已获取最新 Release 版本与安装资源。"));
+    assert!(button.contains("active:scale-[0.98]"));
+    assert!(styles.contains("@keyframes update-download-indeterminate"));
 
     assert!(app.contains("const settingsDraftRevisionRef = useRef(0);"));
     assert!(app.contains("settingsDraftRevisionRef.current += 1;"));
@@ -2792,6 +2868,8 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
     assert!(restart.contains("wait_for_codex_pids_to_exit(&old_codex_pids"));
     assert!(restart.contains("force_kill_process_tree_for_frontend_repair(&old_codex_pids)"));
     assert!(restart.contains("旧 Codex 进程仍未退出"));
+    assert!(restart.contains("select_repair_debug_port(default_debug_port()).await"));
+    assert!(restart.contains("debug_port: selected_debug_port"));
     assert!(
         restart
             .contains("wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await")
@@ -2808,11 +2886,13 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
                 .next()
         })
         .expect("wait_for_codex_launch_ports source");
-    assert!(wait_ports.contains("status.debug_port_online && status.helper_port_online"));
-    assert!(wait_ports.contains("if status.debug_port_online"));
+    assert!(wait_ports.contains("repair_launch_status("));
     assert!(wait_ports.contains("helper 后端仍需恢复"));
     assert!(wait_ports.contains("codex_debug_port_online(request.debug_port)"));
     assert!(wait_ports.contains("helper_backend_online(request.helper_port)"));
+    assert!(wait_ports.contains("status.debug_port == Some(request.debug_port)"));
+    assert!(wait_ports.contains("&& status.debug_port_online"));
+    assert!(wait_ports.contains("if !requested_debug_port_online"));
 
     let wait = commands_rs
         .split("async fn wait_for_renderer_frontend_after")
@@ -2820,6 +2900,30 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         .expect("wait_for_renderer_frontend_after source");
     assert!(wait.contains("heartbeat.timestamp_ms >= min_timestamp_ms"));
     assert!(wait.contains("renderer_frontend_heartbeat_confirms_injection(&heartbeat)"));
+}
+
+#[test]
+fn manager_status_rejects_renderer_heartbeat_from_previous_codex_launch() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = manifest_dir.join("src/commands.rs");
+    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+
+    assert!(commands_rs.contains("fn renderer_heartbeat_is_current("));
+    assert!(commands_rs.contains("timestamp_ms >= launch_started_at_ms"));
+
+    let memory_status = commands_rs
+        .split("fn enrich_memory_status")
+        .nth(1)
+        .and_then(|rest| rest.split("fn normalize_memory_runtime_status").next())
+        .expect("enrich_memory_status source");
+    assert!(memory_status.contains("renderer_heartbeat_is_current("));
+
+    let launch_status = commands_rs
+        .split("fn refresh_launch_port_status")
+        .nth(1)
+        .and_then(|rest| rest.split("fn codex_debug_port_online").next())
+        .expect("refresh_launch_port_status source");
+    assert!(launch_status.contains("renderer_heartbeat_is_current("));
 }
 
 #[test]
@@ -2925,12 +3029,12 @@ fn about_screen_exposes_contact_entrypoints() {
     assert!(screens.contains("contactWechatQr"));
     assert!(screens.contains("CONTACT_QQ_GROUP_PRIMARY_URL"));
     assert!(screens.contains("CONTACT_QQ_GROUP_SECONDARY_URL"));
-    assert!(screens.contains("联系我"));
+    assert!(screens.contains("合作请联系微信"));
     assert!(screens.contains("官方QQ群："));
     assert!(screens.contains("10061615"));
     assert!(screens.contains("1076215359"));
     assert!(screens.contains("一键添加"));
-    assert!(screens.contains("合作代理请联系微信"));
+    assert!(!screens.contains("合作代理请联系微信"));
     assert!(screens.contains("扫码添加微信，备注合作代理。"));
     assert!(screens.contains("actions.openExternalUrl(CONTACT_QQ_GROUP_PRIMARY_URL)"));
     assert!(screens.contains("actions.openExternalUrl(CONTACT_QQ_GROUP_SECONDARY_URL)"));

@@ -17,6 +17,7 @@ pub mod diagnostic_log;
 pub mod helper_auth;
 pub mod http_client;
 pub mod install;
+pub mod install_registration;
 pub mod launcher;
 pub mod memory_assist;
 pub mod model_catalog;

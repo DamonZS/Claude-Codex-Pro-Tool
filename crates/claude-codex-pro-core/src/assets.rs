@@ -28,6 +28,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     let image_overlay = image_overlay_config(helper_port, settings);
     let support_payment_qr = image_data_uri("image/png", SUPPORT_PAYMENT_QR);
     let contact_wechat_qr = image_data_uri("image/jpeg", CONTACT_WECHAT_QR);
+    let announcement = crate::ads::bundled_ad_config();
     let plugin_marketplaces = crate::codex_plugin_marketplace::local_plugin_marketplaces();
     // The helper token is embedded here so the injected renderer (and only it)
     // can authenticate to the local helper. It sits in the bootstrap prologue,
@@ -35,7 +36,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     // this script cannot read the token off `window`.
     let helper_token = crate::helper_auth::helper_token();
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.{} = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
+        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.{} = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
         crate::helper_auth::HELPER_TOKEN_GLOBAL,
         serde_json::to_string(helper_token).expect("helper token should serialize"),
@@ -44,6 +45,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
         serde_json::to_string(&image_overlay).expect("image overlay config should serialize"),
         serde_json::to_string(&support_payment_qr).expect("support payment QR should serialize"),
         serde_json::to_string(&contact_wechat_qr).expect("contact WeChat QR should serialize"),
+        serde_json::to_string(&announcement).expect("announcement config should serialize"),
         serde_json::to_string(&plugin_marketplaces)
             .expect("plugin marketplace config should serialize"),
         renderer_script(),

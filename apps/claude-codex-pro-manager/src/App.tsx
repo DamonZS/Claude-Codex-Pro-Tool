@@ -35,6 +35,7 @@ import {
 import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
 import {
@@ -129,6 +130,7 @@ import {
   claudeDesktopVersionLabel,
   displayAssetName,
   updateInfoToRelease,
+  updateProgressLabel,
   updateStatusLabel,
 } from "@/lib/update";
 import {
@@ -236,6 +238,7 @@ import type {
   SupplierSaveResult,
   SupplierTargetApp,
   UpdateReleasePayload,
+  UpdateDownloadProgress,
   UpdateResult,
   UnifiedToolInventoryResult,
   UserScriptInventory,
@@ -374,6 +377,40 @@ export function App() {
     const timeout = window.setTimeout(() => setNotice(null), 5200);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void listen<UpdateDownloadProgress>("update-download-progress", (event) => {
+      if (disposed) return;
+      const progress = event.payload;
+      const failed = progress.phase === "failed";
+      setUpdateInfo((current) => ({
+        ...(current ?? {}),
+        status: failed ? "failed" : "running",
+        message: updateProgressLabel(progress.phase, progress.percent ?? undefined),
+        currentVersion: current?.currentVersion ?? "",
+        phase: progress.phase,
+        downloadedBytes: progress.downloadedBytes,
+        totalBytes: progress.totalBytes ?? null,
+        progress: progress.percent ?? current?.progress ?? 0,
+      }));
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stopListening = unlisten;
+      })
+      .catch(() => {
+        // Browser-only preview mode has no Tauri event runtime.
+      });
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, []);
 
   const refreshOverview = async (silent = false) => {
     const result = await run(() => call<OverviewResult>("load_overview"), "概览", { trackBusy: !silent, notify: !silent });
@@ -875,15 +912,43 @@ export function App() {
   };
 
   const checkUpdate = async (silent = false) => {
+    setUpdateInfo((current) => ({
+      ...(current ?? {}),
+      status: "running",
+      message: "正在检查 GitHub Release。",
+      currentVersion: current?.currentVersion ?? overview?.current_version ?? "",
+      phase: "checking",
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+    }));
     const result = await run(() => call<UpdateResult>("check_update"), "检查更新", { trackBusy: !silent, notify: !silent });
     if (result) {
       setUpdateInfo(result);
       if (!silent) notifyIfNeedsAttention({ title: "检查更新", message: result.message, status: result.status });
+    } else {
+      setUpdateInfo((current) => ({
+        ...(current ?? {}),
+        status: "failed",
+        message: "检查更新调用失败。",
+        currentVersion: current?.currentVersion ?? overview?.current_version ?? "",
+        phase: "failed",
+      }));
     }
     return result;
   };
 
   const performUpdate = async (release?: UpdateReleasePayload | null) => {
+    setUpdateInfo((current) => ({
+      ...(current ?? {}),
+      status: "running",
+      message: "正在连接更新下载源。",
+      currentVersion: current?.currentVersion ?? overview?.current_version ?? "",
+      phase: "connecting",
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+    }));
     const result = await run(
       () => call<UpdateResult>("perform_update", release ? { expectedVersion: release.expectedVersion } : undefined),
       "下载并运行安装包",
@@ -891,6 +956,14 @@ export function App() {
     if (result) {
       setUpdateInfo(result);
       notifyResult({ title: "下载并运行安装包", message: result.message, status: result.status });
+    } else {
+      setUpdateInfo((current) => ({
+        ...(current ?? {}),
+        status: "failed",
+        message: "下载更新调用失败。",
+        currentVersion: current?.currentVersion ?? overview?.current_version ?? "",
+        phase: "failed",
+      }));
     }
     return result;
   };

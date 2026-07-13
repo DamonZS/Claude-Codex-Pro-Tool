@@ -3,8 +3,8 @@ use std::net::TcpListener;
 use std::thread;
 
 use claude_codex_pro_core::ads::{
-    DEFAULT_AD_LIST_URLS, OFFICIAL_TOPOREDUCE_AD_ID, cache_busted_ad_url, fetch_ad_list_from_urls,
-    normalize_ad_payload,
+    BUNDLED_AD_LIST_JSON, DEFAULT_AD_LIST_URLS, OFFICIAL_TOPOREDUCE_AD_ID, bundled_ad_config,
+    bundled_ad_payload, cache_busted_ad_url, fetch_ad_list_from_urls, normalize_ad_payload,
 };
 use serde_json::json;
 
@@ -39,6 +39,7 @@ fn cache_busted_ad_url_preserves_existing_query() {
 fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
     let payload = normalize_ad_payload(json!({
         "version": 1,
+        "enabled": true,
         "ads": [
             {
                 "id": "partner",
@@ -66,19 +67,17 @@ fn normalizes_remote_ads_for_plugin_and_manager_rendering() {
     }));
 
     assert_eq!(payload["version"], json!(1));
-    assert_eq!(payload["ads"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["enabled"], json!(true));
+    assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
     assert_eq!(payload["ads"][0]["type"], json!("normal"));
-    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
-    assert_eq!(payload["ads"][0]["title"], json!("CCP官方中转站"));
-    assert_eq!(payload["ads"][0]["buttonLabel"], json!("拓扑API"));
-    assert_eq!(payload["ads"][0]["url"], json!("https://api.toporeduce.cn"));
-    assert_eq!(payload["ads"][1]["id"], json!("normal"));
+    assert_eq!(payload["ads"][0]["id"], json!("normal"));
 }
 
 #[test]
 fn remote_official_announcement_overrides_bundled_fallback_without_duplication() {
     let payload = normalize_ad_payload(json!({
         "version": 2,
+        "enabled": true,
         "ads": [
             {
                 "id": OFFICIAL_TOPOREDUCE_AD_ID,
@@ -115,6 +114,7 @@ fn repository_announcement_config_is_valid_and_remotely_editable() {
         serde_json::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
     let announcement = &configured["ads"][0];
 
+    assert_eq!(configured["enabled"], json!(false));
     assert_eq!(announcement["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
     assert_eq!(announcement["type"], json!("normal"));
     for field in ["badge", "title", "description", "buttonLabel", "url"] {
@@ -151,6 +151,7 @@ async fn fetch_ad_list_tries_backup_url_when_primary_fails() {
                 assert!(request.starts_with("GET /backup.json?"), "{request}");
                 let body = json!({
                     "version": 1,
+                    "enabled": true,
                     "ads": [{
                         "id": "backup-ad",
                         "type": "normal",
@@ -179,12 +180,12 @@ async fn fetch_ad_list_tries_backup_url_when_primary_fails() {
     .unwrap();
     thread.join().unwrap();
 
-    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
-    assert_eq!(payload["ads"][1]["id"], json!("backup-ad"));
+    assert_eq!(payload["enabled"], json!(true));
+    assert_eq!(payload["ads"][0]["id"], json!("backup-ad"));
 }
 
 #[tokio::test]
-async fn fetch_ad_list_falls_back_to_official_recommendation_when_all_urls_fail() {
+async fn fetch_ad_list_falls_back_to_disabled_bundled_announcement_when_all_urls_fail() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let thread = thread::spawn(move || {
@@ -203,6 +204,42 @@ async fn fetch_ad_list_falls_back_to_official_recommendation_when_all_urls_fail(
         .unwrap();
     thread.join().unwrap();
 
-    assert_eq!(payload["ads"].as_array().unwrap().len(), 1);
-    assert_eq!(payload["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+    assert_eq!(payload["enabled"], json!(false));
+    assert!(payload["ads"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn disabled_or_legacy_payload_does_not_show_bundled_announcement() {
+    for payload in [
+        json!({ "version": 2, "enabled": false, "ads": [{
+            "id": OFFICIAL_TOPOREDUCE_AD_ID,
+            "type": "normal",
+            "title": "不应显示",
+            "description": "远程已关闭",
+            "url": "https://api.toporeduce.cn"
+        }] }),
+        json!({ "version": 1, "ads": [{
+            "id": "legacy",
+            "type": "normal",
+            "title": "旧配置",
+            "description": "缺少开关",
+            "url": "https://example.test"
+        }] }),
+    ] {
+        let normalized = normalize_ad_payload(payload);
+        assert_eq!(normalized["enabled"], json!(false));
+        assert!(normalized["ads"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn bundled_announcement_is_the_repository_config_and_defaults_to_hidden() {
+    let raw: serde_json::Value = serde_json::from_str(BUNDLED_AD_LIST_JSON).unwrap();
+    assert_eq!(bundled_ad_config(), raw);
+    assert_eq!(raw["enabled"], json!(false));
+    assert_eq!(raw["ads"][0]["id"], json!(OFFICIAL_TOPOREDUCE_AD_ID));
+
+    let normalized = bundled_ad_payload();
+    assert_eq!(normalized["enabled"], json!(false));
+    assert!(normalized["ads"].as_array().unwrap().is_empty());
 }

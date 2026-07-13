@@ -1,6 +1,7 @@
 use claude_codex_pro_core::update::{
-    Release, download_asset_to, is_newer_version, parse_version_tag, release_from_github_payload,
-    release_from_latest_json_payload, safe_asset_name, select_update_asset, validate_update_asset,
+    Release, UpdateDownloadProgress, download_asset_to, is_newer_version, parse_version_tag,
+    release_from_github_payload, release_from_latest_json_payload,
+    release_from_latest_redirect_url, safe_asset_name, select_update_asset, validate_update_asset,
 };
 use serde_json::json;
 
@@ -26,6 +27,7 @@ fn v0_auto_release_tags_are_newer_than_legacy_semver_releases() {
     assert!(is_newer_version("V1.00", "V0.99").unwrap());
     assert!(!is_newer_version("V0.01", "V0.02").unwrap());
     assert!(!is_newer_version("v1.2.9", "V0.01").unwrap());
+    assert!(is_newer_version("V0.39", "dev-0.12.0").unwrap());
 }
 
 #[test]
@@ -103,6 +105,67 @@ fn latest_json_payload_selects_platform_installer_without_github_api_shape() {
 }
 
 #[test]
+fn latest_release_redirect_builds_trusted_platform_installer_without_api_payload() {
+    let release = release_from_latest_redirect_url(
+        "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/tag/V0.39",
+    )
+    .unwrap();
+
+    assert_eq!(release.version, "V0.39");
+    assert_eq!(
+        release.url,
+        "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/tag/V0.39"
+    );
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        assert_eq!(
+            release.asset_name.as_deref(),
+            Some("claude-codex-pro-0.39-windows-x64-setup.exe")
+        );
+        assert_eq!(
+            release.asset_url.as_deref(),
+            Some(
+                "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/download/V0.39/claude-codex-pro-0.39-windows-x64-setup.exe"
+            )
+        );
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        assert_eq!(
+            release.asset_name.as_deref(),
+            Some("claude-codex-pro-0.39-macos-x64.dmg")
+        );
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        assert_eq!(
+            release.asset_name.as_deref(),
+            Some("claude-codex-pro-0.39-macos-arm64.dmg")
+        );
+    } else {
+        assert_eq!(release.asset_name, None);
+        assert_eq!(release.asset_url, None);
+    }
+}
+
+#[test]
+fn latest_release_redirect_rejects_untrusted_or_malformed_tags() {
+    assert!(
+        release_from_latest_redirect_url(
+            "https://github.com/attacker/Claude-Codex-Pro-Tool/releases/tag/V0.39"
+        )
+        .is_err()
+    );
+    assert!(
+        release_from_latest_redirect_url(
+            "https://example.test/DamonZS/Claude-Codex-Pro-Tool/releases/tag/V0.39"
+        )
+        .is_err()
+    );
+    assert!(
+        release_from_latest_redirect_url(
+            "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/tag/not-a-version"
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn asset_selection_prefers_current_platform_artifacts() {
     let assets = vec![
         (
@@ -174,6 +237,50 @@ fn download_asset_to_writes_bytes() {
 
     assert_eq!(path, dir.path().join("pkg.zip"));
     assert_eq!(std::fs::read(path).unwrap(), b"abcdef");
+}
+
+#[test]
+fn download_progress_calculates_bounded_percent_and_camel_case_payload() {
+    let progress = UpdateDownloadProgress::new("downloading", 25, Some(100));
+    let payload = serde_json::to_value(&progress).unwrap();
+
+    assert_eq!(progress.percent, Some(25));
+    assert_eq!(payload["downloadedBytes"], 25);
+    assert_eq!(payload["totalBytes"], 100);
+    assert_eq!(payload["percent"], 25);
+    assert_eq!(
+        UpdateDownloadProgress::new("downloading", 150, Some(100)).percent,
+        Some(100)
+    );
+    assert_eq!(
+        UpdateDownloadProgress::new("connecting", 0, None).percent,
+        None
+    );
+}
+
+#[test]
+fn updater_uses_fast_release_fallback_and_partial_streaming_contract() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("core crate should live under crates/claude-codex-pro-core");
+    let source =
+        std::fs::read_to_string(repo.join("crates/claude-codex-pro-core/src/update.rs")).unwrap();
+
+    assert!(source.contains("DEFAULT_GITHUB_API_URL"));
+    assert!(source.contains("DEFAULT_LATEST_RELEASE_URL"));
+    assert!(source.contains("fetch_latest_redirect_release"));
+    assert!(source.contains("fetch_latest_redirect_release_direct"));
+    assert!(source.contains("retry_latest_redirect_release"));
+    assert!(source.contains("UPDATE_RELEASE_CACHE_TTL"));
+    assert!(source.contains("fetch_update_download_response"));
+    assert!(source.contains(".no_proxy()"));
+    assert!(source.contains("pub async fn fetch_current_release()"));
+    assert!(source.contains("tokio::select!"));
+    assert!(source.contains("response.bytes_stream()"));
+    assert!(source.contains("format!(\"{safe_name}.part\")"));
+    assert!(source.contains("MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH"));
+    assert!(!source.contains(".bytes()\n            .await?"));
 }
 
 #[test]

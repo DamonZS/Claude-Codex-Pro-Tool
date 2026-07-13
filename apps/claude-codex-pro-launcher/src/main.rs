@@ -39,6 +39,14 @@ impl Default for LauncherHooks {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(app_version) = installation_registration_version(&args)? {
+        return claude_codex_pro_core::install_registration::register_current_installation(
+            &app_version,
+        )
+        .await;
+    }
+
     if let Err(error) = run_launcher().await {
         let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
             "launcher.fatal",
@@ -49,6 +57,20 @@ async fn main() -> Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+fn installation_registration_version(args: &[String]) -> Result<Option<String>> {
+    if !args.iter().any(|arg| arg == "--register-installation") {
+        return Ok(None);
+    }
+
+    let app_version = args
+        .windows(2)
+        .find(|pair| pair[0] == "--app-version")
+        .map(|pair| pair[1].trim())
+        .filter(|value| !value.is_empty())
+        .context("--app-version is required for installation registration")?;
+    Ok(Some(app_version.to_string()))
 }
 
 async fn run_launcher() -> Result<()> {

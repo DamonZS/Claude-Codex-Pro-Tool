@@ -28,8 +28,12 @@ pub fn build_bridge_script(binding_name: &str) -> String {
     format!(
         r#"
 (() => {{
-  window.__codexSessionDeleteCallbacks = new Map();
-  window.__codexSessionDeleteSeq = 0;
+  window.__codexSessionDeleteCallbacks = window.__codexSessionDeleteCallbacks instanceof Map
+    ? window.__codexSessionDeleteCallbacks
+    : new Map();
+  window.__codexSessionDeleteSeq = Number.isSafeInteger(window.__codexSessionDeleteSeq)
+    ? window.__codexSessionDeleteSeq
+    : 0;
   window.__codexSessionDeleteResolve = (id, result) => {{
     const callback = window.__codexSessionDeleteCallbacks.get(id);
     if (!callback) return;
@@ -158,17 +162,8 @@ pub async fn install_bridge(
             .await?;
     }
 
-    session.drain_binding_queue().await?;
     tokio::spawn(async move {
-        loop {
-            if session.drain_binding_queue().await.is_err() {
-                break;
-            }
-            match session.next_message().await {
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => break,
-            }
-        }
+        let _ = session.run_bridge_message_pump().await;
     });
 
     Ok(())
@@ -225,6 +220,11 @@ struct CdpSession<S> {
     responses: HashMap<u64, Value>,
     binding_calls: VecDeque<Value>,
     handler: Option<BridgeHandler>,
+}
+
+struct BridgeCompletion {
+    request_id: String,
+    result: Result<Value, String>,
 }
 
 impl<S> CdpSession<S>
@@ -338,54 +338,45 @@ where
         Ok(Some(value))
     }
 
-    async fn drain_binding_queue(&mut self) -> anyhow::Result<()> {
+    fn drain_binding_queue(
+        &mut self,
+        completion_tx: &tokio::sync::mpsc::UnboundedSender<BridgeCompletion>,
+    ) {
         while let Some(message) = self.binding_calls.pop_front() {
-            self.route_binding_call(message).await?;
+            self.dispatch_binding_call(message, completion_tx);
         }
-        Ok(())
     }
 
-    fn route_binding_call(
-        &mut self,
+    fn dispatch_binding_call(
+        &self,
         message: Value,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            let Some(handler) = self.handler.clone() else {
-                return Ok(());
-            };
+        completion_tx: &tokio::sync::mpsc::UnboundedSender<BridgeCompletion>,
+    ) {
+        let Some(handler) = self.handler.clone() else {
+            return;
+        };
+        let Some(payload_text) = message
+            .get("params")
+            .and_then(|params| params.get("payload"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
 
-            let Some(payload_text) = message
-                .get("params")
-                .and_then(|params| params.get("payload"))
-                .and_then(Value::as_str)
-            else {
-                return Ok(());
-            };
-
-            let parsed: Value = match serde_json::from_str(payload_text) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    if let Some(request_id) = extract_string_field(payload_text, "id") {
-                        self.reject_bridge_request(
-                            &request_id,
-                            &format!("failed to parse bridge payload: {error}"),
-                        )
-                        .await?;
-                    }
-                    return Ok(());
+        let parsed: Value = match serde_json::from_str(payload_text) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if let Some(request_id) = extract_string_field(payload_text, "id") {
+                    let _ = completion_tx.send(BridgeCompletion {
+                        request_id,
+                        result: Err(format!("failed to parse bridge payload: {error}")),
+                    });
                 }
-            };
-            self.route_parsed_binding_call(&handler, parsed).await
-        })
-    }
-
-    async fn route_parsed_binding_call(
-        &mut self,
-        handler: &BridgeHandler,
-        parsed: Value,
-    ) -> anyhow::Result<()> {
-        let Some(request_id) = parsed.get("id").and_then(Value::as_str) else {
-            return Ok(());
+                return;
+            }
+        };
+        let Some(request_id) = parsed.get("id").and_then(Value::as_str).map(str::to_string) else {
+            return;
         };
         let path = parsed
             .get("path")
@@ -393,17 +384,49 @@ where
             .unwrap_or_default()
             .to_string();
         let payload = parsed.get("payload").cloned().unwrap_or_else(|| json!({}));
+        let completion_tx = completion_tx.clone();
+        tokio::spawn(async move {
+            let result = handler(path, payload)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = completion_tx.send(BridgeCompletion { request_id, result });
+        });
+    }
 
-        match handler(path, payload).await {
+    async fn complete_bridge_call(&mut self, completion: BridgeCompletion) -> anyhow::Result<()> {
+        match completion.result {
             Ok(result) => {
-                self.resolve_bridge_request(request_id, &result).await?;
+                self.resolve_bridge_request(&completion.request_id, &result)
+                    .await?;
             }
-            Err(error) => {
-                self.reject_bridge_request(request_id, &error.to_string())
+            Err(message) => {
+                self.reject_bridge_request(&completion.request_id, &message)
                     .await?;
             }
         }
+        Ok(())
+    }
 
+    async fn run_bridge_message_pump(&mut self) -> anyhow::Result<()> {
+        let (completion_tx, mut completion_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.drain_binding_queue(&completion_tx);
+
+        loop {
+            tokio::select! {
+                completion = completion_rx.recv() => {
+                    let Some(completion) = completion else {
+                        break;
+                    };
+                    self.complete_bridge_call(completion).await?;
+                }
+                message = self.next_message() => {
+                    match message? {
+                        Some(_) => self.drain_binding_queue(&completion_tx),
+                        None => break,
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

@@ -116,7 +116,9 @@ import {
 import {
   claudeDesktopVersionLabel,
   displayAssetName,
+  formatDownloadBytes,
   updateInfoToRelease,
+  updateProgressLabel,
   updateStatusLabel,
 } from "@/lib/update";
 import type {
@@ -3912,6 +3914,10 @@ export const AboutScreen = memo(function AboutScreen({
   updateInfo: UpdateResult | null;
 }) {
   const release = updateInfoToRelease(updateInfo);
+  const updateRunning = updateInfo?.status === "running";
+  const progress = Math.max(0, Math.min(100, updateInfo?.progress ?? 0));
+  const showDownloadProgress = Boolean(updateInfo?.phase && updateInfo.phase !== "checking");
+  const progressLabel = updateProgressLabel(updateInfo?.phase, updateInfo?.progress);
   return (
     <div className="ops-two-column">
       <div className="ops-wide-column">
@@ -3934,7 +3940,7 @@ export const AboutScreen = memo(function AboutScreen({
             </Button>
           </div>
         </Panel>
-        <Panel title="联系我" detail="官方 QQ 群一键添加与合作代理微信。">
+        <Panel title="合作请联系微信" detail="扫码联系微信洽谈合作，也可一键加入官方 QQ 群。">
           <div className="contact-card">
             <div className="contact-line">
               <span className="contact-label">官方QQ群：</span>
@@ -3945,7 +3951,7 @@ export const AboutScreen = memo(function AboutScreen({
             </div>
             <div className="contact-wechat">
               <div>
-                <strong>合作代理请联系微信</strong>
+                <strong>合作请联系微信</strong>
                 <p>扫码添加微信，备注合作代理。</p>
               </div>
               <img className="contact-qr" src={contactWechatQr} alt="合作代理微信二维码" />
@@ -3961,15 +3967,43 @@ export const AboutScreen = memo(function AboutScreen({
             <StatusRow label="最新版本" status={updateInfo?.latestVersion ? "ok" : "not_checked"} value={updateInfo?.latestVersion ?? "未检查"} />
             <StatusRow label="安装资源" status={updateInfo?.assetUrl ? "ok" : "not_checked"} value={displayAssetName(updateInfo?.assetName)} />
           </div>
-          {updateInfo?.releaseSummary ? <pre className="ops-code compact">{updateInfo.releaseSummary}</pre> : <Empty text="暂未检查到 Release 信息。" />}
+          {updateInfo?.releaseSummary ? (
+            <pre className="ops-code compact">{updateInfo.releaseSummary}</pre>
+          ) : (
+            <Empty text={updateInfo?.latestVersion ? "已获取最新 Release 版本与安装资源。" : "暂未检查到 Release 信息。"} />
+          )}
+          {showDownloadProgress ? (
+            <div className="update-download-progress" aria-live="polite">
+              <div className="update-download-progress-head">
+                <strong>{progressLabel}</strong>
+                <span>
+                  {formatDownloadBytes(updateInfo?.downloadedBytes)}
+                  {updateInfo?.totalBytes ? ` / ${formatDownloadBytes(updateInfo.totalBytes)}` : ""}
+                </span>
+              </div>
+              <div
+                aria-label="安装包下载进度"
+                aria-valuemax={100}
+                aria-valuemin={0}
+                aria-valuenow={updateInfo?.totalBytes ? progress : undefined}
+                className="update-download-progress-track"
+                role="progressbar"
+              >
+                <span
+                  className={updateInfo?.totalBytes ? "update-download-progress-fill" : "update-download-progress-fill indeterminate"}
+                  style={updateInfo?.totalBytes ? { width: `${progress}%` } : undefined}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="action-row">
-            <Button onClick={() => void actions.checkUpdate()}>
-              <RefreshCw className="h-4 w-4" />
-              检查更新
+            <Button disabled={updateRunning} onClick={() => void actions.checkUpdate()}>
+              <RefreshCw className={`h-4 w-4${updateInfo?.phase === "checking" ? " animate-spin" : ""}`} />
+              {updateInfo?.phase === "checking" ? "检查中" : "检查更新"}
             </Button>
-            <Button disabled={!release || !updateInfo?.assetUrl} onClick={() => void actions.performUpdate(release)} variant="outline">
-              <Download className="h-4 w-4" />
-              下载并运行安装包
+            <Button disabled={updateRunning || !release || !updateInfo?.assetUrl} onClick={() => void actions.performUpdate(release)} variant="outline">
+              <Download className={`h-4 w-4${updateRunning && updateInfo?.phase !== "checking" ? " animate-pulse" : ""}`} />
+              {updateRunning && updateInfo?.phase !== "checking" ? progressLabel : "下载并运行安装包"}
             </Button>
           </div>
         </Panel>

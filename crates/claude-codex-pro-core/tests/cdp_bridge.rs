@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -38,6 +38,10 @@ fn bridge_script_defines_expected_globals_and_binding() {
     assert!(script.contains("window.__codexSessionDeleteResolve"));
     assert!(script.contains("window.__codexSessionDeleteReject"));
     assert!(script.contains("codexSessionDeleteV2"));
+    assert!(script.contains("window.__codexSessionDeleteCallbacks instanceof Map"));
+    assert!(script.contains("Number.isSafeInteger(window.__codexSessionDeleteSeq)"));
+    assert!(!script.contains("window.__codexSessionDeleteCallbacks = new Map();"));
+    assert!(!script.contains("window.__codexSessionDeleteSeq = 0;"));
 }
 
 #[test]
@@ -68,21 +72,31 @@ fn injection_script_excludes_ccp_dialog_from_codex_model_menu_candidates() {
             "if (surface.getAttribute?.(\"role\") === \"dialog\") return hasSpecificModel;"
         )
     );
-    assert!(script.contains("if (codexModelMenuCandidates().length) {"));
+    assert!(script.contains("function cleanupCodexInjectedModelGroups(validSurfaces)"));
+    assert!(script.contains(
+        "codexModelMenuCandidates().length || document.querySelector?.(\"[data-claude-codex-pro-model-group]\")"
+    ));
 }
 
 #[test]
-fn injection_script_protects_codex_brand_from_chinese_overlay_translation() {
+fn injection_script_never_translates_codex_page_content() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("const claudeChineseOverlayProtectedBrands = ["));
-    assert!(script.contains("[\"Claude Code\", \"__CCP_BRAND_CLAUDE_CODE__\"]"));
-    assert!(script.contains("[\"Codex\", \"__CCP_BRAND_CODEX__\"]"));
-    assert!(script.contains("[\"Claude\", \"__CCP_BRAND_CLAUDE__\"]"));
-    assert!(script.contains("function protectClaudeChineseOverlayBrands(value)"));
-    assert!(script.contains("function restoreClaudeChineseOverlayBrands(value, tokens)"));
-    assert!(script.contains("if (direct.has(original)) return direct.get(original);"));
-    assert!(!script.contains("[\"Code\", \"代码\"]"));
+    assert!(!script.contains("chineseOverlayEnabled: \"claudeAppChineseOverlayEnabled\""));
+    assert!(script.contains("settings.chineseOverlayEnabled = false;"));
+    let translator = script
+        .split("function translateClaudeChineseText(value) {")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("function protectClaudeChineseOverlayBrands")
+                .next()
+        })
+        .expect("Codex translation guard function");
+    assert!(translator.contains("return String(value || \"\");"));
+    assert!(!translator.contains("replaceAll"));
+    assert!(!translator.contains("new Map"));
+    assert!(!script.contains("ensureClaudeChineseOverlayObserver();"));
+    assert!(!script.contains("runScanStep(refreshClaudeChineseOverlay);"));
 }
 
 #[test]
@@ -210,12 +224,15 @@ fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
     assert!(script.contains("data-claude-codex-pro-tab=\"home\""));
     assert!(script.contains("data-claude-codex-pro-tab=\"recommendations\""));
     assert!(script.contains("data-claude-codex-pro-tab=\"support\""));
-    assert!(script.contains("联系我"));
+    assert!(script.contains("合作请联系微信"));
     assert!(script.contains("官方QQ群："));
     assert!(script.contains("10061615"));
     assert!(script.contains("1076215359"));
     assert!(script.contains("一键添加"));
-    assert!(script.contains("合作代理请联系微信"));
+    assert!(script.contains("claude-codex-pro-contact-group-number"));
+    assert!(script.contains(
+        ".claude-codex-pro-control-deck .claude-codex-pro-contact-group-number { color: #e8fff8;"
+    ));
     assert!(script.contains("data:image/jpeg;base64,"));
     assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg"));
     assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68"));
@@ -323,7 +340,12 @@ fn injection_script_fetches_ads_without_bridge() {
     assert!(script.contains("directFetchClaudeCodexProAds"));
     assert!(script.contains("cacheBustClaudeCodexProAdUrl"));
     assert!(script.contains("Date.now()"));
-    assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool-Ad-List"));
+    assert!(script.contains("window.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__"));
+    assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool/main/assets/config/announcement.json"));
+    assert!(script.contains("DamonZS/Claude-Codex-Pro-Tool@main/assets/config/announcement.json"));
+    assert!(script.contains("ad.buttonLabel"));
+    assert!(!script.contains("DamonZS/Claude-Codex-Pro-Tool-Ad-List"));
+    assert!(!script.contains("拓扑熵减API｜ClaudeCodexPro官方中转站"));
     assert!(
         !script.contains(
             "claudeCodexProAds = normalizeClaudeCodexProAds(await postJson(\"/ads\", {}));"
@@ -336,10 +358,30 @@ fn injection_script_times_out_backend_bridge_calls_and_falls_back_to_helper() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("bridgeWithBackendTimeout"));
+    assert!(script.contains("const bridgeStatus = bridgeWithBackendTimeout(path, payload);"));
+    assert!(script.contains("const helperStatus = fetchBackendStatusFromHelper(path, payload);"));
+    assert!(script.contains("bridgeStatus.then((result) => ({ source: \"bridge\", result }))"));
+    assert!(script.contains("helperStatus.then((result) => ({ source: \"helper\", result }))"));
+    assert!(script.contains(
+        "const second = first.source === \"bridge\" ? await helperStatus : await bridgeStatus;"
+    ));
     assert!(script.contains("backend_bridge_timeout"));
     assert!(script.contains("/backend/repair"));
     assert!(script.contains("backend_status_bridge_failed_http_fallback_ok"));
     assert!(script.contains("backend_status_bridge_and_http_failed"));
+}
+
+#[test]
+fn injection_script_replaces_stale_backend_heartbeat_and_debounces_failures() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("clearInterval(window.__claudeCodexProBackendHeartbeat);"));
+    assert!(script.contains("window.__claudeCodexProBackendHeartbeatGeneration"));
+    assert!(script.contains("claudeCodexProBackendHeartbeatGeneration !== window.__claudeCodexProBackendHeartbeatGeneration"));
+    assert!(script.contains("claudeCodexProBackendFailureThreshold = 3"));
+    assert!(script.contains("claudeCodexProBackendConsecutiveFailures"));
+    assert!(script.contains("document.visibilityState !== \"visible\""));
+    assert!(script.contains("window.__claudeCodexProBackendVisibilityHandler"));
 }
 
 #[test]
@@ -861,6 +903,159 @@ fn injection_script_unlocks_custom_model_catalog() {
     assert!(script.contains("model_dropdown_dom_patched"));
     assert!(script.contains("model_request_override_applied"));
     assert!(script.contains("applyCodexModelSelectionRequestOverride"));
+}
+
+#[test]
+fn injection_script_only_treats_the_owned_model_menu_surface_as_a_candidate() {
+    let result = run_model_menu_candidate_harness();
+
+    assert_eq!(result["candidates"], json!(["model-menu"]));
+}
+
+#[test]
+fn injection_script_removes_model_groups_outside_valid_menu_surfaces() {
+    let result = run_model_menu_candidate_harness();
+
+    assert_eq!(result["cleanupAvailable"], true);
+    assert_eq!(result["removedCount"], 1);
+    assert_eq!(result["staleGroupRemoved"], true);
+    assert_eq!(result["validGroupRemoved"], false);
+}
+
+fn run_model_menu_candidate_harness() -> serde_json::Value {
+    let script = assets::injection_script(57321);
+    let start = script
+        .find("const codexModelMenuSurfaceSelector")
+        .expect("model menu contract should have a start marker");
+    let end = script[start..]
+        .find("function codexModelMenuHasModel")
+        .map(|offset| start + offset)
+        .expect("model menu contract should have an end marker");
+    let contract = &script[start..end];
+
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let harness_path = temp.path().join("model-menu-candidate-harness.cjs");
+    let mut harness = std::fs::File::create(&harness_path).expect("harness should be created");
+    write!(
+        harness,
+        r#"
+class FakeElement {{
+  constructor(name, attributes = {{}}, text = "") {{
+    this.name = name;
+    this.attributes = new Map(Object.entries(attributes));
+    this.textContent = text;
+    this.children = [];
+    this.parentElement = null;
+  }}
+
+  append(...children) {{
+    for (const child of children) {{
+      child.parentElement = this;
+      this.children.push(child);
+    }}
+    return this;
+  }}
+
+  remove() {{
+    this.removed = true;
+    if (!this.parentElement) return;
+    this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+    this.parentElement = null;
+  }}
+
+  get id() {{ return this.getAttribute("id") || ""; }}
+  getAttribute(name) {{ return this.attributes.has(name) ? this.attributes.get(name) : null; }}
+  hasAttribute(name) {{ return this.attributes.has(name); }}
+  getBoundingClientRect() {{ return {{ width: 320, height: 240 }}; }}
+
+  matches(selector) {{
+    return String(selector).split(",").some((part) => {{
+      const value = part.trim();
+      if (value === "[role='menu']" || value === '[role="menu"]') return this.getAttribute("role") === "menu";
+      if (value === "[role='listbox']" || value === '[role="listbox"]') return this.getAttribute("role") === "listbox";
+      if (value === "[role='dialog']" || value === '[role="dialog"]') return this.getAttribute("role") === "dialog";
+      if (value === "[role='option']" || value === '[role="option"]') return this.getAttribute("role") === "option";
+      if (value === "[role='menuitem']" || value === '[role="menuitem"]') return this.getAttribute("role") === "menuitem";
+      if (value === "[data-value]") return this.hasAttribute("data-value");
+      if (value === "[data-radix-popper-content-wrapper]") return this.hasAttribute("data-radix-popper-content-wrapper");
+      if (value === "[data-side][data-align]") return this.hasAttribute("data-side") && this.hasAttribute("data-align");
+      if (value === "[data-claude-codex-pro-model-group]") return this.hasAttribute("data-claude-codex-pro-model-group");
+      if (value === '[data-claude-codex-pro-dialog="true"]') return this.getAttribute("data-claude-codex-pro-dialog") === "true";
+      if (value.startsWith(".")) return false;
+      return false;
+    }});
+  }}
+
+  closest(selector) {{
+    let current = this;
+    while (current) {{
+      if (current.matches(selector)) return current;
+      current = current.parentElement;
+    }}
+    return null;
+  }}
+
+  querySelectorAll(selector) {{
+    const matches = [];
+    const visit = (node) => {{
+      for (const child of node.children) {{
+        if (child.matches(selector)) matches.push(child);
+        visit(child);
+      }}
+    }};
+    visit(this);
+    return matches;
+  }}
+}}
+
+globalThis.Element = FakeElement;
+const parentDialog = new FakeElement("parent-dialog", {{ role: "dialog" }});
+const portalWrapper = new FakeElement("portal-wrapper", {{ "data-radix-popper-content-wrapper": "" }});
+const modelMenu = new FakeElement("model-menu", {{ role: "menu", id: "model-surface" }});
+const modelItem = new FakeElement("native-model", {{ role: "menuitem", "data-value": "gpt-5.4" }}, "5.4");
+const permissionMenu = new FakeElement("permission-menu", {{ role: "menu" }});
+const permissionItem = new FakeElement("permission-item", {{ role: "menuitem" }}, "Full access");
+const staleGroup = new FakeElement("stale-group", {{ "data-claude-codex-pro-model-group": "true" }});
+const validGroup = new FakeElement("valid-group", {{ "data-claude-codex-pro-model-group": "true" }});
+modelMenu.append(modelItem);
+modelMenu.append(validGroup);
+portalWrapper.append(modelMenu, staleGroup);
+parentDialog.append(portalWrapper);
+permissionMenu.append(permissionItem);
+const allNodes = [parentDialog, portalWrapper, modelMenu, modelItem, permissionMenu, permissionItem, staleGroup, validGroup];
+globalThis.document = {{
+  querySelectorAll: (selector) => allNodes.filter((node) => node.matches(selector)),
+  getElementById: (id) => allNodes.find((node) => node.id === id) || null,
+}};
+function claudeCodexProModelNames() {{ return ["gpt-5.4", "gpt-5.5"]; }}
+{contract}
+const candidates = codexModelMenuCandidates();
+const cleanupAvailable = typeof cleanupCodexInjectedModelGroups === "function";
+const removedCount = cleanupAvailable ? cleanupCodexInjectedModelGroups(candidates) : null;
+process.stdout.write(JSON.stringify({{
+  candidates: candidates.map((node) => node.name),
+  cleanupAvailable,
+  removedCount,
+  staleGroupRemoved: !!staleGroup.removed,
+  validGroupRemoved: !!validGroup.removed,
+}}));
+"#,
+        contract = contract,
+    )
+    .expect("harness should be written");
+    drop(harness);
+
+    let output = Command::new("node")
+        .arg(&harness_path)
+        .output()
+        .expect("node should run model menu harness");
+    assert!(
+        output.status.success(),
+        "node harness failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("harness stdout should be JSON")
 }
 
 #[test]
@@ -1898,6 +2093,73 @@ async fn install_bridge_does_not_wait_for_resolve_runtime_evaluate_ack() {
     .await
     .expect("bridge install should not wait for resolve ack")
     .expect("bridge install should survive missing resolve ack");
+    request_rx
+        .await
+        .expect("server task should finish without panicking");
+}
+
+#[tokio::test]
+async fn install_bridge_does_not_queue_backend_status_behind_slow_route() {
+    let release_slow = Arc::new(Notify::new());
+    let server_release = Arc::clone(&release_slow);
+    let (url, request_rx) = spawn_cdp_server(move |mut socket| async move {
+        for expected_id in 1..=5 {
+            let command = recv_json(&mut socket).await;
+            assert_eq!(command["id"], expected_id);
+            send_json(&mut socket, json!({ "id": expected_id, "result": {} })).await;
+        }
+
+        for (request_id, path) in [
+            ("slow-request", "/slow"),
+            ("status-request", "/backend/status"),
+        ] {
+            send_json(
+                &mut socket,
+                json!({
+                    "method": "Runtime.bindingCalled",
+                    "params": {
+                        "payload": serde_json::to_string(&json!({
+                            "id": request_id,
+                            "path": path,
+                            "payload": {},
+                        })).unwrap(),
+                    },
+                }),
+            )
+            .await;
+        }
+
+        let status_resolve =
+            tokio::time::timeout(Duration::from_millis(500), recv_json(&mut socket))
+                .await
+                .expect("backend status must resolve while the earlier route is still blocked");
+        assert_expression_contains_request(&status_resolve, "status-request");
+
+        server_release.notify_one();
+        let slow_resolve = recv_json(&mut socket).await;
+        assert_expression_contains_request(&slow_resolve, "slow-request");
+        close_socket(&mut socket).await;
+    })
+    .await;
+
+    let handler_release = Arc::clone(&release_slow);
+    let handler = Arc::new(move |path: String, _payload: serde_json::Value| {
+        let release_slow = Arc::clone(&handler_release);
+        Box::pin(async move {
+            if path == "/slow" {
+                release_slow.notified().await;
+            }
+            Ok(json!({ "status": "ok", "path": path }))
+        }) as Pin<Box<dyn Future<Output = anyhow::Result<serde_json::Value>> + Send>>
+    });
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        bridge::install_bridge(&url, BRIDGE_BINDING_NAME, handler, &[]),
+    )
+    .await
+    .expect("bridge install should return after setup")
+    .expect("bridge install should succeed");
     request_rx
         .await
         .expect("server task should finish without panicking");

@@ -417,6 +417,13 @@ export type UpdateReleasePayload = {
   expectedVersion: string;
 };
 
+export type UpdateDownloadProgress = {
+  phase: "checking" | "connecting" | "downloading" | "launching" | "complete" | "failed" | string;
+  downloadedBytes: number;
+  totalBytes?: number | null;
+  percent?: number | null;
+};
+
 export type UpdateResult = CommandResult<{
   currentVersion: string;
   latestVersion?: string | null;
@@ -425,6 +432,9 @@ export type UpdateResult = CommandResult<{
   assetUrl?: string | null;
   updateAvailable?: boolean;
   progress?: number;
+  phase?: UpdateDownloadProgress["phase"];
+  downloadedBytes?: number;
+  totalBytes?: number | null;
   installedPath?: string;
   launched?: boolean;
 }>;

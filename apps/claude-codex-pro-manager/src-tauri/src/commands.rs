@@ -36,7 +36,7 @@ use claude_codex_pro_core::user_scripts::UserScriptManager;
 use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt as TokioAsyncWriteExt};
 use toml_edit::DocumentMut;
 
@@ -65,6 +65,7 @@ struct ClaudeZhPatchCliResult {
 const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);
 const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);
+const REPAIR_CODEX_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2376,9 +2377,17 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         tokio::time::sleep(Duration::from_millis(800)).await;
     }
 
+    let selected_debug_port = select_repair_debug_port(default_debug_port()).await;
+    if selected_debug_port != default_debug_port() {
+        details.push(format!(
+            "首选 CDP 端口 {} 尚未释放，本次修复改用可用端口 {selected_debug_port}。",
+            default_debug_port()
+        ));
+    }
+
     let request = LaunchRequest {
         app_path: app_path.to_string_lossy().to_string(),
-        debug_port: default_debug_port(),
+        debug_port: selected_debug_port,
         helper_port: default_helper_port(),
     };
     if let Err(error) = spawn_silent_launcher(&request) {
@@ -2433,6 +2442,35 @@ async fn wait_for_codex_pids_to_exit(pids: &[u32], timeout: Duration) -> bool {
     !pids.iter().any(|pid| running.contains(pid))
 }
 
+async fn select_repair_debug_port(requested: u16) -> u16 {
+    let started = Instant::now();
+    while started.elapsed() < REPAIR_CODEX_PORT_RELEASE_TIMEOUT {
+        if claude_codex_pro_core::ports::can_bind_loopback_port(requested) {
+            return requested;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    select_repair_debug_port_with(
+        requested,
+        claude_codex_pro_core::ports::can_bind_loopback_port,
+        claude_codex_pro_core::ports::find_available_loopback_port,
+    )
+}
+
+fn select_repair_debug_port_with(
+    requested: u16,
+    can_bind: impl Fn(u16) -> bool,
+    find_available: impl Fn() -> u16,
+) -> u16 {
+    if can_bind(requested) {
+        return requested;
+    }
+    match find_available() {
+        0 => requested,
+        available => available,
+    }
+}
+
 #[cfg(windows)]
 fn force_kill_process_tree_for_frontend_repair(pids: &[u32]) -> usize {
     let mut killed = 0;
@@ -2463,45 +2501,55 @@ async fn wait_for_codex_launch_ports(
             .ok()
             .flatten()
             .map(refresh_launch_port_status);
-        if let Some(status) = latest {
-            if status.debug_port_online && status.helper_port_online {
-                return Some(status);
-            }
-            if status.debug_port_online {
-                return Some(status);
-            }
-        } else if codex_debug_port_online(request.debug_port)
-            && helper_backend_online(request.helper_port)
-        {
-            return Some(LaunchStatus {
-                status: "ok".to_string(),
-                message: "前端修复期间检测到 Codex 启动端口。".to_string(),
-                started_at_ms: current_time_ms(),
-                codex_app: Some(request.app_path.clone()),
-                debug_port: Some(request.debug_port),
-                helper_port: Some(request.helper_port),
-                debug_port_online: true,
-                helper_port_online: true,
-                frontend_runtime_online: false,
-                frontend_runtime_seen_at_ms: None,
-            });
-        } else if codex_debug_port_online(request.debug_port) {
-            return Some(LaunchStatus {
-                status: "running_degraded".to_string(),
-                message: "前端修复期间检测到 Codex CDP 已上线，helper 后端仍需恢复。".to_string(),
-                started_at_ms: current_time_ms(),
-                codex_app: Some(request.app_path.clone()),
-                debug_port: Some(request.debug_port),
-                helper_port: Some(request.helper_port),
-                debug_port_online: true,
-                helper_port_online: false,
-                frontend_runtime_online: false,
-                frontend_runtime_seen_at_ms: None,
-            });
+        if let Some(status) = repair_launch_status(
+            request,
+            latest,
+            codex_debug_port_online(request.debug_port),
+            helper_backend_online(request.helper_port),
+            current_time_ms(),
+        ) {
+            return Some(status);
         }
         tokio::time::sleep(Duration::from_millis(750)).await;
     }
     None
+}
+
+fn repair_launch_status(
+    request: &LaunchRequest,
+    latest: Option<LaunchStatus>,
+    requested_debug_port_online: bool,
+    helper_port_online: bool,
+    detected_at_ms: u64,
+) -> Option<LaunchStatus> {
+    if let Some(status) = latest
+        .filter(|status| status.debug_port == Some(request.debug_port) && status.debug_port_online)
+    {
+        return Some(status);
+    }
+    if !requested_debug_port_online {
+        return None;
+    }
+    Some(LaunchStatus {
+        status: if helper_port_online {
+            "ok".to_string()
+        } else {
+            "running_degraded".to_string()
+        },
+        message: if helper_port_online {
+            "前端修复期间检测到 Codex 启动端口。".to_string()
+        } else {
+            "前端修复期间检测到 Codex CDP 已上线，helper 后端仍需恢复。".to_string()
+        },
+        started_at_ms: detected_at_ms,
+        codex_app: Some(request.app_path.clone()),
+        debug_port: Some(request.debug_port),
+        helper_port: Some(request.helper_port),
+        debug_port_online: true,
+        helper_port_online,
+        frontend_runtime_online: false,
+        frontend_runtime_seen_at_ms: None,
+    })
 }
 
 async fn wait_for_renderer_frontend_after(
@@ -4129,10 +4177,15 @@ fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
     memory.inject_enabled = settings.memory_assist_inject_enabled;
     memory.auto_suggest_enabled = settings.memory_assist_auto_suggest_enabled;
 
+    let launch_started_at_ms = StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .map(|status| status.started_at_ms);
     let heartbeat = latest_renderer_runtime_heartbeat();
     let heartbeat_is_fresh = heartbeat
         .as_ref()
-        .is_some_and(|item| renderer_heartbeat_is_fresh(item.timestamp_ms));
+        .is_some_and(|item| renderer_heartbeat_is_current(item.timestamp_ms, launch_started_at_ms));
     let runtime_snapshot = read_codex_memory_runtime_snapshot().or_else(|| {
         heartbeat
             .filter(|_| heartbeat_is_fresh)
@@ -4254,6 +4307,12 @@ fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
 
 fn renderer_heartbeat_is_fresh(timestamp_ms: u64) -> bool {
     current_time_ms().saturating_sub(timestamp_ms) <= 45_000
+}
+
+fn renderer_heartbeat_is_current(timestamp_ms: u64, launch_started_at_ms: Option<u64>) -> bool {
+    launch_started_at_ms.is_some_and(|launch_started_at_ms| {
+        timestamp_ms >= launch_started_at_ms && renderer_heartbeat_is_fresh(timestamp_ms)
+    })
 }
 
 fn renderer_frontend_heartbeat_confirms_injection(heartbeat: &RendererRuntimeHeartbeat) -> bool {
@@ -6008,8 +6067,25 @@ pub async fn check_update() -> CommandResult<Value> {
     }
 }
 
+fn emit_update_download_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    let progress = claude_codex_pro_core::update::UpdateDownloadProgress::new(
+        phase,
+        downloaded_bytes,
+        total_bytes,
+    );
+    let _ = app.emit("update-download-progress", progress);
+}
+
 #[tauri::command]
-pub async fn perform_update(expected_version: Option<String>) -> CommandResult<Value> {
+pub async fn perform_update(
+    app: tauri::AppHandle,
+    expected_version: Option<String>,
+) -> CommandResult<Value> {
     let Some(expected_version) = expected_version.filter(|version| !version.trim().is_empty())
     else {
         return failed(
@@ -6020,13 +6096,11 @@ pub async fn perform_update(expected_version: Option<String>) -> CommandResult<V
             }),
         );
     };
-    let release = match claude_codex_pro_core::update::fetch_latest_release(
-        claude_codex_pro_core::update::DEFAULT_LATEST_JSON_URL,
-    )
-    .await
-    {
+    emit_update_download_progress(&app, "connecting", 0, None);
+    let release = match claude_codex_pro_core::update::fetch_current_release().await {
         Ok(release) if release.version == expected_version => release,
         Ok(release) => {
+            emit_update_download_progress(&app, "failed", 0, None);
             return failed(
                 "发布索引已更新，请重新检查版本后再安装。",
                 json!({
@@ -6038,6 +6112,7 @@ pub async fn perform_update(expected_version: Option<String>) -> CommandResult<V
             );
         }
         Err(error) => {
+            emit_update_download_progress(&app, "failed", 0, None);
             return failed(
                 &format!("重新读取发布索引失败：{error}"),
                 json!({
@@ -6049,27 +6124,56 @@ pub async fn perform_update(expected_version: Option<String>) -> CommandResult<V
         }
     };
     let download_dir = claude_codex_pro_core::paths::default_app_state_dir().join("updates");
-    match claude_codex_pro_core::update::perform_update(&release, &download_dir).await {
-        Ok(result) => ok(
-            "安装包已下载并启动。请按照安装向导提示完成更新。",
-            json!({
-                "currentVersion": claude_codex_pro_core::version::VERSION,
-                "latestVersion": result.release.version,
-                "releaseSummary": result.release.body,
-                "installedPath": result.installer_path.to_string_lossy(),
-                "launched": result.launched,
-                "progress": 100
-            }),
-        ),
-        Err(error) => failed(
-            &format!("安装更新失败：{error}"),
-            json!({
-                "currentVersion": claude_codex_pro_core::version::VERSION,
-                "latestVersion": release.version,
-                "releaseSummary": release.body,
-                "progress": 0
-            }),
-        ),
+    let progress_app = app.clone();
+    match claude_codex_pro_core::update::perform_update_with_progress(
+        &release,
+        &download_dir,
+        move |progress| {
+            let _ = progress_app.emit("update-download-progress", progress);
+        },
+    )
+    .await
+    {
+        Ok(result) => {
+            let downloaded_bytes = std::fs::metadata(&result.installer_path)
+                .map(|metadata| metadata.len())
+                .unwrap_or_default();
+            emit_update_download_progress(
+                &app,
+                "complete",
+                downloaded_bytes,
+                Some(downloaded_bytes),
+            );
+            ok(
+                "安装包已下载并启动。请按照安装向导提示完成更新。",
+                json!({
+                    "currentVersion": claude_codex_pro_core::version::VERSION,
+                    "latestVersion": result.release.version,
+                    "releaseSummary": result.release.body,
+                    "installedPath": result.installer_path.to_string_lossy(),
+                    "launched": result.launched,
+                    "phase": "complete",
+                    "downloadedBytes": downloaded_bytes,
+                    "totalBytes": downloaded_bytes,
+                    "progress": 100
+                }),
+            )
+        }
+        Err(error) => {
+            emit_update_download_progress(&app, "failed", 0, None);
+            failed(
+                &format!("安装更新失败：{error}"),
+                json!({
+                    "currentVersion": claude_codex_pro_core::version::VERSION,
+                    "latestVersion": release.version,
+                    "releaseSummary": release.body,
+                    "phase": "failed",
+                    "downloadedBytes": 0,
+                    "totalBytes": Value::Null,
+                    "progress": 0
+                }),
+            )
+        }
     }
 }
 
@@ -8512,8 +8616,10 @@ fn refresh_launch_port_status(mut status: LaunchStatus) -> LaunchStatus {
     status.helper_port = resolved_port;
     status.helper_port_online = resolved_online;
 
-    if let Some(heartbeat) = latest_renderer_runtime_heartbeat() {
-        status.frontend_runtime_online = renderer_heartbeat_is_fresh(heartbeat.timestamp_ms);
+    if let Some(heartbeat) = latest_renderer_runtime_heartbeat().filter(|heartbeat| {
+        renderer_heartbeat_is_current(heartbeat.timestamp_ms, Some(status.started_at_ms))
+    }) {
+        status.frontend_runtime_online = true;
         status.frontend_runtime_seen_at_ms = Some(heartbeat.timestamp_ms);
     } else {
         status.frontend_runtime_online = false;
@@ -10569,6 +10675,91 @@ enabled = true
         };
 
         assert_eq!(normalize_memory_runtime_status(&runtime), "ok");
+    }
+
+    #[test]
+    fn repair_debug_port_keeps_preferred_port_when_bindable() {
+        let selected = select_repair_debug_port_with(9230, |port| port == 9230, || 9311);
+
+        assert_eq!(selected, 9230);
+    }
+
+    #[test]
+    fn repair_debug_port_uses_available_fallback_when_preferred_is_busy() {
+        let selected = select_repair_debug_port_with(9230, |_| false, || 9311);
+
+        assert_eq!(selected, 9311);
+    }
+
+    #[test]
+    fn repair_launch_status_rejects_stale_status_for_another_port() {
+        let request = LaunchRequest {
+            app_path: "codex.exe".to_string(),
+            debug_port: 9311,
+            helper_port: 46227,
+        };
+        let stale = LaunchStatus {
+            status: "ok".to_string(),
+            message: "stale".to_string(),
+            started_at_ms: 111,
+            codex_app: None,
+            debug_port: Some(9230),
+            helper_port: Some(46227),
+            debug_port_online: true,
+            helper_port_online: true,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
+        };
+
+        assert!(repair_launch_status(&request, Some(stale), false, false, 222).is_none());
+    }
+
+    #[test]
+    fn repair_launch_status_accepts_requested_port_while_status_file_is_stale() {
+        let request = LaunchRequest {
+            app_path: "codex.exe".to_string(),
+            debug_port: 9311,
+            helper_port: 46227,
+        };
+        let stale = LaunchStatus {
+            status: "ok".to_string(),
+            message: "stale".to_string(),
+            started_at_ms: 111,
+            codex_app: None,
+            debug_port: Some(9230),
+            helper_port: Some(46227),
+            debug_port_online: true,
+            helper_port_online: true,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
+        };
+
+        let detected = repair_launch_status(&request, Some(stale), true, true, 222)
+            .expect("requested repair port should win over stale status");
+
+        assert_eq!(detected.debug_port, Some(9311));
+        assert_eq!(detected.helper_port, Some(46227));
+        assert_eq!(detected.started_at_ms, 222);
+        assert!(detected.debug_port_online);
+        assert!(detected.helper_port_online);
+    }
+
+    #[test]
+    fn renderer_heartbeat_rejects_previous_launch_generation() {
+        let now = current_time_ms();
+
+        assert!(!renderer_heartbeat_is_current(
+            now.saturating_sub(1),
+            Some(now)
+        ));
+        assert!(!renderer_heartbeat_is_current(now, None));
+    }
+
+    #[test]
+    fn renderer_heartbeat_accepts_current_launch_generation() {
+        let now = current_time_ms();
+
+        assert!(renderer_heartbeat_is_current(now, Some(now)));
     }
 
     #[test]

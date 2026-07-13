@@ -24,6 +24,8 @@ const POST_LAUNCH_COMPUTER_USE_GUARD_SECONDS: &[u64] = &[0, 5, 15, 30, 60, 120, 
 const POST_LAUNCH_COMPUTER_USE_GUARD_STABLE_ATTEMPTS: usize = 3;
 const PACKAGED_CDP_READY_ATTEMPTS: usize = 10;
 const PACKAGED_CDP_READY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const BRIDGE_WATCHDOG_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(7);
+const BRIDGE_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(11);
 static DETACHED_HELPER_PORT: OnceLock<u16> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -834,7 +836,11 @@ impl LaunchHooks for DefaultLaunchHooks {
     async fn start_bridge_watchdog(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
         let (shutdown, mut shutdown_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + BRIDGE_WATCHDOG_INITIAL_DELAY,
+                BRIDGE_WATCHDOG_INTERVAL,
+            );
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
@@ -2672,6 +2678,13 @@ fn activate_packaged_app_blocking(app_user_model_id: &str, arguments: &str) -> a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_watchdog_is_offset_from_renderer_heartbeat() {
+        assert_eq!(BRIDGE_WATCHDOG_INITIAL_DELAY.as_secs(), 7);
+        assert_eq!(BRIDGE_WATCHDOG_INTERVAL.as_secs(), 11);
+        assert_ne!(BRIDGE_WATCHDOG_INTERVAL.as_secs(), 5);
+    }
 
     fn cdp_target(
         id: &str,

@@ -78,6 +78,7 @@
   const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
   const claudeCodexProSupportPaymentQr = window.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ || "";
   const claudeCodexProContactWechatQr = window.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ || "";
+  const claudeCodexProBundledAnnouncement = window.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__ || { enabled: false, ads: [] };
   const claudeCodexProQqGroupPrimaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
   const claudeCodexProQqGroupSecondaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68";
   const claudeCodexProSettingsKey = "claudeCodexProSettings";
@@ -112,6 +113,10 @@
   window.__codexThreadScrollRestoreTimers = [];
   (window.__codexThreadScrollSyncTimers || []).forEach((timer) => clearTimeout(timer));
   window.__codexThreadScrollSyncTimers = [];
+  window.__claudeCodexProBackendHeartbeatGeneration =
+    (window.__claudeCodexProBackendHeartbeatGeneration || 0) + 1;
+  const claudeCodexProBackendHeartbeatGeneration =
+    window.__claudeCodexProBackendHeartbeatGeneration;
   window.__codexThreadScrollRestoreRevision = (window.__codexThreadScrollRestoreRevision || 0) + 1;
 
   function installClaudeCodexProImageOverlay() {
@@ -1214,6 +1219,7 @@
       .claude-codex-pro-ad-list { display: grid; gap: 14px; }
       .claude-codex-pro-ad-card { border: 1px solid #dce3ed; border-radius: 8px; background: #ffffff; box-shadow: 0 10px 24px rgba(15,23,42,.05); }
       .claude-codex-pro-ad-content { padding: 14px; }
+      .claude-codex-pro-ad-badge { margin-bottom: 6px; color: #0f766e; font-size: 11px; font-weight: 750; }
       .claude-codex-pro-ad-title { margin: 0; color: #172033; font-size: 17px; line-height: 1.35; }
       .claude-codex-pro-ad-description { margin: 6px 0 10px; color: #64748b; font-size: 13px; line-height: 1.55; }
       .claude-codex-pro-ad-highlights { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
@@ -1232,9 +1238,17 @@
       .claude-codex-pro-contact-card { display: grid; gap: 12px; border: 1px solid #dce3ed; border-radius: 10px; background: #ffffff; padding: 14px; box-sizing: border-box; }
       .claude-codex-pro-contact-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; color: #172033; font-size: 13px; line-height: 1.5; }
       .claude-codex-pro-contact-label { font-weight: 750; }
+      .claude-codex-pro-contact-group-number { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-weight: 750; }
       .claude-codex-pro-contact-link { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #0f766e; border-radius: 999px; background: #eef6f5; color: #0f766e; font-size: 12px; font-weight: 750; text-decoration: none; padding: 4px 9px; }
       .claude-codex-pro-contact-qr-wrap { display: grid; gap: 8px; justify-items: center; }
       .claude-codex-pro-contact-qr { display: block; width: min(220px, 80%); aspect-ratio: 1 / 1; border: 1px solid #dce3ed; border-radius: 12px; background: #ffffff; object-fit: contain; padding: 8px; box-sizing: border-box; }
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-section-title,
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-title,
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-title { color: #e8fff8; }
+      .claude-codex-pro-control-deck .claude-codex-pro-ad-badge { color: #62e7c8; }
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-line,
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-label { color: #c8e1db; }
+      .claude-codex-pro-control-deck .claude-codex-pro-contact-group-number { color: #e8fff8; }
       .${timelineClass} {
         position: fixed;
         top: calc(72px + 12px);
@@ -1331,7 +1345,6 @@
     zedRemoteOpen: "codexAppZedRemoteOpen",
     upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
-    chineseOverlayEnabled: "claudeAppChineseOverlayEnabled",
     serviceTierControls: "codexAppServiceTierControls",
     memoryAssistEnabled: "memoryAssistEnabled",
     memoryAssistInjectEnabled: "memoryAssistInjectEnabled",
@@ -1385,6 +1398,9 @@
   function claudeCodexProSettings() {
     const relayPatchDisabled = claudeCodexProBackendSettings.launchMode === "relay";
     const settings = claudeCodexProConfiguredSettings();
+    // Claude localization is owned by the Claude integration. Codex DOM content
+    // can contain user input and project data, so it must never be translated.
+    settings.chineseOverlayEnabled = false;
     if (claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)) {
       return {
         ...settings,
@@ -2304,6 +2320,8 @@
 
   let claudeCodexProBackendStatus = { status: "checking", message: "正在检查连接…" };
   let claudeCodexProBackendCheckSeq = 0;
+  let claudeCodexProBackendConsecutiveFailures = 0;
+  const claudeCodexProBackendFailureThreshold = 3;
   let claudeChineseOverlayObserver = null;
   let claudeChineseOverlayScheduled = false;
   let claudeChineseOverlayFullRefreshDone = false;
@@ -2707,16 +2725,7 @@
   }
 
   function translateClaudeChineseText(value) {
-    const original = String(value || "");
-    const direct = claudeChineseOverlayDirectMap || (claudeChineseOverlayDirectMap = new Map(claudeChineseOverlayMap));
-    if (direct.has(original)) return direct.get(original);
-    const protectedBrands = protectClaudeChineseOverlayBrands(original);
-    let next = protectedBrands.value;
-    const map = claudeChineseOverlaySortedMap || (claudeChineseOverlaySortedMap = [...claudeChineseOverlayMap].sort((a, b) => b[0].length - a[0].length));
-    map.forEach(([source, target]) => {
-      next = next.replaceAll(source, target);
-    });
-    return restoreClaudeChineseOverlayBrands(next, protectedBrands.tokens);
+    return String(value || "");
   }
 
   function protectClaudeChineseOverlayBrands(value) {
@@ -2851,7 +2860,7 @@
   function withBackendTimeout(request) {
     return Promise.race([
       request,
-      new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "连接检查超时", timeout: true }), 2000)),
+      new Promise((resolve) => setTimeout(() => resolve({ status: "failed", message: "连接检查超时", timeout: true }), 3000)),
     ]);
   }
 
@@ -2859,13 +2868,23 @@
     const seq = ++claudeCodexProBackendCheckSeq;
     const nextStatus = await withBackendTimeout(postJson("/backend/status", {}));
     if (seq !== claudeCodexProBackendCheckSeq) return;
-    claudeCodexProBackendStatus = nextStatus;
-    if (nextStatus?.status !== "ok") {
+    if (claudeCodexProBackendHeartbeatGeneration !== window.__claudeCodexProBackendHeartbeatGeneration) return;
+    if (nextStatus?.status === "ok") {
+      claudeCodexProBackendConsecutiveFailures = 0;
+      claudeCodexProBackendStatus = nextStatus;
+    } else {
+      claudeCodexProBackendConsecutiveFailures += 1;
       sendClaudeCodexProDiagnostic("backend_check_failed", {
         status: nextStatus?.status || "unknown",
         message: nextStatus?.message || "",
         timeout: !!nextStatus?.timeout,
+        consecutiveFailures: claudeCodexProBackendConsecutiveFailures,
       });
+      if (claudeCodexProBackendConsecutiveFailures >= claudeCodexProBackendFailureThreshold) {
+        claudeCodexProBackendStatus = nextStatus;
+      } else if (claudeCodexProBackendStatus.status !== "ok") {
+        claudeCodexProBackendStatus = { status: "checking", message: "正在确认连接…" };
+      }
     }
     renderBackendStatus();
   }
@@ -2875,6 +2894,9 @@
     renderBackendStatus();
     try {
       claudeCodexProBackendStatus = await postJson("/backend/repair", {});
+      if (claudeCodexProBackendStatus?.status === "ok") {
+        claudeCodexProBackendConsecutiveFailures = 0;
+      }
     } catch (error) {
       claudeCodexProBackendStatus = { status: "failed", message: "连接修复失败" };
     }
@@ -2882,12 +2904,19 @@
   }
 
   function scheduleBackendHeartbeat() {
-    if (window.__claudeCodexProBackendHeartbeat) return;
-    window.__claudeCodexProBackendHeartbeat = setInterval(checkBackendStatus, 5000);
-    checkBackendStatus();
+    clearInterval(window.__claudeCodexProBackendHeartbeat);
+    document.removeEventListener("visibilitychange", window.__claudeCodexProBackendVisibilityHandler);
+    window.__claudeCodexProBackendVisibilityHandler = () => {
+      if (document.visibilityState !== "visible") return;
+      void checkBackendStatus();
+    };
+    document.addEventListener("visibilitychange", window.__claudeCodexProBackendVisibilityHandler);
+    window.__claudeCodexProBackendHeartbeat = window.setInterval(() => {
+      void checkBackendStatus();
+    }, 5000);
+    void checkBackendStatus();
   }
 
-  const claudeCodexProAdsUrl = "/ads";
   let claudeCodexProAds = [];
   let claudeCodexProAdsLoaded = false;
 
@@ -2897,27 +2926,28 @@
     return Number.isFinite(expiresAt) && expiresAt < Date.now();
   }
 
-  function defaultClaudeCodexProAds() {
-    return [{
-      id: "official-toporeduce-api",
-      type: "normal",
-      title: "官方中转站",
-      description: "拓扑熵减API｜ClaudeCodexPro官方中转站，主打稳定接入和划算价格，支持 GPT-5.5、GPT-5.4、Claude Opus 4.8、Claude Opus 4.7、gpt-image-2 等模型与图像能力。",
-      url: "https://api.toporeduce.cn",
-      highlights: ["拓扑熵减API", "稳定接入", "划算价格", "GPT-5.5", "Claude Opus 4.8", "gpt-image-2"],
-    }];
+  function isSafeClaudeCodexProAdUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      return parsed.protocol === "https:" || parsed.protocol === "http:";
+    } catch (_) {
+      return false;
+    }
   }
 
   function normalizeClaudeCodexProAds(payload) {
+    if (!payload || payload.enabled !== true) return [];
     const remoteAds = payload && Array.isArray(payload.ads) ? payload.ads : [];
     const seen = new Set();
-    return defaultClaudeCodexProAds().concat(remoteAds).filter((ad) => {
-      return ad && ad.type === "normal" && ad.title && ad.description && ad.url && !isClaudeCodexProAdExpired(ad);
+    return remoteAds.filter((ad) => {
+      return ad && ad.type === "normal" && ad.title && ad.description && isSafeClaudeCodexProAdUrl(ad.url) && !isClaudeCodexProAdExpired(ad);
     }).map((ad) => ({
       id: String(ad.id || ad.title),
       type: ad.type,
+      badge: ad.badge ? String(ad.badge) : "",
       title: String(ad.title),
       description: String(ad.description),
+      buttonLabel: ad.buttonLabel ? String(ad.buttonLabel) : "查看详情",
       url: String(ad.url),
       expires_at: ad.expires_at ? String(ad.expires_at) : "",
       highlights: Array.isArray(ad.highlights) ? ad.highlights.map((item) => String(item)).filter(Boolean) : [],
@@ -2937,25 +2967,26 @@
     return ads.map((ad) => `
       <article class="claude-codex-pro-ad-card">
         <div class="claude-codex-pro-ad-content">
+          ${ad.badge ? `<div class="claude-codex-pro-ad-badge">${escapeHtml(ad.badge)}</div>` : ""}
           <h3 class="claude-codex-pro-ad-title">${escapeHtml(ad.title)}</h3>
           <p class="claude-codex-pro-ad-description">${escapeHtml(ad.description)}</p>
           <div class="claude-codex-pro-ad-highlights">
             ${ad.highlights.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
           </div>
-          <a class="claude-codex-pro-ad-link" href="${escapeHtml(ad.url)}" target="_blank" rel="noreferrer">访问 ${escapeHtml(new URL(ad.url).hostname)}</a>
+          <a class="claude-codex-pro-ad-link" href="${escapeHtml(ad.url)}" target="_blank" rel="noreferrer">${escapeHtml(ad.buttonLabel)}</a>
         </div>
       </article>
     `).join("");
   }
 
   function renderClaudeCodexProAds() {
-    if (!claudeCodexProAdsLoaded) return `<div class="claude-codex-pro-ad-empty">Recommendations loading...</div>`;
+    if (!claudeCodexProAdsLoaded) return `<div class="claude-codex-pro-ad-empty">推荐内容加载中...</div>`;
     const normalAds = claudeCodexProAds.filter((ad) => ad.type === "normal");
-    if (!normalAds.length) return `<div class="claude-codex-pro-ad-empty">No recommendations.</div>`;
+    if (!normalAds.length) return `<div class="claude-codex-pro-ad-empty">暂无推荐内容。</div>`;
     return `
       <section class="claude-codex-pro-ad-section">
-        <h3 class="claude-codex-pro-ad-section-title">Recommendations</h3>
-        <div class="claude-codex-pro-ad-list">${renderClaudeCodexProAdGroup("normal", "No recommendations.")}</div>
+        <h3 class="claude-codex-pro-ad-section-title">推荐内容</h3>
+        <div class="claude-codex-pro-ad-list">${renderClaudeCodexProAdGroup("normal", "暂无推荐内容。")}</div>
       </section>
     `;
   }
@@ -2965,8 +2996,8 @@
 
   async function directFetchClaudeCodexProAds() {
     const urls = [
-      "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool-Ad-List/main/ads.json",
-      "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool-Ad-List@main/ads.json",
+      "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool/main/assets/config/announcement.json",
+      "https://cdn.jsdelivr.net/gh/DamonZS/Claude-Codex-Pro-Tool@main/assets/config/announcement.json",
     ];
     let lastError = null;
     const cacheBust = Date.now();
@@ -2993,7 +3024,7 @@
         errorName: error?.name || "",
         errorMessage: error?.message || String(error),
       });
-      claudeCodexProAds = normalizeClaudeCodexProAds({ ads: [] });
+      claudeCodexProAds = normalizeClaudeCodexProAds(claudeCodexProBundledAnnouncement);
     } finally {
       claudeCodexProAdsLoaded = true;
       const panel = document.querySelector('[data-claude-codex-pro-panel="recommendations"] .claude-codex-pro-ad-remote');
@@ -3037,7 +3068,7 @@
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="home" data-active="true">主页</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="recommendations" data-active="false">推荐内容</button>
           <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="support" data-active="false">支持</button>
-          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="contact" data-active="false">联系我</button>
+          <button type="button" class="claude-codex-pro-tab-button" data-claude-codex-pro-tab="contact" data-active="false">合作请联系微信</button>
           <div class="claude-codex-pro-deck-sidebar-note">LOCAL FIRST<br>REVIEWABLE · REVERSIBLE</div>
         </div>
         <div class="claude-codex-pro-modal-body">
@@ -3179,17 +3210,17 @@
           </div>
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="contact" hidden>
             <div class="claude-codex-pro-contact-panel">
-              <h3 class="claude-codex-pro-contact-title">联系我</h3>
+              <h3 class="claude-codex-pro-contact-title">合作请联系微信</h3>
               <div class="claude-codex-pro-contact-card">
                 <div class="claude-codex-pro-contact-line">
                   <span class="claude-codex-pro-contact-label">官方QQ群：</span>
-                  <span>10061615</span>
+                  <span class="claude-codex-pro-contact-group-number">10061615</span>
                   <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupPrimaryUrl)}">一键添加</a>
-                  <span>1076215359</span>
+                  <span class="claude-codex-pro-contact-group-number">1076215359</span>
                   <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupSecondaryUrl)}">一键添加</a>
                 </div>
                 <div class="claude-codex-pro-contact-qr-wrap">
-                  <p class="claude-codex-pro-contact-text">合作代理请联系微信</p>
+                  <p class="claude-codex-pro-contact-text">合作请联系微信</p>
                   ${claudeCodexProContactWechatQr
                     ? `<img class="claude-codex-pro-contact-qr" src="${escapeHtml(claudeCodexProContactWechatQr)}" alt="合作代理微信二维码">`
                     : `<div class="claude-codex-pro-support-empty">微信二维码未加载。</div>`}
@@ -5154,7 +5185,38 @@
       }
     }
     try {
-      if (path === "/backend/status" || path === "/backend/repair") {
+      if (path === "/backend/status") {
+        const bridgeStatus = bridgeWithBackendTimeout(path, payload);
+        const helperStatus = fetchBackendStatusFromHelper(path, payload);
+        const first = await Promise.race([
+          bridgeStatus.then((result) => ({ source: "bridge", result })),
+          helperStatus.then((result) => ({ source: "helper", result })),
+        ]);
+        if (first.result?.status === "ok") return first.result;
+
+        const second = first.source === "bridge" ? await helperStatus : await bridgeStatus;
+        if (second?.status === "ok") {
+          if (first.source === "bridge") {
+            sendClaudeCodexProDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
+              path,
+              httpStatus: 200,
+              responseStatus: second.status || "",
+            });
+          }
+          return second;
+        }
+
+        const bridgeResult = first.source === "bridge" ? first.result : second;
+        const helperResult = first.source === "helper" ? first.result : second;
+        if (bridgeResult?.timeout) sendClaudeCodexProDiagnostic("backend_bridge_timeout", { path });
+        sendClaudeCodexProDiagnostic("backend_status_bridge_and_http_failed", {
+          path,
+          errorName: "",
+          errorMessage: "",
+        });
+        return helperResult || bridgeResult;
+      }
+      if (path === "/backend/repair") {
         const result = await bridgeWithBackendTimeout(path, payload);
         if (result?.status === "ok") return result;
         if (result?.timeout) sendClaudeCodexProDiagnostic("backend_bridge_timeout", { path });
@@ -5655,6 +5717,7 @@
   }
 
   const codexModelMenuSurfaceSelector = "[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper], [data-side][data-align]";
+  const codexModelMenuNativeItemSelector = "[role='option'], [role='menuitem'], [data-value]";
 
   function isClaudeCodexProDialogNode(node) {
     if (!(node instanceof Element)) return false;
@@ -5688,8 +5751,9 @@
   }
 
   function codexModelMenuHasNativeModelStructure(surface) {
-    const nativeItems = Array.from(surface.querySelectorAll("[role='option'], [role='menuitem'], [data-value]"))
-      .filter((node) => !node.hasAttribute("data-claude-codex-pro-injected-model"));
+    const nativeItems = Array.from(surface.querySelectorAll(codexModelMenuNativeItemSelector))
+      .filter((node) => !node.hasAttribute("data-claude-codex-pro-injected-model"))
+      .filter((node) => node.closest(codexModelMenuSurfaceSelector) === surface);
     if (!nativeItems.length) return false;
     const anchorText = codexModelMenuAnchorText(surface);
     const itemText = nativeItems.map((node) => `${node.textContent || ""} ${node.getAttribute?.("data-value") || ""}`).join(" ");
@@ -5711,8 +5775,22 @@
     });
   }
 
+  function cleanupCodexInjectedModelGroups(validSurfaces) {
+    const validSurfaceSet = new Set(validSurfaces);
+    let removedCount = 0;
+    document.querySelectorAll("[data-claude-codex-pro-model-group]").forEach((group) => {
+      if (validSurfaceSet.has(group.parentElement)) return;
+      group.remove();
+      removedCount += 1;
+    });
+    return removedCount;
+  }
+
   function codexModelMenuHasModel(surface, modelName) {
-    return Array.from(surface.querySelectorAll("button, [role='menuitem'], [role='option'], [data-value]")).some((node) => String(node.textContent || node.getAttribute?.("data-value") || "").includes(modelName));
+    return Array.from(surface.querySelectorAll("button, [role='menuitem'], [role='option'], [data-value]")).some((node) => {
+      const identity = `${node.textContent || ""} ${node.getAttribute?.("data-value") || ""}`;
+      return identity.includes(modelName);
+    });
   }
 
   function codexModelMenuDismiss(surface) {
@@ -5768,7 +5846,7 @@
       clearInterval(window.__claudeCodexProModelDropdownPatchInterval);
     }
     window.__claudeCodexProModelDropdownPatchInterval = setInterval(() => {
-      if (codexModelMenuCandidates().length) {
+      if (codexModelMenuCandidates().length || document.querySelector?.("[data-claude-codex-pro-model-group]")) {
         scheduleCodexModelDropdownPatch(0);
       }
     }, 800);
@@ -5812,15 +5890,31 @@
   }
 
   function patchCodexModelDropdownDom() {
-    if (!claudeCodexProModelUnlockEnabled()) return false;
+    if (!claudeCodexProModelUnlockEnabled()) {
+      return cleanupCodexInjectedModelGroups([]) > 0;
+    }
+    const surfaces = codexModelMenuCandidates();
+    let changed = cleanupCodexInjectedModelGroups(surfaces) > 0;
     const names = claudeCodexProModelNames();
     if (!names.length) {
       void loadCodexModelCatalog();
-      return false;
+      return changed;
     }
-    let changed = false;
-    for (const surface of codexModelMenuCandidates()) {
+    for (const surface of surfaces) {
       let group = surface.querySelector("[data-claude-codex-pro-model-group]");
+      group?.querySelectorAll("[data-claude-codex-pro-injected-model]").forEach((item) => {
+        if (names.includes(item.getAttribute("data-claude-codex-pro-injected-model"))) return;
+        item.remove();
+        changed = true;
+      });
+      const missingNames = names.filter((modelName) => !codexModelMenuHasModel(surface, modelName));
+      if (!missingNames.length) {
+        if (group && !group.querySelector("[data-claude-codex-pro-injected-model]")) {
+          group.remove();
+          changed = true;
+        }
+        continue;
+      }
       if (!group) {
         group = document.createElement("div");
         group.dataset.claudeCodexProModelGroup = "true";
@@ -5829,8 +5923,7 @@
         group.style.paddingTop = "6px";
         surface.appendChild(group);
       }
-      names.forEach((modelName) => {
-        if (codexModelMenuHasModel(surface, modelName)) return;
+      missingNames.forEach((modelName) => {
         group.appendChild(createCodexInjectedModelMenuItem(modelName));
         changed = true;
       });
@@ -9669,8 +9762,6 @@
 
   function scan() {
     runScanStep(scanLightweight);
-    ensureClaudeChineseOverlayObserver();
-    runScanStep(refreshClaudeChineseOverlay);
     requestAnimationFrame(() => runScanStep(scanDeferred));
   }
 

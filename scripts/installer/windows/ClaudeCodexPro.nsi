@@ -61,6 +61,9 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayIcon" "$INSTDIR\claude-codex-pro-manager.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "UninstallString" "$INSTDIR\uninstall.exe"
+
+  nsExec::ExecToLog '"$INSTDIR\claude-codex-pro.exe" --register-installation --app-version "${VERSION}"'
+  Pop $0
 SectionEnd
 
 Section "Uninstall"
