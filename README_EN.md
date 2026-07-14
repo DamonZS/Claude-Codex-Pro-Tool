@@ -228,15 +228,7 @@ Default database:
 - Build a bundle from enabled scripts.
 - Extend the frontend through the Codex injection script.
 
-### 11. Prompt Optimizer
-
-The project integrates the prompt-optimization workflow from [linshenkx/prompt-optimizer](https://github.com/linshenkx/prompt-optimizer).
-
-- Open the prompt optimizer inside the manager.
-- Open an independent prompt-optimizer window.
-- Use it as part of the unified tool system without spawning duplicate control windows.
-
-### 12. Zed Remote
+### 11. Zed Remote
 
 - Detect the Zed installation path.
 - Parse SSH host, user, and port.
@@ -246,7 +238,7 @@ The project integrates the prompt-optimization workflow from [linshenkx/prompt-o
 - Support default open, window reuse, new window, and append-to-current-window strategies.
 - Forget remote projects.
 
-### 13. Upstream Worktree
+### 12. Upstream Worktree
 
 - Read Git remotes, branches, and worktrees.
 - Create a worktree from the latest remote-tracking branch.
@@ -254,7 +246,7 @@ The project integrates the prompt-optimization workflow from [linshenkx/prompt-o
 - Validate branch names and base branches.
 - Avoid deriving task branches from a stale local HEAD.
 
-### 14. Watcher and Self-Recovery
+### 13. Watcher and Self-Recovery
 
 - Install the watcher on Windows.
 - Monitor the Codex process and CDP port.
@@ -262,7 +254,7 @@ The project integrates the prompt-optimization workflow from [linshenkx/prompt-o
 - Enable, disable, install, or uninstall the watcher.
 - Stop launcher or Codex-related processes when requested.
 
-### 15. Installation Maintenance and Updates
+### 14. Installation Maintenance and Updates
 
 - Installation and uninstallation entry points.
 - Shortcut repair.
@@ -275,7 +267,7 @@ The project integrates the prompt-optimization workflow from [linshenkx/prompt-o
 - Settings reset.
 - Image-overlay settings reset.
 
-### 16. Automated Builds and Releases
+### 15. Automated Builds and Releases
 
 - `Auto release installers`: after a push to `main` or a manual trigger, calculate the next `V0.01`-series version, create the tag, build the Windows installer, macOS x64 DMG, and macOS arm64 DMG, then upload `latest.json`.
 - `PR build artifacts`: build verification artifacts for pull requests and routine validation.

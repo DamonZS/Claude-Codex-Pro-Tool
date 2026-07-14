@@ -6014,45 +6014,6 @@ body {
   word-break: break-word;
 }
 
-.prompt-optimizer-card {
-  max-width: 340px;
-}
-
-.prompt-optimizer-card .ops-panel-body {
-  display: grid;
-  gap: 8px;
-}
-
-.prompt-optimizer-card-button {
-  justify-content: flex-start;
-  min-height: 40px;
-  width: 100%;
-  border-radius: 6px;
-}
-
-.prompt-optimizer-source-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  border: 1px solid var(--ops-hairline);
-  border-radius: 6px;
-  background: var(--ops-surface-2);
-  color: var(--ops-muted);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 10px 12px;
-  text-align: left;
-  transition: all 0.15s ease-out;
-}
-
-.prompt-optimizer-source-link:hover {
-  border-color: var(--ops-hairline-hover);
-  background: var(--ops-surface-3);
-  color: var(--ops-ink);
-}
-
 .action-row button {
   min-width: 0;
 }

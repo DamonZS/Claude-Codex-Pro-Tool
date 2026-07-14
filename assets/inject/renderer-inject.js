@@ -5747,7 +5747,21 @@
     const trigger = surface.id
       ? Array.from(document.querySelectorAll("[aria-controls]")).find((node) => node.getAttribute("aria-controls") === surface.id)
       : null;
-    return `${labelledBy} ${trigger?.textContent || ""} ${trigger?.getAttribute?.("aria-label") || ""}`;
+    return `${surface.getAttribute?.("aria-label") || ""} ${labelledBy} ${trigger?.textContent || ""} ${trigger?.getAttribute?.("aria-label") || ""}`;
+  }
+
+  function codexModelMenuItemLooksLikeModel(node, knownModels) {
+    const values = [
+      node.getAttribute?.("data-value") || "",
+      node.getAttribute?.("value") || "",
+      node.getAttribute?.("aria-label") || "",
+      node.textContent || "",
+    ].map((value) => String(value).trim().toLowerCase()).filter(Boolean);
+    const known = knownModels.map((value) => String(value).trim().toLowerCase()).filter(Boolean);
+    return values.some((value) => {
+      if (known.some((model) => value === model)) return true;
+      return /(?:^|[\s([{:])(?:gpt-[a-z0-9][a-z0-9._-]*|o[1-9](?:-[a-z0-9][a-z0-9._-]*)?|codex-mini-latest)(?:$|[\s)\]},:])/i.test(value);
+    });
   }
 
   function codexModelMenuHasNativeModelStructure(surface) {
@@ -5756,12 +5770,10 @@
       .filter((node) => node.closest(codexModelMenuSurfaceSelector) === surface);
     if (!nativeItems.length) return false;
     const anchorText = codexModelMenuAnchorText(surface);
-    const itemText = nativeItems.map((node) => `${node.textContent || ""} ${node.getAttribute?.("data-value") || ""}`).join(" ");
     const known = claudeCodexProModelNames();
-    const hasSpecificModel = /\bgpt-|\bcodex\b|\bo[1-9](?:\b|-)/i.test(itemText)
-      || known.some((name) => itemText.includes(name));
-    if (surface.getAttribute?.("role") === "dialog") return hasSpecificModel;
-    return hasSpecificModel || /\bmodel\b/i.test(anchorText);
+    const modelItemCount = nativeItems.filter((node) => codexModelMenuItemLooksLikeModel(node, known)).length;
+    const hasExplicitModelSemantics = /\bmodels?\b|模型/i.test(anchorText);
+    return modelItemCount >= (hasExplicitModelSemantics ? 1 : 2);
   }
 
 

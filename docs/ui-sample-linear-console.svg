@@ -195,7 +195,7 @@
   <text x="842" y="765" text-anchor="middle" class="btnText" font-size="12">预览配置</text>
 
   <rect x="138" y="798" width="790" height="56" rx="8" class="surface2"/>
-  <text x="158" y="820" class="text" font-size="15" font-weight="600">Prompt Optimizer / Skills</text>
+  <text x="158" y="820" class="text" font-size="15" font-weight="600">MCP / Skills</text>
   <text x="158" y="840" class="muted" font-size="12">识别到 SKILL.md 结构 · 可安装 / 可审查</text>
   <rect x="774" y="810" width="136" height="28" rx="14" class="btn"/>
   <text x="842" y="829" text-anchor="middle" class="btnText" font-size="12">打开来源</text>

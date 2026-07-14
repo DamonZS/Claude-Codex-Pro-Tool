@@ -3584,33 +3584,6 @@ export function PluginHubScreen({
   );
 }
 
-export function PromptOptimizerCard({ actions }: { actions: AppActions }) {
-  return (
-    <section className="ops-panel prompt-optimizer-card">
-      <header>
-        <div>
-          <h2>提示词优化</h2>
-          <p>把提示词优化放到 Codex/Claude 运维流旁边。</p>
-        </div>
-      </header>
-      <div className="ops-panel-body">
-        <Button className="prompt-optimizer-card-button" onClick={() => void actions.goPromptOptimizer()}>
-          <PencilRuler className="h-4 w-4" />
-          提示词优化
-        </Button>
-        <button
-          className="prompt-optimizer-source-link"
-          onClick={() => void actions.openExternalUrl("https://github.com/linshenkx/prompt-optimizer")}
-          type="button"
-        >
-          <ExternalLink className="h-4 w-4" />
-          linshenkx/prompt-optimizer
-        </button>
-      </div>
-    </section>
-  );
-}
-
 export function MaintenanceToolsPanel({
   actions,
   claudeDesktop,

@@ -6,16 +6,62 @@ use claude_codex_pro_core::relay_config::{
     apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard,
     backfill_relay_profile_from_home, backfill_relay_profile_from_home_with_common,
     chatgpt_auth_status_from_home, clear_relay_config_to_home,
-    clear_relay_config_to_home_with_auth, delete_context_entry_from_common_config,
-    extract_common_config_from_config, filter_common_config_for_selection,
-    list_context_entries_from_common_config, normalize_relay_profile_for_storage,
-    relay_config_status_from_home, sanitize_common_config_contents,
-    set_codex_goals_feature_in_home, strip_common_config_from_config,
-    sync_live_config_context_entries, upsert_context_entry_in_common_config,
+    clear_relay_config_to_home_with_auth, codex_provider_auth_environment_from_home,
+    delete_context_entry_from_common_config, extract_common_config_from_config,
+    filter_common_config_for_selection, list_context_entries_from_common_config,
+    normalize_relay_profile_for_storage, relay_config_status_from_home,
+    sanitize_common_config_contents, set_codex_goals_feature_in_home,
+    strip_common_config_from_config, sync_live_config_context_entries,
+    upsert_context_entry_in_common_config,
 };
 use claude_codex_pro_core::settings::{
     RelayContextSelection, RelayMode, RelayProfile, RelayProtocol,
 };
+
+struct ProcessEnvironmentGuard {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ProcessEnvironmentGuard {
+    fn capture(name: &'static str) -> Self {
+        Self {
+            name,
+            previous: std::env::var_os(name),
+        }
+    }
+}
+
+impl Drop for ProcessEnvironmentGuard {
+    fn drop(&mut self) {
+        match self.previous.as_ref() {
+            Some(value) => unsafe { std::env::set_var(self.name, value) },
+            None => unsafe { std::env::remove_var(self.name) },
+        }
+    }
+}
+
+#[cfg(windows)]
+fn current_user_environment_value(name: &str) -> Option<String> {
+    let output = std::process::Command::new("reg.exe")
+        .args(["query", r"HKCU\Environment", "/v", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        let line = line.trim();
+        let mut fields = line.split_whitespace();
+        (fields.next()? == name).then(|| {
+            let value_type = fields.next().unwrap_or_default();
+            line.find(value_type)
+                .map(|index| line[index + value_type.len()..].trim().to_string())
+                .unwrap_or_default()
+        })
+    })
+}
 
 #[test]
 fn codex_session_db_path_prefers_new_sqlite_directory_threads_db() {
@@ -70,6 +116,78 @@ fn codex_session_db_path_falls_back_to_legacy_state_db() {
         codex_session_db_path_from_home(home),
         home.join("state_5.sqlite")
     );
+}
+
+#[test]
+fn provider_launch_environment_uses_live_active_provider_env_key_without_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = r#"model_provider = "active"
+
+[model_providers.inactive]
+env_key = "INACTIVE_API_KEY"
+
+[model_providers.active]
+env_key = "ACTIVE_API_KEY"
+"#;
+    let auth = r#"{"OPENAI_API_KEY":"sk-live"}"#;
+    std::fs::write(temp.path().join("config.toml"), config).unwrap();
+    std::fs::write(temp.path().join("auth.json"), auth).unwrap();
+
+    let environment = codex_provider_auth_environment_from_home(temp.path()).unwrap();
+
+    assert_eq!(environment.0, "ACTIVE_API_KEY");
+    assert_eq!(environment.1, "sk-live");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("config.toml")).unwrap(),
+        config
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("auth.json")).unwrap(),
+        auth
+    );
+}
+
+#[test]
+fn provider_launch_environment_falls_back_for_missing_or_invalid_active_env_key() {
+    for config in [
+        r#"model_provider = "active"
+[model_providers.active]
+env_key = "INVALID-KEY"
+"#,
+        r#"model_provider = "active"
+[model_providers.other]
+env_key = "OTHER_API_KEY"
+"#,
+        "not valid toml = [",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config.toml"), config).unwrap();
+        std::fs::write(
+            temp.path().join("auth.json"),
+            r#"{"OPENAI_API_KEY":"sk-live"}"#,
+        )
+        .unwrap();
+
+        let environment = codex_provider_auth_environment_from_home(temp.path()).unwrap();
+        assert_eq!(environment.0, "OPENAI_API_KEY");
+        assert_eq!(environment.1, "sk-live");
+    }
+}
+
+#[test]
+fn provider_launch_environment_is_absent_without_live_auth_credential() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model_provider = "active"
+[model_providers.active]
+env_key = "ACTIVE_API_KEY"
+"#,
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("auth.json"), r#"{"OPENAI_API_KEY":" "}"#).unwrap();
+
+    assert_eq!(codex_provider_auth_environment_from_home(temp.path()), None);
 }
 
 #[test]
@@ -209,6 +327,7 @@ base_url = "http://127.0.0.1:57321/v1"
 
 #[test]
 fn reports_pure_api_configured_from_provider_env_key() {
+    let _environment = ProcessEnvironmentGuard::capture("CCP_TEST_OPENAI_API_KEY");
     unsafe {
         std::env::set_var("CCP_TEST_OPENAI_API_KEY", "sk-env-redacted");
     }
@@ -237,6 +356,9 @@ base_url = "https://api.toporeduce.cn/v1"
 
 #[test]
 fn apply_relay_config_writes_isolated_provider_without_live_config_carryover() {
+    let process_environment_before = std::env::var_os("OPENAI_API_KEY");
+    #[cfg(windows)]
+    let user_environment_before = current_user_environment_value("OPENAI_API_KEY");
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(
         temp.path().join("config.toml"),
@@ -276,6 +398,60 @@ model = "gpt-5-mini"
     assert!(updated.contains(r#"base_url = "https://relay.example.test/v1""#));
     assert!(updated.contains(r#"env_key = "OPENAI_API_KEY""#));
     assert!(!updated.contains("experimental_bearer_token"));
+    assert_eq!(
+        std::env::var_os("OPENAI_API_KEY"),
+        process_environment_before,
+        "generic relay file APIs must not change the current process credential environment"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        current_user_environment_value("OPENAI_API_KEY"),
+        user_environment_before,
+        "generic relay file APIs must not change HKCU\\Environment"
+    );
+}
+
+#[test]
+fn relay_profile_preserves_valid_custom_env_key_through_normalize_and_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut profile = RelayProfile {
+        id: "custom".to_string(),
+        model: "gpt-test".to_string(),
+        base_url: "https://relay.example.test/v1".to_string(),
+        api_key: "test-profile-credential".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "gpt-test"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "CCP_TEST_CUSTOM_PROVIDER_KEY"
+base_url = "https://relay.example.test/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"test-profile-credential"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+    assert!(
+        profile
+            .config_contents
+            .contains(r#"env_key = "CCP_TEST_CUSTOM_PROVIDER_KEY""#)
+    );
+
+    apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
+    let live = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(live.contains(r#"env_key = "CCP_TEST_CUSTOM_PROVIDER_KEY""#));
+    assert_eq!(
+        codex_provider_auth_environment_from_home(temp.path()),
+        Some((
+            "CCP_TEST_CUSTOM_PROVIDER_KEY".to_string(),
+            "test-profile-credential".to_string()
+        ))
+    );
 }
 
 #[test]

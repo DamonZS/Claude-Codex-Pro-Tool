@@ -76,7 +76,6 @@ pub fn run() {
             commands::install_claude_zh_patch_at_install_root,
             commands::restore_claude_zh_patch,
             commands::open_plugin_hub_window,
-            commands::open_prompt_optimizer_window,
             commands::new_claude_desktop_chat,
             commands::paste_claude_desktop_draft,
             commands::submit_claude_desktop_text,

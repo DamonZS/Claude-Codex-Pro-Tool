@@ -8,7 +8,7 @@
 
 ## 项目概览
 
-Claude Codex Pro Tool 是一个 Rust/Tauri + React 的本地运维控制台，用来管理 Codex App、Claude Desktop 包装窗口、供应商配置、插件中心、会话维护、脚本市场、提示词优化与本地记忆辅助。
+Claude Codex Pro Tool 是一个 Rust/Tauri + React 的本地运维控制台，用来管理 Codex App、Claude Desktop 包装窗口、供应商配置、插件中心、会话维护、脚本市场与本地记忆辅助。
 
 ```mermaid
 flowchart LR

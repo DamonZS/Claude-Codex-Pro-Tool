@@ -856,7 +856,7 @@ fn session_summary_limits_injected_items_and_reports_workspace_counts() {
         "供应商配置切换后要同步历史会话",
         "README 需要记录构建和 CI 排查步骤",
         "Claude 中文包装窗口不修改官方 MSIX",
-        "提示词优化器使用系统浏览器打开",
+        "外部工具使用系统浏览器打开",
         "管理工具设置页开关使用滑块",
         "大量改动前先备份源码到 F 盘",
     ];

@@ -10,6 +10,7 @@ use claude_codex_pro_core::memory_assist::{
 };
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
 use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
+use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
 #[cfg(windows)]
@@ -22,10 +23,19 @@ struct LauncherHooks {
     core: Arc<DefaultLaunchHooks>,
     data: Arc<LauncherDataService>,
     runtime: Arc<LauncherRuntimeService>,
+    status_store: StatusStore,
+    last_app_dir: Arc<tokio::sync::Mutex<Option<PathBuf>>>,
+    bridge_watchdog: Arc<tokio::sync::Mutex<Option<LauncherBridgeWatchdogRuntime>>>,
 }
 
 impl Default for LauncherHooks {
     fn default() -> Self {
+        Self::new(StatusStore::default())
+    }
+}
+
+impl LauncherHooks {
+    fn new(status_store: StatusStore) -> Self {
         Self {
             core: Arc::new(DefaultLaunchHooks::default()),
             data: Arc::new(LauncherDataService::default()),
@@ -33,8 +43,16 @@ impl Default for LauncherHooks {
                 claude_codex_pro_core::launcher::LaunchOptions::default().debug_port,
                 default_user_script_manager(),
             )),
+            status_store,
+            last_app_dir: Arc::new(tokio::sync::Mutex::new(None)),
+            bridge_watchdog: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
+}
+
+struct LauncherBridgeWatchdogRuntime {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 #[tokio::main]
@@ -79,7 +97,7 @@ async fn run_launcher() -> Result<()> {
         activate_existing_codex_app(&options).await?;
         return Ok(());
     };
-    let hooks = LauncherHooks::default();
+    let hooks = LauncherHooks::new(options.status_store.clone());
     let handle = launch_and_inject_with_hooks(options, &hooks).await?;
     handle.wait_for_codex_exit().await?;
     Ok(())
@@ -384,6 +402,7 @@ impl LaunchHooks for LauncherHooks {
         app_dir: &Path,
     ) -> anyhow::Result<Option<BridgeContext>> {
         self.runtime.set_debug_port(debug_port);
+        *self.last_app_dir.lock().await = Some(app_dir.to_path_buf());
         Ok(Some(BridgeContext::core_with_data_and_app_dir(
             self.runtime.clone(),
             self.data.clone(),
@@ -402,6 +421,84 @@ impl LaunchHooks for LauncherHooks {
 
     async fn inject(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
         self.core.inject(debug_port, helper_port).await
+    }
+
+    async fn start_bridge_watchdog(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
+        let app_dir = self.last_app_dir.lock().await.clone().ok_or_else(|| {
+            anyhow::anyhow!("Codex app directory unavailable for bridge watchdog")
+        })?;
+        let data = self.data.clone();
+        let runtime = self.runtime.clone();
+        let status_store = self.status_store.clone();
+        let (shutdown, mut shutdown_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval_at(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(7),
+                std::time::Duration::from_secs(11),
+            );
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    _ = interval.tick() => {
+                        if claude_codex_pro_core::launcher::bridge_health_ok(debug_port)
+                            .await
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let ctx = BridgeContext::core_with_data_and_app_dir(
+                            runtime.clone(),
+                            data.clone(),
+                            app_dir.clone(),
+                        );
+                        match inject_with_context(
+                            debug_port,
+                            helper_port,
+                            ctx,
+                            runtime.clone(),
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                if let Ok(Some(mut status)) = status_store.load_latest() {
+                                    status.status = "running".to_string();
+                                    status.message = "Claude Codex Pro launcher ready".to_string();
+                                    let _ = status_store.save_latest(&status);
+                                }
+                                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                                    "launcher.bridge_watchdog_reinject_ok",
+                                    json!({
+                                        "debug_port": debug_port,
+                                        "helper_port": helper_port
+                                    }),
+                                );
+                            }
+                            Err(error) => {
+                                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                                    "launcher.bridge_watchdog_reinject_failed",
+                                    json!({
+                                        "debug_port": debug_port,
+                                        "helper_port": helper_port,
+                                        "message": error.to_string()
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        if let Some(runtime) = self
+            .bridge_watchdog
+            .lock()
+            .await
+            .replace(LauncherBridgeWatchdogRuntime { shutdown, task })
+        {
+            let _ = runtime.shutdown.send(());
+            let _ = runtime.task.await;
+        }
+        Ok(())
     }
 
     async fn start_computer_use_guard_watchdog(
@@ -423,6 +520,10 @@ impl LaunchHooks for LauncherHooks {
     }
 
     async fn shutdown_helper(&self, helper_port: u16) {
+        if let Some(runtime) = self.bridge_watchdog.lock().await.take() {
+            let _ = runtime.shutdown.send(());
+            let _ = runtime.task.await;
+        }
         self.core.shutdown_helper(helper_port).await;
     }
 

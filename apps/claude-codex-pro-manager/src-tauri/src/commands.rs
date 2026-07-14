@@ -178,16 +178,6 @@ pub struct PluginHubWindowPayload {
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptOptimizerWindowPayload {
-    pub open: bool,
-    pub label: String,
-    pub default_url: String,
-    pub integration_mode: String,
-    pub license: String,
-}
-
 fn claude_zh_patch_payload(
     status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
     changed_files: Vec<String>,
@@ -1332,23 +1322,6 @@ pub async fn open_plugin_hub_window(
 }
 
 #[tauri::command]
-pub async fn open_prompt_optimizer_window(
-    app: tauri::AppHandle,
-) -> CommandResult<PromptOptimizerWindowPayload> {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(main_window_route_script("tools"));
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-    let payload = prompt_optimizer_window_payload(false);
-    match open_url(&payload.default_url) {
-        Ok(()) => ok("提示词优化器已在系统浏览器中打开。", payload),
-        Err(error) => failed(&format!("提示词优化器打开失败：{error}"), payload),
-    }
-}
-
-#[tauri::command]
 pub async fn load_claude_chinese_window_status(
     app: tauri::AppHandle,
 ) -> CommandResult<ClaudeChineseWindowPayload> {
@@ -2339,31 +2312,35 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
             .map(refresh_launch_port_status);
     };
 
+    let old_launcher_pids = claude_codex_pro_core::watcher::find_restartable_launcher_processes();
     let old_codex_pids = claude_codex_pro_core::watcher::find_codex_processes();
+    let mut old_process_pids = old_launcher_pids;
+    old_process_pids.extend(old_codex_pids);
+    old_process_pids.sort_unstable();
+    old_process_pids.dedup();
     let stopped_launchers =
         claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
     let stopped_codex = claude_codex_pro_core::watcher::stop_codex_processes();
     details.push(format!(
         "已请求结束 {stopped_codex} 个 Codex 进程、{stopped_launchers} 个启动器进程。"
     ));
-    if !old_codex_pids.is_empty() {
-        if !wait_for_codex_pids_to_exit(&old_codex_pids, Duration::from_secs(3)).await {
+    if !old_process_pids.is_empty() {
+        if !wait_for_processes_to_exit_async(&old_process_pids, Duration::from_secs(3)).await {
             details.push(format!(
-                "旧 Codex 进程未按预期退出，正在强制结束 PID：{}。",
-                old_codex_pids
+                "旧 launcher/Codex 进程未按预期退出，正在强制结束 PID：{}。",
+                old_process_pids
                     .iter()
                     .map(u32::to_string)
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
-            let killed = force_kill_process_tree_for_frontend_repair(&old_codex_pids);
+            let killed = force_kill_process_tree_for_frontend_repair(&old_process_pids);
             details.push(format!(
-                "已发起 taskkill 兜底结束 {killed} 个旧 Codex 进程。"
+                "已发起 taskkill 兜底结束 {killed} 个旧 launcher/Codex 进程。"
             ));
-            if !wait_for_codex_pids_to_exit(&old_codex_pids, Duration::from_secs(8)).await {
+            if !wait_for_processes_to_exit_async(&old_process_pids, Duration::from_secs(8)).await {
                 details.push(
-                    "旧 Codex 进程仍未退出，本次不会继续启动新 Codex，避免复用旧注入状态。"
-                        .to_string(),
+                    "旧 launcher/Codex 进程仍未退出，本次不会继续启动新 Codex，避免复用旧注入状态。".to_string(),
                 );
                 return StatusStore::default()
                     .load_latest()
@@ -2372,7 +2349,7 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
                     .map(refresh_launch_port_status);
             }
         }
-        details.push("旧 Codex 进程已确认退出，开始启动新的 Codex。".to_string());
+        details.push("旧 launcher/Codex 进程已确认退出，开始启动新的 Codex。".to_string());
     } else {
         tokio::time::sleep(Duration::from_millis(800)).await;
     }
@@ -2426,20 +2403,13 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         .map(refresh_launch_port_status)
 }
 
-async fn wait_for_codex_pids_to_exit(pids: &[u32], timeout: Duration) -> bool {
-    if pids.is_empty() {
-        return true;
-    }
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        let running = claude_codex_pro_core::watcher::find_codex_processes();
-        if !pids.iter().any(|pid| running.contains(pid)) {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    let running = claude_codex_pro_core::watcher::find_codex_processes();
-    !pids.iter().any(|pid| running.contains(pid))
+async fn wait_for_processes_to_exit_async(pids: &[u32], timeout: Duration) -> bool {
+    let pids = pids.to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_codex_pro_core::watcher::wait_for_processes_to_exit(&pids, timeout)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 async fn select_repair_debug_port(requested: u16) -> u16 {
@@ -2720,15 +2690,28 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
     // enumerate/kill processes — on Windows those go through taskkill/WMI and can
     // take seconds. Running them on the UI thread froze the WebView during a
     // restart, so move the whole teardown onto the blocking pool.
-    let prepared = tauri::async_runtime::spawn_blocking(move || {
-        let request = normalize_launch_request(request);
-        claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
-        claude_codex_pro_core::watcher::stop_codex_processes();
-        request
-    })
-    .await;
+    let prepared =
+        tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<LaunchRequest> {
+            let request = normalize_launch_request(request);
+            let mut old_process_pids =
+                claude_codex_pro_core::watcher::find_restartable_launcher_processes();
+            old_process_pids.extend(claude_codex_pro_core::watcher::find_codex_processes());
+            old_process_pids.sort_unstable();
+            old_process_pids.dedup();
+            claude_codex_pro_core::watcher::stop_launcher_processes_for_codex_restart();
+            claude_codex_pro_core::watcher::stop_codex_processes();
+            if !claude_codex_pro_core::watcher::wait_for_processes_to_exit(
+                &old_process_pids,
+                Duration::from_secs(8),
+            ) {
+                anyhow::bail!("旧进程未能及时退出，本次不会启动新的 Codex")
+            }
+            Ok(request)
+        })
+        .await;
     match prepared {
-        Ok(request) => spawn_claude_codex_pro_launch(request, "重启 Codex 任务已在后台运行。"),
+        Ok(Ok(request)) => spawn_claude_codex_pro_launch(request, "重启 Codex 任务已在后台运行。"),
+        Ok(Err(error)) => failed(&format!("重启 Codex 任务失败：{error}"), json!({})),
         Err(error) => failed(&format!("重启 Codex 任务失败：{error}"), json!({})),
     }
 }
@@ -6081,20 +6064,30 @@ fn emit_update_download_progress(
     let _ = app.emit("update-download-progress", progress);
 }
 
+fn require_expected_update_version(
+    expected_version: Option<String>,
+) -> Result<String, CommandResult<Value>> {
+    expected_version
+        .filter(|version| !version.trim().is_empty())
+        .ok_or_else(|| {
+            failed(
+                "请先检查更新再安装；当前没有选中的发布版本。",
+                json!({
+                    "currentVersion": claude_codex_pro_core::version::VERSION,
+                    "progress": 0
+                }),
+            )
+        })
+}
+
 #[tauri::command]
 pub async fn perform_update(
     app: tauri::AppHandle,
     expected_version: Option<String>,
 ) -> CommandResult<Value> {
-    let Some(expected_version) = expected_version.filter(|version| !version.trim().is_empty())
-    else {
-        return failed(
-            "请先检查更新再安装；当前没有选中的发布版本。",
-            json!({
-                "currentVersion": claude_codex_pro_core::version::VERSION,
-                "progress": 0
-            }),
-        );
+    let expected_version = match require_expected_update_version(expected_version) {
+        Ok(expected_version) => expected_version,
+        Err(result) => return result,
     };
     emit_update_download_progress(&app, "connecting", 0, None);
     let release = match claude_codex_pro_core::update::fetch_current_release().await {
@@ -6792,6 +6785,14 @@ fn switch_relay_profile_blocking(
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
+            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
+                return failed(
+                    &format!(
+                        "供应商配置已切换，但同步 Codex 启动凭据失败：{error}。请修复后重新点击使用。"
+                    ),
+                    relay_switch_payload(result.settings, status, result.backup_path),
+                );
+            }
             log_manager_event(
                 "manager.switch_relay_profile.ok",
                 json!({
@@ -7627,6 +7628,14 @@ fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
         ) {
             Ok(result) => {
                 let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
+                if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
+                    return failed(
+                        &format!(
+                            "供应商配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
+                        ),
+                        relay_payload(status, result.backup_path),
+                    );
+                }
                 log_relay_apply_result(
                     "manager.apply_relay_injection.ok",
                     &relay,
@@ -7684,6 +7693,14 @@ fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
+            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
+                return failed(
+                    &format!(
+                        "Relay 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
+                    ),
+                    relay_payload(status, result.backup_path),
+                );
+            }
             log_relay_apply_result(
                 "manager.apply_relay_injection.ok",
                 &relay,
@@ -7752,6 +7769,20 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
         ) {
             Ok(result) => {
                 let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
+                if !status.configured {
+                    return failed(
+                        "已写入纯 API 配置，但未检测到完整的自定义供应商。请检查 config.toml 与供应商 API key。",
+                        relay_payload(status, result.backup_path),
+                    );
+                }
+                if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
+                    return failed(
+                        &format!(
+                            "纯 API 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
+                        ),
+                        relay_payload(status, result.backup_path),
+                    );
+                }
                 log_relay_apply_result(
                     "manager.apply_pure_api_injection.ok",
                     &relay,
@@ -7759,12 +7790,6 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
                     result.backup_path.as_ref(),
                     None,
                 );
-                if !status.configured {
-                    return failed(
-                        "已写入纯 API 配置，但未检测到完整的自定义供应商。请检查 config.toml 与供应商 API key。",
-                        relay_payload(status, result.backup_path),
-                    );
-                }
                 ok(
                     "已按兼容规则切换供应商。",
                     relay_payload(status, result.backup_path),
@@ -7796,6 +7821,20 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
+            if !status.configured {
+                return failed(
+                    "纯 API 配置已写入，但未检测到完整的自定义供应商。请检查 config.toml 与供应商 API 密钥。",
+                    relay_payload(status, result.backup_path),
+                );
+            }
+            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
+                return failed(
+                    &format!(
+                        "纯 API 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
+                    ),
+                    relay_payload(status, result.backup_path),
+                );
+            }
             log_relay_apply_result(
                 "manager.apply_pure_api_injection.ok",
                 &relay,
@@ -7803,12 +7842,6 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
                 result.backup_path.as_ref(),
                 None,
             );
-            if !status.configured {
-                return failed(
-                    "纯 API 配置已写入，但未检测到完整的自定义供应商。请检查 config.toml 与供应商 API 密钥。",
-                    relay_payload(status, result.backup_path),
-                );
-            }
             ok(
                 "纯 API 模式已写入：config.toml 使用自定义供应商，auth.json 使用所选供应商。",
                 relay_payload(status, result.backup_path),
@@ -7963,6 +7996,23 @@ fn log_relay_apply_result(
             "error": error
         }),
     );
+}
+
+fn sync_codex_credential_environment_after_apply(home: &Path) -> anyhow::Result<()> {
+    let Some(result) = claude_codex_pro_core::credential_environment::
+        sync_codex_user_credential_environment_from_home(home)?
+    else {
+        return Ok(());
+    };
+    log_manager_event(
+        "manager.codex_credential_environment.synced",
+        json!({
+            "variableName": result.variable_name,
+            "userChanged": result.user_changed,
+            "processChanged": result.process_changed
+        }),
+    );
+    Ok(())
 }
 
 fn log_manager_event(event: &str, detail: Value) {
@@ -8334,16 +8384,6 @@ fn claude_chinese_window_payload(
         cdp_status: status.cdp_status.clone(),
         cdp_blocker: status.cdp_blocker.clone(),
         official_install_kind: status.install_kind.clone(),
-    }
-}
-
-fn prompt_optimizer_window_payload(open: bool) -> PromptOptimizerWindowPayload {
-    PromptOptimizerWindowPayload {
-        open,
-        label: "main".to_string(),
-        default_url: "https://prompt.always200.com".to_string(),
-        integration_mode: "tools_card_external_browser".to_string(),
-        license: "AGPL-3.0-only".to_string(),
     }
 }
 
@@ -10053,7 +10093,7 @@ enabled = true
 
     #[test]
     fn update_install_requires_release_payload() {
-        let result = tauri::async_runtime::block_on(perform_update(None));
+        let result = require_expected_update_version(None).unwrap_err();
 
         assert!(result.message.contains("请先检查更新"));
     }

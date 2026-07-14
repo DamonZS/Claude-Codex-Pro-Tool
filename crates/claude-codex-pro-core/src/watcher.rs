@@ -200,6 +200,74 @@ pub fn find_codex_processes() -> Vec<u32> {
 }
 
 #[cfg(windows)]
+pub fn find_restartable_launcher_processes() -> Vec<u32> {
+    let processes = crate::windows_integration::enumerate_processes();
+    filter_restartable_launcher_processes(
+        processes
+            .iter()
+            .map(|process| (process.process_id, process.exe_file.as_str())),
+        std::process::id(),
+    )
+}
+
+#[cfg(not(windows))]
+pub fn find_restartable_launcher_processes() -> Vec<u32> {
+    Vec::new()
+}
+
+pub fn wait_for_process_ids_to_exit_with<Query, Sleep>(
+    process_ids: &[u32],
+    max_checks: usize,
+    mut query_running_process_ids: Query,
+    mut sleep_between_checks: Sleep,
+) -> bool
+where
+    Query: FnMut() -> Vec<u32>,
+    Sleep: FnMut(),
+{
+    if process_ids.is_empty() {
+        return true;
+    }
+
+    for check in 0..max_checks {
+        let running = query_running_process_ids();
+        if !process_ids.iter().any(|pid| running.contains(pid)) {
+            return true;
+        }
+        if check + 1 < max_checks {
+            sleep_between_checks();
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+pub fn wait_for_processes_to_exit(process_ids: &[u32], timeout: Duration) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    let max_checks = timeout
+        .as_millis()
+        .div_ceil(POLL_INTERVAL.as_millis())
+        .saturating_add(1)
+        .min(usize::MAX as u128) as usize;
+    wait_for_process_ids_to_exit_with(
+        process_ids,
+        max_checks,
+        || {
+            crate::windows_integration::enumerate_processes()
+                .into_iter()
+                .map(|process| process.process_id)
+                .collect()
+        },
+        || std::thread::sleep(POLL_INTERVAL),
+    )
+}
+
+#[cfg(not(windows))]
+pub fn wait_for_processes_to_exit(_process_ids: &[u32], _timeout: Duration) -> bool {
+    true
+}
+
+#[cfg(windows)]
 pub fn stop_launcher_processes() -> usize {
     let processes = crate::windows_integration::enumerate_processes();
     let killable = filter_killable_launcher_processes(
@@ -228,15 +296,8 @@ pub fn stop_launcher_processes() -> usize {
 
 #[cfg(windows)]
 pub fn stop_launcher_processes_for_codex_restart() -> usize {
-    let processes = crate::windows_integration::enumerate_processes();
-    let killable = filter_restartable_launcher_processes(
-        processes
-            .iter()
-            .map(|process| (process.process_id, process.exe_file.as_str())),
-        std::process::id(),
-    );
     let mut stopped = 0;
-    for process_id in killable {
+    for process_id in find_restartable_launcher_processes() {
         if crate::windows_integration::terminate_process(process_id) {
             stopped += 1;
         }

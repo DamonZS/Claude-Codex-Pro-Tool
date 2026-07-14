@@ -995,7 +995,7 @@ export type Route =
   | "maintenance"
   | "settings"
   | "about";
-export type LegacyRoute = "promptOptimizer" | "relay";
+export type LegacyRoute = "relay";
 
 declare global {
   interface Window {

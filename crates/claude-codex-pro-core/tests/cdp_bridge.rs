@@ -67,11 +67,11 @@ fn injection_script_excludes_ccp_dialog_from_codex_model_menu_candidates() {
     assert!(script.contains(".claude-codex-pro-control-deck"));
     assert!(script.contains(".filter((node) => node && !isClaudeCodexProDialogNode(node))"));
     assert!(script.contains("if (isClaudeCodexProDialogNode(node)) return false;"));
-    assert!(
-        script.contains(
-            "if (surface.getAttribute?.(\"role\") === \"dialog\") return hasSpecificModel;"
-        )
-    );
+    assert!(script.contains("function codexModelMenuItemLooksLikeModel(node, knownModels)"));
+    assert!(script.contains(
+        "const modelItemCount = nativeItems.filter((node) => codexModelMenuItemLooksLikeModel(node, known)).length;"
+    ));
+    assert!(script.contains("return modelItemCount >= (hasExplicitModelSemantics ? 1 : 2);"));
     assert!(script.contains("function cleanupCodexInjectedModelGroups(validSurfaces)"));
     assert!(script.contains(
         "codexModelMenuCandidates().length || document.querySelector?.(\"[data-claude-codex-pro-model-group]\")"
@@ -1013,16 +1013,34 @@ const parentDialog = new FakeElement("parent-dialog", {{ role: "dialog" }});
 const portalWrapper = new FakeElement("portal-wrapper", {{ "data-radix-popper-content-wrapper": "" }});
 const modelMenu = new FakeElement("model-menu", {{ role: "menu", id: "model-surface" }});
 const modelItem = new FakeElement("native-model", {{ role: "menuitem", "data-value": "gpt-5.4" }}, "5.4");
+const secondModelItem = new FakeElement("second-native-model", {{ role: "menuitem", "data-value": "gpt-5.5" }}, "5.5");
 const permissionMenu = new FakeElement("permission-menu", {{ role: "menu" }});
 const permissionItem = new FakeElement("permission-item", {{ role: "menuitem" }}, "Full access");
+const projectMenu = new FakeElement("project-menu", {{ role: "menu" }});
+const projectItem = new FakeElement("project-item", {{ role: "menuitem", "data-value": "Claude-Codex-Pro-Tool" }}, "Claude-Codex-Pro-Tool");
+const branchMenu = new FakeElement("branch-menu", {{ role: "menu" }});
+const branchItem = new FakeElement("branch-item", {{ role: "menuitem", "data-value": "codex/fix-model-menu" }}, "codex/fix-model-menu");
+const launchModeMenu = new FakeElement("launch-mode-menu", {{ role: "menu" }});
+const launchModeItem = new FakeElement("launch-mode-item", {{ role: "menuitem", "data-value": "codex-web" }}, "关联 Codex web");
+const reasoningMenu = new FakeElement("reasoning-menu", {{ role: "menu" }});
+const reasoningItem = new FakeElement("reasoning-item", {{ role: "menuitem", "data-value": "medium" }}, "中");
 const staleGroup = new FakeElement("stale-group", {{ "data-claude-codex-pro-model-group": "true" }});
 const validGroup = new FakeElement("valid-group", {{ "data-claude-codex-pro-model-group": "true" }});
-modelMenu.append(modelItem);
+modelMenu.append(modelItem, secondModelItem);
 modelMenu.append(validGroup);
 portalWrapper.append(modelMenu, staleGroup);
 parentDialog.append(portalWrapper);
 permissionMenu.append(permissionItem);
-const allNodes = [parentDialog, portalWrapper, modelMenu, modelItem, permissionMenu, permissionItem, staleGroup, validGroup];
+projectMenu.append(projectItem);
+branchMenu.append(branchItem);
+launchModeMenu.append(launchModeItem);
+reasoningMenu.append(reasoningItem);
+const allNodes = [
+  parentDialog, portalWrapper, modelMenu, modelItem, secondModelItem,
+  permissionMenu, permissionItem, projectMenu, projectItem,
+  branchMenu, branchItem, launchModeMenu, launchModeItem,
+  reasoningMenu, reasoningItem, staleGroup, validGroup,
+];
 globalThis.document = {{
   querySelectorAll: (selector) => allNodes.filter((node) => node.matches(selector)),
   getElementById: (id) => allNodes.find((node) => node.id === id) || null,

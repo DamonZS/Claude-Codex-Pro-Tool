@@ -17,7 +17,6 @@ import {
   Network,
   PackageSearch,
   Pencil,
-  PencilRuler,
   Pin,
   Power,
   RefreshCw,
@@ -49,7 +48,6 @@ import {
   MEMORY_GLOBAL_WORKSPACE,
   PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX,
   PONYTAIL_REPOSITORY_URL,
-  PROMPT_OPTIMIZER_URL,
   SUPPLIER_DRAG_MIME_TYPE,
   SUPPLIER_PRESETS,
 } from "@/constants";
@@ -1354,10 +1352,6 @@ export function App() {
     await refreshRoute("sessions");
   };
 
-  const goPromptOptimizer = async () => {
-    await openExternalUrl(PROMPT_OPTIMIZER_URL);
-  };
-
   const repairEntrypoints = async () => {
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("repair_shortcuts"), "修复入口");
     if (result) notifyResult({ title: "修复入口", message: result.message, status: result.status });
@@ -1942,7 +1936,6 @@ export function App() {
       openExternalUrl,
       goPluginHub,
       goMemoryAssist,
-      goPromptOptimizer,
       previewPlugin,
       installPlugin,
       uninstallPlugin,
@@ -2044,7 +2037,6 @@ export function App() {
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
       goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
-      goPromptOptimizer: (...args) => actionsRef.current!.goPromptOptimizer(...args),
       previewPlugin: (...args) => actionsRef.current!.previewPlugin(...args),
       installPlugin: (...args) => actionsRef.current!.installPlugin(...args),
       uninstallPlugin: (...args) => actionsRef.current!.uninstallPlugin(...args),

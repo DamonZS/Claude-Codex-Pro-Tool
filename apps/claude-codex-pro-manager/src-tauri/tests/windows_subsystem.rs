@@ -59,6 +59,17 @@ fn read_frontend_file(relative: &str) -> String {
     read_source_file(&path)
 }
 
+fn source_section<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+    let start = source
+        .find(start_marker)
+        .unwrap_or_else(|| panic!("missing source marker: {start_marker}"));
+    let end = source[start..]
+        .find(end_marker)
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("missing source marker: {end_marker}"));
+    &source[start..end]
+}
+
 #[cfg(windows)]
 #[test]
 fn manager_binary_uses_windows_gui_subsystem_in_debug_and_release() {
@@ -92,6 +103,76 @@ fn manager_startup_restores_claude_desktop_proxy_helper() {
     assert!(commands.contains("pub(crate) async fn ensure_claude_desktop_proxy_on_startup"));
     assert!(commands.contains("manager.claude_proxy.startup_ok"));
     assert!(commands.contains("manager.claude_proxy.startup_failed"));
+}
+
+#[test]
+fn manager_syncs_live_codex_credentials_only_after_successful_provider_writes() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let sync_call = "sync_codex_credential_environment_after_apply(&home)";
+    assert_eq!(
+        commands.matches(sync_call).count(),
+        5,
+        "only the five production provider-write success paths should synchronize credentials"
+    );
+
+    let switch = source_section(
+        &commands,
+        "fn switch_relay_profile_blocking(",
+        "pub async fn preview_claude_desktop_provider(",
+    );
+    let relay = source_section(
+        &commands,
+        "fn apply_relay_injection_blocking()",
+        "pub async fn apply_pure_api_injection()",
+    );
+    let pure_api = source_section(
+        &commands,
+        "fn apply_pure_api_injection_blocking()",
+        "pub async fn clear_relay_injection()",
+    );
+
+    for (name, section, expected_calls) in [
+        ("switch", switch, 1usize),
+        ("relay apply", relay, 2usize),
+        ("pure API apply", pure_api, 2usize),
+    ] {
+        assert_eq!(section.matches(sync_call).count(), expected_calls, "{name}");
+        for (sync_index, _) in section.match_indices(sync_call) {
+            let prefix = &section[..sync_index];
+            let success_index = prefix
+                .rfind("Ok(result) => {")
+                .unwrap_or_else(|| panic!("{name} sync is not inside a successful write branch"));
+            let failure_index = prefix.rfind("Err(error) => {").unwrap_or_default();
+            assert!(
+                success_index > failure_index,
+                "{name} sync must not run from a failed write branch"
+            );
+        }
+    }
+
+    let helper = source_section(
+        &commands,
+        "fn sync_codex_credential_environment_after_apply(",
+        "fn log_manager_event(",
+    );
+    assert!(helper.contains("sync_codex_user_credential_environment_from_home(home)?"));
+    let payload_start = helper
+        .find("json!({")
+        .expect("credential synchronization log payload");
+    let payload = &helper[payload_start..];
+    for field in ["variableName", "userChanged", "processChanged"] {
+        assert!(
+            payload.contains(field),
+            "missing redacted log field: {field}"
+        );
+    }
+    for forbidden in ["apiKey", "api_key", "token", "secret", "credential"] {
+        assert!(
+            !payload.contains(forbidden),
+            "credential synchronization log payload exposes forbidden field: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -581,10 +662,8 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(app_tsx.contains("onClick={() => void actions.installClaudeZhPatch()}"));
     assert!(!app_tsx.contains("onClick={() => void actions.openClaudeChinese()}"));
     assert!(!app_tsx.contains("包装 WebView"));
-    assert!(app_tsx.contains("PromptOptimizerCard"));
     assert!(commands_rs.contains("pub async fn open_claude_chinese_window"));
     assert!(commands_rs.contains("pub async fn open_plugin_hub_window"));
-    assert!(commands_rs.contains("pub async fn open_prompt_optimizer_window"));
     assert!(commands_rs.contains("tauri::WebviewUrl::External"));
     assert!(commands_rs.contains("https://claude.ai/new"));
     assert!(!commands_rs.contains("tauri::Url::parse(default_url)"));
@@ -601,7 +680,6 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     );
     assert!(commands_rs.contains("pointer-events: none"));
     assert!(commands_rs.contains("fallback.hidden = true"));
-    assert!(commands_rs.contains("https://prompt.always200.com"));
     assert!(commands_rs.contains("main_window_route_script(\"tools\")"));
     assert!(commands_rs.contains("claude-codex-pro-navigate"));
     assert!(commands_rs.contains("window.eval(script)"));
@@ -972,43 +1050,46 @@ fn manager_startup_commands_run_blocking_work_off_ui_thread() {
 }
 
 #[test]
-fn prompt_optimizer_is_integrated_as_tools_card_launcher() {
+fn prompt_optimizer_feature_is_removed() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
 
-    assert!(!app_tsx.contains("id: \"promptOptimizer\""));
-    assert!(!app_tsx.contains("function PromptOptimizerScreen"));
-    assert!(app_tsx.contains("function PromptOptimizerCard"));
-    assert!(app_tsx.contains("linshenkx/prompt-optimizer"));
-    assert!(!app_tsx.contains("http://localhost:8081/mcp"));
-    assert!(!app_tsx.contains("isPromptOptimizerStandaloneWindow"));
-    assert!(!app_tsx.contains("prompt-optimizer-window-shell"));
-    assert!(app_tsx.contains("goPromptOptimizer"));
-    assert!(
-        !app_tsx.contains("call<PromptOptimizerWindowResult>(\"open_prompt_optimizer_window\")")
-    );
-    assert!(app_tsx.contains("提示词优化"));
-    assert!(app_tsx.contains("PROMPT_OPTIMIZER_URL"));
+    for removed in [
+        "promptOptimizer",
+        "PromptOptimizerCard",
+        "PromptOptimizerScreen",
+        "goPromptOptimizer",
+        "PROMPT_OPTIMIZER_URL",
+        "linshenkx/prompt-optimizer",
+        "prompt.always200.com",
+    ] {
+        assert!(
+            !app_tsx.contains(removed),
+            "removed frontend feature remains: {removed}"
+        );
+    }
+    for removed in [
+        "open_prompt_optimizer_window",
+        "PromptOptimizerWindowPayload",
+        "prompt_optimizer_window_payload",
+        "tools_card_external_browser",
+        "prompt.always200.com",
+    ] {
+        assert!(
+            !commands_rs.contains(removed),
+            "removed command remains: {removed}"
+        );
+    }
+    assert!(!lib_rs.contains("commands::open_prompt_optimizer_window"));
+    assert!(!styles.contains(".prompt-optimizer-"));
     assert!(app_tsx.contains("normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE)"));
     assert!(app_tsx.contains("routeDocumentTitle"));
-    assert!(!app_tsx.contains("return \"提示词优化器\""));
-    assert!(styles.contains(".prompt-optimizer-card"));
-    assert!(styles.contains(".prompt-optimizer-card-button"));
-    assert!(!styles.contains(".prompt-optimizer-hero"));
-    assert!(!styles.contains(".prompt-optimizer-window-shell"));
-    assert!(!styles.contains(".prompt-usecase-list"));
-    assert!(commands_rs.contains("tools_card_external_browser"));
-    assert!(!commands_rs.contains("ops_console_initial_route_script"));
-    assert!(!commands_rs.contains("prompt_optimizer_window_background_task"));
     assert!(app_tsx.contains("__CLAUDE_CODEX_PRO_INITIAL_ROUTE"));
-    assert!(!commands_rs.contains(
-        "tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::External(url))"
-    ));
-    assert!(commands_rs.contains("PromptOptimizerWindowPayload"));
 }
 
 #[test]
@@ -1482,6 +1563,18 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("stop_launcher_processes_for_codex_restart()"));
     assert!(!restart_command.contains("stop_launcher_processes();"));
     assert!(restart_command.contains("stop_codex_processes();"));
+    assert!(restart_command.contains("find_restartable_launcher_processes()"));
+    assert!(restart_command.contains("find_codex_processes()"));
+    assert!(restart_command.contains("wait_for_processes_to_exit("));
+    assert!(restart_command.contains("旧进程未能及时退出"));
+    assert!(
+        restart_command
+            .find("wait_for_processes_to_exit(")
+            .expect("bounded process exit wait")
+            < restart_command
+                .find("spawn_claude_codex_pro_launch(")
+                .expect("new launcher spawn")
+    );
     // rustfmt may wrap the call across lines, so assert on the call and the
     // forwarded `request` argument separately rather than on a single substring.
     assert!(restart_command.contains("spawn_claude_codex_pro_launch("));
@@ -2863,11 +2956,12 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         })
         .expect("restart_codex_for_frontend_repair source");
     assert!(restart.contains("stop_launcher_processes_for_codex_restart()"));
+    assert!(restart.contains("let old_launcher_pids ="));
     assert!(restart.contains("let old_codex_pids ="));
     assert!(restart.contains("stop_codex_processes()"));
-    assert!(restart.contains("wait_for_codex_pids_to_exit(&old_codex_pids"));
-    assert!(restart.contains("force_kill_process_tree_for_frontend_repair(&old_codex_pids)"));
-    assert!(restart.contains("旧 Codex 进程仍未退出"));
+    assert!(restart.contains("wait_for_processes_to_exit"));
+    assert!(restart.contains("force_kill_process_tree_for_frontend_repair(&old_process_pids)"));
+    assert!(restart.contains("旧 launcher/Codex 进程仍未退出"));
     assert!(restart.contains("select_repair_debug_port(default_debug_port()).await"));
     assert!(restart.contains("debug_port: selected_debug_port"));
     assert!(

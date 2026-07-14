@@ -50,7 +50,6 @@ export function createActionsShape() {
     openExternalUrl: async (_url: string) => {},
     goPluginHub: async () => {},
     goMemoryAssist: async () => {},
-    goPromptOptimizer: async () => {},
     previewPlugin: async (_id: string) => null as PluginInstallPreviewResult | null,
     installPlugin: async (_id: string) => {},
     uninstallPlugin: async (_id: string) => {},

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::path::Path;
 
 use crate::settings::{BackendSettings, relay_profile_resolved_api_key};
 
@@ -21,6 +22,80 @@ pub struct CredentialEnvironmentDiagnostic {
     pub can_clear_user: bool,
     pub profile_has_key: bool,
     pub restart_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialEnvironmentSyncResult {
+    pub variable_name: String,
+    pub user_changed: bool,
+    pub process_changed: bool,
+}
+
+pub fn credential_environment_requires_update(current: Option<&str>, desired: &str) -> bool {
+    let desired = desired.trim();
+    !desired.is_empty() && current != Some(desired)
+}
+
+/// Synchronize the active live Codex credential at a production boundary.
+/// Generic relay file writers deliberately do not call this function so tests
+/// and previews cannot mutate the user's persistent environment.
+pub fn sync_codex_user_credential_environment_from_home(
+    home: &Path,
+) -> anyhow::Result<Option<CredentialEnvironmentSyncResult>> {
+    let Some((variable_name, credential)) =
+        crate::relay_config::codex_provider_auth_environment_from_home(home)
+    else {
+        return Ok(None);
+    };
+    sync_codex_user_credential_environment(&variable_name, &credential).map(Some)
+}
+
+pub fn sync_codex_user_credential_environment(
+    variable_name: &str,
+    credential: &str,
+) -> anyhow::Result<CredentialEnvironmentSyncResult> {
+    if !valid_environment_variable_name(variable_name) {
+        anyhow::bail!("Codex provider env_key is invalid");
+    }
+    let credential = credential.trim();
+    if credential.is_empty() {
+        anyhow::bail!("Codex provider credential is empty");
+    }
+
+    #[cfg(windows)]
+    let user_changed = {
+        let current = crate::windows_integration::current_user_string_value(
+            WINDOWS_USER_ENVIRONMENT_KEY,
+            variable_name,
+        );
+        let changed = credential_environment_requires_update(current.as_deref(), credential);
+        if changed {
+            crate::windows_integration::set_current_user_string_value(
+                WINDOWS_USER_ENVIRONMENT_KEY,
+                variable_name,
+                credential,
+            )?;
+        }
+        changed
+    };
+    #[cfg(not(windows))]
+    let user_changed = false;
+
+    let process_value = std::env::var(variable_name).ok();
+    let process_changed =
+        credential_environment_requires_update(process_value.as_deref(), credential);
+    if process_changed {
+        unsafe {
+            std::env::set_var(variable_name, credential);
+        }
+    }
+
+    Ok(CredentialEnvironmentSyncResult {
+        variable_name: variable_name.to_string(),
+        user_changed,
+        process_changed,
+    })
 }
 
 pub fn diagnose_codex_credential_environment(

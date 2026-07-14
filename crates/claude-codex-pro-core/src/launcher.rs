@@ -541,9 +541,9 @@ where
             let injection_ready = hooks
                 .ensure_injection(debug_port, helper_port, &app_dir)
                 .await;
+            hooks.start_bridge_watchdog(debug_port, helper_port).await?;
             if injection_ready {
                 keep_launched_on_error = false;
-                hooks.start_bridge_watchdog(debug_port, helper_port).await?;
             } else {
                 injection_degraded = true;
             }
@@ -738,6 +738,20 @@ impl LaunchHooks for DefaultLaunchHooks {
                         process_id: None,
                     });
                 }
+                if let Some(sync) =
+                    crate::credential_environment::sync_codex_user_credential_environment_from_home(
+                        &crate::relay_config::default_codex_home_dir(),
+                    )?
+                {
+                    let _ = crate::diagnostic_log::append_diagnostic_log(
+                        "launcher.codex_credential_environment.synced",
+                        serde_json::json!({
+                            "variableName": sync.variable_name,
+                            "userChanged": sync.user_changed,
+                            "processChanged": sync.process_changed
+                        }),
+                    );
+                }
                 let process_id = activate_packaged_app(app_user_model_id, arguments).await?;
                 let packaged_launch = match activation {
                     CodexLaunch::PackagedActivation {
@@ -807,14 +821,13 @@ impl LaunchHooks for DefaultLaunchHooks {
             .args(&command[1..])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // Pass the provider key explicitly rather than trusting the inherited
-        // environment: right after a provider switch the new OPENAI_API_KEY only
-        // lives in HKCU and its WM_SETTINGCHANGE broadcast may not have reached
-        // this process's environment block yet. Reading auth.json here guarantees
-        // the child Codex sees the key the user just configured.
+        // Read the live files at spawn time so a stale inherited variable cannot
+        // override the credential or env_key selected by the active provider.
         let home = crate::relay_config::default_codex_home_dir();
-        if let Some(api_key) = crate::relay_config::codex_provider_auth_key_from_home(&home) {
-            child_command.env("OPENAI_API_KEY", api_key);
+        if let Some((env_key, api_key)) =
+            crate::relay_config::codex_provider_auth_environment_from_home(&home)
+        {
+            child_command.env(env_key, api_key);
         }
         #[cfg(windows)]
         child_command.creation_flags(crate::windows_integration::CREATE_NO_WINDOW);

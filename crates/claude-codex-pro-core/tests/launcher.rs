@@ -279,6 +279,46 @@ fn launcher_does_not_override_codex_app_environment() {
     assert!(!source.contains(".envs(codex_process_environment())"));
     assert!(!source.contains("activate_packaged_app_with_environment"));
     assert!(!source.contains("with_temporary_proxy_environment"));
+    assert!(source.contains("codex_provider_auth_environment_from_home(&home)"));
+    assert!(source.contains("child_command.env(env_key, api_key)"));
+    assert!(!source.contains("child_command.env(\"OPENAI_API_KEY\", api_key)"));
+}
+
+#[test]
+fn launcher_syncs_live_credentials_before_new_msix_activation_only() {
+    let source = include_str!("../src/launcher.rs").replace("\r\n", "\n");
+    let reuse_event = source
+        .find("launcher.packaged_activation_reuse_preexisting_cdp")
+        .expect("packaged Codex reuse branch");
+    let sync_call = source
+        .find("sync_codex_user_credential_environment_from_home(")
+        .expect("live credential synchronization");
+    let activation = source[sync_call..]
+        .find("let process_id = activate_packaged_app(app_user_model_id, arguments).await?;")
+        .map(|offset| sync_call + offset)
+        .expect("packaged activation after synchronization");
+
+    assert!(reuse_event < sync_call);
+    assert!(source[reuse_event..sync_call].contains("return Ok(CodexLaunch::PackagedActivation"));
+    assert!(sync_call < activation);
+
+    let sync_region = &source[sync_call..activation];
+    let payload_start = sync_region
+        .find("serde_json::json!({")
+        .expect("redacted synchronization log payload");
+    let payload = &sync_region[payload_start..];
+    for field in ["variableName", "userChanged", "processChanged"] {
+        assert!(
+            payload.contains(field),
+            "missing redacted log field: {field}"
+        );
+    }
+    for forbidden in ["apiKey", "api_key", "token", "secret", "credential"] {
+        assert!(
+            !payload.contains(forbidden),
+            "synchronization log payload exposes forbidden field: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -614,6 +654,7 @@ async fn launch_lifecycle_runs_sync_before_launch_writes_success_and_shutdowns_o
             "launch:9229",
             "status:running_degraded",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
             "status:running",
             "wait-codex",
             "shutdown-helper:57321",
@@ -699,6 +740,7 @@ async fn launch_lifecycle_keeps_js_injection_in_relay_mode() {
             "launch:9229",
             "status:running_degraded",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
             "status:running",
             "wait-codex",
             "shutdown-helper:57321",
@@ -766,6 +808,7 @@ async fn launch_lifecycle_still_injects_when_global_enhancements_disabled_but_ch
             "launch:9229",
             "status:running_degraded",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
             "status:running",
             "wait-codex",
             "shutdown-helper:57321",
@@ -846,6 +889,7 @@ async fn launch_lifecycle_runs_computer_use_guard_when_enabled() {
             "status:running_degraded",
             "computer-use-guard-watchdog",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
             "status:running",
             "wait-codex",
             "shutdown-helper:57321",
@@ -1024,6 +1068,7 @@ async fn launch_lifecycle_enters_degraded_mode_and_retries_when_injection_fails(
             "launch:9229",
             "status:running_degraded",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
         ]
     );
     let status = status_store.load_latest().unwrap().unwrap();
@@ -1181,6 +1226,7 @@ async fn launch_lifecycle_cleans_helper_and_codex_when_status_save_fails() {
             "launch:9229",
             "status:running_degraded",
             "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
             "shutdown-helper:57321",
             "terminate-packaged:4242",
             "status:failed",
@@ -1416,11 +1462,8 @@ impl LaunchHooks for FakeHooks {
         self.inject_error.is_none()
     }
 
-    async fn start_bridge_watchdog(
-        &self,
-        _debug_port: u16,
-        _helper_port: u16,
-    ) -> anyhow::Result<()> {
+    async fn start_bridge_watchdog(&self, debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
+        self.event(format!("bridge-watchdog:{debug_port}:{helper_port}"));
         Ok(())
     }
 

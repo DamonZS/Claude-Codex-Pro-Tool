@@ -1,7 +1,8 @@
 use claude_codex_pro_core::watcher::{
     build_spawn_launcher_command, build_watcher_install_plan, cdp_listening, codex_process_ids,
     disable_watcher_at, enable_watcher_at, filter_killable_launcher_processes,
-    filter_restartable_launcher_processes, should_recover_stale_launcher, watcher_disabled_flag,
+    filter_restartable_launcher_processes, should_recover_stale_launcher,
+    wait_for_process_ids_to_exit_with, watcher_disabled_flag,
 };
 
 #[test]
@@ -126,4 +127,45 @@ fn stale_launcher_recovery_only_runs_when_codex_and_cdp_are_absent() {
     assert!(!should_recover_stale_launcher(true, false));
     assert!(!should_recover_stale_launcher(false, true));
     assert!(!should_recover_stale_launcher(true, true));
+}
+
+#[test]
+fn process_exit_wait_rechecks_until_every_requested_pid_is_gone() {
+    let mut snapshots = [vec![101, 202], vec![202], vec![]].into_iter();
+    let mut checks = 0;
+    let mut sleeps = 0;
+
+    let exited = wait_for_process_ids_to_exit_with(
+        &[101, 202],
+        3,
+        || {
+            checks += 1;
+            snapshots.next().unwrap_or_default()
+        },
+        || sleeps += 1,
+    );
+
+    assert!(exited);
+    assert_eq!(checks, 3);
+    assert_eq!(sleeps, 2);
+}
+
+#[test]
+fn process_exit_wait_stops_after_the_bounded_number_of_checks() {
+    let mut checks = 0;
+    let mut sleeps = 0;
+
+    let exited = wait_for_process_ids_to_exit_with(
+        &[101],
+        3,
+        || {
+            checks += 1;
+            vec![101]
+        },
+        || sleeps += 1,
+    );
+
+    assert!(!exited);
+    assert_eq!(checks, 3);
+    assert_eq!(sleeps, 2);
 }

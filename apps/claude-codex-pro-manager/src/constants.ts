@@ -15,7 +15,6 @@ export const SUPPLIER_DRAG_MIME_TYPE = "application/x-claude-codex-pro-supplier-
 
 export const MEMORY_ALL_WORKSPACES = "__all__";
 export const MEMORY_GLOBAL_WORKSPACE = "global";
-export const PROMPT_OPTIMIZER_URL = "https://prompt.always200.com";
 
 export const SUPPLIER_PRESETS: SupplierPreset[] = [
   {
