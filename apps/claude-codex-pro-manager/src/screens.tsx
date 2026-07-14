@@ -1,4 +1,4 @@
-import { type CSSProperties, type Dispatch, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, memo, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Activity,
@@ -509,17 +509,73 @@ function SupplierModelDropdown({
   triggerLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [position, setPosition] = useState<CSSProperties>({});
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
   const valueAvailable = !showAvailabilityWarning || !value || options.includes(value);
+
+  const openMenu = (direction: 1 | -1 = 1) => {
+    const selectedIndex = options.indexOf(value);
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : direction > 0 ? (options.length ? 0 : -1) : options.length - 1);
+    setOpen(true);
+  };
+
+  const closeMenu = (restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  const selectOption = (option: string) => {
+    onChange(option);
+    closeMenu(true);
+  };
+
+  const handleTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      if (!open) {
+        openMenu(direction);
+        return;
+      }
+      setActiveIndex((index) => {
+        if (!options.length) return -1;
+        const start = index < 0 ? (direction > 0 ? -1 : 0) : index;
+        return (start + direction + options.length) % options.length;
+      });
+      return;
+    }
+    if (event.key === "Home" && open) {
+      event.preventDefault();
+      setActiveIndex(options.length ? 0 : -1);
+      return;
+    }
+    if (event.key === "End" && open) {
+      event.preventDefault();
+      setActiveIndex(options.length - 1);
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && open) {
+      event.preventDefault();
+      const option = options[activeIndex];
+      if (option) selectOption(option);
+      return;
+    }
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      closeMenu(true);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
     const updatePosition = () => {
       const trigger = triggerRef.current;
       if (!trigger) return;
-      const rect = trigger.getBoundingClientRect();
+      const anchor = iconOnly ? trigger.closest<HTMLElement>(".supplier-model-input-dropdown") ?? trigger : trigger;
+      const rect = anchor.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       const gap = 8;
@@ -527,12 +583,12 @@ function SupplierModelDropdown({
       const spaceAbove = Math.max(0, rect.top - gap);
       const opensUp = spaceBelow < 180 && spaceAbove > spaceBelow;
       const availableSpace = opensUp ? spaceAbove : spaceBelow;
-      const width = Math.min(Math.max(rect.width, 220), Math.max(120, viewportWidth - 16));
+      const width = Math.min(Math.max(rect.width, 280), Math.max(160, viewportWidth - 16));
       const left = Math.min(Math.max(8, rect.left), Math.max(8, viewportWidth - width - 8));
       setPosition({
         left,
         width,
-        maxHeight: Math.max(24, Math.min(320, availableSpace)),
+        maxHeight: Math.max(44, Math.min(320, availableSpace)),
         ...(opensUp
           ? { bottom: Math.max(8, viewportHeight - rect.top + gap) }
           : { top: Math.min(viewportHeight - 8, rect.bottom + gap) }),
@@ -543,10 +599,9 @@ function SupplierModelDropdown({
       if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
-        setOpen(false);
-        triggerRef.current?.focus();
+        closeMenu(true);
       }
     };
     updatePosition();
@@ -560,21 +615,30 @@ function SupplierModelDropdown({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open]);
+  }, [iconOnly, open]);
+
+  useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    menuRef.current
+      ?.querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
 
   const menu = open ? createPortal(
-    <div className="supplier-model-dropdown-menu" ref={menuRef} style={{ ...position, position: "fixed" }} role="listbox">
+    <div aria-label={triggerLabel || placeholder} className="supplier-model-dropdown-menu" id={menuId} ref={menuRef} style={{ ...position, position: "fixed" }} role="listbox">
       {!valueAvailable && value ? <div className="supplier-model-dropdown-warning">当前配置不可用：{value}</div> : null}
-      {options.length ? options.map((option) => (
+      {options.length ? options.map((option, index) => (
         <button
           aria-selected={option === value}
-          className={option === value ? "selected" : ""}
+          className={`${option === value ? "selected" : ""}${index === activeIndex ? " active" : ""}`.trim()}
+          data-option-index={index}
+          id={`${menuId}-option-${index}`}
           key={option}
-          onClick={() => {
-            onChange(option);
-            setOpen(false);
-          }}
+          onClick={() => selectOption(option)}
+          onMouseDown={(event) => event.preventDefault()}
           role="option"
+          tabIndex={-1}
+          title={option}
           type="button"
         >{option}</button>
       )) : <div className="supplier-model-dropdown-empty">暂无可用模型</div>}
@@ -585,11 +649,14 @@ function SupplierModelDropdown({
   return (
     <div className={`supplier-model-dropdown ${compact ? "compact" : ""} ${iconOnly ? "icon-only" : ""}`}>
       <button
+        aria-activedescendant={open && activeIndex >= 0 ? `${menuId}-option-${activeIndex}` : undefined}
+        aria-controls={menuId}
         aria-label={triggerLabel || placeholder}
         aria-expanded={open}
         aria-haspopup="listbox"
         className={`supplier-model-dropdown-trigger ${!valueAvailable ? "unavailable" : ""}`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => open ? closeMenu() : openMenu()}
+        onKeyDown={handleTriggerKeyDown}
         ref={triggerRef}
         type="button"
       >
@@ -610,6 +677,7 @@ export function SupplierScreen({
   claudeDesktopProviderApply,
   claudeDesktopProviderDraft,
   credentialEnvironment,
+  focusProfileId,
   onClaudeDesktopProviderDraftChange,
 }: {
   actions: AppActions;
@@ -618,6 +686,7 @@ export function SupplierScreen({
   claudeDesktopProviderPreview: ClaudeDesktopProviderPreviewResult | null;
   claudeDesktopProviderApply: ClaudeDesktopProviderApplyResult | null;
   credentialEnvironment: CredentialEnvironmentResult | null;
+  focusProfileId?: string | null;
   claudeDesktopProviderDraft: {
     name: string;
     baseUrl: string;
@@ -657,6 +726,7 @@ export function SupplierScreen({
     offsetY: number;
   } | null>(null);
   const supplierCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const lastFocusedProfileIdRef = useRef<string | null>(null);
   const supplierModelFetchRequestRef = useRef(0);
   const supplierDirectModelRowIdRef = useRef(0);
   const supplierCodexCatalogRowIdRef = useRef(0);
@@ -735,6 +805,14 @@ export function SupplierScreen({
     const targetApp = supplierTargetForProfile(profile);
     setDraft(withSupplierRoutingState(profile, targetApp, supplierRoutingEnabledForTarget(targetApp)));
   };
+  useEffect(() => {
+    if (!focusProfileId || lastFocusedProfileIdRef.current === focusProfileId) return;
+    const profile = profiles.find((item) => item.id === focusProfileId);
+    if (!profile) return;
+    lastFocusedProfileIdRef.current = focusProfileId;
+    setSupplierTargetFilter(supplierTargetForProfile(profile));
+    openProfileEditor(profile);
+  }, [focusProfileId, profileIdsKey]);
   const createProfile = () => {
     if (!appSettings) return;
     supplierModelFetchRequestRef.current += 1;
@@ -1553,12 +1631,24 @@ env_key = "OPENAI_API_KEY"
                     <div className="supplier-model-map-grid claude" key={row.role}>
                       <input disabled value={row.label} />
                       <input onChange={(event) => updateSupplierModelMapping(row.role, "displayName", event.currentTarget.value)} placeholder={defaultModel} value={row.displayName || ""} />
-                      <SupplierModelDropdown
-                        onChange={(value) => updateSupplierModelMapping(row.role, "requestModel", value)}
-                        options={supplierModelOptions}
-                        placeholder="选择实际请求模型"
-                        value={row.requestModel || ""}
-                      />
+                      <div className="supplier-model-input-dropdown">
+                        <input
+                          aria-label={`${row.label} 实际请求模型`}
+                          onChange={(event) => updateSupplierModelMapping(row.role, "requestModel", event.currentTarget.value)}
+                          placeholder="例如: claude-sonnet-4-6"
+                          value={row.requestModel || ""}
+                        />
+                        <SupplierModelDropdown
+                          compact
+                          iconOnly
+                          onChange={(value) => updateSupplierModelMapping(row.role, "requestModel", value)}
+                          options={supplierModelOptions}
+                          placeholder="选择已获取模型"
+                          showAvailabilityWarning={false}
+                          triggerLabel="选择已获取模型"
+                          value={row.requestModel || ""}
+                        />
+                      </div>
                       <label><input checked={row.supports1m} onChange={(event) => updateSupplierModelMapping(row.role, "supports1m", event.currentTarget.checked)} type="checkbox" />1M</label>
                     </div>
                   ))}
@@ -3245,12 +3335,6 @@ export const SessionManagementScreen = memo(function SessionManagementScreen({
   return (
     <>
       <div className="stack">
-        <Panel title="会话管理" detail="历史会话修复、Codex 会话管理和 Claude 会话管理集中在这里。">
-          <div className="ops-note">
-            <ShieldCheck className="h-4 w-4" />
-            <span>会话相关动作会优先在这里刷新和核对，避免在工具页和会话页之间来回跳。</span>
-          </div>
-        </Panel>
         <div className="session-management-wide-grid">
           <div className="session-history-card">
             <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
@@ -3894,7 +3978,7 @@ export const AboutScreen = memo(function AboutScreen({
   return (
     <div className="ops-two-column">
       <div className="ops-wide-column">
-        <Panel title="关于 Claude Codex Pro" detail="Claude Codex Pro 本地管理、供应商、会话与维护工具。">
+        <Panel title="关于 CCP" detail="CCP 本地供应商、客户端、会话与维护控制台。">
           <div className="info-grid compact">
             <InfoRow label="Claude Codex Pro 版本" value={overview?.current_version ?? updateInfo?.currentVersion ?? "未加载"} />
             <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />

@@ -34,6 +34,8 @@ import {
 import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
+import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
@@ -82,8 +84,6 @@ import {
   normalizeRoute,
   routeDocumentTitle,
   routeLabel,
-  routes,
-  routeSubtitle,
 } from "@/lib/routes";
 import {
   aggregateStrategyLabel,
@@ -245,6 +245,8 @@ import type {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => initialRoute());
+  const [agentScope, setAgentScope] = useState<AgentScope>("all");
+  const [supplierFocusProfileId, setSupplierFocusProfileId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string; status?: Status } | null>(null);
   const [busyCount, setBusyCount] = useState(0);
   const busy = busyCount > 0;
@@ -1824,6 +1826,11 @@ export function App() {
       }, 250);
     } else if (target === "supplier") {
       await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
+    } else if (target === "clients") {
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshSettings(true), refreshWatcher(true)]);
+      afterFirstPaintIfFresh(() => {
+        void Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeZhPatch(true)]);
+      }, 250);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -1906,11 +1913,6 @@ export function App() {
         }
       }
     })();
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.classList.add("dark");
-    document.documentElement.classList.remove("light");
   }, []);
 
   useEffect(() => {
@@ -2125,60 +2127,38 @@ export function App() {
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
   }), []);
 
+  const shellSettings = settingsDraft ?? settings?.settings ?? null;
+  const shellActiveProfileId = agentScope === "claude"
+    ? shellSettings?.activeClaudeRelayId || shellSettings?.activeClaudeDesktopRelayId
+    : shellSettings?.activeRelayId;
+  const shellActiveProfile = shellSettings?.relayProfiles.find((profile) => profile.id === shellActiveProfileId)
+    ?? shellSettings?.relayProfiles.find((profile) => profile.id === shellSettings?.activeRelayId)
+    ?? null;
+  const shellProxyHealth: ProxyHealth = overview?.latest_launch?.helper_port_online
+    ? "healthy"
+    : overview?.latest_launch?.frontend_runtime_online
+      ? "attention"
+      : overview?.latest_launch
+        ? "offline"
+        : "unknown";
+
   return (
-    <div className="ops-shell dark">
-      <aside className="ops-rail">
-        <div className="ops-brand" title="Claude Codex Pro">
-          <span>CCP</span>
-        </div>
-        <nav>
-          {routes.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                className={route === item.id ? "active" : ""}
-                key={item.id}
-                onClick={() => {
-                  setRoute(item.id);
-                }}
-                title={item.label}
-                type="button"
-              >
-                <Icon className="h-4 w-4" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-      <main className="ops-workspace">
-        <header className="ops-topbar">
-          <div className="ops-topbar-copy">
-            <h1>{routeLabel(route)}</h1>
-            <p>{routeSubtitle(route)}</p>
-          </div>
-          <div className="ops-commandbar">
-            <Button aria-label="启动/重启Codex" disabled={busy} onClick={() => void actions.restartCodex()} variant="outline">
-              <Rocket className="h-4 w-4" />
-              <span className="desktop-command-label">启动/重启Codex</span>
-              <span aria-hidden="true" className="mobile-command-label">Codex</span>
-            </Button>
-            <Button aria-label="启动/重启Claude" disabled={busy} onClick={() => void actions.launchClaudeDesktop()} variant="outline">
-              <MessageCircle className="h-4 w-4" />
-              <span className="desktop-command-label">启动/重启Claude</span>
-              <span aria-hidden="true" className="mobile-command-label">Claude</span>
-            </Button>
-            <Button aria-label="Claude 一键汉化" className="ops-primary-command" disabled={busy} onClick={() => void actions.installClaudeZhPatch()}>
-              <Languages className="h-4 w-4" />
-              <span className="desktop-command-label">Claude 一键汉化</span>
-              <span aria-hidden="true" className="mobile-command-label">汉化</span>
-            </Button>
-            <Button disabled={busy} onClick={() => void actions.refreshRoute()} size="icon" variant="outline">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-        </header>
-        <section className="ops-screen">
+    <>
+      <AppShell
+        activeSupplierName={shellActiveProfile?.name || shellActiveProfile?.id || "未选择供应商"}
+        agentScope={agentScope}
+        busy={busy}
+        onAgentScopeChange={setAgentScope}
+        onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}
+        onLaunchClaude={() => void actions.launchClaudeDesktop()}
+        onNavigate={(nextRoute) => {
+          if (nextRoute !== "supplier") setSupplierFocusProfileId(null);
+          setRoute(nextRoute);
+        }}
+        onRestartCodex={() => void actions.restartCodex()}
+        proxyHealth={shellProxyHealth}
+        route={route}
+      >
           {route === "overview" ? <OverviewScreen actions={actions} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} memoryItems={memoryItems} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
@@ -2188,8 +2168,21 @@ export function App() {
               claudeDesktopProviderDraft={claudeDesktopProviderDraft}
               claudeDesktopProviderPreview={claudeDesktopProviderPreview}
               credentialEnvironment={credentialEnvironment}
+              focusProfileId={supplierFocusProfileId}
               onClaudeDesktopProviderDraftChange={setClaudeDesktopProviderDraft}
               settings={settings}
+            />
+          ) : null}
+          {route === "clients" ? (
+            <ClientsEnhancementScreen
+              actions={actions}
+              agentScope={agentScope}
+              claudeDesktop={claudeDesktop}
+              claudeDesktopDevMode={claudeDesktopDevMode}
+              claudeZhPatch={claudeZhPatch}
+              overview={overview}
+              settings={settingsDraft ?? settings?.settings ?? null}
+              watcher={watcher}
             />
           ) : null}
           {route === "tools" ? (
@@ -2237,9 +2230,8 @@ export function App() {
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}
           {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} logs={logs} onDraftChange={updateSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
           {route === "about" ? <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} /> : null}
-        </section>
-      </main>
+      </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
-    </div>
+    </>
   );
 }

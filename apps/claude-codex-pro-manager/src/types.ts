@@ -989,13 +989,14 @@ export type InstallEntrypointsResult = CommandResult<{
 export type Route =
   | "overview"
   | "supplier"
+  | "clients"
   | "tools"
   | "sessions"
   | "memory"
   | "maintenance"
   | "settings"
   | "about";
-export type LegacyRoute = "relay";
+export type LegacyRoute = "relay" | "models";
 
 declare global {
   interface Window {

@@ -32,9 +32,9 @@ pub fn run() {
                 "index.html"
             };
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App(url.into()))
-                .title("Claude Codex Pro 管理工具")
+                .title("CCP 管理工具")
                 .inner_size(1180.0, 820.0)
-                .min_inner_size(960.0, 720.0)
+                .min_inner_size(960.0, 640.0)
                 .build()?;
             match setup_tray(app) {
                 Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
@@ -208,7 +208,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("Claude Codex Pro 管理工具")
+        .tooltip("CCP 管理工具")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

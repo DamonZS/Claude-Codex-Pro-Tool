@@ -732,9 +732,9 @@ fn plugin_hub_is_first_class_ops_console_route() {
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
     assert!(app_tsx.contains("id: \"tools\""));
-    assert!(app_tsx.contains("label: \"工具与插件\""));
+    assert!(app_tsx.contains("label: \"插件、Skills 与 MCP\""));
     assert!(app_tsx.contains("id: \"sessions\""));
-    assert!(app_tsx.contains("label: \"会话管理\""));
+    assert!(app_tsx.contains("label: \"会话与记忆\""));
     assert!(app_tsx.contains("function PluginHubScreen"));
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("function SessionManagementScreen"));
@@ -1093,6 +1093,650 @@ fn prompt_optimizer_feature_is_removed() {
 }
 
 #[test]
+fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
+    fn normalize_css(value: &str) -> String {
+        value.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn css_rule_declarations<'a>(source: &'a str, selector: &str) -> Vec<&'a str> {
+        source
+            .split('}')
+            .filter_map(|block| {
+                let (selectors, declarations) = block.rsplit_once('{')?;
+                selectors
+                    .split(',')
+                    .any(|candidate| candidate.lines().last().map(str::trim) == Some(selector))
+                    .then_some(declarations)
+            })
+            .collect()
+    }
+
+    fn css_rule_has(source: &str, selector: &str, declaration: &str) -> bool {
+        let declaration = normalize_css(declaration);
+        css_rule_declarations(source, selector)
+            .into_iter()
+            .any(|candidate| normalize_css(candidate).contains(&declaration))
+    }
+
+    fn css_rule_with_fragments_has(
+        source: &str,
+        selector_fragments: &[&str],
+        declaration: &str,
+    ) -> bool {
+        let declaration = normalize_css(declaration);
+        source.split('}').any(|block| {
+            let Some((selectors, declarations)) = block.rsplit_once('{') else {
+                return false;
+            };
+            selector_fragments
+                .iter()
+                .all(|fragment| selectors.contains(fragment))
+                && normalize_css(declarations).contains(&declaration)
+        })
+    }
+
+    fn css_numeric_property(source: &str, selector: &str, property: &str) -> Option<f32> {
+        css_rule_declarations(source, selector)
+            .into_iter()
+            .flat_map(|declarations| declarations.split(';'))
+            .find_map(|declaration| {
+                let (name, value) = declaration.split_once(':')?;
+                (name.trim() == property)
+                    .then(|| value.trim().parse::<f32>().ok())
+                    .flatten()
+            })
+    }
+
+    fn jsx_button_containing<'a>(source: &'a str, marker: &str) -> &'a str {
+        let marker_index = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("missing button marker: {marker}"));
+        let start = source[..marker_index]
+            .rfind("<button")
+            .unwrap_or_else(|| panic!("missing button start for: {marker}"));
+        let end = source[marker_index..]
+            .find("</button>")
+            .map(|offset| marker_index + offset + "</button>".len())
+            .unwrap_or_else(|| panic!("missing button end for: {marker}"));
+        &source[start..end]
+    }
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app = read_frontend_file("App.tsx");
+    let app_shell = read_frontend_file("components/AppShell.tsx");
+    let clients_screen = read_frontend_file("components/ClientsEnhancementScreen.tsx");
+    let main = read_frontend_file("main.tsx");
+    let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let routes = read_frontend_file("lib/routes.ts");
+    let screens = read_frontend_file("screens.tsx");
+    let tauri_config = read_source_file(&manifest_dir.join("tauri.conf.json"));
+    let types = read_frontend_file("types.ts");
+    let workspace = read_frontend_file("workspace.css");
+
+    let primary_routes = source_section(
+        &routes,
+        "export const routes: RouteItem[] = [",
+        "export const compatibilityRoutes",
+    );
+    assert_eq!(
+        primary_routes.matches("id: \"").count(),
+        7,
+        "the sidebar must expose exactly seven primary destinations"
+    );
+    for (id, label) in [
+        ("overview", "概览"),
+        ("supplier", "供应商与路由"),
+        ("clients", "客户端与增强"),
+        ("sessions", "会话与记忆"),
+        ("tools", "插件、Skills 与 MCP"),
+        ("maintenance", "维护与诊断"),
+        ("settings", "设置"),
+    ] {
+        assert!(
+            primary_routes.contains(&format!("id: \"{id}\", label: \"{label}\"")),
+            "missing primary route {id} ({label})"
+        );
+    }
+    assert!(!primary_routes.contains("id: \"models\""));
+    assert!(!primary_routes.contains("id: \"memory\""));
+    assert!(!primary_routes.contains("id: \"about\""));
+
+    let compatibility_routes = source_section(
+        &routes,
+        "export const compatibilityRoutes: RouteItem[] = [",
+        "export const routeCatalog",
+    );
+    assert_eq!(compatibility_routes.matches("id: \"").count(), 2);
+    assert!(compatibility_routes.contains("id: \"memory\", label: \"盘古记忆\""));
+    assert!(compatibility_routes.contains("id: \"about\", label: \"关于与更新\""));
+    assert!(
+        routes.contains(
+            "export const routeCatalog: RouteItem[] = [...routes, ...compatibilityRoutes];"
+        )
+    );
+    assert!(routes.contains("return routeCatalog.some((item) => item.id === value);"));
+    assert!(routes.contains("if (route === \"memory\") return \"sessions\";"));
+    assert!(routes.contains("if (route === \"about\") return \"settings\";"));
+    assert!(routes.contains("if (route === \"sessions\" || route === \"memory\")"));
+    assert!(routes.contains("{ id: \"sessions\", label: \"会话\" }"));
+    assert!(routes.contains("{ id: \"memory\", label: \"盘古记忆\" }"));
+    assert!(routes.contains("if (route === \"settings\" || route === \"about\")"));
+    assert!(routes.contains("{ id: \"settings\", label: \"偏好设置\" }"));
+    assert!(routes.contains("{ id: \"about\", label: \"关于与更新\" }"));
+    let document_title = &routes[routes
+        .find("export function routeDocumentTitle")
+        .expect("document title helper")..];
+    assert!(document_title.contains("\"CCP 管理工具\""));
+    assert!(document_title.contains("- CCP 管理工具"));
+    assert!(!document_title.contains("Claude Codex Pro 管理工具"));
+    assert!(routes.contains("normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE)"));
+    assert!(routes.contains("new URLSearchParams(window.location.search).get(\"view\")"));
+    let normalize_route = source_section(
+        &routes,
+        "export function normalizeRoute",
+        "export function routeSubtitle",
+    );
+    assert!(normalize_route.contains("value === \"models\""));
+    assert!(normalize_route.contains("return \"supplier\";"));
+    assert!(app.contains("window.addEventListener(\"claude-codex-pro-navigate\", navigate)"));
+    assert!(app.contains("const route = normalizeRoute("));
+    assert!(app.contains("if (!isRoute(route)) return;"));
+
+    let route_type = source_section(&types, "export type Route =", "export type LegacyRoute");
+    for route in [
+        "overview",
+        "supplier",
+        "clients",
+        "tools",
+        "sessions",
+        "memory",
+        "maintenance",
+        "settings",
+        "about",
+    ] {
+        assert!(
+            route_type.contains(&format!("| \"{route}\"")),
+            "Route union is missing {route}"
+        );
+    }
+    assert!(
+        !route_type.contains("\"models\""),
+        "models must not remain a live Route"
+    );
+    let legacy_route_type = source_section(&types, "export type LegacyRoute", "declare global");
+    assert!(legacy_route_type.contains("\"relay\""));
+    assert!(legacy_route_type.contains("\"models\""));
+
+    for shell_contract in [
+        "<aside className=\"ops-rail\" aria-label=\"一级导航\">",
+        "<main className=\"ops-workspace\">",
+        "<header className=\"ops-topbar\" data-tauri-drag-region>",
+        "<section className=\"ops-screen\">",
+        "{routes.map((item) => {",
+        "const activePrimaryRoute = primaryRoute(route);",
+        "aria-label=\"Agent 范围\"",
+        "activeSupplierName",
+        "proxyHealth",
+    ] {
+        assert!(
+            app_shell.contains(shell_contract),
+            "missing AppShell contract: {shell_contract}"
+        );
+    }
+    assert!(app_shell.contains("const THEME_STORAGE_KEY = \"ccp-manager-theme\";"));
+    assert!(app_shell.contains("window.localStorage.getItem(THEME_STORAGE_KEY)"));
+    assert!(app_shell.contains("window.localStorage.setItem(THEME_STORAGE_KEY, themePreference)"));
+    assert!(app_shell.contains("window.matchMedia?.(\"(prefers-color-scheme: dark)\")"));
+    assert!(app_shell.contains("media.addEventListener?.(\"change\", update)"));
+    assert!(app_shell.contains("root.dataset.theme = resolvedTheme;"));
+    assert!(app_shell.contains("root.classList.toggle(\"dark\", resolvedTheme === \"dark\")"));
+    assert!(app_shell.contains("[\"system\", \"跟随系统\", Laptop]"));
+    assert!(app_shell.contains("[\"light\", \"浅色\", Sun]"));
+    assert!(app_shell.contains("[\"dark\", \"深色\", Moon]"));
+    assert!(app_shell.contains("(event.ctrlKey || event.metaKey)"));
+    assert!(app_shell.contains("event.key.toLocaleLowerCase() === \"k\""));
+    assert!(app_shell.contains("event.key === \"Escape\""));
+    assert!(app_shell.contains("event.key === \"ArrowDown\""));
+    assert!(app_shell.contains("event.key === \"ArrowUp\""));
+    assert!(app_shell.contains("event.key === \"Enter\""));
+    assert!(app_shell.contains("return routeCatalog.filter((item) =>"));
+    assert!(app_shell.contains("role=\"dialog\""));
+    assert!(app_shell.contains("role=\"listbox\""));
+
+    let breadcrumb = source_section(
+        &routes,
+        "export function routeBreadcrumb",
+        "export function routeDomainTabs",
+    );
+    assert!(breadcrumb.contains("\"CCP\""));
+    assert!(!breadcrumb.contains("盘古"));
+    let brand_button = jsx_button_containing(&app_shell, "className=\"ops-brand\"");
+    assert!(brand_button.contains("<strong>CCP</strong>"));
+    assert!(!brand_button.contains("<strong>盘古</strong>"));
+    assert!(manager_lib.contains(".title(\"CCP 管理工具\")"));
+    assert!(tauri_config.contains("\"title\": \"CCP 管理工具\""));
+    let tray_setup = source_section(&manager_lib, "fn setup_tray", "fn show_main_window");
+    assert!(tray_setup.contains(".tooltip(\"CCP 管理工具\")"));
+    assert!(!tray_setup.contains("Claude Codex Pro 管理工具"));
+    let about_screen = &screens[screens
+        .find("export const AboutScreen")
+        .expect("About screen")..];
+    assert!(about_screen.contains("<Panel title=\"关于 CCP\""));
+    assert!(about_screen.contains("detail=\"CCP 本地供应商、客户端、会话与维护控制台。\""));
+    assert!(!about_screen.contains("<Panel title=\"关于 Claude Codex Pro\""));
+    assert!(
+        !app_shell.contains("onRefresh"),
+        "refresh is a page concern, not a topbar AppShell prop"
+    );
+
+    let commandbar = source_section(
+        &app_shell,
+        "<div className=\"ops-commandbar\">",
+        "</header>",
+    );
+    assert_eq!(
+        commandbar.matches("ops-action-command").count(),
+        3,
+        "the command bar must expose exactly three primary client actions"
+    );
+    let action_positions = [
+        commandbar
+            .find("onClick={onRestartCodex}")
+            .expect("Codex restart action"),
+        commandbar
+            .find("onClick={onLaunchClaude}")
+            .expect("Claude launch action"),
+        commandbar
+            .find("onClick={onInstallClaudeZhPatch}")
+            .expect("Claude localization action"),
+    ];
+    assert!(action_positions.windows(2).all(|pair| pair[0] < pair[1]));
+    for control in [
+        "className=\"ops-command-search\"",
+        "className=\"ops-runtime-chip supplier\"",
+        "className={`ops-runtime-chip health ${proxyHealth}`}",
+    ] {
+        assert!(
+            commandbar
+                .find(control)
+                .is_some_and(|position| position < action_positions[0]),
+            "topbar context control must remain left of client actions: {control}"
+        );
+    }
+    for (handler, label) in [
+        ("onClick={onRestartCodex}", "启动/重启 Codex"),
+        ("onClick={onLaunchClaude}", "启动/重启 Claude"),
+        ("onClick={onInstallClaudeZhPatch}", "Claude 一键汉化"),
+    ] {
+        let button = jsx_button_containing(commandbar, handler);
+        let icon = button
+            .find("aria-hidden=\"true\"")
+            .unwrap_or_else(|| panic!("missing action icon: {label}"));
+        let text = button
+            .find(&format!("<span>{label}</span>"))
+            .unwrap_or_else(|| panic!("missing visible action label: {label}"));
+        assert!(icon < text, "action icon must precede its label: {label}");
+    }
+
+    assert!(app.contains("import { AppShell, type AgentScope, type ProxyHealth }"));
+    assert!(app.contains("import { ClientsEnhancementScreen }"));
+    assert!(
+        !app.contains("route === \"models\""),
+        "App must not retain a live models route branch"
+    );
+    assert!(app.contains("const [agentScope, setAgentScope] = useState<AgentScope>(\"all\")"));
+    assert!(app.contains("onAgentScopeChange={setAgentScope}"));
+    for action_binding in [
+        "onRestartCodex={() => void actions.restartCodex()}",
+        "onLaunchClaude={() => void actions.launchClaudeDesktop()}",
+        "onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}",
+    ] {
+        assert!(
+            app.contains(action_binding),
+            "AppShell action no longer delegates to existing behavior: {action_binding}"
+        );
+    }
+    let clients_route = source_section(
+        &app,
+        "{route === \"clients\" ? (",
+        "{route === \"tools\" ? (",
+    );
+    for prop in [
+        "actions={actions}",
+        "agentScope={agentScope}",
+        "claudeDesktop={claudeDesktop}",
+        "claudeDesktopDevMode={claudeDesktopDevMode}",
+        "claudeZhPatch={claudeZhPatch}",
+        "overview={overview}",
+        "settings={settingsDraft ?? settings?.settings ?? null}",
+        "watcher={watcher}",
+    ] {
+        assert!(
+            clients_route.contains(prop),
+            "clients route is missing real state prop: {prop}"
+        );
+    }
+
+    for client_contract in [
+        "overview?.latest_launch",
+        "claudeZhPatch?.status.localeConfigured",
+        "claudeDesktopDevMode?.devModeStatus.configured",
+        "watcher?.enabled",
+        "settings?.relayProfiles.find(",
+        "clients.filter((client) => clientMatchesScope(client, agentScope))",
+        "agentScope === \"codex\" ? client.id === \"codex\" : client.id !== \"codex\"",
+        "<StateCell label=\"已安装\"",
+        "<StateCell label=\"已启用\"",
+        "<StateCell label=\"当前生效\"",
+        "<StateCell label=\"健康状态\"",
+        "正在读取本机客户端与增强状态",
+        "状态读取失败，页面保留已取得的数据",
+        "当前 Agent 范围没有可显示的客户端",
+    ] {
+        assert!(
+            clients_screen.contains(client_contract),
+            "missing client/enhancement contract: {client_contract}"
+        );
+    }
+    for action in [
+        "actions.restartCodex()",
+        "actions.repairFrontendConnection()",
+        "actions.launchClaudeDesktop()",
+        "actions.installClaudeZhPatch()",
+        "actions.configureClaudeDesktopDevMode()",
+        "actions.installWatcher()",
+        "actions.disableWatcher()",
+        "actions.enableWatcher()",
+    ] {
+        assert!(
+            clients_screen.contains(action),
+            "client page no longer delegates to existing action: {action}"
+        );
+    }
+    assert!(!clients_screen.contains("invokeCommand"));
+
+    let session_screen = source_section(
+        &screens,
+        "export const SessionManagementScreen",
+        "export const SettingsScreen",
+    );
+    assert!(
+        !session_screen.contains("<Panel title=\"会话管理\""),
+        "the sessions page must not repeat a generic introduction panel"
+    );
+    let session_card_positions = [
+        session_screen
+            .find("className=\"session-history-card\"")
+            .expect("history repair card"),
+        session_screen
+            .find("className=\"session-codex-card\"")
+            .expect("Codex session card"),
+        session_screen
+            .find("className=\"session-claude-card\"")
+            .expect("Claude session card"),
+    ];
+    assert!(
+        session_card_positions
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "history repair must precede the paired Codex and Claude session panes"
+    );
+    for title in [
+        "title=\"历史会话修复\"",
+        "title: \"Codex 会话管理\"",
+        "title: \"Claude 会话管理\"",
+    ] {
+        assert!(
+            session_screen.contains(title),
+            "missing session pane: {title}"
+        );
+    }
+    assert!(css_rule_has(
+        &workspace,
+        ".session-management-wide-grid",
+        "grid-template-columns: repeat(2, minmax(0, 1fr));"
+    ));
+    assert!(css_rule_has(
+        &workspace,
+        ".session-history-card",
+        "grid-column: 1 / -1;"
+    ));
+    assert!(
+        css_rule_declarations(&workspace, ".session-management-wide-grid")
+            .into_iter()
+            .any(|declarations| normalize_css(declarations).contains("grid-template-columns: 1fr;")),
+        "the paired session panes must collapse to one column at narrow widths"
+    );
+
+    let tools_screen = source_section(
+        &screens,
+        "export const ToolsAndPluginsScreen",
+        "function UnifiedToolInventoryPanel",
+    );
+    let repository_grid = source_section(
+        tools_screen,
+        "<div className=\"repository-status-grid\">",
+        "</div>",
+    );
+    assert!(repository_grid.contains("<CodexPluginRepositoryPanel"));
+    assert!(repository_grid.contains("<ClaudePluginRepositoryPanel"));
+    assert!(css_rule_has(
+        &workspace,
+        ".repository-status-grid",
+        "grid-template-columns: repeat(2, minmax(0, 1fr));"
+    ));
+    assert!(
+        css_rule_declarations(&workspace, ".repository-status-grid")
+            .into_iter()
+            .any(|declarations| normalize_css(declarations).contains("grid-template-columns: 1fr;")),
+        "repository panes must collapse to one column at narrow widths"
+    );
+    for (selector, color) in [
+        (".unified-tool-copy > strong", "var(--workspace-text)"),
+        (
+            ".unified-tool-copy > span",
+            "var(--workspace-text-secondary)",
+        ),
+        (
+            ".unified-tool-copy > small",
+            "var(--workspace-text-secondary)",
+        ),
+    ] {
+        assert!(
+            css_rule_has(&workspace, selector, &format!("color: {color};")),
+            "tool copy must use a readable workspace token: {selector}"
+        );
+        assert!(
+            css_rule_has(&workspace, selector, "opacity: 1;"),
+            "tool copy must not be faded: {selector}"
+        );
+    }
+    assert!(
+        css_numeric_property(&workspace, ".ops-shell .agent-toggle", "opacity")
+            .is_some_and(|opacity| opacity >= 0.7),
+        "Agent controls need a readable base opacity"
+    );
+    for selector in [
+        ".ops-shell .agent-toggle img",
+        ".ops-shell .agent-toggle.codex img",
+    ] {
+        assert!(css_rule_has(&workspace, selector, "filter: none;"));
+        assert!(css_rule_has(&workspace, selector, "opacity: 1;"));
+    }
+
+    let model_dropdown = source_section(
+        &screens,
+        "function SupplierModelDropdown",
+        "export function SupplierScreen",
+    );
+    for interaction_contract in [
+        "createPortal(",
+        "document.body",
+        "role=\"listbox\"",
+        "role=\"option\"",
+        "aria-selected={option === value}",
+        "aria-expanded={open}",
+        "aria-haspopup=\"listbox\"",
+        "onChange(option);",
+        "setOpen(false);",
+        "event.key === \"Escape\"",
+        "requestAnimationFrame(() => triggerRef.current?.focus())",
+        "type=\"button\"",
+    ] {
+        assert!(
+            model_dropdown.contains(interaction_contract),
+            "model menu is missing an interaction contract: {interaction_contract}"
+        );
+    }
+    let claude_model_mapping = source_section(
+        &screens,
+        "<div className=\"supplier-model-map-grid header claude\"",
+        "<label className=\"ops-form-field\"><span>默认兜底模型</span>",
+    );
+    let codex_model_mapping = source_section(
+        &screens,
+        "<div className=\"supplier-codex-catalog-grid header\"",
+        "自定义 User-Agent",
+    );
+    for (name, mapping) in [
+        ("Claude", claude_model_mapping),
+        ("Codex", codex_model_mapping),
+    ] {
+        for shared_contract in [
+            "className=\"supplier-model-input-dropdown\"",
+            "<SupplierModelDropdown",
+            "iconOnly",
+            "options={supplierModelOptions}",
+            "showAvailabilityWarning={false}",
+            "triggerLabel=\"选择已获取模型\"",
+            "实际请求模型",
+        ] {
+            assert!(
+                mapping.contains(shared_contract),
+                "{name} actual-model control is missing: {shared_contract}"
+            );
+        }
+    }
+    assert!(
+        claude_model_mapping
+            .contains("updateSupplierModelMapping(row.role, \"requestModel\", value)")
+    );
+    assert!(codex_model_mapping.contains("updateSupplierCodexCatalogModel(row.rowId, {"));
+    assert!(codex_model_mapping.contains("model: value,"));
+
+    for declaration in [
+        "background: var(--workspace-surface);",
+        "color: var(--workspace-text);",
+    ] {
+        assert!(
+            css_rule_with_fragments_has(
+                &workspace,
+                &[
+                    ".ops-shell",
+                    ".supplier-ccswitch-editor",
+                    "input",
+                    "select",
+                    "textarea",
+                ],
+                declaration,
+            ),
+            "supplier editor controls need a high-specificity light-theme override: {declaration}"
+        );
+    }
+    for declaration in [
+        "background: hsl(var(--popover));",
+        "color: hsl(var(--popover-foreground));",
+        "color-scheme: light;",
+        "pointer-events: auto;",
+    ] {
+        assert!(
+            css_rule_has(&workspace, ".supplier-model-dropdown-menu", declaration),
+            "portal model menu is missing a readable/clickable style: {declaration}"
+        );
+    }
+    assert!(css_rule_with_fragments_has(
+        &workspace,
+        &[":root.dark", ".supplier-model-dropdown-menu"],
+        "color-scheme: dark;"
+    ));
+    assert!(css_rule_has(
+        &workspace,
+        ".supplier-model-dropdown-menu button",
+        "color: inherit;"
+    ));
+    assert!(css_rule_has(
+        &workspace,
+        ".supplier-model-dropdown-menu button:focus-visible",
+        "outline: 2px solid hsl(var(--ring));"
+    ));
+
+    let legacy_styles_import = main
+        .find("import \"./styles.css\";")
+        .expect("main.tsx imports the legacy compatibility layer");
+    let workspace_import = main
+        .find("import \"./workspace.css\";")
+        .expect("main.tsx imports the workspace visual layer");
+    assert!(
+        legacy_styles_import < workspace_import,
+        "workspace.css must load after styles.css so its tokens and shell rules win"
+    );
+    for token in [
+        "--workspace-canvas: #f5f6f8;",
+        "--workspace-surface: #ffffff;",
+        "--workspace-border: #e3e6ea;",
+        "--workspace-text: #17191c;",
+        "--workspace-text-secondary: #656b73;",
+        "--workspace-blue: #0a84ff;",
+        "--workspace-success: #10b981;",
+        "--workspace-warning: #f59e0b;",
+        "--workspace-danger: #ef4444;",
+        "--workspace-sidebar-width: 240px;",
+        "--workspace-sidebar-collapsed-width: 64px;",
+        "--workspace-topbar-height: 54px;",
+        "--workspace-control-height: 36px;",
+        "--workspace-radius: 8px;",
+        "--workspace-control-radius: 6px;",
+    ] {
+        assert!(
+            workspace.contains(token),
+            "missing workspace token: {token}"
+        );
+    }
+    for dark_token in [
+        ".ops-shell.dark {",
+        "--workspace-canvas: #121416;",
+        "--workspace-surface: #191c20;",
+        "--workspace-surface-raised: #20242a;",
+        "--workspace-border: #2c3138;",
+        "--workspace-text: #f2f4f7;",
+    ] {
+        assert!(
+            workspace.contains(dark_token),
+            "missing dark workspace token: {dark_token}"
+        );
+    }
+    for layout_contract in [
+        "grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr);",
+        "grid-template-columns: var(--workspace-sidebar-collapsed-width) minmax(0, 1fr);",
+        "grid-template-rows: var(--workspace-topbar-height) minmax(0, 1fr);",
+        "height: var(--workspace-topbar-height);",
+        "padding: 20px 24px 32px;",
+        "min-width: 960px;",
+        "min-height: 640px;",
+        "backdrop-filter: blur(28px) saturate(115%);",
+        "letter-spacing: 0;",
+        "@media (prefers-reduced-motion: reduce)",
+    ] {
+        assert!(
+            workspace.contains(layout_contract),
+            "missing workspace layout contract: {layout_contract}"
+        );
+    }
+    assert!(!workspace.contains("linear-gradient("));
+    assert!(!workspace.contains("radial-gradient("));
+}
+
+#[test]
 fn manager_window_and_ops_console_layout_stay_usable() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // 拆分后：存在性/禁止性断言读前端源码全集（字符串迁到哪个文件都能命中，
@@ -1119,7 +1763,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("ops-rail"));
     assert!(app_tsx.contains("ops-commandbar"));
     assert!(app_tsx.contains("id: \"supplier\""));
-    assert!(app_tsx.contains("label: \"供应商\""));
+    assert!(app_tsx.contains("label: \"供应商与路由\""));
     let routes_file = read_frontend_file("lib/routes.ts");
     let route_source = routes_file
         .split("const routes")
@@ -1127,9 +1771,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .and_then(|rest| rest.split("function isRoute").next())
         .expect("manager route source");
     assert!(route_source.contains("id: \"maintenance\""));
-    assert!(route_source.contains("label: \"维护\""));
+    assert!(route_source.contains("label: \"维护与诊断\""));
     assert!(route_source.contains("id: \"about\""));
-    assert!(route_source.contains("label: \"关于\""));
+    assert!(route_source.contains("label: \"关于与更新\""));
     assert!(!route_source.contains("label: \"脚本\""));
     assert!(!route_source.contains("label: \"日志\""));
     assert!(app_tsx.contains("function SupplierScreen"));
@@ -1137,7 +1781,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("preview_claude_desktop_provider"));
     assert!(app_tsx.contains("apply_claude_desktop_provider"));
     assert!(app_tsx.contains("restore_claude_desktop_provider_official"));
-    assert!(app_tsx.contains("if (value === \"relay\") return \"supplier\""));
+    assert!(
+        app_tsx.contains("if (value === \"relay\" || value === \"models\") return \"supplier\"")
+    );
     assert!(lib_rs.contains("commands::preview_claude_desktop_provider"));
     assert!(lib_rs.contains("commands::apply_claude_desktop_provider"));
     assert!(lib_rs.contains("commands::restore_claude_desktop_provider_official"));
@@ -1378,7 +2024,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: \"正在写入 Claude Desktop 开发配置...\", status: \"running\" });"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: result.message || result.outcome.message, status: result.status });"));
-    assert!(app_tsx.contains("ops-primary-command"));
+    assert!(app_tsx.contains("ops-command-search"));
     assert!(styles.contains(".ops-shell"));
     assert!(styles.contains("grid-template-columns: 92px minmax(0, 1fr)"));
     assert!(styles.contains("height: 100vh;"));
@@ -1404,11 +2050,11 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!styles.contains("notice-backdrop"));
     assert!(!styles.contains("notice-card"));
     assert!(lib_rs.contains(".inner_size(1180.0, 820.0)"));
-    assert!(lib_rs.contains(".min_inner_size(960.0, 720.0)"));
+    assert!(lib_rs.contains(".min_inner_size(960.0, 640.0)"));
     assert!(tauri_conf.contains("\"width\": 1180"));
     assert!(tauri_conf.contains("\"height\": 820"));
     assert!(tauri_conf.contains("\"minWidth\": 960"));
-    assert!(tauri_conf.contains("\"minHeight\": 720"));
+    assert!(tauri_conf.contains("\"minHeight\": 640"));
     assert!(tauri_conf.contains("cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev"));
 }
 
@@ -3031,7 +3677,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
 
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("function MaintenanceToolsPanel"));
-    assert!(app_tsx.contains("label: \"工具与插件\""));
+    assert!(app_tsx.contains("label: \"插件、Skills 与 MCP\""));
     assert!(app_tsx.contains("安装入口"));
     assert!(app_tsx.contains("修复入口"));
     assert!(app_tsx.contains("修复后端"));

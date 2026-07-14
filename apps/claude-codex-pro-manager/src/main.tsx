@@ -1,11 +1,9 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import "./workspace.css";
 
-/* ── Bundled fonts (offline, no Google Fonts request) ──
-     Fontsource packages ship woff2 files that Vite bundles into dist/.
-     CSS @font-face declarations are injected at build time.              */
-import "@fontsource/inter";
+// Keep technical identifiers readable offline; interface text uses the native system stack.
 import "@fontsource/jetbrains-mono";
 
 const app = document.getElementById("app");
@@ -13,7 +11,7 @@ const app = document.getElementById("app");
 function renderBootError(error: unknown) {
   const message = error instanceof Error ? error.stack || error.message : String(error);
   document.body.innerHTML = `
-    <main style="box-sizing:border-box;min-height:100vh;padding:28px;background:#fafafa;color:#171717;font-family:Inter,system-ui,sans-serif;">
+    <main style="box-sizing:border-box;min-height:100vh;padding:28px;background:#fafafa;color:#171717;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei UI',sans-serif;">
       <section style="max-width:880px;margin:0 auto;border:1px solid #ddd;border-radius:8px;background:#fff;padding:20px;box-shadow:0 8px 28px rgba(0,0,0,.08);">
         <h1 style="margin:0 0 10px;font-size:20px;">管理工具前端启动失败</h1>
         <p style="margin:0 0 14px;color:#555;">页面没有继续显示为空黑屏，下面是启动错误。</p>

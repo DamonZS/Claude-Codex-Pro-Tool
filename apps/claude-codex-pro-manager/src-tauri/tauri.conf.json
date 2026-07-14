@@ -14,11 +14,11 @@
       {
         "create": false,
         "label": "main",
-        "title": "Claude Codex Pro 管理工具",
+        "title": "CCP 管理工具",
         "width": 1180,
         "height": 820,
         "minWidth": 960,
-        "minHeight": 720
+        "minHeight": 640
       }
     ],
     "security": {
