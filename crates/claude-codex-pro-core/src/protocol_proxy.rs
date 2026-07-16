@@ -759,7 +759,11 @@ async fn open_responses_proxy_request_with_relay(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let chat_request = responses_to_chat_completions(request_json.clone())?;
-    let client = crate::http_client::proxied_client(&relay.user_agent)?;
+    let client = if is_stream {
+        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+    } else {
+        crate::http_client::proxied_client(&relay.user_agent)?
+    };
     let upstream = client
         .post(chat_completions_url(&relay.base_url))
         .bearer_auth(relay.api_key.trim())
@@ -918,7 +922,11 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let client = crate::http_client::proxied_client(&relay.user_agent)?;
+    let client = if is_stream {
+        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+    } else {
+        crate::http_client::proxied_client(&relay.user_agent)?
+    };
     let mut request = client
         .post(claude_messages_url(&base_url))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -1381,7 +1389,12 @@ pub async fn open_chat_completions_proxy_request(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let upstream = reqwest::Client::new()
+    let client = if is_stream {
+        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+    } else {
+        crate::http_client::proxied_client(&relay.user_agent)?
+    };
+    let upstream = client
         .post(chat_completions_url(&relay.base_url))
         .bearer_auth(relay.api_key.trim())
         .header(reqwest::header::CONTENT_TYPE, "application/json")

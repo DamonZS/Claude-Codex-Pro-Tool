@@ -1783,7 +1783,9 @@ mod tests {
     fn host_is_official_anthropic_matches_domain_and_subdomains() {
         assert!(host_is_official_anthropic("https://api.anthropic.com"));
         assert!(host_is_official_anthropic("https://api.anthropic.com/v1"));
-        assert!(host_is_official_anthropic("https://eu.api.anthropic.com/v1"));
+        assert!(host_is_official_anthropic(
+            "https://eu.api.anthropic.com/v1"
+        ));
         assert!(host_is_official_anthropic("api.anthropic.com:443"));
         assert!(!host_is_official_anthropic(
             "https://api.anthropic.com.evil.example/v1"
