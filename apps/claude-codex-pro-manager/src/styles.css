@@ -5067,10 +5067,11 @@ body {
   font-size: 11px;
 }
 
-/* 对话监控活动条：宿主一个 WebGL2 火焰 canvas（见 MemoryActivityWave.tsx）。
-   火焰噪声天生无周期，会真实忽明忽暗地闪烁并从左往右流动——不像 radial-gradient
-   圆点网格（必生 moiré 斜纹）或平移噪声（只流不闪）那样躲不掉规律。
-   容器只负责裁剪成胶囊、给 idle 态一条暗紫底；canvas 铺满并 screen 混合叠上火焰。 */
+/* 对话监控活动条：Claude 思考态那样的小正方体网格闪光（见 MemoryActivityWave.tsx）。
+   约 8 行小方块，波前从右往左逐列点亮后持续闪烁，一道高光反复从右往左扫过。
+   引擎用 canvas 2D（非 WebGL），任何机器/显卡都支持，不会像旧火焰在弱显卡/无
+   WebGL2 上整条黑掉。容器裁胶囊+暗紫底；canvas 铺满 screen 混合叠上方块。
+   动画常驻；亮度差异交给 data-active：idle 压暗一档、active 全亮。 */
 .memory-activity-wave {
   position: relative;
   display: inline-flex;
@@ -5080,7 +5081,10 @@ body {
   border-radius: 999px;
   overflow: hidden;
   isolation: isolate;
-  background: linear-gradient(90deg, rgb(var(--ops-primary-rgb) / 0.14), rgb(var(--ops-primary-rgb) / 0.04));
+  /* Claude 思考/ultracode 那种紫（偏深 #7c3aed），而非全局偏蓝的 --ops-primary-rgb。
+     JS 引擎也读这个 token 给方块上色。 */
+  --memory-wave-rgb: 124 58 237;
+  background: linear-gradient(90deg, rgb(var(--memory-wave-rgb) / 0.14), rgb(var(--memory-wave-rgb) / 0.04));
 }
 
 .memory-activity-wave canvas {
@@ -5090,12 +5094,12 @@ body {
   height: 100%;
   pointer-events: none;
   mix-blend-mode: screen;
-  /* idle（等待 Codex 注入/等待会话变化）：火焰常驻燃烧，压暗一档。 */
+  /* idle（等待 Codex 注入/等待会话变化）：方块常驻闪烁，压暗一档。 */
   opacity: 0.5;
   transition: opacity 0.35s ease;
 }
 
-/* active（自动学习运行中）：火焰全亮。 */
+/* active（自动学习运行中）：方块全亮。 */
 .memory-activity-wave[data-active="true"] canvas {
   opacity: 1;
 }
