@@ -8,6 +8,7 @@
    - 缺少 `activeClaudeRelayId` / `activeClaudeDesktopRelayId` 的旧设置可以正常加载。
    - 设置可分别保存并加载三个目标的当前供应商 ID。
    - 切换 Claude Desktop 后 `activeRelayId` 不变。
+   - 活动 ID 为空时，仅当该目标恰好存在一个可用供应商才回退选择它；零个或多个候选时返回“未配置供应商”，且回退不修改 Codex 当前供应商。活动 ID 非空但失效时返回“未配置供应商”，不静默回退到旧 Profile。
 
 2. **API Key 兼容解析**
    - 测试覆盖 `OPENAI_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`api_key`、`apiKey`。

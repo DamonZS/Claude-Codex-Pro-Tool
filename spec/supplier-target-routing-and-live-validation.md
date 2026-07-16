@@ -41,7 +41,7 @@
 - 保留 `activeRelayId` 作为 Codex 当前供应商，兼容已有设置。
 - 新增 `activeClaudeRelayId`，用于 Claude。
 - 新增 `activeClaudeDesktopRelayId`，用于 Claude Desktop。
-- 读取旧设置时新字段缺失不得报错；对应目标尚未选择时可回退到该目标的首个可用供应商，但不得回退并修改 Codex 当前供应商。
+- 读取旧设置时新字段缺失不得报错；对应目标的活动 ID 为空时，仅当该目标恰好存在一个可用供应商才回退并选择它，存在零个或多个候选时返回“未配置供应商”（与 `spec/claude-desktop-proxy-upstream-models.md` 保持一致）；任何回退都不得修改 Codex 当前供应商。活动 ID 非空时只允许精确匹配对应目标 Profile，ID 失效时返回“未配置供应商”，不得静默回退到旧 Profile。
 - 删除或重命名供应商时，只修正引用该供应商的目标字段。
 
 ### API Key 与 URL 解析

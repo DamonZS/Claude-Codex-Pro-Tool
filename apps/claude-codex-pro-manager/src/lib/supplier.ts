@@ -495,6 +495,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
   const apiKey = supplierProfileResolvedApiKey(normalized);
   const generated = { ...normalized, apiKey };
   if (generated.targetApp === "claude" || generated.targetApp === "claude-desktop") {
+    const authKey = preferredClaudeCredentialField(generated);
     const routeRows = generated.modelMappingEnabled
       ? supplierModelMappingRows(generated).filter((row) => row.routeId.trim() && row.requestModel.trim())
       : [];
@@ -509,7 +510,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
         app_type: generated.targetApp,
         env: {
           ANTHROPIC_BASE_URL: generated.baseUrl,
-          ANTHROPIC_AUTH_TOKEN: apiKey,
+          [authKey]: apiKey,
           ANTHROPIC_MODEL: generated.model,
           ...Object.fromEntries(routeRows.map((row) => {
             const key = row.role === "sonnet"
@@ -530,7 +531,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
           claudeDesktopModelRoutes,
         },
       }, null, 2)}\n`,
-      authContents: `${JSON.stringify({ ANTHROPIC_AUTH_TOKEN: apiKey }, null, 2)}\n`,
+      authContents: `${JSON.stringify({ [authKey]: apiKey }, null, 2)}\n`,
     };
   }
   return {

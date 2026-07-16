@@ -676,23 +676,6 @@ pub fn relay_profile_uses_anthropic_api_key(profile: &RelayProfile) -> bool {
     resolved_relay_profile_api_key(profile).is_some_and(|resolved| resolved.anthropic_api_key)
 }
 
-pub fn relay_profile_uses_anthropic_messages(profile: &RelayProfile) -> bool {
-    let api_format = profile
-        .api_format
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if !api_format.is_empty() {
-        return matches!(api_format.as_str(), "anthropic" | "anthropicmessages");
-    }
-
-    matches!(
-        normalized_target_app(&profile.target_app),
-        "claude" | "claude-desktop"
-    )
-}
-
 fn non_empty_setting(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
@@ -703,10 +686,59 @@ struct ResolvedRelayApiKey {
     anthropic_api_key: bool,
 }
 
+/// 判断显式填写的 Key 是否应走 Anthropic 官方 `x-api-key` 鉴权。
+///
+/// `authField` 显式声明时以它为准；未声明（第三方中转的常见情况）时，
+/// 只有当上游指向 Anthropic 官方域名才用 `x-api-key`，否则一律按第三方
+/// 中转的约定使用 `ANTHROPIC_AUTH_TOKEN` Bearer，避免中转 Key 被错误地
+/// 塞进 `x-api-key` 头导致 401。
+fn explicit_key_uses_anthropic_api_key(profile: &RelayProfile, key: &str) -> bool {
+    let auth_field = profile.auth_field.trim();
+    if !auth_field.is_empty() {
+        return auth_field == "ANTHROPIC_API_KEY";
+    }
+    // 非 Claude 目标（如 Codex/OpenAI 兼容）永远不用 Anthropic 头。
+    if !matches!(
+        normalized_target_app(&profile.target_app),
+        "claude" | "claude-desktop"
+    ) {
+        return false;
+    }
+    relay_targets_official_anthropic(profile) && !key.trim().starts_with("sk-ant-oat")
+}
+
+/// 上游地址是否指向 Anthropic 官方 API 域名。
+fn relay_targets_official_anthropic(profile: &RelayProfile) -> bool {
+    let candidate = if profile.upstream_base_url.trim().is_empty() {
+        profile.base_url.trim()
+    } else {
+        profile.upstream_base_url.trim()
+    };
+    host_is_official_anthropic(candidate)
+}
+
+fn host_is_official_anthropic(base_url: &str) -> bool {
+    let without_scheme = base_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let host = without_scheme
+        .split(['/', ':', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    host == "api.anthropic.com" || host.ends_with(".api.anthropic.com")
+}
+
 fn resolved_relay_profile_api_key(profile: &RelayProfile) -> Option<ResolvedRelayApiKey> {
-    let explicit = non_empty_setting(&profile.api_key).map(|value| ResolvedRelayApiKey {
-        value,
-        anthropic_api_key: profile.auth_field.trim() == "ANTHROPIC_API_KEY",
+    let explicit = non_empty_setting(&profile.api_key).map(|value| {
+        let anthropic_api_key = explicit_key_uses_anthropic_api_key(profile, &value);
+        ResolvedRelayApiKey {
+            value,
+            anthropic_api_key,
+        }
     });
     if explicit.is_some() {
         return explicit;
@@ -1636,6 +1668,129 @@ mod tests {
             target_app: target_app.to_string(),
             ..RelayProfile::default()
         }
+    }
+
+    #[test]
+    fn explicit_claude_key_defaults_to_bearer_for_third_party_relay() {
+        let profile = RelayProfile {
+            target_app: "claude".to_string(),
+            base_url: "https://relay.example.com/v1".to_string(),
+            api_key: "sk-relay-abc".to_string(),
+            auth_field: String::new(),
+            ..RelayProfile::default()
+        };
+
+        assert!(
+            !relay_profile_uses_anthropic_api_key(&profile),
+            "第三方中转且未声明 authField 时应走 Bearer"
+        );
+        assert_eq!(relay_profile_resolved_api_key(&profile), "sk-relay-abc");
+    }
+
+    #[test]
+    fn explicit_claude_key_uses_x_api_key_for_official_anthropic() {
+        let profile = RelayProfile {
+            target_app: "claude".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: "sk-ant-api03-xyz".to_string(),
+            auth_field: String::new(),
+            ..RelayProfile::default()
+        };
+
+        assert!(
+            relay_profile_uses_anthropic_api_key(&profile),
+            "官方 Anthropic 域名的显式 Key 应走 x-api-key"
+        );
+    }
+
+    #[test]
+    fn official_anthropic_oauth_token_stays_bearer() {
+        let profile = RelayProfile {
+            target_app: "claude".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: "sk-ant-oat01-token".to_string(),
+            auth_field: String::new(),
+            ..RelayProfile::default()
+        };
+
+        assert!(
+            !relay_profile_uses_anthropic_api_key(&profile),
+            "OAuth token（sk-ant-oat）即便命中官方域名也应走 Bearer"
+        );
+    }
+
+    #[test]
+    fn explicit_auth_field_overrides_url_inference() {
+        let bearer_on_official = RelayProfile {
+            target_app: "claude".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: "sk-ant-api03-xyz".to_string(),
+            auth_field: "ANTHROPIC_AUTH_TOKEN".to_string(),
+            ..RelayProfile::default()
+        };
+        assert!(
+            !relay_profile_uses_anthropic_api_key(&bearer_on_official),
+            "显式 authField=ANTHROPIC_AUTH_TOKEN 应强制 Bearer"
+        );
+
+        let x_api_key_on_relay = RelayProfile {
+            target_app: "claude".to_string(),
+            base_url: "https://relay.example.com/v1".to_string(),
+            api_key: "sk-relay-abc".to_string(),
+            auth_field: "ANTHROPIC_API_KEY".to_string(),
+            ..RelayProfile::default()
+        };
+        assert!(
+            relay_profile_uses_anthropic_api_key(&x_api_key_on_relay),
+            "显式 authField=ANTHROPIC_API_KEY 应强制 x-api-key"
+        );
+    }
+
+    #[test]
+    fn upstream_base_url_takes_priority_for_official_detection() {
+        let profile = RelayProfile {
+            target_app: "claude-desktop".to_string(),
+            base_url: "http://127.0.0.1:57321/v1".to_string(),
+            upstream_base_url: "https://api.anthropic.com".to_string(),
+            api_key: "sk-ant-api03-xyz".to_string(),
+            auth_field: String::new(),
+            ..RelayProfile::default()
+        };
+
+        assert!(
+            relay_profile_uses_anthropic_api_key(&profile),
+            "官方判定应看 upstreamBaseUrl 而非本地代理 baseUrl"
+        );
+    }
+
+    #[test]
+    fn codex_target_never_uses_anthropic_header() {
+        let profile = RelayProfile {
+            target_app: "codex".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: "sk-ant-api03-xyz".to_string(),
+            auth_field: String::new(),
+            ..RelayProfile::default()
+        };
+
+        assert!(
+            !relay_profile_uses_anthropic_api_key(&profile),
+            "非 Claude 目标永远不应使用 Anthropic x-api-key"
+        );
+    }
+
+    #[test]
+    fn host_is_official_anthropic_matches_domain_and_subdomains() {
+        assert!(host_is_official_anthropic("https://api.anthropic.com"));
+        assert!(host_is_official_anthropic("https://api.anthropic.com/v1"));
+        assert!(host_is_official_anthropic("https://eu.api.anthropic.com/v1"));
+        assert!(host_is_official_anthropic("api.anthropic.com:443"));
+        assert!(!host_is_official_anthropic(
+            "https://api.anthropic.com.evil.example/v1"
+        ));
+        assert!(!host_is_official_anthropic("https://relay.example.com/v1"));
+        assert!(!host_is_official_anthropic("https://anthropic.com.cn/v1"));
+        assert!(!host_is_official_anthropic(""));
     }
 
     #[test]
