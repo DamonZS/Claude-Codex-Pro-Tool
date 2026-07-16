@@ -25,6 +25,7 @@ struct ModelSource {
     name: String,
     base_url: String,
     api_key: String,
+    anthropic_api_key: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -444,6 +445,7 @@ fn model_sources_from_environment(
         } else {
             api_key
         },
+        anthropic_api_key: false,
     }]
 }
 
@@ -480,6 +482,7 @@ fn model_source_from_config(
         },
         base_url,
         api_key,
+        anthropic_api_key: false,
     })
 }
 
@@ -543,12 +546,15 @@ async fn fetch_models_from_source(
         return (Vec::new(), safe_source);
     }
 
-    let mut request = client
+    let request = client
         .get(&endpoint)
         .header(reqwest::header::ACCEPT, "application/json");
-    if !source.api_key.is_empty() {
-        request = request.bearer_auth(&source.api_key);
-    }
+    let request = crate::http_client::apply_api_auth_headers(
+        request,
+        &source.api_key,
+        source.anthropic_api_key,
+        source.anthropic_api_key,
+    );
 
     match request.send().await {
         Ok(response) if response.status().is_success() => match response.json::<Value>().await {
@@ -597,22 +603,29 @@ pub async fn fetch_relay_profile_model_ids(
         } else {
             profile.upstream_base_url.trim().to_string()
         },
-        api_key: profile.api_key.trim().to_string(),
+        api_key: crate::settings::relay_profile_resolved_api_key(profile),
+        anthropic_api_key: crate::settings::relay_profile_uses_anthropic_api_key(profile),
     };
     if source.base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
     }
-    let endpoint = models_endpoint(&source.base_url);
+    let models_endpoint = models_endpoint(&source.base_url);
     let client = crate::http_client::proxied_client(&profile.user_agent)?;
     let (models, status) = fetch_models_from_source(&client, &source).await;
-    if models.is_empty() {
+    if !models.is_empty() {
+        return Ok((models, models_endpoint));
+    }
+
+    let models_request_succeeded = status.get("status").and_then(Value::as_str) == Some("ok");
+    if !models_request_succeeded {
         let message = status
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("上游没有返回可用模型");
         anyhow::bail!("{message}");
     }
-    Ok((models, endpoint))
+
+    anyhow::bail!("上游 /v1/models 没有返回可用模型")
 }
 
 fn preferred_responses_api_status(sources: &[Value]) -> Value {

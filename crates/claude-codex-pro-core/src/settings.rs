@@ -539,25 +539,29 @@ impl BackendSettings {
         }
 
         let active_id = self.active_relay_id_for_target(target_app);
-        self.relay_profiles
-            .iter()
-            .find(|profile| {
-                !active_id.trim().is_empty()
-                    && profile.id == active_id
-                    && relay_profile_matches_target(profile, target_app)
+        let selected = if active_id.trim().is_empty() {
+            let mut candidates = self
+                .relay_profiles
+                .iter()
+                .filter(|profile| relay_profile_matches_target(profile, target_app));
+            let only_candidate = candidates.next();
+            if candidates.next().is_none() {
+                only_candidate
+            } else {
+                None
+            }
+        } else {
+            self.relay_profiles.iter().find(|profile| {
+                profile.id == active_id && relay_profile_matches_target(profile, target_app)
             })
-            .or_else(|| {
-                self.relay_profiles
-                    .iter()
-                    .find(|profile| relay_profile_matches_target(profile, target_app))
-            })
-            .cloned()
-            .unwrap_or_else(|| RelayProfile {
-                id: active_id.to_string(),
-                name: "未配置供应商".to_string(),
-                target_app: target_app.to_string(),
-                ..RelayProfile::default()
-            })
+        };
+
+        selected.cloned().unwrap_or_else(|| RelayProfile {
+            id: active_id.to_string(),
+            name: "未配置供应商".to_string(),
+            target_app: target_app.to_string(),
+            ..RelayProfile::default()
+        })
     }
 
     pub fn active_relay_profile(&self) -> RelayProfile {
@@ -663,11 +667,30 @@ fn relay_profile_matches_target(profile: &RelayProfile, target_app: &str) -> boo
 }
 
 pub fn relay_profile_resolved_api_key(profile: &RelayProfile) -> String {
-    non_empty_setting(&profile.api_key)
-        .or_else(|| api_key_from_json_text(&profile.auth_contents))
-        .or_else(|| api_key_from_json_text(&profile.config_contents))
-        .or_else(|| api_key_from_toml_text(&profile.config_contents))
+    resolved_relay_profile_api_key(profile)
+        .map(|resolved| resolved.value)
         .unwrap_or_default()
+}
+
+pub fn relay_profile_uses_anthropic_api_key(profile: &RelayProfile) -> bool {
+    resolved_relay_profile_api_key(profile).is_some_and(|resolved| resolved.anthropic_api_key)
+}
+
+pub fn relay_profile_uses_anthropic_messages(profile: &RelayProfile) -> bool {
+    let api_format = profile
+        .api_format
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !api_format.is_empty() {
+        return matches!(api_format.as_str(), "anthropic" | "anthropicmessages");
+    }
+
+    matches!(
+        normalized_target_app(&profile.target_app),
+        "claude" | "claude-desktop"
+    )
 }
 
 fn non_empty_setting(value: &str) -> Option<String> {
@@ -675,23 +698,55 @@ fn non_empty_setting(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn api_key_from_json_text(contents: &str) -> Option<String> {
+struct ResolvedRelayApiKey {
+    value: String,
+    anthropic_api_key: bool,
+}
+
+fn resolved_relay_profile_api_key(profile: &RelayProfile) -> Option<ResolvedRelayApiKey> {
+    let explicit = non_empty_setting(&profile.api_key).map(|value| ResolvedRelayApiKey {
+        value,
+        anthropic_api_key: profile.auth_field.trim() == "ANTHROPIC_API_KEY",
+    });
+    if explicit.is_some() {
+        return explicit;
+    }
+
+    let config_key = || {
+        api_key_from_json_text(&profile.config_contents)
+            .or_else(|| api_key_from_toml_text(&profile.config_contents))
+    };
+    let auth_key = || api_key_from_json_text(&profile.auth_contents);
+    if matches!(
+        normalized_target_app(&profile.target_app),
+        "claude" | "claude-desktop"
+    ) {
+        config_key().or_else(auth_key)
+    } else {
+        auth_key().or_else(config_key)
+    }
+}
+
+fn api_key_from_json_text(contents: &str) -> Option<ResolvedRelayApiKey> {
     let value = serde_json::from_str::<Value>(contents.trim()).ok()?;
     api_key_from_json_value(&value)
 }
 
-fn api_key_from_json_value(value: &Value) -> Option<String> {
+fn api_key_from_json_value(value: &Value) -> Option<ResolvedRelayApiKey> {
     let object = value.as_object()?;
-    for key in [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-        "api_key",
-        "apiKey",
+    for (key, anthropic_api_key) in [
+        ("OPENAI_API_KEY", false),
+        ("ANTHROPIC_AUTH_TOKEN", false),
+        ("ANTHROPIC_API_KEY", true),
+        ("api_key", false),
+        ("apiKey", false),
     ] {
         if let Some(value) = object.get(key).and_then(Value::as_str) {
             if let Some(value) = non_empty_setting(value) {
-                return Some(value);
+                return Some(ResolvedRelayApiKey {
+                    value,
+                    anthropic_api_key,
+                });
             }
         }
     }
@@ -703,19 +758,22 @@ fn api_key_from_json_value(value: &Value) -> Option<String> {
     None
 }
 
-fn api_key_from_toml_text(contents: &str) -> Option<String> {
+fn api_key_from_toml_text(contents: &str) -> Option<ResolvedRelayApiKey> {
     let document = contents.parse::<DocumentMut>().ok()?;
-    for key in [
-        "experimental_bearer_token",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-        "api_key",
-        "apiKey",
+    for (key, anthropic_api_key) in [
+        ("experimental_bearer_token", false),
+        ("OPENAI_API_KEY", false),
+        ("ANTHROPIC_AUTH_TOKEN", false),
+        ("ANTHROPIC_API_KEY", true),
+        ("api_key", false),
+        ("apiKey", false),
     ] {
         if let Some(value) = document.get(key).and_then(Item::as_str) {
             if let Some(value) = non_empty_setting(value) {
-                return Some(value);
+                return Some(ResolvedRelayApiKey {
+                    value,
+                    anthropic_api_key,
+                });
             }
         }
     }
@@ -1569,6 +1627,75 @@ mod tests {
         assert_eq!(profile.auto_compact_limit, "160000");
         assert_eq!(profile.model_insert_mode, RelayModelInsertMode::Patch);
         assert_eq!(profile.model_list, "qwen3-coder\ndeepseek-coder");
+    }
+
+    fn target_profile(id: &str, target_app: &str) -> RelayProfile {
+        RelayProfile {
+            id: id.to_string(),
+            name: format!("供应商 {id}"),
+            target_app: target_app.to_string(),
+            ..RelayProfile::default()
+        }
+    }
+
+    #[test]
+    fn target_profile_requires_an_exact_active_id_when_multiple_profiles_exist() {
+        let settings = BackendSettings {
+            relay_profiles: vec![
+                target_profile("claude-old", "claude"),
+                target_profile("claude-current", "claude"),
+            ],
+            active_claude_relay_id: String::new(),
+            ..BackendSettings::default()
+        };
+
+        let active = settings.active_relay_profile_for_target("claude");
+
+        assert_eq!(active.name, "未配置供应商");
+        assert!(active.id.is_empty());
+    }
+
+    #[test]
+    fn target_profile_does_not_fall_back_when_active_id_is_stale() {
+        let settings = BackendSettings {
+            relay_profiles: vec![target_profile("desktop-old", "claude-desktop")],
+            active_claude_desktop_relay_id: "desktop-missing".to_string(),
+            ..BackendSettings::default()
+        };
+
+        let active = settings.active_relay_profile_for_target("claude-desktop");
+
+        assert_eq!(active.name, "未配置供应商");
+        assert_eq!(active.id, "desktop-missing");
+    }
+
+    #[test]
+    fn target_profile_keeps_single_profile_legacy_compatibility() {
+        let settings = BackendSettings {
+            relay_profiles: vec![target_profile("claude-only", "claude")],
+            active_claude_relay_id: String::new(),
+            ..BackendSettings::default()
+        };
+
+        let active = settings.active_relay_profile_for_target("claude");
+
+        assert_eq!(active.id, "claude-only");
+    }
+
+    #[test]
+    fn target_profile_uses_exact_active_id() {
+        let settings = BackendSettings {
+            relay_profiles: vec![
+                target_profile("desktop-old", "claude-desktop"),
+                target_profile("desktop-current", "claude-desktop"),
+            ],
+            active_claude_desktop_relay_id: "desktop-current".to_string(),
+            ..BackendSettings::default()
+        };
+
+        let active = settings.active_relay_profile_for_target("claude-desktop");
+
+        assert_eq!(active.id, "desktop-current");
     }
 
     #[test]

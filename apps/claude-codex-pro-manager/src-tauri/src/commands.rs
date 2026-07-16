@@ -6574,9 +6574,19 @@ fn switch_claude_supplier_blocking(
         return failed(&error.to_string(), fallback_settings_payload());
     }
     let profile = request.settings.active_relay_profile_for_target("claude");
+    let credential_source = if profile.api_key.trim().is_empty() {
+        "savedProfile"
+    } else {
+        "editorDraft"
+    };
     log_manager_event(
         "manager.switch_supplier_profile.start",
-        json!({ "targetApp": "claude", "profileId": profile.id }),
+        json!({
+            "targetApp": "claude",
+            "profileId": profile.id,
+            "credentialSource": credential_source,
+            "credentialPresent": !relay_profile_resolved_api_key(&profile).trim().is_empty()
+        }),
     );
     if let Err(error) = store.save(&request.settings) {
         return failed(
@@ -6639,6 +6649,11 @@ fn switch_claude_desktop_supplier_blocking(
         .settings
         .active_relay_profile_for_target("claude-desktop");
     let api_key = relay_profile_resolved_api_key(&profile);
+    let credential_source = if profile.api_key.trim().is_empty() {
+        "savedProfile"
+    } else {
+        "editorDraft"
+    };
     if api_key.trim().is_empty() {
         return failed(
             "Claude Desktop 供应商缺少 API Key，未写入不完整配置。",
@@ -6652,6 +6667,8 @@ fn switch_claude_desktop_supplier_blocking(
             "profileId": profile.id,
             "modelLines": profile.model_list.lines().filter(|line| !line.trim().is_empty()).count(),
             "modelMappingEnabled": profile.model_mapping_enabled,
+            "credentialSource": credential_source,
+            "credentialPresent": true,
             "proxyPort": proxy_port
         }),
     );
@@ -7577,18 +7594,44 @@ pub async fn fetch_relay_profile_models(
     } else {
         profile.name.trim()
     };
+    let credential_source = if profile.api_key.trim().is_empty() {
+        "savedProfile"
+    } else {
+        "editorDraft"
+    };
+    log_manager_event(
+        "manager.fetch_relay_profile_models.start",
+        json!({
+            "profileId": profile.id,
+            "targetApp": profile.target_app,
+            "credentialSource": credential_source,
+            "credentialPresent": !relay_profile_resolved_api_key(&profile).trim().is_empty()
+        }),
+    );
     match claude_codex_pro_core::model_catalog::fetch_relay_profile_model_ids(&profile).await {
-        Ok((models, endpoint)) => ok(
-            &format!("已为供应商 {profile_name} 加载 {} 个模型。", models.len()),
-            RelayProfileModelsPayload { models, endpoint },
-        ),
-        Err(error) => failed(
-            &format!("加载供应商 {profile_name} 的模型列表失败：{error}"),
-            RelayProfileModelsPayload {
-                models: Vec::new(),
-                endpoint: String::new(),
-            },
-        ),
+        Ok((models, endpoint)) => {
+            log_manager_event(
+                "manager.fetch_relay_profile_models.ok",
+                json!({ "profileId": profile.id, "modelCount": models.len(), "endpoint": endpoint }),
+            );
+            ok(
+                &format!("已为供应商 {profile_name} 加载 {} 个模型。", models.len()),
+                RelayProfileModelsPayload { models, endpoint },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.fetch_relay_profile_models.failed",
+                json!({ "profileId": profile.id, "error": error.to_string() }),
+            );
+            failed(
+                &format!("加载供应商 {profile_name} 的模型列表失败：{error}"),
+                RelayProfileModelsPayload {
+                    models: Vec::new(),
+                    endpoint: String::new(),
+                },
+            )
+        }
     }
 }
 

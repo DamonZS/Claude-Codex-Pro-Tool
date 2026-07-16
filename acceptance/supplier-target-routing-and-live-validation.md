@@ -12,6 +12,11 @@
 2. **API Key 兼容解析**
    - 测试覆盖 `OPENAI_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`api_key`、`apiKey`。
    - 测试覆盖 `authContents` 和 `configContents.env` 嵌套 JSON。
+   - Claude / Claude Desktop 的 `authContents` 与 `configContents.env` 凭据冲突时，解析结果使用配置中的当前凭据；显式 `apiKey` 仍具有最高优先级。
+   - Codex 凭据冲突时仍保持 `authContents` 优先，避免改变既有 Codex 导入与切换行为。
+   - 前端保存或生成 Claude 配置后，两个凭据容器使用同一个最终凭据。
+   - 编辑框输入新 Key 后，获取模型、保存、写入 Claude/Claude Desktop Profile 均使用该次输入；退出编辑器再打开时仍显示这次保存的 Key。
+   - 日志用 `credentialSource=editorDraft|savedProfile` 和 `credentialPresent` 说明本次凭据来源，不记录 Key 原文。
    - 测试和日志中不出现测试密钥之外的真实凭据。
 
 3. **Claude 新增式写入**

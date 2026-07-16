@@ -68,6 +68,18 @@ fn responses_request_converts_to_chat_completions() {
 }
 
 #[test]
+fn responses_request_preserves_gpt_5_6_model_without_fallback() {
+    let converted = responses_to_chat_completions(json!({
+        "model": "gpt-5.6-sol",
+        "input": "verify model passthrough"
+    }))
+    .unwrap();
+
+    assert_eq!(converted["model"], "gpt-5.6-sol");
+    assert_ne!(converted["model"], "gpt-5.4");
+}
+
+#[test]
 fn responses_request_matches_ccs_reasoning_and_tool_choice_edges() {
     let non_reasoning = responses_to_chat_completions(json!({
         "model": "gpt-4o",

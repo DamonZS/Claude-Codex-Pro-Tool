@@ -54,6 +54,10 @@
   - `api_key` / `apiKey`
   - `authContents` 顶层 JSON
   - `configContents` 顶层或 `env` 嵌套 JSON
+- 多个凭据来源同时存在时必须使用目标感知的稳定优先级：用户当前显式输入的 `apiKey` 最高；Claude / Claude Desktop 优先使用 `configContents.env` 的当前凭据，再回退到 `authContents`；Codex 保持 `authContents` 优先于 `configContents` 的既有语义。
+- 保存或重新生成 Claude / Claude Desktop 配置时，必须用最终解析出的当前凭据同步 `configContents.env` 与 `authContents`，避免旧凭据在后续加载时再次覆盖当前配置。
+- 用户点击“获取模型”“保存”或“保存并使用”时，本次操作必须直接使用编辑框当前的 `apiKey`；不得从保存前的 `configContents`、`authContents` 或旧 Profile 回填覆盖。
+- CCSwitch 导入 Profile 可保留未知 JSON 字段，但保存时必须删除旧凭据别名并把当前编辑值写入唯一认证字段；无效 JSON 必须回退为当前表单生成的配置，不能继续携带旧 Key。
 - URL 优先使用供应商的真实上游 URL，不得把 `127.0.0.1` 的 Claude Desktop 本地代理地址再次当作上游。
 - 缺少 URL 或 Key 时切换失败，并明确指出缺失字段；不得写入不完整 Profile。
 

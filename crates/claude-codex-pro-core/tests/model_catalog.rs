@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use claude_codex_pro_core::model_catalog::{
-    read_codex_model_catalog, read_codex_model_catalog_from_home,
+    fetch_relay_profile_model_ids, read_codex_model_catalog, read_codex_model_catalog_from_home,
 };
 use claude_codex_pro_core::settings::{
     BackendSettings, RelayMode, RelayProfile, RelayProtocol, SettingsStore,
@@ -68,6 +68,229 @@ experimental_bearer_token = "relay-key"
     let requests = server.finish();
     assert_eq!(requests[0].path, "/v1/models");
     assert_eq!(requests[0].authorization, "Bearer relay-key");
+    assert!(requests[0].x_api_key.is_empty());
+    assert!(requests[0].anthropic_version.is_empty());
+}
+
+#[tokio::test]
+async fn relay_profile_model_discovery_resolves_serialized_api_keys() {
+    for (key_name, expected_bearer, expected_x_api_key, expected_version) in [
+        (
+            "ANTHROPIC_AUTH_TOKEN",
+            "Bearer resolved-profile-key",
+            "",
+            "",
+        ),
+        (
+            "ANTHROPIC_API_KEY",
+            "",
+            "resolved-profile-key",
+            "2023-06-01",
+        ),
+    ] {
+        for key_in_auth_contents in [true, false] {
+            let server = spawn_models_server(json!({
+                "data": [{"id": "claude-sonnet-4-6"}]
+            }));
+            let mut profile = RelayProfile {
+                id: "claude-provider".to_string(),
+                name: "Claude Provider".to_string(),
+                upstream_base_url: server.base_url.clone(),
+                target_app: "claude".to_string(),
+                api_format: "Anthropic Messages".to_string(),
+                model_list: "must-not-be-discovered".to_string(),
+                model_mapping: "haiku=must-not-be-discovered".to_string(),
+                ..RelayProfile::default()
+            };
+            let serialized_key =
+                serde_json::to_string(&HashMap::from([(key_name, "resolved-profile-key")]))
+                    .unwrap();
+            if key_in_auth_contents {
+                profile.auth_contents = serialized_key;
+            } else {
+                profile.config_contents = serialized_key;
+            }
+
+            let (models, endpoint) = fetch_relay_profile_model_ids(&profile).await.unwrap();
+
+            assert_eq!(models, vec!["claude-sonnet-4-6"]);
+            assert_eq!(endpoint, format!("{}/v1/models", server.base_url));
+            let requests = server.finish();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].path, "/v1/models");
+            assert_eq!(requests[0].authorization, expected_bearer);
+            assert_eq!(requests[0].x_api_key, expected_x_api_key);
+            assert_eq!(requests[0].anthropic_version, expected_version);
+        }
+    }
+}
+
+#[tokio::test]
+async fn claude_model_discovery_uses_current_config_key_when_auth_key_is_stale() {
+    let server = spawn_models_server(json!({
+        "data": [{"id": "claude-opus-4-8"}]
+    }));
+    let profile = RelayProfile {
+        id: "claude-desktop-provider".to_string(),
+        upstream_base_url: server.base_url.clone(),
+        target_app: "claude-desktop".to_string(),
+        api_format: "Anthropic Messages".to_string(),
+        auth_contents: json!({
+            "ANTHROPIC_AUTH_TOKEN": "test-stale-auth-key"
+        })
+        .to_string(),
+        config_contents: json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "test-current-config-key"
+            }
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    let (models, endpoint) = fetch_relay_profile_model_ids(&profile).await.unwrap();
+
+    assert_eq!(models, vec!["claude-opus-4-8"]);
+    assert_eq!(endpoint, format!("{}/v1/models", server.base_url));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/models");
+    assert_eq!(requests[0].authorization, "Bearer test-current-config-key");
+    assert_ne!(requests[0].authorization, "Bearer test-stale-auth-key");
+}
+
+#[tokio::test]
+async fn openai_relay_profile_model_discovery_keeps_bearer_only_auth() {
+    let server = spawn_models_server(json!({
+        "data": [{"id": "gpt-5.6-sol"}]
+    }));
+    let profile = RelayProfile {
+        id: "codex-provider".to_string(),
+        upstream_base_url: server.base_url.clone(),
+        target_app: "codex".to_string(),
+        api_format: "openai_responses".to_string(),
+        auth_contents: json!({"OPENAI_API_KEY": "openai-profile-key"}).to_string(),
+        ..RelayProfile::default()
+    };
+
+    let (models, _) = fetch_relay_profile_model_ids(&profile).await.unwrap();
+
+    assert_eq!(models, vec!["gpt-5.6-sol"]);
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].authorization, "Bearer openai-profile-key");
+    assert!(requests[0].x_api_key.is_empty());
+    assert!(requests[0].anthropic_version.is_empty());
+}
+
+#[tokio::test]
+async fn relay_profile_model_discovery_rejects_empty_standard_catalog_without_pricing_fallback() {
+    let server = spawn_route_server(
+        vec![
+            ("/v1/models", 200, json!({"data": []})),
+            (
+                "/api/pricing",
+                200,
+                json!({
+                    "data": [
+                        {
+                            "model_name": "claude-opus-4-8",
+                            "supported_endpoint_types": ["anthropic", "openai"]
+                        },
+                        {
+                            "model_name": "gpt-5.6",
+                            "supported_endpoint_types": ["openai"]
+                        },
+                        {
+                            "model_name": "claude-opus-4-8",
+                            "supported_endpoint_types": ["ANTHROPIC"]
+                        },
+                        {
+                            "model_name": " claude-sonnet-4-6 ",
+                            "supported_endpoint_types": ["anthropic"]
+                        },
+                        {
+                            "model_name": "claude-without-endpoint"
+                        }
+                    ]
+                }),
+            ),
+        ],
+        1,
+    );
+    let profile = RelayProfile {
+        id: "claude-provider".to_string(),
+        upstream_base_url: server.base_url.clone(),
+        target_app: "claude-desktop".to_string(),
+        auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "pricing-key"}).to_string(),
+        model_list: "mapped-list-model".to_string(),
+        model_mapping: "haiku=mapped-request-model".to_string(),
+        model_mapping_json: json!({
+            "haiku": {"requestModel": "mapped-json-model"}
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    let error = fetch_relay_profile_model_ids(&profile)
+        .await
+        .expect_err("an empty /v1/models response must remain a discovery failure")
+        .to_string();
+
+    assert!(error.contains("/v1/models"));
+    assert!(error.contains("没有返回可用模型"));
+    assert!(!error.contains("pricing-key"));
+    let requests = server.finish();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/v1/models"]
+    );
+    assert_eq!(requests[0].authorization, "Bearer pricing-key");
+    assert!(requests[0].x_api_key.is_empty());
+    assert!(requests[0].anthropic_version.is_empty());
+}
+
+#[tokio::test]
+async fn relay_profile_model_discovery_does_not_hide_models_endpoint_auth_failure() {
+    let server = spawn_route_server(
+        vec![
+            ("/v1/models", 401, json!({"error": "invalid token"})),
+            (
+                "/api/pricing",
+                200,
+                json!({
+                    "data": [{
+                        "model_name": "claude-opus-4-8",
+                        "supported_endpoint_types": ["anthropic"]
+                    }]
+                }),
+            ),
+        ],
+        1,
+    );
+    let profile = RelayProfile {
+        upstream_base_url: server.base_url.clone(),
+        target_app: "claude".to_string(),
+        auth_contents: json!({"ANTHROPIC_API_KEY": "secret-auth-failure-key"}).to_string(),
+        ..RelayProfile::default()
+    };
+
+    let error = fetch_relay_profile_model_ids(&profile)
+        .await
+        .expect_err("401 must remain a model discovery failure")
+        .to_string();
+
+    assert!(error.contains("HTTP 401"));
+    assert!(!error.contains("secret-auth-failure-key"));
+    let requests = server.finish();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/models");
+    assert!(requests[0].authorization.is_empty());
+    assert_eq!(requests[0].x_api_key, "secret-auth-failure-key");
+    assert_eq!(requests[0].anthropic_version, "2023-06-01");
 }
 
 #[tokio::test]
@@ -412,20 +635,40 @@ impl ModelsServer {
 struct ModelsRequest {
     path: String,
     authorization: String,
+    x_api_key: String,
+    anthropic_version: String,
 }
 
 fn spawn_models_server(payload: serde_json::Value) -> ModelsServer {
+    spawn_route_server(vec![("/v1/models", 200, payload)], 1)
+}
+
+fn spawn_route_server(
+    routes: Vec<(&str, u16, serde_json::Value)>,
+    expected_requests: usize,
+) -> ModelsServer {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let base_url = format!("http://{address}");
     listener
         .set_nonblocking(true)
         .expect("listener should switch to nonblocking mode");
-    let models_body = payload.to_string();
+    let routes = routes
+        .into_iter()
+        .map(|(path, status, payload)| (path.to_string(), status, payload.to_string()))
+        .collect::<Vec<_>>();
     let handle = thread::spawn(move || {
         let started = std::time::Instant::now();
         let mut requests = Vec::new();
-        while requests.is_empty() && started.elapsed() < std::time::Duration::from_secs(2) {
+        let mut last_request_at = None;
+        while started.elapsed() < std::time::Duration::from_secs(2) {
+            if requests.len() >= expected_requests
+                && last_request_at.is_some_and(|last: std::time::Instant| {
+                    last.elapsed() >= std::time::Duration::from_millis(100)
+                })
+            {
+                break;
+            }
             let Ok((mut stream, _)) = listener.accept() else {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
@@ -458,9 +701,23 @@ fn spawn_models_server(payload: serde_json::Value) -> ModelsServer {
                 .find_map(|line| line.strip_prefix("authorization: "))
                 .unwrap_or_default()
                 .to_string();
-            let (status, body) = (200, models_body.as_str());
+            let x_api_key = request
+                .lines()
+                .find_map(|line| line.strip_prefix("x-api-key: "))
+                .unwrap_or_default()
+                .to_string();
+            let anthropic_version = request
+                .lines()
+                .find_map(|line| line.strip_prefix("anthropic-version: "))
+                .unwrap_or_default()
+                .to_string();
+            let (status, body) = routes
+                .iter()
+                .find(|(path, _, _)| path == &request_path)
+                .map(|(_, status, body)| (*status, body.as_str()))
+                .unwrap_or((404, r#"{"error":"not found"}"#));
             let response = format!(
-                "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -468,7 +725,10 @@ fn spawn_models_server(payload: serde_json::Value) -> ModelsServer {
             requests.push(ModelsRequest {
                 path: request_path,
                 authorization,
+                x_api_key,
+                anthropic_version,
             });
+            last_request_at = Some(std::time::Instant::now());
         }
         requests
     });

@@ -60,6 +60,7 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+          Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
       - name: Build Windows installer
         shell: pwsh

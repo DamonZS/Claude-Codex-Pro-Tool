@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -1093,12 +1093,18 @@ async fn handle_helper_connection(
     if crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
         && matches!(method, "POST" | "OPTIONS")
     {
+        let metadata = crate::protocol_proxy::ClaudeMessagesRequestMetadata::from_inbound(
+            raw_path,
+            http_header_value(&request, "anthropic-version"),
+            http_header_value(&request, "anthropic-beta"),
+        );
         return handle_claude_desktop_messages_proxy_connection(
             &mut stream,
             request_body,
             method,
             path,
             remote_addr_text,
+            &metadata,
         )
         .await;
     }
@@ -1677,12 +1683,382 @@ async fn handle_chat_completions_proxy_connection(
     Ok(())
 }
 
+const CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaudeSseStreamOutcome {
+    Complete,
+    Repaired,
+    Incomplete,
+}
+
+impl ClaudeSseStreamOutcome {
+    fn log_event(self) -> &'static str {
+        match self {
+            Self::Complete => "helper.claude_desktop_messages_proxy_stream_ok",
+            Self::Repaired => "helper.claude_desktop_messages_proxy_stream_repaired",
+            Self::Incomplete => "helper.claude_desktop_messages_proxy_stream_incomplete",
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::Repaired => "repaired",
+            Self::Incomplete => "incomplete",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ClaudeSseDiagnosticAction {
+    event_type: &'static str,
+    index: Option<u64>,
+    block_type: Option<String>,
+    action: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct ClaudeMessagesSseGuard {
+    buffer: Vec<u8>,
+    active_blocks: BTreeMap<u64, String>,
+    event_count: usize,
+    inserted_start_count: usize,
+    inserted_stop_count: usize,
+    suppressed_delta_count: usize,
+    suppressed_stop_count: usize,
+    malformed_event_count: usize,
+    trailing_bytes: usize,
+    stream_read_failed: bool,
+    saw_message_stop: bool,
+    actions: Vec<ClaudeSseDiagnosticAction>,
+}
+
+impl ClaudeMessagesSseGuard {
+    fn push_bytes(&mut self, bytes: &[u8]) -> Vec<u8> {
+        self.buffer.extend_from_slice(bytes);
+        let mut output = Vec::new();
+        while let Some((separator_start, separator_len)) = next_sse_event_separator(&self.buffer) {
+            let event = self
+                .buffer
+                .drain(..separator_start + separator_len)
+                .collect::<Vec<_>>();
+            output.extend(self.process_event(&event));
+        }
+        output
+    }
+
+    fn finish(&mut self) -> Vec<u8> {
+        let trailing = std::mem::take(&mut self.buffer);
+        self.trailing_bytes = trailing.len();
+        trailing
+    }
+
+    fn outcome(&self) -> ClaudeSseStreamOutcome {
+        if !self.saw_message_stop
+            || self.trailing_bytes > 0
+            || self.stream_read_failed
+            || !self.active_blocks.is_empty()
+            || self.malformed_event_count > 0
+        {
+            ClaudeSseStreamOutcome::Incomplete
+        } else if self.inserted_start_count > 0
+            || self.inserted_stop_count > 0
+            || self.suppressed_delta_count > 0
+            || self.suppressed_stop_count > 0
+        {
+            ClaudeSseStreamOutcome::Repaired
+        } else {
+            ClaudeSseStreamOutcome::Complete
+        }
+    }
+
+    fn diagnostic_summary(&self) -> Value {
+        let actions = self
+            .actions
+            .iter()
+            .map(|action| {
+                serde_json::json!({
+                    "event_type": action.event_type,
+                    "index": action.index,
+                    "block_type": action.block_type,
+                    "action": action.action
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "outcome": self.outcome().as_str(),
+            "event_count": self.event_count,
+            "message_stop_seen": self.saw_message_stop,
+            "active_block_count": self.active_blocks.len(),
+            "inserted_start_count": self.inserted_start_count,
+            "inserted_stop_count": self.inserted_stop_count,
+            "suppressed_delta_count": self.suppressed_delta_count,
+            "suppressed_stop_count": self.suppressed_stop_count,
+            "malformed_event_count": self.malformed_event_count,
+            "trailing_bytes": self.trailing_bytes,
+            "stream_read_failed": self.stream_read_failed,
+            "actions": actions
+        })
+    }
+
+    fn process_event(&mut self, event: &[u8]) -> Vec<u8> {
+        self.event_count += 1;
+        let line_ending = if event.ends_with(b"\r\n\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let Some(parsed) = parse_claude_sse_event(event) else {
+            self.malformed_event_count += 1;
+            self.record_action("invalid_utf8", None, None, "forwarded_unparsed_event");
+            return event.to_vec();
+        };
+        let event_type = parsed
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("type"))
+            .and_then(Value::as_str)
+            .or(parsed.event_type.as_deref());
+        let Some(event_type) = event_type else {
+            return event.to_vec();
+        };
+        if !matches!(
+            event_type,
+            "content_block_start" | "content_block_delta" | "content_block_stop" | "message_stop"
+        ) {
+            return event.to_vec();
+        }
+        let Some(payload) = parsed.payload.as_ref() else {
+            self.malformed_event_count += 1;
+            self.record_action(
+                lifecycle_event_name(event_type),
+                None,
+                None,
+                "suppressed_malformed_event",
+            );
+            return Vec::new();
+        };
+
+        match event_type {
+            "content_block_start" => {
+                let index = payload.get("index").and_then(Value::as_u64);
+                let block_type = payload
+                    .get("content_block")
+                    .and_then(|block| block.get("type"))
+                    .and_then(Value::as_str);
+                let (Some(index), Some(block_type)) = (index, block_type) else {
+                    self.malformed_event_count += 1;
+                    self.record_action(
+                        "content_block_start",
+                        index,
+                        block_type,
+                        "suppressed_malformed_event",
+                    );
+                    return Vec::new();
+                };
+                self.active_blocks.insert(index, block_type.to_string());
+                event.to_vec()
+            }
+            "content_block_delta" => {
+                let index = payload.get("index").and_then(Value::as_u64);
+                let delta_type = payload
+                    .get("delta")
+                    .and_then(|delta| delta.get("type"))
+                    .and_then(Value::as_str);
+                let (Some(index), Some(delta_type)) = (index, delta_type) else {
+                    self.malformed_event_count += 1;
+                    self.suppressed_delta_count += 1;
+                    self.record_action(
+                        "content_block_delta",
+                        index,
+                        delta_type,
+                        "suppressed_malformed_event",
+                    );
+                    return Vec::new();
+                };
+                if self.active_blocks.contains_key(&index) {
+                    return event.to_vec();
+                }
+
+                let inferred_block_type = match delta_type {
+                    "text_delta" => Some("text"),
+                    "thinking_delta" | "signature_delta" => Some("thinking"),
+                    _ => None,
+                };
+                if let Some(block_type) = inferred_block_type {
+                    self.active_blocks.insert(index, block_type.to_string());
+                    self.inserted_start_count += 1;
+                    self.record_action(
+                        "content_block_delta",
+                        Some(index),
+                        Some(block_type),
+                        "inserted_missing_start",
+                    );
+                    let mut output = synthetic_content_block_start(index, block_type, line_ending);
+                    output.extend_from_slice(event);
+                    output
+                } else {
+                    self.suppressed_delta_count += 1;
+                    self.record_action(
+                        "content_block_delta",
+                        Some(index),
+                        Some(delta_type),
+                        "suppressed_orphan_delta",
+                    );
+                    Vec::new()
+                }
+            }
+            "content_block_stop" => {
+                let index = payload.get("index").and_then(Value::as_u64);
+                if index
+                    .and_then(|index| self.active_blocks.remove(&index))
+                    .is_some()
+                {
+                    event.to_vec()
+                } else {
+                    self.suppressed_stop_count += 1;
+                    self.record_action("content_block_stop", index, None, "suppressed_orphan_stop");
+                    Vec::new()
+                }
+            }
+            "message_stop" => {
+                let active_blocks = self
+                    .active_blocks
+                    .iter()
+                    .map(|(index, block_type)| (*index, block_type.clone()))
+                    .collect::<Vec<_>>();
+                let mut output = Vec::new();
+                for (index, block_type) in active_blocks {
+                    output.extend(synthetic_content_block_stop(index, line_ending));
+                    self.inserted_stop_count += 1;
+                    self.record_action(
+                        "message_stop",
+                        Some(index),
+                        Some(&block_type),
+                        "inserted_missing_stop",
+                    );
+                }
+                self.active_blocks.clear();
+                self.saw_message_stop = true;
+                output.extend_from_slice(event);
+                output
+            }
+            _ => event.to_vec(),
+        }
+    }
+
+    fn record_action(
+        &mut self,
+        event_type: &'static str,
+        index: Option<u64>,
+        block_type: Option<&str>,
+        action: &'static str,
+    ) {
+        if self.actions.len() >= CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT {
+            return;
+        }
+        self.actions.push(ClaudeSseDiagnosticAction {
+            event_type,
+            index,
+            block_type: block_type.map(str::to_string),
+            action,
+        });
+    }
+}
+
+struct ParsedClaudeSseEvent {
+    event_type: Option<String>,
+    payload: Option<Value>,
+}
+
+fn parse_claude_sse_event(event: &[u8]) -> Option<ParsedClaudeSseEvent> {
+    let text = std::str::from_utf8(event).ok()?;
+    let mut event_type = None;
+    let mut data = String::new();
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("event:") {
+            event_type = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(value.strip_prefix(' ').unwrap_or(value));
+        }
+    }
+    let payload = if data.is_empty() {
+        None
+    } else {
+        serde_json::from_str(&data).ok()
+    };
+    Some(ParsedClaudeSseEvent {
+        event_type,
+        payload,
+    })
+}
+
+fn lifecycle_event_name(event_type: &str) -> &'static str {
+    match event_type {
+        "content_block_start" => "content_block_start",
+        "content_block_delta" => "content_block_delta",
+        "content_block_stop" => "content_block_stop",
+        "message_stop" => "message_stop",
+        _ => "unknown",
+    }
+}
+
+fn next_sse_event_separator(bytes: &[u8]) -> Option<(usize, usize)> {
+    let lf = bytes.windows(2).position(|window| window == b"\n\n");
+    let crlf = bytes.windows(4).position(|window| window == b"\r\n\r\n");
+    match (lf, crlf) {
+        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
+        (Some(_), Some(crlf)) => Some((crlf, 4)),
+        (Some(lf), None) => Some((lf, 2)),
+        (None, Some(crlf)) => Some((crlf, 4)),
+        (None, None) => None,
+    }
+}
+
+fn synthetic_content_block_start(index: u64, block_type: &str, line_ending: &str) -> Vec<u8> {
+    let content_block = if block_type == "thinking" {
+        serde_json::json!({"type": "thinking", "thinking": ""})
+    } else {
+        serde_json::json!({"type": "text", "text": ""})
+    };
+    synthetic_claude_sse_event(
+        "content_block_start",
+        serde_json::json!({
+            "type": "content_block_start",
+            "index": index,
+            "content_block": content_block
+        }),
+        line_ending,
+    )
+}
+
+fn synthetic_content_block_stop(index: u64, line_ending: &str) -> Vec<u8> {
+    synthetic_claude_sse_event(
+        "content_block_stop",
+        serde_json::json!({"type": "content_block_stop", "index": index}),
+        line_ending,
+    )
+}
+
+fn synthetic_claude_sse_event(event_type: &str, payload: Value, line_ending: &str) -> Vec<u8> {
+    format!(
+        "event: {event_type}{line_ending}data: {}{line_ending}{line_ending}",
+        payload
+    )
+    .into_bytes()
+}
+
 async fn handle_claude_desktop_messages_proxy_connection(
     stream: &mut tokio::net::TcpStream,
     request_body: &str,
     method: &str,
     path: &str,
     remote_addr_text: Option<String>,
+    metadata: &crate::protocol_proxy::ClaudeMessagesRequestMetadata,
 ) -> anyhow::Result<()> {
     if method == "OPTIONS" {
         write_http_response(
@@ -1697,7 +2073,11 @@ async fn handle_claude_desktop_messages_proxy_connection(
     }
 
     let upstream =
-        match crate::protocol_proxy::open_claude_desktop_messages_proxy_request(request_body).await
+        match crate::protocol_proxy::open_claude_desktop_messages_proxy_request_with_metadata(
+            request_body,
+            metadata,
+        )
+        .await
         {
             Ok(upstream) => upstream,
             Err(error) => {
@@ -1738,15 +2118,39 @@ async fn handle_claude_desktop_messages_proxy_connection(
     if upstream.is_stream && is_success {
         write_http_stream_headers(stream, &status, &content_type).await?;
         let mut bytes_stream = upstream.response.bytes_stream();
+        let mut lifecycle_guard = ClaudeMessagesSseGuard::default();
         while let Some(chunk) = bytes_stream.next().await {
-            stream.write_all(&chunk?).await?;
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    lifecycle_guard.stream_read_failed = true;
+                    let _ = lifecycle_guard.finish();
+                    log_claude_messages_stream_result(
+                        method,
+                        path,
+                        &status,
+                        remote_addr_text,
+                        &lifecycle_guard,
+                    );
+                    let _ = stream.shutdown().await;
+                    return Err(error.into());
+                }
+            };
+            let output = lifecycle_guard.push_bytes(&chunk);
+            if !output.is_empty() {
+                stream.write_all(&output).await?;
+            }
         }
-        log_helper_response(
-            "helper.claude_desktop_messages_proxy_stream_ok",
+        let trailing = lifecycle_guard.finish();
+        if !trailing.is_empty() {
+            stream.write_all(&trailing).await?;
+        }
+        log_claude_messages_stream_result(
             method,
             path,
             &status,
             remote_addr_text,
+            &lifecycle_guard,
         );
         stream.shutdown().await?;
         return Ok(());
@@ -1810,6 +2214,26 @@ fn log_helper_response(
             "path": path,
             "status": status,
             "remote_addr": remote_addr_text
+        }),
+    );
+}
+
+fn log_claude_messages_stream_result(
+    method: &str,
+    path: &str,
+    status: &str,
+    remote_addr_text: Option<String>,
+    guard: &ClaudeMessagesSseGuard,
+) {
+    let outcome = guard.outcome();
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        outcome.log_event(),
+        serde_json::json!({
+            "method": method,
+            "path": path,
+            "status": status,
+            "remote_addr": remote_addr_text,
+            "stream": guard.diagnostic_summary()
         }),
     );
 }
@@ -2780,6 +3204,132 @@ mod tests {
             ],
         );
         assert!(!proxy_request_is_authorized("POST", &bad));
+    }
+
+    #[test]
+    fn claude_sse_guard_preserves_normal_stream_across_chunk_boundaries() {
+        for line_ending in ["\n", "\r\n"] {
+            let input = normal_claude_sse(line_ending);
+            for chunk_size in 1..=19 {
+                let mut guard = ClaudeMessagesSseGuard::default();
+                let mut output = Vec::new();
+                for chunk in input.as_bytes().chunks(chunk_size) {
+                    output.extend(guard.push_bytes(chunk));
+                }
+                output.extend(guard.finish());
+
+                assert_eq!(output, input.as_bytes(), "chunk size {chunk_size}");
+                assert_eq!(guard.outcome(), ClaudeSseStreamOutcome::Complete);
+                assert_eq!(guard.inserted_start_count, 0);
+                assert_eq!(guard.inserted_stop_count, 0);
+                assert_eq!(guard.suppressed_delta_count, 0);
+                assert_eq!(guard.suppressed_stop_count, 0);
+                assert_eq!(guard.malformed_event_count, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn claude_sse_guard_repairs_orphan_text_and_thinking_blocks() {
+        let input = concat!(
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        let mut guard = ClaudeMessagesSseGuard::default();
+        let mut output = Vec::new();
+        for chunk in input.as_bytes().chunks(7) {
+            output.extend(guard.push_bytes(chunk));
+        }
+        output.extend(guard.finish());
+        let output = String::from_utf8(output).expect("guard output should be UTF-8");
+
+        assert_eq!(guard.outcome(), ClaudeSseStreamOutcome::Repaired);
+        assert_eq!(guard.inserted_start_count, 2);
+        assert_eq!(guard.inserted_stop_count, 1);
+        assert!(output.contains("\"content_block\":{\"text\":\"\",\"type\":\"text\"}"));
+        assert!(output.contains("\"content_block\":{\"thinking\":\"\",\"type\":\"thinking\"}"));
+        let thinking_stop = output
+            .find("data: {\"index\":1,\"type\":\"content_block_stop\"}")
+            .expect("thinking stop should be inserted");
+        let message_stop = output
+            .find("data: {\"type\":\"message_stop\"}")
+            .expect("message stop should remain");
+        assert!(thinking_stop < message_stop);
+    }
+
+    #[test]
+    fn claude_sse_guard_suppresses_unidentifiable_tool_delta_and_orphan_stop() {
+        let input = concat!(
+            "event: content_block_delta\r\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":4,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"private-tool-input\"}}\r\n\r\n",
+            "event: content_block_stop\r\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":4}\r\n\r\n",
+            "event: message_stop\r\n",
+            "data: {\"type\":\"message_stop\"}\r\n\r\n"
+        );
+        let mut guard = ClaudeMessagesSseGuard::default();
+        let mut output = guard.push_bytes(input.as_bytes());
+        output.extend(guard.finish());
+        let output = String::from_utf8(output).expect("guard output should be UTF-8");
+        let diagnostics = guard.diagnostic_summary().to_string();
+
+        assert_eq!(guard.outcome(), ClaudeSseStreamOutcome::Repaired);
+        assert_eq!(guard.suppressed_delta_count, 1);
+        assert_eq!(guard.suppressed_stop_count, 1);
+        assert!(!output.contains("input_json_delta"));
+        assert!(!output.contains("content_block_stop"));
+        assert!(output.contains("message_stop"));
+        assert!(!diagnostics.contains("private-tool-input"));
+    }
+
+    #[test]
+    fn claude_sse_guard_marks_truncated_stream_incomplete_and_bounds_diagnostics() {
+        let mut input = String::new();
+        for index in 0..(CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT + 8) {
+            input.push_str(&format!(
+                "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":{index}}}\n\n"
+            ));
+        }
+        input.push_str("event: content_block_delta\ndata: {\"type\":\"content_block_delta\"");
+
+        let mut guard = ClaudeMessagesSseGuard::default();
+        let _ = guard.push_bytes(input.as_bytes());
+        let trailing = guard.finish();
+
+        assert_eq!(guard.outcome(), ClaudeSseStreamOutcome::Incomplete);
+        assert!(!trailing.is_empty());
+        assert_eq!(guard.actions.len(), CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT);
+        assert_eq!(
+            guard.suppressed_stop_count,
+            CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT + 8
+        );
+    }
+
+    fn normal_claude_sse(line_ending: &str) -> String {
+        [
+            format!(
+                "event: message_start{line_ending}data: {{\"type\":\"message_start\",\"message\":{{}}}}{line_ending}{line_ending}"
+            ),
+            format!(
+                "event: content_block_start{line_ending}data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}{line_ending}{line_ending}"
+            ),
+            format!(
+                "event: content_block_delta{line_ending}data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"hello\"}}}}{line_ending}{line_ending}"
+            ),
+            format!(
+                "event: content_block_stop{line_ending}data: {{\"type\":\"content_block_stop\",\"index\":0}}{line_ending}{line_ending}"
+            ),
+            format!(
+                "event: message_stop{line_ending}data: {{\"type\":\"message_stop\"}}{line_ending}{line_ending}"
+            ),
+        ]
+        .concat()
     }
 
     #[test]

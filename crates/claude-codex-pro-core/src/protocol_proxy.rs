@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use crate::settings::{RelayProtocol, SettingsStore};
+use crate::settings::{RelayProfile, RelayProtocol, SettingsStore};
 
 pub const DEFAULT_PROTOCOL_PROXY_PORT: u16 = 57321;
 pub const DEFAULT_CLAUDE_DESKTOP_PROXY_PORT: u16 = 57331;
@@ -38,6 +38,52 @@ const EXTRA_CHAT_PASSTHROUGH_FIELDS: &[&str] = &[
     "user",
 ];
 const ERROR_BODY_PREVIEW_LIMIT: usize = 1024;
+const MAX_ANTHROPIC_VERSION_HEADER_LEN: usize = 64;
+const MAX_ANTHROPIC_BETA_HEADER_LEN: usize = 1024;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaudeMessagesRequestMetadata {
+    beta: bool,
+    anthropic_version: Option<String>,
+    anthropic_beta: Option<String>,
+}
+
+impl ClaudeMessagesRequestMetadata {
+    pub fn from_inbound(raw_path: &str, anthropic_version: &str, anthropic_beta: &str) -> Self {
+        let beta = raw_path
+            .split_once('?')
+            .map(|(_, query)| query)
+            .map(|query| {
+                url::form_urlencoded::parse(query.as_bytes()).any(|(name, value)| {
+                    name.eq_ignore_ascii_case("beta") && value.eq_ignore_ascii_case("true")
+                })
+            })
+            .unwrap_or(false);
+
+        Self {
+            beta,
+            anthropic_version: sanitized_protocol_header(
+                anthropic_version,
+                MAX_ANTHROPIC_VERSION_HEADER_LEN,
+            ),
+            anthropic_beta: sanitized_protocol_header(
+                anthropic_beta,
+                MAX_ANTHROPIC_BETA_HEADER_LEN,
+            ),
+        }
+    }
+}
+
+fn sanitized_protocol_header(value: &str, max_len: usize) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > max_len
+        || reqwest::header::HeaderValue::from_str(value).is_err()
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatReasoningStyle {
@@ -690,6 +736,13 @@ fn claude_desktop_models_response_from_inference_models(inference_models: Vec<Va
 pub async fn open_responses_proxy_request(body: &str) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = settings.active_relay_profile();
+    open_responses_proxy_request_with_relay(body, &relay).await
+}
+
+async fn open_responses_proxy_request_with_relay(
+    body: &str,
+    relay: &RelayProfile,
+) -> anyhow::Result<UpstreamProxyResponse> {
     if relay.protocol != RelayProtocol::ChatCompletions {
         anyhow::bail!("当前中转未启用 Chat Completions 协议代理");
     }
@@ -828,8 +881,28 @@ pub fn local_claude_desktop_gateway_health_response() -> anyhow::Result<ProxyHtt
 pub async fn open_claude_desktop_messages_proxy_request(
     body: &str,
 ) -> anyhow::Result<UpstreamProxyResponse> {
+    open_claude_desktop_messages_proxy_request_with_metadata(
+        body,
+        &ClaudeMessagesRequestMetadata::default(),
+    )
+    .await
+}
+
+pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
+    body: &str,
+    metadata: &ClaudeMessagesRequestMetadata,
+) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let relay = settings.active_relay_profile_for_target("claude-desktop");
+    open_claude_desktop_messages_proxy_request_with_relay(body, &relay, &settings, metadata).await
+}
+
+async fn open_claude_desktop_messages_proxy_request_with_relay(
+    body: &str,
+    relay: &RelayProfile,
+    settings: &crate::settings::BackendSettings,
+    metadata: &ClaudeMessagesRequestMetadata,
+) -> anyhow::Result<UpstreamProxyResponse> {
     let base_url = claude_desktop_resolved_upstream_base_url(&relay, &settings);
     if base_url.trim().is_empty() {
         anyhow::bail!("Claude Desktop 上游 Base URL 不能为空");
@@ -846,14 +919,30 @@ pub async fn open_claude_desktop_messages_proxy_request(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let client = crate::http_client::proxied_client(&relay.user_agent)?;
-    let upstream = client
+    let mut request = client
         .post(claude_messages_url(&base_url))
-        .bearer_auth(api_key.trim())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header("anthropic-version", "2023-06-01")
-        .json(&request_json)
-        .send()
-        .await?;
+        .json(&request_json);
+    if metadata.beta {
+        request = request.query(&[("beta", "true")]);
+    }
+    request = crate::http_client::apply_api_auth_headers(
+        request,
+        api_key.trim(),
+        crate::settings::relay_profile_uses_anthropic_api_key(relay),
+        false,
+    );
+    request = request.header(
+        "anthropic-version",
+        metadata
+            .anthropic_version
+            .as_deref()
+            .unwrap_or(crate::http_client::ANTHROPIC_VERSION),
+    );
+    if let Some(anthropic_beta) = metadata.anthropic_beta.as_deref() {
+        request = request.header("anthropic-beta", anthropic_beta);
+    }
+    let upstream = request.send().await?;
     let status_code = upstream.status().as_u16();
     let content_type = upstream
         .headers()
@@ -4446,4 +4535,267 @@ fn is_openai_o_series(model: &str) -> bool {
             .as_bytes()
             .get(1)
             .is_some_and(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn responses_proxy_sends_one_upstream_request_with_original_model() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let relay = RelayProfile {
+            base_url: format!("http://{address}"),
+            api_key: "test-key".to_string(),
+            protocol: RelayProtocol::ChatCompletions,
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "input": "verify one upstream request",
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_responses_proxy_request_with_relay(&body, &relay)
+            .await
+            .expect("proxy request should succeed");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let (request_count, request) = server.join().expect("mock upstream should finish");
+        let (headers, request_body) = request
+            .split_once("\r\n\r\n")
+            .expect("captured request should contain headers and body");
+        let request_json: Value =
+            serde_json::from_str(request_body).expect("captured body should be JSON");
+
+        assert_eq!(
+            request_count, 1,
+            "one inbound request must not be duplicated"
+        );
+        assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1"));
+        assert_eq!(request_json["model"], "gpt-5.6-sol");
+        assert!(!request_body.contains("gpt-5.4"));
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_sends_anthropic_api_key_once() {
+        assert_claude_desktop_proxy_auth_once(
+            json!({"ANTHROPIC_API_KEY": "claude-test-key"}).to_string(),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_sends_anthropic_auth_token_once() {
+        assert_claude_desktop_proxy_auth_once(
+            json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            false,
+        )
+        .await;
+    }
+
+    #[test]
+    fn claude_messages_metadata_accepts_only_valid_protocol_values() {
+        let metadata = ClaudeMessagesRequestMetadata::from_inbound(
+            "/claude-desktop/v1/messages?other=1&BETA=true",
+            "2024-10-22",
+            "prompt-caching-2024-07-31,computer-use-2024-10-22",
+        );
+        assert!(metadata.beta);
+        assert_eq!(metadata.anthropic_version.as_deref(), Some("2024-10-22"));
+        assert_eq!(
+            metadata.anthropic_beta.as_deref(),
+            Some("prompt-caching-2024-07-31,computer-use-2024-10-22")
+        );
+
+        let invalid = ClaudeMessagesRequestMetadata::from_inbound(
+            "/claude-desktop/v1/messages?beta=false",
+            "2024-10-22\r\nx-injected: true",
+            &"x".repeat(MAX_ANTHROPIC_BETA_HEADER_LEN + 1),
+        );
+        assert!(!invalid.beta);
+        assert!(invalid.anthropic_version.is_none());
+        assert!(invalid.anthropic_beta.is_none());
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_forwards_beta_protocol_metadata_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            ..RelayProfile::default()
+        };
+        let settings = crate::settings::BackendSettings::default();
+        let metadata = ClaudeMessagesRequestMetadata::from_inbound(
+            "/claude-desktop/v1/messages?beta=true",
+            "2024-10-22",
+            "computer-use-2024-10-22",
+        );
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "verify beta metadata"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body, &relay, &settings, &metadata,
+        )
+        .await
+        .expect("Claude Desktop proxy request should succeed");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let (request_count, request) = server.join().expect("mock upstream should finish");
+        let headers = request
+            .split_once("\r\n\r\n")
+            .map(|(headers, _)| headers.to_ascii_lowercase())
+            .expect("captured request should contain headers and body");
+        assert_eq!(request_count, 1);
+        assert!(headers.starts_with("post /v1/messages?beta=true http/1.1"));
+        assert!(headers.contains("authorization: bearer claude-test-key"));
+        assert!(!headers.contains("x-api-key:"));
+        assert!(headers.contains("anthropic-version: 2024-10-22"));
+        assert!(headers.contains("anthropic-beta: computer-use-2024-10-22"));
+    }
+
+    async fn assert_claude_desktop_proxy_auth_once(
+        auth_contents: String,
+        expects_anthropic_api_key: bool,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents,
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            ..RelayProfile::default()
+        };
+        let settings = crate::settings::BackendSettings::default();
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "verify anthropic auth"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &settings,
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("Claude Desktop proxy request should succeed");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let (request_count, request) = server.join().expect("mock upstream should finish");
+        let (headers, request_body) = request
+            .split_once("\r\n\r\n")
+            .expect("captured request should contain headers and body");
+        let request_json: Value =
+            serde_json::from_str(request_body).expect("captured body should be JSON");
+        let headers = headers.to_ascii_lowercase();
+
+        assert_eq!(
+            request_count, 1,
+            "one Claude Desktop request must not be duplicated"
+        );
+        assert!(headers.starts_with("post /v1/messages http/1.1"));
+        assert_eq!(
+            headers.contains("authorization: bearer claude-test-key"),
+            !expects_anthropic_api_key
+        );
+        assert_eq!(
+            headers.contains("x-api-key: claude-test-key"),
+            expects_anthropic_api_key
+        );
+        assert!(headers.contains("anthropic-version: 2023-06-01"));
+        assert_eq!(request_json["model"], "claude-opus-4-8");
+    }
+
+    fn capture_upstream_requests(listener: TcpListener) -> (usize, String) {
+        let (mut stream, _) = listener.accept().expect("accept proxy request");
+        let request = read_http_request(&mut stream);
+        let response_body = r#"{"id":"chatcmpl-test","choices":[]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        )
+        .expect("write mock response");
+        stream.flush().expect("flush mock response");
+        drop(stream);
+
+        listener
+            .set_nonblocking(true)
+            .expect("make mock listener nonblocking");
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let mut request_count = 1;
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut duplicate, _)) => {
+                    request_count += 1;
+                    let _ = read_http_request(&mut duplicate);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept duplicate proxy request: {error}"),
+            }
+        }
+        (request_count, request)
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set mock read timeout");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).expect("read proxy request");
+            assert!(read > 0, "proxy request ended before its body was complete");
+            request.extend_from_slice(&buffer[..read]);
+
+            let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + content_length {
+                request.truncate(header_end + content_length);
+                return String::from_utf8(request).expect("proxy request should be UTF-8");
+            }
+        }
+    }
 }

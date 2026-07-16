@@ -2394,6 +2394,9 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(app_tsx.contains("modelList: hasExplicitModelList ? modelList : model,"));
     assert!(app_tsx.contains("const apiKey = supplierProfileResolvedApiKey(profile);"));
     assert!(app_tsx.contains("function supplierProfileResolvedApiKey(profile: RelayProfile)"));
+    assert!(app_tsx.contains("supplierProfilePrefersConfigApiKey(profile)"));
+    assert!(app_tsx.contains("configKey || authKey"));
+    assert!(app_tsx.contains("authKey || configKey"));
     assert!(app_tsx.contains("function supplierApiKeyFromAuthContents(contents: string)"));
     assert!(app_tsx.contains("function supplierApiKeyFromConfigContents(contents: string)"));
     assert!(app_tsx.contains("ANTHROPIC_API_KEY"));

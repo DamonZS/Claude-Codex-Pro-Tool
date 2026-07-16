@@ -395,16 +395,99 @@ export function supplierModelMappingJsonFromText(text: string) {
 export function withSupplierPreservedImportedFiles(profile: RelayProfile): RelayProfile {
   const normalized = normalizeSupplierProfile(profile);
   const apiKey = supplierProfileResolvedApiKey(normalized);
-  const authKey = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop"
-    ? "ANTHROPIC_AUTH_TOKEN"
-    : "OPENAI_API_KEY";
+  const isClaudeTarget = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop";
+  if (isClaudeTarget) {
+    const authKey = preferredClaudeCredentialField(normalized);
+    return {
+      ...normalized,
+      apiKey,
+      configContents: synchronizeClaudeConfigCredential(normalized, apiKey, authKey),
+      authContents: synchronizeClaudeAuthCredential(normalized.authContents, apiKey, authKey),
+    };
+  }
   return {
     ...normalized,
     apiKey,
     configContents: normalized.configContents ?? "",
-    authContents: `${JSON.stringify({ [authKey]: apiKey }, null, 2)}
+    authContents: `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}
 `,
   };
+}
+
+const CLAUDE_CREDENTIAL_FIELDS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "api_key",
+  "apiKey",
+] as const;
+
+type ClaudeCredentialField = "ANTHROPIC_AUTH_TOKEN" | "ANTHROPIC_API_KEY";
+
+function jsonObject(contents: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(String(contents || "")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function objectHasCredentialField(object: Record<string, unknown> | null, field: ClaudeCredentialField) {
+  if (!object) return false;
+  if (typeof object[field] === "string") return true;
+  const env = object.env;
+  return !!env && typeof env === "object" && !Array.isArray(env)
+    && typeof (env as Record<string, unknown>)[field] === "string";
+}
+
+function preferredClaudeCredentialField(profile: RelayProfile): ClaudeCredentialField {
+  if (profile.authField === "ANTHROPIC_API_KEY") return "ANTHROPIC_API_KEY";
+  if (profile.authField === "ANTHROPIC_AUTH_TOKEN") return "ANTHROPIC_AUTH_TOKEN";
+
+  const containers = [jsonObject(profile.configContents), jsonObject(profile.authContents)];
+  const hasApiKey = containers.some((container) => objectHasCredentialField(container, "ANTHROPIC_API_KEY"));
+  const hasAuthToken = containers.some((container) => objectHasCredentialField(container, "ANTHROPIC_AUTH_TOKEN"));
+  return hasApiKey && !hasAuthToken ? "ANTHROPIC_API_KEY" : "ANTHROPIC_AUTH_TOKEN";
+}
+
+function removeCredentialFields(object: Record<string, unknown>) {
+  for (const field of CLAUDE_CREDENTIAL_FIELDS) delete object[field];
+}
+
+function synchronizeClaudeConfigCredential(
+  profile: RelayProfile,
+  apiKey: string,
+  authKey: ClaudeCredentialField,
+) {
+  const parsed = jsonObject(profile.configContents);
+  if (!parsed) {
+    return withSupplierGeneratedFiles({ ...profile, apiKey, authField: authKey }).configContents;
+  }
+
+  const config = { ...parsed };
+  const currentEnv = config.env;
+  const env = currentEnv && typeof currentEnv === "object" && !Array.isArray(currentEnv)
+    ? { ...currentEnv as Record<string, unknown> }
+    : {};
+  removeCredentialFields(config);
+  removeCredentialFields(env);
+  env[authKey] = apiKey;
+  config.env = env;
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+function synchronizeClaudeAuthCredential(
+  contents: string,
+  apiKey: string,
+  authKey: ClaudeCredentialField,
+) {
+  const auth = { ...(jsonObject(contents) ?? {}) };
+  removeCredentialFields(auth);
+  auth[authKey] = apiKey;
+  return `${JSON.stringify(auth, null, 2)}\n`;
 }
 
 export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile {
@@ -480,9 +563,19 @@ export function supplierApiFormatLabel(profile: RelayProfile) {
 }
 
 export function supplierProfileResolvedApiKey(profile: RelayProfile) {
-  return (profile.apiKey || "").trim()
-    || supplierApiKeyFromAuthContents(profile.authContents)
-    || supplierApiKeyFromConfigContents(profile.configContents);
+  const explicitKey = (profile.apiKey || "").trim();
+  if (explicitKey) return explicitKey;
+
+  const authKey = supplierApiKeyFromAuthContents(profile.authContents);
+  const configKey = supplierApiKeyFromConfigContents(profile.configContents);
+  return supplierProfilePrefersConfigApiKey(profile)
+    ? configKey || authKey
+    : authKey || configKey;
+}
+
+function supplierProfilePrefersConfigApiKey(profile: RelayProfile) {
+  const targetApp = String(profile.targetApp || "codex").trim().toLowerCase();
+  return targetApp === "claude" || targetApp === "claude-desktop";
 }
 
 export function supplierApiKeyFromAuthContents(contents: string) {

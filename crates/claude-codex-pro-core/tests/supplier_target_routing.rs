@@ -93,6 +93,56 @@ fn resolved_api_key_reads_anthropic_keys_from_auth_and_nested_config_env() {
 }
 
 #[test]
+fn claude_profiles_prefer_current_config_key_over_stale_auth_key() {
+    for target_app in ["claude", "claude-desktop"] {
+        let profile = RelayProfile {
+            target_app: target_app.to_string(),
+            auth_contents: r#"{"ANTHROPIC_AUTH_TOKEN":"test-stale-auth-key"}"#.to_string(),
+            config_contents: r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"test-current-config-key"}}"#
+                .to_string(),
+            ..RelayProfile::default()
+        };
+
+        assert_eq!(
+            relay_profile_resolved_api_key(&profile),
+            "test-current-config-key",
+            "{target_app} must use the current key stored in configContents.env"
+        );
+    }
+}
+
+#[test]
+fn explicit_profile_key_wins_over_serialized_claude_credentials() {
+    let profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        api_key: "test-explicit-key".to_string(),
+        auth_contents: r#"{"ANTHROPIC_AUTH_TOKEN":"test-stale-auth-key"}"#.to_string(),
+        config_contents: r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"test-config-key"}}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    assert_eq!(
+        relay_profile_resolved_api_key(&profile),
+        "test-explicit-key"
+    );
+}
+
+#[test]
+fn codex_profiles_keep_auth_key_priority_over_config_key() {
+    let profile = RelayProfile {
+        target_app: "codex".to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"test-codex-auth-key"}"#.to_string(),
+        config_contents: r#"experimental_bearer_token = "test-codex-config-key""#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    assert_eq!(
+        relay_profile_resolved_api_key(&profile),
+        "test-codex-auth-key"
+    );
+}
+
+#[test]
 fn claude_desktop_model_catalog_uses_desktop_target_instead_of_codex_target() {
     let mut codex = profile("codex-a", "codex");
     codex.model_list = "codex-only-model".to_string();
