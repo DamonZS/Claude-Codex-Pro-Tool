@@ -210,8 +210,10 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
         };
         let cdp_listening_before_launch =
             claude_codex_pro_core::watcher::cdp_listening(options.debug_port);
-        let codex_injection_enabled =
+        let settings_injection_enabled =
             claude_codex_pro_core::launcher::codex_frontend_injection_enabled(&settings);
+        let theme_injection_enabled = hooks.codex_theme_injection_enabled();
+        let codex_injection_enabled = settings_injection_enabled || theme_injection_enabled;
         if codex_injection_enabled {
             hooks.start_helper(options.helper_port).await?;
             helper_started = true;
@@ -252,6 +254,8 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
                             "process_ids": process_ids,
                             "activated": activated,
                             "cdp_listening_before_launch": cdp_listening_before_launch,
+                            "settings_injection_enabled": settings_injection_enabled,
+                            "theme_injection_enabled": theme_injection_enabled,
                             "injection_ready": injection_ready,
                             "launch_attempted": should_launch,
                             "launch_ok": launch_ok,
@@ -277,6 +281,8 @@ async fn activate_existing_codex_app(options: &LaunchOptions) -> anyhow::Result<
                 "process_ids": process_ids,
                 "activated": activated,
                 "cdp_listening_before_launch": cdp_listening_before_launch,
+                "settings_injection_enabled": settings_injection_enabled,
+                "theme_injection_enabled": theme_injection_enabled,
                 "injection_ready": injection_ready,
                 "launch_attempted": should_launch,
                 "launch_ok": launch_ok,
@@ -359,6 +365,10 @@ impl LaunchHooks for LauncherHooks {
 
     fn select_helper_port(&self, requested: u16) -> u16 {
         self.core.select_helper_port(requested)
+    }
+
+    fn codex_theme_injection_enabled(&self) -> bool {
+        active_codex_theme_requires_injection()
     }
 
     async fn load_settings(
@@ -896,6 +906,79 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 }
 
+fn log_codex_theme_injection_skipped(stage: &'static str) {
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        "launcher.codex_theme_injection_skipped",
+        json!({
+            "stage": stage,
+            "result": "skipped",
+            "runtime_applied": false
+        }),
+    );
+}
+
+fn active_codex_theme_requires_injection() -> bool {
+    let store = match claude_codex_pro_core::codex_theme::CodexThemeStore::open_default() {
+        Ok(store) => store,
+        Err(_) => {
+            log_codex_theme_injection_skipped("requirement_store_open");
+            return false;
+        }
+    };
+    let payload = match store.active_theme_payload() {
+        Ok(payload) => payload,
+        Err(_) => {
+            log_codex_theme_injection_skipped("requirement_active_payload");
+            return false;
+        }
+    };
+    let enabled = !payload.is_default;
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        "launcher.codex_theme_injection_requirement",
+        json!({
+            "theme_id": payload.theme_id,
+            "generation": payload.generation,
+            "enabled": enabled
+        }),
+    );
+    enabled
+}
+
+fn codex_theme_new_document_script() -> Option<String> {
+    let store = match claude_codex_pro_core::codex_theme::CodexThemeStore::open_default() {
+        Ok(store) => store,
+        Err(_) => {
+            log_codex_theme_injection_skipped("store_open");
+            return None;
+        }
+    };
+    let payload = match store.active_theme_payload() {
+        Ok(payload) => payload,
+        Err(_) => {
+            log_codex_theme_injection_skipped("active_payload");
+            return None;
+        }
+    };
+    match claude_codex_pro_core::assets::codex_theme_injection_script(&payload) {
+        Ok(script) => {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "launcher.codex_theme_script_ready",
+                json!({
+                    "theme_id": payload.theme_id,
+                    "generation": payload.generation,
+                    "is_default": payload.is_default,
+                    "runtime_applied": false
+                }),
+            );
+            Some(script)
+        }
+        Err(_) => {
+            log_codex_theme_injection_skipped("script_build");
+            None
+        }
+    }
+}
+
 async fn inject_with_context(
     debug_port: u16,
     helper_port: u16,
@@ -937,11 +1020,13 @@ async fn try_inject_with_context(
         .user_scripts
         .build_enabled_bundle()
         .unwrap_or_default();
-    let new_document_scripts = if user_bundle.is_empty() {
-        vec![script]
-    } else {
-        vec![script, user_bundle]
-    };
+    let mut new_document_scripts = vec![script];
+    if let Some(theme_script) = codex_theme_new_document_script() {
+        new_document_scripts.push(theme_script);
+    }
+    if !user_bundle.is_empty() {
+        new_document_scripts.push(user_bundle);
+    }
     claude_codex_pro_core::bridge::install_bridge(
         websocket_url,
         claude_codex_pro_core::bridge::BRIDGE_BINDING_NAME,

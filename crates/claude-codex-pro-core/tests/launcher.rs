@@ -492,8 +492,22 @@ fn ports_windows_falls_back_to_ephemeral_when_requested_is_busy() {
 }
 
 #[test]
-fn ports_windows_packaged_debug_keeps_requested_even_when_busy() {
+fn ports_windows_packaged_debug_keeps_requested_when_bindable() {
+    let selected = select_packaged_codex_debug_port_with(9229, true, |_| true, || 43001);
+
+    assert_eq!(selected, 9229);
+}
+
+#[test]
+fn ports_windows_packaged_debug_uses_available_fallback_when_requested_is_busy() {
     let selected = select_packaged_codex_debug_port_with(9229, true, |_| false, || 43001);
+
+    assert_eq!(selected, 43001);
+}
+
+#[test]
+fn ports_windows_packaged_debug_keeps_requested_when_fallback_selection_fails() {
+    let selected = select_packaged_codex_debug_port_with(9229, true, |_| false, || 0);
 
     assert_eq!(selected, 9229);
 }
@@ -848,6 +862,48 @@ async fn launch_lifecycle_skips_helper_and_injection_when_all_frontend_features_
             "launch:9229",
             "status:running",
             "wait-codex",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn launch_lifecycle_injects_active_theme_when_all_other_frontend_features_are_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let app_dir = temp.path().join("Codex.app");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    let status_store = StatusStore::new(temp.path().join("latest-status.json"));
+    let events = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hooks = FakeHooks::new(events.clone())
+        .with_settings(settings_with_all_codex_frontend_injection_disabled())
+        .with_theme_injection_enabled();
+
+    let handle = launch_and_inject_with_hooks(
+        LaunchOptions {
+            app_dir: Some(app_dir),
+            debug_port: 9229,
+            helper_port: 57321,
+            status_store,
+        },
+        &hooks,
+    )
+    .await
+    .unwrap();
+    handle.wait_for_codex_exit().await.unwrap();
+
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            "select-debug:9229",
+            "select-helper:57321",
+            "load-settings",
+            "start-helper:57321",
+            "launch:9229",
+            "status:running_degraded",
+            "inject:9229:57321",
+            "bridge-watchdog:9229:57321",
+            "status:running",
+            "wait-codex",
+            "shutdown-helper:57321",
         ]
     );
 }
@@ -1332,6 +1388,7 @@ struct FakeHooks {
     inject_error: Option<String>,
     provider_sync_unsupported: bool,
     selected_helper_port: Option<u16>,
+    theme_injection_enabled: bool,
 }
 
 impl FakeHooks {
@@ -1348,6 +1405,7 @@ impl FakeHooks {
             inject_error: None,
             provider_sync_unsupported: false,
             selected_helper_port: None,
+            theme_injection_enabled: false,
         }
     }
 
@@ -1381,6 +1439,11 @@ impl FakeHooks {
         self
     }
 
+    fn with_theme_injection_enabled(mut self) -> Self {
+        self.theme_injection_enabled = true;
+        self
+    }
+
     fn event(&self, event: impl Into<String>) {
         self.events.lock().unwrap().push(event.into());
     }
@@ -1406,6 +1469,10 @@ impl LaunchHooks for FakeHooks {
     fn select_helper_port(&self, requested: u16) -> u16 {
         self.event(format!("select-helper:{requested}"));
         self.selected_helper_port.unwrap_or(requested)
+    }
+
+    fn codex_theme_injection_enabled(&self) -> bool {
+        self.theme_injection_enabled
     }
 
     async fn load_settings(&self) -> anyhow::Result<BackendSettings> {

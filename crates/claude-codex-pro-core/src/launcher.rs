@@ -156,6 +156,9 @@ pub trait LaunchHooks: Send + Sync {
     ) -> anyhow::Result<PathBuf>;
     fn select_debug_port(&self, requested: u16) -> u16;
     fn select_helper_port(&self, requested: u16) -> u16;
+    fn codex_theme_injection_enabled(&self) -> bool {
+        false
+    }
     async fn load_settings(&self) -> anyhow::Result<BackendSettings>;
     async fn run_provider_sync(&self) -> anyhow::Result<()>;
     async fn ensure_computer_use_config(&self, _settings: &BackendSettings) -> anyhow::Result<()> {
@@ -510,7 +513,19 @@ where
             hooks.ensure_computer_use_config(&settings).await?;
         }
         let protocol_proxy_enabled = relay_protocol_proxy_enabled(&settings);
-        let codex_injection_enabled = codex_frontend_injection_enabled(&settings);
+        let settings_injection_enabled = codex_frontend_injection_enabled(&settings);
+        let theme_injection_enabled = hooks.codex_theme_injection_enabled();
+        let codex_injection_enabled = settings_injection_enabled || theme_injection_enabled;
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "launcher.injection_requirement",
+            serde_json::json!({
+                "debug_port": debug_port,
+                "helper_port": helper_port,
+                "settings_injection_enabled": settings_injection_enabled,
+                "theme_injection_enabled": theme_injection_enabled,
+                "codex_injection_enabled": codex_injection_enabled
+            }),
+        );
         if codex_injection_enabled || protocol_proxy_enabled {
             hooks.start_helper(helper_port).await?;
             helper_started = true;
@@ -3252,13 +3267,33 @@ mod tests {
         assert_eq!(guard.outcome(), ClaudeSseStreamOutcome::Repaired);
         assert_eq!(guard.inserted_start_count, 2);
         assert_eq!(guard.inserted_stop_count, 1);
-        assert!(output.contains("\"content_block\":{\"text\":\"\",\"type\":\"text\"}"));
-        assert!(output.contains("\"content_block\":{\"thinking\":\"\",\"type\":\"thinking\"}"));
-        let thinking_stop = output
-            .find("data: {\"index\":1,\"type\":\"content_block_stop\"}")
+        let payloads = output
+            .split("\n\n")
+            .filter_map(|event| parse_claude_sse_event(event.as_bytes()))
+            .filter_map(|event| event.payload)
+            .collect::<Vec<_>>();
+        assert!(payloads.iter().any(|payload| {
+            payload.get("type").and_then(Value::as_str) == Some("content_block_start")
+                && payload.get("index").and_then(Value::as_u64) == Some(0)
+                && payload.get("content_block")
+                    == Some(&serde_json::json!({"type": "text", "text": ""}))
+        }));
+        assert!(payloads.iter().any(|payload| {
+            payload.get("type").and_then(Value::as_str) == Some("content_block_start")
+                && payload.get("index").and_then(Value::as_u64) == Some(1)
+                && payload.get("content_block")
+                    == Some(&serde_json::json!({"type": "thinking", "thinking": ""}))
+        }));
+        let thinking_stop = payloads
+            .iter()
+            .position(|payload| {
+                payload.get("type").and_then(Value::as_str) == Some("content_block_stop")
+                    && payload.get("index").and_then(Value::as_u64) == Some(1)
+            })
             .expect("thinking stop should be inserted");
-        let message_stop = output
-            .find("data: {\"type\":\"message_stop\"}")
+        let message_stop = payloads
+            .iter()
+            .position(|payload| payload.get("type").and_then(Value::as_str) == Some("message_stop"))
             .expect("message stop should remain");
         assert!(thinking_stop < message_stop);
     }

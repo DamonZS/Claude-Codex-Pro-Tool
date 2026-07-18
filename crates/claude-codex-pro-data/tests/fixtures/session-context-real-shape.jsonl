@@ -1,0 +1,8 @@
+{"timestamp":"2026-07-18T02:08:51.000Z","type":"session_meta","payload":{"id":"fixture-thread"}}
+{"timestamp":"2026-07-18T02:08:52.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Ignored developer context"}]}}
+{"timestamp":"2026-07-18T02:08:53.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"First user block"},{"type":"input_text","text":"Second user block"}]}}
+{"timestamp":"2026-07-18T02:08:54.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First assistant response"}]}}
+{"timestamp":"2026-07-18T02:08:55.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"Ignored non-message event"}}
+{"timestamp":"2026-07-18T02:08:56.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Second assistant response\nwith a preserved line break"}]}}
+{"timestamp":"2026-07-18T02:08:57.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Final user prompt"}]}}
+{"timestamp":"2026-07-18T02:08:58.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final assistant response"}]}}

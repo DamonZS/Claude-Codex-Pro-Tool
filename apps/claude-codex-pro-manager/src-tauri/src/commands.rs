@@ -10,6 +10,9 @@ use anyhow::{Context, bail};
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
+use claude_codex_pro_core::codex_theme::{
+    CodexThemeList, CodexThemeOperationResult, CodexThemeStore, CodexThemeSummary,
+};
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
 use claude_codex_pro_core::memory_assist::{
@@ -176,6 +179,43 @@ pub struct ClaudeZhPatchPayload {
 pub struct PluginHubWindowPayload {
     pub open: bool,
     pub label: String,
+}
+
+fn empty_codex_theme_list() -> CodexThemeList {
+    CodexThemeList {
+        themes: Vec::new(),
+        current_theme_id: "default".to_string(),
+        generation: 0,
+    }
+}
+
+fn empty_codex_theme_summary() -> CodexThemeSummary {
+    CodexThemeSummary {
+        id: String::new(),
+        name: String::new(),
+        version: String::new(),
+        author: String::new(),
+        description: String::new(),
+        preview_data_uri: None,
+        builtin: false,
+        current: false,
+        imported_at: 0,
+        updated_at: 0,
+        integrity_sha256: None,
+        previous_version_available: false,
+    }
+}
+
+fn failed_codex_theme_operation(theme_id: &str, message: &str) -> CodexThemeOperationResult {
+    CodexThemeOperationResult {
+        theme_id: theme_id.to_string(),
+        persisted: false,
+        runtime_applied: false,
+        restart_required: false,
+        rolled_back: false,
+        generation: 0,
+        message: message.to_string(),
+    }
 }
 
 fn claude_zh_patch_payload(
@@ -2367,6 +2407,7 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         debug_port: selected_debug_port,
         helper_port: default_helper_port(),
     };
+    let launch_started_at_ms = current_time_ms();
     if let Err(error) = spawn_silent_launcher(&request) {
         details.push(format!("自动重启 Codex 失败：{error}"));
         return StatusStore::default()
@@ -2377,7 +2418,9 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
     }
 
     details.push("已启动 Codex，正在等待 Codex 自启完成、CDP 与后端端口上线。".to_string());
-    if let Some(status) = wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await
+    if let Some(status) =
+        wait_for_codex_launch_ports(&request, launch_started_at_ms, REPAIR_CODEX_RESTART_TIMEOUT)
+            .await
     {
         if status.helper_port_online {
             details.push(format!(
@@ -2462,6 +2505,7 @@ fn force_kill_process_tree_for_frontend_repair(_pids: &[u32]) -> usize {
 
 async fn wait_for_codex_launch_ports(
     request: &LaunchRequest,
+    launch_started_at_ms: u64,
     timeout: Duration,
 ) -> Option<LaunchStatus> {
     let started = Instant::now();
@@ -2474,6 +2518,7 @@ async fn wait_for_codex_launch_ports(
         if let Some(status) = repair_launch_status(
             request,
             latest,
+            launch_started_at_ms,
             codex_debug_port_online(request.debug_port),
             helper_backend_online(request.helper_port),
             current_time_ms(),
@@ -2488,13 +2533,16 @@ async fn wait_for_codex_launch_ports(
 fn repair_launch_status(
     request: &LaunchRequest,
     latest: Option<LaunchStatus>,
+    launch_started_at_ms: u64,
     requested_debug_port_online: bool,
     helper_port_online: bool,
     detected_at_ms: u64,
 ) -> Option<LaunchStatus> {
-    if let Some(status) = latest
-        .filter(|status| status.debug_port == Some(request.debug_port) && status.debug_port_online)
-    {
+    if let Some(status) = latest.filter(|status| {
+        status.started_at_ms >= launch_started_at_ms
+            && status.debug_port.is_some()
+            && status.debug_port_online
+    }) {
         return Some(status);
     }
     if !requested_debug_port_online {
@@ -2690,6 +2738,7 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
     // enumerate/kill processes — on Windows those go through taskkill/WMI and can
     // take seconds. Running them on the UI thread froze the WebView during a
     // restart, so move the whole teardown onto the blocking pool.
+    let restart_started_ms = current_time_ms();
     let prepared =
         tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<LaunchRequest> {
             let request = normalize_launch_request(request);
@@ -2710,7 +2759,14 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
         })
         .await;
     match prepared {
-        Ok(Ok(request)) => spawn_claude_codex_pro_launch(request, "重启 Codex 任务已在后台运行。"),
+        Ok(Ok(request)) => {
+            let monitor_request = request.clone();
+            let result = spawn_claude_codex_pro_launch(request, "重启 Codex 任务已在后台运行。");
+            if result.status == "accepted" {
+                start_restart_injection_monitor(monitor_request, restart_started_ms);
+            }
+            result
+        }
         Ok(Err(error)) => failed(&format!("重启 Codex 任务失败：{error}"), json!({})),
         Err(error) => failed(&format!("重启 Codex 任务失败：{error}"), json!({})),
     }
@@ -2795,6 +2851,95 @@ fn spawn_claude_codex_pro_launch(
             }),
         ),
     }
+}
+
+fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u64) {
+    let settings_injection_enabled = SettingsStore::default()
+        .load()
+        .map(|settings| {
+            claude_codex_pro_core::launcher::codex_frontend_injection_enabled(&settings)
+        })
+        .unwrap_or(false);
+    let theme = CodexThemeStore::open_default()
+        .and_then(|store| store.list_themes())
+        .ok();
+    let theme_id = theme
+        .as_ref()
+        .map(|theme| theme.current_theme_id.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let theme_generation = theme.as_ref().map(|theme| theme.generation);
+    let theme_injection_enabled = theme
+        .as_ref()
+        .is_some_and(|theme| theme.current_theme_id != "default");
+    let injection_expected = settings_injection_enabled || theme_injection_enabled;
+    let debug_port = request.debug_port;
+    let helper_port = request.helper_port;
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        "manager.restart_injection_monitor_started",
+        json!({
+            "restart_started_ms": restart_started_ms,
+            "debug_port": debug_port,
+            "helper_port": helper_port,
+            "theme_id": theme_id,
+            "theme_generation": theme_generation,
+            "settings_injection_enabled": settings_injection_enabled,
+            "theme_injection_enabled": theme_injection_enabled,
+            "injection_expected": injection_expected
+        }),
+    );
+    if !injection_expected {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let launch_status =
+            wait_for_codex_launch_ports(&request, restart_started_ms, REPAIR_CODEX_RESTART_TIMEOUT)
+                .await;
+        let Some(launch_status) = launch_status else {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "manager.restart_injection_timeout",
+                json!({
+                    "stage": "launch_ports",
+                    "debug_port": debug_port,
+                    "helper_port": helper_port,
+                    "theme_id": theme_id,
+                    "theme_generation": theme_generation
+                }),
+            );
+            return;
+        };
+
+        let Some(heartbeat) =
+            wait_for_renderer_frontend_after(restart_started_ms, REPAIR_CODEX_FRONTEND_TIMEOUT)
+                .await
+        else {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "manager.restart_injection_timeout",
+                json!({
+                    "stage": "renderer_heartbeat",
+                    "debug_port": launch_status.debug_port.unwrap_or(debug_port),
+                    "helper_port": launch_status.helper_port.unwrap_or(helper_port),
+                    "helper_port_online": launch_status.helper_port_online,
+                    "theme_id": theme_id,
+                    "theme_generation": theme_generation
+                }),
+            );
+            return;
+        };
+
+        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            "manager.restart_injection_confirmed",
+            json!({
+                "debug_port": launch_status.debug_port.unwrap_or(debug_port),
+                "helper_port": launch_status.helper_port.unwrap_or(helper_port),
+                "helper_port_online": launch_status.helper_port_online,
+                "renderer_heartbeat_ms": heartbeat.timestamp_ms,
+                "runtime_reported": heartbeat.runtime_reported,
+                "theme_id": theme_id,
+                "theme_generation": theme_generation
+            }),
+        );
+    });
 }
 
 fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
@@ -5472,6 +5617,67 @@ pub async fn refresh_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
 pub async fn get_plugin_hub_catalog() -> CommandResult<PluginHubPayload> {
     let catalog = plugin_hub::fetch_catalog().await;
     ok("插件中心目录已加载。", PluginHubPayload { catalog })
+}
+
+#[tauri::command]
+pub fn list_codex_themes() -> CommandResult<CodexThemeList> {
+    match CodexThemeStore::open_default().and_then(|store| store.list_themes()) {
+        Ok(themes) => ok("Codex 主题已加载。", themes),
+        Err(error) => failed(
+            &format!("Codex 主题加载失败：{error}"),
+            empty_codex_theme_list(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn import_codex_theme(
+    source_path: String,
+    replace_existing: Option<bool>,
+) -> CommandResult<CodexThemeSummary> {
+    let source_path = source_path.trim().to_string();
+    if source_path.is_empty() {
+        return failed("请选择主题目录或 ZIP 主题包。", empty_codex_theme_summary());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        CodexThemeStore::open_default()?
+            .import_theme_with_options(source_path, replace_existing.unwrap_or(false))
+    })
+    .await;
+    match result {
+        Ok(Ok(theme)) => ok("主题已通过校验并保存。", theme),
+        Ok(Err(error)) => failed(
+            &format!("主题导入失败：{error}"),
+            empty_codex_theme_summary(),
+        ),
+        Err(error) => failed(
+            &format!("主题导入任务异常结束：{error}"),
+            empty_codex_theme_summary(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn apply_codex_theme(theme_id: String) -> CommandResult<CodexThemeOperationResult> {
+    let theme_id = theme_id.trim().to_string();
+    match CodexThemeStore::open_default().and_then(|store| store.apply_theme(&theme_id)) {
+        Ok(outcome) => ok(&outcome.message.clone(), outcome),
+        Err(error) => {
+            let message = format!("主题应用失败：{error}");
+            failed(&message, failed_codex_theme_operation(&theme_id, &message))
+        }
+    }
+}
+
+#[tauri::command]
+pub fn restore_codex_default_theme() -> CommandResult<CodexThemeOperationResult> {
+    match CodexThemeStore::open_default().and_then(|store| store.restore_default_theme()) {
+        Ok(outcome) => ok(&outcome.message.clone(), outcome),
+        Err(error) => {
+            let message = format!("默认主题恢复失败：{error}");
+            failed(&message, failed_codex_theme_operation("default", &message))
+        }
+    }
 }
 
 #[tauri::command]
@@ -10775,7 +10981,33 @@ enabled = true
     }
 
     #[test]
-    fn repair_launch_status_rejects_stale_status_for_another_port() {
+    fn repair_launch_status_accepts_current_launcher_dynamic_port() {
+        let request = LaunchRequest {
+            app_path: "codex.exe".to_string(),
+            debug_port: 9230,
+            helper_port: 46227,
+        };
+        let current = LaunchStatus {
+            status: "ok".to_string(),
+            message: "current dynamic port".to_string(),
+            started_at_ms: 223,
+            codex_app: None,
+            debug_port: Some(43117),
+            helper_port: Some(46227),
+            debug_port_online: true,
+            helper_port_online: true,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
+        };
+
+        let detected = repair_launch_status(&request, Some(current), 222, false, false, 224)
+            .expect("current launcher dynamic port should be accepted");
+
+        assert_eq!(detected.debug_port, Some(43117));
+    }
+
+    #[test]
+    fn repair_launch_status_rejects_status_before_current_restart() {
         let request = LaunchRequest {
             app_path: "codex.exe".to_string(),
             debug_port: 9311,
@@ -10794,7 +11026,7 @@ enabled = true
             frontend_runtime_seen_at_ms: None,
         };
 
-        assert!(repair_launch_status(&request, Some(stale), false, false, 222).is_none());
+        assert!(repair_launch_status(&request, Some(stale), 222, false, false, 223).is_none());
     }
 
     #[test]
@@ -10804,25 +11036,13 @@ enabled = true
             debug_port: 9311,
             helper_port: 46227,
         };
-        let stale = LaunchStatus {
-            status: "ok".to_string(),
-            message: "stale".to_string(),
-            started_at_ms: 111,
-            codex_app: None,
-            debug_port: Some(9230),
-            helper_port: Some(46227),
-            debug_port_online: true,
-            helper_port_online: true,
-            frontend_runtime_online: false,
-            frontend_runtime_seen_at_ms: None,
-        };
 
-        let detected = repair_launch_status(&request, Some(stale), true, true, 222)
-            .expect("requested repair port should win over stale status");
+        let detected = repair_launch_status(&request, None, 222, true, true, 223)
+            .expect("requested repair port should be detected directly");
 
         assert_eq!(detected.debug_port, Some(9311));
         assert_eq!(detected.helper_port, Some(46227));
-        assert_eq!(detected.started_at_ms, 222);
+        assert_eq!(detected.started_at_ms, 223);
         assert!(detected.debug_port_online);
         assert!(detected.helper_port_online);
     }

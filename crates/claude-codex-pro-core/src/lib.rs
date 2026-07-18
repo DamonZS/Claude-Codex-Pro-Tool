@@ -11,6 +11,7 @@ pub mod claude_zh_patch;
 pub mod cli_wrapper;
 pub mod codex_plugin_marketplace;
 pub mod codex_sqlite;
+pub mod codex_theme;
 mod computer_use_guard;
 pub mod credential_environment;
 pub mod diagnostic_log;

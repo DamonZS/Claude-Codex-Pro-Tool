@@ -135,3 +135,37 @@ fn codex_context_loads_latest_and_earlier_pages_without_duplicates() {
         vec!["message 2", "message 3"]
     );
 }
+
+#[test]
+fn codex_context_keeps_text_from_real_rollout_event_shapes() {
+    let tmp = tempdir().unwrap();
+    let db_path = tmp.path().join("state.sqlite");
+    let rollout_path = tmp.path().join("rollout.jsonl");
+    fs::write(
+        &rollout_path,
+        include_str!("fixtures/session-context-real-shape.jsonl"),
+    )
+    .unwrap();
+    create_codex_thread_db(
+        &db_path,
+        &rollout_path,
+        "fixture-thread",
+        "Real rollout shape",
+    );
+
+    let page = load_codex_session_context(&db_path, "fixture-thread", None, None)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(page.total_messages, 5);
+    assert_eq!(page.messages.len(), 5);
+    assert!(page.messages.iter().all(|message| !message.text.is_empty()));
+    assert_eq!(page.messages[0].role, "user");
+    assert_eq!(
+        page.messages[0].text,
+        "First user block\n\nSecond user block"
+    );
+    assert_eq!(page.messages[1].role, "assistant");
+    assert_eq!(page.messages[1].text, "First assistant response");
+    assert_eq!(page.messages[4].text, "Final assistant response");
+}

@@ -5,6 +5,7 @@ import {
   MessageSquare,
   Network,
   PackageSearch,
+  Palette,
   Settings,
   ShieldCheck,
   Wrench,
@@ -21,13 +22,14 @@ export type RouteItem = {
   keywords: string[];
 };
 
-// `routes` is intentionally limited to the seven visible primary navigation
+// `routes` is intentionally limited to the visible primary navigation
 // entries. Compatibility routes remain in `routeCatalog` so external links and
 // older launcher builds can still open them directly.
 export const routes: RouteItem[] = [
   { id: "overview", label: "概览", icon: LayoutDashboard, description: "服务状态、异常与近期操作", keywords: ["首页", "状态", "dashboard"] },
   { id: "supplier", label: "供应商与路由", icon: Network, description: "第三方 API、模型映射、代理与故障转移", keywords: ["provider", "api", "model", "protocol", "模型", "协议", "代理", "中转"] },
   { id: "clients", label: "客户端与增强", icon: Boxes, description: "Codex、Claude 与本地增强状态", keywords: ["codex", "claude", "启动", "注入"] },
+  { id: "themes", label: "主题中心", icon: Palette, description: "导入、应用与恢复 Codex 主题", keywords: ["theme", "主题", "皮肤", "外观"] },
   { id: "sessions", label: "会话与记忆", icon: MessageSquare, description: "会话迁移、项目接续与盘古记忆", keywords: ["session", "memory", "盘古"] },
   { id: "tools", label: "插件、Skills 与 MCP", icon: PackageSearch, description: "跨 Agent 扩展与依赖管理", keywords: ["plugin", "skill", "mcp", "扩展"] },
   { id: "maintenance", label: "维护与诊断", icon: Wrench, description: "入口、Watcher、日志与修复", keywords: ["repair", "watcher", "日志", "诊断"] },
@@ -102,6 +104,7 @@ export function routeSubtitle(route: Route) {
     overview: "服务健康、当前配置、异常与近期运行状态。",
     supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
     clients: "管理 Codex、Claude Desktop、Claude Code 与本地增强。",
+    themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     tools: "统一管理插件、Skills、MCP、来源、风险与依赖。",
     sessions: "查看本地会话、项目归属、迁移与供应商同步。",
     memory: "管理项目接续、长期记忆、召回证据与跨 Agent 共享。",

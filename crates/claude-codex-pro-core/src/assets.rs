@@ -1,4 +1,5 @@
 use base64::Engine;
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -7,9 +8,15 @@ use crate::settings::BackendSettings;
 const RENDERER_SCRIPT: &str = include_str!("../../../assets/inject/renderer-inject.js");
 const CLAUDE_CHINESE_INJECT_SCRIPT: &str =
     include_str!("../../../assets/inject/claude-chinese-inject.js");
+const CODEX_THEME_LOADER_SCRIPT: &str =
+    include_str!("../../../assets/inject/codex-theme-loader.js");
 const SUPPORT_PAYMENT_QR: &[u8] = include_bytes!("../../../assets/images/support-payment-qr.png");
 const CONTACT_WECHAT_QR: &[u8] = include_bytes!("../../../assets/images/contact-wechat-qr.jpg");
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
+pub const CODEX_THEME_PAYLOAD_GLOBAL: &str = "__CLAUDE_CODEX_PRO_CODEX_THEME_PAYLOAD__";
+pub const CODEX_THEME_LOADER_GLOBAL: &str = "__CLAUDE_CODEX_PRO_CODEX_THEME_LOADER__";
+pub const CODEX_THEME_RESULT_GLOBAL: &str = "__CLAUDE_CODEX_PRO_CODEX_THEME_RESULT__";
+pub const CODEX_THEME_STYLE_ID: &str = "claude-codex-pro-codex-theme";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
@@ -17,6 +24,18 @@ pub fn renderer_script() -> &'static str {
 
 pub fn claude_chinese_injection_script() -> &'static str {
     CLAUDE_CHINESE_INJECT_SCRIPT
+}
+
+pub fn codex_theme_loader_script() -> &'static str {
+    CODEX_THEME_LOADER_SCRIPT
+}
+
+pub fn codex_theme_injection_script<T: Serialize>(payload: &T) -> anyhow::Result<String> {
+    let payload = serde_json::to_string(payload)?;
+    Ok(format!(
+        "window.{CODEX_THEME_PAYLOAD_GLOBAL} = {payload};\n{}",
+        codex_theme_loader_script()
+    ))
 }
 
 pub fn injection_script(helper_port: u16) -> String {
@@ -99,5 +118,119 @@ fn image_content_type(path: &Path) -> Option<&'static str> {
         Some("gif") => Some("image/gif"),
         Some("bmp") => Some("image/bmp"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_theme_loader_v4_materializes_and_releases_blob_assets() {
+        let script = codex_theme_loader_script();
+
+        for contract in [
+            "const LOADER_VERSION = 4",
+            "css_variables",
+            "root_attributes",
+            "asset_data_uris",
+            "assetCssVariables",
+            "new Blob([bytes]",
+            "URL.createObjectURL",
+            "URL.revokeObjectURL",
+            "dataUriToBlobAsset",
+            "stageAssets",
+            "migrateV3Ownership",
+            "payload.rootClasses",
+            "payload.rootAttributes",
+        ] {
+            assert!(
+                script.contains(contract),
+                "Codex theme loader must consume explicit v4 payload state: {contract}"
+            );
+        }
+        assert!(
+            !script.contains("return `url(\"${dataUri}\")`"),
+            "large Data URIs must not be assigned directly to CSS variables"
+        );
+        assert!(
+            !script.contains("extractRootThemeClasses"),
+            "root classes must come from root_attributes, not CSS text scanning"
+        );
+    }
+
+    #[test]
+    fn codex_theme_loader_records_and_conditionally_restores_ownership() {
+        let script = codex_theme_loader_script();
+
+        for contract in [
+            "hadOriginal",
+            "originalValue",
+            "writtenValue",
+            "originallyPresent",
+            "originalPriority",
+            "writtenPriority",
+            "variableMatchesWrittenValue",
+            "attributeMatchesWrittenValue",
+            "restoreOwnedRootState",
+            "ownership_conflict",
+        ] {
+            assert!(
+                script.contains(contract),
+                "Codex theme loader must preserve per-item ownership: {contract}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_theme_loader_repairs_same_generation_and_converges_style() {
+        let script = codex_theme_loader_script();
+
+        for contract in [
+            "payloadSignature === payload.signature",
+            "repairActivePayload",
+            "convergeOwnedStyle",
+            "document.querySelectorAll(STYLE_SELECTOR)",
+            "styleNodes.slice(1)",
+            "repair_verification_failed",
+            "\"repaired\"",
+            "\"healthy\"",
+        ] {
+            assert!(
+                script.contains(contract),
+                "Codex theme loader must repair and verify owned state: {contract}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_theme_injection_keeps_a_dedicated_mount_point() {
+        let script = codex_theme_injection_script(&serde_json::json!({
+            "theme_id": "contract-theme",
+            "generation": 7,
+            "css": ":root { color: var(--ccp-theme-accent); }",
+            "is_default": false,
+            "css_variables": {
+                "--ccp-theme-accent": "#ff3344"
+            },
+            "root_attributes": {
+                "classes": ["ccp-theme-contract"],
+                "attributes": {
+                    "data-ccp-theme-tone": "dark"
+                }
+            },
+            "asset_data_uris": {
+                "--ccp-theme-art": "data:image/png;base64,iVBORw0KGgo="
+            }
+        }))
+        .expect("theme payload should serialize");
+
+        assert!(script.contains(CODEX_THEME_PAYLOAD_GLOBAL));
+        assert!(script.contains(CODEX_THEME_LOADER_GLOBAL));
+        assert!(script.contains(CODEX_THEME_RESULT_GLOBAL));
+        assert!(script.contains(CODEX_THEME_STYLE_ID));
+        assert!(!script.contains("CLAUDE_CODEX_PRO_TRANSLATE"));
+        assert!(!script.contains("MutationObserver"));
+        assert!(!script.contains("addEventListener"));
     }
 }

@@ -473,6 +473,49 @@ export type CodexPluginMarketplaceRepairResult = CommandResult<{
   marketplace: CodexPluginMarketplaceStatus;
 }>;
 
+export type CodexThemeSummary = {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  preview_data_uri: string | null;
+  builtin: boolean;
+  current: boolean;
+  imported_at: number;
+  updated_at: number;
+  integrity_sha256: string | null;
+  previous_version_available: boolean;
+};
+
+export type CodexThemeListResult = CommandResult<{
+  themes: CodexThemeSummary[];
+  current_theme_id: string;
+  generation: number;
+}>;
+
+export type CodexThemeImportResult = CommandResult<CodexThemeSummary>;
+
+export type CodexThemeOperationResult = CommandResult<{
+  theme_id: string;
+  persisted: boolean;
+  runtime_applied: boolean;
+  restart_required: boolean;
+  rolled_back: boolean;
+  generation: number;
+}>;
+
+export type CodexThemeOperationState = {
+  kind: "import" | "apply" | "restore";
+  themeId?: string;
+};
+
+export type CodexThemeFeedback = {
+  title: string;
+  message: string;
+  status: Status;
+};
+
 export type LocalSession = {
   id: string;
   title: string;
@@ -990,6 +1033,7 @@ export type Route =
   | "overview"
   | "supplier"
   | "clients"
+  | "themes"
   | "tools"
   | "sessions"
   | "memory"

@@ -1180,8 +1180,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        7,
-        "the sidebar must expose exactly seven primary destinations"
+        8,
+        "the sidebar must expose exactly eight primary destinations"
     );
     for (id, label) in [
         ("overview", "概览"),
@@ -1197,6 +1197,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "missing primary route {id} ({label})"
         );
     }
+    assert!(primary_routes.contains("id: \"themes\""));
+    assert!(primary_routes.contains("icon: Palette"));
     assert!(!primary_routes.contains("id: \"models\""));
     assert!(!primary_routes.contains("id: \"memory\""));
     assert!(!primary_routes.contains("id: \"about\""));
@@ -1247,6 +1249,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "overview",
         "supplier",
         "clients",
+        "themes",
         "tools",
         "sessions",
         "memory",
@@ -1737,6 +1740,378 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
 }
 
 #[test]
+fn codex_theme_center_route_and_tauri_command_contracts_match() {
+    fn assert_json_keys(value: &serde_json::Value, expected: &[&str]) {
+        let actual = value
+            .as_object()
+            .expect("serialized command result must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = expected
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let routes = read_frontend_file("lib/routes.ts");
+    let types = read_frontend_file("types.ts");
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+
+    let primary_routes = source_section(
+        &routes,
+        "export const routes: RouteItem[] = [",
+        "export const compatibilityRoutes",
+    );
+    assert!(
+        primary_routes.contains("id: \"themes\"") && primary_routes.contains("icon: Palette"),
+        "themes must be a visible primary navigation destination"
+    );
+    let route_type = source_section(&types, "export type Route =", "export type LegacyRoute");
+    assert!(route_type.contains("| \"themes\""));
+
+    let registered_commands = source_section(
+        &manager_lib,
+        ".invoke_handler(tauri::generate_handler![",
+        ".run(tauri::generate_context!())",
+    );
+    for command in [
+        "list_codex_themes",
+        "import_codex_theme",
+        "apply_codex_theme",
+        "restore_codex_default_theme",
+    ] {
+        assert_eq!(
+            registered_commands
+                .matches(&format!("commands::{command}"))
+                .count(),
+            1,
+            "theme command must be registered exactly once: {command}"
+        );
+    }
+
+    let list_command = source_section(
+        &commands,
+        "pub fn list_codex_themes()",
+        "pub async fn import_codex_theme(",
+    );
+    assert!(list_command.contains("-> CommandResult<CodexThemeList>"));
+
+    let import_command = source_section(
+        &commands,
+        "pub async fn import_codex_theme(",
+        "pub fn apply_codex_theme(",
+    );
+    for contract in [
+        "source_path: String,",
+        "replace_existing: Option<bool>,",
+        ") -> CommandResult<CodexThemeSummary>",
+    ] {
+        assert!(
+            import_command.contains(contract),
+            "import command contract is missing: {contract}"
+        );
+    }
+
+    let apply_command = source_section(
+        &commands,
+        "pub fn apply_codex_theme(",
+        "pub fn restore_codex_default_theme()",
+    );
+    assert!(apply_command.contains("theme_id: String"));
+    assert!(apply_command.contains("-> CommandResult<CodexThemeOperationResult>"));
+
+    let restore_command = source_section(
+        &commands,
+        "pub fn restore_codex_default_theme()",
+        "pub async fn preview_plugin_hub_install(",
+    );
+    assert!(restore_command.contains("-> CommandResult<CodexThemeOperationResult>"));
+
+    let shared_result = source_section(
+        &types,
+        "export type CommandResult<T>",
+        "export type StatusChipTone",
+    );
+    for contract in ["T & {", "status: Status;", "message: string;"] {
+        assert!(shared_result.contains(contract));
+    }
+
+    let summary_type = source_section(
+        &types,
+        "export type CodexThemeSummary = {",
+        "export type CodexThemeListResult",
+    );
+    for contract in [
+        "id: string;",
+        "name: string;",
+        "version: string;",
+        "author: string;",
+        "description: string;",
+        "preview_data_uri: string | null;",
+        "builtin: boolean;",
+        "current: boolean;",
+        "imported_at: number;",
+        "updated_at: number;",
+        "integrity_sha256: string | null;",
+        "previous_version_available: boolean;",
+    ] {
+        assert!(
+            summary_type.contains(contract),
+            "CodexThemeSummary is missing: {contract}"
+        );
+    }
+
+    let list_type = source_section(
+        &types,
+        "export type CodexThemeListResult",
+        "export type CodexThemeImportResult",
+    );
+    for contract in [
+        "CommandResult<{",
+        "themes: CodexThemeSummary[];",
+        "current_theme_id: string;",
+        "generation: number;",
+    ] {
+        assert!(
+            list_type.contains(contract),
+            "CodexThemeListResult is missing: {contract}"
+        );
+    }
+    assert!(
+        types.contains("export type CodexThemeImportResult = CommandResult<CodexThemeSummary>;")
+    );
+
+    let operation_type = source_section(
+        &types,
+        "export type CodexThemeOperationResult",
+        "export type CodexThemeOperationState",
+    );
+    for contract in [
+        "CommandResult<{",
+        "theme_id: string;",
+        "persisted: boolean;",
+        "runtime_applied: boolean;",
+        "restart_required: boolean;",
+        "rolled_back: boolean;",
+        "generation: number;",
+    ] {
+        assert!(
+            operation_type.contains(contract),
+            "CodexThemeOperationResult is missing: {contract}"
+        );
+    }
+
+    let theme = claude_codex_pro_core::codex_theme::CodexThemeSummary {
+        id: "fixture-theme".to_string(),
+        name: "Fixture Theme".to_string(),
+        version: "1.0.0".to_string(),
+        author: "Fixture Author".to_string(),
+        description: "Fixture description".to_string(),
+        preview_data_uri: Some("data:image/png;base64,fixture".to_string()),
+        builtin: false,
+        current: true,
+        imported_at: 1,
+        updated_at: 2,
+        integrity_sha256: Some("fixture-sha256".to_string()),
+        previous_version_available: true,
+    };
+    let list_json = serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
+        status: "ok".to_string(),
+        message: "loaded".to_string(),
+        payload: claude_codex_pro_core::codex_theme::CodexThemeList {
+            themes: vec![theme.clone()],
+            current_theme_id: theme.id.clone(),
+            generation: 3,
+        },
+    })
+    .expect("serialize theme list command result");
+    assert_json_keys(
+        &list_json,
+        &[
+            "status",
+            "message",
+            "themes",
+            "current_theme_id",
+            "generation",
+        ],
+    );
+    assert_json_keys(
+        &list_json["themes"][0],
+        &[
+            "id",
+            "name",
+            "version",
+            "author",
+            "description",
+            "preview_data_uri",
+            "builtin",
+            "current",
+            "imported_at",
+            "updated_at",
+            "integrity_sha256",
+            "previous_version_available",
+        ],
+    );
+
+    let import_json = serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
+        status: "ok".to_string(),
+        message: "imported".to_string(),
+        payload: theme,
+    })
+    .expect("serialize theme import command result");
+    assert_json_keys(
+        &import_json,
+        &[
+            "status",
+            "message",
+            "id",
+            "name",
+            "version",
+            "author",
+            "description",
+            "preview_data_uri",
+            "builtin",
+            "current",
+            "imported_at",
+            "updated_at",
+            "integrity_sha256",
+            "previous_version_available",
+        ],
+    );
+
+    let operation_json =
+        serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
+            status: "ok".to_string(),
+            message: "applied".to_string(),
+            payload: claude_codex_pro_core::codex_theme::CodexThemeOperationResult {
+                theme_id: "fixture-theme".to_string(),
+                persisted: true,
+                runtime_applied: false,
+                restart_required: true,
+                rolled_back: false,
+                generation: 4,
+                message: "applied".to_string(),
+            },
+        })
+        .expect("serialize theme operation command result");
+    assert_json_keys(
+        &operation_json,
+        &[
+            "status",
+            "message",
+            "theme_id",
+            "persisted",
+            "runtime_applied",
+            "restart_required",
+            "rolled_back",
+            "generation",
+        ],
+    );
+}
+
+#[test]
+fn codex_theme_center_frontend_ipc_calls_match_tauri_commands() {
+    fn ipc_call<'a>(source: &'a str, command: &str) -> &'a str {
+        let marker = format!("\"{command}\"");
+        for (command_index, _) in source.match_indices(&marker) {
+            let prefix_start = source[..command_index]
+                .char_indices()
+                .rev()
+                .nth(199)
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+            let prefix = &source[prefix_start..command_index];
+            let Some(call_offset) = prefix.rfind("call") else {
+                continue;
+            };
+            let call_start = prefix_start + call_offset;
+            let Some(open_offset) = source[call_start..command_index].find('(') else {
+                continue;
+            };
+            let open_index = call_start + open_offset;
+            let mut depth = 0usize;
+            let mut quote = None;
+            let mut escaped = false;
+
+            for (offset, character) in source[open_index..].char_indices() {
+                if let Some(active_quote) = quote {
+                    if escaped {
+                        escaped = false;
+                    } else if character == '\\' {
+                        escaped = true;
+                    } else if character == active_quote {
+                        quote = None;
+                    }
+                    continue;
+                }
+
+                match character {
+                    '\'' | '"' | '`' => quote = Some(character),
+                    '(' => depth += 1,
+                    ')' => {
+                        depth = depth
+                            .checked_sub(1)
+                            .unwrap_or_else(|| panic!("unbalanced IPC call for {command}"));
+                        if depth == 0 {
+                            let end = open_index + offset + character.len_utf8();
+                            return &source[call_start..end];
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        panic!("missing frontend IPC call for {command}");
+    }
+
+    let frontend = read_all_frontend_sources();
+    let list_call = ipc_call(&frontend, "list_codex_themes");
+    assert!(list_call.contains("call<CodexThemeListResult>"));
+    assert_eq!(
+        list_call
+            .split_once("\"list_codex_themes\"")
+            .expect("list command literal")
+            .1
+            .trim(),
+        ")",
+        "list_codex_themes must not receive frontend arguments"
+    );
+
+    let import_call = ipc_call(&frontend, "import_codex_theme");
+    assert!(import_call.contains("call<CodexThemeImportResult>"));
+    for argument in ["sourcePath", "replaceExisting"] {
+        assert!(
+            import_call.contains(argument),
+            "import_codex_theme is missing camelCase IPC argument: {argument}"
+        );
+    }
+    assert!(!import_call.contains("source_path"));
+    assert!(!import_call.contains("replace_existing"));
+
+    let apply_call = ipc_call(&frontend, "apply_codex_theme");
+    assert!(apply_call.contains("call<CodexThemeOperationResult>"));
+    assert!(apply_call.contains("themeId"));
+    assert!(!apply_call.contains("theme_id"));
+
+    let restore_call = ipc_call(&frontend, "restore_codex_default_theme");
+    assert!(restore_call.contains("call<CodexThemeOperationResult>"));
+    assert_eq!(
+        restore_call
+            .split_once("\"restore_codex_default_theme\"")
+            .expect("restore command literal")
+            .1
+            .trim(),
+        ")",
+        "restore_codex_default_theme must not receive frontend arguments"
+    );
+}
+
+#[test]
 fn manager_window_and_ops_console_layout_stay_usable() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // 拆分后：存在性/禁止性断言读前端源码全集（字符串迁到哪个文件都能命中，
@@ -2213,6 +2588,8 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("find_codex_processes()"));
     assert!(restart_command.contains("wait_for_processes_to_exit("));
     assert!(restart_command.contains("旧进程未能及时退出"));
+    assert!(restart_command.contains("let restart_started_ms = current_time_ms();"));
+    assert!(restart_command.contains("start_restart_injection_monitor("));
     assert!(
         restart_command
             .find("wait_for_processes_to_exit(")
@@ -2227,6 +2604,35 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("request,"));
     assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
     assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
+}
+
+#[test]
+fn codex_restart_monitors_current_theme_and_new_renderer_injection_in_background() {
+    let commands_rs = read_source_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/commands.rs"
+    )));
+    let monitor = commands_rs
+        .split("fn start_restart_injection_monitor")
+        .nth(1)
+        .and_then(|rest| rest.split("fn spawn_silent_launcher").next())
+        .expect("restart injection monitor source");
+
+    assert!(monitor.contains("codex_frontend_injection_enabled(&settings)"));
+    assert!(monitor.contains("CodexThemeStore::open_default()"));
+    assert!(monitor.contains("theme.current_theme_id != \"default\""));
+    assert!(monitor.contains("settings_injection_enabled || theme_injection_enabled"));
+    assert!(monitor.contains("tauri::async_runtime::spawn(async move"));
+    assert!(monitor.contains("wait_for_codex_launch_ports("));
+    assert!(monitor.contains("wait_for_renderer_frontend_after("));
+    assert!(monitor.contains("manager.restart_injection_monitor_started"));
+    assert!(monitor.contains("manager.restart_injection_confirmed"));
+    assert!(monitor.contains("manager.restart_injection_timeout"));
+    assert!(monitor.contains("\"stage\": \"launch_ports\""));
+    assert!(monitor.contains("\"stage\": \"renderer_heartbeat\""));
+    assert!(monitor.contains("\"theme_id\": theme_id"));
+    assert!(monitor.contains("\"theme_generation\": theme_generation"));
+    assert!(!monitor.contains("app_path"));
 }
 
 #[test]
@@ -3613,10 +4019,8 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
     assert!(restart.contains("旧 launcher/Codex 进程仍未退出"));
     assert!(restart.contains("select_repair_debug_port(default_debug_port()).await"));
     assert!(restart.contains("debug_port: selected_debug_port"));
-    assert!(
-        restart
-            .contains("wait_for_codex_launch_ports(&request, REPAIR_CODEX_RESTART_TIMEOUT).await")
-    );
+    assert!(restart.contains("let launch_started_at_ms = current_time_ms();"));
+    assert!(restart.contains("launch_started_at_ms,"));
     assert!(restart.contains("正在等待 Codex 自启完成"));
     assert!(commands_rs.contains("taskkill.exe"));
     assert!(commands_rs.contains(".args([\"/PID\", &pid.to_string(), \"/F\", \"/T\"])"));
@@ -3631,10 +4035,12 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         .expect("wait_for_codex_launch_ports source");
     assert!(wait_ports.contains("repair_launch_status("));
     assert!(wait_ports.contains("helper 后端仍需恢复"));
+    assert!(wait_ports.contains("launch_started_at_ms"));
     assert!(wait_ports.contains("codex_debug_port_online(request.debug_port)"));
     assert!(wait_ports.contains("helper_backend_online(request.helper_port)"));
-    assert!(wait_ports.contains("status.debug_port == Some(request.debug_port)"));
-    assert!(wait_ports.contains("&& status.debug_port_online"));
+    assert!(wait_ports.contains("status.started_at_ms >= launch_started_at_ms"));
+    assert!(wait_ports.contains("status.debug_port.is_some()"));
+    assert!(wait_ports.contains("status.debug_port_online"));
     assert!(wait_ports.contains("if !requested_debug_port_online"));
 
     let wait = commands_rs
@@ -3866,4 +4272,24 @@ fn pangu_memory_new_project_guide_keeps_lazy_loading_and_complete_contract() {
     assert!(styles.contains(".memory-start-grid"));
     assert!(styles.contains(".memory-new-project-preview"));
     assert!(styles.contains("@media (max-width:"));
+}
+
+#[test]
+fn session_context_messages_do_not_shrink_and_hide_their_bodies() {
+    let styles = read_frontend_file("styles.css");
+    let workspace = read_frontend_file("workspace.css");
+    let message_rule = source_section(&workspace, ".claude-session-context-message {\n", "\n}");
+
+    assert!(
+        styles.contains(".claude-session-context-body {") && styles.contains("overflow-y: auto;"),
+        "the shared Codex and Claude message list must remain vertically scrollable"
+    );
+    assert!(
+        message_rule.contains("flex: 0 0 auto;"),
+        "session message cards must not shrink and clip their body text"
+    );
+    assert!(
+        message_rule.contains("min-width: 0;"),
+        "session message cards must still fit the context viewer width"
+    );
 }

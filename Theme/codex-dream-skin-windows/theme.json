@@ -2,10 +2,33 @@
   "format_version": 1,
   "id": "codex-dream-skin-windows",
   "name": "Codex Dream Skin - Windows",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "author": "Codex Dream Skin Studio contributors",
-  "description": "Dream Skin visual theme adapted for CCP from the Windows stylesheet.",
+  "description": "Dream Skin Windows theme adapted to the native Codex Renderer DOM.",
   "preview": "preview.png",
   "entry_style": "theme.css",
-  "assets": []
+  "assets": [
+    "theme.css",
+    "art.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-background": "#fff3f9",
+    "--ccp-theme-panel": "rgba(255, 251, 253, .92)",
+    "--ccp-theme-accent": "#8b3dce",
+    "--ccp-theme-accent-alt": "#b45cff",
+    "--ccp-theme-highlight": "#ff73bd",
+    "--ccp-theme-text": "#4c2364",
+    "--ccp-theme-border": "rgba(221, 122, 184, .42)"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-dream-skin-windows"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "light"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "art.png"
+  }
 }

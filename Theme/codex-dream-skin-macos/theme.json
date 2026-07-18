@@ -2,10 +2,37 @@
   "format_version": 1,
   "id": "codex-dream-skin-macos",
   "name": "Codex Dream Skin - macOS",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "author": "Codex Dream Skin Studio contributors",
-  "description": "Dream Skin visual theme adapted for CCP from the macOS stylesheet.",
+  "description": "Dream Skin macOS city theme adapted to the native Codex Renderer DOM.",
   "preview": "preview.png",
   "entry_style": "theme.css",
-  "assets": []
+  "assets": [
+    "theme.css",
+    "art.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-background": "#f6f2f3",
+    "--ccp-theme-panel": "#ffffff",
+    "--ccp-theme-panel-alt": "#fff7f8",
+    "--ccp-theme-accent": "#e25563",
+    "--ccp-theme-accent-alt": "#f07a86",
+    "--ccp-theme-secondary": "#bd5963",
+    "--ccp-theme-highlight": "#642a8c",
+    "--ccp-theme-text": "#1f1a1b",
+    "--ccp-theme-text-soft": "#3d3437",
+    "--ccp-theme-muted": "#6b5f62",
+    "--ccp-theme-border": "rgba(196, 120, 128, .22)"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-dream-skin-macos"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "light"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "art.png"
+  }
 }

@@ -36,6 +36,7 @@ import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, 
 import { Button } from "@/components/ui/button";
 import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
+import { CodexThemeCenterScreen } from "@/components/CodexThemeCenterScreen";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
@@ -180,6 +181,10 @@ import type {
   CodexPluginMarketplaceRepairResult,
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
+  CodexThemeImportResult,
+  CodexThemeListResult,
+  CodexThemeOperationResult,
+  CodexThemeOperationState,
   CredentialEnvironmentResult,
   CommandResult,
   AdsResult,
@@ -301,6 +306,8 @@ export function App() {
   const [liveCodexContextEntries, setLiveCodexContextEntries] = useState<LiveContextEntriesResult | null>(null);
   const [claudeContextEntries, setClaudeContextEntries] = useState<ClaudeContextEntriesResult | null>(null);
   const [unifiedToolInventory, setUnifiedToolInventory] = useState<UnifiedToolInventoryResult | null>(null);
+  const [codexThemes, setCodexThemes] = useState<CodexThemeListResult | null>(null);
+  const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
   const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
   // Monotonic token bumped on every refreshRoute call. Rapid tab switches used
@@ -1083,6 +1090,92 @@ export function App() {
     }
   };
 
+  const refreshCodexThemes = async (silent = false) => {
+    const result = await run(() => call<CodexThemeListResult>("list_codex_themes"), "Codex 涓婚", {
+      trackBusy: !silent,
+      notify: !silent,
+    });
+    if (result) {
+      setCodexThemes(result);
+      if (!silent) notifyIfNeedsAttention({ title: "Codex 涓婚", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const importCodexTheme = async (sourceKind: "zip" | "directory") => {
+    const selected = await open(sourceKind === "zip"
+      ? {
+          directory: false,
+          multiple: false,
+          title: "瀵煎叆 Codex 涓婚 ZIP",
+          filters: [{ name: "ZIP 涓婚", extensions: ["zip"] }],
+        }
+      : {
+          directory: true,
+          multiple: false,
+          title: "閫夋嫨 Codex 涓婚鐩綍",
+        });
+    const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+    if (!sourcePath) return null;
+
+    setCodexThemeOperation({ kind: "import" });
+    try {
+      let result = await run(
+        () => call<CodexThemeImportResult>("import_codex_theme", { sourcePath, replaceExisting: false }),
+        "瀵煎叆 Codex 涓婚",
+      );
+      if (result && !statusOk(result.status) && result.message.includes("ID")) {
+        const replace = window.confirm("该主题 ID 已存在，是否用导入版本替换并保留上一版本？");
+        if (replace) {
+          result = await run(
+            () => call<CodexThemeImportResult>("import_codex_theme", { sourcePath, replaceExisting: true }),
+            "鏇挎崲 Codex 涓婚",
+          );
+        }
+      }
+      if (result) {
+        notifyResult({ title: "Codex 涓婚", message: result.message, status: result.status });
+        if (statusOk(result.status)) await refreshCodexThemes(true);
+      }
+      return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const applyCodexTheme = async (themeId: string) => {
+    setCodexThemeOperation({ kind: "apply", themeId });
+    try {
+      const result = await run(
+        () => call<CodexThemeOperationResult>("apply_codex_theme", { themeId }),
+        "应用 Codex 主题",
+      );
+      if (result) {
+        notifyResult({ title: "应用 Codex 主题", message: result.message, status: result.status });
+        if (statusOk(result.status)) await refreshCodexThemes(true);
+      }
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const restoreCodexDefaultTheme = async () => {
+    if (!window.confirm("确认恢复 Codex 默认主题？当前自定义主题仍会保留。")) return;
+    setCodexThemeOperation({ kind: "restore", themeId: "default" });
+    try {
+      const result = await run(
+        () => call<CodexThemeOperationResult>("restore_codex_default_theme"),
+        "恢复 Codex 默认主题",
+      );
+      if (result) {
+        notifyResult({ title: "恢复 Codex 默认主题", message: result.message, status: result.status });
+        if (statusOk(result.status)) await refreshCodexThemes(true);
+      }
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
   const previewPlugin = async (id: string) => {
     const result = await run(() => call<PluginInstallPreviewResult>("preview_plugin_hub_install", { request: { id } }), "安装预览");
     if (result) {
@@ -1831,6 +1924,8 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeZhPatch(true)]);
       }, 250);
+    } else if (target === "themes") {
+      await refreshCodexThemes(true);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -1935,6 +2030,10 @@ export function App() {
       launchClaudeDesktop,
       launchCodex,
       restartCodex,
+      refreshCodexThemes,
+      importCodexTheme,
+      applyCodexTheme,
+      restoreCodexDefaultTheme,
       openExternalUrl,
       goPluginHub,
       goMemoryAssist,
@@ -2036,6 +2135,10 @@ export function App() {
       launchClaudeDesktop: (...args) => actionsRef.current!.launchClaudeDesktop(...args),
       launchCodex: (...args) => actionsRef.current!.launchCodex(...args),
       restartCodex: (...args) => actionsRef.current!.restartCodex(...args),
+      refreshCodexThemes: (...args) => actionsRef.current!.refreshCodexThemes(...args),
+      importCodexTheme: (...args) => actionsRef.current!.importCodexTheme(...args),
+      applyCodexTheme: (...args) => actionsRef.current!.applyCodexTheme(...args),
+      restoreCodexDefaultTheme: (...args) => actionsRef.current!.restoreCodexDefaultTheme(...args),
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
       goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
@@ -2183,6 +2286,13 @@ export function App() {
               overview={overview}
               settings={settingsDraft ?? settings?.settings ?? null}
               watcher={watcher}
+            />
+          ) : null}
+          {route === "themes" ? (
+            <CodexThemeCenterScreen
+              actions={actions}
+              operation={codexThemeOperation}
+              themes={codexThemes}
             />
           ) : null}
           {route === "tools" ? (
