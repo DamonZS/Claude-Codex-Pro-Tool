@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "id": "codex-dream-skin-macos",
+  "name": "Codex Dream Skin - macOS",
+  "version": "1.0.0",
+  "author": "Codex Dream Skin Studio contributors",
+  "description": "Dream Skin visual theme adapted for CCP from the macOS stylesheet.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": []
+}

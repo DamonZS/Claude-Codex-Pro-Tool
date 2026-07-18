@@ -18,6 +18,7 @@ apps/claude-codex-pro-manager/src-tauri/gen/
 .claude/
 docs/superpowers/
 .workbuddy/
+.codegraph/daemon.pid
 
 *.log
 .DS_Store
