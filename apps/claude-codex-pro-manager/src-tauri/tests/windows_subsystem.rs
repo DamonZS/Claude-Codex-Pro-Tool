@@ -1191,8 +1191,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        8,
-        "the sidebar must expose exactly eight primary destinations"
+        9,
+        "the sidebar must expose exactly nine primary destinations"
     );
     for (id, label) in [
         ("overview", "概览"),
@@ -1210,6 +1210,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     }
     assert!(primary_routes.contains("id: \"themes\""));
     assert!(primary_routes.contains("icon: Palette"));
+    assert!(primary_routes.contains("id: \"prompts\""));
+    assert!(primary_routes.contains("icon: FileText"));
     assert!(!primary_routes.contains("id: \"models\""));
     assert!(!primary_routes.contains("id: \"memory\""));
     assert!(!primary_routes.contains("id: \"about\""));
@@ -2897,8 +2899,9 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(!supplier_screen.contains("?????"));
     assert!(supplier_screen.contains("routeEnabled: enabled"));
     assert!(supplier_screen.contains(
-        "claudeDesktopMode: targetApp === \"codex\" ? \"\" : enabled ? \"proxy\" : \"direct\""
+        "const claudeDesktopMode = targetApp === \"codex\" ? \"\" : enabled ? \"proxy\" : \"direct\""
     ));
+    assert!(supplier_screen.contains("claudeDesktopMode,"));
     assert!(supplier_screen.contains("supplierTargetFilter"));
     assert!(supplier_screen.contains("Codex"));
     assert!(supplier_screen.contains("Claude"));
