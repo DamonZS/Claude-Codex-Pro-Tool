@@ -1,0 +1,189 @@
+:root.ccp-theme-lotus-fire-nezha {
+  color-scheme: dark !important;
+  --ccp-theme-panel: color-mix(in srgb, var(--ccp-theme-surface-solid) 84%, transparent);
+  --ccp-theme-panel-strong: color-mix(in srgb, var(--ccp-theme-surface-solid) 95%, black);
+  --ccp-theme-line: color-mix(in srgb, var(--ccp-theme-accent) 30%, transparent);
+  --ccp-theme-hover: color-mix(in srgb, var(--ccp-theme-accent) 14%, transparent);
+  --color-text-foreground: var(--ccp-theme-text);
+  --color-text-foreground-secondary: var(--ccp-theme-muted);
+  --color-text-accent: var(--ccp-theme-accent);
+  --color-background-surface: transparent;
+  --color-background-panel: transparent;
+  --color-background-control: var(--ccp-theme-panel);
+  --color-background-elevated-primary: var(--ccp-theme-panel-strong);
+  --color-border: var(--ccp-theme-line);
+  --color-border-focus: var(--ccp-theme-accent);
+  --color-token-foreground: var(--ccp-theme-text);
+  --color-token-text-primary: var(--ccp-theme-text);
+  --color-token-text-secondary: var(--ccp-theme-muted);
+  --color-token-bg-primary: var(--ccp-theme-panel);
+  --color-token-bg-secondary: var(--ccp-theme-panel-strong);
+  --color-token-input-background: var(--ccp-theme-panel);
+  --color-token-input-foreground: var(--ccp-theme-text);
+  --color-token-input-placeholder-foreground: var(--ccp-theme-muted);
+  --color-token-menu-background: var(--ccp-theme-panel-strong);
+  --color-token-menu-foreground: var(--ccp-theme-text);
+  --color-token-list-hover-background: var(--ccp-theme-hover);
+  --vscode-foreground: var(--ccp-theme-text);
+  --vscode-descriptionForeground: var(--ccp-theme-muted);
+  --vscode-menu-background: var(--ccp-theme-panel-strong);
+  --vscode-menu-foreground: var(--ccp-theme-text);
+  --vscode-list-hoverBackground: var(--ccp-theme-hover);
+  --vscode-input-background: var(--ccp-theme-panel);
+  --vscode-input-foreground: var(--ccp-theme-text);
+}
+html.ccp-theme-lotus-fire-nezha,
+html.ccp-theme-lotus-fire-nezha body,
+html.ccp-theme-lotus-fire-nezha #root {
+  min-height: 100%;
+  background-color: var(--ccp-theme-surface-solid) !important;
+  color: var(--ccp-theme-text) !important;
+  letter-spacing: 0 !important;
+}
+
+html.ccp-theme-lotus-fire-nezha body {
+  background-image:
+    linear-gradient(
+      90deg,
+      var(--ccp-theme-surface-solid) 0%,
+      var(--ccp-theme-surface) var(--ccp-theme-safe-area),
+      var(--ccp-theme-overlay) 100%
+    ),
+    var(--ccp-theme-art) !important;
+  background-position:
+    center,
+    var(--ccp-theme-focus-x) var(--ccp-theme-focus-y) !important;
+  background-repeat: no-repeat, no-repeat !important;
+  background-size: cover, cover !important;
+  background-attachment: fixed, fixed !important;
+}
+
+html.ccp-theme-lotus-fire-nezha #root,
+html.ccp-theme-lotus-fire-nezha main.main-surface,
+html.ccp-theme-lotus-fire-nezha main.main-surface [role="main"]:has(
+  :is([data-feature="game-source"], [data-testid="home-icon"])
+) {
+  background: transparent !important;
+}
+
+html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel {
+  background: var(--ccp-theme-panel) !important;
+  border-color: var(--ccp-theme-line) !important;
+  box-shadow: 8px 0 28px color-mix(in srgb, black 32%, transparent) !important;
+  color: var(--ccp-theme-text) !important;
+  backdrop-filter: blur(18px) saturate(112%) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel nav {
+  background: transparent !important;
+}
+
+html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel button {
+  color: var(--ccp-theme-text) !important;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease !important;
+}
+
+html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel button:hover {
+  background: var(--ccp-theme-hover) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel :is(
+  [class~="bg-token-list-hover-background"],
+  [aria-current="page"]
+) {
+  background: var(--ccp-theme-hover) !important;
+  border-color: var(--ccp-theme-line) !important;
+  box-shadow: inset 3px 0 var(--ccp-theme-accent) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha main.main-surface {
+  border-color: var(--ccp-theme-line) !important;
+  box-shadow: inset 1px 0 color-mix(in srgb, white 8%, transparent) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha main.main-surface > header.app-header-tint {
+  background: color-mix(in srgb, var(--ccp-theme-surface-solid) 84%, transparent) !important;
+  border-bottom: 1px solid var(--ccp-theme-line) !important;
+  color: var(--ccp-theme-text) !important;
+  backdrop-filter: blur(18px) saturate(110%) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha [data-testid="home-icon"] {
+  color: var(--ccp-theme-accent) !important;
+  filter: drop-shadow(0 8px 20px color-mix(in srgb, var(--ccp-theme-accent) 32%, transparent));
+}
+
+html.ccp-theme-lotus-fire-nezha [data-feature="game-source"] {
+  color: var(--ccp-theme-text) !important;
+  text-shadow: 0 2px 18px color-mix(in srgb, black 58%, transparent) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha .group\/home-suggestions button {
+  border: 1px solid var(--ccp-theme-line) !important;
+  border-radius: 8px !important;
+  background: var(--ccp-theme-panel) !important;
+  color: var(--ccp-theme-text) !important;
+  box-shadow: 0 12px 28px color-mix(in srgb, black 26%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(108%) !important;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease !important;
+}
+
+html.ccp-theme-lotus-fire-nezha .group\/home-suggestions button:hover {
+  border-color: color-mix(in srgb, var(--ccp-theme-accent) 64%, transparent) !important;
+  background: color-mix(in srgb, var(--ccp-theme-panel-strong) 90%, transparent) !important;
+  transform: translateY(-2px);
+}
+
+html.ccp-theme-lotus-fire-nezha .group\/home-suggestions button svg {
+  color: var(--ccp-theme-accent) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha .composer-surface-chrome {
+  border: 1px solid var(--ccp-theme-line) !important;
+  border-radius: 8px !important;
+  background: var(--ccp-theme-panel) !important;
+  color: var(--ccp-theme-text) !important;
+  box-shadow: 0 16px 38px color-mix(in srgb, black 32%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(110%) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha .composer-surface-chrome .ProseMirror {
+  background: transparent !important;
+  color: var(--ccp-theme-text) !important;
+  caret-color: var(--ccp-theme-accent) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha button[class~="bg-token-foreground"] {
+  background: var(--ccp-theme-accent) !important;
+  color: var(--ccp-theme-surface-solid) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha :is(pre, code, .xterm, .xterm-viewport) {
+  border-color: var(--ccp-theme-line) !important;
+  background-color: color-mix(in srgb, var(--ccp-theme-surface-solid) 94%, black) !important;
+  color: var(--ccp-theme-text) !important;
+}
+
+html.ccp-theme-lotus-fire-nezha :is(button, a, input, textarea, [contenteditable="true"]):focus-visible {
+  outline: 2px solid var(--ccp-theme-accent) !important;
+  outline-offset: 2px !important;
+}
+
+@media (max-width: 980px) {
+  html.ccp-theme-lotus-fire-nezha body {
+    background-position: center, 68% var(--ccp-theme-focus-y) !important;
+  }
+
+  html.ccp-theme-lotus-fire-nezha aside.app-shell-left-panel,
+  html.ccp-theme-lotus-fire-nezha .composer-surface-chrome {
+    backdrop-filter: blur(12px) saturate(108%) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.ccp-theme-lotus-fire-nezha *,
+  html.ccp-theme-lotus-fire-nezha *::before,
+  html.ccp-theme-lotus-fire-nezha *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

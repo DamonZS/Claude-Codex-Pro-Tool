@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "lotus-fire-nezha",
+  "name": "莲火哪吒",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Lotus Fire Nezha adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#FF6A62",
+    "--ccp-theme-surface": "#111536E8",
+    "--ccp-theme-surface-solid": "#111536",
+    "--ccp-theme-text": "#FFF5F5",
+    "--ccp-theme-muted": "#D7C2D7",
+    "--ccp-theme-overlay": "#080B286E",
+    "--ccp-theme-focus-x": "84%",
+    "--ccp-theme-focus-y": "48%",
+    "--ccp-theme-safe-area": "58%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-lotus-fire-nezha"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}

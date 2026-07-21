@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "clockwork-fox-spirit",
+  "name": "机关狐灵",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Clockwork Fox Spirit adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#63C7AE",
+    "--ccp-theme-surface": "#071C20E8",
+    "--ccp-theme-surface-solid": "#071C20",
+    "--ccp-theme-text": "#F1FBF8",
+    "--ccp-theme-muted": "#B6D2CB",
+    "--ccp-theme-overlay": "#04141670",
+    "--ccp-theme-focus-x": "82%",
+    "--ccp-theme-focus-y": "49%",
+    "--ccp-theme-safe-area": "57%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-clockwork-fox-spirit"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}

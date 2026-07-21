@@ -234,3 +234,14 @@ cargo build --release
 - 不要求修改 Codex 官方主题系统以外的编辑器字体、模型能力或供应商协议。
 - 不要求删除用户已导入但当前未应用的主题。
 - 不改变翻译、模型、供应商、API、会话、记忆、插件、安装或发布功能的既有产品行为。
+
+## GitHub 精选主题包验收
+
+- `Theme/` 中每个精选主题同时存在 `<theme-id>/` 与 `<theme-id>.zip`，且 ZIP 根目录直接包含 `theme.json`、`theme.css`、`preview.png`、`background.png`、`LICENSE` 和 `NOTICE.md`。
+- `Theme/README.md` 对每个精选主题记录上游 URL、40 位提交 SHA、代码许可证、素材许可证和 CCP 适配边界；记录与本地审计提交一致。
+- 解包清单中不存在 `.js`、`.mjs`、`.ts`、`.sh`、`.command`、`.exe`、远程 URL、`@import`、`file://` 或上游注入器文件。
+- 每个 `theme.json` 只使用当前 manifest 契约字段，主题 ID 与根类均有独立命名空间，`asset_variables` 指向包内已声明并通过 MIME 校验的背景图片。
+- 每张 `preview.png` 可追溯到上游 `docs/examples/real/<theme-id>/new-task.webp`，图像转换只改变编码格式，不进行视觉重绘；`NOTICE.md` 记录源路径与固定提交。
+- 对所有精选主题分别从目录和 ZIP 调用 `CodexThemeStore::import_theme`，全部成功；两种来源得到相同 ID、版本及非空运行时 CSS/图片 Data URI。
+- 应用任一精选主题后，运行时载荷只包含 CSS、受控变量、根属性和 Data URI 图片，不包含脚本；恢复默认主题后不保留精选主题根类或变量。
+- 运行主题定向测试、前端类型检查、前端构建和默认 `target\release` 全量构建，并记录真实退出结果。

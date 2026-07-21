@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "cyber-changan",
+  "name": "赛博长安",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Cyber Changan adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#7B8CFF",
+    "--ccp-theme-surface": "#0A1222E3",
+    "--ccp-theme-surface-solid": "#0A1222",
+    "--ccp-theme-text": "#F4F6FF",
+    "--ccp-theme-muted": "#ADB9D2",
+    "--ccp-theme-overlay": "#07101D6B",
+    "--ccp-theme-focus-x": "84%",
+    "--ccp-theme-focus-y": "52%",
+    "--ccp-theme-safe-area": "58%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-cyber-changan"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}

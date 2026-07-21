@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "obsidian-gold",
+  "name": "黑金环域",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Obsidian Gold adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#F2B75E",
+    "--ccp-theme-surface": "#100D09E6",
+    "--ccp-theme-surface-solid": "#100D09",
+    "--ccp-theme-text": "#FFF8EA",
+    "--ccp-theme-muted": "#D0BEA2",
+    "--ccp-theme-overlay": "#0A070470",
+    "--ccp-theme-focus-x": "82%",
+    "--ccp-theme-focus-y": "49%",
+    "--ccp-theme-safe-area": "56%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-obsidian-gold"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}

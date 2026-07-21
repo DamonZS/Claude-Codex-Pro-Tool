@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "verdant-sanctuary",
+  "name": "森光秘境",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Verdant Sanctuary adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#91D89E",
+    "--ccp-theme-surface": "#09201BE3",
+    "--ccp-theme-surface-solid": "#09201B",
+    "--ccp-theme-text": "#F4FBF5",
+    "--ccp-theme-muted": "#B5CFB9",
+    "--ccp-theme-overlay": "#0717126B",
+    "--ccp-theme-focus-x": "82%",
+    "--ccp-theme-focus-y": "47%",
+    "--ccp-theme-safe-area": "56%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-verdant-sanctuary"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}

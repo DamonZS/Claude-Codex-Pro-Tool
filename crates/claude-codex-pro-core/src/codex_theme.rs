@@ -475,7 +475,9 @@ impl CodexThemeStore {
             &self.library_dir().join(&installed.manifest.id),
             &installed.manifest.entry_style,
         )?;
-        let css = fs::read_to_string(&style_path).context("当前主题样式不可读取")?;
+        let css = normalize_css_line_endings(
+            fs::read_to_string(&style_path).context("当前主题样式不可读取")?,
+        );
         validate_css(&css)?;
         let runtime = compile_runtime_resources(
             &self.library_dir().join(&installed.manifest.id),
@@ -919,6 +921,14 @@ fn expected_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn normalize_css_line_endings(css: String) -> String {
+    if css.contains('\r') {
+        css.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        css
+    }
+}
+
 fn validate_package(root: &Path) -> anyhow::Result<(CodexThemeManifest, String, String)> {
     let manifest_path = find_manifest_path(root).context("主题包缺少 manifest")?;
     let bytes = fs::read(&manifest_path).context("主题 manifest 不可读取")?;
@@ -954,7 +964,9 @@ fn validate_package(root: &Path) -> anyhow::Result<(CodexThemeManifest, String, 
     if style_path.extension().and_then(|value| value.to_str()) != Some("css") {
         bail!("主题样式入口必须是 CSS 文件");
     }
-    let css = fs::read_to_string(&style_path).context("主题 CSS 必须是 UTF-8 文本")?;
+    let css = normalize_css_line_endings(
+        fs::read_to_string(&style_path).context("主题 CSS 必须是 UTF-8 文本")?,
+    );
     validate_css(&css)?;
 
     for asset in &manifest.assets {
@@ -1514,9 +1526,47 @@ mod tests {
     }
 
     #[test]
+    fn css_line_endings_compile_to_the_same_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let lf_source = temp.path().join("lf-source");
+        let mixed_source = temp.path().join("mixed-source");
+        let canonical_css = ":root {\n  color: red;\n}\n";
+
+        write_theme(&lf_source, "line-ending-theme", canonical_css);
+        write_theme(
+            &mixed_source,
+            "line-ending-theme",
+            ":root {\r\n  color: red;\r}\r\n",
+        );
+        let (_, validated_css, _) = validate_package(&mixed_source).unwrap();
+        assert_eq!(validated_css, canonical_css);
+
+        let mut payloads = Vec::new();
+        for (index, source) in [lf_source, mixed_source].iter().enumerate() {
+            let store = CodexThemeStore::open(temp.path().join(format!("store-{index}"))).unwrap();
+            store.import_theme(source).unwrap();
+            store.apply_theme("line-ending-theme").unwrap();
+            payloads.push(store.active_theme_payload().unwrap());
+        }
+
+        assert_eq!(payloads[0], payloads[1]);
+        assert_eq!(payloads[0].css, canonical_css);
+        assert!(!payloads[0].css.contains('\r'));
+    }
+
+    #[test]
     fn repository_theme_directories_and_archives_compile_to_the_same_payload() {
         let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for theme_id in ["codex-dream-skin-macos", "codex-dream-skin-windows"] {
+        for (theme_id, expected_shell) in [
+            ("codex-dream-skin-macos", "light"),
+            ("codex-dream-skin-windows", "light"),
+            ("aurora-glass", "dark"),
+            ("clockwork-fox-spirit", "dark"),
+            ("cyber-changan", "dark"),
+            ("obsidian-gold", "dark"),
+            ("verdant-sanctuary", "dark"),
+            ("lotus-fire-nezha", "dark"),
+        ] {
             let directory = repository_root.join("Theme").join(theme_id);
             let archive = repository_root
                 .join("Theme")
@@ -1562,8 +1612,14 @@ mod tests {
                 );
                 assert_eq!(
                     payload.root_attributes.attributes["data-ccp-theme-shell"],
-                    "light"
+                    expected_shell
                 );
+                if expected_shell == "dark" {
+                    assert_eq!(
+                        payload.root_attributes.attributes["data-ccp-theme-origin"],
+                        "theme-studio-curated"
+                    );
+                }
                 assert!(
                     payload.asset_data_uris["--ccp-theme-art"]
                         .starts_with("data:image/png;base64,")

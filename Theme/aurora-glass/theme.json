@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "id": "aurora-glass",
+  "name": "极光穹顶",
+  "version": "0.1.0-ccp.1",
+  "author": "Theme Studio for Codex contributors",
+  "description": "Aurora Glass adapted for the CCP Codex Theme Loader.",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": [
+    "theme.css",
+    "background.png"
+  ],
+  "css_variables": {
+    "--ccp-theme-accent": "#8AA7FF",
+    "--ccp-theme-surface": "#080D1BDD",
+    "--ccp-theme-surface-solid": "#080D1B",
+    "--ccp-theme-text": "#F5F7FF",
+    "--ccp-theme-muted": "#B8C2E0",
+    "--ccp-theme-overlay": "#05081666",
+    "--ccp-theme-focus-x": "82%",
+    "--ccp-theme-focus-y": "48%",
+    "--ccp-theme-safe-area": "56%"
+  },
+  "root_attributes": {
+    "classes": [
+      "ccp-theme-aurora-glass"
+    ],
+    "attributes": {
+      "data-ccp-theme-shell": "dark",
+      "data-ccp-theme-origin": "theme-studio-curated"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png"
+  }
+}
