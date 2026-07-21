@@ -35,6 +35,9 @@ use claude_codex_pro_core::settings::{
     BackendSettings, RelayProfile, SettingsStore, relay_profile_resolved_api_key,
 };
 use claude_codex_pro_core::status::{LaunchStatus, StatusStore};
+use claude_codex_pro_core::system_prompt::{
+    SaveSystemPromptRequest, SystemPromptMode, SystemPromptSnapshot, SystemPromptStore,
+};
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,25 @@ pub struct VersionPayload {
     pub version: String,
     pub exe_path: String,
     pub exe_last_modified_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptIdRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnableSystemPromptRequest {
+    pub id: String,
+    pub mode: SystemPromptMode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptUrlRequest {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5680,6 +5702,109 @@ pub fn restore_codex_default_theme() -> CommandResult<CodexThemeOperationResult>
             let message = format!("默认主题恢复失败：{error}");
             failed(&message, failed_codex_theme_operation("default", &message))
         }
+    }
+}
+
+fn empty_system_prompt_snapshot() -> SystemPromptSnapshot {
+    SystemPromptSnapshot {
+        prompts: Vec::new(),
+        active_prompt_id: None,
+        active_title: None,
+        active_path: None,
+        mode: None,
+        managed: false,
+        externally_modified: false,
+    }
+}
+
+#[tauri::command]
+pub fn list_system_prompts() -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default().and_then(|store| store.list()) {
+        Ok(snapshot) => ok("系统提示词已加载。", snapshot),
+        Err(error) => failed(
+            &format!("系统提示词加载失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn save_system_prompt(request: SaveSystemPromptRequest) -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default().and_then(|store| store.save(request)) {
+        Ok(snapshot) => ok("系统提示词已保存。", snapshot),
+        Err(error) => failed(
+            &format!("系统提示词保存失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn import_system_prompt(source_path: String) -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default()
+        .and_then(|store| store.import_markdown(source_path.trim()))
+    {
+        Ok(snapshot) => ok("Markdown 提示词已导入。", snapshot),
+        Err(error) => failed(
+            &format!("Markdown 提示词导入失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn delete_system_prompt(request: SystemPromptIdRequest) -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default().and_then(|store| store.delete(request.id.trim())) {
+        Ok(snapshot) => ok("系统提示词已删除。", snapshot),
+        Err(error) => failed(
+            &format!("系统提示词删除失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn enable_system_prompt(
+    request: EnableSystemPromptRequest,
+) -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default()
+        .and_then(|store| store.enable(request.id.trim(), request.mode))
+    {
+        Ok(snapshot) => ok("系统提示词已启用，重启 Codex 后生效。", snapshot),
+        Err(error) => failed(
+            &format!("系统提示词启用失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn disable_system_prompt() -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default().and_then(|store| store.disable()) {
+        Ok(snapshot) => ok("系统提示词已停用，重启 Codex 后生效。", snapshot),
+        Err(error) => failed(
+            &format!("系统提示词停用失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn sync_system_prompt_url(
+    request: SystemPromptUrlRequest,
+) -> CommandResult<SystemPromptSnapshot> {
+    match SystemPromptStore::open_default() {
+        Ok(store) => match store.sync_markdown_url(request.url.trim()).await {
+            Ok(snapshot) => ok("GitHub Markdown 模板已同步。", snapshot),
+            Err(error) => failed(
+                &format!("GitHub 模板同步失败：{error}"),
+                empty_system_prompt_snapshot(),
+            ),
+        },
+        Err(error) => failed(
+            &format!("系统提示词存储打开失败：{error}"),
+            empty_system_prompt_snapshot(),
+        ),
     }
 }
 

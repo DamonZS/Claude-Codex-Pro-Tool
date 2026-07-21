@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
 import { CodexThemeCenterScreen } from "@/components/CodexThemeCenterScreen";
+import { SystemPromptScreen } from "@/components/SystemPromptScreen";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invokeCommand } from "@/tauriBridge";
@@ -185,6 +186,9 @@ import type {
   CodexThemeListResult,
   CodexThemeOperationResult,
   CodexThemeOperationState,
+  SaveSystemPromptRequest,
+  SystemPromptMode,
+  SystemPromptResult,
   CredentialEnvironmentResult,
   CommandResult,
   AdsResult,
@@ -308,6 +312,7 @@ export function App() {
   const [unifiedToolInventory, setUnifiedToolInventory] = useState<UnifiedToolInventoryResult | null>(null);
   const [codexThemes, setCodexThemes] = useState<CodexThemeListResult | null>(null);
   const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
+  const [systemPrompts, setSystemPrompts] = useState<SystemPromptResult | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
   const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
   // Monotonic token bumped on every refreshRoute call. Rapid tab switches used
@@ -1176,6 +1181,69 @@ export function App() {
     }
   };
 
+  const refreshSystemPrompts = async (silent = false) => {
+    const result = await run(() => call<SystemPromptResult>("list_system_prompts"), "系统提示词", {
+      trackBusy: !silent,
+      notify: !silent,
+    });
+    if (result) {
+      setSystemPrompts(result);
+      if (!silent) notifyIfNeedsAttention({ title: "系统提示词", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const updateSystemPrompts = (title: string, result: SystemPromptResult | null) => {
+    if (result) {
+      setSystemPrompts(result);
+      notifyResult({ title, message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const saveSystemPrompt = async (request: SaveSystemPromptRequest) => updateSystemPrompts(
+    "保存系统提示词",
+    await run(() => call<SystemPromptResult>("save_system_prompt", { request }), "保存系统提示词"),
+  );
+
+  const importSystemPrompt = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "导入系统提示词",
+      filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+    });
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    if (!path) return null;
+    return updateSystemPrompts(
+      "导入系统提示词",
+      await run(() => call<SystemPromptResult>("import_system_prompt", { sourcePath: path }), "导入系统提示词"),
+    );
+  };
+
+  const deleteSystemPrompt = async (id: string) => {
+    if (!window.confirm("确认删除这个自定义提示词？")) return null;
+    return updateSystemPrompts(
+      "删除系统提示词",
+      await run(() => call<SystemPromptResult>("delete_system_prompt", { request: { id } }), "删除系统提示词"),
+    );
+  };
+
+  const enableSystemPrompt = async (id: string, mode: SystemPromptMode) => updateSystemPrompts(
+    "启用系统提示词",
+    await run(() => call<SystemPromptResult>("enable_system_prompt", { request: { id, mode } }), "启用系统提示词"),
+  );
+
+  const disableSystemPrompt = async () => updateSystemPrompts(
+    "停用系统提示词",
+    await run(() => call<SystemPromptResult>("disable_system_prompt"), "停用系统提示词"),
+  );
+
+  const syncSystemPromptUrl = async (url: string) => updateSystemPrompts(
+    "同步系统提示词",
+    await run(() => call<SystemPromptResult>("sync_system_prompt_url", { request: { url } }), "同步系统提示词"),
+  );
+
   const previewPlugin = async (id: string) => {
     const result = await run(() => call<PluginInstallPreviewResult>("preview_plugin_hub_install", { request: { id } }), "安装预览");
     if (result) {
@@ -1926,6 +1994,8 @@ export function App() {
       }, 250);
     } else if (target === "themes") {
       await refreshCodexThemes(true);
+    } else if (target === "prompts") {
+      await refreshSystemPrompts(true);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -2034,6 +2104,13 @@ export function App() {
       importCodexTheme,
       applyCodexTheme,
       restoreCodexDefaultTheme,
+      refreshSystemPrompts,
+      saveSystemPrompt,
+      importSystemPrompt,
+      deleteSystemPrompt,
+      enableSystemPrompt,
+      disableSystemPrompt,
+      syncSystemPromptUrl,
       openExternalUrl,
       goPluginHub,
       goMemoryAssist,
@@ -2139,6 +2216,13 @@ export function App() {
       importCodexTheme: (...args) => actionsRef.current!.importCodexTheme(...args),
       applyCodexTheme: (...args) => actionsRef.current!.applyCodexTheme(...args),
       restoreCodexDefaultTheme: (...args) => actionsRef.current!.restoreCodexDefaultTheme(...args),
+      refreshSystemPrompts: (...args) => actionsRef.current!.refreshSystemPrompts(...args),
+      saveSystemPrompt: (...args) => actionsRef.current!.saveSystemPrompt(...args),
+      importSystemPrompt: (...args) => actionsRef.current!.importSystemPrompt(...args),
+      deleteSystemPrompt: (...args) => actionsRef.current!.deleteSystemPrompt(...args),
+      enableSystemPrompt: (...args) => actionsRef.current!.enableSystemPrompt(...args),
+      disableSystemPrompt: (...args) => actionsRef.current!.disableSystemPrompt(...args),
+      syncSystemPromptUrl: (...args) => actionsRef.current!.syncSystemPromptUrl(...args),
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
       goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
@@ -2295,6 +2379,7 @@ export function App() {
               themes={codexThemes}
             />
           ) : null}
+          {route === "prompts" ? <SystemPromptScreen actions={actions} prompts={systemPrompts} /> : null}
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}

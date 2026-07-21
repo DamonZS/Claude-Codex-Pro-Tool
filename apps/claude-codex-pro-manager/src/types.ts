@@ -517,6 +517,39 @@ export type CodexThemeFeedback = {
   status: Status;
 };
 
+export type SystemPromptMode = "preserve" | "replace";
+
+export type SystemPromptItem = {
+  id: string;
+  title: string;
+  filename: string;
+  description: string;
+  category: string;
+  content: string;
+  builtin: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SystemPromptResult = CommandResult<{
+  prompts: SystemPromptItem[];
+  activePromptId: string | null;
+  activeTitle: string | null;
+  activePath: string | null;
+  mode: SystemPromptMode | null;
+  managed: boolean;
+  externallyModified: boolean;
+}>;
+
+export type SaveSystemPromptRequest = {
+  id: string;
+  title: string;
+  filename: string;
+  description: string;
+  category: string;
+  content: string;
+};
+
 export type LocalSession = {
   id: string;
   title: string;
@@ -1035,6 +1068,7 @@ export type Route =
   | "supplier"
   | "clients"
   | "themes"
+  | "prompts"
   | "tools"
   | "sessions"
   | "memory"

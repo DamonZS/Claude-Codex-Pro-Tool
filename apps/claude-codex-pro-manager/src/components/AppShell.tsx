@@ -356,21 +356,23 @@ export function AppShell({
         </header>
 
         <section className="ops-screen">
-          <div className="ops-page-heading">
-            <div>
-              <h1>{routeLabel(route)}</h1>
-              <p>{routeSubtitle(route)}</p>
-            </div>
-            {domainTabs.length ? (
-              <div className="ops-domain-tabs" aria-label={`${routeLabel(activePrimaryRoute)}视图`}>
-                {domainTabs.map((tab) => (
-                  <button aria-pressed={route === tab.id} className={route === tab.id ? "active" : ""} key={tab.id} onClick={() => navigate(tab.id)} type="button">
-                    {tab.label}
-                  </button>
-                ))}
+          {route !== "prompts" ? (
+            <div className="ops-page-heading">
+              <div>
+                <h1>{routeLabel(route)}</h1>
+                <p>{routeSubtitle(route)}</p>
               </div>
-            ) : null}
-          </div>
+              {domainTabs.length ? (
+                <div className="ops-domain-tabs" aria-label={`${routeLabel(activePrimaryRoute)}视图`}>
+                  {domainTabs.map((tab) => (
+                    <button aria-pressed={route === tab.id} className={route === tab.id ? "active" : ""} key={tab.id} onClick={() => navigate(tab.id)} type="button">
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="ops-page-content">{children}</div>
         </section>
       </main>
