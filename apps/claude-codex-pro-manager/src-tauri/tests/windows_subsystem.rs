@@ -554,6 +554,8 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     let workflow =
         std::fs::read_to_string(repo_root.join(".github/workflows/auto-release-installers.yml"))
             .expect("read auto release workflow");
+    let pr_build = std::fs::read_to_string(repo_root.join(".github/workflows/pr-build.yml"))
+        .expect("read PR build workflow");
     let release_assets =
         std::fs::read_to_string(repo_root.join(".github/workflows/release-assets.yml"))
             .expect("read release assets workflow");
@@ -584,9 +586,16 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains(r#"git push origin ":refs/tags/$tag""#));
     assert!(workflow.contains("name: Prepare auto release tag"));
     assert!(!workflow.contains("Prepare V0.01 release tag"));
-    assert!(workflow.contains("npm run check"));
-    assert!(workflow.contains("run: npm run vite:build"));
-    assert!(workflow.contains("cargo test --workspace"));
+    assert!(!workflow.contains("npm run check"));
+    assert_eq!(workflow.matches("run: npm run vite:build").count(), 2);
+    assert!(!workflow.contains("cargo test --workspace"));
+    assert!(workflow.contains("run: cargo build --release"));
+    assert!(workflow.contains("cargo build --release --target \"${{ matrix.target }}\""));
+    assert!(pr_build.contains("run: npm run check"));
+    assert!(pr_build.contains("run: npm run vite:build"));
+    assert!(pr_build.contains("cargo test --workspace"));
+    assert!(pr_build.contains("run: cargo build --release"));
+    assert!(pr_build.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
     assert_release_workflow_uses_current_hosted_runners(&workflow);
@@ -604,6 +613,8 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("## 更新内容"));
     assert!(workflow.contains("## 验证"));
     assert!(workflow.contains("## 构建产物说明"));
+    assert!(workflow.contains("前端生产资源由 GitHub Actions 构建并嵌入桌面应用"));
+    assert!(workflow.contains("Windows 与 macOS release 二进制均在对应平台构建"));
     assert!(!workflow.contains("## Assets 9"));
     assert!(!workflow.contains("Source code (zip)"));
     assert!(!workflow.contains("Source code (tar.gz)"));
@@ -2866,18 +2877,21 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
             .contains("routableSupplierProfiles.some((profile) => supplierRouteEnabled(profile))")
     );
     assert!(supplier_screen.contains("toggleVisibleSupplierRouting"));
+    assert!(supplier_screen.contains("const supplierRouteGroup = supplierTargetFilter;"));
+    assert!(supplier_screen.contains("supplierRouteGroup === \"claude-desktop\""));
     assert!(supplier_screen.contains(
-        "const supplierRouteGroup = supplierTargetFilter === \"codex\" ? \"codex\" : \"claude\";"
+        "profiles.filter((profile) => supplierTargetForProfile(profile) === supplierRouteGroup)"
     ));
-    assert!(supplier_screen.contains(
-        "const supplierRouteGroupLabel = supplierRouteGroup === \"codex\" ? \"Codex\" : \"Claude\";"
-    ));
-    assert!(supplier_screen.contains("supplierRouteGroup === \"codex\" ? target === \"codex\" : target === \"claude\" || target === \"claude-desktop\""));
-    assert!(supplier_screen.contains("if (supplierRouteGroup === \"codex\")"));
+    assert!(!supplier_screen.contains("target === \"claude\" || target === \"claude-desktop\""));
     assert!(supplier_screen.contains("const withSupplierRoutingState = (profile: RelayProfile"));
     assert!(supplier_screen.contains("routeMode: targetApp === \"codex\""));
     assert!(
-        supplier_screen.contains("return withSupplierRoutingState(profile, \"codex\", enabled);")
+        supplier_screen
+            .contains("return withSupplierRoutingState(profile, supplierRouteGroup, enabled);")
+    );
+    assert!(
+        supplier_screen
+            .contains("withSupplierRoutingState(profile, targetApp, !!profile.routeEnabled)")
     );
     assert!(supplier_screen.contains("supplierRouteGroupLabel"));
     assert!(!supplier_screen.contains("?????"));

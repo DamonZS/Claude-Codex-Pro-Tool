@@ -55,6 +55,8 @@ pub struct RelayProfile {
         deserialize_with = "deserialize_profile_api_key"
     )]
     pub api_key: String,
+    #[serde(rename = "apiKeyExplicit", default, skip_serializing)]
+    pub api_key_explicit: bool,
     #[serde(default)]
     pub protocol: RelayProtocol,
     #[serde(rename = "relayMode", default)]
@@ -216,6 +218,7 @@ impl Default for RelayProfile {
             base_url: default_relay_base_url(),
             upstream_base_url: String::new(),
             api_key: String::new(),
+            api_key_explicit: false,
             protocol: RelayProtocol::Responses,
             relay_mode: RelayMode::Official,
             official_mix_api_key: false,
@@ -740,7 +743,7 @@ fn resolved_relay_profile_api_key(profile: &RelayProfile) -> Option<ResolvedRela
             anthropic_api_key,
         }
     });
-    if explicit.is_some() {
+    if profile.api_key_explicit || explicit.is_some() {
         return explicit;
     }
 
@@ -1234,6 +1237,9 @@ fn preserve_official_mix_bearer_tokens(
         if profile.relay_mode != RelayMode::Official || !profile.official_mix_api_key {
             continue;
         }
+        if profile.api_key_explicit {
+            continue;
+        }
         if experimental_bearer_token_from_config_text(&profile.config_contents).is_some() {
             continue;
         }
@@ -1328,6 +1334,382 @@ fn settings_to_object(settings: &BackendSettings) -> Map<String, Value> {
     }
 }
 
+#[derive(Debug)]
+struct ClaudeMappingTextRow {
+    role: String,
+    label: String,
+    route_id: String,
+    display_name: String,
+    request_model: String,
+    supports_1m: bool,
+}
+
+fn claude_mapping_role(label: &str, route_id: &str) -> Option<&'static str> {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "sonnet" => Some("sonnet"),
+        "opus" => Some("opus"),
+        "fable" => Some("fable"),
+        "haiku" => Some("haiku"),
+        "subagent" => Some("subagent"),
+        _ => {
+            let route_id = route_id.trim().to_ascii_lowercase();
+            if route_id.contains("sonnet") {
+                Some("sonnet")
+            } else if route_id.contains("opus") {
+                Some("opus")
+            } else if route_id.contains("fable") {
+                Some("fable")
+            } else if route_id.contains("haiku") {
+                Some("haiku")
+            } else if route_id.contains("subagent") {
+                Some("subagent")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn claude_mapping_label(role: &str) -> Option<&'static str> {
+    match role {
+        "sonnet" => Some("Sonnet"),
+        "opus" => Some("Opus"),
+        "fable" => Some("Fable"),
+        "haiku" => Some("Haiku"),
+        "subagent" => Some("Subagent"),
+        _ => None,
+    }
+}
+
+fn parse_claude_mapping_text(text: &str) -> Vec<ClaudeMappingTextRow> {
+    text.lines()
+        .filter_map(|raw_line| {
+            let trimmed = raw_line.trim();
+            let supports_1m = trimmed.to_ascii_lowercase().ends_with("[1m]");
+            let line = if supports_1m {
+                trimmed[..trimmed.len().saturating_sub(4)].trim_end()
+            } else {
+                trimmed
+            };
+            let (left, right) = line.split_once(':')?;
+            let left = left.trim();
+            let right = right.trim();
+            let (label, route_id) = match (left.rfind('('), left.rfind(')')) {
+                (Some(open), Some(close)) if open < close => {
+                    (left[..open].trim(), left[open + 1..close].trim())
+                }
+                _ => (left, ""),
+            };
+            let role = claude_mapping_role(label, route_id)?;
+            let (display_name, request_model) = right
+                .split_once("->")
+                .map(|(display, request)| (display.trim(), request.trim()))
+                .unwrap_or((right, right));
+            if display_name.is_empty() && request_model.is_empty() {
+                return None;
+            }
+            Some(ClaudeMappingTextRow {
+                role: role.to_string(),
+                label: label.to_string(),
+                route_id: route_id.to_string(),
+                display_name: if display_name.is_empty() {
+                    request_model.to_string()
+                } else {
+                    display_name.to_string()
+                },
+                request_model: if request_model.is_empty() {
+                    display_name.to_string()
+                } else {
+                    request_model.to_string()
+                },
+                supports_1m,
+            })
+        })
+        .collect()
+}
+
+fn claude_mapping_text_from_json_entries(entries: &[Value]) -> Option<String> {
+    let lines = entries
+        .iter()
+        .map(|entry| {
+            let object = entry.as_object()?;
+            let role = object.get("role")?.as_str()?;
+            let route_id = object.get("routeId")?.as_str()?.trim();
+            let request_model = object
+                .get("requestModel")
+                .or_else(|| object.get("model"))?
+                .as_str()?
+                .trim();
+            if route_id.is_empty() || request_model.is_empty() {
+                return None;
+            }
+            let label = object
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| claude_mapping_label(role))?;
+            let display_name = object
+                .get("displayName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(request_model);
+            let supports_1m = object
+                .get("supports1m")
+                .and_then(Value::as_bool)
+                .or_else(|| object.get("supports_1m").and_then(Value::as_bool))
+                .unwrap_or(false);
+            Some(format!(
+                "{label} ({route_id}): {display_name} -> {request_model}{}",
+                if supports_1m { " [1M]" } else { "" }
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn claude_mapping_json_from_text_rows(rows: &[ClaudeMappingTextRow]) -> Value {
+    Value::Array(
+        rows.iter()
+            .map(|row| {
+                serde_json::json!({
+                    "role": row.role,
+                    "label": row.label,
+                    "routeId": row.route_id,
+                    "displayName": row.display_name,
+                    "requestModel": row.request_model,
+                    "supports1m": row.supports_1m
+                })
+            })
+            .collect(),
+    )
+}
+
+fn strip_claude_mapping_one_m_marker(value: &str) -> (&str, bool) {
+    let value = value.trim();
+    const MARKER: &str = "[1M]";
+    if value.len() >= MARKER.len()
+        && value[value.len() - MARKER.len()..].eq_ignore_ascii_case(MARKER)
+    {
+        (value[..value.len() - MARKER.len()].trim_end(), true)
+    } else {
+        (value, false)
+    }
+}
+
+fn claude_mapping_rows_from_config_contents(contents: &str) -> Vec<ClaudeMappingTextRow> {
+    let Ok(config) = serde_json::from_str::<Value>(contents.trim()) else {
+        return Vec::new();
+    };
+    let route_source = config.get("meta").unwrap_or(&config);
+    let Some(routes) = route_source
+        .get("claudeDesktopModelRoutes")
+        .or_else(|| route_source.get("claude_desktop_model_routes"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    routes
+        .iter()
+        .filter_map(|(route_id, route)| {
+            let role = claude_mapping_role("", route_id)?;
+            let (raw_request_model, display_name, configured_supports_1m) = match route {
+                Value::String(model) => {
+                    let model = model.trim();
+                    (model, None, None)
+                }
+                Value::Object(object) => {
+                    let request_model = object
+                        .get("model")
+                        .or_else(|| object.get("requestModel"))
+                        .and_then(Value::as_str)?
+                        .trim();
+                    let display_name = object
+                        .get("labelOverride")
+                        .or_else(|| object.get("displayName"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    let supports_1m = object
+                        .get("supports1m")
+                        .or_else(|| object.get("supports_1m"))
+                        .and_then(Value::as_bool);
+                    (request_model, display_name, supports_1m)
+                }
+                _ => return None,
+            };
+            let (request_model, marker_supports_1m) =
+                strip_claude_mapping_one_m_marker(raw_request_model);
+            if request_model.is_empty() {
+                return None;
+            }
+            Some(ClaudeMappingTextRow {
+                role: role.to_string(),
+                label: claude_mapping_label(role)?.to_string(),
+                route_id: route_id.trim().to_string(),
+                display_name: display_name.unwrap_or(request_model).to_string(),
+                request_model: request_model.to_string(),
+                supports_1m: configured_supports_1m.unwrap_or(marker_supports_1m),
+            })
+        })
+        .collect()
+}
+
+fn synchronize_claude_mapping_entries(entries: &mut Vec<Value>, rows: &[ClaudeMappingTextRow]) {
+    for row in rows {
+        let existing = entries.iter_mut().find(|entry| {
+            entry
+                .get("routeId")
+                .and_then(Value::as_str)
+                .is_some_and(|route_id| route_id.trim() == row.route_id)
+        });
+        if let Some(object) = existing.and_then(Value::as_object_mut) {
+            if object
+                .get("role")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                object.insert("role".to_string(), Value::String(row.role.clone()));
+            }
+            if object
+                .get("label")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                object.insert("label".to_string(), Value::String(row.label.clone()));
+            }
+            object.insert(
+                "displayName".to_string(),
+                Value::String(row.display_name.clone()),
+            );
+            object.insert(
+                "requestModel".to_string(),
+                Value::String(row.request_model.clone()),
+            );
+            object.insert("supports1m".to_string(), Value::Bool(row.supports_1m));
+        } else {
+            entries.push(serde_json::json!({
+                "role": row.role,
+                "label": row.label,
+                "routeId": row.route_id,
+                "displayName": row.display_name,
+                "requestModel": row.request_model,
+                "supports1m": row.supports_1m
+            }));
+        }
+    }
+}
+
+fn store_claude_mapping_representations(profile: &mut RelayProfile, entries: Vec<Value>) {
+    if let Some(text) = claude_mapping_text_from_json_entries(&entries) {
+        profile.model_mapping = text;
+    }
+    profile.model_mapping_json = Value::Array(entries).to_string();
+}
+
+fn repair_claude_model_mapping_representation(profile: &mut RelayProfile) {
+    if !matches!(
+        normalized_target_app(&profile.target_app),
+        "claude" | "claude-desktop"
+    ) {
+        return;
+    }
+    let text_rows = parse_claude_mapping_text(&profile.model_mapping);
+    let config_rows = claude_mapping_rows_from_config_contents(&profile.config_contents);
+    let raw_json = profile.model_mapping_json.trim();
+    let parsed_mapping = (!raw_json.is_empty())
+        .then(|| serde_json::from_str::<Value>(raw_json).ok())
+        .flatten();
+    let mut entries = match parsed_mapping {
+        Some(Value::Array(entries)) => entries,
+        Some(_) if config_rows.is_empty() => return,
+        _ => Vec::new(),
+    };
+    let mut rebuilt = false;
+    if entries.is_empty() {
+        let source_rows = if text_rows.is_empty() {
+            &config_rows
+        } else {
+            &text_rows
+        };
+        if source_rows.is_empty() {
+            return;
+        }
+        entries = claude_mapping_json_from_text_rows(source_rows)
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        rebuilt = true;
+    }
+
+    if !config_rows.is_empty() {
+        synchronize_claude_mapping_entries(&mut entries, &config_rows);
+        store_claude_mapping_representations(profile, entries);
+        return;
+    }
+    if rebuilt {
+        store_claude_mapping_representations(profile, entries);
+        return;
+    }
+
+    let Some(explicit_haiku) = text_rows.iter().find(|row| {
+        row.role == "haiku"
+            && row.route_id == "claude-haiku-4-5"
+            && row.display_name == "claude-opus-4-7"
+            && row.request_model == "claude-opus-4-7"
+    }) else {
+        if let Some(text) = claude_mapping_text_from_json_entries(&entries) {
+            profile.model_mapping = text;
+        }
+        return;
+    };
+    let Some(haiku) = entries.iter_mut().find_map(|entry| {
+        let object = entry.as_object_mut()?;
+        let role = object
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let route_id = object
+            .get("routeId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let request_model = object
+            .get("requestModel")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let display_name = object
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        (role == "haiku"
+            && route_id == "claude-haiku-4-5"
+            && request_model == "claude-haiku-4-5"
+            && (display_name.is_empty() || display_name == "claude-haiku-4-5"))
+            .then_some(object)
+    }) else {
+        if let Some(text) = claude_mapping_text_from_json_entries(&entries) {
+            profile.model_mapping = text;
+        }
+        return;
+    };
+    haiku.insert(
+        "displayName".to_string(),
+        Value::String(explicit_haiku.display_name.clone()),
+    );
+    haiku.insert(
+        "requestModel".to_string(),
+        Value::String(explicit_haiku.request_model.clone()),
+    );
+    haiku.insert(
+        "supports1m".to_string(),
+        Value::Bool(explicit_haiku.supports_1m),
+    );
+
+    store_claude_mapping_representations(profile, entries);
+}
+
 fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendSettings {
     let (common, extracted_context) =
         split_context_config_sections(&settings.relay_common_config_contents);
@@ -1339,6 +1721,7 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
     settings.relay_context_config_contents = crate::relay_config::normalize_config_text(&context);
     for profile in &mut settings.relay_profiles {
         let _ = crate::relay_config::normalize_relay_profile_for_storage(profile);
+        repair_claude_model_mapping_representation(profile);
     }
     settings.codex_app_image_overlay_opacity =
         clamp_image_overlay_opacity(settings.codex_app_image_overlay_opacity);
@@ -1520,6 +1903,338 @@ mod tests {
         assert_eq!(settings.relay_test_model, default_relay_test_model());
         assert!(!settings.cli_wrapper_enabled);
         assert_eq!(settings.cli_wrapper_api_key_env, "CUSTOM_OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn settings_load_repairs_claude_mapping_divergence_without_overwriting_custom_json() {
+        fn split_mapping_json() -> Value {
+            json!([
+                {
+                    "role": "sonnet",
+                    "label": "Sonnet",
+                    "routeId": "claude-sonnet-4-6",
+                    "displayName": "claude-opus-4-6",
+                    "requestModel": "claude-opus-4-6",
+                    "supports1m": true
+                },
+                {
+                    "role": "opus",
+                    "label": "Opus",
+                    "routeId": "claude-opus-4-8",
+                    "displayName": "claude-opus-4-8",
+                    "requestModel": "claude-opus-4-8",
+                    "supports1m": true
+                },
+                {
+                    "role": "haiku",
+                    "label": "Haiku",
+                    "routeId": "claude-haiku-4-5",
+                    "displayName": "",
+                    "requestModel": "claude-haiku-4-5",
+                    "supports1m": true
+                }
+            ])
+        }
+
+        const EXPLICIT_TEXT: &str = "Sonnet (claude-sonnet-4-6): claude-opus-4-6 -> claude-opus-4-6 [1M]\n\
+Opus (claude-opus-4-8): claude-opus-4-8 -> claude-opus-4-8 [1M]\n\
+Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
+
+        let split_json = split_mapping_json();
+        let mut custom_json = split_mapping_json();
+        let custom_haiku = custom_json
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|entry| entry["role"] == "haiku")
+            .unwrap();
+        custom_haiku["displayName"] = json!("custom-haiku");
+        custom_haiku["requestModel"] = json!("custom-haiku");
+        let unchanged_custom = custom_json.to_string();
+        let expected_custom_text =
+            claude_mapping_text_from_json_entries(custom_json.as_array().unwrap()).unwrap();
+        let unchanged_codex = split_json.to_string();
+        let generated_config_split_json = json!([
+            {
+                "role": "fable",
+                "label": "Fable",
+                "routeId": "claude-fable-5",
+                "displayName": "claude-fable-5",
+                "requestModel": "claude-fable-5",
+                "supports1m": false
+            },
+            {
+                "role": "haiku",
+                "label": "Haiku",
+                "routeId": "claude-haiku-4-5",
+                "displayName": "claude-haiku-4-5",
+                "requestModel": "claude-haiku-4-5",
+                "supports1m": false
+            },
+            {
+                "role": "subagent",
+                "label": "Subagent",
+                "routeId": "claude-subagent",
+                "displayName": "custom-subagent",
+                "requestModel": "custom-subagent",
+                "supports1m": false
+            }
+        ]);
+        let generated_config_contents = json!({
+            "meta": {
+                "claudeDesktopModelRoutes": {
+                    "claude-fable-5": {
+                        "model": "claude-opus-4-8",
+                        "labelOverride": "claude-opus-4-8",
+                        "supports1m": true
+                    },
+                    "claude-haiku-4-5": {
+                        "model": "claude-opus-4-7",
+                        "labelOverride": "claude-opus-4-7",
+                        "supports1m": true
+                    },
+                    "claude-sonnet-5": {
+                        "model": "claude-opus-4-6[1M]",
+                        "labelOverride": "claude-opus-4-6"
+                    },
+                    "not-a-role": {
+                        "model": "ignored-model"
+                    }
+                }
+            }
+        })
+        .to_string();
+        let invalid_config_contents = json!({
+            "meta": {
+                "claudeDesktopModelRoutes": {
+                    "claude-haiku-4-5": {
+                        "labelOverride": "missing-model"
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let settings = BackendSettings {
+            relay_profiles: vec![
+                RelayProfile {
+                    id: "known-split".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    model_mapping_enabled: true,
+                    model_mapping_json: split_json.to_string(),
+                    model_mapping: EXPLICIT_TEXT.to_string(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "custom-json".to_string(),
+                    target_app: "claude".to_string(),
+                    model_mapping_json: unchanged_custom.clone(),
+                    model_mapping: EXPLICIT_TEXT.to_string(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "blank-json".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    model_mapping_enabled: true,
+                    model_mapping_json: "   ".to_string(),
+                    model_mapping: EXPLICIT_TEXT.to_string(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "empty-array-json".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    model_mapping_enabled: true,
+                    model_mapping_json: "[]".to_string(),
+                    model_mapping: EXPLICIT_TEXT.to_string(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "codex-profile".to_string(),
+                    target_app: "codex".to_string(),
+                    model_mapping_json: unchanged_codex.clone(),
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "generated-config-split".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    model_mapping_enabled: true,
+                    model_mapping_json: generated_config_split_json.to_string(),
+                    config_contents: generated_config_contents,
+                    ..RelayProfile::default()
+                },
+                RelayProfile {
+                    id: "invalid-generated-config".to_string(),
+                    target_app: "claude-desktop".to_string(),
+                    model_mapping_enabled: true,
+                    model_mapping_json: unchanged_custom.clone(),
+                    config_contents: invalid_config_contents,
+                    ..RelayProfile::default()
+                },
+            ],
+            ..BackendSettings::default()
+        };
+        std::fs::write(&path, serde_json::to_vec_pretty(&settings).unwrap()).unwrap();
+
+        let loaded = store.load().unwrap();
+        let repaired_entries =
+            serde_json::from_str::<Value>(&loaded.relay_profiles[0].model_mapping_json).unwrap();
+        let repaired_haiku = repaired_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["role"] == "haiku")
+            .unwrap();
+        assert_eq!(repaired_haiku["requestModel"], "claude-opus-4-7");
+        assert_eq!(repaired_haiku["displayName"], "claude-opus-4-7");
+        assert_eq!(loaded.relay_profiles[0].model_mapping, EXPLICIT_TEXT);
+        assert_eq!(
+            crate::protocol_proxy::claude_desktop_model_mapping_for(
+                "claude-haiku-4-5",
+                &loaded.relay_profiles[0]
+            )
+            .as_deref(),
+            Some("claude-opus-4-7")
+        );
+
+        assert_eq!(
+            loaded.relay_profiles[1].model_mapping_json,
+            unchanged_custom
+        );
+        assert_eq!(loaded.relay_profiles[1].model_mapping, expected_custom_text);
+
+        let rebuilt_entries =
+            serde_json::from_str::<Value>(&loaded.relay_profiles[2].model_mapping_json).unwrap();
+        let rebuilt_haiku = rebuilt_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["role"] == "haiku")
+            .unwrap();
+        assert_eq!(rebuilt_haiku["requestModel"], "claude-opus-4-7");
+        assert_eq!(rebuilt_haiku["displayName"], "claude-opus-4-7");
+        assert_eq!(loaded.relay_profiles[2].model_mapping, EXPLICIT_TEXT);
+
+        let rebuilt_empty_entries =
+            serde_json::from_str::<Value>(&loaded.relay_profiles[3].model_mapping_json).unwrap();
+        let rebuilt_empty_haiku = rebuilt_empty_entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["role"] == "haiku")
+            .unwrap();
+        assert_eq!(rebuilt_empty_haiku["requestModel"], "claude-opus-4-7");
+        assert_eq!(loaded.relay_profiles[3].model_mapping, EXPLICIT_TEXT);
+        assert_eq!(
+            crate::protocol_proxy::claude_desktop_model_mapping_for(
+                "claude-haiku-4-5",
+                &loaded.relay_profiles[3]
+            )
+            .as_deref(),
+            Some("claude-opus-4-7")
+        );
+
+        assert_eq!(loaded.relay_profiles[4].model_mapping_json, unchanged_codex);
+
+        let config_repaired_entries =
+            serde_json::from_str::<Value>(&loaded.relay_profiles[5].model_mapping_json).unwrap();
+        let config_repaired_entries = config_repaired_entries.as_array().unwrap();
+        let request_model_for = |route_id: &str| {
+            config_repaired_entries
+                .iter()
+                .find(|entry| entry["routeId"] == route_id)
+                .and_then(|entry| entry["requestModel"].as_str())
+        };
+        assert_eq!(
+            request_model_for("claude-haiku-4-5"),
+            Some("claude-opus-4-7")
+        );
+        assert_eq!(request_model_for("claude-fable-5"), Some("claude-opus-4-8"));
+        assert_eq!(
+            request_model_for("claude-sonnet-5"),
+            Some("claude-opus-4-6")
+        );
+        assert_eq!(
+            request_model_for("claude-subagent"),
+            Some("custom-subagent"),
+            "config synchronization must preserve JSON-only custom routes"
+        );
+        assert_eq!(request_model_for("not-a-role"), None);
+        assert_eq!(
+            crate::protocol_proxy::claude_desktop_model_mapping_for(
+                "claude-haiku-4-5",
+                &loaded.relay_profiles[5]
+            )
+            .as_deref(),
+            Some("claude-opus-4-7")
+        );
+        assert!(
+            loaded.relay_profiles[5]
+                .model_mapping
+                .contains("Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]")
+        );
+
+        assert_eq!(
+            loaded.relay_profiles[6].model_mapping_json, unchanged_custom,
+            "an invalid generated route must not overwrite an existing mapping"
+        );
+
+        assert_eq!(
+            normalize_settings_config_sections(loaded.clone()),
+            loaded,
+            "mapping repair must be deterministic"
+        );
+    }
+
+    #[test]
+    fn settings_store_save_and_load_preserves_current_claude_credentials() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+        let settings = BackendSettings {
+            relay_profiles: vec![RelayProfile {
+                id: "claude-current-key".to_string(),
+                target_app: "claude-desktop".to_string(),
+                api_key: "test-current-key".to_string(),
+                upstream_base_url: "https://relay.example/v1".to_string(),
+                config_contents: json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://relay.old.example/v1",
+                        "OPENAI_API_KEY": "test-old-config-key",
+                        "KEEP_ENV": "keep-env"
+                    },
+                    "metadata": { "keep": true }
+                })
+                .to_string(),
+                auth_contents: json!({
+                    "ANTHROPIC_API_KEY": "test-old-auth-key",
+                    "keepAuth": true
+                })
+                .to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        let profile = &loaded.relay_profiles[0];
+        let config: Value = serde_json::from_str(&profile.config_contents).unwrap();
+        let auth: Value = serde_json::from_str(&profile.auth_contents).unwrap();
+
+        assert_eq!(profile.api_key, "test-current-key");
+        assert_eq!(profile.base_url, "https://relay.example/v1");
+        assert_eq!(profile.upstream_base_url, "https://relay.example/v1");
+        assert_eq!(config["env"]["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
+        assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
+        assert_eq!(config["env"]["KEEP_ENV"], "keep-env");
+        assert_eq!(config["metadata"]["keep"], true);
+        assert_eq!(auth["keepAuth"], true);
+        for alias in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "api_key", "apiKey"] {
+            assert!(config["env"].get(alias).is_none());
+            assert!(auth.get(alias).is_none());
+        }
     }
 
     #[test]

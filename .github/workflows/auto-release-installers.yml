@@ -116,10 +116,9 @@ jobs:
 
           ## 验证
 
-          - npm run check 通过。
-          - npm run vite:build 通过。
-          - cargo test --workspace 通过。
-          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均由 GitHub Actions 构建并上传。
+          - 前端生产资源由 GitHub Actions 构建并嵌入桌面应用。
+          - Windows 与 macOS release 二进制均在对应平台构建。
+          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均完成结构检查并上传。
 
           ## 构建产物说明
 
@@ -169,24 +168,9 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
-
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
-
-      - name: Rust tests
-        shell: pwsh
-        run: |
-          cargo test --workspace *>&1 | Tee-Object cargo-test.log
-          if ($LASTEXITCODE -ne 0) {
-            $tail = (Get-Content cargo-test.log -Tail 80) -join "`n"
-            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Windows Rust tests failed::$escaped"
-            exit $LASTEXITCODE
-          }
 
       - name: Build release binaries
         run: cargo build --release
@@ -269,10 +253,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
-
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager

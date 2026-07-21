@@ -258,28 +258,20 @@ fn claude_desktop_model_mapping_uses_single_model_for_all_roles() {
 }
 
 #[test]
-fn claude_desktop_model_mapping_has_requested_defaults_when_empty() {
+fn claude_desktop_model_mapping_does_not_infer_defaults_when_empty() {
     let relay = RelayProfile {
         model_mapping_enabled: true,
         ..Default::default()
     };
 
-    assert_eq!(
-        claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
-        Some("claude-Fable-5")
-    );
-    assert_eq!(
-        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
-        Some("claude-opus-4-7")
-    );
-    assert_eq!(
-        claude_desktop_model_mapping_for("claude-opus-4-8", &relay).as_deref(),
-        Some("claude-opus-4-8")
-    );
-    assert_eq!(
-        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
-        Some("claude-opus-4-6")
-    );
+    for model in [
+        "claude-fable-5",
+        "claude-haiku-4-5",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+    ] {
+        assert_eq!(claude_desktop_model_mapping_for(model, &relay), None);
+    }
 }
 
 #[test]
@@ -315,16 +307,16 @@ fn claude_desktop_model_mapping_prefers_ccswitch_route_json() {
     );
     assert_eq!(
         claude_desktop_model_mapping_for("claude-sonnet-4-6-20260101", &relay).as_deref(),
-        Some("gpt-5.5")
+        None
     );
     assert_eq!(
         claude_desktop_model_mapping_for("claude-fable-5", &relay).as_deref(),
-        Some("gpt-5.5-pro")
+        None
     );
 }
 
 #[test]
-fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback() {
+fn claude_desktop_model_mapping_requires_exact_subagent_route_id() {
     let relay = RelayProfile {
         model_mapping_enabled: true,
         model_list: "fallback-model".to_string(),
@@ -352,6 +344,10 @@ fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback
 
     assert_eq!(
         claude_desktop_model_mapping_for("gpt-5.4-mini[1M]", &relay).as_deref(),
+        None
+    );
+    assert_eq!(
+        claude_desktop_model_mapping_for("claude-subagent", &relay).as_deref(),
         Some("gpt-5.4-mini")
     );
     assert_eq!(
@@ -364,33 +360,29 @@ fn claude_desktop_model_mapping_preserves_subagent_model_before_default_fallback
 fn claude_desktop_default_model_list_matches_expected_ui_order() {
     assert_eq!(
         claude_desktop_default_model_list(),
-        "claude-Fable-5\nclaude-opus-4-7\nclaude-opus-4-8\nclaude-opus-4-6"
+        "claude-Fable-5\nclaude-haiku-4-5\nclaude-opus-4-8\nclaude-opus-4-6"
     );
 }
 
 #[test]
-fn claude_desktop_empty_profile_uses_requested_default_role_mapping() {
+fn claude_desktop_empty_profile_keeps_default_catalog_without_runtime_mapping() {
     let relay = RelayProfile {
         model_mapping_enabled: true,
         ..Default::default()
     };
-    for (route_id, expected) in [
-        ("claude-sonnet-4-6", "claude-opus-4-6"),
-        ("claude-opus-4-8", "claude-opus-4-8"),
-        ("claude-fable-5", "claude-Fable-5"),
-        ("claude-haiku-4-5", "claude-opus-4-7"),
+    for route_id in [
+        "claude-sonnet-4-6",
+        "claude-opus-4-8",
+        "claude-fable-5",
+        "claude-haiku-4-5",
     ] {
-        assert_eq!(
-            claude_desktop_model_mapping_for(route_id, &relay).as_deref(),
-            Some(expected),
-            "{route_id}"
-        );
+        assert_eq!(claude_desktop_model_mapping_for(route_id, &relay), None);
     }
 
     let body = claude_desktop_models_response("");
     let expected_labels = [
         "claude-Fable-5",
-        "claude-opus-4-7",
+        "claude-haiku-4-5",
         "claude-opus-4-8",
         "claude-opus-4-6",
     ];
@@ -409,7 +401,7 @@ fn claude_desktop_expanded_default_list_keeps_role_order_and_all_1m_flags() {
     let body = claude_desktop_models_response(&claude_desktop_default_model_list());
     let expected_labels = [
         "claude-Fable-5",
-        "claude-opus-4-7",
+        "claude-haiku-4-5",
         "claude-opus-4-8",
         "claude-opus-4-6",
     ];
@@ -425,7 +417,7 @@ fn claude_desktop_expanded_default_list_keeps_role_order_and_all_1m_flags() {
 }
 
 #[test]
-fn claude_desktop_enabled_mapping_without_custom_json_ignores_stale_single_model() {
+fn claude_desktop_enabled_mapping_without_custom_json_ignores_stale_models() {
     let relay = RelayProfile {
         model_mapping_enabled: true,
         model_list: "claude-sonnet".to_string(),
@@ -434,12 +426,12 @@ fn claude_desktop_enabled_mapping_without_custom_json_ignores_stale_single_model
     };
 
     assert_eq!(
-        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay).as_deref(),
-        Some("claude-opus-4-6")
+        claude_desktop_model_mapping_for("claude-sonnet-4-6", &relay),
+        None
     );
     assert_eq!(
-        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay).as_deref(),
-        Some("claude-opus-4-7")
+        claude_desktop_model_mapping_for("claude-haiku-4-5", &relay),
+        None
     );
 }
 

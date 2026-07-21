@@ -1,6 +1,6 @@
 use anyhow::Context;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +12,23 @@ use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 const RELAY_PROVIDER: &str = "custom";
 const CODEX_PROVIDER_AUTH_ENV_KEY: &str = "OPENAI_API_KEY";
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "claude_codex_pro_chat_base_url";
+const CLAUDE_CREDENTIAL_FIELDS: &[&str] = &[
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "api_key",
+    "apiKey",
+];
+const CODEX_CREDENTIAL_FIELDS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "experimental_bearer_token",
+    "openai_api_key",
+    "api_key",
+    "apikey",
+    "bearer_token",
+    "token",
+];
 const RESERVED_MODEL_PROVIDER_IDS: &[&str] = &[
     "amazon-bedrock",
     "openai",
@@ -533,92 +550,47 @@ pub fn apply_pure_api_config_to_home_with_protocol(
 
 pub async fn test_relay_profile(
     profile: &RelayProfile,
-    model: &str,
+    _model: &str,
 ) -> anyhow::Result<RelayProfileTestResult> {
-    let base_url = relay_profile_base_url(profile);
+    let uses_anthropic_messages = relay_profile_uses_anthropic_messages(profile);
+    let base_url = if uses_anthropic_messages && !profile.upstream_base_url.trim().is_empty() {
+        profile.upstream_base_url.trim().to_string()
+    } else {
+        relay_profile_base_url(profile)
+    };
     let base_url = base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
     }
-    let api_key = relay_profile_api_key(profile);
-    let api_key = api_key.trim();
-    if api_key.is_empty() {
-        anyhow::bail!("API Key 不能为空");
-    }
 
     let client = crate::http_client::proxied_client("ClaudeCodexPro/RelayTest")?;
-    let endpoint = match profile.protocol {
-        RelayProtocol::Responses => format!("{base_url}/responses"),
-        RelayProtocol::ChatCompletions => format!("{base_url}/chat/completions"),
-    };
-    let test_model = model.trim();
-    if test_model.is_empty() {
-        anyhow::bail!("测试模型不能为空");
-    }
-
-    let payload = relay_profile_test_payload(profile.protocol, test_model);
     let response = client
-        .post(&endpoint)
-        .bearer_auth(api_key)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&payload)
+        .get(base_url)
+        .header(reqwest::header::ACCEPT, "*/*")
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .send()
         .await?;
-    let http_status = response.status().as_u16();
-
-    // 如果 404 且 base_url 末尾没有 /v1，尝试自动补 /v1 后再发一次。
-    // 许多上游（中转站、自建代理）暴露的路径以 /v1/ 开头，
-    // 用户容易遗漏这个前缀，导致 /responses 或 /chat/completions 404。
-    if http_status == 404 && !base_url.ends_with("/v1") {
-        let v1_url = format!("{base_url}/v1");
-        let v1_endpoint = match profile.protocol {
-            RelayProtocol::Responses => format!("{v1_url}/responses"),
-            RelayProtocol::ChatCompletions => format!("{v1_url}/chat/completions"),
-        };
-        let v1_response = client
-            .post(&v1_endpoint)
-            .bearer_auth(api_key)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&payload)
-            .send()
-            .await?;
-        let v1_status = v1_response.status().as_u16();
-        if v1_status < 400 {
-            let response_text = v1_response.text().await.unwrap_or_default();
-            return Ok(RelayProfileTestResult {
-                http_status: v1_status,
-                endpoint: v1_endpoint,
-                response_preview: format!(
-                    "（Base URL 建议加上 /v1 前缀）{}",
-                    response_text.chars().take(280).collect::<String>()
-                ),
-            });
-        }
-    }
-
-    let response_text = response.text().await.unwrap_or_default();
     Ok(RelayProfileTestResult {
-        http_status,
-        endpoint,
-        response_preview: response_text.chars().take(320).collect(),
+        http_status: response.status().as_u16(),
+        endpoint: base_url.to_string(),
+        response_preview: "Base URL 可访问；此结果仅表示网络可达。".to_string(),
     })
 }
 
-fn relay_profile_test_payload(protocol: RelayProtocol, model: &str) -> Value {
-    match protocol {
-        RelayProtocol::Responses => serde_json::json!({
-            "model": model,
-            "input": "hi",
-            "max_output_tokens": 16
-        }),
-        RelayProtocol::ChatCompletions => serde_json::json!({
-            "model": model,
-            "messages": [
-                { "role": "user", "content": "hi" }
-            ],
-            "max_tokens": 16
-        }),
+pub fn relay_profile_uses_anthropic_messages(profile: &RelayProfile) -> bool {
+    let api_format = profile
+        .api_format
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '-'], "");
+    if !api_format.is_empty() {
+        return matches!(api_format.as_str(), "anthropic" | "anthropicmessages");
     }
+
+    matches!(
+        profile.target_app.trim().to_ascii_lowercase().as_str(),
+        "claude" | "claude-desktop" | "claude_desktop" | "claudedesktop"
+    )
 }
 
 /// Payload for a memory-summarization completion. Same two-protocol shape as the
@@ -2000,6 +1972,9 @@ fn relay_profile_base_url(profile: &RelayProfile) -> String {
 }
 
 fn relay_profile_api_key(profile: &RelayProfile) -> String {
+    if profile.api_key_explicit {
+        return profile.api_key.trim().to_string();
+    }
     if !profile.api_key.trim().is_empty() {
         return profile.api_key.trim().to_string();
     }
@@ -2021,7 +1996,11 @@ fn relay_profile_api_key(profile: &RelayProfile) -> String {
 }
 
 fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<String> {
-    let mut doc = parse_toml_document(&profile.config_contents)?;
+    let mut doc = match parse_toml_document(&profile.config_contents) {
+        Ok(doc) => doc,
+        Err(_) if profile.relay_mode == crate::settings::RelayMode::PureApi => DocumentMut::new(),
+        Err(error) => return Err(error),
+    };
     let provider_id = profile_or_active_provider_id(profile, &doc);
     set_provider_id(&mut doc, &provider_id);
 
@@ -2034,6 +2013,9 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     let api_key = relay_profile_api_key(profile);
     let provider_env_key = provider_env_key_from_document(&doc, &provider_id)
         .unwrap_or_else(|| CODEX_PROVIDER_AUTH_ENV_KEY.to_string());
+    if profile.relay_mode == crate::settings::RelayMode::PureApi {
+        remove_codex_credential_aliases_from_table(doc.as_table_mut());
+    }
     doc.as_table_mut().remove(CHAT_UPSTREAM_BASE_URL_KEY);
     retain_only_provider_table(&mut doc, &provider_id);
     let provider = ensure_provider_table(&mut doc, &provider_id)?;
@@ -2069,7 +2051,9 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     if !provider_base_url.trim().is_empty() {
         provider["base_url"] = toml_edit::value(provider_base_url.trim());
     }
-    if profile.relay_mode == crate::settings::RelayMode::PureApi {
+    if profile.relay_mode == crate::settings::RelayMode::PureApi
+        || (profile.api_key_explicit && api_key.trim().is_empty())
+    {
         provider.remove("experimental_bearer_token");
     } else if !api_key.trim().is_empty() {
         provider["experimental_bearer_token"] = toml_edit::value(api_key.trim());
@@ -2080,7 +2064,223 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     ))
 }
 
+fn relay_profile_targets_claude(profile: &RelayProfile) -> bool {
+    matches!(
+        profile.target_app.trim().to_ascii_lowercase().as_str(),
+        "claude" | "claude-desktop" | "claude_desktop" | "claudedesktop"
+    )
+}
+
+fn json_object_or_empty(contents: &str) -> Map<String, Value> {
+    serde_json::from_str::<Value>(contents.trim())
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn non_empty_json_string(object: &Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn claude_credential_from_object(
+    object: &Map<String, Value>,
+    preferred_field: &str,
+) -> Option<String> {
+    if CLAUDE_CREDENTIAL_FIELDS.contains(&preferred_field) {
+        if let Some(value) = non_empty_json_string(object, preferred_field) {
+            return Some(value);
+        }
+    }
+    CLAUDE_CREDENTIAL_FIELDS
+        .iter()
+        .find_map(|field| non_empty_json_string(object, field))
+}
+
+fn remove_claude_credential_aliases(object: &mut Map<String, Value>) {
+    for field in CLAUDE_CREDENTIAL_FIELDS {
+        object.remove(*field);
+    }
+    for value in object.values_mut() {
+        remove_claude_credential_aliases_from_value(value);
+    }
+}
+
+fn remove_claude_credential_aliases_from_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => remove_claude_credential_aliases(object),
+        Value::Array(items) => {
+            for item in items {
+                remove_claude_credential_aliases_from_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn pretty_json_object(object: Map<String, Value>) -> anyhow::Result<String> {
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(object))?
+    ))
+}
+
+fn normalize_claude_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow::Result<()> {
+    let config_was_blank = profile.config_contents.trim().is_empty();
+    let auth_was_blank = profile.auth_contents.trim().is_empty();
+    let mut config = json_object_or_empty(&profile.config_contents);
+    let mut auth = json_object_or_empty(&profile.auth_contents);
+    let preferred_auth_field = profile.auth_field.trim().to_string();
+
+    let profile_desktop_mode = match profile
+        .claude_desktop_mode
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "proxy" => Some("proxy".to_string()),
+        "direct" => Some("direct".to_string()),
+        _ => None,
+    };
+    let migrated_desktop_mode = config
+        .get("meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| {
+            non_empty_json_string(meta, "claudeDesktopMode")
+                .or_else(|| non_empty_json_string(meta, "claude_desktop_mode"))
+        })
+        .map(|mode| mode.to_ascii_lowercase())
+        .filter(|mode| matches!(mode.as_str(), "proxy" | "direct"));
+    let route_mode = profile.route_mode.trim().to_ascii_lowercase();
+    let desktop_mode = profile_desktop_mode
+        .or(migrated_desktop_mode)
+        .or_else(|| {
+            if route_mode.contains("proxy") {
+                Some("proxy".to_string())
+            } else if route_mode.contains("direct") {
+                Some("direct".to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            if profile.route_enabled {
+                "proxy".to_string()
+            } else {
+                "direct".to_string()
+            }
+        });
+    match desktop_mode.as_str() {
+        "proxy" => {
+            profile.claude_desktop_mode = "proxy".to_string();
+            profile.route_enabled = true;
+            profile.route_mode = "Claude Desktop Proxy".to_string();
+        }
+        _ => {
+            profile.claude_desktop_mode = "direct".to_string();
+            profile.route_enabled = false;
+            profile.route_mode = "Claude Desktop Direct".to_string();
+        }
+    }
+    let meta_value = config
+        .entry("meta".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !meta_value.is_object() {
+        *meta_value = Value::Object(Map::new());
+    }
+    let meta = meta_value
+        .as_object_mut()
+        .expect("Claude config meta was normalized to an object");
+    meta.remove("claude_desktop_mode");
+    meta.insert("claudeDesktopMode".to_string(), Value::String(desktop_mode));
+
+    let config_env_base_url = config
+        .get("env")
+        .and_then(Value::as_object)
+        .and_then(|env| non_empty_json_string(env, "ANTHROPIC_BASE_URL"));
+    let base_url = (!profile.upstream_base_url.trim().is_empty())
+        .then(|| profile.upstream_base_url.trim().to_string())
+        .or(config_env_base_url)
+        .or_else(|| {
+            (!profile.base_url.trim().is_empty()).then(|| profile.base_url.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    let config_env_credential = config
+        .get("env")
+        .and_then(Value::as_object)
+        .and_then(|env| claude_credential_from_object(env, &preferred_auth_field));
+    let api_key = if profile.api_key_explicit {
+        profile.api_key.trim().to_string()
+    } else {
+        (!profile.api_key.trim().is_empty())
+            .then(|| profile.api_key.trim().to_string())
+            .or(config_env_credential)
+            .or_else(|| claude_credential_from_object(&config, &preferred_auth_field))
+            .or_else(|| claude_credential_from_object(&auth, &preferred_auth_field))
+            .unwrap_or_default()
+    };
+
+    profile.base_url = base_url.clone();
+    profile.upstream_base_url = base_url.clone();
+    profile.api_key = api_key.clone();
+    let auth_field =
+        if !api_key.is_empty() && crate::settings::relay_profile_uses_anthropic_api_key(profile) {
+            "ANTHROPIC_API_KEY"
+        } else {
+            "ANTHROPIC_AUTH_TOKEN"
+        };
+    if !api_key.is_empty() {
+        profile.auth_field = auth_field.to_string();
+    }
+
+    remove_claude_credential_aliases(&mut config);
+    let needs_env = config.contains_key("env") || !base_url.is_empty() || !api_key.is_empty();
+    if needs_env {
+        let env_value = config
+            .entry("env".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !env_value.is_object() {
+            *env_value = Value::Object(Map::new());
+        }
+        let env = env_value
+            .as_object_mut()
+            .expect("Claude config env was normalized to an object");
+        remove_claude_credential_aliases(env);
+        if !base_url.is_empty() {
+            env.insert("ANTHROPIC_BASE_URL".to_string(), Value::String(base_url));
+        }
+        if !api_key.is_empty() {
+            env.insert(auth_field.to_string(), Value::String(api_key.clone()));
+        }
+    }
+
+    remove_claude_credential_aliases(&mut auth);
+    if !api_key.is_empty() {
+        auth.insert(auth_field.to_string(), Value::String(api_key));
+    }
+
+    profile.config_contents = if config_was_blank && config.is_empty() {
+        String::new()
+    } else {
+        pretty_json_object(config)?
+    };
+    profile.auth_contents = if auth_was_blank && auth.is_empty() {
+        String::new()
+    } else {
+        pretty_json_object(auth)?
+    };
+    Ok(())
+}
+
 pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow::Result<()> {
+    if relay_profile_targets_claude(profile) {
+        return normalize_claude_relay_profile_for_storage(profile);
+    }
     if profile.relay_mode == crate::settings::RelayMode::Official && !profile.official_mix_api_key {
         profile.config_contents.clear();
         profile.model.clear();
@@ -2100,7 +2300,13 @@ pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow
             profile.config_contents = config_contents;
         }
     }
-    if profile.relay_mode == crate::settings::RelayMode::PureApi
+    if profile.api_key_explicit && source_api_key.trim().is_empty() {
+        profile.auth_contents = if profile.relay_mode == crate::settings::RelayMode::PureApi {
+            remove_codex_credentials_from_auth_contents(&profile.auth_contents)?
+        } else {
+            remove_openai_api_key_from_auth_contents(&profile.auth_contents)?
+        };
+    } else if profile.relay_mode == crate::settings::RelayMode::PureApi
         && !source_api_key.trim().is_empty()
     {
         profile.auth_contents =
@@ -2151,8 +2357,7 @@ fn set_openai_api_key_in_auth_contents(auth_contents: &str, token: &str) -> anyh
     let mut value = if auth_contents.trim().is_empty() {
         json!({})
     } else {
-        serde_json::from_str::<Value>(auth_contents)
-            .with_context(|| "auth.json JSON 瑙ｆ瀽澶辫触")?
+        serde_json::from_str::<Value>(auth_contents).unwrap_or_else(|_| json!({}))
     };
     if !value.is_object() {
         value = json!({});
@@ -2160,10 +2365,83 @@ fn set_openai_api_key_in_auth_contents(auth_contents: &str, token: &str) -> anyh
     let Some(object) = value.as_object_mut() else {
         anyhow::bail!("auth.json 蹇呴』鏄?JSON 瀵硅薄");
     };
+    remove_codex_credential_aliases_from_json_object(object);
     object.insert(
         "OPENAI_API_KEY".to_string(),
         Value::String(token.trim().to_string()),
     );
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+}
+
+fn codex_credential_field(key: &str) -> bool {
+    let normalized = key.trim().to_ascii_lowercase();
+    CODEX_CREDENTIAL_FIELDS.contains(&normalized.as_str())
+}
+
+fn remove_codex_credential_aliases_from_table(table: &mut dyn TableLike) {
+    let stale_keys = table
+        .iter()
+        .map(|(key, _)| key.to_string())
+        .filter(|key| codex_credential_field(key))
+        .collect::<Vec<_>>();
+    for key in stale_keys {
+        table.remove(&key);
+    }
+    for (_, item) in table.iter_mut() {
+        remove_codex_credential_aliases_from_item(item);
+    }
+}
+
+fn remove_codex_credential_aliases_from_item(item: &mut Item) {
+    if let Some(table) = item.as_table_like_mut() {
+        remove_codex_credential_aliases_from_table(table);
+        return;
+    }
+    if let Some(tables) = item.as_array_of_tables_mut() {
+        for table in tables.iter_mut() {
+            remove_codex_credential_aliases_from_table(table);
+        }
+    }
+}
+
+fn remove_codex_credential_aliases_from_json_object(object: &mut Map<String, Value>) {
+    let stale_keys = object
+        .keys()
+        .filter(|key| codex_credential_field(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in stale_keys {
+        object.remove(&key);
+    }
+    for nested in object.values_mut() {
+        remove_codex_credential_aliases_from_json_value(nested);
+    }
+}
+
+fn remove_codex_credential_aliases_from_json_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => remove_codex_credential_aliases_from_json_object(object),
+        Value::Array(items) => {
+            for item in items {
+                remove_codex_credential_aliases_from_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn remove_codex_credentials_from_auth_contents(auth_contents: &str) -> anyhow::Result<String> {
+    if auth_contents.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let mut value = serde_json::from_str::<Value>(auth_contents).unwrap_or_else(|_| json!({}));
+    let Some(object) = value.as_object_mut() else {
+        return Ok(String::new());
+    };
+    remove_codex_credential_aliases_from_json_object(object);
+    if object.is_empty() {
+        return Ok(String::new());
+    }
     Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
 }
 

@@ -187,6 +187,7 @@ export type RelayProfile = {
   baseUrl: string;
   upstreamBaseUrl: string;
   apiKey: string;
+  apiKeyExplicit?: boolean;
   protocol: string;
   relayMode: string;
   officialMixApiKey: boolean;

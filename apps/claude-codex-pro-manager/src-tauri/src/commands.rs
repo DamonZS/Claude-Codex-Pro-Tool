@@ -4998,7 +4998,10 @@ fn normalize_settings_before_save(mut settings: BackendSettings) -> BackendSetti
     let common_config = relay_combined_common_config(&settings);
     if !common_config.trim().is_empty() {
         for profile in &mut settings.relay_profiles {
-            if !profile.use_common_config || profile.config_contents.trim().is_empty() {
+            if !matches!(normalized_supplier_target(&profile.target_app), Ok("codex"))
+                || !profile.use_common_config
+                || profile.config_contents.trim().is_empty()
+            {
                 continue;
             }
             match claude_codex_pro_core::relay_config::strip_common_config_from_config(
@@ -6780,17 +6783,12 @@ fn switch_claude_supplier_blocking(
         return failed(&error.to_string(), fallback_settings_payload());
     }
     let profile = request.settings.active_relay_profile_for_target("claude");
-    let credential_source = if profile.api_key.trim().is_empty() {
-        "savedProfile"
-    } else {
-        "editorDraft"
-    };
     log_manager_event(
         "manager.switch_supplier_profile.start",
         json!({
             "targetApp": "claude",
             "profileId": profile.id,
-            "credentialSource": credential_source,
+            "credentialSource": "submittedProfile",
             "credentialPresent": !relay_profile_resolved_api_key(&profile).trim().is_empty()
         }),
     );
@@ -6855,10 +6853,10 @@ fn switch_claude_desktop_supplier_blocking(
         .settings
         .active_relay_profile_for_target("claude-desktop");
     let api_key = relay_profile_resolved_api_key(&profile);
-    let credential_source = if profile.api_key.trim().is_empty() {
-        "savedProfile"
-    } else {
+    let credential_source = if profile.api_key_explicit {
         "editorDraft"
+    } else {
+        "savedProfile"
     };
     if api_key.trim().is_empty() {
         return failed(
@@ -7743,34 +7741,28 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
     } else {
         profile.name.trim()
     };
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    let test_model: String = if !profile.test_model.trim().is_empty() {
-        profile.test_model.trim().to_string()
-    } else {
-        let from_profile = claude_codex_pro_core::relay_config::relay_profile_model(&profile);
-        if from_profile.trim().is_empty() {
-            settings.relay_test_model.trim().to_string()
-        } else {
-            from_profile
-        }
-    };
-    match claude_codex_pro_core::relay_config::test_relay_profile(&profile, &test_model).await {
+    log_manager_event(
+        "manager.test_relay_profile.reachability_start",
+        json!({
+            "profileId": profile.id,
+            "targetApp": profile.target_app,
+            "apiFormat": profile.api_format
+        }),
+    );
+    match claude_codex_pro_core::relay_config::test_relay_profile(&profile, "").await {
         Ok(result) => {
-            let status = if result.http_status < 400 {
-                "ok"
-            } else {
-                "failed"
-            };
-            let preview = result.response_preview.trim();
-            let detail = if preview.is_empty() {
-                "无响应预览。".to_string()
-            } else {
-                format!("预览：{preview}")
-            };
+            log_manager_event(
+                "manager.test_relay_profile.reachability_ok",
+                json!({
+                    "profileId": profile.id,
+                    "endpoint": result.endpoint,
+                    "httpStatus": result.http_status
+                }),
+            );
             CommandResult {
-                status: status.to_string(),
+                status: "ok".to_string(),
                 message: format!(
-                    "已使用模型 {test_model} 测试供应商 {profile_name}；HTTP {}；{detail}",
+                    "供应商 {profile_name} 的 Base URL 可访问；HTTP {}。此测试仅检查网络可达性。",
                     result.http_status
                 ),
                 payload: RelayProfileTestPayload {
@@ -7780,14 +7772,20 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
                 },
             }
         }
-        Err(error) => failed(
-            &format!("供应商 {profile_name} 测试失败：{error}"),
-            RelayProfileTestPayload {
-                http_status: 0,
-                endpoint: String::new(),
-                response_preview: String::new(),
-            },
-        ),
+        Err(error) => {
+            log_manager_event(
+                "manager.test_relay_profile.reachability_failed",
+                json!({ "profileId": profile.id, "error": error.to_string() }),
+            );
+            failed(
+                &format!("供应商 {profile_name} Base URL 连接失败：{error}"),
+                RelayProfileTestPayload {
+                    http_status: 0,
+                    endpoint: String::new(),
+                    response_preview: String::new(),
+                },
+            )
+        }
     }
 }
 
@@ -7800,10 +7798,10 @@ pub async fn fetch_relay_profile_models(
     } else {
         profile.name.trim()
     };
-    let credential_source = if profile.api_key.trim().is_empty() {
-        "savedProfile"
-    } else {
+    let credential_source = if profile.api_key_explicit {
         "editorDraft"
+    } else {
+        "savedProfile"
     };
     log_manager_event(
         "manager.fetch_relay_profile_models.start",
@@ -10794,6 +10792,47 @@ enabled = true
                 .relay_common_config_contents
                 .contains("[mcp_servers")
         );
+    }
+
+    #[test]
+    fn normalize_settings_before_save_does_not_treat_claude_json_as_codex_toml() {
+        let settings = BackendSettings {
+            relay_common_config_contents: r#""note": "common = shared""#.to_string(),
+            relay_profiles: vec![RelayProfile {
+                target_app: "claude-desktop".to_string(),
+                use_common_config: true,
+                api_key: "test-current-key".to_string(),
+                upstream_base_url: "https://relay.example/v1".to_string(),
+                config_contents: serde_json::json!({
+                    "env": {
+                        "ANTHROPIC_AUTH_TOKEN": "test-old-key",
+                        "KEEP_ENV": "keep-env"
+                    },
+                    "note": "common = local",
+                    "metadata": { "keep": true }
+                })
+                .to_string(),
+                auth_contents: serde_json::json!({
+                    "ANTHROPIC_AUTH_TOKEN": "test-old-key",
+                    "keepAuth": true
+                })
+                .to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        let normalized = normalize_settings_before_save(settings);
+        let profile = &normalized.relay_profiles[0];
+        let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+        let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+
+        assert_eq!(config["note"], "common = local");
+        assert_eq!(config["metadata"]["keep"], true);
+        assert_eq!(config["env"]["KEEP_ENV"], "keep-env");
+        assert_eq!(config["env"]["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
+        assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
+        assert_eq!(auth["keepAuth"], true);
     }
 
     #[test]

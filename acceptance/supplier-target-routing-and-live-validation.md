@@ -14,10 +14,11 @@
    - 测试覆盖 `OPENAI_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_API_KEY`、`api_key`、`apiKey`。
    - 测试覆盖 `authContents` 和 `configContents.env` 嵌套 JSON。
    - Claude / Claude Desktop 的 `authContents` 与 `configContents.env` 凭据冲突时，解析结果使用配置中的当前凭据；显式 `apiKey` 仍具有最高优先级。
-   - Codex 凭据冲突时仍保持 `authContents` 优先，避免改变既有 Codex 导入与切换行为。
+   - 未进入编辑覆盖流程时，Codex 凭据冲突仍保持 `authContents` 优先；保存编辑中的 Codex Profile 时，当前表单 Key 写入唯一的 `authContents.OPENAI_API_KEY`，并移除 TOML 中的 `experimental_bearer_token`、静态认证 Header 和其他旧凭据别名。
    - 前端保存或生成 Claude 配置后，两个凭据容器使用同一个最终凭据。
    - 编辑框输入新 Key 后，获取模型、保存、写入 Claude/Claude Desktop Profile 均使用该次输入；退出编辑器再打开时仍显示这次保存的 Key。
-   - 日志用 `credentialSource=editorDraft|savedProfile` 和 `credentialPresent` 说明本次凭据来源，不记录 Key 原文。
+   - 编辑框清空 Key 后，获取模型不读取旧 `configContents` / `authContents`；保存结果移除其中全部旧凭据别名，退出再打开时仍为空。
+   - 获取模型与切换日志使用能准确表示命令提交 Profile 的 `credentialSource` 和 `credentialPresent`，不通过保存标志猜测来源，也不记录 Key 原文。
    - 测试和日志中不出现测试密钥之外的真实凭据。
 
 3. **Claude 新增式写入**
@@ -29,7 +30,9 @@
    - 缺少 API Key 的供应商被拒绝，不产生不完整 Profile。
    - 有效供应商写入后 `inferenceGatewayApiKey` 非空、`inferenceGatewayBaseUrl` 指向当前本地代理、`inferenceModels` 至少一项。
    - 原有 CC Switch 与其他 Profile 文件和 meta 条目保持不变。
-   - 缺省映射的四个角色分别为 Sonnet=`claude-opus-4-6`、Opus=`claude-opus-4-8`、Fable=`claude-Fable-5`、Haiku=`claude-opus-4-7`，且 `supports1m` 全部为 true。
+   - 缺省映射的四个角色分别为 Sonnet=`claude-opus-4-6`、Opus=`claude-opus-4-8`、Fable=`claude-Fable-5`、Haiku=`claude-haiku-4-5`，且 `supports1m` 全部为 true。
+   - 文本映射中的显示名称、实际请求模型和 `[1M]` 标记分别解析；空 JSON 从有效文本重建；文本明确选择 `claude-opus-4-7` 而 JSON 错写 `claude-haiku-4-5` 时以显式选择修复 JSON；其他自定义 JSON 映射保持原值，修复后文本与 JSON 一致。
+   - Profile 明确写入 `claudeDesktopMode=proxy|direct` 时优先于冲突的旧 `configContents.meta`；Profile 模式缺省时可从 camelCase 或 snake_case 旧元数据迁移。最终模式同步 `routeEnabled`、`routeMode` 并写回规范的 `meta.claudeDesktopMode`，未知 JSON 字段保留且重复归一化稳定。
 
 5. **代理使用正确目标**
    - 仅重启管理工具、不重新点击供应商“使用”时，Claude Desktop 本地代理会自动恢复监听。
@@ -40,22 +43,27 @@
    - 对更长的可解析会话正文，`input_tokens` 估算值必须单调增加；无效 JSON 返回明确错误而不是伪造成功。
 
 6. **前端目标分流**
+   - “测试连接”对当前 Base URL 只发送一次无认证 `GET`；测试过程不调用模型发现或任何推理接口，不发送 API Key、自定义 Header 或请求 Body。服务端返回任意 HTTP 状态均显示网络可达，传输错误才显示连接失败。
    - 供应商卡片不再写死调用 `switchCodexRelayProfile`。
    - Codex、Claude、Claude Desktop 标签分别按 `activeRelayId`、`activeClaudeRelayId`、`activeClaudeDesktopRelayId` 显示“使用中”。
    - Claude/Claude Desktop 切换提示中不出现 Codex。
    - 获取模型后展开“实际请求模型”下拉，所有选项在深色主题下文字与背景对比清晰，不出现白底浅字。
    - 模型列表使用窗口内自定义弹层，具备固定定位、可视区边界计算、最大高度和纵向滚动；列表不会越过管理工具窗口。
    - 获取模型成功后可选项只包含该次 `models` 返回值；默认 Claude 映射和旧映射不得混入选项。旧值不在返回列表中时仅显示为“当前配置不可用”。
+   - `/v1/models` 返回 HTTP 2xx 空数组时保持真实空结果，诊断 `attempts[0].action` 为 `empty_payload`，不得写成 `accepted`。
+   - 定向测试覆盖深层包装、对象映射、JSON 字符串包装，以及 `model_id`、`modelId`、`slug`、`value` 字段，均能返回去重后的真实模型列表。
+   - HTTP 2xx 业务错误对象返回失败且诊断 action 为 `business_error`；未识别结构返回失败且 action 为 `unknown_payload_shape`；这两类都不得显示“当前 Key 没有返回可用模型”。
+   - 诊断尝试包含脱敏的顶层类型/字段、命中路径、集合长度和首项结构，不包含响应字段值、完整响应正文或 API Key。
    - 点击“一键设置”后四个角色的实际请求模型均属于当前供应商模型列表，并显示成功反馈；无模型时显示“请先获取模型”反馈。
-   - 编辑表单中不存在“是否开启路由”和“路由”文本框，列表页仍保留目标级“开启路由”总开关；保存配置继承对应目标组状态。
+   - 编辑表单中不存在“是否开启路由”和“路由”文本框，列表页仍保留 Codex、Claude、Claude Desktop 三个独立的目标级“开启路由”总开关；切换、复制、编辑或保存任一目标的供应商时，不改写另外两个目标的路由状态。
    - 胶囊开关白色滑块在开/关两态都按 `top: 50%` 与 Y 轴 `-50%` 居中。
    - OpenAI“上游格式/模型”双列表单以顶部对齐，右侧模型输入框不因左侧帮助文字而下移。
-   - Claude / Claude Desktop 的“需要模型映射”开关可交互；关闭后归一化与保存结果仍为 false，生成配置不含角色映射，协议代理对请求模型返回“不改写”；重新开启后原有映射可继续使用。
+   - Claude / Claude Desktop 的“需要模型映射”开关可交互；关闭后归一化与保存结果仍为 false，生成配置不含角色映射且协议代理保留入站模型；开启后精确命中的路由发送实际请求模型，原有映射可继续生效。
    - 映射开启时只显示 API 格式和 Sonnet / Opus / Fable / Haiku 映射矩阵，不显示手动模型列表；映射关闭时不显示 API 格式和映射矩阵，只显示“手动指定 Claude Desktop 模型列表（高级，可选）”。
    - 关闭态可获取模型、添加模型、编辑模型 ID、勾选/取消 1M、删除模型；保存后 `modelList` 按每行一项及可选 `[1M]` 后缀序列化，重新打开编辑页可还原。
    - 关闭态手动列表中每条 `[1M]` 声明会在 Claude Desktop 本地模型目录中反映为对应安全模型的 `supports1m=true`；未声明的模型不应被错误标记。
    - 关闭再开启不会丢失 `modelMappingJson` / `modelMapping`，开启再关闭不会丢失 `modelList`；获取模型不会把 `modelMappingEnabled=false` 改回 true。
-   - `modelMappingEnabled=true` 时本地模型目录来自 `modelMappingJson`，不含已停用的手动列表；`false` 时目录 ID 等于手动列表中的安全 Claude ID，代理不改写并原样发送。
+   - `modelMappingEnabled=true` 时本地模型目录来自 `modelMappingJson`，不含已停用的手动列表，代理按精确路由发送 `requestModel`；`false` 时目录 ID 等于手动列表中的安全 Claude ID，代理原样发送。
    - 直接模式拒绝非 `claude-*/anthropic/claude-*` 的 Sonnet / Opus / Haiku / Fable 安全 ID，并提示用户开启模型映射。
    - 获取模型途中切换供应商、映射模式或修改关键配置后，旧响应不会写入当前编辑项。
    - 删除全部手动模型并保存后仍为空；配置 JSON 在眼睛关闭时不出现 Key 原文且不可编辑。
@@ -98,7 +106,7 @@ cargo build -p claude-codex-pro-manager --manifest-path Cargo.toml
 - 供应商编辑页仍显示“供应商 ID”输入框，或仍渲染 OpenAI / Anthropic 之外的预设卡片。
 - 模型下拉仍使用原生 `<select>`、弹层越过窗口、接口返回列表被默认 Claude 模型污染，或“一键设置”仍因保留全部旧值而无可见效果。
 - 编辑表单仍保留第二套路由开关/路由文本，胶囊滑块偏离垂直中心，或 OpenAI 上游格式与模型控件顶边不齐。
-- “需要模型映射”无法关闭，视觉关闭但保存后恢复开启，或关闭后代理仍继续改写模型。
+- “需要模型映射”无法关闭、视觉关闭但保存后恢复开启，关闭时仍改写模型，或开启并精确命中后没有发送保存的实际请求模型。
 - 开启/关闭状态仍显示同一套表单、关闭态没有可编辑手动模型列表，或切换状态导致另一套模型配置丢失。
 - “保存并使用”仍先普通保存再应用，导致应用失败时无法恢复修改前设置。
 - 编辑当前活动 Claude Desktop 供应商后点击普通“保存”，仍只更新代理读取的 Settings 而没有同步重写 Profile。

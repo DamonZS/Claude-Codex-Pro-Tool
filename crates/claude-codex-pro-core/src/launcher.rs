@@ -2172,6 +2172,16 @@ async fn handle_claude_desktop_messages_proxy_connection(
     }
 
     let body = upstream.response.bytes().await?.to_vec();
+    if !is_success {
+        log_claude_desktop_upstream_error_body(
+            method,
+            path,
+            &status,
+            &content_type,
+            &body,
+            remote_addr_text.as_deref(),
+        );
+    }
     write_http_response(stream, &status, &content_type, &body).await?;
     log_helper_response(
         if is_success {
@@ -2186,6 +2196,105 @@ async fn handle_claude_desktop_messages_proxy_connection(
     );
     stream.shutdown().await?;
     Ok(())
+}
+
+fn log_claude_desktop_upstream_error_body(
+    method: &str,
+    path: &str,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    remote_addr_text: Option<&str>,
+) {
+    let parsed = serde_json::from_slice::<Value>(body).ok();
+    let error_type = parsed
+        .as_ref()
+        .and_then(|value| value.pointer("/error/type").or_else(|| value.get("type")))
+        .and_then(Value::as_str)
+        .map(sanitized_error_preview);
+    let error_message = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("message"))
+        })
+        .and_then(Value::as_str)
+        .map(sanitized_error_preview)
+        .or_else(|| {
+            if content_type.to_ascii_lowercase().contains("json")
+                || content_type.to_ascii_lowercase().contains("text")
+            {
+                Some(sanitized_error_preview(&String::from_utf8_lossy(body)))
+            } else {
+                None
+            }
+        });
+
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        "proxy.claude_desktop_upstream_error_body",
+        serde_json::json!({
+            "method": method,
+            "path": path,
+            "status": status,
+            "content_type": content_type,
+            "remote_addr": remote_addr_text,
+            "error_type": error_type,
+            "error_message": error_message
+        }),
+    );
+}
+
+fn sanitized_error_preview(input: &str) -> String {
+    let compact = input
+        .replace('\r', " ")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let without_query = compact
+        .split_whitespace()
+        .map(|part| {
+            if part.starts_with("http://") || part.starts_with("https://") {
+                part.split(['?', '#']).next().unwrap_or(part)
+            } else {
+                part
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut redacted = without_query;
+    for marker in [
+        "Bearer ",
+        "bearer ",
+        "Authorization:",
+        "authorization:",
+        "x-api-key:",
+        "X-Api-Key:",
+        "api_key=",
+        "apiKey=",
+        "key=",
+        "token=",
+    ] {
+        if let Some(index) = redacted.find(marker) {
+            let end = redacted[index + marker.len()..]
+                .find([' ', ',', '"', '\'', '}'])
+                .map(|offset| index + marker.len() + offset)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(index + marker.len()..end, "[REDACTED]");
+        }
+    }
+    while let Some(index) = redacted.find("sk-") {
+        let end = redacted[index..]
+            .find([' ', ',', '"', '\'', '}', ']'])
+            .map(|offset| index + offset)
+            .unwrap_or(redacted.len());
+        if end <= index + 3 {
+            break;
+        }
+        redacted.replace_range(index..end, "[REDACTED]");
+    }
+    redacted.chars().take(500).collect()
 }
 
 async fn write_http_response(
@@ -3130,6 +3239,19 @@ fn activate_packaged_app_blocking(app_user_model_id: &str, arguments: &str) -> a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_error_preview_removes_tokens_and_url_queries() {
+        let preview = sanitized_error_preview(
+            "channel failed at https://api.example/v1/messages?token=query-secret Bearer sk-secret-value token=plain-secret",
+        );
+
+        assert!(preview.contains("https://api.example/v1/messages"));
+        assert!(preview.contains("[REDACTED]"));
+        for secret in ["query-secret", "sk-secret-value", "plain-secret"] {
+            assert!(!preview.contains(secret));
+        }
+    }
 
     #[test]
     fn bridge_watchdog_is_offset_from_renderer_heartbeat() {

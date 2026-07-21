@@ -70,6 +70,7 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
   const routeEnabled = typeof profile.routeEnabled === "boolean"
     ? profile.routeEnabled
     : profile.claudeDesktopMode === "proxy" || /\bproxy\b/i.test(profile.routeMode || "");
+  const normalizedModelMapping = normalizeSupplierModelMappingFields(profile);
   return {
     ...profile,
     id: supplierIdFromName(profile.id || profile.name),
@@ -107,9 +108,9 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
     routeMode: targetApp === "codex"
       ? (routeEnabled ? "Codex Proxy" : "Codex Direct")
       : (routeEnabled ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
-    modelMapping: profile.modelMapping ?? "",
+    modelMapping: normalizedModelMapping.modelMapping,
     modelMappingEnabled,
-    modelMappingJson: profile.modelMappingJson ?? supplierModelMappingJsonFromText(profile.modelMapping ?? ""),
+    modelMappingJson: normalizedModelMapping.modelMappingJson,
     aggregateEnabled: !!profile.aggregateEnabled,
     aggregateStrategy: profile.aggregateStrategy || (profile.aggregateEnabled ? "failover" : ""),
     aggregateMembers: Array.isArray(profile.aggregateMembers) ? profile.aggregateMembers : [],
@@ -255,9 +256,149 @@ export const SUPPLIER_MODEL_MAPPING_DEFAULTS: SupplierModelMappingRow[] = [
   { role: "sonnet", label: "Sonnet", routeId: "claude-sonnet-4-6", displayName: "claude-opus-4-6", requestModel: "claude-opus-4-6", supports1m: true },
   { role: "opus", label: "Opus", routeId: "claude-opus-4-8", displayName: "claude-opus-4-8", requestModel: "claude-opus-4-8", supports1m: true },
   { role: "fable", label: "Fable", routeId: "claude-fable-5", displayName: "claude-Fable-5", requestModel: "claude-Fable-5", supports1m: true },
-  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "claude-opus-4-7", requestModel: "claude-opus-4-7", supports1m: true },
+  { role: "haiku", label: "Haiku", routeId: "claude-haiku-4-5", displayName: "claude-haiku-4-5", requestModel: "claude-haiku-4-5", supports1m: true },
   { role: "subagent", label: "Subagent", routeId: "claude-subagent", displayName: "", requestModel: "", supports1m: true },
 ];
+
+type SupplierModelMappingJsonEntry = Record<string, unknown>;
+
+function supplierModelMappingDefaultForEntry(entry: SupplierModelMappingJsonEntry) {
+  const role = typeof entry.role === "string" ? entry.role.trim().toLowerCase() : "";
+  const label = typeof entry.label === "string" ? entry.label.trim().toLowerCase() : "";
+  const routeId = typeof entry.routeId === "string" ? entry.routeId.trim() : "";
+  return SUPPLIER_MODEL_MAPPING_DEFAULTS.find((row) =>
+    row.role === role || row.label.toLowerCase() === label || row.routeId === routeId);
+}
+
+function supplierModelMappingRowFromEntry(entry: SupplierModelMappingJsonEntry): SupplierModelMappingRow | null {
+  const fallback = supplierModelMappingDefaultForEntry(entry);
+  if (!fallback) return null;
+  const requestModel = typeof entry.requestModel === "string"
+    ? entry.requestModel.trim()
+    : typeof entry.model === "string"
+      ? entry.model.trim()
+      : "";
+  const displayName = typeof entry.displayName === "string"
+    ? entry.displayName.trim()
+    : typeof entry.labelOverride === "string"
+      ? entry.labelOverride.trim()
+      : "";
+  return {
+    ...fallback,
+    label: typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : fallback.label,
+    routeId: typeof entry.routeId === "string" && entry.routeId.trim() ? entry.routeId.trim() : fallback.routeId,
+    displayName,
+    requestModel: requestModel || displayName,
+    supports1m: typeof entry.supports1m === "boolean"
+      ? entry.supports1m
+      : typeof entry.supports_1m === "boolean"
+        ? entry.supports_1m
+        : false,
+  };
+}
+
+function supplierModelMappingRowsFromText(text: string): SupplierModelMappingRow[] {
+  const rows: SupplierModelMappingRow[] = [];
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const supports1m = /\s*\[1m\]\s*$/i.test(rawLine);
+    const line = rawLine.replace(/\s*\[1m\]\s*$/i, "").trim();
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+
+    const left = line.slice(0, separator).trim();
+    const right = line.slice(separator + 1).trim();
+    const routeMatch = left.match(/\(([^)]+)\)/);
+    const routeId = routeMatch?.[1]?.trim() || "";
+    const label = left.replace(/\s*\([^)]+\)\s*$/, "").trim();
+    const fallback = SUPPLIER_MODEL_MAPPING_DEFAULTS.find((row) =>
+      row.role === label.toLowerCase() || row.label.toLowerCase() === label.toLowerCase() || row.routeId === routeId);
+    if (!fallback) continue;
+
+    const arrow = right.indexOf("->");
+    const displayName = (arrow >= 0 ? right.slice(0, arrow) : right).trim();
+    const requestModel = (arrow >= 0 ? right.slice(arrow + 2) : right).trim();
+    if (!displayName && !requestModel) continue;
+    rows.push({
+      ...fallback,
+      label: label || fallback.label,
+      routeId: routeId || fallback.routeId,
+      displayName: displayName || requestModel,
+      requestModel: requestModel || displayName,
+      supports1m,
+    });
+  }
+  return rows;
+}
+
+function supplierModelMappingEntriesFromJson(raw: string): SupplierModelMappingJsonEntry[] | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+      ? parsed as SupplierModelMappingJsonEntry[]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function repairKnownClaudeHaikuMappingSplit(
+  entries: SupplierModelMappingJsonEntry[],
+  textRows: SupplierModelMappingRow[],
+) {
+  const explicitHaiku = textRows.find((row) =>
+    row.role === "haiku"
+    && row.routeId === "claude-haiku-4-5"
+    && row.requestModel === "claude-opus-4-7");
+  if (!explicitHaiku) return entries;
+
+  const index = entries.findIndex((entry) => {
+    const row = supplierModelMappingRowFromEntry(entry);
+    return row?.role === "haiku"
+      && row.routeId === "claude-haiku-4-5"
+      && row.requestModel === "claude-haiku-4-5"
+      && (!row.displayName || row.displayName === "claude-haiku-4-5");
+  });
+  if (index < 0) return entries;
+
+  const repaired = entries.map((entry) => ({ ...entry }));
+  repaired[index] = {
+    ...repaired[index],
+    role: "haiku",
+    label: explicitHaiku.label,
+    routeId: explicitHaiku.routeId,
+    displayName: explicitHaiku.displayName,
+    requestModel: explicitHaiku.requestModel,
+    supports1m: explicitHaiku.supports1m,
+  };
+  return repaired;
+}
+
+function normalizeSupplierModelMappingFields(profile: RelayProfile) {
+  const originalText = profile.modelMapping ?? "";
+  const textRows = supplierModelMappingRowsFromText(originalText);
+  const rawJson = (profile.modelMappingJson ?? "").trim();
+  let entries = rawJson ? supplierModelMappingEntriesFromJson(rawJson) : null;
+
+  if ((!rawJson || (entries && entries.length === 0)) && textRows.length > 0) {
+    entries = textRows.map((row) => ({ ...row }));
+  } else if (entries) {
+    entries = repairKnownClaudeHaikuMappingSplit(entries, textRows);
+  }
+
+  if (!entries || entries.length === 0) {
+    return { modelMapping: originalText, modelMappingJson: rawJson };
+  }
+  const rows = entries
+    .map(supplierModelMappingRowFromEntry)
+    .filter((row): row is SupplierModelMappingRow => row !== null);
+  if (!rows.length) {
+    return { modelMapping: originalText, modelMappingJson: rawJson };
+  }
+  return {
+    modelMapping: supplierModelMappingText(rows),
+    modelMappingJson: JSON.stringify(entries, null, 2),
+  };
+}
 
 export const SUPPLIER_API_FORMAT_OPTIONS = [
   {
@@ -312,7 +453,8 @@ export function supplierRouteEnabled(profile: RelayProfile) {
 
 export function supplierModelMappingRows(profile: RelayProfile): SupplierModelMappingRow[] {
   const defaults = SUPPLIER_MODEL_MAPPING_DEFAULTS.map((row) => ({ ...row }));
-  const raw = profile.modelMappingJson || supplierModelMappingJsonFromText(profile.modelMapping || "");
+  const normalized = normalizeSupplierModelMappingFields(profile);
+  const raw = normalized.modelMappingJson.trim() || supplierModelMappingJsonFromText(normalized.modelMapping);
   if (!raw.trim()) return defaults;
   try {
     const parsed = JSON.parse(raw) as Partial<SupplierModelMappingRow>[] | Record<string, {
@@ -374,43 +516,33 @@ export function supplierModelMappingText(rows: SupplierModelMappingRow[]) {
 }
 
 export function supplierModelMappingJsonFromText(text: string) {
-  const rows = SUPPLIER_MODEL_MAPPING_DEFAULTS.map((row) => ({ ...row }));
-  const lines = String(text || "").split(/\r?\n/);
-  for (const line of lines) {
-    const [left, rightRaw] = line.split(":");
-    if (!left || !rightRaw) continue;
-    const role = left.trim().toLowerCase();
-    const row = rows.find((item) => item.role === role || item.label.toLowerCase() === role);
-    if (!row) continue;
-    const cleaned = rightRaw.replace(/\[1m\]/ig, "").trim();
-    const routeMatch = left.match(/\(([^)]+)\)/);
-    if (routeMatch?.[1]?.trim()) row.routeId = routeMatch[1].trim();
-    row.displayName = cleaned;
-    row.requestModel = cleaned;
-    row.supports1m = /\[1m\]/i.test(rightRaw) || row.supports1m;
-  }
-  return rows.some((row) => row.displayName || row.requestModel) ? supplierModelMappingJson(rows) : "";
+  const rows = supplierModelMappingRowsFromText(text);
+  return rows.length ? supplierModelMappingJson(rows) : "";
 }
 
 export function withSupplierPreservedImportedFiles(profile: RelayProfile): RelayProfile {
-  const normalized = normalizeSupplierProfile(profile);
-  const apiKey = supplierProfileResolvedApiKey(normalized);
+  const currentApiKey = (profile.apiKey || "").trim();
+  const apiKeyExplicit = profile.apiKeyExplicit === true;
+  const normalized = normalizeSupplierProfile({
+    ...profile,
+    apiKey: currentApiKey,
+    apiKeyExplicit,
+  });
+  const apiKey = apiKeyExplicit ? currentApiKey : supplierProfileResolvedApiKey(normalized);
+  const current = { ...normalized, apiKey, apiKeyExplicit };
   const isClaudeTarget = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop";
   if (isClaudeTarget) {
-    const authKey = preferredClaudeCredentialField(normalized);
+    const authKey = preferredClaudeCredentialField(current);
     return {
-      ...normalized,
-      apiKey,
-      configContents: synchronizeClaudeConfigCredential(normalized, apiKey, authKey),
-      authContents: synchronizeClaudeAuthCredential(normalized.authContents, apiKey, authKey),
+      ...current,
+      configContents: synchronizeClaudeConfigCredential(current, apiKey, authKey),
+      authContents: synchronizeClaudeAuthCredential(current.authContents, apiKey, authKey),
     };
   }
   return {
-    ...normalized,
-    apiKey,
-    configContents: normalized.configContents ?? "",
-    authContents: `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}
-`,
+    ...current,
+    configContents: current.configContents ?? "",
+    authContents: synchronizeCodexAuthCredential(current.authContents, apiKey),
   };
 }
 
@@ -455,6 +587,17 @@ function preferredClaudeCredentialField(profile: RelayProfile): ClaudeCredential
 
 function removeCredentialFields(object: Record<string, unknown>) {
   for (const field of CLAUDE_CREDENTIAL_FIELDS) delete object[field];
+  for (const value of Object.values(object)) removeCredentialFieldsFromValue(value);
+}
+
+function removeCredentialFieldsFromValue(value: unknown) {
+  if (Array.isArray(value)) {
+    for (const item of value) removeCredentialFieldsFromValue(item);
+    return;
+  }
+  if (value && typeof value === "object") {
+    removeCredentialFields(value as Record<string, unknown>);
+  }
 }
 
 function synchronizeClaudeConfigCredential(
@@ -474,7 +617,7 @@ function synchronizeClaudeConfigCredential(
     : {};
   removeCredentialFields(config);
   removeCredentialFields(env);
-  env[authKey] = apiKey;
+  if (apiKey) env[authKey] = apiKey;
   config.env = env;
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -486,8 +629,15 @@ function synchronizeClaudeAuthCredential(
 ) {
   const auth = { ...(jsonObject(contents) ?? {}) };
   removeCredentialFields(auth);
-  auth[authKey] = apiKey;
+  if (apiKey) auth[authKey] = apiKey;
   return `${JSON.stringify(auth, null, 2)}\n`;
+}
+
+function synchronizeCodexAuthCredential(contents: string, apiKey: string) {
+  const auth = { ...(jsonObject(contents) ?? {}) };
+  removeCredentialFields(auth);
+  if (apiKey) auth.OPENAI_API_KEY = apiKey;
+  return Object.keys(auth).length ? `${JSON.stringify(auth, null, 2)}\n` : "";
 }
 
 export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile {
@@ -510,7 +660,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
         app_type: generated.targetApp,
         env: {
           ANTHROPIC_BASE_URL: generated.baseUrl,
-          [authKey]: apiKey,
+          ...(apiKey ? { [authKey]: apiKey } : {}),
           ANTHROPIC_MODEL: generated.model,
           ...Object.fromEntries(routeRows.map((row) => {
             const key = row.role === "sonnet"
@@ -531,13 +681,13 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
           claudeDesktopModelRoutes,
         },
       }, null, 2)}\n`,
-      authContents: `${JSON.stringify({ [authKey]: apiKey }, null, 2)}\n`,
+      authContents: apiKey ? `${JSON.stringify({ [authKey]: apiKey }, null, 2)}\n` : "",
     };
   }
   return {
     ...generated,
     configContents: buildSupplierConfigToml(generated),
-    authContents: `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n`,
+    authContents: apiKey ? `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n` : "",
   };
 }
 
@@ -565,6 +715,7 @@ export function supplierApiFormatLabel(profile: RelayProfile) {
 
 export function supplierProfileResolvedApiKey(profile: RelayProfile) {
   const explicitKey = (profile.apiKey || "").trim();
+  if (profile.apiKeyExplicit) return explicitKey;
   if (explicitKey) return explicitKey;
 
   const authKey = supplierApiKeyFromAuthContents(profile.authContents);

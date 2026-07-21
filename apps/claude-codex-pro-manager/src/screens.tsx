@@ -752,20 +752,41 @@ export function SupplierScreen({
         : appSettings.activeRelayId;
   };
   const supplierRoutingEnabledForTarget = (targetApp: SupplierTargetApp, sourceProfiles = profiles) => {
-    return sourceProfiles.some((profile) => {
-      const target = supplierTargetForProfile(profile);
-      return (targetApp === "codex" ? target === "codex" : target === "claude" || target === "claude-desktop") && !!profile.routeEnabled;
+    return sourceProfiles.some((profile) => supplierTargetForProfile(profile) === targetApp && !!profile.routeEnabled);
+  };
+  const withSupplierRoutingState = (profile: RelayProfile, targetApp: SupplierTargetApp, enabled: boolean) => {
+    const claudeDesktopMode = targetApp === "codex" ? "" : enabled ? "proxy" : "direct";
+    let configContents = profile.configContents ?? "";
+    if (targetApp !== "codex") {
+      let config: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(configContents);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          config = { ...parsed as Record<string, unknown> };
+        }
+      } catch {
+        // Invalid imported JSON is replaced with the current form state below.
+      }
+      const existingMeta = config.meta;
+      const meta = existingMeta && typeof existingMeta === "object" && !Array.isArray(existingMeta)
+        ? { ...existingMeta as Record<string, unknown> }
+        : {};
+      delete meta.claude_desktop_mode;
+      meta.claudeDesktopMode = claudeDesktopMode;
+      config.meta = meta;
+      configContents = `${JSON.stringify(config, null, 2)}\n`;
+    }
+    return normalizeSupplierProfile({
+      ...profile,
+      targetApp,
+      configContents,
+      routeEnabled: enabled,
+      claudeDesktopMode,
+      routeMode: targetApp === "codex"
+        ? (enabled ? "Codex Proxy" : "Codex Direct")
+        : (enabled ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
     });
   };
-  const withSupplierRoutingState = (profile: RelayProfile, targetApp: SupplierTargetApp, enabled: boolean) => normalizeSupplierProfile({
-    ...profile,
-    targetApp,
-    routeEnabled: enabled,
-    claudeDesktopMode: targetApp === "codex" ? "" : enabled ? "proxy" : "direct",
-    routeMode: targetApp === "codex"
-      ? (enabled ? "Codex Proxy" : "Codex Direct")
-      : (enabled ? "Claude Desktop Proxy" : "Claude Desktop Direct"),
-  });
   const withActiveSupplierId = (current: BackendSettings, targetApp: SupplierTargetApp, profileId: string): BackendSettings => {
     if (targetApp === "claude") return { ...current, activeClaudeRelayId: profileId };
     if (targetApp === "claude-desktop") return { ...current, activeClaudeDesktopRelayId: profileId };
@@ -803,7 +824,7 @@ export function SupplierScreen({
     setSupplierDirectModelsOpen(true);
     setEditingId(profile.id);
     const targetApp = supplierTargetForProfile(profile);
-    setDraft(withSupplierRoutingState(profile, targetApp, supplierRoutingEnabledForTarget(targetApp)));
+    setDraft(withSupplierRoutingState(profile, targetApp, !!profile.routeEnabled));
   };
   useEffect(() => {
     if (!focusProfileId || lastFocusedProfileIdRef.current === focusProfileId) return;
@@ -844,7 +865,7 @@ export function SupplierScreen({
     setShowSupplierApiKey(false);
     const targetApp = supplierTargetForProfile(profile);
     const copy = {
-      ...withSupplierRoutingState(profile, targetApp, supplierRoutingEnabledForTarget(targetApp)),
+      ...withSupplierRoutingState(profile, targetApp, !!profile.routeEnabled),
       id: uniqueSupplierProfileId(appSettings.relayProfiles, `${profile.id || "provider"}-copy`),
       name: `${profile.name || profile.id || "供应商"} 副本`,
     };
@@ -971,8 +992,7 @@ export function SupplierScreen({
     const normalizedId = supplierIdFromName(requestedId || draft.name);
     const idWasNormalized = requestedId !== normalizedId;
     const targetApp = supplierTargetForProfile(draft);
-    const inheritedRouting = supplierRoutingEnabledForTarget(targetApp);
-    const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId }, targetApp, inheritedRouting);
+    const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId }, targetApp, !!draft.routeEnabled);
     const normalized = supplierProfileIsCcswitch(routedDraft)
       ? withSupplierPreservedImportedFiles(routedDraft)
       : normalizeSupplierProfile(withSupplierGeneratedFiles(routedDraft));
@@ -1187,10 +1207,7 @@ export function SupplierScreen({
     const visibleIds = new Set(routableSupplierProfiles.map((profile) => profile.id));
     const nextProfiles = appSettings.relayProfiles.map((profile) => {
       if (!visibleIds.has(profile.id)) return profile;
-      if (supplierRouteGroup === "codex") {
-        return withSupplierRoutingState(profile, "codex", enabled);
-      }
-      return withSupplierRoutingState(profile, supplierTargetForProfile(profile), enabled);
+      return withSupplierRoutingState(profile, supplierRouteGroup, enabled);
     });
     actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
     const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
@@ -1213,12 +1230,16 @@ export function SupplierScreen({
   const orderedProfiles = useMemo(() => supplierOrderFromIds(supplierOrderIds), [profiles, supplierOrderIds]);
   const filteredOrderedProfiles = useMemo(() => orderedProfiles.filter((profile) => supplierTargetForProfile(profile) === supplierTargetFilter), [orderedProfiles, supplierTargetFilter]);
   const visibleSupplierOrderIds = useMemo(() => filteredOrderedProfiles.map((profile) => profile.id), [filteredOrderedProfiles]);
-  const supplierRouteGroup = supplierTargetFilter === "codex" ? "codex" : "claude";
-  const supplierRouteGroupLabel = supplierRouteGroup === "codex" ? "Codex" : "Claude";
-  const routableSupplierProfiles = useMemo(() => profiles.filter((profile) => {
-    const target = supplierTargetForProfile(profile);
-    return supplierRouteGroup === "codex" ? target === "codex" : target === "claude" || target === "claude-desktop";
-  }), [profiles, supplierRouteGroup]);
+  const supplierRouteGroup = supplierTargetFilter;
+  const supplierRouteGroupLabel = supplierRouteGroup === "claude-desktop"
+    ? "Claude Desktop"
+    : supplierRouteGroup === "claude"
+      ? "Claude"
+      : "Codex";
+  const routableSupplierProfiles = useMemo(
+    () => profiles.filter((profile) => supplierTargetForProfile(profile) === supplierRouteGroup),
+    [profiles, supplierRouteGroup],
+  );
   const supplierRouteSwitchEnabled = routableSupplierProfiles.some((profile) => !!profile.routeEnabled);
   const supplierRouteSwitchDisabled = !appSettings || !routableSupplierProfiles.length;
   const setSupplierCardRef = (profileId: string) => (node: HTMLDivElement | null) => {
@@ -1601,7 +1622,7 @@ env_key = "OPENAI_API_KEY"
           <label className="ops-form-field"><span>供应商名称</span><input onBlur={(event) => updateNewDraftIdFromName(event.currentTarget.value)} onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={cleanName} /></label>
           <label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label>
           <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || ""} /></label>
-          <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
+          <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value, apiKeyExplicit: true })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
           <label className="ops-form-field"><span>{baseEndpointLabel} <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder={isCodexSupplier ? "https://api.example.com/v1" : "https://api.example.com"} value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
           <div className="supplier-route-note">提示：{baseEndpointHint}</div>
           {isClaudeSupplier ? <section className="supplier-mapping-card"><div><strong>需要模型映射</strong><p>关闭时按原始模型 ID 直传；供应商不接受 Claude 安全路由 ID 时请开启映射。</p></div><ToggleSwitch checked={!!generated.modelMappingEnabled} onChange={(value) => updateDraft({ modelMappingEnabled: value })} /></section> : null}

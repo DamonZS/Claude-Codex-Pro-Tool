@@ -18,6 +18,20 @@ const API_KEY_ENV_KEYS: &[&str] = &[
     "OPENAI_API_KEY",
 ];
 
+/// Base URL 可能指向 Anthropic/Claude 兼容协议的子路径。模型目录通常
+/// 仍挂在供应商根路径下，因此在当前路径失败时只对这些已知后缀做根路径候选。
+const KNOWN_MODEL_COMPAT_SUFFIXES: &[&str] = &[
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+];
+
 #[derive(Debug, Clone)]
 struct ModelSource {
     source_id: String,
@@ -26,6 +40,28 @@ struct ModelSource {
     base_url: String,
     api_key: String,
     anthropic_api_key: bool,
+    include_anthropic_version: bool,
+}
+
+const MODEL_PAYLOAD_CONTAINER_KEYS: &[&str] = &[
+    "data", "models", "items", "result", "results", "payload", "response",
+];
+const MODEL_PAYLOAD_ID_KEYS: &[&str] = &[
+    "id", "model", "name", "model_id", "modelId", "slug", "value",
+];
+const MODEL_PAYLOAD_ERROR_KEYS: &[&str] = &["error", "errors", "error_code", "errorCode"];
+const MODEL_MAP_METADATA_KEYS: &[&str] = &[
+    "object", "type", "total", "count", "page", "limit", "offset", "next", "previous", "has_more",
+    "hasMore", "message", "code", "status", "success", "ok",
+];
+const MODEL_PAYLOAD_MAX_DEPTH: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModelPayloadResult {
+    Models(Vec<String>),
+    Empty,
+    BusinessError,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -446,6 +482,7 @@ fn model_sources_from_environment(
             api_key
         },
         anthropic_api_key: false,
+        include_anthropic_version: false,
     }]
 }
 
@@ -483,6 +520,7 @@ fn model_source_from_config(
         base_url,
         api_key,
         anthropic_api_key: false,
+        include_anthropic_version: false,
     })
 }
 
@@ -530,53 +568,236 @@ async fn fetch_models_from_source(
     client: &reqwest::Client,
     source: &ModelSource,
 ) -> (Vec<String>, Value) {
-    let endpoint = models_endpoint(&source.base_url);
+    let candidates = match build_models_url_candidates(&source.base_url) {
+        Ok(candidates) if !candidates.is_empty() => candidates,
+        Ok(_) => Vec::new(),
+        Err(error) => {
+            let mut safe_source = json!({
+                "id": source.source_id,
+                "type": source.source_type,
+                "name": source.name,
+                "base_url": safe_url_for_status(&source.base_url),
+                "endpoint": "",
+                "candidate_endpoints": [],
+                "auth": if source.api_key.is_empty() { "missing" } else { "present" },
+            });
+            safe_source["status"] = json!("failed");
+            safe_source["message"] = json!(error.to_string());
+            safe_source["models"] = json!(0);
+            return finish_model_discovery(Vec::new(), safe_source, Vec::new());
+        }
+    };
+    let safe_candidates = candidates
+        .iter()
+        .map(|candidate| safe_url_for_status(candidate))
+        .collect::<Vec<_>>();
     let mut safe_source = json!({
         "id": source.source_id,
         "type": source.source_type,
         "name": source.name,
         "base_url": safe_url_for_status(&source.base_url),
-        "endpoint": safe_url_for_status(&endpoint),
+        "endpoint": safe_candidates.first().cloned().unwrap_or_default(),
+        "candidate_endpoints": safe_candidates,
         "auth": if source.api_key.is_empty() { "missing" } else { "present" },
     });
-    if endpoint.is_empty() {
+    let mut attempts = Vec::new();
+    if candidates.is_empty() {
         safe_source["status"] = json!("failed");
         safe_source["message"] = json!("Missing base URL");
         safe_source["models"] = json!(0);
-        return (Vec::new(), safe_source);
+        return finish_model_discovery(Vec::new(), safe_source, attempts);
     }
 
-    let request = client
-        .get(&endpoint)
-        .header(reqwest::header::ACCEPT, "application/json");
-    let request = crate::http_client::apply_api_auth_headers(
-        request,
-        &source.api_key,
-        source.anthropic_api_key,
-        source.anthropic_api_key,
-    );
+    for endpoint in candidates {
+        let safe_endpoint = safe_url_for_status(&endpoint);
+        let request = client
+            .get(&endpoint)
+            .header(reqwest::header::ACCEPT, "application/json");
+        let request = crate::http_client::apply_api_auth_headers(
+            request,
+            &source.api_key,
+            source.anthropic_api_key,
+            source.include_anthropic_version,
+        );
 
-    match request.send().await {
-        Ok(response) if response.status().is_success() => match response.json::<Value>().await {
-            Ok(payload) => {
-                let models = unique_strings(parse_model_payload(&payload));
-                safe_source["status"] = json!("ok");
-                safe_source["models"] = json!(models.len());
-                (models, safe_source)
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                let status_code = response.status().as_u16();
+                match response.json::<Value>().await {
+                    Ok(payload) => {
+                        let (payload_result, payload_shape) = parse_model_payload(&payload);
+                        match payload_result {
+                            ModelPayloadResult::Models(models) => {
+                                let models = unique_strings(models);
+                                attempts.push(json!({
+                                    "endpoint": safe_endpoint,
+                                    "http_status": status_code,
+                                    "models": models.len(),
+                                    "action": "accepted",
+                                    "payload_shape": payload_shape,
+                                }));
+                                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                                safe_source["status"] = json!("ok");
+                                safe_source["models"] = json!(models.len());
+                                return finish_model_discovery(models, safe_source, attempts);
+                            }
+                            ModelPayloadResult::Empty => {
+                                attempts.push(json!({
+                                    "endpoint": safe_endpoint,
+                                    "http_status": status_code,
+                                    "models": 0,
+                                    "action": "empty_payload",
+                                    "payload_shape": payload_shape,
+                                }));
+                                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                                safe_source["status"] = json!("ok");
+                                safe_source["models"] = json!(0);
+                                return finish_model_discovery(Vec::new(), safe_source, attempts);
+                            }
+                            ModelPayloadResult::BusinessError => {
+                                attempts.push(json!({
+                                    "endpoint": safe_endpoint,
+                                    "http_status": status_code,
+                                    "models": 0,
+                                    "action": "business_error",
+                                    "payload_shape": payload_shape,
+                                }));
+                                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                                return finish_model_discovery(
+                                    Vec::new(),
+                                    failed_source(
+                                        safe_source,
+                                        "模型目录返回业务错误；请检查当前 Key 与供应商分组"
+                                            .to_string(),
+                                    ),
+                                    attempts,
+                                );
+                            }
+                            ModelPayloadResult::Unknown => {
+                                attempts.push(json!({
+                                    "endpoint": safe_endpoint,
+                                    "http_status": status_code,
+                                    "models": 0,
+                                    "action": "unknown_payload_shape",
+                                    "payload_shape": payload_shape,
+                                }));
+                                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                                return finish_model_discovery(
+                                    Vec::new(),
+                                    failed_source(
+                                        safe_source,
+                                        "模型目录返回了未识别的 JSON 结构".to_string(),
+                                    ),
+                                    attempts,
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        attempts.push(json!({
+                            "endpoint": safe_endpoint,
+                            "http_status": status_code,
+                            "models": 0,
+                            "action": "parse_failed",
+                        }));
+                        safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                        return finish_model_discovery(
+                            Vec::new(),
+                            failed_source(safe_source, format!("模型目录响应解析失败: {error}")),
+                            attempts,
+                        );
+                    }
+                }
             }
-            Err(error) => failed_source(safe_source, error.to_string()),
-        },
-        Ok(response) => failed_source(safe_source, format!("HTTP {}", response.status().as_u16())),
-        Err(error) => failed_source(safe_source, error.to_string()),
+            Ok(response) => {
+                let status_code = response.status().as_u16();
+                let retryable = matches!(status_code, 404 | 405);
+                attempts.push(json!({
+                    "endpoint": safe_endpoint,
+                    "http_status": status_code,
+                    "models": 0,
+                    "action": if retryable { "try_next" } else { "failed" },
+                }));
+                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                if retryable {
+                    continue;
+                }
+                return finish_model_discovery(
+                    Vec::new(),
+                    failed_source(safe_source, format!("HTTP {status_code}")),
+                    attempts,
+                );
+            }
+            Err(error) => {
+                attempts.push(json!({
+                    "endpoint": safe_endpoint,
+                    "http_status": Value::Null,
+                    "models": 0,
+                    "action": "failed",
+                }));
+                safe_source["endpoint"] = json!(safe_url_for_status(&endpoint));
+                return finish_model_discovery(
+                    Vec::new(),
+                    failed_source(safe_source, model_request_error_message(&error)),
+                    attempts,
+                );
+            }
+        }
+    }
+
+    finish_model_discovery(
+        Vec::new(),
+        failed_source(
+            safe_source,
+            "所有模型目录候选均返回 HTTP 404/405".to_string(),
+        ),
+        attempts,
+    )
+}
+
+fn finish_model_discovery(
+    models: Vec<String>,
+    mut source: Value,
+    attempts: Vec<Value>,
+) -> (Vec<String>, Value) {
+    source["attempts"] = json!(attempts);
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        "model_catalog.discovery",
+        json!({
+            "source_id": source.get("id").and_then(Value::as_str).unwrap_or_default(),
+            "candidate_endpoints": source
+                .get("candidate_endpoints")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            "attempts": source
+                .get("attempts")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            "endpoint": source.get("endpoint").cloned().unwrap_or_else(|| json!("")),
+            "status": source.get("status").cloned().unwrap_or_else(|| json!("failed")),
+            "models": models.len(),
+            "message": source.get("message").cloned().unwrap_or_else(|| json!("")),
+        }),
+    );
+    (models, source)
+}
+
+fn model_request_error_message(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "模型目录请求超时".to_string()
+    } else if error.is_connect() {
+        "模型目录连接失败".to_string()
+    } else {
+        "模型目录请求失败".to_string()
     }
 }
 
-fn failed_source(mut source: Value, message: String) -> (Vec<String>, Value) {
+fn failed_source(mut source: Value, message: String) -> Value {
     source["status"] = json!("failed");
     source["message"] = json!(message);
     source["models"] = json!(0);
     source["responses_api"] = responses_api_status("unknown", "", "");
-    (Vec::new(), source)
+    source
 }
 
 fn responses_api_status(status: &str, endpoint: &str, message: &str) -> Value {
@@ -590,7 +811,16 @@ fn responses_api_status(status: &str, endpoint: &str, message: &str) -> Value {
 pub async fn fetch_relay_profile_model_ids(
     profile: &RelayProfile,
 ) -> anyhow::Result<(Vec<String>, String)> {
-    let source = ModelSource {
+    let (models, endpoint) = discover_relay_profile_model_ids(profile).await?;
+    if !models.is_empty() {
+        return Ok((models, endpoint));
+    }
+
+    anyhow::bail!("当前 Key 的标准模型目录 {endpoint} 没有返回可用模型")
+}
+
+fn relay_profile_model_source(profile: &RelayProfile) -> ModelSource {
+    ModelSource {
         source_id: format!("relay-profile:{}", profile.id),
         source_type: "relay_profile".to_string(),
         name: if profile.name.trim().is_empty() {
@@ -604,18 +834,25 @@ pub async fn fetch_relay_profile_model_ids(
             profile.upstream_base_url.trim().to_string()
         },
         api_key: crate::settings::relay_profile_resolved_api_key(profile),
-        anthropic_api_key: crate::settings::relay_profile_uses_anthropic_api_key(profile),
-    };
+        // Model discovery is an OpenAI-compatible catalogue request. Keep it
+        // independent from the authentication mode used by real Messages traffic.
+        anthropic_api_key: false,
+        include_anthropic_version: false,
+    }
+}
+
+/// Performs authenticated model discovery while preserving a successful empty
+/// catalogue. Callers that have a narrowly scoped local fallback can therefore
+/// distinguish HTTP/auth failures from an upstream that returned no models.
+pub async fn discover_relay_profile_model_ids(
+    profile: &RelayProfile,
+) -> anyhow::Result<(Vec<String>, String)> {
+    let source = relay_profile_model_source(profile);
     if source.base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
     }
-    let models_endpoint = models_endpoint(&source.base_url);
     let client = crate::http_client::proxied_client(&profile.user_agent)?;
     let (models, status) = fetch_models_from_source(&client, &source).await;
-    if !models.is_empty() {
-        return Ok((models, models_endpoint));
-    }
-
     let models_request_succeeded = status.get("status").and_then(Value::as_str) == Some("ok");
     if !models_request_succeeded {
         let message = status
@@ -625,7 +862,13 @@ pub async fn fetch_relay_profile_model_ids(
         anyhow::bail!("{message}");
     }
 
-    anyhow::bail!("上游 /v1/models 没有返回可用模型")
+    let endpoint = status
+        .get("endpoint")
+        .and_then(Value::as_str)
+        .filter(|endpoint| !endpoint.trim().is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| models_endpoint(&source.base_url));
+    Ok((models, endpoint))
 }
 
 fn preferred_responses_api_status(sources: &[Value]) -> Value {
@@ -645,55 +888,378 @@ fn preferred_responses_api_status(sources: &[Value]) -> Value {
 }
 
 fn models_endpoint(base_url: &str) -> String {
-    let cleaned = safe_url_for_status(base_url)
-        .trim_end_matches('/')
-        .to_string();
-    if cleaned.is_empty() {
-        return String::new();
-    }
-    if cleaned.ends_with("/models") {
-        return cleaned;
-    }
-    if cleaned.ends_with("/v1") {
-        return format!("{cleaned}/models");
-    }
-    format!("{cleaned}/v1/models")
+    build_models_url_candidates(base_url)
+        .ok()
+        .and_then(|candidates| candidates.into_iter().next())
+        .unwrap_or_default()
 }
 
-fn parse_model_payload(payload: &Value) -> Vec<String> {
-    if let Some(array) = payload.as_array() {
-        return array
-            .iter()
-            .filter_map(|item| {
-                item.as_str().map(str::to_string).or_else(|| {
-                    item.as_object().and_then(|object| {
-                        ["id", "model", "name"]
-                            .iter()
-                            .filter_map(|key| object.get(*key).and_then(Value::as_str))
-                            .find(|value| !value.trim().is_empty())
-                            .map(|value| value.trim().to_string())
-                    })
-                })
-            })
-            .collect();
+/// Construct deterministic model-directory candidates for a provider Base URL.
+///
+/// The first candidate follows the current path. A version segment such as
+/// `/v4` uses `{base}/models` first, while known compatibility suffixes add
+/// root-level `/v1/models` and `/models` fallbacks. Callers should only move to
+/// the next candidate for HTTP 404 or 405.
+pub fn build_models_url_candidates(base_url: &str) -> anyhow::Result<Vec<String>> {
+    let raw = base_url.trim();
+    if raw.is_empty() {
+        anyhow::bail!("Base URL 不能为空");
     }
-    let Some(object) = payload.as_object() else {
-        return Vec::new();
-    };
-    for key in ["data", "models", "items"] {
-        if let Some(value) = object.get(key) {
-            let nested = parse_model_payload(value);
-            if !nested.is_empty() {
-                return nested;
-            }
+
+    let mut parsed = reqwest::Url::parse(raw).map_err(anyhow::Error::from)?;
+    parsed.set_fragment(None);
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+
+    let mut cleaned = parsed.path().trim_end_matches('/').to_string();
+    let lower = cleaned.to_ascii_lowercase();
+    for suffix in ["/chat/completions", "/messages", "/responses"] {
+        if lower.ends_with(suffix) {
+            cleaned.truncate(cleaned.len() - suffix.len());
+            break;
         }
     }
-    ["id", "model", "name"]
+    cleaned = cleaned.trim_end_matches('/').to_string();
+    if cleaned.is_empty() && parsed.host_str().is_none() {
+        anyhow::bail!("Base URL 不能为空");
+    }
+    if cleaned.to_ascii_lowercase().ends_with("/models") {
+        parsed.set_path(&cleaned);
+        return Ok(vec![parsed.to_string()]);
+    }
+
+    let candidate_url = |path: &str| {
+        let mut candidate = parsed.clone();
+        candidate.set_path(path);
+        candidate.to_string()
+    };
+    let mut candidates = Vec::new();
+    if ends_with_version_segment(&cleaned) {
+        candidates.push(candidate_url(&format!("{cleaned}/models")));
+        if !cleaned.to_ascii_lowercase().ends_with("/v1") {
+            candidates.push(candidate_url(&format!("{cleaned}/v1/models")));
+        }
+    } else {
+        candidates.push(candidate_url(&format!("{cleaned}/v1/models")));
+    }
+
+    if let Some(stripped) = strip_model_compat_suffix(&cleaned) {
+        let root = stripped.trim_end_matches('/');
+        candidates.push(candidate_url(&format!("{root}/v1/models")));
+        candidates.push(candidate_url(&format!("{root}/models")));
+    }
+
+    let mut unique = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !unique.iter().any(|existing| existing == &candidate) {
+            unique.push(candidate);
+        }
+    }
+    Ok(unique)
+}
+
+fn strip_model_compat_suffix(base_url: &str) -> Option<&str> {
+    KNOWN_MODEL_COMPAT_SUFFIXES
         .iter()
-        .filter_map(|key| object.get(*key).and_then(Value::as_str))
-        .find(|value| !value.trim().is_empty())
-        .map(|value| vec![value.trim().to_string()])
-        .unwrap_or_default()
+        .find_map(|suffix| base_url.strip_suffix(suffix))
+}
+
+fn ends_with_version_segment(url: &str) -> bool {
+    let segment = url.rsplit('/').next().unwrap_or_default();
+    let Some(digits) = segment.strip_prefix('v') else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn parse_model_payload(payload: &Value) -> (ModelPayloadResult, Value) {
+    let result = match parse_model_payload_value(payload, 0, false) {
+        ModelPayloadResult::Models(models) => ModelPayloadResult::Models(unique_strings(models)),
+        other => other,
+    };
+    (result, model_payload_shape(payload, "$", 0))
+}
+
+fn parse_model_payload_value(
+    value: &Value,
+    depth: usize,
+    scalar_is_model: bool,
+) -> ModelPayloadResult {
+    if depth >= MODEL_PAYLOAD_MAX_DEPTH {
+        return ModelPayloadResult::Unknown;
+    }
+
+    match value {
+        Value::String(raw) => {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return if scalar_is_model {
+                    ModelPayloadResult::Empty
+                } else {
+                    ModelPayloadResult::Unknown
+                };
+            }
+            if let Ok(decoded) = serde_json::from_str::<Value>(raw) {
+                return parse_model_payload_value(&decoded, depth + 1, scalar_is_model);
+            }
+            if scalar_is_model {
+                ModelPayloadResult::Models(vec![raw.to_string()])
+            } else {
+                ModelPayloadResult::Unknown
+            }
+        }
+        Value::Array(items) => {
+            if items.is_empty() {
+                return ModelPayloadResult::Empty;
+            }
+
+            let mut models = Vec::new();
+            let mut saw_empty = false;
+            let mut saw_unknown = false;
+            let mut saw_business_error = false;
+            for item in items {
+                match parse_model_payload_value(item, depth + 1, true) {
+                    ModelPayloadResult::Models(nested) => models.extend(nested),
+                    ModelPayloadResult::Empty => saw_empty = true,
+                    ModelPayloadResult::BusinessError => saw_business_error = true,
+                    ModelPayloadResult::Unknown => saw_unknown = true,
+                }
+            }
+            if !models.is_empty() {
+                ModelPayloadResult::Models(models)
+            } else if saw_business_error {
+                ModelPayloadResult::BusinessError
+            } else if saw_empty && !saw_unknown {
+                ModelPayloadResult::Empty
+            } else {
+                ModelPayloadResult::Unknown
+            }
+        }
+        Value::Object(object) => {
+            if object_has_business_error(object) {
+                return ModelPayloadResult::BusinessError;
+            }
+
+            if let Some(model) = MODEL_PAYLOAD_ID_KEYS.iter().find_map(|key| {
+                object
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+            }) {
+                return ModelPayloadResult::Models(vec![model.to_string()]);
+            }
+
+            let mut found_container = false;
+            let mut saw_empty = false;
+            let mut saw_unknown = false;
+            for key in MODEL_PAYLOAD_CONTAINER_KEYS {
+                let Some(nested) = object.get(*key) else {
+                    continue;
+                };
+                found_container = true;
+                match parse_model_payload_value(nested, depth + 1, true) {
+                    ModelPayloadResult::Models(models) => {
+                        return ModelPayloadResult::Models(models);
+                    }
+                    ModelPayloadResult::BusinessError => {
+                        return ModelPayloadResult::BusinessError;
+                    }
+                    ModelPayloadResult::Empty => saw_empty = true,
+                    ModelPayloadResult::Unknown => saw_unknown = true,
+                }
+            }
+            if found_container {
+                return if saw_empty && !saw_unknown {
+                    ModelPayloadResult::Empty
+                } else {
+                    ModelPayloadResult::Unknown
+                };
+            }
+
+            if object.is_empty() {
+                return ModelPayloadResult::Unknown;
+            }
+
+            let mapped_models = model_ids_from_object_map(object);
+            if mapped_models.is_empty() {
+                ModelPayloadResult::Unknown
+            } else {
+                ModelPayloadResult::Models(mapped_models)
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => ModelPayloadResult::Unknown,
+    }
+}
+
+fn object_has_business_error(object: &serde_json::Map<String, Value>) -> bool {
+    if object.get("success").and_then(Value::as_bool) == Some(false)
+        || object.get("ok").and_then(Value::as_bool) == Some(false)
+    {
+        return true;
+    }
+    if object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|status| {
+            ["error", "failed", "failure"]
+                .iter()
+                .any(|expected| status.eq_ignore_ascii_case(expected))
+        })
+    {
+        return true;
+    }
+    MODEL_PAYLOAD_ERROR_KEYS.iter().any(|key| {
+        object
+            .get(*key)
+            .is_some_and(model_payload_error_value_is_present)
+    })
+}
+
+fn model_payload_error_value_is_present(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(values) => !values.is_empty(),
+        Value::Bool(value) => *value,
+        Value::Number(_) => true,
+    }
+}
+
+fn model_ids_from_object_map(object: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut models = Vec::new();
+    for (key, value) in object {
+        if MODEL_PAYLOAD_CONTAINER_KEYS.contains(&key.as_str())
+            || MODEL_PAYLOAD_ID_KEYS.contains(&key.as_str())
+            || MODEL_PAYLOAD_ERROR_KEYS.contains(&key.as_str())
+            || MODEL_MAP_METADATA_KEYS.contains(&key.as_str())
+        {
+            continue;
+        }
+
+        if let Some(model) = value.as_object().and_then(|descriptor| {
+            MODEL_PAYLOAD_ID_KEYS.iter().find_map(|id_key| {
+                descriptor
+                    .get(*id_key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+            })
+        }) {
+            models.push(model.to_string());
+            continue;
+        }
+
+        if looks_like_model_id(key) && model_map_value_is_descriptor(value) {
+            models.push(key.trim().to_string());
+        }
+    }
+    unique_strings(models)
+}
+
+fn model_map_value_is_descriptor(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Object(_) | Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null
+    )
+}
+
+fn looks_like_model_id(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 256
+        || value
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || b"-_.:/".contains(&byte)))
+    {
+        return false;
+    }
+    let lower = value.to_ascii_lowercase();
+    value.bytes().any(|byte| b"-_.:/".contains(&byte))
+        || [
+            "claude",
+            "anthropic",
+            "opus",
+            "sonnet",
+            "haiku",
+            "fable",
+            "gpt",
+            "o1",
+            "o3",
+            "o4",
+            "gemini",
+            "deepseek",
+            "qwen",
+            "llama",
+            "mistral",
+            "grok",
+            "command",
+        ]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+fn model_payload_shape(value: &Value, path: &str, depth: usize) -> Value {
+    if depth >= MODEL_PAYLOAD_MAX_DEPTH {
+        return json!({ "path": path, "kind": value_kind(value), "depth_limited": true });
+    }
+
+    match value {
+        Value::Object(object) => {
+            let fields = object.keys().take(32).cloned().collect::<Vec<_>>();
+            let containers = MODEL_PAYLOAD_CONTAINER_KEYS
+                .iter()
+                .filter_map(|key| {
+                    object.get(*key).map(|nested| {
+                        model_payload_shape(nested, &format!("{path}.{key}"), depth + 1)
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "path": path,
+                "kind": "object",
+                "field_count": object.len(),
+                "fields": fields,
+                "containers": containers,
+            })
+        }
+        Value::Array(items) => json!({
+            "path": path,
+            "kind": "array",
+            "length": items.len(),
+            "first": items
+                .first()
+                .map(|item| model_payload_shape(item, &format!("{path}[0]"), depth + 1))
+                .unwrap_or(Value::Null),
+        }),
+        Value::String(raw) => {
+            let decoded = serde_json::from_str::<Value>(raw.trim()).ok();
+            json!({
+                "path": path,
+                "kind": "string",
+                "length": raw.len(),
+                "json_encoded": decoded.is_some(),
+                "decoded": decoded
+                    .as_ref()
+                    .map(|decoded| model_payload_shape(decoded, path, depth + 1))
+                    .unwrap_or(Value::Null),
+            })
+        }
+        _ => json!({ "path": path, "kind": value_kind(value) }),
+    }
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn models_from_config_model_catalog_json(

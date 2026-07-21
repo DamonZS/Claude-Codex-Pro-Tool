@@ -19,7 +19,7 @@ const CLAUDE_DESKTOP_SAFE_HAIKU_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL: &str = "claude-opus-4-6";
 const CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL: &str = "claude-opus-4-8";
 const CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL: &str = "claude-Fable-5";
-const CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL: &str = "claude-opus-4-7";
+const CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL: &str = "claude-haiku-4-5";
 const THINK_OPEN_TAG: &str = "<think>";
 const THINK_CLOSE_TAG: &str = "</think>";
 const EXTRA_CHAT_PASSTHROUGH_FIELDS: &[&str] = &[
@@ -49,6 +49,18 @@ pub struct ClaudeMessagesRequestMetadata {
 }
 
 impl ClaudeMessagesRequestMetadata {
+    pub fn beta(&self) -> bool {
+        self.beta
+    }
+
+    pub fn has_anthropic_version(&self) -> bool {
+        self.anthropic_version.is_some()
+    }
+
+    pub fn has_anthropic_beta(&self) -> bool {
+        self.anthropic_beta.is_some()
+    }
+
     pub fn from_inbound(raw_path: &str, anthropic_version: &str, anthropic_beta: &str) -> Self {
         let beta = raw_path
             .split_once('?')
@@ -83,6 +95,147 @@ fn sanitized_protocol_header(value: &str, max_len: usize) -> Option<String> {
         return None;
     }
     Some(value.to_string())
+}
+
+fn parsed_local_proxy_body_override(raw: &str) -> Option<Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    value.as_object()?;
+    Some(value)
+}
+
+fn apply_local_proxy_body_override(target: &mut Value, override_body: &Value) -> Vec<String> {
+    let Some(target_object) = target.as_object_mut() else {
+        return Vec::new();
+    };
+    let Some(override_object) = override_body.as_object() else {
+        return Vec::new();
+    };
+
+    let mut applied = Vec::new();
+    for (key, value) in override_object {
+        if key == "stream" {
+            continue;
+        }
+        match target_object.get_mut(key) {
+            Some(target_value) => {
+                if merge_json_override_value(target_value, value) {
+                    applied.push(key.clone());
+                }
+            }
+            None => {
+                target_object.insert(key.clone(), value.clone());
+                applied.push(key.clone());
+            }
+        }
+    }
+    applied
+}
+
+fn merge_json_override_value(target: &mut Value, patch: &Value) -> bool {
+    match (target, patch) {
+        (Value::Object(target_object), Value::Object(patch_object)) => {
+            let mut changed = false;
+            for (key, value) in patch_object {
+                match target_object.get_mut(key) {
+                    Some(target_value) => {
+                        changed |= merge_json_override_value(target_value, value);
+                    }
+                    None => {
+                        target_object.insert(key.clone(), value.clone());
+                        changed = true;
+                    }
+                }
+            }
+            changed
+        }
+        (target_value, patch_value) => {
+            if target_value == patch_value {
+                false
+            } else {
+                *target_value = patch_value.clone();
+                true
+            }
+        }
+    }
+}
+
+fn parsed_local_proxy_header_override(raw: &str) -> BTreeMap<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(Value::Object(headers)) = serde_json::from_str::<Value>(raw) else {
+        return BTreeMap::new();
+    };
+
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() || is_protected_local_proxy_override_header(&name) {
+                return None;
+            }
+            let value = match value {
+                Value::String(value) => value,
+                Value::Number(value) => value.to_string(),
+                Value::Bool(value) => value.to_string(),
+                _ => return None,
+            };
+            let value = value.trim().to_string();
+            if value.is_empty()
+                || reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err()
+                || reqwest::header::HeaderValue::from_str(&value).is_err()
+            {
+                return None;
+            }
+            Some((name, value))
+        })
+        .collect()
+}
+
+fn is_protected_local_proxy_override_header(name: &str) -> bool {
+    matches!(
+        name,
+        "host"
+            | "content-length"
+            | "transfer-encoding"
+            | "connection"
+            | "proxy-authorization"
+            | "proxy-authenticate"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "accept-encoding"
+            | "content-type"
+            | "authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            | "api-key"
+            | "anthropic-api-key"
+            | "chatgpt-account-id"
+            | "session_id"
+            | "x-client-request-id"
+            | "x-codex-window-id"
+            | "x-forwarded-host"
+            | "x-forwarded-port"
+            | "x-forwarded-proto"
+            | "forwarded"
+            | "cf-connecting-ip"
+            | "cf-ipcountry"
+            | "cf-ray"
+            | "cf-visitor"
+            | "true-client-ip"
+            | "fastly-client-ip"
+            | "x-azure-clientip"
+            | "x-azure-fdid"
+            | "x-azure-ref"
+            | "akamai-origin-hop"
+            | "x-akamai-config-log-detail"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -911,13 +1064,33 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     if base_url.trim().is_empty() {
         anyhow::bail!("Claude Desktop 上游 Base URL 不能为空");
     }
-    let api_key = claude_desktop_upstream_api_key(&relay, &settings);
+    let api_key = crate::settings::relay_profile_resolved_api_key(relay);
     if api_key.trim().is_empty() {
-        anyhow::bail!("Claude Desktop 上游 Key 不能为空");
+        anyhow::bail!("当前 Claude Desktop 供应商 Key 不能为空");
     }
 
     let mut request_json: Value = serde_json::from_str(body)?;
-    map_claude_desktop_request_model(&mut request_json, &relay);
+    let original_model = {
+        let request_object = request_json
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Claude Desktop 请求正文必须是 JSON 对象"))?;
+        request_object
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Claude Desktop 请求缺少有效的 model 字段"))?
+            .to_string()
+    };
+    let mapped_model = claude_desktop_model_mapping_for(&original_model, relay);
+    let mapping_applied = mapped_model.is_some();
+    let upstream_model = mapped_model.unwrap_or_else(|| original_model.clone());
+    let applied_body_override_fields = parsed_local_proxy_body_override(&relay.body_override)
+        .map(|override_body| apply_local_proxy_body_override(&mut request_json, &override_body))
+        .unwrap_or_default();
+    // The saved route mapping owns the upstream model. Reapply it after body
+    // overrides so an unrelated override cannot silently undo the route.
+    request_json["model"] = Value::String(upstream_model.clone());
     let is_stream = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -927,8 +1100,19 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     } else {
         crate::http_client::proxied_client(&relay.user_agent)?
     };
+    let upstream_url = claude_messages_url(&base_url);
+    let request_body_fields = request_json
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let uses_anthropic_api_key = crate::settings::relay_profile_uses_anthropic_api_key(relay);
+    let auth_header_mode = if uses_anthropic_api_key {
+        "x-api-key"
+    } else {
+        "authorization"
+    };
     let mut request = client
-        .post(claude_messages_url(&base_url))
+        .post(&upstream_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .json(&request_json);
     if metadata.beta {
@@ -937,7 +1121,7 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     request = crate::http_client::apply_api_auth_headers(
         request,
         api_key.trim(),
-        crate::settings::relay_profile_uses_anthropic_api_key(relay),
+        uses_anthropic_api_key,
         false,
     );
     request = request.header(
@@ -950,8 +1134,89 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     if let Some(anthropic_beta) = metadata.anthropic_beta.as_deref() {
         request = request.header("anthropic-beta", anthropic_beta);
     }
+    let applied_header_overrides = parsed_local_proxy_header_override(&relay.header_override);
+    for (name, value) in &applied_header_overrides {
+        request = request.header(name.as_str(), value.as_str());
+    }
     let upstream = request.send().await?;
     let status_code = upstream.status().as_u16();
+    let _ = crate::diagnostic_log::append_diagnostic_log("proxy.claude_desktop_upstream_route", {
+        let mut detail = claude_desktop_route_diagnostic(
+            &relay.id,
+            &original_model,
+            &upstream_model,
+            status_code,
+        );
+        if let Some(object) = detail.as_object_mut() {
+            object.insert(
+                "target_app".to_string(),
+                Value::String("claude-desktop".to_string()),
+            );
+            object.insert(
+                "protocol".to_string(),
+                Value::String(format!("{:?}", relay.protocol)),
+            );
+            object.insert(
+                "upstream_path".to_string(),
+                Value::String(sanitized_url_path(&upstream_url)),
+            );
+            object.insert(
+                "auth_header_mode".to_string(),
+                Value::String(auth_header_mode.to_string()),
+            );
+            object.insert("mapping_applied".to_string(), Value::Bool(mapping_applied));
+            object.insert("has_anthropic_version".to_string(), Value::Bool(true));
+            object.insert(
+                "has_inbound_anthropic_version".to_string(),
+                Value::Bool(metadata.has_anthropic_version()),
+            );
+            object.insert(
+                "has_anthropic_beta".to_string(),
+                Value::Bool(metadata.has_anthropic_beta()),
+            );
+            object.insert("beta_query".to_string(), Value::Bool(metadata.beta()));
+            object.insert(
+                "content_type".to_string(),
+                Value::String("application/json".to_string()),
+            );
+            object.insert("is_stream".to_string(), Value::Bool(is_stream));
+            object.insert(
+                "request_body_fields".to_string(),
+                Value::Array(
+                    request_body_fields
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            if !applied_header_overrides.is_empty() {
+                object.insert(
+                    "applied_custom_headers".to_string(),
+                    Value::Array(
+                        applied_header_overrides
+                            .keys()
+                            .cloned()
+                            .map(Value::String)
+                            .collect(),
+                    ),
+                );
+            }
+            if !applied_body_override_fields.is_empty() {
+                object.insert(
+                    "applied_body_fields".to_string(),
+                    Value::Array(
+                        applied_body_override_fields
+                            .iter()
+                            .cloned()
+                            .map(Value::String)
+                            .collect(),
+                    ),
+                );
+            }
+        }
+        detail
+    });
     let content_type = upstream
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -965,6 +1230,32 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         content_type,
         response: upstream,
     })
+}
+
+fn claude_desktop_route_diagnostic(
+    profile_id: &str,
+    original_model: &str,
+    upstream_model: &str,
+    http_status: u16,
+) -> Value {
+    json!({
+        "profile_id": profile_id,
+        "original_model": original_model,
+        "upstream_model": upstream_model,
+        "http_status": http_status
+    })
+}
+
+fn sanitized_url_path(raw_url: &str) -> String {
+    url::Url::parse(raw_url)
+        .map(|url| url.path().to_string())
+        .unwrap_or_else(|_| {
+            raw_url
+                .split_once('?')
+                .map(|(path, _)| path)
+                .unwrap_or(raw_url)
+                .to_string()
+        })
 }
 
 pub fn claude_desktop_resolved_upstream_base_url(
@@ -1016,18 +1307,6 @@ fn claude_desktop_upstream_api_key(
         .unwrap_or_default()
 }
 
-fn map_claude_desktop_request_model(body: &mut Value, relay: &crate::settings::RelayProfile) {
-    let Some(original) = body.get("model").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(mapped) = claude_desktop_model_mapping_for(original, relay) else {
-        return;
-    };
-    if mapped != original {
-        body["model"] = json!(mapped);
-    }
-}
-
 pub fn claude_desktop_model_mapping_for(
     original_model: &str,
     relay: &crate::settings::RelayProfile,
@@ -1035,55 +1314,7 @@ pub fn claude_desktop_model_mapping_for(
     if !relay.model_mapping_enabled {
         return None;
     }
-    if let Some(mapped) = claude_desktop_model_mapping_json_for(original_model, relay) {
-        return Some(mapped);
-    }
-    if relay.model_mapping_enabled && relay.model_mapping_json.trim().is_empty() {
-        return default_claude_desktop_upstream_model(original_model).map(ToOwned::to_owned);
-    }
-    let models = parse_plain_model_list(&relay.model_list);
-    if models.is_empty() && relay_model_fallback(relay).is_none() {
-        return default_claude_desktop_upstream_model(original_model).map(ToOwned::to_owned);
-    }
-    let default_models = non_empty_model_list_or_default(&relay.model_list);
-    let fallback = relay_model_fallback(relay)
-        .or_else(|| models.first().cloned())
-        .or_else(|| default_models.first().cloned());
-    let lower_original = original_model.to_ascii_lowercase();
-    let mapped = if lower_original.contains("fable") {
-        pick_model_by_keyword(&models, "fable")
-            .or_else(|| models.first().cloned())
-            .or_else(|| pick_model_by_keyword(&default_models, "fable"))
-            .or_else(|| fallback.clone())
-    } else if lower_original.contains("haiku") {
-        pick_model_by_keyword(&models, "haiku")
-            .or_else(|| models.get(1).cloned())
-            .or_else(|| pick_model_by_keyword(&default_models, "haiku"))
-            .or_else(|| fallback.clone())
-    } else if lower_original.contains("opus") {
-        pick_model_by_keyword(&models, "opus")
-            .or_else(|| models.get(2).cloned())
-            .or_else(|| pick_model_by_keyword(&default_models, "opus"))
-            .or_else(|| fallback.clone())
-    } else if lower_original.contains("sonnet") {
-        pick_model_by_keyword(&models, "sonnet")
-            .or_else(|| models.get(3).cloned())
-            .or_else(|| pick_model_by_keyword(&default_models, "sonnet"))
-            .or_else(|| fallback.clone())
-    } else {
-        fallback
-    }?;
-    Some(strip_one_m_suffix(&mapped).to_string())
-}
-
-fn default_claude_desktop_upstream_model(model: &str) -> Option<&'static str> {
-    match claude_route_role_keyword(model)? {
-        "sonnet" => Some(CLAUDE_DESKTOP_DEFAULT_SONNET_MODEL),
-        "opus" => Some(CLAUDE_DESKTOP_DEFAULT_OPUS_MODEL),
-        "fable" => Some(CLAUDE_DESKTOP_DEFAULT_FABLE_MODEL),
-        "haiku" => Some(CLAUDE_DESKTOP_DEFAULT_HAIKU_MODEL),
-        _ => None,
-    }
+    claude_desktop_model_mapping_json_for(original_model, relay)
 }
 
 fn claude_desktop_model_mapping_json_for(
@@ -1095,98 +1326,25 @@ fn claude_desktop_model_mapping_json_for(
         return None;
     }
     let parsed: Value = serde_json::from_str(raw).ok()?;
-    let requested = strip_one_m_suffix(original_model.trim());
+    let requested = original_model.trim();
     if requested.is_empty() {
         return None;
     }
     let entries = parsed.as_array()?;
-    let subagent_preserve = entries.iter().any(|entry| {
-        entry
-            .get("role")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|role| role.eq_ignore_ascii_case("subagent"))
-            && entry
-                .get("requestModel")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .map(strip_one_m_suffix)
-                .is_some_and(|model| model == requested)
-    });
-    if subagent_preserve {
-        return Some(requested.to_string());
-    }
-    let exact = entries.iter().find(|entry| {
-        entry
-            .get("routeId")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|route_id| route_id == requested)
-    });
-    let role_fallback = || {
-        let role = claude_route_role_keyword(requested)?;
-        entries.iter().find(|entry| {
+    entries
+        .iter()
+        .find(|entry| {
             entry
-                .get("role")
+                .get("routeId")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .is_some_and(|entry_role| entry_role.eq_ignore_ascii_case(role))
-                || entry
-                    .get("routeId")
-                    .and_then(Value::as_str)
-                    .and_then(claude_route_role_keyword)
-                    .is_some_and(|entry_role| entry_role == role)
+                .is_some_and(|route_id| route_id == requested)
         })
-    };
-    let fable_to_opus_fallback = || {
-        (claude_route_role_keyword(requested) == Some("fable"))
-            .then(|| {
-                entries.iter().find(|entry| {
-                    entry
-                        .get("role")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .is_some_and(|entry_role| entry_role.eq_ignore_ascii_case("opus"))
-                        || entry
-                            .get("routeId")
-                            .and_then(Value::as_str)
-                            .and_then(claude_route_role_keyword)
-                            .is_some_and(|entry_role| entry_role == "opus")
-                })
-            })
-            .flatten()
-    };
-    exact
-        .or_else(role_fallback)
-        .or_else(fable_to_opus_fallback)
         .and_then(|entry| entry.get("requestModel").and_then(Value::as_str))
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(strip_one_m_suffix)
         .map(ToOwned::to_owned)
-}
-
-fn claude_route_role_keyword(model: &str) -> Option<&'static str> {
-    let lower = model.to_ascii_lowercase();
-    if lower.contains("sonnet") {
-        Some("sonnet")
-    } else if lower.contains("opus") {
-        Some("opus")
-    } else if lower.contains("haiku") {
-        Some("haiku")
-    } else if lower.contains("fable") {
-        Some("fable")
-    } else if lower.contains("subagent") {
-        Some("subagent")
-    } else {
-        None
-    }
-}
-
-fn relay_model_fallback(relay: &crate::settings::RelayProfile) -> Option<String> {
-    non_empty_string(&relay.model)
-        .or_else(|| non_empty_string(&relay.test_model))
-        .or_else(|| root_string_from_toml(&relay.config_contents, "model"))
 }
 
 #[derive(Clone)]
@@ -1207,26 +1365,10 @@ fn parse_claude_desktop_model_list(raw: &str) -> Vec<ClaudeDesktopModelListEntry
         .collect()
 }
 
-fn parse_plain_model_list(raw: &str) -> Vec<String> {
-    parse_claude_desktop_model_list(raw)
-        .into_iter()
-        .map(|entry| entry.model)
-        .collect()
-}
-
 fn non_empty_model_entries_or_default(raw: &str) -> Vec<ClaudeDesktopModelListEntry> {
     let models = parse_claude_desktop_model_list(raw);
     if models.is_empty() {
         parse_claude_desktop_model_list(&claude_desktop_default_model_list())
-    } else {
-        models
-    }
-}
-
-fn non_empty_model_list_or_default(raw: &str) -> Vec<String> {
-    let models = parse_plain_model_list(raw);
-    if models.is_empty() {
-        parse_plain_model_list(&claude_desktop_default_model_list())
     } else {
         models
     }
@@ -1239,13 +1381,6 @@ fn pick_model_entry_by_keyword(
     models
         .iter()
         .find(|entry| entry.model.to_ascii_lowercase().contains(keyword))
-        .cloned()
-}
-
-fn pick_model_by_keyword(models: &[String], keyword: &str) -> Option<String> {
-    models
-        .iter()
-        .find(|model| model.to_ascii_lowercase().contains(keyword))
         .cloned()
 }
 
@@ -1329,14 +1464,6 @@ fn provider_string_from_toml(contents: &str, key: &str) -> Option<String> {
                 .and_then(toml_edit::Item::as_value)
                 .and_then(toml_edit::Value::as_str)
         })
-        .and_then(non_empty_string)
-}
-
-fn root_string_from_toml(contents: &str, key: &str) -> Option<String> {
-    let doc = contents.parse::<toml_edit::DocumentMut>().ok()?;
-    doc.get(key)
-        .and_then(toml_edit::Item::as_value)
-        .and_then(toml_edit::Value::as_str)
         .and_then(non_empty_string)
 }
 
@@ -4558,6 +4685,34 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    #[test]
+    fn claude_desktop_route_diagnostic_contains_only_route_fields() {
+        let detail = claude_desktop_route_diagnostic(
+            "desktop-profile",
+            "claude-haiku-4-5",
+            "claude-haiku-4-5",
+            503,
+        );
+        let object = detail
+            .as_object()
+            .expect("route diagnostic must be an object");
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+
+        assert_eq!(
+            keys,
+            [
+                "http_status",
+                "original_model",
+                "profile_id",
+                "upstream_model"
+            ]
+        );
+        assert_eq!(object["http_status"], 503);
+        assert_eq!(object["original_model"], "claude-haiku-4-5");
+        assert_eq!(object["upstream_model"], "claude-haiku-4-5");
+    }
+
     #[tokio::test]
     async fn responses_proxy_sends_one_upstream_request_with_original_model() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
@@ -4644,7 +4799,12 @@ mod tests {
     async fn claude_desktop_proxy_forwards_beta_protocol_metadata_once() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
         let address = listener.local_addr().expect("read mock upstream address");
-        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
         let relay = RelayProfile {
             upstream_base_url: format!("http://{address}"),
             auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
@@ -4674,17 +4834,400 @@ mod tests {
         assert_eq!(response.status_code, 200);
         drop(response);
 
-        let (request_count, request) = server.join().expect("mock upstream should finish");
-        let headers = request
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let message_headers = requests[0]
             .split_once("\r\n\r\n")
             .map(|(headers, _)| headers.to_ascii_lowercase())
-            .expect("captured request should contain headers and body");
-        assert_eq!(request_count, 1);
-        assert!(headers.starts_with("post /v1/messages?beta=true http/1.1"));
+            .expect("captured message request should contain headers and body");
+        assert!(message_headers.starts_with("post /v1/messages?beta=true http/1.1"));
+        assert!(message_headers.contains("authorization: bearer claude-test-key"));
+        assert!(!message_headers.contains("x-api-key:"));
+        assert!(message_headers.contains("anthropic-version: 2024-10-22"));
+        assert!(message_headers.contains("anthropic-beta: computer-use-2024-10-22"));
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_applies_saved_request_overrides_without_replacing_auth() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            header_override: json!({
+                "X-Provider": "cc-switch",
+                "Authorization": "Bearer stale-override",
+                "Content-Type": "text/plain"
+            })
+            .to_string(),
+            body_override: json!({
+                "temperature": 0.2,
+                "stream": true,
+                "metadata": {"source": "ccp"}
+            })
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "verify saved overrides"}],
+            "metadata": {"existing": true},
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("Claude Desktop proxy request should succeed");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let (headers, request_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured message request should contain headers and body");
+        let request_json: Value =
+            serde_json::from_str(request_body).expect("captured body should be JSON");
+        let headers = headers.to_ascii_lowercase();
+
+        assert!(headers.contains("x-provider: cc-switch"));
         assert!(headers.contains("authorization: bearer claude-test-key"));
-        assert!(!headers.contains("x-api-key:"));
-        assert!(headers.contains("anthropic-version: 2024-10-22"));
-        assert!(headers.contains("anthropic-beta: computer-use-2024-10-22"));
+        assert!(!headers.contains("stale-override"));
+        assert!(headers.contains("content-type: application/json"));
+        assert_eq!(request_json["temperature"], json!(0.2));
+        assert_eq!(request_json["metadata"]["existing"], json!(true));
+        assert_eq!(request_json["metadata"]["source"], "ccp");
+        assert_eq!(request_json["stream"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_applies_saved_model_mapping() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            model_mapping_enabled: true,
+            model_mapping_json: json!([{
+                "routeId": "claude-haiku-4-5",
+                "requestModel": "claude-opus-4-7"
+            }])
+            .to_string(),
+            body_override: json!({"model": "stale-body-override"}).to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-haiku-4-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "keep discovered model"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("Claude Desktop proxy request should succeed");
+        drop(response);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let (headers, message_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured message request should contain a body");
+        let message_json: Value =
+            serde_json::from_str(message_body).expect("message body should be JSON");
+        assert!(headers.starts_with("POST /v1/messages HTTP/1.1"));
+        assert_eq!(message_json["model"], "claude-opus-4-7");
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_maps_all_claude_model_families() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![
+                    (200, r#"{"id":"msg-opus","content":[]}"#),
+                    (200, r#"{"id":"msg-sonnet","content":[]}"#),
+                    (200, r#"{"id":"msg-haiku","content":[]}"#),
+                    (200, r#"{"id":"msg-fable","content":[]}"#),
+                ],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            api_key: "current-profile-key".to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            model_mapping_enabled: true,
+            model_mapping_json: json!([
+                {"routeId": "claude-opus-4-8", "requestModel": "mapped-opus"},
+                {"routeId": "claude-sonnet-4-5", "requestModel": "mapped-sonnet"},
+                {"routeId": "claude-haiku-4-5", "requestModel": "mapped-haiku"},
+                {"routeId": "claude-fable-5", "requestModel": "mapped-fable"}
+            ])
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let models = [
+            ("claude-opus-4-8", "mapped-opus"),
+            ("claude-sonnet-4-5", "mapped-sonnet"),
+            ("claude-haiku-4-5", "mapped-haiku"),
+            ("claude-fable-5", "mapped-fable"),
+        ];
+
+        for (model, _) in models {
+            let body = json!({
+                "model": model,
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "."}],
+                "stream": false
+            })
+            .to_string();
+            let response = open_claude_desktop_messages_proxy_request_with_relay(
+                &body,
+                &relay,
+                &crate::settings::BackendSettings::default(),
+                &ClaudeMessagesRequestMetadata::default(),
+            )
+            .await
+            .expect("Claude Desktop proxy request should succeed");
+            assert_eq!(response.status_code, 200);
+        }
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), models.len());
+        for (request, (_, expected_model)) in requests.iter().zip(models) {
+            let (_, body) = request
+                .split_once("\r\n\r\n")
+                .expect("captured request should contain a body");
+            let body: Value = serde_json::from_str(body).expect("request body should be JSON");
+            assert_eq!(body["model"], expected_model);
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_probe_shaped_request_applies_saved_mapping_once() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            api_key: "current-profile-key".to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            model_mapping_enabled: true,
+            model_mapping_json: json!([{
+                "routeId": "claude-haiku-4-5",
+                "requestModel": "claude-fable-5"
+            }])
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-haiku-4-5",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "."}]
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("probe-shaped request should be sent as a normal message");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(
+            requests.len(),
+            1,
+            "request must not perform model discovery"
+        );
+        let (headers, message_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured request should contain a body");
+        let headers = headers.to_ascii_lowercase();
+        let message_json: Value =
+            serde_json::from_str(message_body).expect("message body should be JSON");
+        assert!(headers.starts_with("post /v1/messages http/1.1"));
+        assert!(headers.contains("authorization: bearer current-profile-key"));
+        assert_eq!(message_json["model"], "claude-fable-5");
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_preserves_model_when_mapping_is_disabled() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            model_mapping_enabled: false,
+            model_mapping_json: json!([{
+                "routeId": "claude-haiku-4-5",
+                "requestModel": "claude-opus-4-7"
+            }])
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-haiku-4-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "use current catalog"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("Claude Desktop proxy request should succeed");
+        drop(response);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let (_, message_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured message request should contain a body");
+        let message_json: Value =
+            serde_json::from_str(message_body).expect("message body should be JSON");
+        assert_eq!(message_json["model"], "claude-haiku-4-5");
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_preserves_unmatched_model_without_catalog_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            model_mapping_enabled: true,
+            model_mapping_json: json!([{
+                "routeId": "claude-opus-4-8",
+                "requestModel": "upstream-opus"
+            }])
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-haiku-4-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "do not post"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("message forwarding must not depend on a model catalog endpoint");
+        drop(response);
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let (headers, message_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured message request should contain a body");
+        let message_json: Value =
+            serde_json::from_str(message_body).expect("message body should be JSON");
+        assert!(headers.starts_with("POST /v1/messages HTTP/1.1"));
+        assert_eq!(message_json["model"], "claude-haiku-4-5");
+    }
+
+    #[tokio::test]
+    async fn claude_desktop_proxy_rejects_invalid_model_before_connecting_upstream() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude-desktop".to_string(),
+            api_format: "Anthropic Messages".to_string(),
+            ..RelayProfile::default()
+        };
+
+        for invalid_body in ["[]", "{}", r#"{"model":""}"#, r#"{"model":42}"#] {
+            assert!(
+                open_claude_desktop_messages_proxy_request_with_relay(
+                    invalid_body,
+                    &relay,
+                    &crate::settings::BackendSettings::default(),
+                    &ClaudeMessagesRequestMetadata::default(),
+                )
+                .await
+                .is_err(),
+                "invalid model body must be rejected: {invalid_body}"
+            );
+        }
+
+        listener
+            .set_nonblocking(true)
+            .expect("make mock listener nonblocking");
+        let error = listener
+            .accept()
+            .expect_err("invalid requests must not connect upstream");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
     }
 
     async fn assert_claude_desktop_proxy_auth_once(
@@ -4693,7 +5236,12 @@ mod tests {
     ) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
         let address = listener.local_addr().expect("read mock upstream address");
-        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-test","content":[]}"#)],
+            )
+        });
         let relay = RelayProfile {
             upstream_base_url: format!("http://{address}"),
             auth_contents,
@@ -4701,7 +5249,10 @@ mod tests {
             api_format: "Anthropic Messages".to_string(),
             ..RelayProfile::default()
         };
-        let settings = crate::settings::BackendSettings::default();
+        let settings = crate::settings::BackendSettings {
+            relay_api_key: "stale-global-key".to_string(),
+            ..crate::settings::BackendSettings::default()
+        };
         let body = json!({
             "model": "claude-opus-4-8",
             "max_tokens": 64,
@@ -4721,29 +5272,83 @@ mod tests {
         assert_eq!(response.status_code, 200);
         drop(response);
 
-        let (request_count, request) = server.join().expect("mock upstream should finish");
-        let (headers, request_body) = request
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1, "one message POST is required");
+        let (headers, request_body) = requests[0]
             .split_once("\r\n\r\n")
-            .expect("captured request should contain headers and body");
+            .expect("captured message request should contain headers and body");
         let request_json: Value =
             serde_json::from_str(request_body).expect("captured body should be JSON");
         let headers = headers.to_ascii_lowercase();
 
-        assert_eq!(
-            request_count, 1,
-            "one Claude Desktop request must not be duplicated"
-        );
         assert!(headers.starts_with("post /v1/messages http/1.1"));
         assert_eq!(
-            headers.contains("authorization: bearer claude-test-key"),
-            !expects_anthropic_api_key
+            headers
+                .matches("authorization: bearer claude-test-key")
+                .count(),
+            usize::from(!expects_anthropic_api_key)
         );
         assert_eq!(
-            headers.contains("x-api-key: claude-test-key"),
-            expects_anthropic_api_key
+            headers.matches("x-api-key: claude-test-key").count(),
+            usize::from(expects_anthropic_api_key)
         );
+        assert!(!headers.contains("stale-global-key"));
         assert!(headers.contains("anthropic-version: 2023-06-01"));
         assert_eq!(request_json["model"], "claude-opus-4-8");
+    }
+
+    fn capture_mock_upstream_requests(
+        listener: TcpListener,
+        responses: Vec<(u16, &'static str)>,
+    ) -> Vec<String> {
+        let mut requests = Vec::with_capacity(responses.len());
+        for (status, response_body) in responses {
+            let (mut stream, _) = listener.accept().expect("accept mock upstream request");
+            requests.push(read_http_request(&mut stream));
+            write_json_response(&mut stream, status, response_body);
+        }
+
+        listener
+            .set_nonblocking(true)
+            .expect("make mock listener nonblocking");
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut extra, _)) => {
+                    requests.push(read_http_request(&mut extra));
+                    write_json_response(
+                        &mut extra,
+                        500,
+                        r#"{"error":{"message":"unexpected extra request"}}"#,
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept extra mock upstream request: {error}"),
+            }
+        }
+        requests
+    }
+
+    fn write_json_response(stream: &mut TcpStream, status: u16, body: &str) {
+        let reason = match status {
+            200 => "OK",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "Mock Status",
+        };
+        write!(
+            stream,
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("write mock response");
+        stream.flush().expect("flush mock response");
     }
 
     fn capture_upstream_requests(listener: TcpListener) -> (usize, String) {

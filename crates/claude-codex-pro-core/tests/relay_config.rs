@@ -1,3 +1,7 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::thread;
+
 use claude_codex_pro_core::codex_sqlite::codex_session_db_path_from_home;
 use claude_codex_pro_core::relay_config::{
     apply_pure_api_config_to_home, apply_relay_config_file_to_home, apply_relay_config_to_home,
@@ -11,7 +15,7 @@ use claude_codex_pro_core::relay_config::{
     filter_common_config_for_selection, list_context_entries_from_common_config,
     normalize_relay_profile_for_storage, relay_config_status_from_home,
     sanitize_common_config_contents, set_codex_goals_feature_in_home,
-    strip_common_config_from_config, sync_live_config_context_entries,
+    strip_common_config_from_config, sync_live_config_context_entries, test_relay_profile,
     upsert_context_entry_in_common_config,
 };
 use claude_codex_pro_core::settings::{
@@ -591,7 +595,7 @@ fn official_mix_api_profile_does_not_generate_auth_api_key() {
 }
 
 #[test]
-fn normalize_relay_profile_preserves_invalid_config_without_failing_storage() {
+fn normalize_relay_profile_rebuilds_invalid_pure_api_config_without_losing_form_values() {
     let mut profile = RelayProfile {
         relay_mode: RelayMode::PureApi,
         model: "gpt-5".to_string(),
@@ -603,12 +607,424 @@ fn normalize_relay_profile_preserves_invalid_config_without_failing_storage() {
 
     normalize_relay_profile_for_storage(&mut profile).unwrap();
 
-    assert_eq!(profile.config_contents, "model = [\n");
+    assert!(profile.config_contents.parse::<toml::Value>().is_ok());
+    assert!(profile.config_contents.contains(r#"model = "gpt-5""#));
+    assert!(
+        profile
+            .config_contents
+            .contains(r#"base_url = "https://relay.example/v1""#)
+    );
+    assert!(
+        !profile
+            .config_contents
+            .contains("experimental_bearer_token")
+    );
     assert_eq!(profile.model, "gpt-5");
     assert_eq!(profile.base_url, "https://relay.example/v1");
     assert_eq!(profile.upstream_base_url, "https://relay.example/v1");
     assert_eq!(profile.api_key, "sk-test");
     assert!(profile.auth_contents.contains("sk-test"));
+}
+
+#[test]
+fn normalize_claude_profile_persists_current_editor_key_in_both_json_containers() {
+    let mut profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        api_key: "test-current-editor-key".to_string(),
+        base_url: "http://127.0.0.1:57331/claude-desktop".to_string(),
+        upstream_base_url: "https://relay.current.example/v1".to_string(),
+        config_contents: serde_json::json!({
+            "app_type": "claude-desktop",
+            "apiKey": "test-old-top-level-key",
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://relay.old.example/v1",
+                "OPENAI_API_KEY": "test-old-env-key",
+                "KEEP_ENV": "keep-me"
+            },
+            "meta": { "apiFormat": "Anthropic Messages" },
+            "hooks": { "PreToolUse": ["keep-hook"] }
+        })
+        .to_string(),
+        auth_contents: serde_json::json!({
+            "ANTHROPIC_API_KEY": "test-old-auth-key",
+            "keepAuthMetadata": true
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(profile.base_url, "https://relay.current.example/v1");
+    assert_eq!(
+        profile.upstream_base_url,
+        "https://relay.current.example/v1"
+    );
+    assert_eq!(
+        config["env"]["ANTHROPIC_BASE_URL"],
+        "https://relay.current.example/v1"
+    );
+    assert_eq!(
+        config["env"]["ANTHROPIC_AUTH_TOKEN"],
+        "test-current-editor-key"
+    );
+    assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-current-editor-key");
+    assert_eq!(config["env"]["KEEP_ENV"], "keep-me");
+    assert_eq!(config["meta"]["apiFormat"], "Anthropic Messages");
+    assert_eq!(config["hooks"]["PreToolUse"][0], "keep-hook");
+    assert_eq!(auth["keepAuthMetadata"], true);
+    for alias in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "api_key", "apiKey"] {
+        assert!(config.get(alias).is_none(), "stale top-level alias {alias}");
+        assert!(
+            config["env"].get(alias).is_none(),
+            "stale env alias {alias}"
+        );
+        assert!(auth.get(alias).is_none(), "stale auth alias {alias}");
+    }
+}
+
+#[test]
+fn normalize_claude_profile_explicit_clear_removes_nested_stale_credentials() {
+    let mut profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        api_key: String::new(),
+        api_key_explicit: true,
+        base_url: "https://relay.example/v1".to_string(),
+        config_contents: serde_json::json!({
+            "apiKey": "test-old-top-level-key",
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "test-old-env-key",
+                "KEEP_ENV": "keep-me"
+            },
+            "nested": {
+                "credentials": {
+                    "ANTHROPIC_API_KEY": "test-old-nested-key"
+                },
+                "items": [
+                    { "OPENAI_API_KEY": "test-old-array-openai-key" },
+                    { "api_key": "test-old-array-snake-key" },
+                    { "apiKey": "test-old-array-camel-key", "keep": true }
+                ]
+            }
+        })
+        .to_string(),
+        auth_contents: serde_json::json!({
+            "ANTHROPIC_API_KEY": "test-old-auth-key",
+            "nested": [
+                { "ANTHROPIC_AUTH_TOKEN": "test-old-auth-array-key" },
+                { "keepAuthMetadata": true }
+            ]
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert!(profile.api_key.is_empty());
+    assert_no_claude_credential_aliases(&config);
+    assert_no_claude_credential_aliases(&auth);
+    assert_eq!(
+        config["env"]["ANTHROPIC_BASE_URL"],
+        "https://relay.example/v1"
+    );
+    assert_eq!(config["env"]["KEEP_ENV"], "keep-me");
+    assert_eq!(config["nested"]["items"][2]["keep"], true);
+    assert_eq!(auth["nested"][1]["keepAuthMetadata"], true);
+}
+
+#[test]
+fn normalize_codex_profile_explicit_clear_removes_stale_auth_and_bearer_token() {
+    let mut profile = RelayProfile {
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        api_key: String::new(),
+        api_key_explicit: true,
+        base_url: "https://relay.example/v1".to_string(),
+        config_contents: r#"model = "gpt-test"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "test-old-bearer-token"
+"#
+        .to_string(),
+        auth_contents: serde_json::json!({
+            "OPENAI_API_KEY": "test-old-auth-key",
+            "keepAuthMetadata": true
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert!(profile.api_key.is_empty());
+    assert!(
+        !profile
+            .config_contents
+            .contains("experimental_bearer_token")
+    );
+    assert!(!profile.config_contents.contains("test-old-bearer-token"));
+    assert!(auth.get("OPENAI_API_KEY").is_none());
+    assert_eq!(auth["keepAuthMetadata"], true);
+}
+
+#[test]
+fn normalize_codex_profile_current_key_replaces_nested_toml_and_json_credentials() {
+    let mut profile = RelayProfile {
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        api_key: "test-current-key".to_string(),
+        api_key_explicit: true,
+        base_url: "https://relay.example/v1".to_string(),
+        config_contents: r#"model = "gpt-test"
+model_provider = "custom"
+token = "test-old-root-token"
+
+[metadata]
+keep = "keep-me"
+authorization = "Bearer test-old-metadata-token"
+
+[model_providers.custom]
+name = "custom"
+env_key = "CUSTOM_API_KEY"
+wire_api = "responses"
+experimental_bearer_token = "test-old-provider-token"
+
+[model_providers.custom.http_headers]
+Authorization = "Bearer test-old-header-token"
+Proxy-Authorization = "Bearer test-old-proxy-token"
+"#
+        .to_string(),
+        auth_contents: serde_json::json!({
+            "OPENAI_API_KEY": "test-old-auth-key",
+            "nested": {
+                "apiKey": "test-old-nested-key",
+                "token": "test-old-json-token",
+                "keep": true
+            },
+            "keepAuthMetadata": "keep-me"
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    for stale in [
+        "test-old-root-token",
+        "test-old-metadata-token",
+        "test-old-provider-token",
+        "test-old-header-token",
+        "test-old-proxy-token",
+        "test-old-auth-key",
+        "test-old-nested-key",
+        "test-old-json-token",
+    ] {
+        assert!(!profile.config_contents.contains(stale));
+        assert!(!profile.auth_contents.contains(stale));
+    }
+    assert!(
+        profile
+            .config_contents
+            .contains(r#"env_key = "CUSTOM_API_KEY""#)
+    );
+    assert!(profile.config_contents.contains(r#"keep = "keep-me""#));
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(auth["OPENAI_API_KEY"], "test-current-key");
+    assert_eq!(auth["nested"]["keep"], true);
+    assert_eq!(auth["keepAuthMetadata"], "keep-me");
+}
+
+#[test]
+fn normalize_codex_profile_rebuilds_invalid_toml_from_current_form() {
+    let mut profile = RelayProfile {
+        id: "current-provider".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        api_key: "test-current-key".to_string(),
+        api_key_explicit: true,
+        model: "gpt-current".to_string(),
+        base_url: "https://relay.example/v1".to_string(),
+        config_contents: "[broken".to_string(),
+        auth_contents: "{broken".to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    assert!(profile.config_contents.parse::<toml::Value>().is_ok());
+    assert!(profile.config_contents.contains(r#"model = "gpt-current""#));
+    assert!(profile.config_contents.contains("https://relay.example/v1"));
+    assert!(
+        !profile
+            .config_contents
+            .contains("experimental_bearer_token")
+    );
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(auth["OPENAI_API_KEY"], "test-current-key");
+}
+
+#[test]
+fn normalize_claude_profile_prefers_config_key_and_explicit_auth_field() {
+    let mut profile = RelayProfile {
+        target_app: "claude".to_string(),
+        auth_field: "ANTHROPIC_AUTH_TOKEN".to_string(),
+        config_contents: serde_json::json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+                "ANTHROPIC_API_KEY": "test-current-config-key"
+            }
+        })
+        .to_string(),
+        auth_contents: serde_json::json!({
+            "ANTHROPIC_AUTH_TOKEN": "test-stale-auth-key"
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(profile.api_key, "test-current-config-key");
+    assert_eq!(profile.base_url, "https://relay.example/v1");
+    assert_eq!(profile.upstream_base_url, "https://relay.example/v1");
+    assert_eq!(
+        config["env"]["ANTHROPIC_AUTH_TOKEN"],
+        "test-current-config-key"
+    );
+    assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-current-config-key");
+    assert!(config["env"].get("ANTHROPIC_API_KEY").is_none());
+    assert!(auth.get("ANTHROPIC_API_KEY").is_none());
+}
+
+#[test]
+fn normalize_claude_profile_uses_official_auth_field_and_repairs_invalid_json() {
+    let mut profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        api_key: "test-official-key".to_string(),
+        base_url: "https://api.anthropic.com/v1".to_string(),
+        config_contents: "{invalid-json".to_string(),
+        auth_contents: "[invalid-json".to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(
+        config["env"]["ANTHROPIC_BASE_URL"],
+        "https://api.anthropic.com/v1"
+    );
+    assert_eq!(config["env"]["ANTHROPIC_API_KEY"], "test-official-key");
+    assert_eq!(auth["ANTHROPIC_API_KEY"], "test-official-key");
+    assert!(config["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+    assert!(auth.get("ANTHROPIC_AUTH_TOKEN").is_none());
+}
+
+#[test]
+fn normalize_claude_profile_prefers_explicit_direct_mode_over_generated_config() {
+    let mut profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        claude_desktop_mode: "direct".to_string(),
+        route_enabled: false,
+        route_mode: "Claude Desktop Direct".to_string(),
+        config_contents: serde_json::json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "test-current-key"
+            },
+            "meta": {
+                "claudeDesktopMode": "proxy",
+                "keepMeta": true
+            },
+            "keepTopLevel": "keep-me"
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+    let normalized = profile.clone();
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    assert_eq!(profile.claude_desktop_mode, "direct");
+    assert!(!profile.route_enabled);
+    assert_eq!(profile.route_mode, "Claude Desktop Direct");
+    assert_eq!(config["meta"]["claudeDesktopMode"], "direct");
+    assert_eq!(config["meta"]["keepMeta"], true);
+    assert_eq!(config["keepTopLevel"], "keep-me");
+    assert_eq!(profile, normalized, "normalization must be stable");
+}
+
+#[test]
+fn normalize_claude_profile_migrates_legacy_snake_case_direct_mode() {
+    let mut profile = RelayProfile {
+        target_app: "claude".to_string(),
+        claude_desktop_mode: String::new(),
+        route_enabled: true,
+        route_mode: String::new(),
+        config_contents: serde_json::json!({
+            "meta": {
+                "claude_desktop_mode": "direct",
+                "keepMeta": "keep-me"
+            }
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+    let normalized = profile.clone();
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    assert_eq!(profile.claude_desktop_mode, "direct");
+    assert!(!profile.route_enabled);
+    assert_eq!(profile.route_mode, "Claude Desktop Direct");
+    assert_eq!(config["meta"]["claudeDesktopMode"], "direct");
+    assert!(config["meta"].get("claude_desktop_mode").is_none());
+    assert_eq!(config["meta"]["keepMeta"], "keep-me");
+    assert_eq!(profile, normalized, "normalization must be stable");
+}
+
+#[test]
+fn normalize_claude_profile_migrates_legacy_camel_case_proxy_mode() {
+    let mut profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        config_contents: serde_json::json!({
+            "meta": {
+                "claudeDesktopMode": "proxy"
+            }
+        })
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+    let normalized = profile.clone();
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
+    assert_eq!(profile.claude_desktop_mode, "proxy");
+    assert!(profile.route_enabled);
+    assert_eq!(profile.route_mode, "Claude Desktop Proxy");
+    assert_eq!(config["meta"]["claudeDesktopMode"], "proxy");
+    assert_eq!(profile, normalized, "normalization must be stable");
 }
 
 #[test]
@@ -2948,6 +3364,221 @@ goals = true
 
     assert!(profile.config_contents.contains(r#"model = "gpt-5""#));
     assert!(!profile.auth_contents.is_empty());
+}
+
+#[tokio::test]
+async fn anthropic_profile_test_checks_base_url_once_without_auth_model_or_body() {
+    let server = spawn_profile_test_server(503);
+    let expected_endpoint = server.base_url.clone();
+    let profile = RelayProfile {
+        id: "anthropic-reachability".to_string(),
+        target_app: "claude-desktop".to_string(),
+        api_format: "Anthropic Messages".to_string(),
+        base_url: server.base_url.clone(),
+        api_key: "test-current-editor-key".to_string(),
+        auth_field: "ANTHROPIC_API_KEY".to_string(),
+        protocol: RelayProtocol::Responses,
+        test_model: "stale-test-model".to_string(),
+        model: "stale-profile-model".to_string(),
+        model_list: "stale-list-model".to_string(),
+        ..RelayProfile::default()
+    };
+
+    let result = test_relay_profile(&profile, "ignored-model").await.unwrap();
+    let requests = server.finish();
+
+    assert_eq!(result.http_status, 503, "any HTTP response is reachable");
+    assert_eq!(result.endpoint, expected_endpoint);
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.path, "/");
+    assert_eq!(request.accept, "*/*");
+    assert_eq!(request.accept_encoding, "identity");
+    assert!(request.authorization.is_empty());
+    assert!(request.x_api_key.is_empty());
+    assert!(request.anthropic_version.is_empty());
+    assert!(request.body.is_empty());
+}
+
+#[tokio::test]
+async fn openai_profile_test_checks_base_url_once_without_auth_model_or_body() {
+    let server = spawn_profile_test_server(401);
+    let expected_endpoint = server.base_url.clone();
+    let profile = RelayProfile {
+        id: "openai-reachability".to_string(),
+        target_app: "codex".to_string(),
+        api_format: "OpenAI Responses".to_string(),
+        base_url: server.base_url.clone(),
+        api_key: "test-current-editor-key".to_string(),
+        api_key_explicit: true,
+        protocol: RelayProtocol::Responses,
+        test_model: "stale-test-model".to_string(),
+        model: "stale-profile-model".to_string(),
+        model_list: "stale-list-model".to_string(),
+        ..RelayProfile::default()
+    };
+
+    let result = test_relay_profile(&profile, "ignored-model").await.unwrap();
+    let requests = server.finish();
+
+    assert_eq!(result.http_status, 401, "any HTTP response is reachable");
+    assert_eq!(result.endpoint, expected_endpoint);
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.path, "/");
+    assert_eq!(request.accept, "*/*");
+    assert_eq!(request.accept_encoding, "identity");
+    assert!(request.authorization.is_empty());
+    assert!(request.x_api_key.is_empty());
+    assert!(request.anthropic_version.is_empty());
+    assert!(request.body.is_empty());
+}
+
+#[tokio::test]
+async fn profile_test_reports_invalid_base_url_without_retry() {
+    let profile = RelayProfile {
+        target_app: "claude-desktop".to_string(),
+        api_format: "Anthropic Messages".to_string(),
+        base_url: "http://[invalid".to_string(),
+        ..RelayProfile::default()
+    };
+
+    assert!(test_relay_profile(&profile, "").await.is_err());
+}
+
+struct ProfileTestServer {
+    base_url: String,
+    handle: thread::JoinHandle<Vec<ProfileTestRequest>>,
+}
+
+impl ProfileTestServer {
+    fn finish(self) -> Vec<ProfileTestRequest> {
+        self.handle.join().unwrap()
+    }
+}
+
+struct ProfileTestRequest {
+    method: String,
+    path: String,
+    accept: String,
+    accept_encoding: String,
+    authorization: String,
+    x_api_key: String,
+    anthropic_version: String,
+    body: String,
+}
+
+fn spawn_profile_test_server(status: u16) -> ProfileTestServer {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let raw_request = read_profile_test_request(&mut stream);
+        let request_line = raw_request.lines().next().unwrap_or_default();
+        let mut request_line_parts = request_line.split_whitespace();
+        let method = request_line_parts.next().unwrap_or_default().to_string();
+        let path = request_line_parts.next().unwrap_or_default().to_string();
+        let body = raw_request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_default();
+        write!(
+            stream,
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        )
+        .unwrap();
+        vec![ProfileTestRequest {
+            method,
+            path,
+            accept: profile_test_header(&raw_request, "accept"),
+            accept_encoding: profile_test_header(&raw_request, "accept-encoding"),
+            authorization: profile_test_header(&raw_request, "authorization"),
+            x_api_key: profile_test_header(&raw_request, "x-api-key"),
+            anthropic_version: profile_test_header(&raw_request, "anthropic-version"),
+            body,
+        }]
+    });
+    ProfileTestServer {
+        base_url: format!("http://{address}"),
+        handle,
+    }
+}
+
+fn read_profile_test_request(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let mut expected_length = None;
+    loop {
+        let read = stream.read(&mut buffer).unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if expected_length.is_none() {
+            if let Some(header_end) = find_profile_test_bytes(&request, b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                expected_length = Some(header_end + 4 + content_length);
+            }
+        }
+        if expected_length.is_some_and(|length| request.len() >= length) {
+            break;
+        }
+    }
+    String::from_utf8(request).unwrap()
+}
+
+fn profile_test_header(request: &str, expected_name: &str) -> String {
+    request
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case(expected_name))
+        .map(|(_, value)| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn find_profile_test_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn assert_no_claude_credential_aliases(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for alias in [
+                "OPENAI_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "api_key",
+                "apiKey",
+            ] {
+                assert!(
+                    object.get(alias).is_none(),
+                    "stale credential alias {alias}"
+                );
+            }
+            for nested in object.values() {
+                assert_no_claude_credential_aliases(nested);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                assert_no_claude_credential_aliases(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn base64_url_no_pad(value: &str) -> String {
