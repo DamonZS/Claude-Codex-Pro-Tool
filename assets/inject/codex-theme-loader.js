@@ -16,6 +16,9 @@
     "data-ccp-codex-theme-id": null,
   });
   const DATA_URI_PATTERN = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
+  const CSS_IMPORT_PATTERN = /@import(?:\s|\/\*[\s\S]*?\*\/)*(?:url\s*\(|["'])/i;
+  const CSS_URL_PATTERN = /url\s*\(\s*(["']?)([\s\S]*?)\1\s*\)/gi;
+  const SAFE_CSS_URL_PATTERN = /^(?:data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}|blob:|(?:\.\.?\/|\/(?!\/))[^\\]*|#[^\s]*)$/i;
 
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
   const emptyRecord = () => Object.create(null);
@@ -138,6 +141,19 @@
     throw new TypeError("generation must be a non-negative integer");
   };
 
+  const validateThemeCss = (css) => {
+    if (CSS_IMPORT_PATTERN.test(css)) {
+      throw new TypeError("theme CSS must not contain @import");
+    }
+    CSS_URL_PATTERN.lastIndex = 0;
+    for (const match of css.matchAll(CSS_URL_PATTERN)) {
+      const resource = match[2].trim();
+      if (!resource || !SAFE_CSS_URL_PATTERN.test(resource)) {
+        throw new TypeError("theme CSS contains an unsafe resource URL");
+      }
+    }
+  };
+
   const normalizePayload = (rawPayload) => {
     if (!isRecord(rawPayload)) {
       throw new TypeError("theme payload must be an object");
@@ -156,6 +172,7 @@
     if (typeof rawCss !== "string") {
       throw new TypeError("theme CSS must be a string");
     }
+    validateThemeCss(rawCss);
     const rawDefault = pick(rawPayload, "isDefault", "is_default");
     if (rawDefault !== undefined && typeof rawDefault !== "boolean") {
       throw new TypeError("is_default must be a boolean");

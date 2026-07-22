@@ -1,13 +1,73 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 use anyhow::Context;
+use fs2::FileExt;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::zed_remote::ZedOpenStrategy;
+
+static SETTINGS_WRITE_TURN: Mutex<u64> = Mutex::new(0);
+static SETTINGS_WRITE_READY: Condvar = Condvar::new();
+static NEXT_SETTINGS_WRITE_TICKET: AtomicU64 = AtomicU64::new(0);
+static NEXT_ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
+
+struct SettingsWriteGuard {
+    turn: MutexGuard<'static, u64>,
+}
+
+impl Drop for SettingsWriteGuard {
+    fn drop(&mut self) {
+        *self.turn += 1;
+        SETTINGS_WRITE_READY.notify_all();
+    }
+}
+
+fn lock_settings_writes() -> anyhow::Result<SettingsWriteGuard> {
+    let ticket = NEXT_SETTINGS_WRITE_TICKET.fetch_add(1, Ordering::Relaxed);
+    let mut turn = SETTINGS_WRITE_TURN
+        .lock()
+        .map_err(|_| anyhow::anyhow!("settings write lock is poisoned"))?;
+    while *turn != ticket {
+        turn = SETTINGS_WRITE_READY
+            .wait(turn)
+            .map_err(|_| anyhow::anyhow!("settings write lock is poisoned"))?;
+    }
+    Ok(SettingsWriteGuard { turn })
+}
+
+struct SettingsFileLock {
+    file: File,
+}
+
+impl SettingsFileLock {
+    fn acquire(settings_path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = settings_path.parent() {
+            create_private_dir_all(parent)?;
+        }
+        let lock_path = settings_lock_path(settings_path);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open settings lock {}", lock_path.display()))?;
+        file.lock_exclusive()
+            .with_context(|| format!("failed to lock settings {}", settings_path.display()))?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for SettingsFileLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -923,15 +983,9 @@ impl SettingsStore {
     }
 
     pub fn load(&self) -> anyhow::Result<BackendSettings> {
-        let contents = match fs::read_to_string(&self.path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(BackendSettings::default());
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to read settings {}", self.path.display()));
-            }
+        let contents = match self.read_contents()? {
+            Some(contents) => contents,
+            None => return Ok(BackendSettings::default()),
         };
 
         Ok(normalize_settings_config_sections(
@@ -939,7 +993,34 @@ impl SettingsStore {
         ))
     }
 
+    pub fn load_strict(&self) -> anyhow::Result<BackendSettings> {
+        let contents = match self.read_contents()? {
+            Some(contents) => contents,
+            None => return Ok(BackendSettings::default()),
+        };
+
+        let settings = serde_json::from_str(&contents)
+            .with_context(|| format!("解析设置文件失败: {}", self.path.display()))?;
+        Ok(normalize_settings_config_sections(settings))
+    }
+
+    fn read_contents(&self) -> anyhow::Result<Option<String>> {
+        let contents = match fs::read_to_string(&self.path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read settings {}", self.path.display()));
+            }
+        };
+        Ok(Some(contents))
+    }
+
     pub fn save(&self, settings: &BackendSettings) -> anyhow::Result<()> {
+        let _write_guard = lock_settings_writes()?;
+        let _file_lock = SettingsFileLock::acquire(&self.path)?;
         let mut settings = normalize_settings_config_sections(settings.clone());
         settings.codex_extra_args = normalize_codex_extra_args(&settings.codex_extra_args);
         let bytes = serde_json::to_vec_pretty(&settings)?;
@@ -951,6 +1032,10 @@ impl SettingsStore {
             return self.load();
         };
 
+        // Keep the read/merge/write transaction intact so concurrent partial
+        // updates cannot both start from the same stale snapshot.
+        let _write_guard = lock_settings_writes()?;
+        let _file_lock = SettingsFileLock::acquire(&self.path)?;
         let mut raw = self.load_raw_object()?;
         merge_known_setting_fields(&mut raw, &payload);
         let settings = normalize_settings_config_sections(
@@ -981,10 +1066,14 @@ impl SettingsStore {
             }
         };
 
-        match serde_json::from_str::<Value>(&contents) {
-            Ok(Value::Object(map)) => Ok(map),
-            Ok(_) | Err(_) => Ok(settings_to_object(&BackendSettings::default())),
-        }
+        let value = serde_json::from_str::<Value>(&contents)
+            .with_context(|| format!("failed to parse settings {}", self.path.display()))?;
+        value.as_object().cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "settings root must be a JSON object: {}",
+                self.path.display()
+            )
+        })
     }
 }
 
@@ -1788,13 +1877,18 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 
     let temp_path = temp_path_for(path);
     write_private_file(&temp_path, bytes)?;
-    fs::rename(&temp_path, path).with_context(|| {
+    let replace_result = replace_file(&temp_path, path).with_context(|| {
         format!(
             "failed to replace {} with {}",
             path.display(),
             temp_path.display()
         )
-    })?;
+    });
+    if replace_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    replace_result?;
+    secure_private_path(path)?;
     Ok(())
 }
 
@@ -1837,20 +1931,117 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        fs::write(path, bytes)
+        use std::io::Write;
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .with_context(|| format!("failed to write temp file {}", path.display()))?;
+        file.write_all(bytes)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
     }
     Ok(())
 }
 
+#[cfg(unix)]
+fn secure_private_file(_path: &Path, file: &File) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn secure_private_path(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_private_path(path: &Path) -> anyhow::Result<()> {
+    use std::process::Command;
+
+    // Use well-known SIDs instead of USERDOMAIN/USERNAME: launchers and
+    // elevated helpers can inherit environment variables for a different
+    // account than the process token. OWNER RIGHTS follows the actual file
+    // owner, while LocalSystem keeps elevated maintenance flows working.
+    let output = Command::new("icacls.exe")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .args(["*S-1-3-4:(F)", "*S-1-5-18:(F)"])
+        .output()
+        .with_context(|| format!("failed to secure private file {}", path.display()))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "failed to secure private file {} (icacls exit {})",
+            path.display(),
+            output.status
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn secure_private_path(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+        .map_err(anyhow::Error::from)
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    fs::rename(source, destination).map_err(anyhow::Error::from)
+}
+
 fn temp_path_for(path: &Path) -> PathBuf {
     let mut temp_path = path.to_path_buf();
     let extension = path.extension().and_then(|value| value.to_str());
+    let write_id = NEXT_ATOMIC_WRITE_ID.fetch_add(1, Ordering::Relaxed);
     temp_path.set_extension(match extension {
-        Some(extension) => format!("{extension}.tmp"),
-        None => "tmp".to_string(),
+        Some(extension) => format!("{extension}.{}.{}.tmp", std::process::id(), write_id),
+        None => format!("{}.{}.tmp", std::process::id(), write_id),
     });
     temp_path
+}
+
+fn settings_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.to_path_buf();
+    let extension = path.extension().and_then(|value| value.to_str());
+    lock_path.set_extension(match extension {
+        Some(extension) => format!("{extension}.lock"),
+        None => "lock".to_string(),
+    });
+    lock_path
 }
 
 #[cfg(test)]
@@ -3499,6 +3690,128 @@ experimental_bearer_token = "sk-existing"
 
         assert!(!updated.provider_sync_enabled);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn settings_store_update_rejects_malformed_json_without_overwriting_it() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let original = r#"{"providerSyncEnabled":false"#;
+        std::fs::write(&path, original).unwrap();
+
+        let error = store
+            .update(json!({"providerSyncEnabled": true}))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("failed to parse settings"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn settings_store_update_rejects_non_object_root_without_overwriting_it() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let original = r#"["keep", "this"]"#;
+        std::fs::write(&path, original).unwrap();
+
+        let error = store
+            .update(json!({"providerSyncEnabled": true}))
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("settings root must be a JSON object")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn settings_store_concurrent_updates_preserve_both_changes() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"futureField":"preserved"}"#).unwrap();
+
+        let first = SettingsStore::new(path.clone());
+        let second = SettingsStore::new(path.clone());
+        let first_update = std::thread::spawn(move || {
+            first.update(json!({"providerSyncEnabled": true})).unwrap();
+        });
+        let second_update = std::thread::spawn(move || {
+            second
+                .update(json!({"memoryAssistDataDir": "D:/CCP Data"}))
+                .unwrap();
+        });
+        first_update.join().unwrap();
+        second_update.join().unwrap();
+
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["providerSyncEnabled"], true);
+        assert_eq!(saved["memoryAssistDataDir"], "D:/CCP Data");
+        assert_eq!(saved["futureField"], "preserved");
+    }
+
+    #[test]
+    fn atomic_write_uses_unique_temp_paths() {
+        let path = Path::new("settings.json");
+        let first = temp_path_for(path);
+        let second = temp_path_for(path);
+
+        assert_ne!(first, second);
+        assert!(first.to_string_lossy().ends_with(".tmp"));
+        assert!(second.to_string_lossy().ends_with(".tmp"));
+    }
+
+    #[test]
+    fn settings_file_lock_excludes_another_writer() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let _held = SettingsFileLock::acquire(&path).unwrap();
+        let lock_path = settings_lock_path(&path);
+        let contender = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+
+        assert!(contender.try_lock_exclusive().is_err());
+    }
+
+    #[test]
+    fn settings_store_save_replaces_an_existing_file() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"providerSyncEnabled":false}"#).unwrap();
+        let store = SettingsStore::new(path.clone());
+        let settings = BackendSettings {
+            provider_sync_enabled: true,
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["providerSyncEnabled"], true);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_applies_private_windows_acl() {
+        use std::process::Command;
+
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        atomic_write(&path, br#"{"secret":true}"#).unwrap();
+
+        let output = Command::new("icacls.exe").arg(&path).output().unwrap();
+        assert!(output.status.success());
+        let acl = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !acl.contains("(I)"),
+            "ACL still contains inherited entries: {acl}"
+        );
     }
 
     #[cfg(unix)]

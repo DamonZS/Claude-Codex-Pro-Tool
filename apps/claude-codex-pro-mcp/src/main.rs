@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 /// MCP 工具默认返回条数（客户端可用 `limit` 覆盖）。
 const DEFAULT_LIMIT: usize = 12;
+/// Hard cap for caller-controlled result sets to bound query and serialization work.
+const MAX_LIMIT: usize = 100;
 
 /// 把任意错误转成 MCP 错误响应。
 fn internal_error(message: impl Into<String>) -> ErrorData {
@@ -81,7 +83,10 @@ fn workspace_or_global(workspace: Option<String>) -> String {
 }
 
 fn clamp_limit(limit: Option<usize>) -> usize {
-    limit.filter(|value| *value > 0).unwrap_or(DEFAULT_LIMIT)
+    limit
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_LIMIT)
+        .min(MAX_LIMIT)
 }
 
 fn search_with_mcp_activity(
@@ -111,7 +116,7 @@ struct SearchParams {
     /// 目标 workspace；缺省用 `global`（跨 agent 共享）。可传 `agent://<id>/<repo>` 隔离。
     #[serde(default)]
     workspace: Option<String>,
-    /// 返回条数上限，默认 12。
+    /// 返回条数上限，默认 12，最大 100。
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -121,7 +126,7 @@ struct ListParams {
     /// 目标 workspace；缺省用 `global`。
     #[serde(default)]
     workspace: Option<String>,
-    /// 返回条数上限，默认 12。
+    /// 返回条数上限，默认 12，最大 100。
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -131,7 +136,7 @@ struct RecentParams {
     /// 目标 workspace；缺省用 `global`。
     #[serde(default)]
     workspace: Option<String>,
-    /// 返回条数上限，默认 12。
+    /// 返回条数上限，默认 12，最大 100。
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -351,6 +356,9 @@ mod tests {
         assert_eq!(clamp_limit(None), DEFAULT_LIMIT);
         assert_eq!(clamp_limit(Some(0)), DEFAULT_LIMIT);
         assert_eq!(clamp_limit(Some(5)), 5);
+        assert_eq!(clamp_limit(Some(MAX_LIMIT)), MAX_LIMIT);
+        assert_eq!(clamp_limit(Some(MAX_LIMIT + 1)), MAX_LIMIT);
+        assert_eq!(clamp_limit(Some(usize::MAX)), MAX_LIMIT);
     }
 
     #[test]

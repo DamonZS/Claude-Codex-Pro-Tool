@@ -160,6 +160,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_theme_loader_rejects_external_css_resources_and_keeps_local_assets() {
+        let script = codex_theme_loader_script();
+
+        assert!(script.contains("theme CSS must not contain @import"));
+        assert!(script.contains("theme CSS contains an unsafe resource URL"));
+        assert!(script.contains("CSS_IMPORT_PATTERN"));
+        assert!(script.contains("CSS_URL_PATTERN"));
+        assert!(script.contains("SAFE_CSS_URL_PATTERN"));
+        assert!(script.contains("data:image\\/(?:png|jpeg|webp)"));
+        assert!(script.contains("blob:"));
+        assert!(script.contains("(?:\\.\\.?\\/|\\/(?!\\/))"));
+        assert!(!script.contains("https?:"));
+        assert!(!script.contains("file:"));
+    }
+
+    #[test]
     fn codex_theme_loader_records_and_conditionally_restores_ownership() {
         let script = codex_theme_loader_script();
 

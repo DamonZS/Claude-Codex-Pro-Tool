@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use crate::settings::{RelayProfile, RelayProtocol, SettingsStore};
+use crate::settings::{BackendSettings, RelayProfile, RelayProtocol, SettingsStore};
 
 pub const DEFAULT_PROTOCOL_PROXY_PORT: u16 = 57321;
 pub const DEFAULT_CLAUDE_DESKTOP_PROXY_PORT: u16 = 57331;
@@ -886,8 +886,14 @@ fn claude_desktop_models_response_from_inference_models(inference_models: Vec<Va
     })
 }
 
+fn load_proxy_settings(store: &SettingsStore) -> anyhow::Result<BackendSettings> {
+    store
+        .load_strict()
+        .map_err(|error| anyhow::anyhow!("failed to load protocol proxy settings: {error:#}"))
+}
+
 pub async fn open_responses_proxy_request(body: &str) -> anyhow::Result<UpstreamProxyResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile();
     open_responses_proxy_request_with_relay(body, &relay).await
 }
@@ -941,7 +947,7 @@ async fn open_responses_proxy_request_with_relay(
 }
 
 pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile();
     if relay.protocol != RelayProtocol::ChatCompletions {
         anyhow::bail!("当前中转未启用 Chat Completions 协议代理");
@@ -976,7 +982,7 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
 }
 
 pub fn local_claude_desktop_models_proxy_response() -> anyhow::Result<ProxyHttpResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let body = serde_json::to_vec(&claude_desktop_models_response_for_settings(&settings))?;
     Ok(ProxyHttpResponse {
         status: "200 OK".to_string(),
@@ -1007,7 +1013,7 @@ pub fn claude_desktop_count_tokens_response(body: &str) -> anyhow::Result<Value>
 }
 
 pub fn local_claude_desktop_gateway_health_response() -> anyhow::Result<ProxyHttpResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile_for_target("claude-desktop");
     let base_url = claude_desktop_resolved_upstream_base_url(&relay, &settings);
     let api_key = claude_desktop_upstream_api_key(&relay, &settings);
@@ -1049,7 +1055,7 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
     body: &str,
     metadata: &ClaudeMessagesRequestMetadata,
 ) -> anyhow::Result<UpstreamProxyResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile_for_target("claude-desktop");
     open_claude_desktop_messages_proxy_request_with_relay(body, &relay, &settings, metadata).await
 }
@@ -1499,7 +1505,7 @@ fn non_empty_string(value: &str) -> Option<String> {
 pub async fn open_chat_completions_proxy_request(
     body: &str,
 ) -> anyhow::Result<UpstreamProxyResponse> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
+    let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile();
     if relay.protocol != RelayProtocol::ChatCompletions {
         anyhow::bail!("当前中转未启用 Chat Completions 协议代理");
@@ -4684,6 +4690,39 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn proxy_settings_load_fails_closed_when_settings_json_is_corrupt() {
+        let directory = tempfile::tempdir().expect("create temporary settings directory");
+        let settings_path = directory.path().join("settings.json");
+        std::fs::write(&settings_path, br#"{"relayProfiles":["#)
+            .expect("write corrupt settings fixture");
+        let store = SettingsStore::new(settings_path);
+
+        let error = load_proxy_settings(&store).expect_err("corrupt settings must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load protocol proxy settings"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            format!("{error:#}").contains("解析设置文件失败"),
+            "source error should remain available: {error:#}"
+        );
+    }
+
+    #[test]
+    fn proxy_settings_load_preserves_normal_settings_behavior() {
+        let directory = tempfile::tempdir().expect("create temporary settings directory");
+        let store = SettingsStore::new(directory.path().join("missing-settings.json"));
+
+        let settings =
+            load_proxy_settings(&store).expect("missing settings use established defaults");
+
+        assert_eq!(settings, BackendSettings::default());
+    }
 
     #[test]
     fn claude_desktop_route_diagnostic_contains_only_route_fields() {

@@ -3,7 +3,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
@@ -49,6 +52,16 @@ use toml_edit::DocumentMut;
 use crate::install::{self, InstallActionResult, InstallOptions};
 
 static CLAUDE_DESKTOP_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
+static SETTINGS_WRITE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+static SETTINGS_SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn settings_write_mutex() -> &'static Mutex<()> {
+    SETTINGS_WRITE_MUTEX.get_or_init(|| Mutex::new(()))
+}
+
+fn settings_save_is_stale(sequence: u64, latest_requested_sequence: u64) -> bool {
+    sequence < latest_requested_sequence
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandResult<T>
@@ -2193,10 +2206,9 @@ fn log_claude_desktop_command<T>(operation: &str, result: &CommandResult<T>)
 where
     T: Serialize,
 {
-    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-        &format!("manager.claude_desktop.{operation}"),
-        result,
-    );
+    let detail = serde_json::to_value(result)
+        .unwrap_or_else(|error| json!({ "serializationError": error.to_string() }));
+    log_manager_event(&format!("manager.claude_desktop.{operation}"), detail);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2801,7 +2813,7 @@ fn normalize_launch_request(mut request: LaunchRequest) -> LaunchRequest {
             request.app_path = path.to_string_lossy().to_string();
             return request;
         }
-        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        log_manager_event(
             "manager.launch_path_stale",
             json!({ "app_path": requested }),
         );
@@ -2848,7 +2860,7 @@ fn spawn_claude_codex_pro_launch(
 ) -> CommandResult<Value> {
     let debug_port = request.debug_port;
     let helper_port = request.helper_port;
-    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+    log_manager_event(
         "manager.launch_requested",
         json!({
             "debug_port": debug_port,
@@ -2896,7 +2908,7 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
     let injection_expected = settings_injection_enabled || theme_injection_enabled;
     let debug_port = request.debug_port;
     let helper_port = request.helper_port;
-    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+    log_manager_event(
         "manager.restart_injection_monitor_started",
         json!({
             "restart_started_ms": restart_started_ms,
@@ -2918,7 +2930,7 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
             wait_for_codex_launch_ports(&request, restart_started_ms, REPAIR_CODEX_RESTART_TIMEOUT)
                 .await;
         let Some(launch_status) = launch_status else {
-            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            log_manager_event(
                 "manager.restart_injection_timeout",
                 json!({
                     "stage": "launch_ports",
@@ -2935,7 +2947,7 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
             wait_for_renderer_frontend_after(restart_started_ms, REPAIR_CODEX_FRONTEND_TIMEOUT)
                 .await
         else {
-            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+            log_manager_event(
                 "manager.restart_injection_timeout",
                 json!({
                     "stage": "renderer_heartbeat",
@@ -2949,7 +2961,7 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
             return;
         };
 
-        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        log_manager_event(
             "manager.restart_injection_confirmed",
             json!({
                 "debug_port": launch_status.debug_port.unwrap_or(debug_port),
@@ -3051,7 +3063,8 @@ pub async fn save_settings(settings: BackendSettings) -> CommandResult<SettingsP
     // Saving normalizes the settings, writes settings.json, and (via
     // refresh_cli_wrapper_after_settings_save) may write CLI wrapper files — all
     // synchronous disk IO that must stay off the UI thread.
-    tauri::async_runtime::spawn_blocking(move || save_settings_blocking(settings))
+    let sequence = SETTINGS_SAVE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn_blocking(move || save_settings_blocking(settings, sequence))
         .await
         .unwrap_or_else(|join_error| {
             failed(
@@ -3067,7 +3080,19 @@ pub async fn save_settings(settings: BackendSettings) -> CommandResult<SettingsP
         })
 }
 
-fn save_settings_blocking(settings: BackendSettings) -> CommandResult<SettingsPayload> {
+fn save_settings_blocking(
+    settings: BackendSettings,
+    sequence: u64,
+) -> CommandResult<SettingsPayload> {
+    let _write_guard = settings_write_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if settings_save_is_stale(sequence, SETTINGS_SAVE_SEQUENCE.load(Ordering::SeqCst)) {
+        return settings_payload(
+            "已忽略过期的设置保存请求。",
+            "忽略过期保存请求后重新加载设置失败。",
+        );
+    }
     let settings = normalize_settings_before_save(settings);
     match SettingsStore::default().save(&settings) {
         Ok(()) => {
@@ -6899,6 +6924,9 @@ fn switch_codex_supplier_blocking(
 fn switch_claude_supplier_blocking(
     mut request: SupplierProfileSwitchRequest,
 ) -> CommandResult<SettingsPayload> {
+    let _write_guard = settings_write_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let store = SettingsStore::default();
     let previous = store.load().unwrap_or_default();
     request.settings = normalize_settings_before_save(request.settings);
@@ -6964,6 +6992,9 @@ fn switch_claude_desktop_supplier_blocking(
     mut request: SupplierProfileSwitchRequest,
     proxy_port: u16,
 ) -> CommandResult<SettingsPayload> {
+    let _write_guard = settings_write_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let store = SettingsStore::default();
     let previous = store.load().unwrap_or_default();
     request.settings = normalize_settings_before_save(request.settings);
@@ -7228,19 +7259,6 @@ pub async fn apply_claude_desktop_provider(
             "modelLines": request.model_list.lines().filter(|line| !line.trim().is_empty()).count()
         }),
     );
-    if let Err(error) = plugin_hub::persist_claude_desktop_provider_request_to_settings(&request) {
-        log_manager_event(
-            "manager.claude_desktop_provider.apply.settings_failed",
-            json!({ "error": error.to_string() }),
-        );
-        return failed(
-            &format!("保存 Claude Desktop 当前供应商失败：{error}"),
-            ClaudeDesktopProviderApplyPayload {
-                outcome: empty_claude_desktop_provider_outcome(error.to_string()),
-                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
-            },
-        );
-    }
     let proxy_port = match ensure_claude_desktop_proxy_helper().await {
         Ok(port) => port,
         Err(error) => {
@@ -7257,9 +7275,65 @@ pub async fn apply_claude_desktop_provider(
             );
         }
     };
+    tauri::async_runtime::spawn_blocking(move || {
+        apply_claude_desktop_provider_blocking(request, proxy_port)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("应用 Claude Desktop 供应商任务失败：{join_error}"),
+            ClaudeDesktopProviderApplyPayload {
+                outcome: empty_claude_desktop_provider_outcome(join_error.to_string()),
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+            },
+        )
+    })
+}
+
+fn apply_claude_desktop_provider_blocking(
+    request: ClaudeDesktopProviderRequest,
+    proxy_port: u16,
+) -> CommandResult<ClaudeDesktopProviderApplyPayload> {
+    let _write_guard = settings_write_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let store = SettingsStore::default();
+    let previous = match store.load() {
+        Ok(settings) => settings,
+        Err(error) => {
+            return failed(
+                &format!("读取 Claude Desktop 设置快照失败：{error}"),
+                ClaudeDesktopProviderApplyPayload {
+                    outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                    dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+                },
+            );
+        }
+    };
+    if let Err(error) = plugin_hub::persist_claude_desktop_provider_request_to_settings(&request) {
+        let rollback_error = rollback_settings(&store, &previous);
+        log_manager_event(
+            "manager.claude_desktop_provider.apply.settings_failed",
+            json!({
+                "error": error.to_string(),
+                "settingsRollbackFailed": rollback_error.is_some()
+            }),
+        );
+        return failed(
+            &format!(
+                "保存 Claude Desktop 当前供应商失败：{error}{}",
+                rollback_error
+                    .map(|error| format!("；管理工具设置回滚失败：{error}"))
+                    .unwrap_or_default()
+            ),
+            ClaudeDesktopProviderApplyPayload {
+                outcome: empty_claude_desktop_provider_outcome(error.to_string()),
+                dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
+            },
+        );
+    }
     match claude_codex_pro_core::claude_desktop_provider::apply_claude_desktop_provider_with_proxy_port(
-        &request,
-        proxy_port,
+        &request, proxy_port,
     ) {
         Ok(outcome) => {
             log_manager_event(
@@ -7280,12 +7354,21 @@ pub async fn apply_claude_desktop_provider(
             )
         }
         Err(error) => {
+            let rollback_error = rollback_settings(&store, &previous);
             log_manager_event(
                 "manager.claude_desktop_provider.apply.failed",
-                json!({ "error": error.to_string() }),
+                json!({
+                    "error": error.to_string(),
+                    "settingsRollbackFailed": rollback_error.is_some()
+                }),
             );
             failed(
-                &format!("应用 Claude Desktop 供应商失败：{error}"),
+                &format!(
+                    "应用 Claude Desktop 供应商失败：{error}{}",
+                    rollback_error
+                        .map(|error| format!("；管理工具设置回滚失败：{error}"))
+                        .unwrap_or_default()
+                ),
                 ClaudeDesktopProviderApplyPayload {
                     outcome: empty_claude_desktop_provider_outcome(error.to_string()),
                     dev_mode_status: plugin_hub::load_claude_desktop_dev_mode_status(),
@@ -7293,6 +7376,10 @@ pub async fn apply_claude_desktop_provider(
             )
         }
     }
+}
+
+fn rollback_settings(store: &SettingsStore, previous: &BackendSettings) -> Option<anyhow::Error> {
+    store.save(previous).err()
 }
 
 #[tauri::command]
@@ -7333,7 +7420,10 @@ pub fn restore_claude_desktop_provider_official() -> CommandResult<ClaudeDesktop
 #[tauri::command]
 pub fn write_diagnostic_event(event: String, detail: Value) -> CommandResult<Value> {
     let event = sanitize_manager_event(&event);
-    match claude_codex_pro_core::diagnostic_log::append_diagnostic_log(&event, detail) {
+    match claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        &event,
+        sanitize_diagnostic_detail(detail),
+    ) {
         Ok(()) => ok("诊断事件已写入。", json!({})),
         Err(error) => failed(&format!("写入诊断事件失败：{error}"), json!({})),
     }
@@ -8331,7 +8421,7 @@ fn log_relay_apply_request(
     settings: &BackendSettings,
     relay: &claude_codex_pro_core::settings::RelayProfile,
 ) {
-    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+    log_manager_event(
         event,
         json!({
             "activeRelayId": settings.active_relay_id,
@@ -8388,7 +8478,10 @@ fn sync_codex_credential_environment_after_apply(home: &Path) -> anyhow::Result<
 }
 
 fn log_manager_event(event: &str, detail: Value) {
-    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(event, detail);
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        event,
+        sanitize_diagnostic_detail(detail),
+    );
 }
 
 fn sanitize_manager_event(event: &str) -> String {
@@ -8870,10 +8963,100 @@ const DIAGNOSTICS_SECRET_KEY_MARKERS: &[&str] = &[
     "commonconfigcontents",
     "contextconfigcontents",
     "bearertoken",
+    "authorization",
+    "credential",
+    "cookie",
     "token",
     "secret",
     "password",
 ];
+
+const DIAGNOSTICS_URL_KEY_MARKERS: &[&str] = &["url", "uri", "endpoint"];
+
+fn sanitize_url_for_diagnostics(url: &str) -> String {
+    let suffix_start = url.find(['?', '#']).unwrap_or(url.len());
+    let mut sanitized = url[..suffix_start].to_string();
+    if let Some(scheme_end) = sanitized.find("://") {
+        let authority_start = scheme_end + 3;
+        let authority_end = sanitized[authority_start..]
+            .find('/')
+            .map(|offset| authority_start + offset)
+            .unwrap_or(sanitized.len());
+        if let Some(userinfo_end) = sanitized[authority_start..authority_end].rfind('@') {
+            sanitized.replace_range(authority_start..authority_start + userinfo_end + 1, "");
+        }
+    }
+    sanitized
+}
+
+fn sanitize_urls_in_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut remaining = input;
+    loop {
+        let remaining_lower = remaining.to_ascii_lowercase();
+        let next_http = [
+            remaining_lower.find("https://"),
+            remaining_lower.find("http://"),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let Some(start) = next_http else {
+            output.push_str(remaining);
+            break;
+        };
+        output.push_str(&remaining[..start]);
+        let candidate = &remaining[start..];
+        let end = candidate
+            .find(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '>'))
+            .unwrap_or(candidate.len());
+        output.push_str(&sanitize_url_for_diagnostics(&candidate[..end]));
+        remaining = &candidate[end..];
+    }
+    output
+}
+
+fn sanitize_diagnostic_string(input: &str) -> String {
+    claude_codex_pro_core::memory_assist::redact_secrets(&sanitize_urls_in_text(input))
+}
+
+fn sanitize_diagnostic_detail(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, child)| {
+                    let lower = key.to_ascii_lowercase();
+                    let child = if DIAGNOSTICS_SECRET_KEY_MARKERS
+                        .iter()
+                        .any(|marker| lower.contains(marker))
+                    {
+                        match child {
+                            Value::String(text) if text.is_empty() => Value::String(text),
+                            Value::Null => Value::Null,
+                            _ => Value::String("***redacted***".to_string()),
+                        }
+                    } else if DIAGNOSTICS_URL_KEY_MARKERS
+                        .iter()
+                        .any(|marker| lower.contains(marker))
+                    {
+                        match child {
+                            Value::String(text) => Value::String(sanitize_diagnostic_string(&text)),
+                            other => sanitize_diagnostic_detail(other),
+                        }
+                    } else {
+                        sanitize_diagnostic_detail(child)
+                    };
+                    (key, child)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(sanitize_diagnostic_detail).collect())
+        }
+        Value::String(text) => Value::String(sanitize_diagnostic_string(&text)),
+        other => other,
+    }
+}
 
 /// Recursively replace the values of secret-bearing keys with a placeholder.
 /// Empty strings are left as-is so the report still shows whether a field was
@@ -10215,6 +10398,94 @@ mod tests {
             redacted["relayProfiles"][0]["upstreamBaseUrl"],
             json!("https://up.example.com")
         );
+    }
+
+    #[test]
+    fn diagnostic_detail_redacts_nested_secrets_and_url_credentials() {
+        let sanitized = sanitize_diagnostic_detail(json!({
+            "baseUrl": "https://user:pass@example.test/v1?api_key=secret#fragment",
+            "error": "request https://example.test/v1?token=secret failed; Bearer abc123",
+            "nested": { "apiKey": "sk-live-secret" }
+        }));
+        let serialized = serde_json::to_string(&sanitized).unwrap();
+
+        assert_eq!(sanitized["baseUrl"], json!("https://example.test/v1"));
+        assert_eq!(sanitized["nested"]["apiKey"], json!("***redacted***"));
+        assert!(serialized.contains("https://example.test/v1"));
+        for secret in [
+            "user",
+            "pass",
+            "api_key",
+            "fragment",
+            "abc123",
+            "sk-live-secret",
+        ] {
+            assert!(
+                !serialized.contains(secret),
+                "leaked {secret}: {serialized}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostic_string_sanitizes_multiple_urls_in_error_text() {
+        let sanitized = sanitize_diagnostic_string(
+            "first HTTPS://u:p@one.test/v1?token=a then http://two.test/path#secret",
+        );
+
+        assert_eq!(
+            sanitized,
+            "first HTTPS://one.test/v1 then http://two.test/path"
+        );
+    }
+
+    #[test]
+    fn diagnostic_detail_redacts_common_authorization_fields() {
+        let sanitized = sanitize_diagnostic_detail(json!({
+            "Authorization": "Basic dXNlcjpwYXNz",
+            "set-cookie": "session=secret",
+            "credentialValue": "secret"
+        }));
+
+        assert_eq!(sanitized["Authorization"], json!("***redacted***"));
+        assert_eq!(sanitized["set-cookie"], json!("***redacted***"));
+        assert_eq!(sanitized["credentialValue"], json!("***redacted***"));
+    }
+
+    #[test]
+    fn stale_settings_save_sequence_is_older_than_latest_request() {
+        let latest_requested = 42_u64;
+        assert!(settings_save_is_stale(41, latest_requested));
+        assert!(!settings_save_is_stale(42, latest_requested));
+        assert!(!settings_save_is_stale(43, latest_requested));
+    }
+
+    #[test]
+    fn failed_newer_save_still_makes_older_save_stale() {
+        let latest_requested = AtomicU64::new(2);
+
+        assert!(settings_save_is_stale(
+            1,
+            latest_requested.load(Ordering::SeqCst)
+        ));
+    }
+
+    #[test]
+    fn rollback_settings_restores_previous_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(temp.path().join("settings.json"));
+        let previous = BackendSettings {
+            active_relay_id: "previous".to_string(),
+            ..BackendSettings::default()
+        };
+        let changed = BackendSettings {
+            active_relay_id: "changed".to_string(),
+            ..BackendSettings::default()
+        };
+        store.save(&changed).unwrap();
+
+        assert!(rollback_settings(&store, &previous).is_none());
+        assert_eq!(store.load().unwrap().active_relay_id, "previous");
     }
 
     #[test]

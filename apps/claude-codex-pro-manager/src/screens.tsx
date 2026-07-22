@@ -1210,6 +1210,16 @@ export function SupplierScreen({
       return withSupplierRoutingState(profile, supplierRouteGroup, enabled);
     });
     actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
+    const activeProfileId = activeSupplierIdForTarget(supplierRouteGroup);
+    const isDisablingActiveRoute = !enabled && visibleIds.has(activeProfileId);
+    if (isDisablingActiveRoute && supplierRouteGroup === "codex") {
+      const cleared = await (actions.clearRelayMode as unknown as () => Promise<{ status?: Status } | null>)();
+      if (!cleared || statusFailed(cleared.status)) return;
+    }
+    if (isDisablingActiveRoute && supplierRouteGroup === "claude-desktop") {
+      const restored = await (actions.restoreClaudeDesktopProviderOfficial as unknown as (skipConfirm?: boolean) => Promise<{ status?: Status } | null>)(true);
+      if (!restored || statusFailed(restored.status)) return;
+    }
     const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
     if (saved) {
       actions.showNotice({ title: "供应商路由", message: enabled ? `已开启 ${supplierRouteGroupLabel} 供应商路由。` : `已关闭 ${supplierRouteGroupLabel} 供应商路由。`, status: "ok" });
@@ -1393,7 +1403,8 @@ export function SupplierScreen({
       nextProfiles.push(nextProfile);
       addedCount += 1;
     }
-    await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+    const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+    if (!saved) return;
     actions.showNotice({ title: "CC-switch 导入", message: `已从 cc-switch 更新 ${updatedCount} 个、新增 ${addedCount} 个供应商配置。`, status: "ok" });
   };
 

@@ -324,6 +324,8 @@ export function App() {
   const codexSessionContextEpochRef = useRef(0);
   const settingsDraftRevisionRef = useRef(0);
   const memorySearchRequestRef = useRef(0);
+  const updateDownloadActiveRef = useRef(false);
+  const updateCheckEpochRef = useRef(0);
 
   const updateSettingsDraft = useCallback((next: SetStateAction<BackendSettings | null>) => {
     settingsDraftRevisionRef.current += 1;
@@ -397,6 +399,7 @@ export function App() {
       if (disposed) return;
       const progress = event.payload;
       const failed = progress.phase === "failed";
+      updateDownloadActiveRef.current = !failed && progress.phase !== "complete";
       setUpdateInfo((current) => ({
         ...(current ?? {}),
         status: failed ? "failed" : "running",
@@ -924,6 +927,9 @@ export function App() {
   };
 
   const checkUpdate = async (silent = false) => {
+    if (silent && updateDownloadActiveRef.current) return null;
+    const checkEpoch = updateCheckEpochRef.current + 1;
+    updateCheckEpochRef.current = checkEpoch;
     setUpdateInfo((current) => ({
       ...(current ?? {}),
       status: "running",
@@ -935,6 +941,7 @@ export function App() {
       totalBytes: null,
     }));
     const result = await run(() => call<UpdateResult>("check_update"), "检查更新", { trackBusy: !silent, notify: !silent });
+    if (checkEpoch !== updateCheckEpochRef.current || updateDownloadActiveRef.current) return result;
     if (result) {
       setUpdateInfo(result);
       if (!silent) notifyIfNeedsAttention({ title: "检查更新", message: result.message, status: result.status });
@@ -951,6 +958,8 @@ export function App() {
   };
 
   const performUpdate = async (release?: UpdateReleasePayload | null) => {
+    updateDownloadActiveRef.current = true;
+    updateCheckEpochRef.current += 1;
     setUpdateInfo((current) => ({
       ...(current ?? {}),
       status: "running",
@@ -967,8 +976,10 @@ export function App() {
     );
     if (result) {
       setUpdateInfo(result);
+      updateDownloadActiveRef.current = !statusFailed(result.status) && result.phase !== "complete" && result.phase !== "failed";
       notifyResult({ title: "下载并运行安装包", message: result.message, status: result.status });
     } else {
+      updateDownloadActiveRef.current = false;
       setUpdateInfo((current) => ({
         ...(current ?? {}),
         status: "failed",
@@ -1756,6 +1767,7 @@ export function App() {
       notifyResult({ title: "清除 API 模式", message: result.message, status: result.status });
       await refreshSettings(true);
     }
+    return result;
   };
 
   const switchCodexRelayProfile = async (profileId: string, sourceSettings?: BackendSettings) => {
@@ -1876,8 +1888,8 @@ export function App() {
     }
   };
 
-  const restoreClaudeDesktopProviderOfficial = async () => {
-    if (!window.confirm("确认将 Claude Desktop 切回官方部署模式？操作前会备份现有配置。")) return;
+  const restoreClaudeDesktopProviderOfficial = async (skipConfirm = false) => {
+    if (!skipConfirm && !window.confirm("确认将 Claude Desktop 切回官方部署模式？操作前会备份现有配置。")) return null;
     const result = await run(
       () => call<ClaudeDesktopProviderApplyResult>("restore_claude_desktop_provider_official"),
       "恢复 Claude Desktop 官方模式",
@@ -1892,6 +1904,7 @@ export function App() {
       notifyResult({ title: "Claude Desktop 官方模式", message: result.message, status: result.status });
       await refreshClaudeDesktopDevMode(true);
     }
+    return result;
   };
 
   const saveSettings = async (next: BackendSettings) => {
@@ -1972,6 +1985,7 @@ export function App() {
         void work();
       }, delay);
     };
+    let requiredResults: Array<{ status?: Status } | null | void> = [];
     if (target === "overview") {
       await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
@@ -1986,7 +2000,7 @@ export function App() {
         void refreshLogs(true);
       }, 250);
     } else if (target === "supplier") {
-      await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
+      requiredResults = await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
     } else if (target === "clients") {
       await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshSettings(true), refreshWatcher(true)]);
       afterFirstPaintIfFresh(() => {
@@ -2035,6 +2049,9 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void checkUpdate(true);
       }, 250);
+    }
+    if (shouldNotify && requiredResults.some((result) => !result || statusFailed(result.status))) {
+      throw new Error(`${routeLabel(target)}刷新失败，请查看错误提示后重试。`);
     }
     if (shouldNotify && !isStaleRouteLoad()) {
       setNotice({ title: refreshTitle, message: `${routeLabel(target)}已刷新。`, status: "ok" });
@@ -2168,7 +2185,7 @@ export function App() {
       importMemoryAssist,
       applyRelayMode,
       applyPureApiMode,
-      clearRelayMode,
+      clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
       switchCodexRelayProfile,
       switchSupplierProfile,
       fetchRelayProfileModels,
@@ -2177,7 +2194,7 @@ export function App() {
       clearCodexUserCredentialEnvironment,
       previewClaudeDesktopProvider,
       applyClaudeDesktopProvider,
-      restoreClaudeDesktopProviderOfficial,
+      restoreClaudeDesktopProviderOfficial: restoreClaudeDesktopProviderOfficial as unknown as AppActions["restoreClaudeDesktopProviderOfficial"],
       saveSettings,
       installEntrypoints,
       uninstallEntrypoints,

@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use fs2::FileExt;
@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const SCHEMA_VERSION: i64 = 7;
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const EXPORT_SCHEMA_VERSION: &str = "memory-assist/v1";
 const GLOBAL_WORKSPACE: &str = "global";
 /// Tiering (phase 2). Items live in one of two tiers; archived is a soft,
@@ -2099,6 +2100,7 @@ impl MemoryAssistStore {
         }
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("open memory db {}", self.db_path.display()))?;
+        configure_connection(&conn)?;
         ensure_schema(&conn)?;
         Ok(conn)
     }
@@ -2475,10 +2477,21 @@ fn learn_item_with_conn(
     Ok(item)
 }
 
+fn configure_connection(conn: &Connection) -> anyhow::Result<()> {
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .context("configure memory database busy timeout")?;
+    let journal_mode: String = conn
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .context("enable WAL journal mode for memory database")?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        anyhow::bail!("memory database did not enable WAL journal mode (actual: {journal_mode})");
+    }
+    Ok(())
+}
+
 fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         "
-        PRAGMA journal_mode = WAL;
         CREATE TABLE IF NOT EXISTS memory_items (
             id TEXT PRIMARY KEY,
             text TEXT NOT NULL,
@@ -6248,6 +6261,23 @@ fn redact_named_secret_assignments(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_connections_use_wal_and_busy_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = MemoryAssistStore::new(temp.path().join("memory_assist.sqlite"));
+        let conn = store.open().unwrap();
+
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        let busy_timeout_ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(busy_timeout_ms, SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+    }
 
     #[test]
     fn ascii_keyword_matching_respects_word_boundaries() {
