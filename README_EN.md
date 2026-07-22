@@ -16,15 +16,26 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-Turn Codex App and Claude Desktop into an operable, maintainable, and extensible local AI workstation.
+**A local AI operations console for Codex App, Claude Desktop, and Claude Code on Windows and macOS.**
 
-Claude Codex Pro Tool is more than a launcher. It brings Codex enhancements, local Claude Desktop integration, provider and relay switching, Plugin Hub, Ponytail, multi-tool Skills, session repair, Pangu Memory, the script market, prompt optimization, Zed Remote, automatic updates, and installation maintenance into one Tauri operations console. Think of it as a local control room for Codex and Claude Desktop: capabilities that would otherwise be scattered across configuration files, command-line tools, plugin directories, and script catalogs are managed in one place.
+Claude Codex Pro Tool (CCP) combines third-party API providers, model and protocol conversion, local proxy routing, Codex enhancements, Claude Desktop integration, MCP servers, Skills, plugins, session repair, long-term memory, Codex themes, and system prompts in one Rust + Tauri desktop app. It manages local configuration and third-party APIs; it does not take over official accounts, subscriptions, or payments.
 
 Canonical repository:
 
 <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
 > **Highlighted capability: fix GPT-5.6 selection for third-party Codex APIs through injection.** When a third-party API or relay already provides `gpt-5.6` / `gpt-5.6-*`, but Codex Desktop still hides it behind a frontend model whitelist, CCP reads the active provider and local model catalog, then uses injection to synchronize Codex model configuration, model-request paths, and the model picker. This makes GPT-5.6 visible and selectable in the UI. The fix removes a Codex client-side selection restriction; successful inference still depends on whether the upstream API supports the selected model ID.
+
+## CCP at a Glance
+
+- **Providers and routing:** manage Base URLs, API keys, headers, request bodies, model discovery, protocol conversion, local proxy routing, priorities, and failover.
+- **Codex and Claude enhancements:** launch, restart, monitor, localize Claude, inject Codex enhancements, apply themes, and maintain client installations.
+- **Model and protocol compatibility:** support OpenAI Responses, Chat Completions, Anthropic Messages, and model mapping for compatible providers.
+- **Agent extension center:** manage Codex and Claude plugins, Skills, MCP servers, scripts, dependencies, and installation state.
+- **Sessions and long-term memory:** repair and migrate local sessions, then use Pangu Memory for project handoff, cross-agent recall, and recall evidence.
+- **System prompts:** manage Markdown instruction templates, remote synchronization, activation modes, configuration backups, and the CCP + DeepSeek usage guide.
+
+**Quick links:** [Download](#download) · [Screenshots](#manager-interface) · [Features](#feature-overview) · [FAQ](#faq) · [Build](#build-and-development)
 
 ## Who This Is For
 
@@ -57,7 +68,47 @@ The installer provides two entry points:
 
 The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG contains `Claude Codex Pro.app` and `Claude Codex Pro 管理工具.app`.
 
+## Manager Interface
+
+<table>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/overview.png"><img src="docs/screenshots/overview.png" alt="CCP overview dashboard" width="100%"></a><br><sub>Overview</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="API providers and routing" width="100%"></a><br><sub>Providers &amp; Routing</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="Codex and Claude clients" width="100%"></a><br><sub>Clients &amp; Enhancements</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="Codex theme center" width="100%"></a><br><sub>Theme Center</sub></td>
+  </tr>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="Codex system prompt manager" width="100%"></a><br><sub>System Prompts</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="Sessions and long-term memory" width="100%"></a><br><sub>Sessions &amp; Memory</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="Plugins Skills and MCP manager" width="100%"></a><br><sub>Plugins, Skills &amp; MCP</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="Maintenance and diagnostics" width="100%"></a><br><sub>Maintenance &amp; Diagnostics</sub></td>
+  </tr>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="CCP settings" width="100%"></a><br><sub>Settings</sub></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+  </tr>
+</table>
+
 ## Feature Overview
+
+### Codex Theme System
+
+- Provides a dedicated top-level page with a three-column gallery of installed themes; the Codex default theme always appears first.
+- Supports importing, previewing, applying, and restoring themes. Built-in theme packages live in [`Theme/`](Theme/).
+- Validates packages in a temporary directory, atomically replaces the active version, and keeps the previous version for rollback.
+- Keeps renderer-only visual injection separate from localization and model-label injection so themes do not alter inputs, menus, or native interactions.
+- Reports the active state clearly and applies the selected theme after Codex restarts.
+
+### System Prompts and Instruction Templates
+
+- Provides a dedicated top-level page for compact management of general-purpose, boundary-testing, reverse-engineering, and other instruction templates.
+- Includes five Markdown templates in [`assets/system-prompts/`](assets/system-prompts/).
+- Supports creating, editing, deleting, importing Markdown, and synchronizing from a URL or GitHub source.
+- Offers both “preserve the existing prompt” and “replace the existing prompt” activation modes with a visible active-state indicator.
+- Backs up `~/.codex/config.toml` before writing and detects external changes to avoid silently overwriting manual or third-party edits.
+- Includes an in-app usage guide sourced from [`apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md`](apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md).
 
 ### 1. Codex Launch and Enhancements
 
@@ -281,14 +332,15 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 
 ## Manager Pages
 
-- Overview: runtime status, Codex/Claude quick actions, log summary, and the official relay entry point.
-- Providers: Codex, Claude, and Claude Desktop provider profiles, routing, model catalogs, and mappings.
-- Tools and Plugins: Plugin Hub, Ponytail, the Codex plugin repository, and local Claude Desktop plugins.
-- Session Management: history repair plus Codex and Claude session management.
-- Pangu Memory: memory status, review, maintenance, and related controls.
-- Maintenance: diagnostics, repair, watcher, installation, and update actions.
-- Settings: real runtime switches, launch arguments, enhancement matrix, memory, Zed, and watcher settings.
-- About: project, version, repository, and contact information.
+- Overview: service health, active provider, proxy state, incidents, and recent operations.
+- Providers and Routing: API profiles, model catalogs, routing, and failover for Codex, Claude, and Claude Desktop.
+- Clients and Enhancements: Codex and Claude launch maintenance, injection, localization, scripts, and local state.
+- Theme Center: preview, import, apply, roll back, and restore Codex themes.
+- System Prompts: Markdown instruction templates, synchronization, activation modes, and usage guidance.
+- Sessions and Memory: history repair, Codex and Claude sessions, Pangu Memory, and recall evidence.
+- Plugins, Skills, and MCP: multi-agent extension assets, sources, dependencies, risk, and installation state.
+- Maintenance and Diagnostics: logs, Watcher, installation entry points, path detection, repair, and updates.
+- Settings: runtime switches, launch arguments, enhancement matrix, local paths, and appearance preferences.
 
 ## Safety Boundaries
 

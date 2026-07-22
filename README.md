@@ -16,15 +16,26 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-把 Codex App 和 Claude Desktop 变成一个可运营、可维护、可扩展的本地 AI 工作台。
+**面向 Windows 与 macOS 的 Codex App、Claude Desktop 和 Claude Code 本地 AI 运维控制台。**
 
-Claude Codex Pro Tool 不只是一个启动器。它把 Codex 增强、Claude Desktop 本地集成、供应商/中转切换、插件中心、Ponytail、多工具 Skills、会话修复、盘古记忆、脚本市场、Zed Remote、自动更新和安装维护整合到一个 Tauri 运维控制台里。你可以把它理解成：给 Codex 和 Claude Desktop 配一个本地控制室，把原本散落在配置文件、命令行、插件目录、脚本市场里的能力集中管理。
+Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换、本地代理和路由、Codex 增强、Claude Desktop 集成、MCP / Skills / 插件、会话修复、长期记忆、Codex 主题与系统提示词集中到一个 Rust + Tauri 桌面应用中。它只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
 
 项目仓库唯一地址：
 
 <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
 > **重点能力：通过注入修复 Codex 第三方 API 无法选择 GPT-5.6。** 当第三方 API 或中转站已经提供 `gpt-5.6` / `gpt-5.6-*`，但 Codex 桌面版仍受前端模型白名单限制时，CCP 会读取当前供应商与本地模型目录，通过注入同步 Codex 的模型配置、模型请求链路和模型选择菜单，使 GPT-5.6 在界面中可见并可选。该能力修复的是 Codex 客户端选择限制；模型能否实际调用仍取决于上游 API 是否支持对应模型 ID。
+
+## 一眼看懂 CCP
+
+- **供应商与路由**：统一管理 Base URL、API Key、Header、Body、模型发现、协议转换、本地代理、优先级和故障转移。
+- **Codex 与 Claude 增强**：启动、重启、状态监控、Claude 一键汉化、Codex 注入、主题和客户端维护。
+- **模型与协议兼容**：支持 OpenAI Responses、Chat Completions、Anthropic Messages 及兼容渠道的模型映射。
+- **Agent 扩展中心**：集中管理 Codex / Claude 插件、Skills、MCP、脚本和依赖状态。
+- **会话与长期记忆**：修复和迁移本地会话，通过盘古记忆提供项目接续、跨 Agent 召回与证据记录。
+- **系统提示词**：管理 Markdown 指令模板、外部同步、启用模式、配置备份和 DeepSeek 组合使用教程。
+
+**快速导航：** [下载](#下载) · [界面预览](#管理工具界面) · [功能总览](#功能总览) · [常见问题](#常见问题) · [构建与开发](#构建与开发)
 
 ## 适合谁
 
@@ -57,7 +68,47 @@ Claude Codex Pro Tool 不只是一个启动器。它把 Codex 增强、Claude De
 
 Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
 
+## 管理工具界面
+
+<table>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/overview.png"><img src="docs/screenshots/overview.png" alt="概览" width="100%"></a><br><sub>概览</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="供应商与路由" width="100%"></a><br><sub>供应商与路由</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="客户端与增强" width="100%"></a><br><sub>客户端与增强</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="主题中心" width="100%"></a><br><sub>主题中心</sub></td>
+  </tr>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词" width="100%"></a><br><sub>系统提示词</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话与记忆" width="100%"></a><br><sub>会话与记忆</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="插件、Skills 与 MCP" width="100%"></a><br><sub>插件、Skills 与 MCP</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="维护与诊断" width="100%"></a><br><sub>维护与诊断</sub></td>
+  </tr>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="设置" width="100%"></a><br><sub>设置</sub></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+  </tr>
+</table>
+
 ## 功能总览
+
+### Codex 主题系统
+
+- 提供独立一级导航，以三列主题卡片集中展示已安装主题；Codex 默认主题固定为第一项。
+- 支持导入、预览、应用主题和恢复默认主题，内置主题包位于 [`Theme/`](Theme/)。
+- 安装主题时先在临时目录验证，再原子替换正式版本并保留上一版本，降低资源损坏和更新中断风险。
+- Renderer 视觉注入与汉化、模型标识注入相互隔离，避免主题脚本污染输入框、下拉菜单和原生交互。
+- 选择主题后给出明确状态反馈，重启 Codex 后加载生效。
+
+### 系统提示词与指令模板管理
+
+- 提供独立一级导航，以紧凑卡片管理通用、破甲、逆向分析等系统指令模板。
+- 内置五套 Markdown 模板，资源位于 [`assets/system-prompts/`](assets/system-prompts/)。
+- 支持新增、编辑、删除、导入 Markdown，以及通过 URL 或 GitHub 地址同步模板。
+- 支持“保留原提示词”和“替换原提示词”两种启用方式，并清楚显示当前生效状态。
+- 写入 `~/.codex/config.toml` 前自动备份；检测外部修改，避免静默覆盖其他工具或用户手工更新的配置。
+- 页面内置“使用方式”教程弹窗，教程源文件位于 [`apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md`](apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md)。
 
 ### 1. Codex 启动与增强
 
@@ -277,11 +328,15 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 
 ## 管理工具页面
 
-- 概览：运行状态、Codex/Claude 快捷动作、日志摘要、官方中转站入口。
-- 供应商：管理 Codex API / 中转 / 官方混合配置。
-- 工具与插件：会话管理、历史会话修复、插件中心、Ponytail、Codex 插件仓库、Claude Desktop 本地插件、盘古记忆。
-- 脚本：脚本市场和用户脚本管理。
-- 设置：真实可用开关、启动参数、增强矩阵、记忆、Zed、Watcher、安装维护。
+- 概览：服务健康、当前供应商、代理状态、异常与近期操作。
+- 供应商与路由：Codex、Claude 和 Claude Desktop 的 API Profile、模型目录、路由与故障转移。
+- 客户端与增强：Codex / Claude 启动维护、注入、汉化、脚本和本机状态。
+- 主题中心：Codex 主题预览、导入、应用、回滚和恢复默认。
+- 系统提示词：Markdown 指令模板、同步、启用方式和使用教程。
+- 会话与记忆：历史会话修复、Codex / Claude 会话管理、盘古记忆和召回证据。
+- 插件、Skills 与 MCP：多 Agent 扩展资产、来源、依赖、风险和安装状态。
+- 维护与诊断：日志、Watcher、安装入口、路径检测、修复与更新。
+- 设置：运行开关、启动参数、增强矩阵、本地路径和外观偏好。
 
 ## 安全边界
 
