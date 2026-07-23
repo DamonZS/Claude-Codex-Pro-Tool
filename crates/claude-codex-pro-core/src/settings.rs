@@ -1963,16 +1963,21 @@ fn secure_private_path(path: &Path) -> anyhow::Result<()> {
 
 #[cfg(windows)]
 fn secure_private_path(path: &Path) -> anyhow::Result<()> {
+    use crate::windows_create_no_window;
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
 
     // Use well-known SIDs instead of USERDOMAIN/USERNAME: launchers and
     // elevated helpers can inherit environment variables for a different
     // account than the process token. OWNER RIGHTS follows the actual file
     // owner, while LocalSystem keeps elevated maintenance flows working.
-    let output = Command::new("icacls.exe")
+    let mut command = Command::new("icacls.exe");
+    command
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .args(["*S-1-3-4:(F)", "*S-1-5-18:(F)"])
+        .creation_flags(windows_create_no_window());
+    let output = command
         .output()
         .with_context(|| format!("failed to secure private file {}", path.display()))?;
     if !output.status.success() {

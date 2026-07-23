@@ -4310,3 +4310,17 @@ fn session_context_messages_do_not_shrink_and_hide_their_bodies() {
         "session message cards must still fit the context viewer width"
     );
 }
+#[test]
+fn windows_private_file_acl_command_stays_hidden() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let settings_path = manifest_dir.join("../../../crates/claude-codex-pro-core/src/settings.rs");
+    let settings = read_source_file(&settings_path);
+    let secure_private_path = source_section(
+        &settings,
+        "#[cfg(windows)]\nfn secure_private_path",
+        "#[cfg(not(any(unix, windows)))]",
+    );
+
+    assert!(secure_private_path.contains("CommandExt"));
+    assert!(secure_private_path.contains("creation_flags(windows_create_no_window())"));
+}
