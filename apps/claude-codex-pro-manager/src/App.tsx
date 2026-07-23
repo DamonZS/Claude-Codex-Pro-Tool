@@ -1088,8 +1088,8 @@ export function App() {
     }
   };
 
-  const restartCodex = async () => {
-    const request = codexLaunchRequestFromOverview(overview);
+  const restartCodex = async (skipProviderSync = false) => {
+    const request = { ...codexLaunchRequestFromOverview(overview), skipProviderSync };
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("restart_claude_codex_pro", { request }), "重启 Codex");
     if (result) {
       notifyResult({ title: "重启 Codex", message: result.message, status: result.status });
@@ -1542,12 +1542,28 @@ export function App() {
   };
 
   const repairHistorySessions = async () => {
+    setNotice({
+      title: "历史会话修复",
+      message: "正在修复历史会话，请稍候。",
+      status: "running",
+    });
+    await waitForPaint();
     const result = await run(() => call<ProviderSyncResult>("sync_providers_now"), "历史会话修复");
     if (result) {
       setProviderSync(result);
-      notifyResult({ title: "历史会话修复", message: result.message, status: result.status });
+      if (!statusOk(result.status)) {
+        notifyResult({ title: "历史会话修复", message: result.message, status: result.status });
+        return;
+      }
+      notifyResult({
+        title: "历史会话修复成功",
+        message: `${result.message}\n即将重启 Codex，使修复后的会话立即生效。`,
+        status: result.status,
+      });
       await refreshLocalSessions(true);
       await refreshSettings(true);
+      await waitForPaint();
+      await restartCodex(true);
     }
   };
 

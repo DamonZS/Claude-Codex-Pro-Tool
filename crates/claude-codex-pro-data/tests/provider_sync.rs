@@ -710,6 +710,97 @@ fn provider_sync_skips_when_home_missing_or_lock_exists_and_prunes_backups() {
 }
 
 #[test]
+fn provider_sync_recovers_stale_lock() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join(".codex");
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join("config.toml"), "model_provider = \"custom\"\n").unwrap();
+    write_rollout(
+        &home.join("sessions/rollout-stale-lock.jsonl"),
+        "old-provider",
+        "thread-1",
+        "C:/workspace",
+    );
+    create_state_db(&home.join("state_5.sqlite"));
+    let lock = home.join("tmp/provider-sync.lock");
+    fs::create_dir_all(&lock).unwrap();
+    fs::write(
+        lock.join("owner.json"),
+        json!({"pid": 1, "startedAt": 0}).to_string(),
+    )
+    .unwrap();
+
+    let result = run_provider_sync(Some(&home));
+
+    assert_eq!(result.status, ProviderSyncStatus::Synced);
+    assert_eq!(result.sqlite_provider_rows_updated, 1);
+    let db = Connection::open(home.join("state_5.sqlite")).unwrap();
+    let provider: String = db
+        .query_row(
+            "SELECT model_provider FROM threads WHERE id = 'thread-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(provider, "custom");
+}
+
+#[test]
+fn provider_sync_does_not_restore_archived_sessions() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join(".codex");
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join("config.toml"), "model_provider = \"custom\"\n").unwrap();
+    write_rollout(
+        &home.join("sessions/rollout-active.jsonl"),
+        "old-provider",
+        "thread-active",
+        "C:/workspace",
+    );
+    let archived_rollout = home.join("archived_sessions/rollout-archived.jsonl");
+    write_rollout(
+        &archived_rollout,
+        "old-provider",
+        "thread-archived",
+        "C:/workspace",
+    );
+    create_state_db_with_providers(
+        &home.join("state_5.sqlite"),
+        &[
+            ("thread-active", "old-provider", 0),
+            ("thread-archived", "old-provider", 1),
+        ],
+    );
+
+    let result = run_provider_sync(Some(&home));
+
+    assert_eq!(result.status, ProviderSyncStatus::Synced);
+    assert_eq!(result.sqlite_provider_rows_updated, 1);
+    let db = Connection::open(home.join("state_5.sqlite")).unwrap();
+    let active_provider: String = db
+        .query_row(
+            "SELECT model_provider FROM threads WHERE id = 'thread-active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let archived_provider: String = db
+        .query_row(
+            "SELECT model_provider FROM threads WHERE id = 'thread-archived'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_provider, "custom");
+    assert_eq!(archived_provider, "old-provider");
+    assert!(
+        fs::read_to_string(archived_rollout)
+            .unwrap()
+            .contains("old-provider")
+    );
+}
+
+#[test]
 fn provider_sync_preserves_rollout_mtime() {
     let tmp = tempdir().unwrap();
     let home = tmp.path().join(".codex");

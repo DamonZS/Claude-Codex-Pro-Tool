@@ -10,6 +10,7 @@ const DEFAULT_PROVIDER: &str = "openai";
 const SESSION_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
 const BACKUP_KEEP_COUNT: usize = 5;
 const PROVIDER_SYNC_MANAGED_BY: &str = "Claude Codex Pro provider sync";
+const PROVIDER_SYNC_LOCK_STALE_AFTER_SECS: u64 = 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,13 +65,7 @@ pub struct ProviderSyncTargetList {
 #[derive(Debug, Clone)]
 struct SessionChange {
     path: PathBuf,
-    original_text: String,
-    next_text: String,
     original_session_meta_lines: Vec<String>,
-    thread_id: Option<String>,
-    cwd: Option<String>,
-    has_user_event: bool,
-    rewrite_needed: bool,
     original_mtime: Option<SystemTime>,
 }
 
@@ -90,6 +85,8 @@ struct SessionChanges {
     changes: Vec<SessionChange>,
     skipped_locked_rollout_files: Vec<PathBuf>,
     encrypted_content_counts: HashMap<String, usize>,
+    user_event_thread_ids: HashSet<String>,
+    cwd_by_thread_id: HashMap<String, String>,
 }
 
 #[derive(Debug, Default)]
@@ -164,28 +161,15 @@ pub fn run_provider_sync_with_target(
         );
     }
     let sync_result = (|| -> anyhow::Result<ProviderSyncResult> {
-        let collected = collect_session_changes(&home, &target_provider)?;
-        let encrypted_content_warning =
-            build_encrypted_content_warning(&collected.encrypted_content_counts, &target_provider);
-        let rewrite_changes = collected
-            .changes
-            .iter()
-            .filter(|change| change.rewrite_needed)
-            .cloned()
-            .collect::<Vec<_>>();
-        let thread_ids_with_user_events = collected
-            .changes
-            .iter()
-            .filter(|change| change.has_user_event)
-            .filter_map(|change| change.thread_id.clone())
-            .collect::<HashSet<_>>();
-        let cwd_by_thread_id = collected
-            .changes
-            .iter()
-            .filter_map(|change| Some((change.thread_id.clone()?, change.cwd.clone()?)))
-            .collect::<HashMap<_, _>>();
         let sqlite_paths =
             claude_codex_pro_core::codex_sqlite::codex_session_db_paths_from_home(&home);
+        let archived_thread_ids = archived_thread_ids_for_paths(&sqlite_paths)?;
+        let collected = collect_session_changes(&home, &target_provider, &archived_thread_ids)?;
+        let encrypted_content_warning =
+            build_encrypted_content_warning(&collected.encrypted_content_counts, &target_provider);
+        let rewrite_changes = collected.changes;
+        let thread_ids_with_user_events = collected.user_event_thread_ids;
+        let cwd_by_thread_id = collected.cwd_by_thread_id;
         let sqlite_update_count = count_sqlite_updates_for_paths(
             &sqlite_paths,
             &target_provider,
@@ -209,7 +193,8 @@ pub fn run_provider_sync_with_target(
             return Ok(synced);
         }
         let backup_dir = create_backup(&home, &target_provider, &rewrite_changes)?;
-        let applied = apply_session_changes(&rewrite_changes)?;
+        let applied =
+            apply_session_changes(&home, &backup_dir, &rewrite_changes, &target_provider)?;
         let apply_result = (|| -> anyhow::Result<(SqliteUpdateCounts, usize)> {
             let sqlite_updates = apply_sqlite_update_for_paths(
                 &sqlite_paths,
@@ -225,7 +210,7 @@ pub fn run_provider_sync_with_target(
         let (sqlite_updates, updated_workspace_roots) = match apply_result {
             Ok(counts) => counts,
             Err(err) => {
-                let _ = restore_session_changes(&applied.changes);
+                let _ = restore_session_changes(&home, &backup_dir, &applied.changes);
                 return Err(err);
             }
         };
@@ -474,11 +459,58 @@ fn toml_string_value(raw: &str) -> Option<String> {
 
 fn acquire_lock(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new(".")))?;
-    fs::create_dir(path)?;
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if !is_stale_lock(path) {
+                return Err(error);
+            }
+            fs::remove_dir_all(path)?;
+            fs::create_dir(path)?;
+        }
+        Err(error) => return Err(error),
+    }
     fs::write(
         path.join("owner.json"),
         json!({"pid": std::process::id(), "startedAt": now_secs()}).to_string(),
     )
+}
+
+fn is_stale_lock(path: &Path) -> bool {
+    let owner = fs::read_to_string(path.join("owner.json"))
+        .ok()
+        .and_then(|contents| serde_json::from_str::<Value>(&contents).ok());
+    if owner
+        .as_ref()
+        .and_then(|value| value.get("pid").and_then(Value::as_u64))
+        .and_then(|pid| u32::try_from(pid).ok())
+        .is_some_and(|pid| !lock_owner_is_alive(pid))
+    {
+        return true;
+    }
+    let started_at = owner
+        .as_ref()
+        .and_then(|value| value.get("startedAt").and_then(Value::as_u64));
+    let timestamp = started_at.or_else(|| {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+    });
+    timestamp
+        .map(|timestamp| now_secs().saturating_sub(timestamp) > PROVIDER_SYNC_LOCK_STALE_AFTER_SECS)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn lock_owner_is_alive(pid: u32) -> bool {
+    claude_codex_pro_core::windows_process_exists(pid)
+}
+
+#[cfg(not(windows))]
+fn lock_owner_is_alive(_pid: u32) -> bool {
+    true
 }
 
 fn release_lock(path: &Path) -> std::io::Result<()> {
@@ -488,7 +520,11 @@ fn release_lock(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn collect_session_changes(home: &Path, target_provider: &str) -> anyhow::Result<SessionChanges> {
+fn collect_session_changes(
+    home: &Path,
+    target_provider: &str,
+    archived_thread_ids: &HashSet<String>,
+) -> anyhow::Result<SessionChanges> {
     let mut collected = SessionChanges::default();
     for path in rollout_files(home)? {
         let text = match fs::read_to_string(&path) {
@@ -503,7 +539,20 @@ fn collect_session_changes(home: &Path, target_provider: &str) -> anyhow::Result
         if rewrite.session_meta_count == 0 {
             continue;
         }
+        if rewrite
+            .thread_id
+            .as_ref()
+            .is_some_and(|thread_id| archived_thread_ids.contains(thread_id))
+        {
+            continue;
+        }
         let has_user_event = text.contains("\"user_message\"") || text.contains("\"user_input\"");
+        if has_user_event && let Some(thread_id) = rewrite.thread_id.clone() {
+            collected.user_event_thread_ids.insert(thread_id);
+        }
+        if let (Some(thread_id), Some(cwd)) = (rewrite.thread_id.clone(), rewrite.cwd.clone()) {
+            collected.cwd_by_thread_id.insert(thread_id, cwd);
+        }
         if text.contains("encrypted_content") {
             for provider in &rewrite.providers {
                 *collected
@@ -512,18 +561,14 @@ fn collect_session_changes(home: &Path, target_provider: &str) -> anyhow::Result
                     .or_insert(0) += 1;
             }
         }
-        let original_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
-        collected.changes.push(SessionChange {
-            path,
-            original_text: text,
-            next_text: rewrite.next_text,
-            original_session_meta_lines: rewrite.original_session_meta_lines,
-            thread_id: rewrite.thread_id,
-            cwd: rewrite.cwd,
-            has_user_event,
-            rewrite_needed: rewrite.rewrite_needed,
-            original_mtime,
-        });
+        if rewrite.rewrite_needed {
+            let original_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+            collected.changes.push(SessionChange {
+                path,
+                original_session_meta_lines: rewrite.original_session_meta_lines,
+                original_mtime,
+            });
+        }
     }
     Ok(collected)
 }
@@ -732,13 +777,21 @@ fn create_backup(
     }
     let manifest = changes
         .iter()
-        .map(|change| {
-            json!({
+        .map(|change| -> anyhow::Result<Value> {
+            let relative =
+                claude_codex_pro_core::codex_sqlite::relative_to_codex_home(home, &change.path);
+            let backup_path = backup_dir.join("session-files").join(&relative);
+            if let Some(parent) = backup_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&change.path, &backup_path)?;
+            Ok(json!({
                 "path": change.path.to_string_lossy(),
+                "backupPath": backup_path.to_string_lossy(),
                 "originalSessionMetaLines": change.original_session_meta_lines,
-            })
+            }))
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     fs::write(
         backup_dir.join("session-meta-backup.json"),
         serde_json::to_string_pretty(&manifest)?,
@@ -759,10 +812,38 @@ fn create_backup(
     Ok(backup_dir)
 }
 
-fn apply_session_changes(changes: &[SessionChange]) -> anyhow::Result<AppliedSessionChanges> {
+fn apply_session_changes(
+    home: &Path,
+    backup_dir: &Path,
+    changes: &[SessionChange],
+    target_provider: &str,
+) -> anyhow::Result<AppliedSessionChanges> {
     let mut applied = AppliedSessionChanges::default();
     for change in changes {
-        match fs::write(&change.path, &change.next_text) {
+        let text = match fs::read_to_string(&change.path) {
+            Ok(text) => text,
+            Err(error) if is_locked_io_error(&error) => {
+                applied
+                    .skipped_locked_rollout_files
+                    .push(change.path.clone());
+                continue;
+            }
+            Err(error) => {
+                let _ = restore_session_changes(home, backup_dir, &applied.changes);
+                return Err(error.into());
+            }
+        };
+        let rewrite = match rewrite_rollout_session_meta_providers(&text, target_provider) {
+            Ok(rewrite) => rewrite,
+            Err(error) => {
+                let _ = restore_session_changes(home, backup_dir, &applied.changes);
+                return Err(error);
+            }
+        };
+        if !rewrite.rewrite_needed {
+            continue;
+        }
+        match fs::write(&change.path, rewrite.next_text) {
             Ok(()) => {}
             Err(error) if is_locked_io_error(&error) => {
                 applied
@@ -770,7 +851,10 @@ fn apply_session_changes(changes: &[SessionChange]) -> anyhow::Result<AppliedSes
                     .push(change.path.clone());
                 continue;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                let _ = restore_session_changes(home, backup_dir, &applied.changes);
+                return Err(error.into());
+            }
         }
         restore_file_mtime(&change.path, change.original_mtime);
         applied.changes.push(change.clone());
@@ -778,9 +862,18 @@ fn apply_session_changes(changes: &[SessionChange]) -> anyhow::Result<AppliedSes
     Ok(applied)
 }
 
-fn restore_session_changes(changes: &[SessionChange]) -> anyhow::Result<()> {
+fn restore_session_changes(
+    home: &Path,
+    backup_dir: &Path,
+    changes: &[SessionChange],
+) -> anyhow::Result<()> {
     for change in changes {
-        fs::write(&change.path, &change.original_text)?;
+        let relative =
+            claude_codex_pro_core::codex_sqlite::relative_to_codex_home(home, &change.path);
+        fs::copy(
+            backup_dir.join("session-files").join(relative),
+            &change.path,
+        )?;
         restore_file_mtime(&change.path, change.original_mtime);
     }
     Ok(())
@@ -827,6 +920,27 @@ fn sqlite_provider_ids(path: &Path) -> anyhow::Result<Vec<String>> {
     Ok(sorted_provider_ids(ids))
 }
 
+fn archived_thread_ids_for_paths(paths: &[PathBuf]) -> anyhow::Result<HashSet<String>> {
+    let mut archived = HashSet::new();
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let db = Connection::open(path)?;
+        let columns = table_columns(&db, "threads")?;
+        if !columns.contains("id") || !columns.contains("archived") {
+            continue;
+        }
+        let mut statement = db.prepare(
+            "SELECT id FROM threads WHERE COALESCE(archived, 0) <> 0 AND COALESCE(id, '') <> ''",
+        )?;
+        for row in statement.query_map([], |row| row.get::<_, String>(0))? {
+            archived.insert(row?);
+        }
+    }
+    Ok(archived)
+}
+
 fn count_sqlite_updates(
     path: &Path,
     target_provider: &str,
@@ -841,15 +955,24 @@ fn count_sqlite_updates(
     if !columns.contains("model_provider") {
         return Ok(0);
     }
+    let archived_filter = if columns.contains("archived") {
+        " AND COALESCE(archived, 0) = 0"
+    } else {
+        ""
+    };
     let mut total: usize = db.query_row(
-        "SELECT COUNT(*) FROM threads WHERE COALESCE(model_provider, '') <> ?1",
+        &format!(
+            "SELECT COUNT(*) FROM threads WHERE COALESCE(model_provider, '') <> ?1{archived_filter}"
+        ),
         [target_provider],
         |row| row.get::<_, i64>(0),
     )? as usize;
     if columns.contains("has_user_event") {
         for thread_id in user_event_thread_ids {
             total += db.query_row(
-                "SELECT COUNT(*) FROM threads WHERE id = ?1 AND COALESCE(has_user_event, 0) <> 1",
+                &format!(
+                    "SELECT COUNT(*) FROM threads WHERE id = ?1 AND COALESCE(has_user_event, 0) <> 1{archived_filter}"
+                ),
                 [thread_id],
                 |row| row.get::<_, i64>(0),
             )? as usize;
@@ -858,7 +981,9 @@ fn count_sqlite_updates(
     if columns.contains("cwd") {
         for (thread_id, cwd) in cwd_by_thread_id {
             total += db.query_row(
-                "SELECT COUNT(*) FROM threads WHERE id = ?1 AND COALESCE(cwd, '') <> ?2",
+                &format!(
+                    "SELECT COUNT(*) FROM threads WHERE id = ?1 AND COALESCE(cwd, '') <> ?2{archived_filter}"
+                ),
                 (thread_id, cwd),
                 |row| row.get::<_, i64>(0),
             )? as usize;
@@ -901,14 +1026,23 @@ fn apply_sqlite_update(
     }
     let tx = db.transaction()?;
     let mut counts = SqliteUpdateCounts::default();
+    let archived_filter = if columns.contains("archived") {
+        " AND COALESCE(archived, 0) = 0"
+    } else {
+        ""
+    };
     counts.provider_rows = tx.execute(
-        "UPDATE threads SET model_provider = ?1 WHERE COALESCE(model_provider, '') <> ?1",
+        &format!(
+            "UPDATE threads SET model_provider = ?1 WHERE COALESCE(model_provider, '') <> ?1{archived_filter}"
+        ),
         [target_provider],
     )?;
     if columns.contains("has_user_event") {
         for thread_id in user_event_thread_ids {
             counts.user_event_rows += tx.execute(
-                "UPDATE threads SET has_user_event = 1 WHERE id = ?1 AND COALESCE(has_user_event, 0) <> 1",
+                &format!(
+                    "UPDATE threads SET has_user_event = 1 WHERE id = ?1 AND COALESCE(has_user_event, 0) <> 1{archived_filter}"
+                ),
                 [thread_id],
             )?;
         }
@@ -916,7 +1050,9 @@ fn apply_sqlite_update(
     if columns.contains("cwd") {
         for (thread_id, cwd) in cwd_by_thread_id {
             counts.cwd_rows += tx.execute(
-                "UPDATE threads SET cwd = ?1 WHERE id = ?2 AND COALESCE(cwd, '') <> ?1",
+                &format!(
+                    "UPDATE threads SET cwd = ?1 WHERE id = ?2 AND COALESCE(cwd, '') <> ?1{archived_filter}"
+                ),
                 (cwd, thread_id),
             )?;
         }

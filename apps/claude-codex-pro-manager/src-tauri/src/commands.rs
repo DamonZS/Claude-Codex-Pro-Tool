@@ -549,6 +549,8 @@ pub struct LaunchRequest {
     pub debug_port: u16,
     #[serde(default = "default_helper_port")]
     pub helper_port: u16,
+    #[serde(default)]
+    pub skip_provider_sync: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -2440,6 +2442,7 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         app_path: app_path.to_string_lossy().to_string(),
         debug_port: selected_debug_port,
         helper_port: default_helper_port(),
+        skip_provider_sync: false,
     };
     let launch_started_at_ms = current_time_ms();
     if let Err(error) = spawn_silent_launcher(&request) {
@@ -2987,6 +2990,9 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
         .arg(request.debug_port.to_string())
         .arg("--helper-port")
         .arg(request.helper_port.to_string());
+    if request.skip_provider_sync {
+        command.arg("--skip-provider-sync");
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -5308,35 +5314,43 @@ pub async fn sync_providers_now(target_provider: Option<String>) -> CommandResul
     .map_err(|error| anyhow::anyhow!("供应商同步任务失败：{error}"));
     match result {
         Ok(sync) => {
-            if is_success_sync_status(&sync.status) {
+            let succeeded = is_success_sync_status(&sync.status);
+            if succeeded {
                 persist_provider_sync_selection(
                     target_for_settings
                         .as_deref()
                         .unwrap_or(&sync.target_provider),
                 );
             }
-            ok(
-                &format!(
+            let message = if succeeded {
+                format!(
                     "已完成一次供应商同步：{} 个会话文件，{} 行 sqlite 数据，{} 个被锁定文件已跳过。",
                     sync.changed_session_files,
                     sync.sqlite_rows_updated,
                     sync.skipped_locked_rollout_files.len()
-                ),
-                json!({
-                    "syncStatus": sync.status,
-                    "targetProvider": sync.target_provider,
-                    "changedSessionFiles": sync.changed_session_files,
-                    "skippedLockedRolloutFiles": sync.skipped_locked_rollout_files,
-                    "sqliteRowsUpdated": sync.sqlite_rows_updated,
-                    "sqliteProviderRowsUpdated": sync.sqlite_provider_rows_updated,
-                    "sqliteUserEventRowsUpdated": sync.sqlite_user_event_rows_updated,
-                    "sqliteCwdRowsUpdated": sync.sqlite_cwd_rows_updated,
-                    "updatedWorkspaceRoots": sync.updated_workspace_roots,
-                    "encryptedContentWarning": sync.encrypted_content_warning,
-                    "backupDir": sync.backup_dir,
-                    "syncMessage": sync.message,
-                }),
-            )
+                )
+            } else {
+                format!("供应商同步未执行：{}", sync.message)
+            };
+            let payload = json!({
+                "syncStatus": sync.status,
+                "targetProvider": sync.target_provider,
+                "changedSessionFiles": sync.changed_session_files,
+                "skippedLockedRolloutFiles": sync.skipped_locked_rollout_files,
+                "sqliteRowsUpdated": sync.sqlite_rows_updated,
+                "sqliteProviderRowsUpdated": sync.sqlite_provider_rows_updated,
+                "sqliteUserEventRowsUpdated": sync.sqlite_user_event_rows_updated,
+                "sqliteCwdRowsUpdated": sync.sqlite_cwd_rows_updated,
+                "updatedWorkspaceRoots": sync.updated_workspace_roots,
+                "encryptedContentWarning": sync.encrypted_content_warning,
+                "backupDir": sync.backup_dir,
+                "syncMessage": sync.message,
+            });
+            if succeeded {
+                ok(&message, payload)
+            } else {
+                failed(&message, payload)
+            }
         }
         Err(error) => failed(&format!("供应商同步失败：{error}"), json!({})),
     }

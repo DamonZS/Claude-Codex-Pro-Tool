@@ -599,6 +599,11 @@ fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
+pub(crate) fn process_exists(process_id: u32) -> bool {
+    query_process_image_path(process_id).is_some()
+}
+
+#[cfg(windows)]
 fn send_key_sequence(inputs: &[INPUT]) -> bool {
     let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
     sent == inputs.len() as u32

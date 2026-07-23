@@ -26,16 +26,17 @@ struct LauncherHooks {
     status_store: StatusStore,
     last_app_dir: Arc<tokio::sync::Mutex<Option<PathBuf>>>,
     bridge_watchdog: Arc<tokio::sync::Mutex<Option<LauncherBridgeWatchdogRuntime>>>,
+    skip_provider_sync: bool,
 }
 
 impl Default for LauncherHooks {
     fn default() -> Self {
-        Self::new(StatusStore::default())
+        Self::new(StatusStore::default(), false)
     }
 }
 
 impl LauncherHooks {
-    fn new(status_store: StatusStore) -> Self {
+    fn new(status_store: StatusStore, skip_provider_sync: bool) -> Self {
         Self {
             core: Arc::new(DefaultLaunchHooks::default()),
             data: Arc::new(LauncherDataService::default()),
@@ -46,6 +47,7 @@ impl LauncherHooks {
             status_store,
             last_app_dir: Arc::new(tokio::sync::Mutex::new(None)),
             bridge_watchdog: Arc::new(tokio::sync::Mutex::new(None)),
+            skip_provider_sync,
         }
     }
 }
@@ -92,15 +94,28 @@ fn installation_registration_version(args: &[String]) -> Result<Option<String>> 
 }
 
 async fn run_launcher() -> Result<()> {
-    let options = parse_launch_options(std::env::args().skip(1));
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let options = parse_launch_options(&args);
     let Some(_guard) = acquire_single_instance_guard(options.debug_port)? else {
         activate_existing_codex_app(&options).await?;
         return Ok(());
     };
-    let hooks = LauncherHooks::new(options.status_store.clone());
+    let hooks = LauncherHooks::new(
+        options.status_store.clone(),
+        skip_provider_sync_requested(&args),
+    );
     let handle = launch_and_inject_with_hooks(options, &hooks).await?;
     handle.wait_for_codex_exit().await?;
     Ok(())
+}
+
+fn skip_provider_sync_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .any(|arg| arg.as_ref() == "--skip-provider-sync")
 }
 
 fn acquire_single_instance_guard(
@@ -378,6 +393,9 @@ impl LaunchHooks for LauncherHooks {
     }
 
     async fn run_provider_sync(&self) -> anyhow::Result<()> {
+        if self.skip_provider_sync {
+            return Ok(());
+        }
         let _ = tokio::task::spawn_blocking(|| claude_codex_pro_data::run_provider_sync(None))
             .await
             .map_err(|error| anyhow::anyhow!("provider sync task failed: {error}"))?;

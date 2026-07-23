@@ -51,6 +51,11 @@ pub fn windows_create_no_window() -> u32 {
 }
 
 #[cfg(windows)]
+pub fn windows_process_exists(process_id: u32) -> bool {
+    windows_integration::process_exists(process_id)
+}
+
+#[cfg(windows)]
 pub fn windows_open_url(url: &str) -> anyhow::Result<()> {
     windows_integration::open_url(url)
 }

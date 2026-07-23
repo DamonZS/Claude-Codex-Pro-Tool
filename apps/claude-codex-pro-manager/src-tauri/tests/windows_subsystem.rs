@@ -4324,3 +4324,71 @@ fn windows_private_file_acl_command_stays_hidden() {
     assert!(secure_private_path.contains("CommandExt"));
     assert!(secure_private_path.contains("creation_flags(windows_create_no_window())"));
 }
+
+#[test]
+fn provider_sync_skipped_status_is_not_reported_as_success() {
+    let commands = include_str!("../src/commands.rs");
+    let section = source_section(
+        commands,
+        "pub async fn sync_providers_now",
+        "fn is_success_sync_status",
+    );
+
+    assert!(section.contains("failed(&message, payload)"));
+    assert!(section.contains("供应商同步未执行：{}"));
+}
+
+#[test]
+fn history_session_repair_toasts_progress_and_restarts_codex_only_after_success() {
+    let app_tsx = read_frontend_file("App.tsx");
+    let repair_action = app_tsx
+        .split("const repairHistorySessions = async () => {")
+        .nth(1)
+        .and_then(|rest| rest.split("const deleteLocalSession").next())
+        .expect("history session repair action source");
+
+    assert!(repair_action.contains("title: \"历史会话修复\""));
+    assert!(repair_action.contains("message: \"正在修复历史会话，请稍候。\""));
+    assert!(repair_action.contains("status: \"running\""));
+    assert!(repair_action.contains("await waitForPaint()"));
+    assert!(repair_action.contains("statusOk(result.status)"));
+    assert!(repair_action.contains("即将重启 Codex"));
+    assert!(repair_action.contains("await restartCodex(true)"));
+    assert!(
+        repair_action.find("statusOk(result.status)").unwrap()
+            < repair_action.find("await restartCodex(true)").unwrap()
+    );
+}
+
+#[test]
+fn repair_restart_skips_only_the_duplicate_provider_sync() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let app = read_frontend_file("App.tsx");
+    let launcher = read_source_file(
+        &manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("claude-codex-pro-launcher/src/main.rs"),
+    );
+
+    assert!(app.contains("const restartCodex = async (skipProviderSync = false)"));
+    assert!(app.contains("skipProviderSync"));
+    assert!(commands.contains("pub skip_provider_sync: bool"));
+    assert!(commands.contains("command.arg(\"--skip-provider-sync\")"));
+    assert!(launcher.contains("skip_provider_sync_requested"));
+    assert!(launcher.contains("if self.skip_provider_sync"));
+}
+
+#[test]
+fn provider_sync_keeps_rollout_contents_on_disk_instead_of_memory() {
+    let source = include_str!("../../../../crates/claude-codex-pro-data/src/provider_sync.rs");
+    let change = source_section(source, "struct SessionChange", "struct RolloutRewrite");
+
+    assert!(!change.contains("original_text"));
+    assert!(!change.contains("next_text"));
+    assert!(source.contains("backup_dir.join(\"session-files\")"));
+    assert!(source.contains("fs::read_to_string(&change.path)"));
+}
