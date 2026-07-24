@@ -435,7 +435,10 @@ fn windows_process_looks_like_claude_codex_pro(process_id: u32) -> bool {
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_ascii_lowercase())
                 .unwrap_or_default();
-            exe_file.contains("claude-codex-pro") || executable_path.contains("claude-codex-pro")
+            exe_file.contains("claude-codex-pro")
+                || executable_path.contains("claude-codex-pro")
+                || exe_file == "chatgpt.exe"
+                || executable_path.contains("\\windowsapps\\openai.codex_")
         })
 }
 

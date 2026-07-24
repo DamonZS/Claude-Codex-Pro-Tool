@@ -2603,6 +2603,9 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("旧进程未能及时退出"));
     assert!(restart_command.contains("let restart_started_ms = current_time_ms();"));
     assert!(restart_command.contains("start_restart_injection_monitor("));
+    assert!(restart_command.contains("wait_for_codex_launch_ports("));
+    assert!(restart_command.contains("Codex 已重新启动，新的启动记录与 CDP/后端端口已确认上线。"));
+    assert!(restart_command.contains("旧 Codex 已关闭，但新 Codex 未能在限定时间内启动"));
     assert!(
         restart_command
             .find("wait_for_processes_to_exit(")
@@ -2617,6 +2620,24 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("request,"));
     assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
     assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
+}
+
+#[test]
+fn launcher_recognizes_chatgpt_renamed_codex_process() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let launcher = std::fs::read_to_string(
+        manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("crates/claude-codex-pro-core/src/launcher.rs"),
+    )
+    .expect("read core launcher");
+    assert!(launcher.contains("exe_file == \"chatgpt.exe\""));
+    assert!(launcher.contains("\\\\windowsapps\\\\openai.codex_"));
 }
 
 #[test]

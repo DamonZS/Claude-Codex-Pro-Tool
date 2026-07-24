@@ -2800,7 +2800,30 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
             let monitor_request = request.clone();
             let result = spawn_claude_codex_pro_launch(request, "重启 Codex 任务已在后台运行。");
             if result.status == "accepted" {
-                start_restart_injection_monitor(monitor_request, restart_started_ms);
+                start_restart_injection_monitor(monitor_request.clone(), restart_started_ms);
+                match wait_for_codex_launch_ports(
+                    &monitor_request,
+                    restart_started_ms,
+                    REPAIR_CODEX_RESTART_TIMEOUT,
+                )
+                .await
+                {
+                    Some(status) => {
+                        return ok(
+                            "Codex 已重新启动，新的启动记录与 CDP/后端端口已确认上线。",
+                            serde_json::to_value(status).unwrap_or_else(|_| json!({})),
+                        );
+                    }
+                    None => {
+                        return failed(
+                            "旧 Codex 已关闭，但新 Codex 未能在限定时间内启动，请检查应用路径和启动日志。",
+                            json!({
+                                "debugPort": monitor_request.debug_port,
+                                "helperPort": monitor_request.helper_port,
+                            }),
+                        );
+                    }
+                }
             }
             result
         }
