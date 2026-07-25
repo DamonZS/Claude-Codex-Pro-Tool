@@ -1,7 +1,8 @@
 use claude_codex_pro_core::update::{
-    Release, UpdateDownloadProgress, download_asset_to, is_newer_version, parse_version_tag,
-    release_from_github_payload, release_from_latest_json_payload,
-    release_from_latest_redirect_url, safe_asset_name, select_update_asset, validate_update_asset,
+    Release, UPDATE_DOWNLOAD_CONNECTION_FAILED_MESSAGE, UpdateDownloadProgress, download_asset_to,
+    is_newer_version, parse_version_tag, release_from_github_payload,
+    release_from_latest_json_payload, release_from_latest_redirect_url, safe_asset_name,
+    select_update_asset, validate_update_asset, validated_update_asset_url,
 };
 use serde_json::json;
 
@@ -323,6 +324,53 @@ fn update_asset_validation_rejects_wrong_platform_installer() {
     );
 
     assert!(validate_update_asset(wrong_name, &url).is_err());
+}
+
+#[test]
+fn browser_fallback_requires_release_version_tag_name_and_platform_to_match() {
+    let Some(platform_name) = current_platform_asset_name() else {
+        return;
+    };
+    let name = platform_name.replace("-V0.42", "-0.42");
+    let url =
+        format!("https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/download/V0.42/{name}");
+    let mut release = Release {
+        version: "V0.42".to_string(),
+        url: "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/tag/V0.42".to_string(),
+        body: String::new(),
+        asset_name: Some(name),
+        asset_url: Some(url.clone()),
+    };
+
+    assert_eq!(validated_update_asset_url(&release).unwrap(), url);
+
+    release.version = "V0.43".to_string();
+    assert!(validated_update_asset_url(&release).is_err());
+    release.version = "V0.42".to_string();
+    release.asset_url = Some(url.replace("/V0.42/", "/V0.41/"));
+    assert!(validated_update_asset_url(&release).is_err());
+}
+
+#[test]
+fn application_download_failure_is_concise_and_keeps_browser_recovery_actionable() {
+    assert_eq!(
+        UPDATE_DOWNLOAD_CONNECTION_FAILED_MESSAGE,
+        "应用内无法连接安装包下载源，请使用系统浏览器下载。"
+    );
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("core crate should live under crates/claude-codex-pro-core");
+    let source =
+        std::fs::read_to_string(repo.join("crates/claude-codex-pro-core/src/update.rs")).unwrap();
+    let download_response = source
+        .split("async fn fetch_update_download_response")
+        .nth(1)
+        .and_then(|rest| rest.split("async fn send_update_download_request").next())
+        .expect("download response source");
+    assert!(download_response.contains("anyhow::bail!(UPDATE_DOWNLOAD_CONNECTION_FAILED_MESSAGE)"));
+    assert!(!download_response.contains("errors.join"));
 }
 
 fn current_platform_asset_name() -> Option<&'static str> {

@@ -13,6 +13,9 @@
 - 在旧 launcher 与 Codex 完全退出后再拉起新 launcher，避免新旧实例争抢单例锁和 CDP 端口。
 - 首次注入未就绪或 Codex renderer 被替换后，由 launcher 自动恢复注入，无需用户反复点击重启。
 - 保持按钮、Tauri command 名称和启动器二进制路径不变。
+- 点击顶部按钮后必须立即显示“正在重启 Codex”反馈，不能等进程重启完成后才出现提示。
+- 重启完成后的反馈必须明确区分 Codex 进程与注入结果，不直接展示 launcher 内部英文状态文案。
+- 进行中提示可持续展示，但成功、降级或失败等终态提示必须自动关闭，同时保留手动关闭入口。
 
 本次不包含：
 
@@ -32,6 +35,9 @@
 - restart 流程必须在有界超时内轮询旧 launcher 与 Codex 是否已退出；未退出时返回失败，不得继续启动一个会命中旧单例锁的新 launcher。
 - `restart_claude_codex_pro` 仍必须调用 `spawn_claude_codex_pro_launch(...)` 启动静默 launcher。
 - 前端顶部按钮仍调用 `actions.restartCodex()`。
+- 前端在调用 `restart_claude_codex_pro` 前先提交一次可渲染的进行中提示，并等待浏览器完成绘制。
+- 后端返回后，前端必须把成功结果归一化为用户可理解的中文终态；注入状态未知或未成功时不得声称“注入成功”。
+- 最终提示不能继续使用 `running` 状态，否则会被误认为仍在执行而永久驻留。
 - 只要 Codex 前端注入已启用，生命周期就必须启动 bridge watchdog，包括首次注入暂未成功的降级状态。
 - 正式 `claude-codex-pro` launcher 的 watchdog 必须复用当前 `BridgeContext`、数据服务、运行时服务与用户脚本包执行重注入，不能退化为缺少业务上下文的基础注入。
 - watchdog 恢复成功后必须把状态从 `running_degraded` 更新为 `running`。

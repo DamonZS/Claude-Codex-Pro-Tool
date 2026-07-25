@@ -115,11 +115,13 @@ import {
 } from "@/lib/plugin";
 import {
   claudeDesktopVersionLabel,
+  compactUpdateError,
   displayAssetName,
   formatDownloadBytes,
   updateInfoToRelease,
   updateProgressLabel,
   updateStatusLabel,
+  trustedUpdateAssetUrl,
 } from "@/lib/update";
 import type {
   AdsResult,
@@ -809,7 +811,7 @@ export function SupplierScreen({
   const saveSupplierSettings = async (next: BackendSettings) => {
     const result = await actions.saveSettings(next);
     if (!result) return null;
-    if (statusFailed(result.status)) {
+    if (!statusOk(result.status)) {
       actions.showNotice({ title: "供应商保存", message: result.message || "保存设置失败。", status: "failed" });
       return null;
     }
@@ -1214,11 +1216,15 @@ export function SupplierScreen({
     const isDisablingActiveRoute = !enabled && visibleIds.has(activeProfileId);
     if (isDisablingActiveRoute && supplierRouteGroup === "codex") {
       const cleared = await (actions.clearRelayMode as unknown as () => Promise<{ status?: Status } | null>)();
-      if (!cleared || statusFailed(cleared.status)) return;
+      if (!cleared || !statusOk(cleared.status)) return;
+      actions.showNotice({ title: "供应商路由", message: "已关闭 Codex 供应商路由，运行中的代理配置已撤销。", status: "ok" });
+      return;
     }
     if (isDisablingActiveRoute && supplierRouteGroup === "claude-desktop") {
       const restored = await (actions.restoreClaudeDesktopProviderOfficial as unknown as (skipConfirm?: boolean) => Promise<{ status?: Status } | null>)(true);
-      if (!restored || statusFailed(restored.status)) return;
+      if (!restored || !statusOk(restored.status)) return;
+      actions.showNotice({ title: "供应商路由", message: "已关闭 Claude Desktop 供应商路由，运行中的代理配置已撤销。", status: "ok" });
+      return;
     }
     const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
     if (saved) {
@@ -1380,7 +1386,7 @@ export function SupplierScreen({
     if (!appSettings) return;
     setImportOpen(false);
     const result = await actions.importCcswitchCodexProviders();
-    if (!result || statusFailed(result.status)) return;
+    if (!result || !statusOk(result.status)) return;
     const imported = result.profiles.map((profile) => normalizeSupplierProfile(profile));
     const importedById = new Map(imported.map((profile) => [profile.id, profile]));
     let updatedCount = 0;
@@ -4007,6 +4013,7 @@ export const AboutScreen = memo(function AboutScreen({
   const progress = Math.max(0, Math.min(100, updateInfo?.progress ?? 0));
   const showDownloadProgress = Boolean(updateInfo?.phase && updateInfo.phase !== "checking");
   const progressLabel = updateProgressLabel(updateInfo?.phase, updateInfo?.progress);
+  const browserDownloadUrl = trustedUpdateAssetUrl(updateInfo);
   return (
     <div className="ops-two-column">
       <div className="ops-wide-column">
@@ -4085,6 +4092,9 @@ export const AboutScreen = memo(function AboutScreen({
               </div>
             </div>
           ) : null}
+          {updateInfo?.phase === "failed" ? (
+            <Empty text={compactUpdateError(updateInfo.message)} />
+          ) : null}
           <div className="action-row">
             <Button disabled={updateRunning} onClick={() => void actions.checkUpdate()}>
               <RefreshCw className={`h-4 w-4${updateInfo?.phase === "checking" ? " animate-spin" : ""}`} />
@@ -4094,6 +4104,12 @@ export const AboutScreen = memo(function AboutScreen({
               <Download className={`h-4 w-4${updateRunning && updateInfo?.phase !== "checking" ? " animate-pulse" : ""}`} />
               {updateRunning && updateInfo?.phase !== "checking" ? progressLabel : "下载并运行安装包"}
             </Button>
+            {updateInfo?.phase === "failed" && browserDownloadUrl ? (
+              <Button onClick={() => void actions.openExternalUrl(browserDownloadUrl)} variant="outline">
+                <ExternalLink className="h-4 w-4" />
+                用系统浏览器下载
+              </Button>
+            ) : null}
           </div>
         </Panel>
       </div>

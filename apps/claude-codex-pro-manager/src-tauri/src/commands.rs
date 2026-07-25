@@ -63,6 +63,23 @@ fn settings_save_is_stale(sequence: u64, latest_requested_sequence: u64) -> bool
     sequence < latest_requested_sequence
 }
 
+fn with_latest_settings_save<T>(
+    write_mutex: &Mutex<()>,
+    latest_sequence: &AtomicU64,
+    sequence: u64,
+    stale: impl FnOnce() -> T,
+    save: impl FnOnce() -> T,
+) -> T {
+    let _write_guard = write_mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if settings_save_is_stale(sequence, latest_sequence.load(Ordering::SeqCst)) {
+        stale()
+    } else {
+        save()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandResult<T>
 where
@@ -1733,7 +1750,6 @@ fn run_claude_zh_patch_elevated(
     if result_path.exists() {
         let _ = fs::remove_file(&result_path);
     }
-    let exe_quoted = powershell_single_quoted(&exe.to_string_lossy());
     let target_user_sid = current_user_sid().unwrap_or_default();
     let (target_appdata, target_localappdata) = current_user_data_dirs();
     let target_install_root = install_root
@@ -1746,16 +1762,16 @@ fn run_claude_zh_patch_elevated(
     let diagnostic_log_path = claude_codex_pro_core::paths::default_diagnostic_log_path()
         .to_string_lossy()
         .to_string();
-    let argument_list = windows_argument_list(&[
+    let result_path_text = result_path.to_string_lossy().to_string();
+    let arguments = [
         internal_command,
-        &result_path.to_string_lossy(),
+        result_path_text.as_str(),
         &target_user_sid,
         &target_appdata,
         &target_localappdata,
         &target_install_root,
         &diagnostic_log_path,
-    ]);
-    let argument_list_quoted = powershell_single_quoted(&argument_list);
+    ];
     log_manager_event(
         "manager.claude_zh_patch.elevated.start",
         json!({
@@ -1769,27 +1785,51 @@ fn run_claude_zh_patch_elevated(
             "targetInstallRoot": target_install_root,
         }),
     );
-    let script = format!(
-        "$ErrorActionPreference='Stop'; try {{ $p = Start-Process -FilePath {exe_quoted} -ArgumentList {argument_list_quoted} -Verb RunAs -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode }} catch {{ Write-Error $_; exit 1 }}"
-    );
-    let mut command = std::process::Command::new("powershell.exe");
-    command.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        &script,
-    ]);
+    let mut command: std::process::Command;
+    #[cfg(windows)]
+    {
+        let exe_quoted = powershell_single_quoted(&exe.to_string_lossy());
+        let argument_list = windows_argument_list(&arguments);
+        let argument_list_quoted = powershell_single_quoted(&argument_list);
+        let script = format!(
+            "$ErrorActionPreference='Stop'; try {{ $p = Start-Process -FilePath {exe_quoted} -ArgumentList {argument_list_quoted} -Verb RunAs -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode }} catch {{ Write-Error $_; exit 1 }}"
+        );
+        let mut elevated_command = std::process::Command::new("powershell.exe");
+        elevated_command.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ]);
+        use std::os::windows::process::CommandExt;
+        elevated_command.creation_flags(claude_codex_pro_core::windows_create_no_window());
+        command = elevated_command;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let shell_command = std::iter::once(exe.to_string_lossy().to_string())
+            .chain(arguments.iter().map(|value| (*value).to_string()))
+            .map(|value| shell_single_quoted(&value))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let script = format!(
+            "do shell script \"{}\" with administrator privileges",
+            apple_script_string(&shell_command)
+        );
+        let mut elevated_command = std::process::Command::new("/usr/bin/osascript");
+        elevated_command.args(["-e", &script]);
+        command = elevated_command;
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        anyhow::bail!("Claude 汉化管理员授权仅支持 Windows 和 macOS");
+    }
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(claude_codex_pro_core::windows_create_no_window());
-    }
     let output = run_elevated_process_with_timeout(&mut command)?;
     log_manager_event(
         "manager.claude_zh_patch.elevated.exit",
@@ -1833,6 +1873,16 @@ fn run_claude_zh_patch_elevated(
 
 fn powershell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(target_os = "macos")]
+fn shell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(target_os = "macos")]
+fn apple_script_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn windows_argument_list(values: &[&str]) -> String {
@@ -1935,6 +1985,11 @@ fn current_user_sid() -> Option<String> {
 }
 
 fn current_user_data_dirs() -> (String, String) {
+    #[cfg(target_os = "macos")]
+    if let Some(base) = directories::BaseDirs::new() {
+        let home = base.home_dir().to_string_lossy().to_string();
+        return (home.clone(), home);
+    }
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
     (appdata, localappdata)
@@ -3024,55 +3079,99 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
     command
         .spawn()
         .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("启动 {} 失败：{error}", launcher.to_string_lossy()))
+        .map_err(|error| anyhow::anyhow!("Codex 启动器启动失败：{error}"))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    let companion =
-        claude_codex_pro_core::install::companion_binary_path_from_exe(&current_exe, SILENT_BINARY);
-    if companion.is_file() {
-        return Ok(companion);
-    }
+    let current_exe = std::env::current_exe().context("无法定位 CCP Manager 运行文件")?;
+    resolve_silent_launcher_path_from_exe(&current_exe)
+}
 
-    let exe_dir = current_exe.parent().unwrap_or_else(|| Path::new("."));
-    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
-    let launcher_name = format!("{SILENT_BINARY}{exe_suffix}");
-    let mut candidates = vec![
-        exe_dir.join(&launcher_name),
-        PathBuf::from("target").join("debug").join(&launcher_name),
-        PathBuf::from("target").join("release").join(&launcher_name),
-    ];
-    if let Some(profile_dir) = exe_dir.parent() {
-        candidates.push(profile_dir.join("debug").join(&launcher_name));
-        candidates.push(profile_dir.join("release").join(&launcher_name));
-        if let Some(target_dir) = profile_dir.parent() {
-            candidates.push(target_dir.join("debug").join(&launcher_name));
-            candidates.push(target_dir.join("release").join(&launcher_name));
+fn resolve_silent_launcher_path_from_exe(current_exe: &Path) -> anyhow::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        if claude_codex_pro_core::install::is_macos_app_translocation_path(current_exe) {
+            bail!("CCP 正从临时隔离位置运行，请将 App 移到“应用程序”后重新打开")
         }
+
+        let Some(companion) = claude_codex_pro_core::install::macos_bundle_companion_path_from_exe(
+            current_exe,
+            SILENT_BINARY,
+        ) else {
+            bail!("当前 CCP Manager 不是标准 macOS App，请重新安装正式版本")
+        };
+        if is_executable_file(&companion) {
+            return Ok(companion);
+        }
+        bail!("CCP Manager 安装不完整，缺少 Codex 启动器，请重新安装")
     }
 
-    candidates.sort();
-    candidates.dedup();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let companion = claude_codex_pro_core::install::companion_binary_path_from_exe(
+            current_exe,
+            SILENT_BINARY,
+        );
+        if is_executable_file(&companion) {
+            return Ok(companion);
+        }
 
-    if let Some(path) = candidates.iter().find(|path| path.is_file()).cloned() {
-        return Ok(path);
-    }
+        let exe_dir = current_exe.parent().unwrap_or_else(|| Path::new("."));
+        let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+        let launcher_name = format!("{SILENT_BINARY}{exe_suffix}");
+        let mut candidates = vec![
+            exe_dir.join(&launcher_name),
+            PathBuf::from("target").join("debug").join(&launcher_name),
+            PathBuf::from("target").join("release").join(&launcher_name),
+        ];
+        if let Some(profile_dir) = exe_dir.parent() {
+            candidates.push(profile_dir.join("debug").join(&launcher_name));
+            candidates.push(profile_dir.join("release").join(&launcher_name));
+            if let Some(target_dir) = profile_dir.parent() {
+                candidates.push(target_dir.join("debug").join(&launcher_name));
+                candidates.push(target_dir.join("release").join(&launcher_name));
+            }
+        }
 
-    let searched = candidates
-        .iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join("; ");
-    // 已安装场景下 NSIS 会把 claude-codex-pro.exe 与管理器放在同一 $INSTDIR；
-    // dev 场景下 beforeDevCommand 会先 `cargo build -p claude-codex-pro-launcher`
-    // 把它产到 target/debug。两种入口都缺失时，多半是直接跑了 manager.exe 却
-    // 没先编译 launcher。给出可执行的恢复指引，而不是只抛一串搜索路径。
-    bail!(
-        "未找到静默启动器 {launcher_name}。开发环境请先运行 \
+        candidates.sort();
+        candidates.dedup();
+
+        if let Some(path) = candidates
+            .iter()
+            .find(|path| is_executable_file(path))
+            .cloned()
+        {
+            return Ok(path);
+        }
+
+        // 已安装场景下 NSIS 会把 claude-codex-pro.exe 与管理器放在同一 $INSTDIR；
+        // dev 场景下 beforeDevCommand 会先 `cargo build -p claude-codex-pro-launcher`
+        // 把它产到 target/debug。两种入口都缺失时，多半是直接跑了 manager.exe 却
+        // 没先编译 launcher。给出可执行的恢复指引，而不是只抛一串搜索路径。
+        bail!(
+            "未找到静默启动器 {launcher_name}。开发环境请先运行 \
          `cargo build -p claude-codex-pro-launcher --bin claude-codex-pro`（或直接 `npm run dev`），\
-         已安装环境请重新运行安装包修复。已搜索路径：{searched}"
-    )
+         已安装环境请重新运行安装包修复。"
+        )
+    }
 }
 
 #[tauri::command]
@@ -3113,35 +3212,39 @@ fn save_settings_blocking(
     settings: BackendSettings,
     sequence: u64,
 ) -> CommandResult<SettingsPayload> {
-    let _write_guard = settings_write_mutex()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if settings_save_is_stale(sequence, SETTINGS_SAVE_SEQUENCE.load(Ordering::SeqCst)) {
-        return settings_payload(
-            "已忽略过期的设置保存请求。",
-            "忽略过期保存请求后重新加载设置失败。",
-        );
-    }
-    let settings = normalize_settings_before_save(settings);
-    match SettingsStore::default().save(&settings) {
-        Ok(()) => {
-            let wrapper_message = refresh_cli_wrapper_after_settings_save(&settings);
+    with_latest_settings_save(
+        settings_write_mutex(),
+        &SETTINGS_SAVE_SEQUENCE,
+        sequence,
+        || {
             settings_payload(
-                &format!("设置已保存。{wrapper_message}"),
-                "保存后重新加载设置失败。",
+                "已忽略过期的设置保存请求。",
+                "忽略过期保存请求后重新加载设置失败。",
             )
-        }
-        Err(error) => failed(
-            &format!("保存设置失败：{error}"),
-            SettingsPayload {
-                settings,
-                settings_path: claude_codex_pro_core::paths::default_settings_path()
-                    .to_string_lossy()
-                    .to_string(),
-                user_scripts: user_script_inventory(),
-            },
-        ),
-    }
+        },
+        || {
+            let settings = normalize_settings_before_save(settings);
+            match SettingsStore::default().save(&settings) {
+                Ok(()) => {
+                    let wrapper_message = refresh_cli_wrapper_after_settings_save(&settings);
+                    settings_payload(
+                        &format!("设置已保存。{wrapper_message}"),
+                        "保存后重新加载设置失败。",
+                    )
+                }
+                Err(error) => failed(
+                    &format!("保存设置失败：{error}"),
+                    SettingsPayload {
+                        settings,
+                        settings_path: claude_codex_pro_core::paths::default_settings_path()
+                            .to_string_lossy()
+                            .to_string(),
+                        user_scripts: user_script_inventory(),
+                    },
+                ),
+            }
+        },
+    )
 }
 
 #[tauri::command]
@@ -9012,7 +9115,20 @@ const DIAGNOSTICS_URL_KEY_MARKERS: &[&str] = &["url", "uri", "endpoint"];
 
 fn sanitize_url_for_diagnostics(url: &str) -> String {
     let suffix_start = url.find(['?', '#']).unwrap_or(url.len());
-    let mut sanitized = url[..suffix_start].to_string();
+    let without_suffix = &url[..suffix_start];
+    if let Ok(mut parsed) = tauri::Url::parse(without_suffix) {
+        if matches!(parsed.scheme(), "http" | "https") {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.set_query(None);
+            parsed.set_fragment(None);
+            return parsed.to_string();
+        }
+    }
+
+    // Error strings can contain a truncated or otherwise invalid URL. Keep the
+    // fallback conservative so malformed input still cannot expose userinfo.
+    let mut sanitized = without_suffix.to_string();
     if let Some(scheme_end) = sanitized.find("://") {
         let authority_start = scheme_end + 3;
         let authority_end = sanitized[authority_start..]
@@ -10472,7 +10588,7 @@ mod tests {
 
         assert_eq!(
             sanitized,
-            "first HTTPS://one.test/v1 then http://two.test/path"
+            "first https://one.test/v1 then http://two.test/path"
         );
     }
 
@@ -10504,6 +10620,39 @@ mod tests {
         assert!(settings_save_is_stale(
             1,
             latest_requested.load(Ordering::SeqCst)
+        ));
+    }
+
+    #[test]
+    fn queued_older_settings_save_is_rejected_after_newer_request_arrives() {
+        use std::sync::{Arc, mpsc};
+
+        let write_mutex = Arc::new(Mutex::new(()));
+        let latest_sequence = Arc::new(AtomicU64::new(1));
+        let held_guard = write_mutex.lock().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+
+        let queued_mutex = Arc::clone(&write_mutex);
+        let queued_latest = Arc::clone(&latest_sequence);
+        let queued = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            with_latest_settings_save(&queued_mutex, &queued_latest, 1, || false, || true)
+        });
+
+        started_rx.recv().unwrap();
+        latest_sequence.store(2, Ordering::SeqCst);
+        drop(held_guard);
+
+        assert!(
+            !queued.join().unwrap(),
+            "the queued stale save must not run"
+        );
+        assert!(with_latest_settings_save(
+            &write_mutex,
+            &latest_sequence,
+            2,
+            || false,
+            || true
         ));
     }
 
@@ -11458,6 +11607,7 @@ enabled = true
             app_path: "codex.exe".to_string(),
             debug_port: 9230,
             helper_port: 46227,
+            skip_provider_sync: false,
         };
         let current = LaunchStatus {
             status: "ok".to_string(),
@@ -11484,6 +11634,7 @@ enabled = true
             app_path: "codex.exe".to_string(),
             debug_port: 9311,
             helper_port: 46227,
+            skip_provider_sync: false,
         };
         let stale = LaunchStatus {
             status: "ok".to_string(),
@@ -11507,6 +11658,7 @@ enabled = true
             app_path: "codex.exe".to_string(),
             debug_port: 9311,
             helper_port: 46227,
+            skip_provider_sync: false,
         };
 
         let detected = repair_launch_status(&request, None, 222, true, true, 223)

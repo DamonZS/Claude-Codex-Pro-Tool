@@ -264,9 +264,12 @@ fn manager_launch_button_spawns_silent_launcher_binary() {
 
     assert!(commands_rs.contains("SILENT_BINARY"));
     assert!(commands_rs.contains("resolve_silent_launcher_path()"));
+    assert!(commands_rs.contains("macos_bundle_companion_path_from_exe"));
+    assert!(commands_rs.contains("is_macos_app_translocation_path"));
     assert!(commands_rs.contains("target\").join(\"debug\").join(&launcher_name)"));
     assert!(commands_rs.contains("target\").join(\"release\").join(&launcher_name)"));
-    assert!(commands_rs.contains("找不到静默启动器"));
+    assert!(commands_rs.contains("安装不完整，缺少 Codex 启动器"));
+    assert!(!commands_rs.contains("已搜索路径：{searched}"));
     assert!(commands_rs.contains("std::process::Command::new"));
     assert!(!commands_rs.contains("launch_and_inject_with_hooks(options"));
 }
@@ -371,6 +374,40 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
     assert!(script.contains(
         "create_app \"Claude Codex Pro Manager\" \"ClaudeCodexProManager\" \"$BINARY_DIR/claude-codex-pro-manager\" \"com.damonzs.claudecodexpro.manager\" \"false\""
     ));
+    assert!(script.contains("install_manager_runtime \"claude-codex-pro\""));
+    assert!(script.contains("install_manager_runtime \"claude-codex-pro-mcp\""));
+    assert!(
+        script
+            .contains("for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp")
+    );
+    let verify_position = script
+        .find("verify_manager_runtime_before_signing\n")
+        .expect("runtime verification invocation");
+    let sign_position = script
+        .find("sign_app \"$STAGE/Claude Codex Pro.app\"")
+        .expect("first app signing invocation");
+    assert!(verify_position < sign_position);
+}
+
+#[test]
+fn macos_workflows_verify_all_manager_bundle_runtimes() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    for workflow in [
+        ".github/workflows/pr-build.yml",
+        ".github/workflows/release-assets.yml",
+        ".github/workflows/auto-release-installers.yml",
+    ] {
+        let source = std::fs::read_to_string(repo_root.join(workflow)).expect("read workflow");
+        assert!(source.contains(
+            "for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp"
+        ));
+        assert!(source.contains("Claude Codex Pro Manager.app/Contents/MacOS/$runtime"));
+    }
 }
 
 #[test]
@@ -2623,6 +2660,122 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
 }
 
 #[test]
+fn codex_restart_feedback_is_immediate_specific_and_auto_dismissable() {
+    let app_tsx = read_all_frontend_sources().replace("\r\n", "\n");
+    let restart = app_tsx
+        .split("const restartCodex = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const launchCodex = async").next())
+        .expect("restartCodex source");
+
+    let progress_notice = restart
+        .find("正在关闭旧进程并重新启动 Codex，请稍候...")
+        .expect("immediate restart progress notice");
+    let command = restart
+        .find("restart_claude_codex_pro")
+        .expect("restart command invocation");
+    assert!(progress_notice < command);
+    assert!(restart.contains("await waitForPaint();"));
+    assert!(restart.contains("refreshedOverview?.latest_launch?.frontend_runtime_online === true"));
+    assert!(restart.contains("attempt < 4"));
+    assert!(restart.contains("Codex 已重启成功，前端注入已确认生效。"));
+    assert!(restart.contains("Codex 已重启成功，前端注入正在后台确认"));
+    assert!(
+        restart.contains("status: successful ? (frontendInjected ? \"ok\" : \"needs_review\")")
+    );
+    assert!(!restart.contains("Claude Codex Pro launcher ready"));
+
+    assert!(app_tsx.contains("if (notice.status === \"running\") return;"));
+    assert!(app_tsx.contains("window.setTimeout(() => setNotice(null), 5200)"));
+}
+
+#[test]
+fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
+    let screens = read_all_frontend_sources().replace("\r\n", "\n");
+    let route_toggle = screens
+        .split("const toggleVisibleSupplierRouting = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const supplierOrderFromIds").next())
+        .expect("supplier route toggle source");
+    assert!(route_toggle.contains("actions.clearRelayMode"));
+    assert!(route_toggle.contains("actions.restoreClaudeDesktopProviderOfficial"));
+    assert!(route_toggle.contains("运行中的代理配置已撤销"));
+
+    let supplier_import = screens
+        .split("const importFromCcswitch = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const refreshSupplierList").next())
+        .expect("supplier import source");
+    assert!(supplier_import.contains("if (!result || !statusOk(result.status)) return;"));
+    assert!(supplier_import.contains("if (!saved) return;"));
+
+    let supplier_refresh = screens
+        .split("const refreshSupplierList = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const supplierDisplayUrl").next())
+        .expect("supplier refresh source");
+    assert!(
+        supplier_refresh.contains("await actions.refreshRoute(\"supplier\", { notify: true });")
+    );
+    assert!(supplier_refresh.contains("刷新供应商列表失败"));
+}
+
+#[test]
+fn update_check_cannot_replace_an_active_download() {
+    let app = read_all_frontend_sources().replace("\r\n", "\n");
+    let check_update = app
+        .split("const checkUpdate = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const performUpdate = async").next())
+        .expect("checkUpdate source");
+    assert!(check_update.contains("if (updateDownloadActiveRef.current) return null;"));
+    assert!(
+        check_update.contains(
+            "checkEpoch !== updateCheckEpochRef.current || updateDownloadActiveRef.current"
+        )
+    );
+
+    let refresh_route = app
+        .split("const refreshRoute = async")
+        .nth(1)
+        .and_then(|rest| rest.split("useEffect(() =>").next())
+        .expect("refreshRoute source");
+    assert!(
+        refresh_route
+            .contains("requiredResults.some((result) => !result || !statusOk(result.status))")
+    );
+}
+
+#[test]
+fn failed_update_keeps_a_validated_browser_download_fallback() {
+    let app = read_frontend_file("App.tsx").replace("\r\n", "\n");
+    let screens = read_frontend_file("screens.tsx").replace("\r\n", "\n");
+    let update = read_frontend_file("lib/update.ts").replace("\r\n", "\n");
+
+    let perform_update = app
+        .split("const performUpdate = async")
+        .nth(1)
+        .and_then(|rest| rest.split("const writeUiEvent = async").next())
+        .expect("performUpdate source");
+    assert!(perform_update.contains("compactUpdateError(result.message)"));
+    assert!(perform_update.contains("trustedUpdateAssetUrl(current)"));
+    assert!(perform_update.contains("assetUrl: browserFallbackUrl"));
+
+    assert!(update.contains("export function trustedUpdateAssetUrl"));
+    assert!(update.contains("github.com/DamonZS/Claude-Codex-Pro-Tool/releases/download"));
+    assert!(update.contains("export function compactUpdateError"));
+
+    let about = screens
+        .split("export const AboutScreen")
+        .nth(1)
+        .expect("About screen source");
+    assert!(about.contains("const browserDownloadUrl = trustedUpdateAssetUrl(updateInfo);"));
+    assert!(about.contains("用系统浏览器下载"));
+    assert!(about.contains("actions.openExternalUrl(browserDownloadUrl)"));
+    assert!(about.contains("compactUpdateError(updateInfo.message)"));
+}
+
+#[test]
 fn launcher_recognizes_chatgpt_renamed_codex_process() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let launcher = std::fs::read_to_string(
@@ -3546,7 +3699,7 @@ fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
     assert!(commands_rs.contains("manager.claude_zh_patch.install.elevation_required"));
     assert!(commands_rs.contains("manager.claude_zh_patch.install.direct.start"));
     assert!(commands_rs.contains("current_user_sid()"));
-    assert!(commands_rs.contains("windows_argument_list(&["));
+    assert!(commands_rs.contains("windows_argument_list(&arguments)"));
     assert!(commands_rs.contains("powershell_single_quoted(&argument_list)"));
     assert!(commands_rs.contains("manager.claude_zh_patch.elevated.start"));
     assert!(commands_rs.contains("manager.claude_zh_patch.elevated.exit"));
@@ -3956,7 +4109,7 @@ fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
         std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
 
     assert!(commands_rs.contains("current_user_data_dirs()"));
-    assert!(commands_rs.contains("windows_argument_list(&["));
+    assert!(commands_rs.contains("windows_argument_list(&arguments)"));
     assert!(commands_rs.contains("powershell_single_quoted(&argument_list)"));
     assert!(commands_rs.contains("-ArgumentList {argument_list_quoted}"));
     assert!(commands_rs.contains("target_install_root"));
@@ -3980,6 +4133,12 @@ fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
     assert!(core_zh_patch.contains("restore_patch_elevated_for_user_dirs_at_install_root"));
     assert!(core_zh_patch.contains("appdata.join(\"Claude-3p\").join(\"config.json\")"));
     assert!(core_zh_patch.contains("local_appdata.join(BACKUP_DIR_NAME)"));
+    assert!(commands_rs.contains("/usr/bin/osascript"));
+    assert!(commands_rs.contains("with administrator privileges"));
+    assert!(commands_rs.contains("shell_single_quoted(&value)"));
+    assert!(commands_rs.contains("apple_script_string(&shell_command)"));
+    assert!(core_zh_patch.contains("home.join(\".claude-codex-pro\")"));
+    assert!(core_zh_patch.contains(".join(\"Application Support\")"));
 }
 
 #[test]

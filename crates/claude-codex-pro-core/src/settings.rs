@@ -1876,7 +1876,10 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
 
     let temp_path = temp_path_for(path);
-    write_private_file(&temp_path, bytes)?;
+    if let Err(error) = write_private_file(&temp_path, bytes) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
     let replace_result = replace_file(&temp_path, path).with_context(|| {
         format!(
             "failed to replace {} with {}",
@@ -1939,6 +1942,8 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
             .truncate(true)
             .open(path)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
+        #[cfg(windows)]
+        secure_private_path(path)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
     }
@@ -3799,6 +3804,24 @@ experimental_bearer_token = "sk-existing"
 
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(saved["providerSyncEnabled"], true);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_private_file_applies_windows_acl_before_atomic_replace() {
+        use std::process::Command;
+
+        let dir = temp_dir();
+        let path = dir.join("settings.pending.tmp");
+        write_private_file(&path, br#"{"secret":true}"#).unwrap();
+
+        let output = Command::new("icacls.exe").arg(&path).output().unwrap();
+        assert!(output.status.success());
+        let acl = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !acl.contains("(I)"),
+            "temporary file ACL still contains inherited entries: {acl}"
+        );
     }
 
     #[cfg(windows)]

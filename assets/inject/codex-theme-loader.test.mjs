@@ -489,3 +489,59 @@ test("reports default ownership conflicts without revoking a Blob still referenc
   assert.equal(root.style.getPropertyValue(ASSET_VARIABLE).includes(oldAssetUrl), true);
   assert.equal(harness.revoked.includes(oldAssetUrl), false);
 });
+
+test("rejects external and dangerous theme CSS resources, including escaped forms", () => {
+  const unsafeCss = [
+    '@import "https://example.com/theme.css";',
+    '@import/**/url("https://example.com/theme.css");',
+    '@\\69mport url("https://example.com/theme.css");',
+    '@\\69mport url("data:image/png;base64,dGhlbWU=");',
+    '.x { background: url("http://example.com/image.png"); }',
+    '.x { background: URL(HTTPS://example.com/image.png); }',
+    '.x { background: u\\72l("https://example.com/image.png"); }',
+    '.x { background: url("//example.com/image.png"); }',
+    '.x { background: url("\\2f\\2f example.com/image.png"); }',
+    '.x { background: url("javascript:alert(1)"); }',
+    '.x { background: url("j\\61vascript:alert(1)"); }',
+    '.x { background: url("file:///C:/secret.txt"); }',
+    '.x { background: url("ftp://example.com/image.png"); }',
+    '.x { background: url("data:text/html;base64,PGgxPk5vPC9oMT4="); }',
+    '.x { background: url("blob:https://example.com/id"); }',
+  ];
+
+  for (const css of unsafeCss) {
+    const payload = themePayload();
+    payload.css = css;
+    const harness = createHarness(payload);
+
+    assert.equal(harness.initialResult.ok, false, css);
+    assert.equal(harness.initialResult.status, "failed", css);
+    assert.equal(harness.initialResult.reason, "invalid_payload", css);
+    assert.equal(harness.document.querySelectorAll(STYLE_SELECTOR).length, 0, css);
+  }
+});
+
+test("keeps controlled local and image resources while materializing assets as Blob URLs", () => {
+  const safeCss = [
+    '.x { background: url("data:image/png;base64,dGhlbWU="); }',
+    '.x { background: url("./images/background.png"); }',
+    '.x { background: url("../images/background.png"); }',
+    '.x { background: url("/assets/background.png"); }',
+    '.x { filter: url("#theme-filter"); }',
+    '.x::before { content: "@import and url(https://example.com) are text"; }',
+  ];
+
+  for (const css of safeCss) {
+    const payload = themePayload();
+    payload.css = css;
+    const harness = createHarness(payload);
+
+    assert.equal(harness.initialResult.ok, true, css);
+    assert.equal(harness.initialResult.status, "applied", css);
+    assert.match(
+      harness.document.documentElement.style.getPropertyValue(ASSET_VARIABLE),
+      /^url\("blob:ccp-theme-test\/\d+"\)$/,
+      css,
+    );
+  }
+});

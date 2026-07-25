@@ -16,9 +16,10 @@
     "data-ccp-codex-theme-id": null,
   });
   const DATA_URI_PATTERN = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
-  const CSS_IMPORT_PATTERN = /@import(?:\s|\/\*[\s\S]*?\*\/)*(?:url\s*\(|["'])/i;
-  const CSS_URL_PATTERN = /url\s*\(\s*(["']?)([\s\S]*?)\1\s*\)/gi;
-  const SAFE_CSS_URL_PATTERN = /^(?:data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}|blob:|(?:\.\.?\/|\/(?!\/))[^\\]*|#[^\s]*)$/i;
+  const CSS_WHITESPACE_PATTERN = /[\t\n\f\r ]/;
+  const CSS_HEX_DIGIT_PATTERN = /[0-9a-f]/i;
+  const CSS_IDENTIFIER_CHARACTER_PATTERN = /[-_a-z0-9]/i;
+  const CSS_CONTROL_CHARACTER_PATTERN = /[\0-\x1f\x7f]/;
 
   const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
   const emptyRecord = () => Object.create(null);
@@ -141,16 +142,184 @@
     throw new TypeError("generation must be a non-negative integer");
   };
 
-  const validateThemeCss = (css) => {
-    if (CSS_IMPORT_PATTERN.test(css)) {
-      throw new TypeError("theme CSS must not contain @import");
+  const consumeCssComment = (css, start) => {
+    const end = css.indexOf("*/", start + 2);
+    if (end < 0) {
+      throw new TypeError("theme CSS contains an unterminated comment");
     }
-    CSS_URL_PATTERN.lastIndex = 0;
-    for (const match of css.matchAll(CSS_URL_PATTERN)) {
-      const resource = match[2].trim();
-      if (!resource || !SAFE_CSS_URL_PATTERN.test(resource)) {
-        throw new TypeError("theme CSS contains an unsafe resource URL");
+    return end + 2;
+  };
+
+  const skipCssWhitespaceAndComments = (css, start) => {
+    let index = start;
+    while (index < css.length) {
+      if (CSS_WHITESPACE_PATTERN.test(css[index])) {
+        index += 1;
+      } else if (css.startsWith("/*", index)) {
+        index = consumeCssComment(css, index);
+      } else {
+        break;
       }
+    }
+    return index;
+  };
+
+  const consumeCssEscape = (css, start) => {
+    if (css[start] !== "\\" || start + 1 >= css.length) {
+      throw new TypeError("theme CSS contains an invalid escape");
+    }
+    let index = start + 1;
+    if (CSS_HEX_DIGIT_PATTERN.test(css[index])) {
+      const hexStart = index;
+      while (index < css.length && index - hexStart < 6 && CSS_HEX_DIGIT_PATTERN.test(css[index])) {
+        index += 1;
+      }
+      const codePoint = Number.parseInt(css.slice(hexStart, index), 16);
+      if (index < css.length && CSS_WHITESPACE_PATTERN.test(css[index])) {
+        index += 1;
+      }
+      const value = codePoint === 0 || codePoint > 0x10ffff
+        ? "\ufffd"
+        : String.fromCodePoint(codePoint);
+      return { index, value };
+    }
+    if (css[index] === "\r" && css[index + 1] === "\n") {
+      return { index: index + 2, value: "" };
+    }
+    if (css[index] === "\n" || css[index] === "\r" || css[index] === "\f") {
+      return { index: index + 1, value: "" };
+    }
+    return { index: index + 1, value: css[index] };
+  };
+
+  const consumeCssIdentifier = (css, start) => {
+    let index = start;
+    let value = "";
+    while (index < css.length) {
+      const character = css[index];
+      if (CSS_IDENTIFIER_CHARACTER_PATTERN.test(character) || character.codePointAt(0) >= 0x80) {
+        value += character;
+        index += 1;
+      } else if (character === "\\") {
+        const escaped = consumeCssEscape(css, index);
+        value += escaped.value;
+        index = escaped.index;
+      } else {
+        break;
+      }
+    }
+    return { index, value };
+  };
+
+  const consumeCssString = (css, start) => {
+    const quote = css[start];
+    let index = start + 1;
+    let value = "";
+    while (index < css.length) {
+      if (css[index] === quote) {
+        return { index: index + 1, value };
+      }
+      if (css[index] === "\\") {
+        const escaped = consumeCssEscape(css, index);
+        value += escaped.value;
+        index = escaped.index;
+      } else {
+        value += css[index];
+        index += 1;
+      }
+    }
+    throw new TypeError("theme CSS contains an unterminated string");
+  };
+
+  const isSafeThemeResource = (resource) => {
+    if (!resource || CSS_CONTROL_CHARACTER_PATTERN.test(resource) || resource.includes("\\")) {
+      return false;
+    }
+    const dataMatch = DATA_URI_PATTERN.exec(resource);
+    if (dataMatch) {
+      return dataMatch[2].length % 4 === 0;
+    }
+    if (resource.startsWith("#")) {
+      return !/\s/.test(resource);
+    }
+    if (resource.startsWith("//")) {
+      return false;
+    }
+    return resource.startsWith("/")
+      || resource.startsWith("./")
+      || resource.startsWith("../");
+  };
+
+  const consumeAndValidateCssUrl = (css, openParenthesis) => {
+    let index = skipCssWhitespaceAndComments(css, openParenthesis + 1);
+    let resource = "";
+    if (css[index] === "\"" || css[index] === "'") {
+      const parsed = consumeCssString(css, index);
+      resource = parsed.value.trim();
+      index = skipCssWhitespaceAndComments(css, parsed.index);
+      if (css[index] !== ")") {
+        throw new TypeError("theme CSS contains an invalid resource URL");
+      }
+      index += 1;
+    } else {
+      while (index < css.length && css[index] !== ")") {
+        if (css.startsWith("/*", index)) {
+          index = consumeCssComment(css, index);
+        } else if (css[index] === "\\") {
+          const escaped = consumeCssEscape(css, index);
+          resource += escaped.value;
+          index = escaped.index;
+        } else {
+          resource += css[index];
+          index += 1;
+        }
+      }
+      if (css[index] !== ")") {
+        throw new TypeError("theme CSS contains an unterminated resource URL");
+      }
+      resource = resource.trim();
+      index += 1;
+    }
+    if (!isSafeThemeResource(resource)) {
+      throw new TypeError("theme CSS contains an unsafe resource URL");
+    }
+    return index;
+  };
+
+  const validateThemeCss = (css) => {
+    let index = 0;
+    while (index < css.length) {
+      if (css.startsWith("/*", index)) {
+        index = consumeCssComment(css, index);
+        continue;
+      }
+      if (css[index] === "\"" || css[index] === "'") {
+        index = consumeCssString(css, index).index;
+        continue;
+      }
+      if (css[index] === "@") {
+        const identifier = consumeCssIdentifier(css, index + 1);
+        if (identifier.value.toLowerCase() === "import") {
+          throw new TypeError("theme CSS must not contain @import");
+        }
+        index = identifier.index;
+        continue;
+      }
+      if (
+        CSS_IDENTIFIER_CHARACTER_PATTERN.test(css[index])
+        || css[index] === "\\"
+        || css[index].codePointAt(0) >= 0x80
+      ) {
+        const identifier = consumeCssIdentifier(css, index);
+        const next = skipCssWhitespaceAndComments(css, identifier.index);
+        if (identifier.value.toLowerCase() === "url" && css[next] === "(") {
+          index = consumeAndValidateCssUrl(css, next);
+        } else {
+          index = identifier.index;
+        }
+        continue;
+      }
+      index += 1;
     }
   };
 

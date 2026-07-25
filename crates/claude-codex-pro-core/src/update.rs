@@ -14,6 +14,9 @@ pub const DEFAULT_LATEST_RELEASE_URL: &str =
     "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/latest";
 pub const DEFAULT_LATEST_JSON_URL: &str =
     "https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/latest/download/latest.json";
+pub const UPDATE_DOWNLOAD_CONNECTION_FAILED_MESSAGE: &str =
+    "应用内无法连接安装包下载源，请使用系统浏览器下载。";
+const UPDATE_DOWNLOAD_INTERRUPTED_MESSAGE: &str = "应用内下载安装包中断，请使用系统浏览器下载。";
 
 const UPDATE_CHECK_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const UPDATE_CHECK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -156,7 +159,7 @@ pub fn release_from_github_payload(payload: &Value) -> anyhow::Result<Release> {
             ))
         })
         .collect::<Vec<_>>();
-    let selected = select_update_asset(&assets);
+    let selected = select_update_asset_for_version(&version, &assets);
     Ok(Release {
         version,
         url: payload
@@ -196,7 +199,7 @@ pub fn release_from_latest_json_payload(payload: &Value) -> anyhow::Result<Relea
             Some((name, url))
         })
         .collect::<Vec<_>>();
-    let selected = select_update_asset(&assets);
+    let selected = select_update_asset_for_version(&version, &assets);
     Ok(Release {
         version,
         url: payload
@@ -293,6 +296,27 @@ pub fn select_update_asset(assets: &[(String, String)]) -> Option<ReleaseAsset> 
         }
     }
     None
+}
+
+fn select_update_asset_for_version(
+    version: &str,
+    assets: &[(String, String)],
+) -> Option<ReleaseAsset> {
+    assets.iter().find_map(|(name, url)| {
+        let release = Release {
+            version: version.to_string(),
+            url: String::new(),
+            body: String::new(),
+            asset_name: Some(name.clone()),
+            asset_url: Some(url.clone()),
+        };
+        validated_update_asset_url(&release)
+            .ok()
+            .map(|_| ReleaseAsset {
+                name: name.clone(),
+                browser_download_url: url.clone(),
+            })
+    })
 }
 
 pub async fn fetch_latest_release(latest_json_url: &str) -> anyhow::Result<Release> {
@@ -508,6 +532,9 @@ fn cache_current_release(release: &Release) {
 
 pub async fn check_for_update(current_version: &str) -> anyhow::Result<UpdateCheck> {
     let release = fetch_current_release().await?;
+    if release.asset_name.is_some() || release.asset_url.is_some() {
+        validated_update_asset_url(&release)?;
+    }
     let update_available = is_newer_version(&release.version, current_version)?;
     Ok(UpdateCheck {
         current_version: current_version.to_string(),
@@ -534,15 +561,11 @@ pub async fn perform_update_with_progress<F>(
 where
     F: FnMut(UpdateDownloadProgress),
 {
-    let url = release
-        .asset_url
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
     let name = release
         .asset_name
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
-    validate_update_asset(name, url)?;
+    let url = validated_update_asset_url(release)?;
 
     std::fs::create_dir_all(download_dir)?;
     let safe_name = safe_asset_name(name)?;
@@ -560,7 +583,7 @@ where
         let mut stream = response.bytes_stream();
         let mut downloaded_bytes = 0_u64;
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+            let chunk = chunk.map_err(|_| anyhow::anyhow!(UPDATE_DOWNLOAD_INTERRUPTED_MESSAGE))?;
             file.write_all(&chunk)?;
             downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
             on_progress(UpdateDownloadProgress::new(
@@ -662,27 +685,26 @@ async fn fetch_update_download_response(url: &str) -> anyhow::Result<reqwest::Re
 
     let mut proxied_done = false;
     let mut direct_done = false;
-    let mut errors = Vec::new();
     loop {
         tokio::select! {
             result = &mut proxied, if !proxied_done => {
                 proxied_done = true;
                 match result {
                     Ok(response) => return Ok(response),
-                    Err(error) => errors.push(format!("system proxy: {error}")),
+                    Err(_) => {},
                 }
             },
             result = &mut direct, if !direct_done => {
                 direct_done = true;
                 match result {
                     Ok(response) => return Ok(response),
-                    Err(error) => errors.push(format!("direct: {error}")),
+                    Err(_) => {},
                 }
             },
             else => break,
         }
     }
-    anyhow::bail!("安装包下载连接均不可用：{}", errors.join("; "))
+    anyhow::bail!(UPDATE_DOWNLOAD_CONNECTION_FAILED_MESSAGE)
 }
 
 async fn send_update_download_request(
@@ -797,6 +819,46 @@ pub fn validate_update_asset(name: &str, value: &str) -> anyhow::Result<()> {
         anyhow::bail!("Release asset URL 不属于固定仓库下载路径");
     }
     Ok(())
+}
+
+pub fn validated_update_asset_url(release: &Release) -> anyhow::Result<&str> {
+    let name = release
+        .asset_name
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
+    let value = release
+        .asset_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("没有可下载的 Release asset"))?;
+    parse_version_tag(&release.version)?;
+    validate_update_asset(name, value)?;
+
+    let version = release
+        .version
+        .strip_prefix('v')
+        .or_else(|| release.version.strip_prefix('V'))
+        .unwrap_or(&release.version);
+    let expected_name = format!(
+        "claude-codex-pro-{version}{}",
+        expected_platform_installer_suffix()
+            .ok_or_else(|| anyhow::anyhow!("当前平台没有受支持的 Release 安装包"))?
+    );
+    if name != expected_name {
+        anyhow::bail!("Release asset 与发布版本不匹配");
+    }
+
+    let url = url::Url::parse(value)
+        .map_err(|error| anyhow::anyhow!("Release asset URL 非法：{error}"))?;
+    let segments = url
+        .path_segments()
+        .ok_or_else(|| anyhow::anyhow!("Release asset URL 缺少路径"))?
+        .collect::<Vec<_>>();
+    if segments.get(4).copied() != Some(release.version.as_str())
+        || segments.get(5).copied() != Some(name)
+    {
+        anyhow::bail!("Release asset URL 与发布版本不匹配");
+    }
+    Ok(value)
 }
 
 fn is_expected_platform_installer(name: &str) -> bool {

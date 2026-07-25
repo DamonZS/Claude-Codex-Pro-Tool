@@ -60,6 +60,7 @@ pub struct ClaudeZhPatchOutcome {
 pub struct ClaudeZhPatchPaths {
     pub install_root: PathBuf,
     pub app_root: PathBuf,
+    pub resource_root: PathBuf,
     pub locale_config_path: PathBuf,
     pub backup_dir: PathBuf,
     pub install_kind: String,
@@ -339,7 +340,7 @@ fn install_patch_at_with_resources_impl(
         )
     })?;
 
-    let root_i18n = paths.app_root.join("resources").join("zh-CN.json");
+    let root_i18n = paths.resource_root.join("zh-CN.json");
     backup_file(&root_i18n, paths)?;
     let fallback_desktop_i18n = desktop_i18n_json();
     let desktop_i18n = resources
@@ -353,8 +354,7 @@ fn install_patch_at_with_resources_impl(
     changed_files.push(root_i18n.to_string_lossy().to_string());
 
     let frontend_i18n = paths
-        .app_root
-        .join("resources")
+        .resource_root
         .join("ion-dist")
         .join("i18n")
         .join("zh-CN.json");
@@ -371,8 +371,7 @@ fn install_patch_at_with_resources_impl(
     changed_files.push(frontend_i18n.to_string_lossy().to_string());
 
     let statsig_i18n = paths
-        .app_root
-        .join("resources")
+        .resource_root
         .join("ion-dist")
         .join("i18n")
         .join("statsig")
@@ -389,7 +388,7 @@ fn install_patch_at_with_resources_impl(
     )?;
     changed_files.push(statsig_i18n.to_string_lossy().to_string());
 
-    let chunks = find_patchable_chunks(&paths.app_root)?;
+    let chunks = find_patchable_chunks(&paths.resource_root)?;
     let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
     for chunk in chunks {
         let before = std::fs::read_to_string(&chunk).unwrap_or_default();
@@ -520,16 +519,14 @@ fn remove_zh_cn_artifacts(
     changed_files: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     for path in [
-        paths.app_root.join("resources").join("zh-CN.json"),
+        paths.resource_root.join("zh-CN.json"),
         paths
-            .app_root
-            .join("resources")
+            .resource_root
             .join("ion-dist")
             .join("i18n")
             .join("zh-CN.json"),
         paths
-            .app_root
-            .join("resources")
+            .resource_root
             .join("ion-dist")
             .join("i18n")
             .join("statsig")
@@ -577,7 +574,7 @@ fn scrub_zh_cn_from_chunks(
     paths: &ClaudeZhPatchPaths,
     changed_files: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    for chunk in find_patchable_chunks(&paths.app_root)? {
+    for chunk in find_patchable_chunks(&paths.resource_root)? {
         let before = std::fs::read_to_string(&chunk).unwrap_or_default();
         let mut after = before.replace(",\"zh-CN\"", "").replace(",'zh-CN'", "");
         after = remove_marker_line(after, LANGUAGE_MARKER);
@@ -640,21 +637,19 @@ fn remove_legacy_language_patch_lines(text: String) -> String {
 }
 
 pub fn status_for_paths(paths: &ClaudeZhPatchPaths) -> ClaudeZhPatchStatus {
-    let root_i18n = paths.app_root.join("resources").join("zh-CN.json");
+    let root_i18n = paths.resource_root.join("zh-CN.json");
     let frontend_i18n = paths
-        .app_root
-        .join("resources")
+        .resource_root
         .join("ion-dist")
         .join("i18n")
         .join("zh-CN.json");
     let statsig_i18n = paths
-        .app_root
-        .join("resources")
+        .resource_root
         .join("ion-dist")
         .join("i18n")
         .join("statsig")
         .join("zh-CN.json");
-    let chunk_texts = find_patchable_chunks(&paths.app_root)
+    let chunk_texts = find_patchable_chunks(&paths.resource_root)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(&path).ok().map(|text| (path, text)))
@@ -732,6 +727,16 @@ fn detect_paths_for_user_dirs(
 
 impl ClaudeZhPatchPaths {
     fn with_user_data_dirs(mut self, appdata: Option<&Path>, local_appdata: Option<&Path>) -> Self {
+        #[cfg(target_os = "macos")]
+        if let Some(home) = local_appdata.or(appdata) {
+            self.locale_config_path = home
+                .join("Library")
+                .join("Application Support")
+                .join("Claude")
+                .join("config.json");
+            self.backup_dir = home.join(".claude-codex-pro").join(BACKUP_DIR_NAME);
+            return self;
+        }
         if let Some(local_appdata) = local_appdata {
             self.locale_config_path = local_appdata.join("Claude-3p").join("config.json");
         } else if let Some(appdata) = appdata {
@@ -746,6 +751,10 @@ impl ClaudeZhPatchPaths {
 
 fn candidate_install_roots() -> Vec<PathBuf> {
     let mut candidates = running_claude_install_roots();
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = crate::claude_desktop::macos_runtime::discover_bundle_default() {
+        push_unique_path(&mut candidates, bundle.bundle_path);
+    }
     for path in appx_claude_install_roots() {
         push_unique_path(&mut candidates, path);
     }
@@ -855,10 +864,21 @@ fn push_unique_path(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> {
-    let app_root = if install_root.join("app").join("resources").exists() {
-        install_root.join("app")
+    let (app_root, resource_root, install_kind) = if let Some(bundle) =
+        crate::claude_desktop::macos_runtime::resolve_bundle_path(&install_root)
+    {
+        let resource_root = bundle.bundle_path.join("Contents").join("Resources");
+        if !resource_root.is_dir() {
+            return None;
+        }
+        (bundle.bundle_path.clone(), resource_root, "macos_bundle")
+    } else if install_root.join("app").join("resources").exists() {
+        let app_root = install_root.join("app");
+        let resource_root = app_root.join("resources");
+        (app_root, resource_root, "windows")
     } else if install_root.join("resources").exists() {
-        install_root.clone()
+        let resource_root = install_root.join("resources");
+        (install_root.clone(), resource_root, "windows")
     } else {
         return None;
     };
@@ -868,6 +888,8 @@ fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> 
         .contains("\\windowsapps\\")
     {
         "msix"
+    } else if install_kind == "macos_bundle" {
+        "macos_bundle"
     } else {
         "desktop"
     }
@@ -875,6 +897,7 @@ fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> 
     Some(ClaudeZhPatchPaths {
         install_root,
         app_root,
+        resource_root,
         locale_config_path: default_locale_config_path(),
         backup_dir: default_backup_dir(),
         install_kind,
@@ -882,6 +905,15 @@ fn paths_from_install_root(install_root: PathBuf) -> Option<ClaudeZhPatchPaths> 
 }
 
 fn default_locale_config_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(base) = directories::BaseDirs::new() {
+        return base
+            .home_dir()
+            .join("Library")
+            .join("Application Support")
+            .join("Claude")
+            .join("config.json");
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
@@ -891,6 +923,13 @@ fn default_locale_config_path() -> PathBuf {
 }
 
 fn default_backup_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(base) = directories::BaseDirs::new() {
+        return base
+            .home_dir()
+            .join(".claude-codex-pro")
+            .join(BACKUP_DIR_NAME);
+    }
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -917,7 +956,7 @@ fn ensure_patch_writable(paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
     }
     anyhow::bail!(
         "Claude Desktop 安装目录已找到，但资源目录不可写：{}。汉化需要在该目录写入 zh-CN.json、前端 i18n 文件并修改语言白名单；如果这是 Microsoft Store/MSIX 版本，请允许弹出的管理员授权后重试，或安装可写入的桌面版 Claude 后再执行 Claude 一键汉化。",
-        paths.app_root.join("resources").display()
+        paths.resource_root.display()
     );
 }
 
@@ -945,7 +984,7 @@ fn prepare_elevated_patch_access(
     };
     anyhow::bail!(
         "Claude Desktop WindowsApps 资源目录仍不可写：{}。已尝试管理员授权 takeown/icacls，请确认已在 UAC 中允许授权，或安装可写入的桌面版 Claude 后再重试。{}",
-        paths.app_root.join("resources").display(),
+        paths.resource_root.display(),
         warning_suffix
     );
 }
@@ -1090,7 +1129,7 @@ fn grant_current_user_write_access(
 }
 
 fn resource_tree_writable_no_create(paths: &ClaudeZhPatchPaths) -> bool {
-    let resources = paths.app_root.join("resources");
+    let resources = paths.resource_root.clone();
     if !resources.is_dir() {
         return false;
     }
@@ -1106,7 +1145,7 @@ fn resource_tree_writable_no_create(paths: &ClaudeZhPatchPaths) -> bool {
 }
 
 fn resource_tree_writable_or_create(paths: &ClaudeZhPatchPaths) -> bool {
-    let resources = paths.app_root.join("resources");
+    let resources = paths.resource_root.clone();
     if !resources.is_dir() {
         return false;
     }
@@ -1122,10 +1161,10 @@ fn resource_tree_writable_or_create(paths: &ClaudeZhPatchPaths) -> bool {
 }
 
 fn patch_target_dirs(paths: &ClaudeZhPatchPaths) -> Vec<PathBuf> {
-    let resources = paths.app_root.join("resources");
+    let resources = paths.resource_root.clone();
     let i18n = resources.join("ion-dist").join("i18n");
     let mut dirs = vec![resources.clone(), i18n.clone(), i18n.join("statsig")];
-    if let Ok(chunks) = find_patchable_chunks(&paths.app_root) {
+    if let Ok(chunks) = find_patchable_chunks(&paths.resource_root) {
         for chunk in chunks {
             if let Some(parent) = chunk.parent() {
                 push_unique_path(&mut dirs, parent.to_path_buf());
@@ -1136,14 +1175,14 @@ fn patch_target_dirs(paths: &ClaudeZhPatchPaths) -> Vec<PathBuf> {
 }
 
 fn patch_target_files(paths: &ClaudeZhPatchPaths) -> Vec<PathBuf> {
-    let resources = paths.app_root.join("resources");
+    let resources = paths.resource_root.clone();
     let i18n = resources.join("ion-dist").join("i18n");
     let mut files = vec![
         resources.join("zh-CN.json"),
         i18n.join("zh-CN.json"),
         i18n.join("statsig").join("zh-CN.json"),
     ];
-    if let Ok(chunks) = find_patchable_chunks(&paths.app_root) {
+    if let Ok(chunks) = find_patchable_chunks(&paths.resource_root) {
         for chunk in chunks {
             push_unique_path(&mut files, chunk);
         }
@@ -1194,8 +1233,8 @@ fn locale_configured(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn find_patchable_chunks(app_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let assets = app_root.join("resources").join("ion-dist").join("assets");
+fn find_patchable_chunks(resource_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let assets = resource_root.join("ion-dist").join("assets");
     if !assets.exists() {
         return Ok(Vec::new());
     }
@@ -1966,6 +2005,7 @@ mod tests {
         ClaudeZhPatchPaths {
             install_root: root.join("AnthropicClaude"),
             app_root: root.join("AnthropicClaude"),
+            resource_root: root.join("AnthropicClaude").join("resources"),
             locale_config_path: root.join("Claude-3p").join("config.json"),
             backup_dir: root.join("backup"),
             install_kind: "desktop".to_string(),
@@ -2302,6 +2342,39 @@ mod tests {
     }
 
     #[test]
+    fn paths_from_macos_bundle_use_contents_resources() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("Claude.app");
+        let executable = bundle.join("Contents").join("MacOS").join("Claude");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(bundle.join("Contents").join("Resources")).unwrap();
+        std::fs::write(&executable, b"binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(
+            bundle.join("Contents").join("Info.plist"),
+            r#"<plist><dict>
+<key>CFBundleIdentifier</key><string>com.anthropic.claudefordesktop</string>
+<key>CFBundleExecutable</key><string>Claude</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+
+        let paths = paths_from_install_root(bundle.clone()).unwrap();
+
+        assert_eq!(paths.install_root, bundle);
+        assert_eq!(paths.app_root, paths.install_root);
+        assert_eq!(
+            paths.resource_root,
+            paths.install_root.join("Contents").join("Resources")
+        );
+        assert_eq!(paths.install_kind, "macos_bundle");
+    }
+
+    #[test]
     fn paths_from_appx_install_location_supports_package_root() {
         let temp = tempfile::tempdir().unwrap();
         let appx_install_location = temp.path().join("Claude_1.0.0.0_x64__abcd");
@@ -2378,6 +2451,12 @@ mod tests {
                 .join("WindowsApps")
                 .join("Claude_1.0.0.0_x64__abcd")
                 .join("app"),
+            resource_root: temp
+                .path()
+                .join("WindowsApps")
+                .join("Claude_1.0.0.0_x64__abcd")
+                .join("app")
+                .join("resources"),
             locale_config_path: temp.path().join("Claude-3p").join("config.json"),
             backup_dir: temp.path().join("backup"),
             install_kind: "msix".to_string(),
@@ -2814,6 +2893,12 @@ mod tests {
                 .join("WindowsApps")
                 .join("Claude_1.0.0.0_x64__abcd")
                 .join("app"),
+            resource_root: temp
+                .path()
+                .join("WindowsApps")
+                .join("Claude_1.0.0.0_x64__abcd")
+                .join("app")
+                .join("resources"),
             locale_config_path: temp.path().join("Claude-3p").join("config.json"),
             backup_dir: temp.path().join("backup"),
             install_kind: "msix".to_string(),

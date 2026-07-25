@@ -165,12 +165,16 @@ mod tests {
 
         assert!(script.contains("theme CSS must not contain @import"));
         assert!(script.contains("theme CSS contains an unsafe resource URL"));
-        assert!(script.contains("CSS_IMPORT_PATTERN"));
-        assert!(script.contains("CSS_URL_PATTERN"));
-        assert!(script.contains("SAFE_CSS_URL_PATTERN"));
-        assert!(script.contains("data:image\\/(?:png|jpeg|webp)"));
-        assert!(script.contains("blob:"));
-        assert!(script.contains("(?:\\.\\.?\\/|\\/(?!\\/))"));
+        assert!(script.contains("consumeCssEscape"));
+        assert!(script.contains("consumeCssIdentifier"));
+        assert!(script.contains("consumeAndValidateCssUrl"));
+        assert!(script.contains("isSafeThemeResource"));
+        assert!(script.contains("const DATA_URI_PATTERN"));
+        assert!(script.contains("image\\/(?:png|jpeg|webp)"));
+        assert!(script.contains("resource.startsWith(\"./\")"));
+        assert!(script.contains("resource.startsWith(\"../\")"));
+        assert!(script.contains("resource.startsWith(\"/\")"));
+        assert!(!script.contains("resource.startsWith(\"blob:\")"));
         assert!(!script.contains("https?:"));
         assert!(!script.contains("file:"));
     }

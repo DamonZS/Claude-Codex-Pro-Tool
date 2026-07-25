@@ -51,3 +51,11 @@
 12. 默认 Release 目录全量构建
    - 通过标准：`cargo build --release` 成功，产物位于仓库默认 `target/release`。
    - 证据：命令输出。
+
+13. 点击后立即反馈
+   - 通过标准：`restartCodex` 在调用 Tauri command 前设置“正在重启 Codex”运行态提示并等待一次绘制。
+   - 证据：`windows_subsystem` 前端源码契约测试。
+
+14. 终态反馈准确且自动关闭
+   - 通过标准：成功提示明确包含 Codex 重启结果和真实注入结果，不展示 `Claude Codex Pro launcher ready`；终态状态不为 `running`，并由 Toast 自动关闭计时器清除。
+   - 证据：`windows_subsystem` 前端源码契约测试与手动检查。

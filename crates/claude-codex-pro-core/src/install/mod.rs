@@ -236,40 +236,43 @@ pub fn companion_binary_path(binary: &str) -> PathBuf {
 }
 
 pub fn companion_binary_path_from_exe(exe: &Path, binary: &str) -> PathBuf {
+    if let Some(companion) = macos_bundle_companion_path_from_exe(exe, binary) {
+        return companion;
+    }
     let dir = exe.parent().unwrap_or_else(|| Path::new("."));
     let suffix = if cfg!(windows) { ".exe" } else { "" };
-    if binary == SILENT_BINARY {
-        if let Some(sibling_app_binary) = macos_silent_app_binary_from_exe(exe) {
-            return sibling_app_binary;
-        }
-        let same_bundle = dir.join(binary);
-        if same_bundle.exists() {
-            return same_bundle;
-        }
-    }
     dir.join(format!("{binary}{suffix}"))
 }
 
-fn macos_silent_app_binary_from_exe(exe: &Path) -> Option<PathBuf> {
-    let applications_dir = macos_applications_dir_from_exe(exe)?;
-    Some(
-        applications_dir
-            .join(format!("{SILENT_NAME}.app"))
-            .join("Contents")
-            .join("MacOS")
-            .join("ClaudeCodexPro"),
-    )
+pub fn macos_bundle_companion_path_from_exe(exe: &Path, binary: &str) -> Option<PathBuf> {
+    if is_macos_app_translocation_path(exe) {
+        return None;
+    }
+
+    let app_bundle = macos_app_bundle_from_exe(exe)?;
+    Some(app_bundle.join("Contents").join("MacOS").join(binary))
 }
 
-fn macos_applications_dir_from_exe(exe: &Path) -> Option<PathBuf> {
+pub fn is_macos_app_translocation_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("AppTranslocation")
+    })
+}
+
+fn macos_app_bundle_from_exe(exe: &Path) -> Option<PathBuf> {
     let mut path = exe;
-    while let Some(parent) = path.parent() {
+    loop {
         if path.extension().and_then(|extension| extension.to_str()) == Some("app") {
-            return Some(parent.to_path_buf());
+            let macos_dir = path.join("Contents").join("MacOS");
+            if exe.starts_with(&macos_dir) {
+                return Some(path.to_path_buf());
+            }
         }
-        path = parent;
+        path = path.parent()?;
     }
-    None
 }
 
 pub(crate) fn install_root_or_default(options: &InstallOptions) -> PathBuf {

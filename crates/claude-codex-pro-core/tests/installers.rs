@@ -1,7 +1,7 @@
 use claude_codex_pro_core::install::{
-    InstallOptions, SILENT_BINARY, app_bundle_names, build_macos_app_bundle,
+    InstallOptions, MCP_BINARY, SILENT_BINARY, app_bundle_names, build_macos_app_bundle,
     build_windows_entrypoint_plan, companion_binary_path_from_exe, default_install_root_strategy,
-    shortcut_names,
+    is_macos_app_translocation_path, macos_bundle_companion_path_from_exe, shortcut_names,
 };
 
 #[test]
@@ -90,7 +90,7 @@ fn installer_exports_expected_two_entrypoint_names() {
 }
 
 #[test]
-fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
+fn companion_binary_path_resolves_runtime_inside_standard_manager_bundle() {
     let manager_exe = std::path::Path::new(
         "/Applications/Claude Code Pro 管理工具.app/Contents/MacOS/ClaudeCodexProManager",
     );
@@ -99,13 +99,29 @@ fn companion_binary_path_resolves_macos_silent_app_next_to_manager_app() {
 
     assert_eq!(
         companion,
-        std::path::PathBuf::from("/Applications/Claude Code Pro.app/Contents/MacOS/ClaudeCodexPro")
-    );
-    assert_ne!(
-        companion,
         std::path::PathBuf::from(
             "/Applications/Claude Code Pro 管理工具.app/Contents/MacOS/claude-codex-pro"
         )
+    );
+
+    assert_eq!(
+        macos_bundle_companion_path_from_exe(manager_exe, MCP_BINARY),
+        Some(std::path::PathBuf::from(
+            "/Applications/Claude Code Pro 管理工具.app/Contents/MacOS/claude-codex-pro-mcp"
+        ))
+    );
+}
+
+#[test]
+fn macos_bundle_companion_rejects_app_translocation() {
+    let manager_exe = std::path::Path::new(
+        "/private/var/folders/zz/AppTranslocation/ABC/d/Claude Codex Pro Manager.app/Contents/MacOS/ClaudeCodexProManager",
+    );
+
+    assert!(is_macos_app_translocation_path(manager_exe));
+    assert_eq!(
+        macos_bundle_companion_path_from_exe(manager_exe, SILENT_BINARY),
+        None
     );
 }
 

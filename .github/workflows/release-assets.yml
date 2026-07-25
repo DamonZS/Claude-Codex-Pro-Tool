@@ -159,8 +159,10 @@ jobs:
             codesign --verify --strict "$app"
             echo "verified: $app"
           done
-          test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
-          codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"
+          for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp; do
+            test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/$runtime"
+            codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/$runtime"
+          done
 
       - name: Package macOS ZIP
         shell: bash

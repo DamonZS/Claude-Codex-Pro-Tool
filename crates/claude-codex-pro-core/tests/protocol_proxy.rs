@@ -7,11 +7,93 @@ use claude_codex_pro_core::protocol_proxy::{
     claude_desktop_resolved_upstream_base_url, claude_messages_url, is_chat_completions_proxy_path,
     is_claude_desktop_count_tokens_proxy_path, is_claude_desktop_gateway_health_path,
     is_claude_desktop_messages_proxy_path, is_claude_desktop_models_proxy_path,
-    is_models_proxy_path, is_responses_proxy_path, models_url, responses_error_from_upstream,
-    responses_to_chat_completions,
+    is_models_proxy_path, is_responses_proxy_path, local_claude_desktop_gateway_health_response,
+    local_claude_desktop_models_proxy_response, models_url, open_chat_completions_proxy_request,
+    open_claude_desktop_messages_proxy_request, open_models_proxy_request,
+    open_responses_proxy_request, responses_error_from_upstream, responses_to_chat_completions,
 };
 use claude_codex_pro_core::settings::{BackendSettings, RelayProfile};
 use serde_json::json;
+
+struct SettingsPathGuard(Option<std::path::PathBuf>);
+
+impl SettingsPathGuard {
+    fn replace(path: std::path::PathBuf) -> Self {
+        Self(claude_codex_pro_core::paths::set_settings_path_for_tests(
+            Some(path),
+        ))
+    }
+}
+
+impl Drop for SettingsPathGuard {
+    fn drop(&mut self) {
+        claude_codex_pro_core::paths::set_settings_path_for_tests(self.0.take());
+    }
+}
+
+fn assert_settings_load_failed(error: &anyhow::Error) {
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("failed to load protocol proxy settings"),
+        "proxy request did not fail at settings loading: {error}"
+    );
+    assert!(
+        error.contains("settings.json"),
+        "settings load error omitted the affected file: {error}"
+    );
+}
+
+fn require_error<T>(result: anyhow::Result<T>, message: &str) -> anyhow::Error {
+    match result {
+        Ok(_) => panic!("{message}"),
+        Err(error) => error,
+    }
+}
+
+#[tokio::test]
+async fn real_proxy_request_paths_fail_closed_when_settings_cannot_be_parsed() {
+    let directory = tempfile::tempdir().expect("create temporary settings directory");
+    let settings_path = directory.path().join("settings.json");
+    std::fs::write(&settings_path, br#"{"relayProfiles":["#)
+        .expect("write corrupt settings fixture");
+    let _settings_path_guard = SettingsPathGuard::replace(settings_path);
+
+    let error = require_error(
+        open_responses_proxy_request("not-json").await,
+        "responses proxy must reject unreadable settings before the request",
+    );
+    assert_settings_load_failed(&error);
+
+    let error = require_error(
+        open_models_proxy_request().await,
+        "models proxy must reject unreadable settings before the request",
+    );
+    assert_settings_load_failed(&error);
+
+    let error = require_error(
+        open_chat_completions_proxy_request("not-json").await,
+        "chat proxy must reject unreadable settings before the request",
+    );
+    assert_settings_load_failed(&error);
+
+    let error = require_error(
+        open_claude_desktop_messages_proxy_request("not-json").await,
+        "Claude messages proxy must reject unreadable settings before the request",
+    );
+    assert_settings_load_failed(&error);
+
+    let error = require_error(
+        local_claude_desktop_models_proxy_response(),
+        "Claude models proxy must reject unreadable settings",
+    );
+    assert_settings_load_failed(&error);
+
+    let error = require_error(
+        local_claude_desktop_gateway_health_response(),
+        "Claude health proxy must reject unreadable settings",
+    );
+    assert_settings_load_failed(&error);
+}
 
 #[test]
 fn responses_request_converts_to_chat_completions() {

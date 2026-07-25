@@ -128,10 +128,12 @@ import {
 } from "@/lib/plugin";
 import {
   claudeDesktopVersionLabel,
+  compactUpdateError,
   displayAssetName,
   updateInfoToRelease,
   updateProgressLabel,
   updateStatusLabel,
+  trustedUpdateAssetUrl,
 } from "@/lib/update";
 import {
   ActionButton,
@@ -433,6 +435,7 @@ export function App() {
       setOverview(result);
       if (!silent) notifyIfNeedsAttention({ title: "概览", message: result.message, status: result.status });
     }
+    return result;
   };
 
   const refreshAds = async (silent = false) => {
@@ -927,7 +930,7 @@ export function App() {
   };
 
   const checkUpdate = async (silent = false) => {
-    if (silent && updateDownloadActiveRef.current) return null;
+    if (updateDownloadActiveRef.current) return null;
     const checkEpoch = updateCheckEpochRef.current + 1;
     updateCheckEpochRef.current = checkEpoch;
     setUpdateInfo((current) => ({
@@ -975,9 +978,19 @@ export function App() {
       "下载并运行安装包",
     );
     if (result) {
-      setUpdateInfo(result);
+      const downloadFailed = result.phase === "failed";
+      setUpdateInfo((current) => {
+        const browserFallbackUrl = downloadFailed ? trustedUpdateAssetUrl(current) : null;
+        return {
+          ...current,
+          ...result,
+          message: downloadFailed ? compactUpdateError(result.message) : result.message,
+          assetName: browserFallbackUrl ? current?.assetName : result.assetName,
+          assetUrl: browserFallbackUrl,
+        };
+      });
       updateDownloadActiveRef.current = !statusFailed(result.status) && result.phase !== "complete" && result.phase !== "failed";
-      notifyResult({ title: "下载并运行安装包", message: result.message, status: result.status });
+      notifyResult({ title: "下载并运行安装包", message: downloadFailed ? compactUpdateError(result.message) : result.message, status: result.status });
     } else {
       updateDownloadActiveRef.current = false;
       setUpdateInfo((current) => ({
@@ -1090,10 +1103,35 @@ export function App() {
 
   const restartCodex = async (skipProviderSync = false) => {
     const request = { ...codexLaunchRequestFromOverview(overview), skipProviderSync };
+    setNotice({
+      title: "启动/重启 Codex",
+      message: "正在关闭旧进程并重新启动 Codex，请稍候...",
+      status: "running",
+    });
+    await waitForPaint();
     const result = await run(() => call<CommandResult<Record<string, unknown>>>("restart_claude_codex_pro", { request }), "重启 Codex");
     if (result) {
-      notifyResult({ title: "重启 Codex", message: result.message, status: result.status });
-      await refreshOverview(true);
+      const payload = result.payload && typeof result.payload === "object"
+        ? result.payload as Record<string, unknown>
+        : {};
+      const successful = statusOk(result.status);
+      let refreshedOverview = await refreshOverview(true);
+      let frontendInjected = payload.frontendRuntimeOnline === true
+        || payload.frontend_runtime_online === true;
+      for (let attempt = 0; successful && !frontendInjected && attempt < 4; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        refreshedOverview = await refreshOverview(true);
+        frontendInjected = refreshedOverview?.latest_launch?.frontend_runtime_online === true;
+      }
+      notifyResult({
+        title: successful ? "Codex 重启完成" : "Codex 重启失败",
+        message: successful
+          ? frontendInjected
+            ? "Codex 已重启成功，前端注入已确认生效。"
+            : "Codex 已重启成功，前端注入正在后台确认；无需重复点击，稍后可在概览查看状态。"
+          : result.message,
+        status: successful ? (frontendInjected ? "ok" : "needs_review") : result.status,
+      });
     }
   };
 
@@ -2066,7 +2104,7 @@ export function App() {
         void checkUpdate(true);
       }, 250);
     }
-    if (shouldNotify && requiredResults.some((result) => !result || statusFailed(result.status))) {
+    if (shouldNotify && requiredResults.some((result) => !result || !statusOk(result.status))) {
       throw new Error(`${routeLabel(target)}刷新失败，请查看错误提示后重试。`);
     }
     if (shouldNotify && !isStaleRouteLoad()) {

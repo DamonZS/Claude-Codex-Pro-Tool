@@ -4,6 +4,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+#[path = "claude_macos.rs"]
+pub(crate) mod macos_runtime;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopStatus {
@@ -749,7 +752,18 @@ fn claude_process_ids() -> Vec<u32> {
     ids
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn claude_process_ids() -> Vec<u32> {
+    let mut ids = macos_runtime::running_processes_default()
+        .into_iter()
+        .map(|(process_id, _)| process_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn claude_process_ids() -> Vec<u32> {
     Vec::new()
 }
@@ -763,7 +777,16 @@ fn terminate_claude_processes(process_ids: &[u32]) -> usize {
         .count()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn terminate_claude_processes(process_ids: &[u32]) -> usize {
+    process_ids
+        .iter()
+        .copied()
+        .filter(|process_id| macos_runtime::terminate_process(*process_id))
+        .count()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn terminate_claude_processes(_process_ids: &[u32]) -> usize {
     0
 }
@@ -1141,7 +1164,15 @@ fn claude_desktop_executable_path_from_inventory() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn claude_desktop_executable_path_from_inventory() -> Option<PathBuf> {
+    macos_runtime::running_processes_default()
+        .into_iter()
+        .next()
+        .map(|(_, bundle)| bundle.bundle_path)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn claude_desktop_executable_path_from_inventory() -> Option<PathBuf> {
     None
 }
@@ -1232,49 +1263,58 @@ Get-AppxPackage |
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
-    if cfg!(target_os = "macos") {
-        let app = executable_hint
-            .map(Path::to_path_buf)
-            .or_else(claude_desktop_macos_app_path);
-        if let Some(app) = app {
-            std::process::Command::new("open").arg(app).spawn()?;
-            return Ok(());
+    let bundle = executable_hint
+        .and_then(macos_runtime::resolve_bundle_path)
+        .or_else(macos_runtime::discover_bundle_default)
+        .ok_or_else(|| anyhow::anyhow!("Claude Desktop macOS app bundle was not found"))?;
+    let output = std::process::Command::new("open")
+        .arg(&bundle.bundle_path)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    anyhow::bail!(
+        "macOS open failed for {}{}",
+        bundle.bundle_path.display(),
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
         }
-    }
-    anyhow::bail!("Claude Desktop launch is only supported when a Claude app path is discoverable")
-}
-
-#[cfg(not(windows))]
-fn claude_desktop_macos_app_path() -> Option<PathBuf> {
-    claude_desktop_macos_app_candidates_from(
-        directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().to_path_buf())
-            .as_deref(),
     )
-    .into_iter()
-    .find(|path| path.is_dir())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
+fn launch_claude_desktop_app(_executable_hint: Option<&Path>) -> anyhow::Result<()> {
+    anyhow::bail!("Claude Desktop launch is only supported on Windows and macOS")
+}
+
+#[cfg(target_os = "macos")]
+fn claude_desktop_macos_app_path() -> Option<PathBuf> {
+    macos_runtime::discover_bundle_default().map(|bundle| bundle.bundle_path)
+}
+
+#[cfg(target_os = "macos")]
 fn claude_desktop_macos_app_candidates_from(home: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots = vec![PathBuf::from("/Applications")];
-    if let Some(home) = home {
-        roots.push(home.join("Applications"));
-    }
-    let mut candidates = Vec::new();
-    for root in roots {
-        candidates.push(root.join("Claude.app"));
-        candidates.push(root.join("Claude Desktop.app"));
-        candidates.push(root.join("Anthropic Claude.app"));
-    }
-    candidates.sort();
-    candidates.dedup();
-    candidates
+    macos_runtime::candidate_paths_from_sources(home, "", "")
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn claude_process_inventory() -> (usize, Vec<String>) {
+    let processes = macos_runtime::running_processes_default();
+    let mut paths = processes
+        .iter()
+        .map(|(_, bundle)| bundle.executable_path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    (processes.len(), paths)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn claude_process_inventory() -> (usize, Vec<String>) {
     (0, Vec::new())
 }
@@ -2335,7 +2375,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn claude_desktop_candidate_paths_cover_macos_user_applications() {
         let home = std::path::PathBuf::from("/Users/me");
