@@ -2824,6 +2824,21 @@ pub async fn launch_claude_codex_pro(request: LaunchRequest) -> CommandResult<Va
     }
 }
 
+fn restart_codex_payload(status: &LaunchStatus) -> Value {
+    json!({
+        "launchStatus": status.status,
+        "launchMessage": status.message,
+        "startedAtMs": status.started_at_ms,
+        "debugPort": status.debug_port,
+        "helperPort": status.helper_port,
+        "debugPortOnline": status.debug_port_online,
+        "helperPortOnline": status.helper_port_online,
+        "frontendRuntimeOnline": status.frontend_runtime_online,
+        "frontendRuntimeSeenAtMs": status.frontend_runtime_seen_at_ms,
+        "codexApp": status.codex_app,
+    })
+}
+
 #[tauri::command]
 pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<Value> {
     // Both normalize_launch_request (app-path probing) and the two stop_* calls
@@ -2866,7 +2881,7 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
                     Some(status) => {
                         return ok(
                             "Codex 已重新启动，新的启动记录与 CDP/后端端口已确认上线。",
-                            serde_json::to_value(status).unwrap_or_else(|_| json!({})),
+                            restart_codex_payload(&status),
                         );
                     }
                     None => {
@@ -10304,6 +10319,29 @@ mod tests {
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn restart_payload_does_not_override_command_status_or_message() {
+        let launch_status = LaunchStatus {
+            status: "running_degraded".to_string(),
+            message: "waiting for the page bridge".to_string(),
+            started_at_ms: 42,
+            debug_port: Some(9230),
+            helper_port: Some(57321),
+            debug_port_online: true,
+            helper_port_online: true,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
+            codex_app: Some("Codex.exe".to_string()),
+        };
+        let result = ok("Codex 已重新启动", restart_codex_payload(&launch_status));
+        let serialized = serde_json::to_value(result).unwrap();
+
+        assert_eq!(serialized["status"], "ok");
+        assert_eq!(serialized["message"], "Codex 已重新启动");
+        assert_eq!(serialized["launchStatus"], "running_degraded");
+        assert_eq!(serialized["launchMessage"], "waiting for the page bridge");
     }
 
     #[test]

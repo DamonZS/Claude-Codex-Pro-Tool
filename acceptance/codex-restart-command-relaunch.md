@@ -59,3 +59,11 @@
 14. 终态反馈准确且自动关闭
    - 通过标准：成功提示明确包含 Codex 重启结果和真实注入结果，不展示 `Claude Codex Pro launcher ready`；终态状态不为 `running`，并由 Toast 自动关闭计时器清除。
    - 证据：`windows_subsystem` 前端源码契约测试与手动检查。
+
+15. 手动重启跳过重复供应商同步
+   - 通过标准：`restartCodex` 默认使用 `skipProviderSync = true`；快捷方式和 launcher 正常启动逻辑不变。
+   - 证据：`windows_subsystem` 源码契约测试。
+
+16. 重启结果不覆盖命令成功状态
+   - 通过标准：重启成功 payload 不含顶层 `status`、`message`，launcher 内部状态使用 `launchStatus`、`launchMessage`；前端可稳定识别外层 `ok`。
+   - 证据：Rust 单元测试与 `windows_subsystem` 源码契约测试。

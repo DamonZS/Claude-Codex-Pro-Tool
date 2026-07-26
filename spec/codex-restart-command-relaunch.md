@@ -61,3 +61,10 @@
 - Codex restart command 修复。
 - UI/command 回归测试。
 - 本规格文档与对应验收标准。
+
+## 快速重启与结果字段约束
+
+- Manager 顶部按钮和客户端增强页触发的手动重启默认跳过本次重复的 Provider Sync，避免在关闭旧 Codex 后、拉起新 Codex 前进行全量供应商扫描。
+- 快捷方式启动和直接运行 launcher 的正常启动流程仍保留 Provider Sync，不改变供应商同步的既有行为。
+- `restart_claude_codex_pro` 返回的 payload 不得使用 `status` 或 `message` 字段覆盖 `CommandResult` 的命令状态和用户提示。
+- launcher 的内部状态与消息使用 `launchStatus`、`launchMessage` 等独立字段返回，前端成功判断始终以外层 `CommandResult.status` 为准。

@@ -2641,6 +2641,8 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("let restart_started_ms = current_time_ms();"));
     assert!(restart_command.contains("start_restart_injection_monitor("));
     assert!(restart_command.contains("wait_for_codex_launch_ports("));
+    assert!(restart_command.contains("restart_codex_payload(&status)"));
+    assert!(!restart_command.contains("serde_json::to_value(status)"));
     assert!(restart_command.contains("Codex 已重新启动，新的启动记录与 CDP/后端端口已确认上线。"));
     assert!(restart_command.contains("旧 Codex 已关闭，但新 Codex 未能在限定时间内启动"));
     assert!(
@@ -4541,7 +4543,7 @@ fn history_session_repair_toasts_progress_and_restarts_codex_only_after_success(
 }
 
 #[test]
-fn repair_restart_skips_only_the_duplicate_provider_sync() {
+fn manual_restart_skips_the_duplicate_provider_sync() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let app = read_frontend_file("App.tsx");
@@ -4554,7 +4556,7 @@ fn repair_restart_skips_only_the_duplicate_provider_sync() {
             .join("claude-codex-pro-launcher/src/main.rs"),
     );
 
-    assert!(app.contains("const restartCodex = async (skipProviderSync = false)"));
+    assert!(app.contains("const restartCodex = async (skipProviderSync = true)"));
     assert!(app.contains("skipProviderSync"));
     assert!(commands.contains("pub skip_provider_sync: bool"));
     assert!(commands.contains("command.arg(\"--skip-provider-sync\")"));

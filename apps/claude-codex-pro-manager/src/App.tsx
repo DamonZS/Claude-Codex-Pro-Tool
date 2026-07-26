@@ -1101,7 +1101,7 @@ export function App() {
     }
   };
 
-  const restartCodex = async (skipProviderSync = false) => {
+  const restartCodex = async (skipProviderSync = true) => {
     const request = { ...codexLaunchRequestFromOverview(overview), skipProviderSync };
     setNotice({
       title: "启动/重启 Codex",
