@@ -67,3 +67,7 @@
 16. 重启结果不覆盖命令成功状态
    - 通过标准：重启成功 payload 不含顶层 `status`、`message`，launcher 内部状态使用 `launchStatus`、`launchMessage`；前端可稳定识别外层 `ok`。
    - 证据：Rust 单元测试与 `windows_subsystem` 源码契约测试。
+
+17. Windows 保留端口不阻断 launcher
+   - 通过标准：单例端口绑定返回 `PermissionDenied` / `os error 10013` 时使用文件锁回退；第二个实例仍因文件锁冲突被拒绝。
+   - 证据：`claude-codex-pro-core` ports 单元测试。

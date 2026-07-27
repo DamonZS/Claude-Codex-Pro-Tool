@@ -68,3 +68,9 @@
 - 快捷方式启动和直接运行 launcher 的正常启动流程仍保留 Provider Sync，不改变供应商同步的既有行为。
 - `restart_claude_codex_pro` 返回的 payload 不得使用 `status` 或 `message` 字段覆盖 `CommandResult` 的命令状态和用户提示。
 - launcher 的内部状态与消息使用 `launchStatus`、`launchMessage` 等独立字段返回，前端成功判断始终以外层 `CommandResult.status` 为准。
+
+## Windows 保留端口兼容
+
+- Windows 将 launcher 单例端口标记为系统保留或禁止绑定、返回 `PermissionDenied` / `os error 10013` 时，launcher 必须复用已有文件锁作为单例守卫并继续启动 Codex。
+- 文件锁冲突仍表示已有 launcher 实例，不得绕过单例约束。
+- 后端和 CDP 继续使用既有动态端口选择逻辑，不固定新的备用端口。

@@ -156,7 +156,12 @@ fn acquire_resilient_loopback_port_guard_with(
     let (file, path) = acquire_lock_guard(port, state_dir)?;
     match bind(port) {
         Ok(listener) => Ok(LoopbackPortGuard::locked_listener(file, path, listener)),
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
             Ok(LoopbackPortGuard::fallback_lock(file, path))
         }
         Err(error) => Err(error),
@@ -232,6 +237,40 @@ mod tests {
 
         assert!(guard._listener.is_none());
         assert!(guard.fallback_path().is_some());
+    }
+
+    #[test]
+    fn resilient_guard_uses_lock_fallback_when_windows_reserves_requested_port() {
+        let temp = tempfile::tempdir().unwrap();
+        let guard = acquire_resilient_loopback_port_guard_with(
+            57320,
+            temp.path(),
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "requested port is in a Windows excluded range",
+                ))
+            },
+            |_| false,
+        )
+        .unwrap();
+
+        assert!(guard._listener.is_none());
+        assert!(guard.fallback_path().is_some());
+
+        let second = acquire_resilient_loopback_port_guard_with(
+            57320,
+            temp.path(),
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "requested port is in a Windows excluded range",
+                ))
+            },
+            |_| false,
+        )
+        .unwrap_err();
+        assert_eq!(second.kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
