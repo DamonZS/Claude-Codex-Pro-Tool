@@ -14,7 +14,8 @@ use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
 use claude_codex_pro_core::codex_theme::{
-    CodexThemeList, CodexThemeOperationResult, CodexThemeStore, CodexThemeSummary,
+    CodexThemeList, CodexThemeManagerBackground, CodexThemeOperationResult, CodexThemeStore,
+    CodexThemeSummary,
 };
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
@@ -255,6 +256,20 @@ fn empty_codex_theme_summary() -> CodexThemeSummary {
         updated_at: 0,
         integrity_sha256: None,
         previous_version_available: false,
+    }
+}
+
+fn empty_codex_theme_background() -> CodexThemeManagerBackground {
+    CodexThemeManagerBackground {
+        theme_id: "default".to_string(),
+        generation: 0,
+        data_uri: None,
+        source_variable: None,
+        is_default: true,
+        width: None,
+        height: None,
+        mime_type: None,
+        user_override: false,
     }
 }
 
@@ -5831,6 +5846,53 @@ pub fn list_codex_themes() -> CommandResult<CodexThemeList> {
         Err(error) => failed(
             &format!("Codex 主题加载失败：{error}"),
             empty_codex_theme_list(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn load_codex_theme_background() -> CommandResult<CodexThemeManagerBackground> {
+    match CodexThemeStore::open_default().and_then(|store| store.active_manager_background()) {
+        Ok(background) => ok("Codex 主题背景已加载。", background),
+        Err(error) => failed(
+            &format!("Codex 主题背景加载失败：{error}"),
+            empty_codex_theme_background(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn set_codex_manager_background(
+    source_path: String,
+) -> CommandResult<CodexThemeManagerBackground> {
+    let source_path = source_path.trim().to_string();
+    if source_path.is_empty() {
+        return failed("请选择背景图片。", empty_codex_theme_background());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        CodexThemeStore::open_default()?.set_manager_background(source_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(background)) => ok("管理工具背景已应用。", background),
+        Ok(Err(error)) => failed(
+            &format!("管理工具背景设置失败：{error}"),
+            empty_codex_theme_background(),
+        ),
+        Err(error) => failed(
+            &format!("管理工具背景任务异常结束：{error}"),
+            empty_codex_theme_background(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn clear_codex_manager_background() -> CommandResult<CodexThemeManagerBackground> {
+    match CodexThemeStore::open_default().and_then(|store| store.clear_manager_background()) {
+        Ok(background) => ok("已恢复当前主题背景。", background),
+        Err(error) => failed(
+            &format!("管理工具背景恢复失败：{error}"),
+            empty_codex_theme_background(),
         ),
     }
 }

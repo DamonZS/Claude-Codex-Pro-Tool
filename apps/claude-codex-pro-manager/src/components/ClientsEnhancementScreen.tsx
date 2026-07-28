@@ -382,7 +382,6 @@ function buildClientRecords({
 }
 
 function clientMatchesScope(client: ClientRecord, agentScope: AgentScope) {
-  if (agentScope === "all") return true;
   return agentScope === "codex" ? client.id === "codex" : client.id !== "codex";
 }
 

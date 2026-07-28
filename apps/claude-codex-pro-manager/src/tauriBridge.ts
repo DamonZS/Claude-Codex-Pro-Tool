@@ -1425,6 +1425,45 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       lines: 3,
     });
   }
+  if (command === "load_codex_theme_background") {
+    return ok("预览模式使用内置背景。", {
+      theme_id: "default",
+      generation: 0,
+      data_uri: null,
+      source_variable: null,
+      is_default: true,
+      width: null,
+      height: null,
+      mime_type: null,
+      user_override: false,
+    });
+  }
+  if (command === "set_codex_manager_background") {
+    return ok("预览模式已模拟设置背景。", {
+      theme_id: "default",
+      generation: 1,
+      data_uri: null,
+      source_variable: "user-selected",
+      is_default: false,
+      width: 1920,
+      height: 1080,
+      mime_type: "image/webp",
+      user_override: true,
+    });
+  }
+  if (command === "clear_codex_manager_background") {
+    return ok("预览模式已模拟恢复主题背景。", {
+      theme_id: "default",
+      generation: 2,
+      data_uri: null,
+      source_variable: null,
+      is_default: true,
+      width: null,
+      height: null,
+      mime_type: null,
+      user_override: false,
+    });
+  }
   if (command === "check_update") {
     return ok("预览模式已模拟检查更新。", {
       currentVersion: "V0.12",

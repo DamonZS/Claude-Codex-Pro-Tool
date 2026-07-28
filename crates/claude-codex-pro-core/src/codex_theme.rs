@@ -27,6 +27,15 @@ const MAX_CSS_VARIABLE_VALUE_BYTES: usize = 1024;
 const MAX_CSS_VARIABLE_VALUES_BYTES: usize = 64 * 1024;
 const MAX_ROOT_ATTRIBUTE_VALUE_BYTES: usize = 256;
 const MAX_RUNTIME_ASSET_DATA_URI_BYTES: usize = 48 * 1024 * 1024;
+const MAX_MANAGER_BACKGROUND_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_MANAGER_BACKGROUND_PIXELS: u64 = 100_000_000;
+const MIN_MANAGER_BACKGROUND_WIDTH: u32 = 1920;
+const MIN_MANAGER_BACKGROUND_HEIGHT: u32 = 1080;
+const MANAGER_BACKGROUND_VARIABLE: &str = "--ccp-theme-manager-background";
+const LEGACY_THEME_ART_VARIABLE: &str = "--ccp-theme-art";
+const USER_MANAGER_BACKGROUND_SOURCE: &str = "user-selected";
+const MANAGER_BACKGROUND_FILE: &str = "current.bin";
+const PREVIOUS_MANAGER_BACKGROUND_FILE: &str = "previous.bin";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +103,19 @@ pub struct CodexThemePayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexThemeManagerBackground {
+    pub theme_id: String,
+    pub generation: u64,
+    pub data_uri: Option<String>,
+    pub source_variable: Option<String>,
+    pub is_default: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub mime_type: Option<String>,
+    pub user_override: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexThemeOperationResult {
     pub theme_id: String,
     pub persisted: bool,
@@ -114,12 +136,23 @@ struct InstalledTheme {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct StoredManagerBackground {
+    mime_type: String,
+    width: u32,
+    height: u32,
+    sha256: String,
+    updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct ThemeState {
     schema_version: u32,
     current_theme_id: String,
     previous_theme_id: Option<String>,
     generation: u64,
     themes: Vec<InstalledTheme>,
+    #[serde(default)]
+    manager_background: Option<StoredManagerBackground>,
 }
 
 impl Default for ThemeState {
@@ -130,6 +163,7 @@ impl Default for ThemeState {
             previous_theme_id: None,
             generation: 0,
             themes: Vec::new(),
+            manager_background: None,
         }
     }
 }
@@ -410,6 +444,146 @@ impl CodexThemeStore {
         self.active_theme_payload_for_state(&state)
     }
 
+    pub fn active_manager_background(&self) -> anyhow::Result<CodexThemeManagerBackground> {
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let state = self.read_state()?;
+        self.active_manager_background_for_state(&state)
+    }
+
+    pub fn set_manager_background(
+        &self,
+        source: impl AsRef<Path>,
+    ) -> anyhow::Result<CodexThemeManagerBackground> {
+        let (bytes, background) = validate_manager_background_source(source.as_ref())?;
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        let state_before = state.clone();
+        let current_path = self.manager_background_dir().join(MANAGER_BACKGROUND_FILE);
+        let previous_path = self
+            .manager_background_dir()
+            .join(PREVIOUS_MANAGER_BACKGROUND_FILE);
+        let old_current = state
+            .manager_background
+            .as_ref()
+            .and_then(|_| fs::read(&current_path).ok());
+        let old_previous = fs::read(&previous_path).ok();
+        let staging_dir = self.staging_dir().join(operation_id());
+        let staging_path = staging_dir.join(MANAGER_BACKGROUND_FILE);
+
+        crate::settings::atomic_write(&staging_path, &bytes).context("无法暂存管理工具背景")?;
+        let staged = fs::read(&staging_path).context("无法复核暂存的管理工具背景")?;
+        if staged != bytes {
+            let _ = fs::remove_dir_all(&staging_dir);
+            bail!("管理工具背景暂存复核失败");
+        }
+
+        let commit = (|| -> anyhow::Result<()> {
+            if let Some(previous) = old_current.as_deref() {
+                crate::settings::atomic_write(&previous_path, previous)
+                    .context("无法保留上一张管理工具背景")?;
+            }
+            crate::settings::atomic_write(&current_path, &staged)
+                .context("无法写入管理工具背景")?;
+            state.manager_background = Some(background);
+            state.generation = state.generation.saturating_add(1);
+            self.write_state(&state)
+                .context("无法提交管理工具背景状态")?;
+            Ok(())
+        })();
+
+        if let Err(error) = commit {
+            restore_optional_file(&current_path, old_current.as_deref());
+            restore_optional_file(&previous_path, old_previous.as_deref());
+            let _ = self.write_state(&state_before);
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error.context("设置管理工具背景失败，已恢复上一状态"));
+        }
+
+        if old_current.is_none() && previous_path.exists() {
+            let _ = fs::remove_file(&previous_path);
+        }
+        let _ = fs::remove_dir_all(&staging_dir);
+        let verified = self.read_state()?;
+        self.active_manager_background_for_state(&verified)
+    }
+
+    pub fn clear_manager_background(&self) -> anyhow::Result<CodexThemeManagerBackground> {
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        if state.manager_background.is_some() {
+            state.manager_background = None;
+            state.generation = state.generation.saturating_add(1);
+            self.write_state(&state)
+                .context("无法清除管理工具背景状态")?;
+        }
+        for path in [
+            self.manager_background_dir().join(MANAGER_BACKGROUND_FILE),
+            self.manager_background_dir()
+                .join(PREVIOUS_MANAGER_BACKGROUND_FILE),
+        ] {
+            if path.exists() {
+                let _ = fs::remove_file(path);
+            }
+        }
+        self.active_manager_background_for_state(&state)
+    }
+
+    fn active_manager_background_for_state(
+        &self,
+        state: &ThemeState,
+    ) -> anyhow::Result<CodexThemeManagerBackground> {
+        if let Some(background) = state.manager_background.as_ref() {
+            let path = self.manager_background_dir().join(MANAGER_BACKGROUND_FILE);
+            if let Ok(bytes) = fs::read(path) {
+                let mime_matches = image_mime(&bytes) == Some(background.mime_type.as_str());
+                let hash_matches = sha256_bytes(&bytes) == background.sha256;
+                if mime_matches && hash_matches {
+                    return Ok(CodexThemeManagerBackground {
+                        theme_id: state.current_theme_id.clone(),
+                        generation: state.generation,
+                        data_uri: Some(data_uri(&background.mime_type, &bytes)),
+                        source_variable: Some(USER_MANAGER_BACKGROUND_SOURCE.to_string()),
+                        is_default: false,
+                        width: Some(background.width),
+                        height: Some(background.height),
+                        mime_type: Some(background.mime_type.clone()),
+                        user_override: true,
+                    });
+                }
+            }
+        }
+
+        let payload = self.active_theme_payload_for_state(state)?;
+        let selected = [MANAGER_BACKGROUND_VARIABLE, LEGACY_THEME_ART_VARIABLE]
+            .into_iter()
+            .find_map(|variable| {
+                payload
+                    .asset_data_uris
+                    .get(variable)
+                    .cloned()
+                    .map(|data_uri| (variable.to_string(), data_uri))
+            });
+        let (source_variable, data_uri) = selected
+            .map(|(variable, data_uri)| (Some(variable), Some(data_uri)))
+            .unwrap_or((None, None));
+        let mime_type = selected_manager_background_mime(&data_uri);
+
+        Ok(CodexThemeManagerBackground {
+            theme_id: payload.theme_id,
+            generation: payload.generation,
+            data_uri,
+            source_variable,
+            is_default: payload.is_default,
+            width: None,
+            height: None,
+            mime_type,
+            user_override: false,
+        })
+    }
+
     fn commit_active_theme(&self, state: &mut ThemeState, theme_id: &str) -> anyhow::Result<()> {
         let operation_id = operation_id();
         let mut journal = MutationJournal {
@@ -603,6 +777,7 @@ impl CodexThemeStore {
             self.journal_dir(),
             self.history_dir(),
             self.backups_dir(),
+            self.manager_background_dir(),
         ] {
             fs::create_dir_all(&directory)
                 .with_context(|| format!("无法创建主题目录: {}", directory.display()))?;
@@ -709,6 +884,40 @@ impl CodexThemeStore {
     fn backups_dir(&self) -> PathBuf {
         self.root.join("backups")
     }
+
+    fn manager_background_dir(&self) -> PathBuf {
+        self.root.join("manager-background")
+    }
+}
+
+fn restore_optional_file(path: &Path, bytes: Option<&[u8]>) {
+    if let Some(bytes) = bytes {
+        let _ = crate::settings::atomic_write(path, bytes);
+    } else if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn data_uri(mime_type: &str, bytes: &[u8]) -> String {
+    format!(
+        "data:{mime_type};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+fn selected_manager_background_mime(data_uri: &Option<String>) -> Option<String> {
+    data_uri.as_deref().and_then(|value| {
+        ["image/png", "image/jpeg", "image/webp"]
+            .into_iter()
+            .find(|mime| value.starts_with(&format!("data:{mime};base64,")))
+            .map(str::to_string)
+    })
 }
 
 fn operation_result(theme_id: &str, generation: u64, message: &str) -> CodexThemeOperationResult {
@@ -919,6 +1128,61 @@ fn expected_image_mime(path: &Path) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         _ => None,
     }
+}
+
+fn validate_manager_background_source(
+    path: &Path,
+) -> anyhow::Result<(Vec<u8>, StoredManagerBackground)> {
+    let metadata = fs::symlink_metadata(path).context("管理工具背景文件不存在")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("管理工具背景必须是本地图片文件");
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_MANAGER_BACKGROUND_BYTES {
+        bail!("管理工具背景必须小于 16 MB");
+    }
+    let expected_mime =
+        expected_image_mime(path).context("管理工具背景只支持 PNG、JPEG 或 WebP")?;
+    let bytes = fs::read(path).context("无法读取管理工具背景")?;
+    let reader = image::ImageReader::new(Cursor::new(&bytes))
+        .with_guessed_format()
+        .context("无法识别管理工具背景格式")?;
+    let format = reader.format().context("无法识别管理工具背景格式")?;
+    let actual_mime = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::WebP => "image/webp",
+        _ => bail!("管理工具背景只支持 PNG、JPEG 或 WebP"),
+    };
+    if actual_mime != expected_mime {
+        bail!("管理工具背景扩展名与真实图片格式不一致");
+    }
+    let (width, height) = reader
+        .into_dimensions()
+        .context("无法读取管理工具背景尺寸")?;
+    if width < MIN_MANAGER_BACKGROUND_WIDTH || height < MIN_MANAGER_BACKGROUND_HEIGHT {
+        bail!(
+            "管理工具背景至少需要 {} x {} 像素",
+            MIN_MANAGER_BACKGROUND_WIDTH,
+            MIN_MANAGER_BACKGROUND_HEIGHT
+        );
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > MAX_MANAGER_BACKGROUND_PIXELS {
+        bail!("管理工具背景像素尺寸过大");
+    }
+    image::load_from_memory_with_format(&bytes, format)
+        .context("管理工具背景文件已损坏或无法完整解码")?;
+
+    Ok((
+        bytes.clone(),
+        StoredManagerBackground {
+            mime_type: actual_mime.to_string(),
+            width,
+            height,
+            sha256: sha256_bytes(&bytes),
+            updated_at: now_secs(),
+        },
+    ))
 }
 
 fn normalize_css_line_endings(css: String) -> String {
@@ -1281,6 +1545,11 @@ mod tests {
         .unwrap();
     }
 
+    fn write_manager_background(path: &Path, width: u32, height: u32, color: [u8; 3]) {
+        let image = image::RgbImage::from_pixel(width, height, image::Rgb(color));
+        image.save(path).unwrap();
+    }
+
     #[test]
     fn default_theme_is_always_first() {
         let temp = tempfile::tempdir().unwrap();
@@ -1421,6 +1690,164 @@ mod tests {
             "dark"
         );
         assert!(payload.asset_data_uris["--ccp-theme-art"].starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn manager_background_prefers_dedicated_asset_and_falls_back_to_theme_art() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+
+        let default_background = store.active_manager_background().unwrap();
+        assert!(default_background.is_default);
+        assert!(default_background.data_uri.is_none());
+        assert!(default_background.source_variable.is_none());
+
+        let legacy_source = temp.path().join("legacy-source");
+        write_theme_with_runtime_resources(
+            &legacy_source,
+            "legacy-background",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({"--ccp-theme-art": "assets/hero.png"}),
+            &["assets/theme.css", "assets/hero.png"],
+        );
+        store.import_theme(&legacy_source).unwrap();
+        store.apply_theme("legacy-background").unwrap();
+        let legacy_background = store.active_manager_background().unwrap();
+        assert_eq!(
+            legacy_background.source_variable.as_deref(),
+            Some(LEGACY_THEME_ART_VARIABLE)
+        );
+        assert!(
+            legacy_background
+                .data_uri
+                .as_deref()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+
+        let dedicated_source = temp.path().join("dedicated-source");
+        write_theme_with_runtime_resources(
+            &dedicated_source,
+            "dedicated-background",
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({
+                "--ccp-theme-art": "assets/hero.png",
+                "--ccp-theme-manager-background": "assets/hero.png"
+            }),
+            &["assets/theme.css", "assets/hero.png"],
+        );
+        store.import_theme(&dedicated_source).unwrap();
+        store.apply_theme("dedicated-background").unwrap();
+        let dedicated_background = store.active_manager_background().unwrap();
+        assert_eq!(
+            dedicated_background.source_variable.as_deref(),
+            Some(MANAGER_BACKGROUND_VARIABLE)
+        );
+        assert_eq!(dedicated_background.theme_id, "dedicated-background");
+        assert!(!dedicated_background.is_default);
+
+        store.restore_default_theme().unwrap();
+        assert!(
+            store
+                .active_manager_background()
+                .unwrap()
+                .data_uri
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn manager_background_override_is_validated_persisted_and_clearable() {
+        let temp = tempfile::tempdir().unwrap();
+        let store_root = temp.path().join("store");
+        let first_source = temp.path().join("first.png");
+        let second_source = temp.path().join("second.png");
+        write_manager_background(&first_source, 1920, 1080, [12, 34, 56]);
+        write_manager_background(&second_source, 4096, 2160, [78, 90, 123]);
+        let first_source_bytes = fs::read(&first_source).unwrap();
+
+        let store = CodexThemeStore::open(&store_root).unwrap();
+        let first = store.set_manager_background(&first_source).unwrap();
+        assert!(first.user_override);
+        assert_eq!(first.width, Some(1920));
+        assert_eq!(first.height, Some(1080));
+        assert_eq!(first.mime_type.as_deref(), Some("image/png"));
+        assert_eq!(
+            first.source_variable.as_deref(),
+            Some(USER_MANAGER_BACKGROUND_SOURCE)
+        );
+        assert!(
+            first
+                .data_uri
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert_eq!(fs::read(&first_source).unwrap(), first_source_bytes);
+
+        let second = store.set_manager_background(&second_source).unwrap();
+        assert_eq!(second.width, Some(4096));
+        assert_eq!(
+            fs::read(
+                store
+                    .manager_background_dir()
+                    .join(PREVIOUS_MANAGER_BACKGROUND_FILE)
+            )
+            .unwrap(),
+            first_source_bytes
+        );
+
+        drop(store);
+        let reopened = CodexThemeStore::open(&store_root).unwrap();
+        assert!(reopened.active_manager_background().unwrap().user_override);
+        let cleared = reopened.clear_manager_background().unwrap();
+        assert!(!cleared.user_override);
+        assert!(cleared.data_uri.is_none());
+        assert!(
+            !reopened
+                .manager_background_dir()
+                .join(MANAGER_BACKGROUND_FILE)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn manager_background_override_rejects_invalid_images_without_changing_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+
+        let low_resolution = temp.path().join("low.png");
+        write_manager_background(&low_resolution, 1919, 1080, [1, 2, 3]);
+        assert!(
+            store
+                .set_manager_background(&low_resolution)
+                .unwrap_err()
+                .to_string()
+                .contains("1920 x 1080")
+        );
+
+        let fake = temp.path().join("fake.png");
+        fs::write(&fake, b"not an image").unwrap();
+        assert!(store.set_manager_background(&fake).is_err());
+
+        let oversized = temp.path().join("oversized.png");
+        fs::write(
+            &oversized,
+            vec![0_u8; MAX_MANAGER_BACKGROUND_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(
+            store
+                .set_manager_background(&oversized)
+                .unwrap_err()
+                .to_string()
+                .contains("16 MB")
+        );
+
+        let active = store.active_manager_background().unwrap();
+        assert!(!active.user_override);
+        assert!(active.data_uri.is_none());
     }
 
     #[test]

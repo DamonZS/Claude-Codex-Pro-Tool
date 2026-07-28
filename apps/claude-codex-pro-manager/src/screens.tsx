@@ -7,8 +7,11 @@ import {
   Archive,
   ArchiveRestore,
   BarChart3,
+  Bot,
   CheckCircle2,
+  Clock3,
   Copy,
+  Database,
   Download,
   Edit,
   ExternalLink,
@@ -19,6 +22,7 @@ import {
   FileUp,
   FolderOpen,
   GripVertical,
+  Gauge,
   Info,
   KeyRound,
   Languages,
@@ -32,7 +36,9 @@ import {
   Power,
   RefreshCw,
   Save,
+  Server,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Wrench,
   X,
@@ -189,8 +195,160 @@ const SUPPLIER_USER_AGENT_PRESETS = [
   "Kilo-Code/1.0",
 ] as const;
 
+type OverviewAgentScope = "codex" | "claude";
+type OverviewTimelineLane = "provider" | "protocol" | "agent" | "memory";
+type OverviewTimelineTone = "ok" | "warning" | "failed";
+
+type OverviewTimelineEvent = {
+  id: string;
+  lane: OverviewTimelineLane;
+  label: string;
+  timestampMs: number;
+  tone: OverviewTimelineTone;
+};
+
+const OVERVIEW_TIMELINE_LANES: Array<{ id: OverviewTimelineLane; label: string }> = [
+  { id: "provider", label: "Provider 请求" },
+  { id: "protocol", label: "协议与代理" },
+  { id: "agent", label: "Agent 响应" },
+  { id: "memory", label: "记忆活动" },
+];
+
+function overviewProfileTarget(profile: RelayProfile): SupplierTargetApp {
+  return profile.targetApp || "codex";
+}
+
+function overviewProfileInitials(profile: RelayProfile) {
+  const source = (profile.name || profile.id || "API").trim();
+  const words = source.split(/[\s_-]+/).filter(Boolean);
+  if (words.length > 1) return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+}
+
+function normalizeOverviewTimestamp(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
+}
+
+function formatOverviewEventTime(timestampMs: number) {
+  if (!timestampMs) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(timestampMs));
+}
+
+function overviewEventLane(eventName: string): OverviewTimelineLane {
+  const event = eventName.toLowerCase();
+  if (event.includes("memory")) return "memory";
+  if (event.includes("provider") || event.includes("profile") || event.includes("relay_apply")) return "provider";
+  if (event.includes("proxy") || event.includes("protocol") || event.includes("responses") || event.includes("chat_completion")) return "protocol";
+  return "agent";
+}
+
+function overviewEventTone(eventName: string): OverviewTimelineTone {
+  const event = eventName.toLowerCase();
+  if (event.includes("failed") || event.includes("error") || event.includes("unauthorized")) return "failed";
+  if (event.includes("degraded") || event.includes("warning") || event.includes("retry") || event.includes("waiting")) return "warning";
+  return "ok";
+}
+
+function overviewEventLabel(eventName: string) {
+  const labels: Array<[string, string]> = [
+    ["test_relay_profile.reachability_ok", "供应商连接测试通过"],
+    ["test_relay_profile.reachability_failed", "供应商连接测试失败"],
+    ["fetch_relay_profile_models.ok", "供应商模型目录已刷新"],
+    ["fetch_relay_profile_models.failed", "供应商模型目录刷新失败"],
+    ["restart", "Codex 重启流程"],
+    ["frontend_runtime.online", "Codex Renderer 已连接"],
+    ["frontend_runtime", "Codex Renderer 状态更新"],
+    ["backend_status", "本地后端状态更新"],
+    ["claude_desktop", "Claude Desktop 状态更新"],
+    ["memory", "盘古记忆活动"],
+    ["update", "CCP 更新状态变化"],
+  ];
+  const normalized = eventName.toLowerCase();
+  const match = labels.find(([needle]) => normalized.includes(needle));
+  if (match) return match[1];
+  return eventName
+    .split(".")
+    .slice(-2)
+    .join(" / ")
+    .replaceAll("_", " ");
+}
+
+function buildOverviewTimeline(logs: LogsResult | null, overview: OverviewResult | null, memoryAssist: MemoryStatusResult | null) {
+  const events: OverviewTimelineEvent[] = [];
+  const lines = logs?.text.split(/\r?\n/).filter(Boolean) ?? [];
+  for (let index = lines.length - 1; index >= 0 && events.length < 10; index -= 1) {
+    try {
+      const record = JSON.parse(lines[index]) as Record<string, unknown>;
+      const eventName = typeof record.event === "string" ? record.event.trim() : "";
+      const timestampMs = normalizeOverviewTimestamp(record.timestamp_ms);
+      if (!eventName || !timestampMs) continue;
+      events.push({
+        id: `log-${timestampMs}-${index}`,
+        lane: overviewEventLane(eventName),
+        label: overviewEventLabel(eventName),
+        timestampMs,
+        tone: overviewEventTone(eventName),
+      });
+    } catch {
+      // Legacy text logs are intentionally not surfaced because they can contain URLs or request bodies.
+    }
+  }
+
+  const launch = overview?.latest_launch;
+  const launchTimestamp = normalizeOverviewTimestamp(launch?.started_at_ms);
+  if (launch && launchTimestamp) {
+    events.push({
+      id: `launch-${launchTimestamp}`,
+      lane: "agent",
+      label: statusFailed(launch.status) ? "Codex 最近启动异常" : launch.status === "degraded" ? "Codex 增强部分在线" : "Codex 已启动",
+      timestampMs: launchTimestamp,
+      tone: statusFailed(launch.status) ? "failed" : launch.status === "degraded" ? "warning" : "ok",
+    });
+  }
+  const frontendTimestamp = normalizeOverviewTimestamp(launch?.frontend_runtime_seen_at_ms);
+  if (frontendTimestamp) {
+    events.push({
+      id: `frontend-${frontendTimestamp}`,
+      lane: "agent",
+      label: "Codex Renderer 最近在线",
+      timestampMs: frontendTimestamp,
+      tone: "ok",
+    });
+  }
+  const latestCaptureAt = Math.max(0, ...(memoryAssist?.memory.workspaces.map((workspace) => workspace.latestCaptureAt || 0) ?? []));
+  const captureTimestamp = normalizeOverviewTimestamp(latestCaptureAt);
+  if (captureTimestamp) {
+    events.push({
+      id: `memory-${captureTimestamp}`,
+      lane: "memory",
+      label: "盘古记忆完成最近采集",
+      timestampMs: captureTimestamp,
+      tone: "ok",
+    });
+  }
+
+  const seen = new Set<string>();
+  return events
+    .sort((left, right) => right.timestampMs - left.timestampMs)
+    .filter((event) => {
+      const key = `${event.lane}:${event.label}:${event.timestampMs}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 10);
+}
+
 export function OverviewScreen({
   actions,
+  agentScope,
   ads,
   overview,
   claudeDesktop,
@@ -199,9 +357,12 @@ export function OverviewScreen({
   claudeDevModeBusy,
   memoryAssist,
   memoryItems,
+  logs,
+  onAgentScopeChange,
   settings,
 }: {
   actions: AppActions;
+  agentScope: OverviewAgentScope;
   ads: AdsResult | null;
   overview: OverviewResult | null;
   claudeDesktop: ClaudeDesktopResult | null;
@@ -210,48 +371,94 @@ export function OverviewScreen({
   claudeDevModeBusy: boolean;
   memoryAssist: MemoryStatusResult | null;
   memoryItems: MemoryItemsResult | null;
+  logs: LogsResult | null;
+  onAgentScopeChange: (scope: OverviewAgentScope) => void;
   settings: BackendSettings | null;
 }) {
-  const [showMemoryDetails, setShowMemoryDetails] = useState(false);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
   const announcement = ads?.ads.find((item) => item.id === "official-toporeduce-api") ?? ads?.ads[0] ?? null;
   const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
   const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
   const memoryStatus = memoryOverviewStatus(memoryAssist, settings);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
-  const devModeStatus = claudeDevModeBusy ? "running" : devModeConfigured ? "ok" : "not_checked";
-  const devModeValue = claudeDevModeBusy ? "写入中..." : devModeConfigured ? "已写入" : "写入开发配置";
+  const devModeValue = claudeDevModeBusy
+    ? "写入中..."
+    : devModeConfigured
+      ? "开发模式已写入"
+      : "写入开发模式";
   const memoryEnabled = memory?.enabled ?? Boolean(settings?.memoryAssistEnabled);
-  const memoryInjectEnabled = memory?.injectEnabled ?? Boolean(settings?.memoryAssistInjectEnabled);
-  const memoryAutoSuggestEnabled = memory?.autoSuggestEnabled ?? Boolean(settings?.memoryAssistAutoSuggestEnabled);
   const memoryCodexInjected = Boolean(memory?.codexInjected);
   const memoryMonitorActive = Boolean(memory?.active);
-  const memoryRuntimeStatus = memory?.runtimeStatus ?? "not_checked";
-  // 运行状态行只显示短标签，不再把后端 runtimeMessage（可能是整份经验教训全文）灌进 value。
-  const memoryRuntimeValue = ({
-    ok: "运行中",
-    waiting: "等待 Codex 注入",
-    disabled: "未开启",
-    failed: "未运行",
-    loading: "正在检测",
-    not_checked: "尚未检测",
-  } as Record<string, string>)[memoryRuntimeStatus] ?? "尚未检测";
-  const memoryInjectStatus = memoryCodexInjected ? "ok" : memoryEnabled && memoryInjectEnabled ? "running" : memoryEnabled ? "failed" : "not_checked";
-  const memoryInjectValue = memoryCodexInjected ? "已注入" : memoryEnabled && memoryInjectEnabled ? "等待 Codex 注入" : "未开启";
-  const memoryMonitorValue = memoryMonitorActive
-    ? "自动学习运行中"
-    : memoryEnabled && memoryAutoSuggestEnabled
-      ? memoryCodexInjected
-        ? "等待会话变化"
-        : "等待 Codex 注入"
-      : "未监听";
-  const memoryMonitorStatus = memoryMonitorActive || (memoryCodexInjected && memoryAutoSuggestEnabled) ? "running" : memoryEnabled && memoryAutoSuggestEnabled ? "failed" : "not_checked";
-  const memoryWorkspaceCount = memory?.workspaces?.length ?? 0;
   const memoryCaptureCount = memory?.totalCaptures ?? memory?.workspaces?.reduce((total, workspace) => total + (workspace.captureCount || 0), 0) ?? 0;
-  const openMemoryDetails = async () => {
-    setShowMemoryDetails(true);
-    await actions.refreshMemoryAssist();
-  };
+  const profiles = settings?.relayProfiles ?? [];
+  const activeProfileIds = new Set([
+    settings?.activeRelayId,
+    settings?.activeClaudeRelayId,
+    settings?.activeClaudeDesktopRelayId,
+  ].filter(Boolean));
+  const scopedProfiles = profiles.filter((profile) => {
+    const target = overviewProfileTarget(profile);
+    return agentScope === "codex" ? target === "codex" : target !== "codex";
+  });
+  const preferredProfileId = agentScope === "claude"
+    ? settings?.activeClaudeRelayId || settings?.activeClaudeDesktopRelayId || ""
+    : settings?.activeRelayId || "";
+  const scopedProfileIds = scopedProfiles.map((profile) => profile.id).join("\u001f");
+  useEffect(() => {
+    if (selectedProfileId && scopedProfiles.some((profile) => profile.id === selectedProfileId)) return;
+    const next = scopedProfiles.find((profile) => profile.id === preferredProfileId) ?? scopedProfiles[0] ?? null;
+    setSelectedProfileId(next?.id ?? "");
+  }, [agentScope, preferredProfileId, scopedProfileIds]);
+  const selectedProfile = scopedProfiles.find((profile) => profile.id === selectedProfileId) ?? scopedProfiles[0] ?? null;
+  const selectedTarget = selectedProfile ? overviewProfileTarget(selectedProfile) : "codex";
+  const selectedActiveId = selectedTarget === "claude"
+    ? settings?.activeClaudeRelayId
+    : selectedTarget === "claude-desktop"
+      ? settings?.activeClaudeDesktopRelayId
+      : settings?.activeRelayId;
+  const selectedIsCurrent = Boolean(selectedProfile && selectedProfile.id === selectedActiveId);
+  const selectedHasCredential = Boolean(selectedProfile && supplierProfileHasApiKey(selectedProfile));
+  const launch = overview?.latest_launch;
+  const proxyOnline = Boolean(launch?.helper_port_online);
+  const codexRunning = launch?.status === "running" || launch?.status === "degraded";
+  const claudeRunning = (claudeDesktop?.processCount ?? 0) > 0;
+  const selectedAgentOnline = selectedTarget === "codex" ? codexRunning : claudeRunning;
+  const providerCount = profiles.length;
+  const routeCount = profiles.filter((profile) => profile.routeEnabled).length;
+  const codexEnhancementValue = !overview
+    ? "未检测"
+    : statusFailed(launch?.status ?? "not_checked")
+      ? "异常"
+      : launch?.status === "degraded"
+        ? "部分在线"
+        : codexRunning
+          ? "已注入"
+          : "未运行";
+  const timelineEvents = useMemo(
+    () => buildOverviewTimeline(logs, overview, memoryAssist),
+    [logs?.text, overview?.latest_launch, memoryAssist?.memory.workspaces],
+  );
+  const timelineLayout = useMemo(() => {
+    const newestTimestamp = timelineEvents[0]?.timestampMs ?? Date.now();
+    const oldestTimestamp = timelineEvents.at(-1)?.timestampMs ?? newestTimestamp - 60_000;
+    const startTimestamp = Math.min(oldestTimestamp, newestTimestamp - 60_000);
+    const duration = Math.max(1, newestTimestamp - startTimestamp);
+    return {
+      ticks: Array.from({ length: 8 }, (_, index) => startTimestamp + (duration * index) / 7),
+      eventLeft: (timestampMs: number) => {
+        const ratio = Math.max(0, Math.min(1, (timestampMs - startTimestamp) / duration));
+        return `${4 + ratio * 74}%`;
+      },
+    };
+  }, [timelineEvents]);
+  const diagnostics: string[] = [];
+  if (!selectedProfile) diagnostics.push("当前范围内没有可检查的供应商配置。");
+  if (selectedProfile && !selectedHasCredential) diagnostics.push("当前供应商缺少可用凭据，请先进入编辑器补充 API Key。");
+  if (selectedProfile?.routeEnabled && !proxyOnline) diagnostics.push("该路由需要本地代理，但代理尚未在线，可尝试修复后端服务。");
+  if (selectedProfile && !selectedIsCurrent) diagnostics.push("当前仅在检查此供应商，尚未把它设为目标 Agent 的当前配置。");
+  if (selectedIsCurrent && !selectedAgentOnline) diagnostics.push(`${supplierTargetAppLabel(selectedTarget)} 尚未运行或状态未检测。`);
+  if (!diagnostics.length) diagnostics.push("当前链路没有已知异常，可继续使用当前配置。");
   const toggleMemoryAssistEnabled = async (enabled: boolean) => {
     if (!settings) {
       actions.showNotice({ title: "盘古记忆开关", message: "设置尚未加载，请先刷新概览。", status: "failed" });
@@ -261,80 +468,179 @@ export function OverviewScreen({
     if (saved) await actions.refreshMemoryAssist();
   };
   return (
-    <div className="ops-dashboard">
-      {announcement ? (
-        <section className="overview-announcement-card" aria-label={announcement.badge?.trim() || "公告"}>
-          <div className="overview-announcement-copy">
-            <span className="overview-announcement-kicker">{announcement.badge?.trim() || "公告"}</span>
-            <div>
-              <h2>{announcement.title}</h2>
-              <p>{announcement.description}</p>
-            </div>
-          </div>
-          <Button onClick={() => void actions.openExternalUrl(announcement.url)} variant="outline">
-            <ExternalLink className="h-4 w-4" />
-            {announcement.buttonLabel?.trim() || "查看详情"}
-          </Button>
+    <div className="overview-control-plane">
+      <div className="overview-console-layout">
+        <main className="overview-main">
+          <div className="overview-kpi-grid" aria-label="运行关键指标">
+        <section className="overview-kpi-card" data-tone={providerCount ? "ok" : "muted"}>
+          <header><span>当前供应商</span><Server aria-hidden="true" /></header>
+          <div className="overview-kpi-value"><strong>{settings ? providerCount : "未检测"}</strong><small>{settings ? "条可用配置" : "等待设置"}</small></div>
+          <p>{settings ? `${activeProfileIds.size} 个当前配置 · ${routeCount} 条路由` : "设置尚未加载"}</p>
         </section>
-      ) : null}
-      <div className="ops-matrix">
-        <StatusTile icon={Power} items={codexStatus.items} label="Codex 状态" status={codexStatus.status} />
-        <StatusTile icon={MessageCircle} items={claudeStatus.items} label="Claude 状态" status={claudeStatus.status} />
-        <StatusActionTile disabled={claudeDevModeBusy} icon={Wrench} label="Claude 一键开发模式" onClick={() => void actions.configureClaudeDesktopDevMode()} status={devModeStatus} value={devModeValue} />
-        <StatusTile icon={ShieldCheck} items={memoryStatus.items} label="盘古记忆" status={memoryStatus.status} />
-      </div>
-      <div className="ops-overview-grid">
-        <Panel title="盘古记忆总览" hideHeader>
-          <div className="memory-overview-header">
-            <div>
-              <div className="memory-title-row">
-                <strong>盘古记忆开关</strong>
-                <span className="memory-info" tabIndex={0}>
-                  <Info className="h-3.5 w-3.5" />
-                  <span className="memory-info-popover" role="tooltip">
-                    <strong>盘古记忆是什么</strong>
-                    <p>一份保存在本机的 agent 长期记忆库（<code>memory_assist.sqlite</code>）。它把你和 Codex / Claude 的每次协作里沉淀的经验教训、约定和结论记下来，下次自动喂回给 agent，让它记得住上下文、不再重复踩同一个坑。</p>
-                    <strong>有多好</strong>
-                    <ul>
-                      <li>语义检索：按意思找记忆，不只是关键词匹配。</li>
-                      <li>遗忘曲线：长期没用到的记忆自动淡出，常用的越记越牢，注入的上下文始终聚焦。</li>
-                      <li>跨 agent 共享：通过 MCP，Claude Code / Cursor / Codex CLI 接入同一份大脑。</li>
-                    </ul>
-                    <strong>怎么用</strong>
-                    <ul>
-                      <li>打开上方开关，允许 Codex 读写本地记忆。</li>
-                      <li>「提炼经验教训」把历史会话沉淀成手册；「查看/编辑」可手动增删。</li>
-                      <li>在设置里开「盘古记忆 MCP」后，用一键注册把它接到 Claude Desktop / Codex。</li>
-                    </ul>
-                    <strong>怎么让 agent 越用越聪明</strong>
-                    <p>用得越多，记忆越丰富、命中越频繁，高价值经验被强化、低价值的自动归档——大脑随使用持续自我打磨。手动固化的规则（约定、安全红线）常驻不衰减，始终生效。</p>
-                  </span>
-                </span>
+        <section className="overview-kpi-card" data-tone={proxyOnline ? "ok" : launch ? "warning" : "muted"}>
+          <header><span>本地代理</span><Gauge aria-hidden="true" /></header>
+          <div className="overview-kpi-value"><strong>{proxyOnline ? "在线" : launch ? "离线" : "未检测"}</strong><small>{proxyOnline ? "本机服务" : "运行状态"}</small></div>
+          <p>{proxyOnline && launch?.helper_port ? `本机端口 ${launch.helper_port}` : "等待本机运行状态"}</p>
+        </section>
+        <section className="overview-kpi-card is-accent" data-tone={codexStatus.status === "failed" ? "failed" : codexRunning ? "ok" : "muted"}>
+          <header><span>Codex 增强</span><Sparkles aria-hidden="true" /></header>
+          <div className="overview-kpi-value"><strong>{codexEnhancementValue}</strong><small>增强状态</small></div>
+          <p>{launch?.frontend_runtime_online ? "Renderer 与 Bridge 已连接" : "Renderer 尚未确认"}</p>
+        </section>
+        <section className="overview-kpi-card" data-tone={memoryStatus.status === "failed" ? "warning" : memoryEnabled ? "ok" : "muted"}>
+          <header><span>盘古记忆</span><Database aria-hidden="true" /></header>
+          <div className="overview-kpi-value"><strong>{memory ? memory.totalItems : "未检测"}</strong><small>{memory ? "条记忆" : "等待状态"}</small></div>
+          <p>{memory ? `${memoryCaptureCount} 次采集 · ${memory.pendingCandidates} 项待确认` : "记忆状态尚未加载"}</p>
+        </section>
+          </div>
+
+          <section className="overview-route-board overview-glass-panel">
+            <aside className="overview-route-panel">
+          <header className="overview-panel-heading">
+            <div><Network aria-hidden="true" /><strong>供应商路由</strong><span>{profiles.length}</span></div>
+            <button aria-label="管理供应商" onClick={() => void actions.goSupplierProfile(null)} title="管理供应商" type="button"><Plus aria-hidden="true" /></button>
+          </header>
+          <div className="overview-route-tabs" role="group" aria-label="供应商 Agent 范围">
+            {([["codex", "Codex"], ["claude", "Claude"]] as Array<[OverviewAgentScope, string]>).map(([scope, label]) => (
+              <button aria-pressed={agentScope === scope} className={agentScope === scope ? "active" : ""} key={scope} onClick={() => onAgentScopeChange(scope)} type="button">{label}</button>
+            ))}
+          </div>
+          <div className="overview-provider-list">
+            {scopedProfiles.length ? scopedProfiles.map((profile) => {
+              const current = activeProfileIds.has(profile.id);
+              const hasCredential = supplierProfileHasApiKey(profile);
+              const routeOffline = Boolean(profile.routeEnabled && !proxyOnline);
+              const statusLabel = !hasCredential ? "缺少 Key" : current ? routeOffline ? "代理离线" : profile.routeEnabled ? "在线" : "当前" : profile.routeEnabled ? "路由" : "待用";
+              const statusTone = !hasCredential || routeOffline ? "warning" : current ? "ok" : "muted";
+              return (
+                <button
+                  aria-pressed={selectedProfile?.id === profile.id}
+                  className={selectedProfile?.id === profile.id ? "active" : ""}
+                  key={profile.id}
+                  onClick={() => setSelectedProfileId(profile.id)}
+                  type="button"
+                >
+                  <span className="overview-provider-mark">{overviewProfileInitials(profile)}</span>
+                  <span className="overview-provider-copy"><strong>{profile.name || profile.id}</strong><small>{supplierApiFormatLabel(profile)} · {supplierTargetAppLabel(profile.targetApp)}</small></span>
+                  <span className={`overview-provider-status ${statusTone}`}><i />{statusLabel}</span>
+                </button>
+              );
+            }) : <div className="overview-provider-empty"><Server aria-hidden="true" /><strong>暂无供应商</strong><span>当前 Agent 范围内没有配置。</span></div>}
+          </div>
+            </aside>
+
+            <section className="overview-topology-panel">
+          <header className="overview-panel-heading overview-topology-heading">
+            <div><Activity aria-hidden="true" /><span><strong>当前请求链路</strong><small>供应商 → 协议代理 → 目标 Agent</small></span></div>
+            <button aria-label="刷新概览" onClick={() => void actions.refreshRoute("overview", { notify: true })} title="刷新概览" type="button"><RefreshCw aria-hidden="true" /></button>
+          </header>
+          {selectedProfile ? (
+            <div className="overview-topology-stage">
+              <div className="overview-topology-path" aria-label={`${selectedProfile.name || selectedProfile.id} 到 ${supplierTargetAppLabel(selectedTarget)} 的当前链路`}>
+                <span className="overview-route-line" aria-hidden="true" />
+                <article className="overview-topology-node provider">
+                  <header><span>PROVIDER</span><Server aria-hidden="true" /></header>
+                  <div><strong>{selectedProfile.name || selectedProfile.id}</strong><small>{selectedProfile.baseUrl || selectedProfile.upstreamBaseUrl ? "Base URL 已配置" : "Base URL 未配置"}</small></div>
+                  <footer><b>{selectedHasCredential ? "已配置" : "缺少"}</b><span>凭据状态</span></footer>
+                </article>
+                <article className="overview-topology-node protocol">
+                  <header><span>PROTOCOL ENGINE</span><Network aria-hidden="true" /></header>
+                  <div><strong>{supplierApiFormatLabel(selectedProfile)}</strong><small>{selectedProfile.routeEnabled ? "本地协议代理" : "上游直连"}</small></div>
+                  <footer><b>{selectedProfile.routeEnabled ? proxyOnline ? "在线" : "离线" : "直连"}</b><span>代理状态</span></footer>
+                </article>
+                <article className="overview-topology-node agent">
+                  <header><span>AGENT</span><Bot aria-hidden="true" /></header>
+                  <div><strong>{supplierTargetAppLabel(selectedTarget)}</strong><small>{selectedProfile.model || selectedProfile.testModel || "模型未配置"}</small></div>
+                  <footer><b>{selectedAgentOnline ? "在线" : selectedIsCurrent ? "未运行" : "待切换"}</b><span>运行状态</span></footer>
+                </article>
               </div>
-              <p>{memoryEnabled ? "已允许 Codex 使用本地经验教训与会话摘要。" : "当前不会向 Codex 注入盘古记忆。可在这里直接开启。"}</p>
+              <p className="overview-topology-source">实时配置视图 · 状态来自本机检测</p>
             </div>
-            <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
+          ) : (
+            <div className="overview-topology-empty"><Network aria-hidden="true" /><strong>没有可显示的请求链路</strong><span>添加供应商后，这里会展示真实配置链路。</span></div>
+          )}
+            </section>
+          </section>
+
+        <aside className="overview-inspector overview-glass-panel">
+          <header className="overview-panel-heading"><div><Wrench aria-hidden="true" /><strong>智能诊断</strong></div></header>
+          <div className="overview-inspector-scroll">
+            {selectedProfile ? (
+              <>
+                <section className="overview-inspector-summary">
+                  <span>ROUTE / {selectedProfile.id}</span>
+                  <div><h2>{selectedProfile.name || selectedProfile.id} → {supplierTargetAppLabel(selectedTarget)}</h2><em className={selectedIsCurrent ? "current" : "saved"}>{selectedIsCurrent ? "当前配置" : "已保存"}</em></div>
+                  <p>该面板只读取已保存配置与本机运行状态；检查供应商不会自动切换或覆写配置。</p>
+                </section>
+                <dl className="overview-inspector-facts">
+                  <div><dt>实际模型</dt><dd>{selectedProfile.model || selectedProfile.testModel || "未配置"}</dd></div>
+                  <div><dt>请求协议</dt><dd>{supplierApiFormatLabel(selectedProfile)}</dd></div>
+                  <div><dt>目标客户端</dt><dd>{supplierTargetAppLabel(selectedTarget)}</dd></div>
+                  <div><dt>路由状态</dt><dd>{selectedProfile.routeEnabled ? proxyOnline ? "已开启 · 代理在线" : "已开启 · 代理离线" : "直连"}</dd></div>
+                  <div><dt>凭据状态</dt><dd><KeyRound aria-hidden="true" />{selectedHasCredential ? "•••••••• · 已配置" : "未配置"}</dd></div>
+                </dl>
+                <div className="overview-inspector-metrics">
+                  <span><b>{proxyOnline ? "在线" : launch ? "离线" : "未检测"}</b><small>本地代理</small></span>
+                  <span><b>{selectedHasCredential ? "已配置" : "缺失"}</b><small>连接凭据</small></span>
+                  <span><b>{selectedAgentOnline ? "在线" : "未检测"}</b><small>Agent 状态</small></span>
+                </div>
+              </>
+            ) : null}
+            <section className="overview-advice">
+              <header><Sparkles aria-hidden="true" /><strong>运行建议</strong></header>
+              <ul>{diagnostics.map((message) => <li key={message}>{message}</li>)}</ul>
+            </section>
+            <section className="overview-memory-control">
+              <div><ShieldCheck aria-hidden="true" /><span><strong>盘古记忆</strong><small>{memoryMonitorActive ? "对话监控运行中" : memoryCodexInjected ? "已注入，等待会话变化" : "当前未监听"}</small></span></div>
+              <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
+            </section>
+            <div className="overview-quick-actions" aria-label="诊断与修复">
+              <button onClick={() => void actions.repairFrontendConnection()} type="button"><Wrench aria-hidden="true" />修复前端</button>
+              <button onClick={() => void actions.repairBackendService()} type="button"><Wrench aria-hidden="true" />修复后端</button>
+              <button onClick={() => void actions.refreshClaudeThirdPartyConfig()} type="button"><RefreshCw aria-hidden="true" />刷新 Claude</button>
+              <button disabled={claudeDevModeBusy} onClick={() => void actions.configureClaudeDesktopDevMode()} type="button"><Power aria-hidden="true" />{devModeValue}</button>
+            </div>
+            {announcement ? (
+              <button className="overview-announcement-link" onClick={() => void actions.openExternalUrl(announcement.url)} type="button"><ExternalLink aria-hidden="true" /><span><strong>{announcement.title}</strong><small>{announcement.buttonLabel?.trim() || "查看公告"}</small></span></button>
+            ) : null}
           </div>
-          <div className="ops-status-list">
-            <StatusRow label="运行状态" status={memoryRuntimeStatus} value={memoryRuntimeValue} />
-            <StatusRow label="Codex 注入" status={memoryInjectStatus} value={memoryInjectValue} />
-            <StatusRow label="对话监控" status={memoryMonitorStatus} value={memoryMonitorValue} />
+          <footer>
+            <Button disabled={!selectedProfile} onClick={() => void actions.goSupplierProfile(selectedProfile?.id)} variant="outline"><Pencil className="h-4 w-4" />编辑配置</Button>
+            {!selectedIsCurrent ? <Button disabled={!selectedProfile || !selectedHasCredential || !settings} onClick={() => { if (selectedProfile && settings) void actions.switchSupplierProfile(selectedTarget, selectedProfile.id, settings); }}><CheckCircle2 className="h-4 w-4" />设为当前</Button> : null}
+            <Button className="supplier-test-connection" disabled={!selectedProfile} onClick={() => { if (selectedProfile) void actions.testRelayProfile(selectedProfile); }}><Activity className="h-4 w-4" />测试连接</Button>
+          </footer>
+        </aside>
+
+          <section className="overview-timeline overview-glass-panel">
+          <header className="overview-panel-heading">
+            <div><Clock3 aria-hidden="true" /><span><strong>请求与事件时间线</strong><small>最近 {timelineEvents.length} 项脱敏事件</small></span></div>
+            <span className="overview-timeline-legend"><i className="ok" />成功<i className="warning" />降级<i className="failed" />失败</span>
+          </header>
+          <div className="overview-timeline-body">
+            <div className="overview-timeline-labels">
+              {OVERVIEW_TIMELINE_LANES.map((lane) => <strong key={lane.id}><i />{lane.label}</strong>)}
+            </div>
+            <div className="overview-timeline-chart">
+              <div className="overview-timeline-axis">{timelineLayout.ticks.map((timestamp, index) => <time key={`${timestamp}-${index}`}>{formatOverviewEventTime(timestamp)}</time>)}</div>
+              <div className="overview-timeline-grid" aria-hidden="true" />
+              {OVERVIEW_TIMELINE_LANES.map((lane) => {
+                const event = timelineEvents.find((item) => item.lane === lane.id);
+                return (
+                  <div className="overview-timeline-track" key={lane.id}>
+                    {event ? (
+                      <span className={`overview-timeline-event ${event.tone}`} style={{ left: timelineLayout.eventLeft(event.timestampMs) } as CSSProperties}>
+                        <i /><b>{event.label}</b><time>{formatOverviewEventTime(event.timestampMs)}</time>
+                      </span>
+                    ) : <span className="overview-timeline-empty">暂无事件</span>}
+                  </div>
+                );
+              })}
+              <span className="overview-timeline-now" aria-hidden="true">最新</span>
+            </div>
           </div>
-          <div className="ops-note">
-            <Activity className="h-4 w-4" />
-            <span>对话监控</span>
-            <MemoryActivityWave active={memoryMonitorActive} />
-          </div>
-        </Panel>
-        <div className="overview-side-stack">
-          <Panel title="诊断与修复" detail="检查和修复入口集中在这里；修复动作会先显示运行反馈，再调用后端命令。">
-            <ActionButton icon={RefreshCw} label="刷新概览" onClick={() => void actions.refreshRoute("overview", { notify: true })} />
-            <ActionButton icon={RefreshCw} label="刷新 Claude 第三方配置" onClick={() => void actions.refreshClaudeThirdPartyConfig()} />
-            <ActionButton icon={Wrench} label="修复前端连接" onClick={() => void actions.repairFrontendConnection()} />
-            <ActionButton icon={Wrench} label="修复后端服务" onClick={() => void actions.repairBackendService()} />
-            <ActionButton icon={Wrench} label="修复 Claude" onClick={() => void actions.restoreClaudeZhPatch()} />
-          </Panel>
-        </div>
+          <p className="overview-timeline-note">仅展示事件名称与时间，原始日志 detail 不进入概览。</p>
+          </section>
+        </main>
       </div>
     </div>
   );
@@ -3783,7 +4089,7 @@ export function MaintenanceToolsPanel({
         </div>
         <div className="action-row">
           <Button onClick={() => void actions.launchClaudeDesktop()} size="sm" variant="outline">启动/重启Claude</Button>
-          <Button onClick={() => void actions.installClaudeZhPatch()} size="sm" variant="outline">Claude 一键汉化</Button>
+          <Button className="claude-zh-success" onClick={() => void actions.installClaudeZhPatch()} size="sm" variant="outline">Claude 一键汉化</Button>
           <Button onClick={() => void actions.configureClaudeDesktopDevMode()} size="sm" variant="outline">Claude 一键开发模式</Button>
         </div>
       </Panel>
@@ -3949,7 +4255,7 @@ export const SettingsScreen = memo(function SettingsScreen({
             <InfoRow label="Chunk 注入" value={claudeZhPatch?.status.chunkPatchPresent ? "已注入" : "未注入"} />
           </div>
           <div className="action-row">
-            <Button onClick={() => void actions.installClaudeZhPatch()}>
+            <Button className="claude-zh-success" onClick={() => void actions.installClaudeZhPatch()}>
               <Languages className="h-4 w-4" />
               Claude 一键汉化
             </Button>

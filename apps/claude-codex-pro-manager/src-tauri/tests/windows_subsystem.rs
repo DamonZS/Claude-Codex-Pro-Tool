@@ -1324,7 +1324,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "<aside className=\"ops-rail\" aria-label=\"一级导航\">",
         "<main className=\"ops-workspace\">",
         "<header className=\"ops-topbar\" data-tauri-drag-region>",
-        "<section className=\"ops-screen\">",
+        "<section className=\"ops-screen\" data-route={route}>",
         "{routes.map((item) => {",
         "const activePrimaryRoute = primaryRoute(route);",
         "aria-label=\"Agent 范围\"",
@@ -1364,7 +1364,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     assert!(breadcrumb.contains("\"CCP\""));
     assert!(!breadcrumb.contains("盘古"));
     let brand_button = jsx_button_containing(&app_shell, "className=\"ops-brand\"");
-    assert!(brand_button.contains("<strong>CCP</strong>"));
+    assert!(brand_button.contains("className=\"ops-brand-mark\">CCP</span>"));
+    assert!(brand_button.contains("<strong>Control Plane</strong>"));
     assert!(!brand_button.contains("<strong>盘古</strong>"));
     assert!(manager_lib.contains(".title(\"CCP 管理工具\")"));
     assert!(tauri_config.contains("\"title\": \"CCP 管理工具\""));
@@ -1385,7 +1386,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let commandbar = source_section(
         &app_shell,
         "<div className=\"ops-commandbar\">",
-        "</header>",
+        "<section className=\"ops-screen\"",
     );
     assert_eq!(
         commandbar.matches("ops-action-command").count(),
@@ -1406,8 +1407,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     assert!(action_positions.windows(2).all(|pair| pair[0] < pair[1]));
     for control in [
         "className=\"ops-command-search\"",
-        "className=\"ops-runtime-chip supplier\"",
-        "className={`ops-runtime-chip health ${proxyHealth}`}",
+        "className={`ops-runtime-chip supplier ${proxyHealth}`}",
     ] {
         assert!(
             commandbar
@@ -1416,6 +1416,10 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "topbar context control must remain left of client actions: {control}"
         );
     }
+    assert!(commandbar.contains("[\"codex\", \"Codex\"]"));
+    assert!(commandbar.contains("[\"claude\", \"Claude\"]"));
+    assert!(!commandbar.contains("[\"all\", \"全部\"]"));
+    assert!(!commandbar.contains("ops-runtime-chip health"));
     for (handler, label) in [
         ("onClick={onRestartCodex}", "启动/重启 Codex"),
         ("onClick={onLaunchClaude}", "启动/重启 Claude"),
@@ -1437,8 +1441,22 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         !app.contains("route === \"models\""),
         "App must not retain a live models route branch"
     );
-    assert!(app.contains("const [agentScope, setAgentScope] = useState<AgentScope>(\"all\")"));
+    assert!(app.contains("const [agentScope, setAgentScope] = useState<AgentScope>(\"codex\")"));
     assert!(app.contains("onAgentScopeChange={setAgentScope}"));
+    assert!(app_shell.contains("export type AgentScope = \"codex\" | \"claude\";"));
+    assert!(!app_shell.contains("export type AgentScope = \"all\""));
+
+    let overview_screen = source_section(
+        &screens,
+        "export function OverviewScreen",
+        "function MemoryTierControls",
+    );
+    assert!(screens.contains("type OverviewAgentScope = \"codex\" | \"claude\";"));
+    assert!(overview_screen.contains("[[\"codex\", \"Codex\"], [\"claude\", \"Claude\"]]"));
+    assert!(!overview_screen.contains("\"all\", \"全部\""));
+    assert!(overview_screen.contains(
+        "return agentScope === \"codex\" ? target === \"codex\" : target !== \"codex\";"
+    ));
     for action_binding in [
         "onRestartCodex={() => void actions.restartCodex()}",
         "onLaunchClaude={() => void actions.launchClaudeDesktop()}",
@@ -1697,6 +1715,31 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         );
     }
     for declaration in [
+        "border-color: rgb(70 93 82 / 0.34);",
+        "background-color: rgb(255 255 255 / 0.96);",
+        "color: #101713;",
+    ] {
+        assert!(
+            css_rule_with_fragments_has(
+                &workspace,
+                &[
+                    ".ops-shell.light",
+                    ".supplier-ccswitch-editor",
+                    "input",
+                    "select",
+                    "textarea"
+                ],
+                declaration,
+            ),
+            "light supplier controls need visible opaque styling: {declaration}"
+        );
+    }
+    assert!(css_rule_with_fragments_has(
+        &workspace,
+        &[".ops-shell.light", ".supplier-ccswitch-editor"],
+        "backdrop-filter: blur(30px) saturate(148%);"
+    ));
+    for declaration in [
         "background: hsl(var(--popover));",
         "color: hsl(var(--popover-foreground));",
         "color-scheme: light;",
@@ -1743,8 +1786,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "--workspace-success: #10b981;",
         "--workspace-warning: #f59e0b;",
         "--workspace-danger: #ef4444;",
-        "--workspace-sidebar-width: 240px;",
-        "--workspace-sidebar-collapsed-width: 64px;",
+        "--workspace-sidebar-width: 208px;",
+        "--workspace-sidebar-collapsed-width: 56px;",
         "--workspace-topbar-height: 54px;",
         "--workspace-control-height: 36px;",
         "--workspace-radius: 8px;",
@@ -1785,7 +1828,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "missing workspace layout contract: {layout_contract}"
         );
     }
-    assert!(!workspace.contains("linear-gradient("));
+    assert!(workspace.contains("--workspace-glass-sheen: linear-gradient("));
+    assert!(!workspace.contains("repeating-linear-gradient("));
     assert!(!workspace.contains("radial-gradient("));
 }
 
@@ -1808,6 +1852,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let routes = read_frontend_file("lib/routes.ts");
     let types = read_frontend_file("types.ts");
+    let theme_screen = read_frontend_file("components/CodexThemeCenterScreen.tsx");
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
 
@@ -1822,6 +1867,19 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     );
     let route_type = source_section(&types, "export type Route =", "export type LegacyRoute");
     assert!(route_type.contains("| \"themes\""));
+    for contract in [
+        "管理工具高清背景",
+        "至少 1920 x 1080",
+        "设置背景",
+        "actions.setCodexManagerBackground()",
+        "actions.clearCodexManagerBackground()",
+        "background.user_override",
+    ] {
+        assert!(
+            theme_screen.contains(contract),
+            "theme background UI is missing: {contract}"
+        );
+    }
 
     let registered_commands = source_section(
         &manager_lib,
@@ -1830,6 +1888,9 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     );
     for command in [
         "list_codex_themes",
+        "load_codex_theme_background",
+        "set_codex_manager_background",
+        "clear_codex_manager_background",
         "import_codex_theme",
         "apply_codex_theme",
         "restore_codex_default_theme",
@@ -1846,9 +1907,34 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let list_command = source_section(
         &commands,
         "pub fn list_codex_themes()",
-        "pub async fn import_codex_theme(",
+        "pub fn load_codex_theme_background()",
     );
     assert!(list_command.contains("-> CommandResult<CodexThemeList>"));
+
+    let background_command = source_section(
+        &commands,
+        "pub fn load_codex_theme_background()",
+        "pub async fn set_codex_manager_background(",
+    );
+    assert!(background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
+    assert!(background_command.contains("store.active_manager_background()"));
+
+    let set_background_command = source_section(
+        &commands,
+        "pub async fn set_codex_manager_background(",
+        "pub fn clear_codex_manager_background()",
+    );
+    assert!(set_background_command.contains("source_path: String"));
+    assert!(set_background_command.contains(".set_manager_background(source_path)"));
+    assert!(set_background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
+
+    let clear_background_command = source_section(
+        &commands,
+        "pub fn clear_codex_manager_background()",
+        "pub async fn import_codex_theme(",
+    );
+    assert!(clear_background_command.contains("store.clear_manager_background()"));
+    assert!(clear_background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
 
     let import_command = source_section(
         &commands,
@@ -1918,7 +2004,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let list_type = source_section(
         &types,
         "export type CodexThemeListResult",
-        "export type CodexThemeImportResult",
+        "export type CodexThemeBackgroundResult",
     );
     for contract in [
         "CommandResult<{",
@@ -1929,6 +2015,29 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         assert!(
             list_type.contains(contract),
             "CodexThemeListResult is missing: {contract}"
+        );
+    }
+
+    let background_type = source_section(
+        &types,
+        "export type CodexThemeBackgroundResult",
+        "export type CodexThemeImportResult",
+    );
+    for contract in [
+        "CommandResult<{",
+        "theme_id: string;",
+        "generation: number;",
+        "data_uri: string | null;",
+        "source_variable: string | null;",
+        "is_default: boolean;",
+        "width: number | null;",
+        "height: number | null;",
+        "mime_type: string | null;",
+        "user_override: boolean;",
+    ] {
+        assert!(
+            background_type.contains(contract),
+            "CodexThemeBackgroundResult is missing: {contract}"
         );
     }
     assert!(
@@ -2004,6 +2113,40 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "updated_at",
             "integrity_sha256",
             "previous_version_available",
+        ],
+    );
+
+    let background_json =
+        serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
+            status: "ok".to_string(),
+            message: "loaded".to_string(),
+            payload: claude_codex_pro_core::codex_theme::CodexThemeManagerBackground {
+                theme_id: "fixture-theme".to_string(),
+                generation: 3,
+                data_uri: Some("data:image/webp;base64,fixture".to_string()),
+                source_variable: Some("--ccp-theme-manager-background".to_string()),
+                is_default: false,
+                width: Some(3840),
+                height: Some(2160),
+                mime_type: Some("image/webp".to_string()),
+                user_override: false,
+            },
+        })
+        .expect("serialize theme background command result");
+    assert_json_keys(
+        &background_json,
+        &[
+            "status",
+            "message",
+            "theme_id",
+            "generation",
+            "data_uri",
+            "source_variable",
+            "is_default",
+            "width",
+            "height",
+            "mime_type",
+            "user_override",
         ],
     );
 
@@ -2132,6 +2275,35 @@ fn codex_theme_center_frontend_ipc_calls_match_tauri_commands() {
         "list_codex_themes must not receive frontend arguments"
     );
 
+    let background_call = ipc_call(&frontend, "load_codex_theme_background");
+    assert!(background_call.contains("call<CodexThemeBackgroundResult>"));
+    assert_eq!(
+        background_call
+            .split_once("\"load_codex_theme_background\"")
+            .expect("background command literal")
+            .1
+            .trim(),
+        ")",
+        "load_codex_theme_background must not receive frontend arguments"
+    );
+
+    let set_background_call = ipc_call(&frontend, "set_codex_manager_background");
+    assert!(set_background_call.contains("call<CodexThemeBackgroundResult>"));
+    assert!(set_background_call.contains("sourcePath"));
+    assert!(!set_background_call.contains("source_path"));
+
+    let clear_background_call = ipc_call(&frontend, "clear_codex_manager_background");
+    assert!(clear_background_call.contains("call<CodexThemeBackgroundResult>"));
+    assert_eq!(
+        clear_background_call
+            .split_once("\"clear_codex_manager_background\"")
+            .expect("clear background command literal")
+            .1
+            .trim(),
+        ")",
+        "clear_codex_manager_background must not receive frontend arguments"
+    );
+
     let import_call = ipc_call(&frontend, "import_codex_theme");
     assert!(import_call.contains("call<CodexThemeImportResult>"));
     for argument in ["sourcePath", "replaceExisting"] {
@@ -2172,6 +2344,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let tauri_bridge = read_source_file(&tauri_bridge);
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
+    let workspace = read_frontend_file("workspace.css");
     let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
     let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
     let tauri_conf = read_source_file(&manifest_dir.join("tauri.conf.json"));
@@ -2213,14 +2386,9 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::apply_claude_desktop_provider"));
     assert!(lib_rs.contains("commands::restore_claude_desktop_provider_official"));
     assert!(!app_tsx.contains("const actions = useMemo("));
-    assert!(!app_tsx.contains("route !== \"overview\""));
+    assert!(app_tsx.contains("route !== \"prompts\" && route !== \"overview\""));
     assert!(!app_tsx.contains("<span>后端链接</span>"));
     assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
-    assert!(app_tsx.contains("Codex 状态"));
-    assert!(app_tsx.contains("Claude 状态"));
-    assert!(app_tsx.contains("盘古记忆"));
-    assert!(app_tsx.contains("盘古记忆总览"));
-    assert!(app_tsx.contains("诊断与修复"));
     assert!(app_tsx.contains("function codexOverviewStatus"));
     assert!(app_tsx.contains("function claudeOverviewStatus"));
     assert!(app_tsx.contains("function memoryOverviewStatus"));
@@ -2232,78 +2400,65 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         "const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });"
     ));
     assert!(app_tsx.contains("if (saved) await actions.refreshMemoryAssist();"));
-    assert!(!app_tsx.contains("设置尚未加载，无法切换盘古记忆。"));
-    assert!(app_tsx.contains("status-segment-list"));
-    assert!(app_tsx.contains("status-segment"));
-    assert!(app_tsx.contains("status-action-tile"));
-    assert!(app_tsx.contains("运行中"));
-    assert!(app_tsx.contains("未运行"));
-    assert!(app_tsx.contains("注入成功"));
-    assert!(app_tsx.contains("前端在线"));
-    assert!(app_tsx.contains("launch?.frontend_runtime_online || launch?.debug_port_online"));
-    assert!(app_tsx.contains("CDP 离线"));
-    assert!(app_tsx.contains("后端在线"));
-    assert!(app_tsx.contains("汉化已注入"));
     assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch)"));
-    assert!(!app_tsx.contains("前端已注入"));
-    assert!(!app_tsx.contains("包装窗口已注入"));
     assert!(!app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
-    assert!(!app_tsx.contains("前端未注入"));
-    assert!(app_tsx.contains("Inspector 在线"));
-    assert!(!app_tsx.contains("CDP 未检测"));
-    assert!(!app_tsx.contains("CDP 受阻"));
-    assert!(!app_tsx.contains("调试受限"));
-    assert!(!app_tsx.contains("cdpStatus === \"blocked\" ? \"CDP 受阻\""));
-    assert!(app_tsx.contains("const cdpWarn = !inspectorReady && cdpStatus === \"failed\""));
-    assert!(app_tsx.contains("注入异常"));
-    assert!(!app_tsx.contains("inject ok"));
-    assert!(!app_tsx.contains("FE on"));
-    assert!(!app_tsx.contains("BE on"));
-    assert!(!app_tsx.contains("Codex 运行"));
     let overview_screen = screens_file
         .split("function OverviewScreen")
         .nth(1)
         .and_then(|rest| rest.split("function SupplierScreen").next())
         .expect("overview screen source");
-    assert!(!overview_screen.contains("relay-banner"));
-    assert!(!overview_screen.contains("拓扑熵减API"));
-    assert!(!overview_screen.contains("Codex 诊断"));
-    assert!(!overview_screen.contains("Claude 诊断"));
-    assert!(!overview_screen.contains("installKind ?? \"unknown\""));
-    assert!(!overview_screen.contains("cdpStatus ?? \"unknown\""));
-    let announcement_panel = overview_screen
-        .split("className=\"overview-announcement-card\"")
-        .nth(1)
-        .and_then(|rest| rest.split("<div className=\"ops-matrix\">").next())
-        .expect("overview announcement card source");
-    assert!(announcement_panel.contains("announcement.badge"));
-    assert!(announcement_panel.contains("announcement.title"));
-    assert!(announcement_panel.contains("announcement.description"));
-    assert!(announcement_panel.contains("announcement.buttonLabel"));
-    assert!(announcement_panel.contains("actions.openExternalUrl(announcement.url)"));
-    assert!(!announcement_panel.contains("拓扑API是CCP官方中转站"));
-    assert!(!announcement_panel.contains("https://api.toporeduce.cn"));
-    assert!(!announcement_panel.contains("dangerouslySetInnerHTML"));
+    for contract in [
+        "className=\"overview-control-plane\"",
+        "className=\"overview-kpi-grid\"",
+        "<span>当前供应商</span>",
+        "<span>本地代理</span>",
+        "<span>Codex 增强</span>",
+        "<span>盘古记忆</span>",
+        "className=\"overview-route-board overview-glass-panel\"",
+        "<strong>供应商路由</strong>",
+        "<strong>当前请求链路</strong>",
+        "className=\"overview-topology-node provider\"",
+        "className=\"overview-topology-node protocol\"",
+        "className=\"overview-topology-node agent\"",
+        "className=\"overview-inspector overview-glass-panel\"",
+        "<strong>智能诊断</strong>",
+        "className=\"overview-timeline overview-glass-panel\"",
+        "<strong>请求与事件时间线</strong>",
+    ] {
+        assert!(
+            overview_screen.contains(contract),
+            "overview control plane is missing: {contract}"
+        );
+    }
+    assert!(overview_screen.contains("const profiles = settings?.relayProfiles ?? [];"));
+    assert!(overview_screen.contains("supplierProfileHasApiKey(profile)"));
+    assert!(overview_screen.contains("•••••••• · 已配置"));
+    assert!(overview_screen.contains("actions.testRelayProfile(selectedProfile)"));
+    assert!(
+        overview_screen.contains(
+            "actions.switchSupplierProfile(selectedTarget, selectedProfile.id, settings)"
+        )
+    );
+    assert!(overview_screen.contains("buildOverviewTimeline(logs, overview, memoryAssist)"));
+    assert!(overview_screen.contains("原始日志 detail 不进入概览"));
+    assert!(overview_screen.contains("className=\"overview-memory-control\""));
+    assert!(overview_screen.contains("toggleMemoryAssistEnabled(value)"));
+    assert!(overview_screen.contains("aria-label=\"诊断与修复\""));
+    assert!(overview_screen.contains("actions.repairFrontendConnection()"));
+    assert!(overview_screen.contains("actions.repairBackendService()"));
+    assert!(overview_screen.contains("actions.refreshClaudeThirdPartyConfig()"));
+    assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
+    assert!(overview_screen.contains("className=\"overview-announcement-link\""));
+    assert!(overview_screen.contains("announcement.title"));
+    assert!(overview_screen.contains("announcement.buttonLabel"));
+    assert!(overview_screen.contains("actions.openExternalUrl(announcement.url)"));
+    assert!(!overview_screen.contains("https://api.toporeduce.cn"));
+    assert!(!overview_screen.contains("dangerouslySetInnerHTML"));
+    for fabricated_metric in ["99.9%", "12 ms", "1,284 req", "拓扑熵减API"] {
+        assert!(!overview_screen.contains(fabricated_metric));
+    }
     assert!(app_tsx.contains("call<AdsResult>(\"load_ads\")"));
     assert!(app_tsx.contains("ads={ads}"));
-    let memory_panel = overview_screen
-        .split("title=\"盘古记忆总览\"")
-        .nth(1)
-        .and_then(|rest| rest.split("title=\"诊断与修复\"").next())
-        .expect("memory overview panel source");
-    assert!(!memory_panel.contains("Claude 一键开发模式"));
-    assert!(memory_panel.contains("盘古记忆开关"));
-    assert!(memory_panel.contains("运行状态"));
-    assert!(memory_panel.contains("Codex 注入"));
-    assert!(memory_panel.contains("对话监控"));
-    assert!(memory_panel.contains("<MemoryActivityWave active={memoryMonitorActive} />"));
-    assert!(!memory_panel.contains("查看/编辑经验教训"));
-    assert!(!memory_panel.contains("memory-overview-matrix"));
-    assert!(!memory_panel.contains("memory-overview-actions"));
-    assert!(!memory_panel.contains("待确认"));
-    assert!(!memory_panel.contains("actions.refineLongTermMemory()"));
-    assert!(!memory_panel.contains("openMemoryDetails()"));
-    assert!(overview_screen.contains("overview-side-stack"));
     assert!(app_tsx.contains("function OverviewMemoryDetails"));
     assert!(app_tsx.contains("经验教训手册详情"));
     assert!(app_tsx.contains("提炼结果会合成为一条精简手册，可在这里直接查看和编辑。"));
@@ -2329,24 +2484,58 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("manager.memory.selfcheck.result"));
     assert!(commands_rs.contains("manager.memory.selfcheck.failed"));
     assert!(commands_rs.contains("\"historyScan\": \"all_visible_workspaces_and_sessions\""));
-    assert!(styles.contains(".overview-side-stack"));
-    assert!(styles.contains(".overview-announcement-card"));
-    assert!(styles.contains(".overview-announcement-kicker"));
-    assert!(styles.contains(".overview-memory-list"));
-    assert!(styles.contains(".memory-overview-matrix"));
-    assert!(styles.contains("grid-template-columns: repeat(2, minmax(0, 1fr));"));
-    assert!(styles.contains(".memory-overview-actions"));
-    assert!(styles.contains("grid-template-columns: repeat(3, minmax(0, 1fr));"));
-    assert!(styles.contains("max-height: 360px;"));
+    for style_contract in [
+        ".overview-control-plane",
+        ".overview-kpi-grid",
+        "grid-template-columns: repeat(4, minmax(0, 1fr));",
+        ".overview-route-board",
+        ".overview-topology-stage",
+        ".overview-inspector",
+        ".overview-timeline",
+        "transform: rotateY(25deg) rotateZ(-1.5deg) translateZ(-34px);",
+        "transform: rotateY(-25deg) rotateZ(1.5deg) translateZ(-34px);",
+        "@media (max-width: 980px)",
+        "@media (min-width: 2400px) and (min-height: 1350px)",
+        "width: 100%;",
+        "height: 100%;",
+    ] {
+        assert!(
+            workspace.contains(style_contract),
+            "workspace is missing overview style contract: {style_contract}"
+        );
+    }
+    for (selector, declaration) in [
+        (".overview-timeline-labels strong", "font-size: 12px;"),
+        (
+            ".overview-timeline-axis time",
+            "font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;",
+        ),
+        (".overview-timeline-event b", "font-size: 11px;"),
+        (".overview-timeline-event time", "font-size: 10px;"),
+        (".overview-timeline-empty", "font-size: 11px;"),
+        (".overview-timeline-note", "font-size: 10px;"),
+    ] {
+        let marker = format!("{selector} {{");
+        let start = workspace
+            .rfind(&marker)
+            .unwrap_or_else(|| panic!("missing overview timeline selector: {selector}"));
+        let end = workspace[start..]
+            .find('}')
+            .map(|offset| start + offset)
+            .expect("overview timeline rule end");
+        assert!(
+            workspace[start..end].contains(declaration),
+            "overview timeline text must remain readable: {selector}"
+        );
+    }
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
     assert!(overview_screen.contains("刷新概览"));
     assert!(overview_screen.contains("actions.refreshRoute(\"overview\", { notify: true })"));
-    assert!(overview_screen.contains("刷新 Claude 第三方配置"));
-    assert!(overview_screen.contains("修复前端连接"));
-    assert!(overview_screen.contains("修复后端服务"));
-    assert!(overview_screen.contains("修复 Claude"));
+    assert!(overview_screen.contains("刷新 Claude"));
+    assert!(overview_screen.contains("修复前端"));
+    assert!(overview_screen.contains("修复后端"));
     assert!(app_tsx.contains("refresh_claude_third_party_config"));
     assert!(app_tsx.contains("repair_frontend_connection"));
     assert!(app_tsx.contains("repair_backend_service"));
@@ -2432,43 +2621,36 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!commands_rs.contains("codex_frontend_ok && claude_probe.injected"));
     assert!(commands_rs.contains("codex_helper && claude_helper"));
     assert!(commands_rs.contains("\"degraded\""));
-    let overview_matrix = overview_screen
-        .split("<div className=\"ops-matrix\">")
-        .nth(1)
-        .and_then(|rest| rest.split("</div>").next())
-        .expect("overview matrix source");
-    assert!(!overview_matrix.contains("actions.installClaudeZhPatch()"));
-    assert!(overview_matrix.contains("items={codexStatus.items}"));
-    assert!(!overview_matrix.contains("Codex 版本"));
-    assert!(overview_matrix.contains("items={claudeStatus.items}"));
-    assert!(overview_matrix.contains("items={memoryStatus.items}"));
-    assert!(overview_screen.contains("StatusActionTile"));
-    assert!(overview_screen.contains("Claude 一键开发模式"));
-    assert!(overview_screen.contains("已写入"));
+    assert!(!overview_screen.contains("StatusActionTile"));
+    assert!(!overview_screen.contains("actions.installClaudeZhPatch()"));
+    assert!(overview_screen.contains("const devModeValue = claudeDevModeBusy"));
+    assert!(overview_screen.contains("开发模式已写入"));
+    assert!(overview_screen.contains("写入中..."));
     assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
     assert!(app_tsx.contains("const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: \"正在写入 Claude Desktop 开发配置...\", status: \"running\" });"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: result.message || result.outcome.message, status: result.status });"));
     assert!(app_tsx.contains("ops-command-search"));
-    assert!(styles.contains(".ops-shell"));
-    assert!(styles.contains("grid-template-columns: 92px minmax(0, 1fr)"));
-    assert!(styles.contains("height: 100vh;"));
-    assert!(styles.contains(".ops-workspace"));
-    assert!(styles.contains("min-height: 0;"));
-    assert!(styles.contains(".ops-screen"));
-    assert!(styles.contains("overflow-y: auto;"));
-    assert!(styles.contains("padding-bottom: 32px;"));
-    assert!(styles.contains(".ops-commandbar"));
-    assert!(styles.contains(".status-tile"));
-    assert!(styles.contains(".status-segment-list"));
-    assert!(styles.contains(".status-segment.ok"));
-    assert!(styles.contains(".status-segment.warn"));
-    assert!(styles.contains(".status-segment.muted"));
-    assert!(styles.contains(".memory-overview-header"));
-    assert!(styles.contains(".memory-activity-wave"));
-    assert!(styles.contains(".memory-activity-wave[data-active=\"true\"]"));
+    for shell_style_contract in [
+        ".ops-shell",
+        "grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr);",
+        "grid-template-columns: var(--workspace-sidebar-collapsed-width) minmax(0, 1fr);",
+        "height: 100vh;",
+        ".ops-workspace",
+        "min-height: 0;",
+        ".ops-screen",
+        "overflow-y: auto;",
+        ".ops-commandbar",
+        "--workspace-theme-background: url(\"./assets/workspace-dark.jpg\");",
+        "--workspace-theme-background: url(\"./assets/workspace-light.jpg\");",
+        "background-image: var(--workspace-theme-background);",
+    ] {
+        assert!(
+            workspace.contains(shell_style_contract),
+            "workspace is missing shell style contract: {shell_style_contract}"
+        );
+    }
     assert!(styles.contains(".toast-wrap"));
-    assert!(styles.contains(".status-action-tile .status-segment-list"));
     assert!(app_tsx.contains("notifyIfNeedsAttention"));
     assert!(app_tsx.contains("role=\"dialog\""));
     assert!(app_tsx.contains("aria-modal=\"true\""));
@@ -2578,7 +2760,7 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
     assert!(app_tsx.contains(
         "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);"
     ));
-    assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy ? \"写入中...\" : devModeConfigured ? \"已写入\" : \"写入开发配置\";"));
+    assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy\n    ? \"写入中...\"\n    : devModeConfigured\n      ? \"开发模式已写入\"\n      : \"写入开发模式\";"));
     assert!(
         app_tsx.contains(
             "afterFirstPaintIfFresh(() => {\n        void refreshMemoryAssistStatus(true);"
@@ -4573,4 +4755,58 @@ fn provider_sync_keeps_rollout_contents_on_disk_instead_of_memory() {
     assert!(!change.contains("next_text"));
     assert!(source.contains("backup_dir.join(\"session-files\")"));
     assert!(source.contains("fs::read_to_string(&change.path)"));
+}
+
+#[test]
+fn manager_liquid_glass_shell_uses_real_update_state_and_keeps_dense_content_opaque() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app = read_frontend_file("App.tsx");
+    let shell = read_frontend_file("components/AppShell.tsx");
+    let workspace = read_frontend_file("workspace.css");
+    let update_control = shell
+        .find("className={`ops-update-control")
+        .expect("topbar update control");
+    let codex_action = shell
+        .find("title=\"启动或重启 Codex\"")
+        .expect("Codex topbar action");
+
+    assert!(shell.contains("updateInfo?.updateAvailable === true"));
+    assert!(shell.contains("onInstallUpdate"));
+    assert!(shell.contains("updateProgressLabel(updatePhase, updatePercent)"));
+    assert!(shell.contains("formatDownloadBytes(updateInfo.downloadedBytes)"));
+    assert!(shell.contains("role=\"progressbar\""));
+    assert!(shell.contains("className={`ops-runtime-chip supplier ${proxyHealth}`}"));
+    assert!(!shell.contains("ops-runtime-chip health"));
+    assert!(!shell.contains("[\"all\", \"全部\"]"));
+    assert!(shell.contains("supportedThemeBackground ? \" has-custom-background\" : \"\""));
+    assert!(shell.contains("className=\"ops-shell-background\""));
+    assert!(shell.contains("src={supportedThemeBackground}"));
+    assert!(!shell.contains("const shellStyle"));
+    assert!(shell.contains("className=\"ops-supplier-name\""));
+    assert!(shell.contains("className=\"ops-supplier-current\">· 当前</span>"));
+    assert!(update_control < codex_action);
+    assert!(app.contains("actions.performUpdate(updateInfoToRelease(updateInfo))"));
+    assert!(app.contains("if (updateCheckEpochRef.current === 0) void checkUpdate(true)"));
+
+    assert!(workspace.contains("--workspace-sidebar-width: 208px"));
+    assert!(workspace.contains("--workspace-sidebar-collapsed-width: 56px"));
+    assert!(!workspace.contains("width: min(100%, 2200px)"));
+    assert!(!workspace.contains("transform: scale(1.035)"));
+    assert!(workspace.contains("./assets/workspace-dark.jpg"));
+    assert!(workspace.contains("./assets/workspace-light.jpg"));
+    assert!(workspace.contains(".ops-update-trigger"));
+    assert!(workspace.contains(".ops-runtime-chip.supplier.healthy .ops-runtime-dot"));
+    assert!(workspace.contains(".ops-supplier-current"));
+    assert!(workspace.contains(".ops-shell.has-custom-background::before"));
+    assert!(workspace.contains(".ops-shell-background"));
+    assert!(workspace.contains("object-fit: cover"));
+    assert!(workspace.contains("grid-template-rows: auto minmax(0, 1fr) auto"));
+    assert!(workspace.contains("scrollbar-gutter: stable"));
+    assert!(workspace.contains("background: transparent"));
+    assert!(workspace.contains("--workspace-opaque-surface"));
+    assert!(!workspace.contains("repeating-linear-gradient"));
+
+    let assets = manifest_dir.parent().unwrap().join("src/assets");
+    assert!(assets.join("workspace-dark.jpg").is_file());
+    assert!(assets.join("workspace-light.jpg").is_file());
 }

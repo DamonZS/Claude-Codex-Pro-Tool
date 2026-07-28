@@ -44,3 +44,38 @@ license, and notice. Upstream Renderer injection, CDP control, installers, and
 remote loading code are intentionally excluded. Importing a package does not
 apply it automatically or change Provider, model, credential, localization,
 input, menu, or session settings.
+
+## Optional Manager background
+
+A theme package can also provide the environment background used behind the
+CCP Manager liquid-glass shell. Add the local image to `assets`, then map it in
+`asset_variables`:
+
+```json
+{
+  "assets": [
+    "theme.css",
+    "manager-background.webp"
+  ],
+  "asset_variables": {
+    "--ccp-theme-manager-background": "manager-background.webp"
+  }
+}
+```
+
+`--ccp-theme-manager-background` has priority. Existing packages that only
+declare `--ccp-theme-art` remain compatible and use that image for both Codex
+and the Manager. The Manager consumes only the validated local image data URI;
+it does not execute the package's Codex Renderer CSS, classes, or attributes.
+
+Use an image of at least 1920x1080; 3840x2160 WebP or JPEG remains recommended
+for high-DPI displays. PNG, JPEG, and WebP are accepted, but each file must
+remain under 8 MB and the complete package under 32 MB. Keep important content
+away from the edges because the Manager uses a centered `cover` crop at
+different window sizes. If the variable is absent or invalid, the built-in
+light or dark Manager background is used automatically.
+
+Users can also choose **Theme Center > Set background** without editing a
+theme package. That local override has the highest priority and is stored in
+CCP's theme state directory; **Restore theme background** removes only the
+override and falls back to the active theme variable or the built-in image.

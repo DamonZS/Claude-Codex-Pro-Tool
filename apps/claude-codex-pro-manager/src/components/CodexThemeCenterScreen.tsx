@@ -2,6 +2,7 @@ import {
   Check,
   FolderOpen,
   Image as ImageIcon,
+  ImagePlus,
   LoaderCircle,
   Palette,
   Plus,
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import type { AppActions } from "@/lib/actions";
 import { statusOk } from "@/lib/helpers";
 import type {
+  CodexThemeBackgroundResult,
   CodexThemeListResult,
   CodexThemeOperationState,
   CodexThemeSummary,
@@ -21,6 +23,7 @@ import type {
 
 type CodexThemeCenterScreenProps = {
   actions: AppActions;
+  background: CodexThemeBackgroundResult | null;
   operation: CodexThemeOperationState | null;
   themes: CodexThemeListResult | null;
 };
@@ -35,7 +38,17 @@ function operationLabel(operation: CodexThemeOperationState | null) {
   if (!operation) return "";
   if (operation.kind === "import") return "正在验证并保存主题";
   if (operation.kind === "restore") return "正在恢复默认主题";
+  if (operation.kind === "background") return "正在校验并应用背景";
+  if (operation.kind === "clear-background") return "正在恢复主题背景";
   return "正在应用主题";
+}
+
+function backgroundSourceLabel(background: CodexThemeBackgroundResult | null) {
+  if (!background || !statusOk(background.status)) return "正在读取";
+  if (background.user_override) return "自定义背景";
+  if (background.source_variable === "--ccp-theme-manager-background") return "当前主题专用背景";
+  if (background.source_variable === "--ccp-theme-art") return "当前主题视觉资源";
+  return "CCP 内置背景";
 }
 
 function ThemePreview({ theme }: { theme: CodexThemeSummary }) {
@@ -102,7 +115,7 @@ function ThemeCard({
   );
 }
 
-export function CodexThemeCenterScreen({ actions, operation, themes }: CodexThemeCenterScreenProps) {
+export function CodexThemeCenterScreen({ actions, background, operation, themes }: CodexThemeCenterScreenProps) {
   const themeItems = themes?.themes ?? [];
   const orderedThemes = [...themeItems].sort((left, right) => {
     if (left.builtin !== right.builtin) return left.builtin ? -1 : 1;
@@ -154,6 +167,48 @@ export function CodexThemeCenterScreen({ actions, operation, themes }: CodexThem
         <span>默认主题固定在第一张卡片</span>
         {operation ? <span className="codex-theme-operation"><LoaderCircle className="spin" aria-hidden="true" />{operationLabel(operation)}</span> : null}
       </div>
+
+      <section className="codex-manager-background" aria-labelledby="codex-manager-background-title">
+        <div className={`codex-manager-background-preview${background?.data_uri ? " has-image" : ""}`}>
+          {background?.data_uri ? (
+            <img src={background.data_uri} alt="当前管理工具背景预览" />
+          ) : (
+            <span>
+              <ImageIcon aria-hidden="true" />
+              <small>CCP</small>
+            </span>
+          )}
+        </div>
+        <div className="codex-manager-background-copy">
+          <span className="codex-manager-background-kicker">Manager / 环境背景</span>
+          <h2 id="codex-manager-background-title">管理工具高清背景</h2>
+          <p>PNG、JPEG 或 WebP，至少 1920 x 1080，最大 16 MB。</p>
+          <div className="codex-manager-background-meta">
+            <span>{backgroundSourceLabel(background)}</span>
+            {background?.width && background?.height ? <span>{background.width} x {background.height}</span> : null}
+            {background?.mime_type ? <span>{background.mime_type.replace("image/", "").toUpperCase()}</span> : null}
+          </div>
+        </div>
+        <div className="codex-manager-background-actions">
+          <Button
+            type="button"
+            disabled={Boolean(operation)}
+            onClick={() => void actions.setCodexManagerBackground()}
+          >
+            {operation?.kind === "background" ? <LoaderCircle className="spin" aria-hidden="true" /> : <ImagePlus aria-hidden="true" />}
+            设置背景
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={Boolean(operation) || !background?.user_override}
+            onClick={() => void actions.clearCodexManagerBackground()}
+          >
+            {operation?.kind === "clear-background" ? <LoaderCircle className="spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}
+            恢复主题背景
+          </Button>
+        </div>
+      </section>
 
       {loading ? (
         <div className="codex-theme-state" role="status">

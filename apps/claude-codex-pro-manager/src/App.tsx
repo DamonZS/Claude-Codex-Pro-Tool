@@ -184,6 +184,7 @@ import type {
   CodexPluginMarketplaceRepairResult,
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
+  CodexThemeBackgroundResult,
   CodexThemeImportResult,
   CodexThemeListResult,
   CodexThemeOperationResult,
@@ -237,6 +238,7 @@ import type {
   ProviderSyncResult,
   RelayProfile,
   RelayProfileModelsResult,
+  RelayProfileTestResult,
   RepairConnectionResult,
   Route,
   ScriptMarketResult,
@@ -256,7 +258,7 @@ import type {
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => initialRoute());
-  const [agentScope, setAgentScope] = useState<AgentScope>("all");
+  const [agentScope, setAgentScope] = useState<AgentScope>("codex");
   const [supplierFocusProfileId, setSupplierFocusProfileId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string; status?: Status } | null>(null);
   const [busyCount, setBusyCount] = useState(0);
@@ -313,6 +315,7 @@ export function App() {
   const [claudeContextEntries, setClaudeContextEntries] = useState<ClaudeContextEntriesResult | null>(null);
   const [unifiedToolInventory, setUnifiedToolInventory] = useState<UnifiedToolInventoryResult | null>(null);
   const [codexThemes, setCodexThemes] = useState<CodexThemeListResult | null>(null);
+  const [codexThemeBackground, setCodexThemeBackground] = useState<CodexThemeBackgroundResult | null>(null);
   const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
   const [systemPrompts, setSystemPrompts] = useState<SystemPromptResult | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
@@ -328,6 +331,8 @@ export function App() {
   const memorySearchRequestRef = useRef(0);
   const updateDownloadActiveRef = useRef(false);
   const updateCheckEpochRef = useRef(0);
+  const startupUpdateCheckStartedRef = useRef(false);
+  const startupThemeBackgroundLoadedRef = useRef(false);
 
   const updateSettingsDraft = useCallback((next: SetStateAction<BackendSettings | null>) => {
     settingsDraftRevisionRef.current += 1;
@@ -1004,6 +1009,15 @@ export function App() {
     return result;
   };
 
+  useEffect(() => {
+    if (startupUpdateCheckStartedRef.current) return;
+    startupUpdateCheckStartedRef.current = true;
+    const timeout = window.setTimeout(() => {
+      if (updateCheckEpochRef.current === 0) void checkUpdate(true);
+    }, 900);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
   const writeUiEvent = async (event: string, detail: Record<string, unknown> = {}) => {
     try {
       await call<CommandResult<Record<string, unknown>>>("write_diagnostic_event", { event, detail });
@@ -1156,6 +1170,22 @@ export function App() {
     return result;
   };
 
+  const refreshCodexThemeBackground = async () => {
+    const result = await run(
+      () => call<CodexThemeBackgroundResult>("load_codex_theme_background"),
+      "Codex 主题背景",
+      { trackBusy: false, notify: false },
+    );
+    setCodexThemeBackground(result && statusOk(result.status) ? result : null);
+    return result;
+  };
+
+  useEffect(() => {
+    if (startupThemeBackgroundLoadedRef.current) return;
+    startupThemeBackgroundLoadedRef.current = true;
+    void refreshCodexThemeBackground();
+  }, []);
+
   const importCodexTheme = async (sourceKind: "zip" | "directory") => {
     const selected = await open(sourceKind === "zip"
       ? {
@@ -1189,7 +1219,9 @@ export function App() {
       }
       if (result) {
         notifyResult({ title: "Codex 涓婚", message: result.message, status: result.status });
-        if (statusOk(result.status)) await refreshCodexThemes(true);
+        if (statusOk(result.status)) {
+          await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
+        }
       }
       return result;
     } finally {
@@ -1206,7 +1238,9 @@ export function App() {
       );
       if (result) {
         notifyResult({ title: "应用 Codex 主题", message: result.message, status: result.status });
-        if (statusOk(result.status)) await refreshCodexThemes(true);
+        if (statusOk(result.status)) {
+          await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
+        }
       }
     } finally {
       setCodexThemeOperation(null);
@@ -1223,8 +1257,54 @@ export function App() {
       );
       if (result) {
         notifyResult({ title: "恢复 Codex 默认主题", message: result.message, status: result.status });
-        if (statusOk(result.status)) await refreshCodexThemes(true);
+        if (statusOk(result.status)) {
+          await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
+        }
       }
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const setCodexManagerBackground = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "设置管理工具背景",
+      filters: [{ name: "高清图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+    if (!sourcePath) return null;
+
+    setCodexThemeOperation({ kind: "background" });
+    try {
+      const result = await run(
+        () => call<CodexThemeBackgroundResult>("set_codex_manager_background", { sourcePath }),
+        "设置管理工具背景",
+      );
+      if (result) {
+        notifyResult({ title: "管理工具背景", message: result.message, status: result.status });
+        if (statusOk(result.status)) setCodexThemeBackground(result);
+      }
+      return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const clearCodexManagerBackground = async () => {
+    if (!window.confirm("确认恢复当前主题背景？已选择的管理工具背景会被移除。")) return null;
+    setCodexThemeOperation({ kind: "clear-background" });
+    try {
+      const result = await run(
+        () => call<CodexThemeBackgroundResult>("clear_codex_manager_background"),
+        "恢复主题背景",
+      );
+      if (result) {
+        notifyResult({ title: "管理工具背景", message: result.message, status: result.status });
+        if (statusOk(result.status)) setCodexThemeBackground(result);
+      }
+      return result;
     } finally {
       setCodexThemeOperation(null);
     }
@@ -1562,6 +1642,11 @@ export function App() {
   const goMemoryAssist = async () => {
     setRoute("sessions");
     await refreshRoute("sessions");
+  };
+
+  const goSupplierProfile = async (profileId?: string | null) => {
+    setSupplierFocusProfileId(profileId ?? null);
+    setRoute("supplier");
   };
 
   const repairEntrypoints = async () => {
@@ -1902,6 +1987,17 @@ export function App() {
     return result;
   };
 
+  const testRelayProfile = async (profile: RelayProfile) => {
+    const result = await run(
+      () => call<RelayProfileTestResult>("test_relay_profile", { profile }),
+      "测试供应商连接",
+    );
+    if (result) {
+      notifyResult({ title: "测试供应商连接", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
   const importCcswitchCodexProviders = async () => {
     const result = await run(() => call<CcswitchImportResult>("import_ccswitch_codex_providers"), "CC-switch 导入");
     if (result) {
@@ -2048,6 +2144,9 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void refreshClaudeZhPatch(true);
       }, 650);
+      afterFirstPaintIfFresh(() => {
+        void refreshLogs(true);
+      }, 900);
     } else if (target === "settings") {
       await refreshSettings(true);
       afterFirstPaintIfFresh(() => {
@@ -2061,7 +2160,7 @@ export function App() {
         void Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeZhPatch(true)]);
       }, 250);
     } else if (target === "themes") {
-      await refreshCodexThemes(true);
+      await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
     } else if (target === "prompts") {
       await refreshSystemPrompts(true);
     } else if (target === "tools") {
@@ -2175,6 +2274,8 @@ export function App() {
       importCodexTheme,
       applyCodexTheme,
       restoreCodexDefaultTheme,
+      setCodexManagerBackground,
+      clearCodexManagerBackground,
       refreshSystemPrompts,
       saveSystemPrompt,
       importSystemPrompt,
@@ -2185,6 +2286,7 @@ export function App() {
       openExternalUrl,
       goPluginHub,
       goMemoryAssist,
+      goSupplierProfile,
       previewPlugin,
       installPlugin,
       uninstallPlugin,
@@ -2242,6 +2344,7 @@ export function App() {
       clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
       switchCodexRelayProfile,
       switchSupplierProfile,
+      testRelayProfile,
       fetchRelayProfileModels,
       importCcswitchCodexProviders,
       diagnoseCodexCredentialEnvironment,
@@ -2287,6 +2390,8 @@ export function App() {
       importCodexTheme: (...args) => actionsRef.current!.importCodexTheme(...args),
       applyCodexTheme: (...args) => actionsRef.current!.applyCodexTheme(...args),
       restoreCodexDefaultTheme: (...args) => actionsRef.current!.restoreCodexDefaultTheme(...args),
+      setCodexManagerBackground: (...args) => actionsRef.current!.setCodexManagerBackground(...args),
+      clearCodexManagerBackground: (...args) => actionsRef.current!.clearCodexManagerBackground(...args),
       refreshSystemPrompts: (...args) => actionsRef.current!.refreshSystemPrompts(...args),
       saveSystemPrompt: (...args) => actionsRef.current!.saveSystemPrompt(...args),
       importSystemPrompt: (...args) => actionsRef.current!.importSystemPrompt(...args),
@@ -2297,6 +2402,7 @@ export function App() {
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
       goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
+      goSupplierProfile: (...args) => actionsRef.current!.goSupplierProfile(...args),
       previewPlugin: (...args) => actionsRef.current!.previewPlugin(...args),
       installPlugin: (...args) => actionsRef.current!.installPlugin(...args),
       uninstallPlugin: (...args) => actionsRef.current!.uninstallPlugin(...args),
@@ -2354,6 +2460,7 @@ export function App() {
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
       switchCodexRelayProfile: (...args) => actionsRef.current!.switchCodexRelayProfile(...args),
       switchSupplierProfile: (...args) => actionsRef.current!.switchSupplierProfile(...args),
+      testRelayProfile: (...args) => actionsRef.current!.testRelayProfile(...args),
       fetchRelayProfileModels: (...args) => actionsRef.current!.fetchRelayProfileModels(...args),
       importCcswitchCodexProviders: (...args) => actionsRef.current!.importCcswitchCodexProviders(...args),
       diagnoseCodexCredentialEnvironment: (...args) => actionsRef.current!.diagnoseCodexCredentialEnvironment(...args),
@@ -2392,6 +2499,18 @@ export function App() {
   const shellActiveProfile = shellSettings?.relayProfiles.find((profile) => profile.id === shellActiveProfileId)
     ?? shellSettings?.relayProfiles.find((profile) => profile.id === shellSettings?.activeRelayId)
     ?? null;
+  const shellSupplierOptions = (shellSettings?.relayProfiles ?? [])
+    .filter((profile) => {
+      const targetApp = profile.targetApp || "codex";
+      return agentScope === "codex"
+        ? targetApp === "codex"
+        : targetApp === "claude" || targetApp === "claude-desktop";
+    })
+    .map((profile) => ({
+      id: profile.id,
+      name: profile.name || profile.id,
+      targetApp: profile.targetApp || "codex" as const,
+    }));
   const shellProxyHealth: ProxyHealth = overview?.latest_launch?.helper_port_online
     ? "healthy"
     : overview?.latest_launch?.frontend_runtime_online
@@ -2403,21 +2522,31 @@ export function App() {
   return (
     <>
       <AppShell
+        activeSupplierId={shellActiveProfile?.id ?? null}
         activeSupplierName={shellActiveProfile?.name || shellActiveProfile?.id || "未选择供应商"}
         agentScope={agentScope}
         busy={busy}
+        codexThemeBackground={codexThemeBackground?.data_uri ?? null}
         onAgentScopeChange={setAgentScope}
         onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}
+        onInstallUpdate={() => void actions.performUpdate(updateInfoToRelease(updateInfo))}
         onLaunchClaude={() => void actions.launchClaudeDesktop()}
         onNavigate={(nextRoute) => {
           if (nextRoute !== "supplier") setSupplierFocusProfileId(null);
           setRoute(nextRoute);
         }}
         onRestartCodex={() => void actions.restartCodex()}
+        onSelectSupplier={(profileId) => {
+          const profile = shellSettings?.relayProfiles.find((item) => item.id === profileId);
+          if (!profile || !shellSettings) return;
+          void actions.switchSupplierProfile(profile.targetApp || "codex", profileId, shellSettings);
+        }}
         proxyHealth={shellProxyHealth}
         route={route}
+        supplierOptions={shellSupplierOptions}
+        updateInfo={updateInfo}
       >
-          {route === "overview" ? <OverviewScreen actions={actions} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} memoryAssist={memoryAssist} memoryItems={memoryItems} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} logs={logs} memoryAssist={memoryAssist} memoryItems={memoryItems} onAgentScopeChange={setAgentScope} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -2446,6 +2575,7 @@ export function App() {
           {route === "themes" ? (
             <CodexThemeCenterScreen
               actions={actions}
+              background={codexThemeBackground}
               operation={codexThemeOperation}
               themes={codexThemes}
             />

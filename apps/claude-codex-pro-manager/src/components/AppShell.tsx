@@ -1,9 +1,13 @@
 import {
+  ArrowDownToLine,
   Check,
+  ChevronDown,
   ChevronRight,
+  CircleCheck,
   Command,
   Laptop,
   Languages,
+  LoaderCircle,
   MessageCircle,
   Moon,
   PanelLeftClose,
@@ -11,11 +15,19 @@ import {
   Rocket,
   Search,
   Sun,
+  TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
-import brandLogo from "../../../../assets/images/claude-codex-pro.png";
 import {
   primaryRoute,
   routeBreadcrumb,
@@ -25,24 +37,36 @@ import {
   routes,
   routeSubtitle,
 } from "@/lib/routes";
-import type { Route } from "@/types";
+import { formatDownloadBytes, updateProgressLabel } from "@/lib/update";
+import type { Route, SupplierTargetApp, UpdateResult } from "@/types";
 
-export type AgentScope = "all" | "codex" | "claude";
+export type AgentScope = "codex" | "claude";
 export type ThemePreference = "system" | "light" | "dark";
 export type ProxyHealth = "healthy" | "attention" | "offline" | "unknown";
+export type ShellSupplierOption = {
+  id: string;
+  name: string;
+  targetApp: SupplierTargetApp;
+};
 
 type AppShellProps = {
+  activeSupplierId: string | null;
   activeSupplierName: string;
   agentScope: AgentScope;
   busy: boolean;
   children: ReactNode;
+  codexThemeBackground: string | null;
   onAgentScopeChange: (scope: AgentScope) => void;
   onInstallClaudeZhPatch: () => void;
+  onInstallUpdate: () => void;
   onLaunchClaude: () => void;
   onNavigate: (route: Route) => void;
   onRestartCodex: () => void;
+  onSelectSupplier: (profileId: string) => void;
   proxyHealth: ProxyHealth;
   route: Route;
+  supplierOptions: ShellSupplierOption[];
+  updateInfo: UpdateResult | null;
 };
 
 const THEME_STORAGE_KEY = "ccp-manager-theme";
@@ -78,22 +102,29 @@ function healthCopy(health: ProxyHealth) {
 }
 
 export function AppShell({
+  activeSupplierId,
   activeSupplierName,
   agentScope,
   busy,
   children,
+  codexThemeBackground,
   onAgentScopeChange,
   onInstallClaudeZhPatch,
+  onInstallUpdate,
   onLaunchClaude,
   onNavigate,
   onRestartCodex,
+  onSelectSupplier,
   proxyHealth,
   route,
+  supplierOptions,
+  updateInfo,
 }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPreference);
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [supplierMenuOpen, setSupplierMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
@@ -101,10 +132,33 @@ export function AppShell({
   const commandPaletteRef = useRef<HTMLElement | null>(null);
   const commandReturnFocusRef = useRef<HTMLElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const supplierMenuRef = useRef<HTMLDivElement | null>(null);
   const resolvedTheme = themePreference === "system" ? (systemDark ? "dark" : "light") : themePreference;
   const activePrimaryRoute = primaryRoute(route);
   const breadcrumbs = routeBreadcrumb(route);
   const domainTabs = routeDomainTabs(route);
+  const updateAvailable = updateInfo?.updateAvailable === true;
+  const updatePhase = updateInfo?.phase ?? "ready";
+  const updateRunning = updateInfo?.status === "running" && updatePhase !== "checking";
+  const updateComplete = updatePhase === "complete" || updateInfo?.launched === true;
+  const updateFailed = updatePhase === "failed";
+  const updatePercent = Math.max(0, Math.min(100, updateInfo?.progress ?? 0));
+  const currentVersion = updateInfo?.currentVersion?.trim() || "未知";
+  const latestVersion = updateInfo?.latestVersion?.trim() || "未知";
+  const updateStatus = updateRunning
+    ? updateProgressLabel(updatePhase, updatePercent)
+    : updateComplete
+      ? "安装程序已启动"
+      : updateFailed
+        ? "更新失败，点击重试"
+        : "有可用更新";
+  const supportedThemeBackground = codexThemeBackground && [
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/webp;base64,",
+  ].some((prefix) => codexThemeBackground.startsWith(prefix))
+    ? codexThemeBackground
+    : null;
 
   const commandItems = useMemo(() => {
     const query = commandQuery.trim().toLocaleLowerCase("zh-CN");
@@ -167,6 +221,7 @@ export function AppShell({
       } else if (event.key === "Escape") {
         if (commandOpen) closeCommand();
         setThemeMenuOpen(false);
+        setSupplierMenuOpen(false);
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -192,6 +247,15 @@ export function AppShell({
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [themeMenuOpen]);
+
+  useEffect(() => {
+    if (!supplierMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!supplierMenuRef.current?.contains(event.target as Node)) setSupplierMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [supplierMenuOpen]);
 
   const navigate = (nextRoute: Route) => {
     if (commandOpen) closeCommand();
@@ -231,13 +295,25 @@ export function AppShell({
   };
 
   return (
-    <div className={`ops-shell ${resolvedTheme}${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`} data-theme-preference={themePreference}>
+    <div
+      className={`ops-shell ${resolvedTheme}${sidebarCollapsed ? " is-sidebar-collapsed" : ""}${supportedThemeBackground ? " has-custom-background" : ""}`}
+      data-theme-preference={themePreference}
+    >
+      {supportedThemeBackground ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className="ops-shell-background"
+          draggable={false}
+          src={supportedThemeBackground}
+        />
+      ) : null}
       <aside className="ops-rail" aria-label="一级导航">
         <button className="ops-brand" onClick={() => navigate("overview")} title="CCP 概览" type="button">
-          <img alt="" aria-hidden="true" src={brandLogo} />
+          <span aria-hidden="true" className="ops-brand-mark">CCP</span>
           <span className="ops-brand-copy">
-            <strong>CCP</strong>
-            <small>AI 运维控制台</small>
+            <strong>Control Plane</strong>
+            <small>Local AI Operations</small>
           </span>
         </button>
 
@@ -305,58 +381,161 @@ export function AppShell({
 
       <main className="ops-workspace">
         <header className="ops-topbar" data-tauri-drag-region>
-          <div className="ops-breadcrumb" aria-label="当前位置">
-            {breadcrumbs.map((item, index) => (
-              <span key={`${item}-${index}`}>
-                {index ? <ChevronRight aria-hidden="true" className="h-3 w-3" /> : null}
-                <span>{item}</span>
-              </span>
-            ))}
-          </div>
-
-          <div className="ops-agent-scope" aria-label="Agent 范围" role="group">
-            {([
-              ["all", "全部"],
-              ["codex", "Codex"],
-              ["claude", "Claude"],
-            ] as const).map(([value, label]) => (
-              <button aria-pressed={agentScope === value} className={agentScope === value ? "active" : ""} key={value} onClick={() => onAgentScopeChange(value)} type="button">
-                {label}
-              </button>
-            ))}
-          </div>
+          {route === "overview" ? (
+            <div className="ops-overview-heading">
+              <strong>运维概览</strong>
+              <small>供应商、路由与 Agent 运行态</small>
+            </div>
+          ) : (
+            <div className="ops-breadcrumb" aria-label="当前位置">
+              {breadcrumbs.map((item, index) => (
+                <span key={`${item}-${index}`}>
+                  {index ? <ChevronRight aria-hidden="true" className="h-3 w-3" /> : null}
+                  <span>{item}</span>
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="ops-commandbar">
-            <button className="ops-command-search" onClick={openCommand} type="button">
-              <Search aria-hidden="true" className="h-4 w-4" />
-              <span>搜索页面与命令</span>
-              <kbd><Command aria-hidden="true" className="h-3 w-3" />K</kbd>
-            </button>
-            <div className="ops-runtime-chip supplier" title={`当前供应商：${activeSupplierName}`}>
-              <span className="ops-runtime-dot" />
-              <span>{activeSupplierName}</span>
+            <div className="ops-command-context">
+              <div className="ops-agent-scope" aria-label="Agent 范围" role="group">
+                {([
+                  ["codex", "Codex"],
+                  ["claude", "Claude"],
+                ] as const).map(([value, label]) => (
+                  <button aria-pressed={agentScope === value} className={agentScope === value ? "active" : ""} key={value} onClick={() => onAgentScopeChange(value)} type="button">
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button className="ops-command-search" onClick={openCommand} type="button">
+                <Search aria-hidden="true" className="h-4 w-4" />
+                <span>搜索页面与命令</span>
+                <kbd><Command aria-hidden="true" className="h-3 w-3" />K</kbd>
+              </button>
+              <div className="ops-supplier-control" ref={supplierMenuRef}>
+                <button
+                  aria-expanded={supplierMenuOpen}
+                  aria-haspopup="menu"
+                  className={`ops-runtime-chip supplier ${proxyHealth}`}
+                  disabled={busy || supplierOptions.length === 0}
+                  onClick={() => setSupplierMenuOpen((open) => !open)}
+                  title={`当前供应商：${activeSupplierName}；${healthCopy(proxyHealth)}`}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="ops-runtime-dot" />
+                  <span className="ops-supplier-name">{activeSupplierName}</span>
+                  <span className="ops-supplier-current">· 当前</span>
+                  <ChevronDown aria-hidden="true" />
+                </button>
+                {supplierMenuOpen ? (
+                  <div className="ops-supplier-menu" role="menu" aria-label="切换当前供应商">
+                    <header>
+                      <strong>当前供应商</strong>
+                      <small>{agentScope === "claude" ? "Claude" : "Codex"}</small>
+                    </header>
+                    <div>
+                      {supplierOptions.map((option) => {
+                        const selected = option.id === activeSupplierId;
+                        return (
+                          <button
+                            aria-checked={selected}
+                            key={option.id}
+                            onClick={() => {
+                              setSupplierMenuOpen(false);
+                              if (!selected) onSelectSupplier(option.id);
+                            }}
+                            role="menuitemradio"
+                            type="button"
+                          >
+                            <span>
+                              <strong>{option.name}</strong>
+                              <small>{option.targetApp === "claude-desktop" ? "Claude Desktop" : option.targetApp === "claude" ? "Claude" : "Codex"}</small>
+                            </span>
+                            {selected ? <Check aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button className="ops-supplier-manage" onClick={() => { setSupplierMenuOpen(false); navigate("supplier"); }} type="button">
+                      管理供应商
+                      <ChevronRight aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <div className={`ops-runtime-chip health ${proxyHealth}`} title={healthCopy(proxyHealth)}>
-              <span className="ops-runtime-dot" />
-              <span>{healthCopy(proxyHealth)}</span>
+            <div className="ops-command-actions">
+              {updateAvailable ? (
+              <div className={`ops-update-control${updateRunning ? " is-running" : ""}${updateComplete ? " is-complete" : ""}${updateFailed ? " is-failed" : ""}`}>
+                <button
+                  aria-busy={updateRunning}
+                  aria-describedby="ops-update-popover"
+                  aria-label={`${updateStatus}，${latestVersion}`}
+                  className="ops-update-trigger"
+                  disabled={busy || updateRunning}
+                  onClick={onInstallUpdate}
+                  type="button"
+                >
+                  {updateRunning ? (
+                    <LoaderCircle aria-hidden="true" className="spin" strokeWidth={3} />
+                  ) : updateComplete ? (
+                    <CircleCheck aria-hidden="true" strokeWidth={3} />
+                  ) : updateFailed ? (
+                    <TriangleAlert aria-hidden="true" strokeWidth={3} />
+                  ) : (
+                    <ArrowDownToLine aria-hidden="true" strokeWidth={3} />
+                  )}
+                </button>
+                <div className="ops-update-popover" id="ops-update-popover" role="status" aria-live="polite">
+                  <header>
+                    <span>
+                      <strong>发现 CCP 更新</strong>
+                      <small>{currentVersion} → {latestVersion}</small>
+                    </span>
+                    <em>{updateRunning ? `${Math.round(updatePercent)}%` : updateComplete ? "DONE" : "NEW"}</em>
+                  </header>
+                  <p>{updateInfo.releaseSummary?.trim() || "新版本已就绪，可直接下载并启动安装程序。"}</p>
+                  <div className="ops-update-meta">
+                    <span>{updateStatus}</span>
+                    {updateRunning ? (
+                      <span>{formatDownloadBytes(updateInfo.downloadedBytes)} / {formatDownloadBytes(updateInfo.totalBytes)}</span>
+                    ) : null}
+                  </div>
+                  {updateRunning ? (
+                    <div
+                      aria-label="更新下载进度"
+                      aria-valuemax={100}
+                      aria-valuemin={0}
+                      aria-valuenow={Math.round(updatePercent)}
+                      className="ops-update-progress"
+                      role="progressbar"
+                    >
+                      <span style={{ width: `${updatePercent}%` }} />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              ) : null}
+              <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onRestartCodex} title="启动或重启 Codex" type="button">
+                <Rocket aria-hidden="true" className="h-4 w-4" />
+                <span>启动/重启 Codex</span>
+              </button>
+              <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onLaunchClaude} title="启动或重启 Claude" type="button">
+                <MessageCircle aria-hidden="true" className="h-4 w-4" />
+                <span>启动/重启 Claude</span>
+              </button>
+              <button className="ops-icon-command ops-action-command ops-primary-command claude-zh-success" disabled={busy} onClick={onInstallClaudeZhPatch} title="写入 Claude 本机汉化资源" type="button">
+                <Languages aria-hidden="true" className="h-4 w-4" />
+                <span>Claude 一键汉化</span>
+              </button>
             </div>
-            <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onRestartCodex} title="启动或重启 Codex" type="button">
-              <Rocket aria-hidden="true" className="h-4 w-4" />
-              <span>启动/重启 Codex</span>
-            </button>
-            <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onLaunchClaude} title="启动或重启 Claude" type="button">
-              <MessageCircle aria-hidden="true" className="h-4 w-4" />
-              <span>启动/重启 Claude</span>
-            </button>
-            <button className="ops-icon-command ops-action-command ops-primary-command" disabled={busy} onClick={onInstallClaudeZhPatch} title="写入 Claude 本机汉化资源" type="button">
-              <Languages aria-hidden="true" className="h-4 w-4" />
-              <span>Claude 一键汉化</span>
-            </button>
           </div>
         </header>
 
-        <section className="ops-screen">
-          {route !== "prompts" ? (
+        <section className="ops-screen" data-route={route}>
+          {route !== "prompts" && route !== "overview" ? (
             <div className="ops-page-heading">
               <div>
                 <h1>{routeLabel(route)}</h1>

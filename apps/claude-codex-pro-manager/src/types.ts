@@ -495,6 +495,18 @@ export type CodexThemeListResult = CommandResult<{
   generation: number;
 }>;
 
+export type CodexThemeBackgroundResult = CommandResult<{
+  theme_id: string;
+  generation: number;
+  data_uri: string | null;
+  source_variable: string | null;
+  is_default: boolean;
+  width: number | null;
+  height: number | null;
+  mime_type: string | null;
+  user_override: boolean;
+}>;
+
 export type CodexThemeImportResult = CommandResult<CodexThemeSummary>;
 
 export type CodexThemeOperationResult = CommandResult<{
@@ -507,7 +519,7 @@ export type CodexThemeOperationResult = CommandResult<{
 }>;
 
 export type CodexThemeOperationState = {
-  kind: "import" | "apply" | "restore";
+  kind: "import" | "apply" | "restore" | "background" | "clear-background";
   themeId?: string;
 };
 
@@ -539,6 +551,12 @@ export type SystemPromptResult = CommandResult<{
   mode: SystemPromptMode | null;
   managed: boolean;
   externallyModified: boolean;
+}>;
+
+export type RelayProfileTestResult = CommandResult<{
+  httpStatus: number;
+  endpoint: string;
+  responsePreview: string;
 }>;
 
 export type SaveSystemPromptRequest = {
