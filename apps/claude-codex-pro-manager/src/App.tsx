@@ -185,6 +185,9 @@ import type {
   CodexPluginMarketplaceStatus,
   CodexPluginMarketplaceStatusResult,
   CodexThemeBackgroundResult,
+  CodexManagerBackgroundLibraryResult,
+  CodexThemeDiyBackgroundPreviewResult,
+  CodexThemeDiyInput,
   CodexThemeImportResult,
   CodexThemeListResult,
   CodexThemeOperationResult,
@@ -316,6 +319,7 @@ export function App() {
   const [unifiedToolInventory, setUnifiedToolInventory] = useState<UnifiedToolInventoryResult | null>(null);
   const [codexThemes, setCodexThemes] = useState<CodexThemeListResult | null>(null);
   const [codexThemeBackground, setCodexThemeBackground] = useState<CodexThemeBackgroundResult | null>(null);
+  const [codexManagerBackgrounds, setCodexManagerBackgrounds] = useState<CodexManagerBackgroundLibraryResult | null>(null);
   const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
   const [systemPrompts, setSystemPrompts] = useState<SystemPromptResult | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
@@ -1159,13 +1163,13 @@ export function App() {
   };
 
   const refreshCodexThemes = async (silent = false) => {
-    const result = await run(() => call<CodexThemeListResult>("list_codex_themes"), "Codex 涓婚", {
+    const result = await run(() => call<CodexThemeListResult>("list_codex_themes"), "Codex 主题", {
       trackBusy: !silent,
       notify: !silent,
     });
     if (result) {
       setCodexThemes(result);
-      if (!silent) notifyIfNeedsAttention({ title: "Codex 涓婚", message: result.message, status: result.status });
+      if (!silent) notifyIfNeedsAttention({ title: "Codex 主题", message: result.message, status: result.status });
     }
     return result;
   };
@@ -1180,6 +1184,16 @@ export function App() {
     return result;
   };
 
+  const refreshCodexManagerBackgrounds = async (silent = false) => {
+    const result = await run(
+      () => call<CodexManagerBackgroundLibraryResult>("list_codex_manager_backgrounds"),
+      "CCP 背景图库",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (result) setCodexManagerBackgrounds(result);
+    return result;
+  };
+
   useEffect(() => {
     if (startupThemeBackgroundLoadedRef.current) return;
     startupThemeBackgroundLoadedRef.current = true;
@@ -1191,13 +1205,13 @@ export function App() {
       ? {
           directory: false,
           multiple: false,
-          title: "瀵煎叆 Codex 涓婚 ZIP",
-          filters: [{ name: "ZIP 涓婚", extensions: ["zip"] }],
+          title: "导入 Codex 主题 ZIP",
+          filters: [{ name: "ZIP 主题", extensions: ["zip"] }],
         }
       : {
           directory: true,
           multiple: false,
-          title: "閫夋嫨 Codex 涓婚鐩綍",
+          title: "选择 Codex 主题目录",
         });
     const sourcePath = Array.isArray(selected) ? selected[0] : selected;
     if (!sourcePath) return null;
@@ -1206,24 +1220,135 @@ export function App() {
     try {
       let result = await run(
         () => call<CodexThemeImportResult>("import_codex_theme", { sourcePath, replaceExisting: false }),
-        "瀵煎叆 Codex 涓婚",
+        "导入 Codex 主题",
       );
       if (result && !statusOk(result.status) && result.message.includes("ID")) {
         const replace = window.confirm("该主题 ID 已存在，是否用导入版本替换并保留上一版本？");
         if (replace) {
           result = await run(
             () => call<CodexThemeImportResult>("import_codex_theme", { sourcePath, replaceExisting: true }),
-            "鏇挎崲 Codex 涓婚",
+            "替换 Codex 主题",
           );
         }
       }
       if (result) {
-        notifyResult({ title: "Codex 涓婚", message: result.message, status: result.status });
+        notifyResult({ title: "Codex 主题", message: result.message, status: result.status });
         if (statusOk(result.status)) {
           await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
         }
       }
       return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const selectCodexDiyThemeBackground = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "选择 DIY 主题背景",
+      filters: [{ name: "主题背景", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    return Array.isArray(selected) ? selected[0] ?? null : selected;
+  };
+
+  const previewCodexDiyThemeBackground = async (sourcePath: string) => run(
+    () => call<CodexThemeDiyBackgroundPreviewResult>("preview_codex_diy_theme_background", { sourcePath }),
+    "校验 DIY 主题背景",
+    { trackBusy: false, notify: false },
+  );
+
+  const loadCodexDiyThemeBackground = async (themeId: string) => run(
+    () => call<CodexThemeDiyBackgroundPreviewResult>("load_codex_diy_theme_background", { themeId }),
+    "读取 DIY 主题背景",
+    { trackBusy: false, notify: false },
+  );
+
+  const saveCodexDiyTheme = async (input: CodexThemeDiyInput, applyAfterSave: boolean) => {
+    const updatingCurrentTheme = Boolean(input.theme_id && codexThemes?.current_theme_id === input.theme_id);
+    setCodexThemeOperation({ kind: "diy-save", themeId: input.theme_id ?? undefined });
+    try {
+      const result = await run(
+        () => call<CodexThemeImportResult>("save_codex_diy_theme", { input }),
+        "保存 DIY Codex 主题",
+      );
+      if (!result) return null;
+      notifyResult({
+        title: "DIY Codex 主题",
+        message: statusOk(result.status) && updatingCurrentTheme && !applyAfterSave
+          ? `${result.message} 当前主题已更新，请重启 Codex 生效。`
+          : result.message,
+        status: result.status,
+      });
+      if (!statusOk(result.status)) return result;
+
+      let applied = false;
+      let completionResult = result;
+      if (applyAfterSave) {
+        const applyResult = await run(
+          () => call<CodexThemeOperationResult>("apply_codex_theme", { themeId: result.id }),
+          "应用 DIY Codex 主题",
+        );
+        if (applyResult) {
+          notifyResult({ title: "应用 DIY Codex 主题", message: applyResult.message, status: applyResult.status });
+          applied = statusOk(applyResult.status);
+        }
+        if (!applied) {
+          completionResult = {
+            ...result,
+            status: "partial",
+            message: `主题已保存到主题中心，但未能应用：${applyResult?.message || "应用命令未返回结果"}`,
+          };
+        }
+      }
+
+      await Promise.all([
+        refreshCodexThemes(true),
+        applied || updatingCurrentTheme ? refreshCodexThemeBackground() : Promise.resolve(null),
+      ]);
+      return completionResult;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const downloadCodexTheme = async (themeId: string) => {
+    setCodexThemeOperation({ kind: "download", themeId });
+    try {
+      const result = await run(
+        () => call<CodexThemeImportResult>("download_codex_theme", { themeId }),
+        "下载 Codex 主题",
+      );
+      if (result) {
+        notifyResult({ title: "下载 Codex 主题", message: result.message, status: result.status });
+        if (statusOk(result.status)) {
+          await refreshCodexThemes(true);
+        }
+      }
+      return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const deleteCodexTheme = async (themeId: string) => {
+    const theme = codexThemes?.themes.find((item) => item.id === themeId);
+    if (!theme || theme.builtin || theme.current) return;
+    if (!window.confirm(`确认删除主题“${theme.name}”？该主题及保留的上一版本都会被移除。`)) return;
+
+    setCodexThemeOperation({ kind: "delete", themeId });
+    try {
+      const result = await run(
+        () => call<CodexThemeOperationResult>("delete_codex_theme", { themeId }),
+        "删除 Codex 主题",
+      );
+      if (result) {
+        notifyResult({ title: "删除 Codex 主题", message: result.message, status: result.status });
+        if (statusOk(result.status)) {
+          await refreshCodexThemes(true);
+        }
+      }
     } finally {
       setCodexThemeOperation(null);
     }
@@ -1284,7 +1409,10 @@ export function App() {
       );
       if (result) {
         notifyResult({ title: "管理工具背景", message: result.message, status: result.status });
-        if (statusOk(result.status)) setCodexThemeBackground(result);
+        if (statusOk(result.status)) {
+          setCodexThemeBackground(result);
+          await refreshCodexManagerBackgrounds(true);
+        }
       }
       return result;
     } finally {
@@ -1293,7 +1421,7 @@ export function App() {
   };
 
   const clearCodexManagerBackground = async () => {
-    if (!window.confirm("确认恢复当前主题背景？已选择的管理工具背景会被移除。")) return null;
+    if (!window.confirm("确认恢复 CCP 默认背景？背景图库中的图片会继续保留。")) return null;
     setCodexThemeOperation({ kind: "clear-background" });
     try {
       const result = await run(
@@ -1302,7 +1430,48 @@ export function App() {
       );
       if (result) {
         notifyResult({ title: "管理工具背景", message: result.message, status: result.status });
-        if (statusOk(result.status)) setCodexThemeBackground(result);
+        if (statusOk(result.status)) {
+          setCodexThemeBackground(result);
+          await refreshCodexManagerBackgrounds(true);
+        }
+      }
+      return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const applyCodexManagerBackground = async (backgroundId: string) => {
+    setCodexThemeOperation({ kind: "background-apply", themeId: backgroundId });
+    try {
+      const result = await run(
+        () => call<CodexThemeBackgroundResult>("apply_codex_manager_background", { backgroundId }),
+        "切换 CCP 背景",
+      );
+      if (result) {
+        notifyResult({ title: "CCP 外观", message: result.message, status: result.status });
+        if (statusOk(result.status)) {
+          setCodexThemeBackground(result);
+          await refreshCodexManagerBackgrounds(true);
+        }
+      }
+      return result;
+    } finally {
+      setCodexThemeOperation(null);
+    }
+  };
+
+  const deleteCodexManagerBackground = async (backgroundId: string) => {
+    if (!window.confirm("确认从 CCP 背景图库删除这张图片？")) return null;
+    setCodexThemeOperation({ kind: "background-delete", themeId: backgroundId });
+    try {
+      const result = await run(
+        () => call<CodexManagerBackgroundLibraryResult>("delete_codex_manager_background", { backgroundId }),
+        "删除 CCP 背景",
+      );
+      if (result) {
+        notifyResult({ title: "CCP 外观", message: result.message, status: result.status });
+        if (statusOk(result.status)) setCodexManagerBackgrounds(result);
       }
       return result;
     } finally {
@@ -2160,7 +2329,7 @@ export function App() {
         void Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeZhPatch(true)]);
       }, 250);
     } else if (target === "themes") {
-      await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground()]);
+      await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
       await refreshSystemPrompts(true);
     } else if (target === "tools") {
@@ -2272,10 +2441,19 @@ export function App() {
       restartCodex,
       refreshCodexThemes,
       importCodexTheme,
+      selectCodexDiyThemeBackground,
+      previewCodexDiyThemeBackground,
+      loadCodexDiyThemeBackground,
+      saveCodexDiyTheme,
+      downloadCodexTheme,
+      deleteCodexTheme,
       applyCodexTheme,
       restoreCodexDefaultTheme,
       setCodexManagerBackground,
       clearCodexManagerBackground,
+      refreshCodexManagerBackgrounds,
+      applyCodexManagerBackground,
+      deleteCodexManagerBackground,
       refreshSystemPrompts,
       saveSystemPrompt,
       importSystemPrompt,
@@ -2388,10 +2566,19 @@ export function App() {
       restartCodex: (...args) => actionsRef.current!.restartCodex(...args),
       refreshCodexThemes: (...args) => actionsRef.current!.refreshCodexThemes(...args),
       importCodexTheme: (...args) => actionsRef.current!.importCodexTheme(...args),
+      selectCodexDiyThemeBackground: (...args) => actionsRef.current!.selectCodexDiyThemeBackground(...args),
+      previewCodexDiyThemeBackground: (...args) => actionsRef.current!.previewCodexDiyThemeBackground(...args),
+      loadCodexDiyThemeBackground: (...args) => actionsRef.current!.loadCodexDiyThemeBackground(...args),
+      saveCodexDiyTheme: (...args) => actionsRef.current!.saveCodexDiyTheme(...args),
+      downloadCodexTheme: (...args) => actionsRef.current!.downloadCodexTheme(...args),
+      deleteCodexTheme: (...args) => actionsRef.current!.deleteCodexTheme(...args),
       applyCodexTheme: (...args) => actionsRef.current!.applyCodexTheme(...args),
       restoreCodexDefaultTheme: (...args) => actionsRef.current!.restoreCodexDefaultTheme(...args),
       setCodexManagerBackground: (...args) => actionsRef.current!.setCodexManagerBackground(...args),
       clearCodexManagerBackground: (...args) => actionsRef.current!.clearCodexManagerBackground(...args),
+      refreshCodexManagerBackgrounds: (...args) => actionsRef.current!.refreshCodexManagerBackgrounds(...args),
+      applyCodexManagerBackground: (...args) => actionsRef.current!.applyCodexManagerBackground(...args),
+      deleteCodexManagerBackground: (...args) => actionsRef.current!.deleteCodexManagerBackground(...args),
       refreshSystemPrompts: (...args) => actionsRef.current!.refreshSystemPrompts(...args),
       saveSystemPrompt: (...args) => actionsRef.current!.saveSystemPrompt(...args),
       importSystemPrompt: (...args) => actionsRef.current!.importSystemPrompt(...args),
@@ -2576,6 +2763,7 @@ export function App() {
             <CodexThemeCenterScreen
               actions={actions}
               background={codexThemeBackground}
+              managerBackgrounds={codexManagerBackgrounds}
               operation={codexThemeOperation}
               themes={codexThemes}
             />

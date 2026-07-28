@@ -487,10 +487,58 @@ export type CodexThemeSummary = {
   updated_at: number;
   integrity_sha256: string | null;
   previous_version_available: boolean;
+  diy?: CodexThemeDiySettings | null;
+};
+
+export type CodexThemeDiyMode = "dark" | "light";
+export type CodexThemeDiyDensity = "compact" | "comfortable";
+export type CodexThemeDiyImageLayout = "fullscreen" | "banner" | "card";
+
+export type CodexThemeDiySettings = {
+  mode: CodexThemeDiyMode;
+  accent_color: string;
+  background_color: string;
+  surface_color: string;
+  text_color: string;
+  glass_opacity: number;
+  blur_px: number;
+  radius_px: number;
+  font_scale_percent: number;
+  density: CodexThemeDiyDensity;
+  image_layout: CodexThemeDiyImageLayout;
+  background_file_name: string | null;
+};
+
+export type CodexThemeDiyAutomaticPalette = Pick<
+  CodexThemeDiySettings,
+  "mode" | "accent_color" | "background_color" | "surface_color" | "text_color"
+>;
+
+export type CodexThemeDiyInput = {
+  theme_id: string | null;
+  expected_integrity_sha256: string | null;
+  name: string;
+  author: string;
+  description: string;
+  settings: CodexThemeDiySettings;
+  background_path: string | null;
+  remove_background: boolean;
+};
+
+export type CodexThemeDiyBackgroundPreviewResult = CommandResult<{
+  file_name: string;
+  data_uri: string;
+  automatic_palette: CodexThemeDiyAutomaticPalette;
+}>;
+
+export type CodexOfficialTheme = {
+  id: string;
+  name: string;
 };
 
 export type CodexThemeListResult = CommandResult<{
   themes: CodexThemeSummary[];
+  official_themes: CodexOfficialTheme[];
   current_theme_id: string;
   generation: number;
 }>;
@@ -507,6 +555,23 @@ export type CodexThemeBackgroundResult = CommandResult<{
   user_override: boolean;
 }>;
 
+export type CodexManagerBackgroundItem = {
+  id: string;
+  file_name: string;
+  preview_data_uri: string;
+  width: number;
+  height: number;
+  mime_type: string;
+  updated_at: number;
+  current: boolean;
+};
+
+export type CodexManagerBackgroundLibraryResult = CommandResult<{
+  items: CodexManagerBackgroundItem[];
+  current_background_id: string | null;
+  generation: number;
+}>;
+
 export type CodexThemeImportResult = CommandResult<CodexThemeSummary>;
 
 export type CodexThemeOperationResult = CommandResult<{
@@ -519,7 +584,7 @@ export type CodexThemeOperationResult = CommandResult<{
 }>;
 
 export type CodexThemeOperationState = {
-  kind: "import" | "apply" | "restore" | "background" | "clear-background";
+  kind: "import" | "download" | "delete" | "diy-save" | "apply" | "restore" | "background" | "background-apply" | "background-delete" | "clear-background";
   themeId?: string;
 };
 

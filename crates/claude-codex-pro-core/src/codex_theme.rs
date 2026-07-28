@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use base64::Engine;
 use fs2::FileExt;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,7 +36,134 @@ const MANAGER_BACKGROUND_VARIABLE: &str = "--ccp-theme-manager-background";
 const LEGACY_THEME_ART_VARIABLE: &str = "--ccp-theme-art";
 const USER_MANAGER_BACKGROUND_SOURCE: &str = "user-selected";
 const MANAGER_BACKGROUND_FILE: &str = "current.bin";
-const PREVIOUS_MANAGER_BACKGROUND_FILE: &str = "previous.bin";
+const MANAGER_BACKGROUND_LIBRARY_DIR: &str = "library";
+const DIY_THEME_ID_PREFIX: &str = "ccp-diy-";
+const DIY_BUILD_PREFIX: &str = "diy-build-";
+const DIY_IMAGE_LAYOUT_FULLSCREEN: &str = "fullscreen";
+const DIY_IMAGE_LAYOUT_BANNER: &str = "banner";
+const DIY_IMAGE_LAYOUT_CARD: &str = "card";
+const DIY_BACKGROUND_VARIABLE: &str = "--ccp-theme-art";
+const DIY_BACKGROUND_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const DIY_BACKGROUND_MAX_PIXELS: u64 = 100_000_000;
+const DIY_BACKGROUND_PREVIEW_MAX_WIDTH: u32 = 1280;
+const DIY_BACKGROUND_PREVIEW_MAX_HEIGHT: u32 = 720;
+const DIY_PREVIEW_WIDTH: u32 = 960;
+const DIY_PREVIEW_HEIGHT: u32 = 600;
+const DIY_PREVIEW_HERO_X: u32 = 386;
+const DIY_PREVIEW_HERO_Y: u32 = 104;
+const DIY_PREVIEW_HERO_WIDTH: u32 = 390;
+const DIY_PREVIEW_HERO_HEIGHT: u32 = 196;
+const DIY_PREVIEW_BANNER_X: u32 = 270;
+const DIY_PREVIEW_BANNER_Y: u32 = 80;
+const DIY_PREVIEW_BANNER_WIDTH: u32 = 620;
+const DIY_PREVIEW_BANNER_HEIGHT: u32 = 150;
+const OFFICIAL_THEME_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool/63ef4da6fbc22832553bab126c93e56aea2a91a6/Theme";
+
+#[derive(Debug, Clone, Copy)]
+struct OfficialThemeDefinition {
+    id: &'static str,
+    name: &'static str,
+    archive_sha256: &'static str,
+}
+
+const OFFICIAL_THEMES: &[OfficialThemeDefinition] = &[
+    OfficialThemeDefinition {
+        id: "aurora-glass",
+        name: "极光穹顶",
+        archive_sha256: "728b688c960c1c816cc93600dd72200467048f50128cecf16a0afa0a14fa250c",
+    },
+    OfficialThemeDefinition {
+        id: "clockwork-fox-spirit",
+        name: "机关狐灵",
+        archive_sha256: "8511cc157ac693dbfb1428b125da7edf70ff325541e0d68877c12d3672f52a42",
+    },
+    OfficialThemeDefinition {
+        id: "codex-dream-skin-macos",
+        name: "Codex Dream Skin - macOS",
+        archive_sha256: "0199f4fff9073b2b8a3c40ffcb230b9a0e24d4bfd71dab7080169686bc8aaeb2",
+    },
+    OfficialThemeDefinition {
+        id: "codex-dream-skin-windows",
+        name: "Codex Dream Skin - Windows",
+        archive_sha256: "424fdd72c08f57b9c06941aebebce89dfe5489347b75657e8558cf92ba307ac7",
+    },
+    OfficialThemeDefinition {
+        id: "cyber-changan",
+        name: "赛博长安",
+        archive_sha256: "c79d90da6ce0da293035325a26efb9e431e0539c3a145f4ae6fa292d56ff6889",
+    },
+    OfficialThemeDefinition {
+        id: "lotus-fire-nezha",
+        name: "莲火哪吒",
+        archive_sha256: "192af19b9b09c7d8deedbcaa37b38ec73d5c6a56eb5ce0c86e35c5a65a865589",
+    },
+    OfficialThemeDefinition {
+        id: "obsidian-gold",
+        name: "黑金环域",
+        archive_sha256: "37715125572452fffcc6e9907931cb8366a425c363310392c5c22fbe643b6c38",
+    },
+    OfficialThemeDefinition {
+        id: "verdant-sanctuary",
+        name: "森光秘境",
+        archive_sha256: "578f487b0e44b812f70ef841f587a94135a1df64003db3a9191370a1c9c377f3",
+    },
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexThemeDiySettings {
+    pub mode: String,
+    pub accent_color: String,
+    pub background_color: String,
+    pub surface_color: String,
+    pub text_color: String,
+    pub glass_opacity: u8,
+    pub blur_px: u8,
+    pub radius_px: u8,
+    pub font_scale_percent: u8,
+    pub density: String,
+    #[serde(default = "default_diy_image_layout")]
+    pub image_layout: String,
+    #[serde(default)]
+    pub background_file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexThemeDiyInput {
+    #[serde(default)]
+    pub theme_id: Option<String>,
+    #[serde(default)]
+    pub expected_integrity_sha256: Option<String>,
+    pub name: String,
+    #[serde(default = "default_diy_author")]
+    pub author: String,
+    #[serde(default)]
+    pub description: String,
+    pub settings: CodexThemeDiySettings,
+    #[serde(default)]
+    pub background_path: Option<String>,
+    #[serde(default)]
+    pub remove_background: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexThemeDiyAutomaticPalette {
+    pub mode: String,
+    pub accent_color: String,
+    pub background_color: String,
+    pub surface_color: String,
+    pub text_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexThemeDiyBackgroundPreview {
+    pub file_name: String,
+    pub data_uri: String,
+    pub automatic_palette: CodexThemeDiyAutomaticPalette,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +185,8 @@ pub struct CodexThemeManifest {
     pub root_attributes: CodexThemeRootAttributes,
     #[serde(default)]
     pub asset_variables: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diy: Option<CodexThemeDiySettings>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,13 +212,21 @@ pub struct CodexThemeSummary {
     pub updated_at: u64,
     pub integrity_sha256: Option<String>,
     pub previous_version_available: bool,
+    pub diy: Option<CodexThemeDiySettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexThemeList {
     pub themes: Vec<CodexThemeSummary>,
+    pub official_themes: Vec<CodexOfficialTheme>,
     pub current_theme_id: String,
     pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexOfficialTheme {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -116,6 +254,25 @@ pub struct CodexThemeManagerBackground {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexManagerBackgroundItem {
+    pub id: String,
+    pub file_name: String,
+    pub preview_data_uri: String,
+    pub width: u32,
+    pub height: u32,
+    pub mime_type: String,
+    pub updated_at: u64,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexManagerBackgroundLibrary {
+    pub items: Vec<CodexManagerBackgroundItem>,
+    pub current_background_id: Option<String>,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexThemeOperationResult {
     pub theme_id: String,
     pub persisted: bool,
@@ -137,6 +294,10 @@ struct InstalledTheme {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct StoredManagerBackground {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    file_name: String,
     mime_type: String,
     width: u32,
     height: u32,
@@ -153,6 +314,10 @@ struct ThemeState {
     themes: Vec<InstalledTheme>,
     #[serde(default)]
     manager_background: Option<StoredManagerBackground>,
+    #[serde(default)]
+    manager_backgrounds: Vec<StoredManagerBackground>,
+    #[serde(default)]
+    current_manager_background_id: Option<String>,
 }
 
 impl Default for ThemeState {
@@ -164,6 +329,8 @@ impl Default for ThemeState {
             generation: 0,
             themes: Vec::new(),
             manager_background: None,
+            manager_backgrounds: Vec::new(),
+            current_manager_background_id: None,
         }
     }
 }
@@ -180,9 +347,33 @@ struct MutationJournal {
     target_dir: Option<PathBuf>,
     backup_dir: Option<PathBuf>,
     #[serde(default)]
+    version_backup_dir: Option<PathBuf>,
+    #[serde(default)]
+    staged_version_backup_dir: Option<PathBuf>,
+    #[serde(default)]
     finished_at: Option<u64>,
     #[serde(default)]
     result: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum ImportConstraint {
+    Standard,
+    ExpectedId(String),
+    DiyCreate {
+        theme_id: String,
+    },
+    DiyEdit {
+        theme_id: String,
+        expected_integrity_sha256: String,
+    },
+}
+
+struct DiyBackground {
+    bytes: Vec<u8>,
+    image: image::DynamicImage,
+    extension: &'static str,
+    file_name: String,
 }
 
 pub struct CodexThemeStore {
@@ -227,6 +418,7 @@ impl CodexThemeStore {
             updated_at: 0,
             integrity_sha256: None,
             previous_version_available: false,
+            diy: None,
         });
 
         let mut installed = state.themes.clone();
@@ -241,6 +433,13 @@ impl CodexThemeStore {
         }
         Ok(CodexThemeList {
             themes,
+            official_themes: OFFICIAL_THEMES
+                .iter()
+                .map(|theme| CodexOfficialTheme {
+                    id: theme.id.to_string(),
+                    name: theme.name.to_string(),
+                })
+                .collect(),
             current_theme_id: state.current_theme_id,
             generation: state.generation,
         })
@@ -255,12 +454,36 @@ impl CodexThemeStore {
         source: impl AsRef<Path>,
         replace_existing: bool,
     ) -> anyhow::Result<CodexThemeSummary> {
-        let source = source.as_ref();
+        self.import_theme_checked(
+            source.as_ref(),
+            replace_existing,
+            ImportConstraint::Standard,
+        )
+    }
+
+    fn import_theme_checked(
+        &self,
+        source: &Path,
+        replace_existing: bool,
+        constraint: ImportConstraint,
+    ) -> anyhow::Result<CodexThemeSummary> {
         if !source.exists() {
             bail!("主题来源不存在");
         }
         let _lock = self.acquire_lock()?;
         self.recover_pending_locked()?;
+        self.import_theme_checked_locked(source, replace_existing, constraint)
+    }
+
+    fn import_theme_checked_locked(
+        &self,
+        source: &Path,
+        replace_existing: bool,
+        constraint: ImportConstraint,
+    ) -> anyhow::Result<CodexThemeSummary> {
+        if !source.exists() {
+            bail!("主题来源不存在");
+        }
         let mut state = self.read_state()?;
         let operation_id = operation_id();
         let staging_dir = self.staging_dir().join(&operation_id);
@@ -287,6 +510,10 @@ impl CodexThemeStore {
                 return Err(error);
             }
         };
+        if let Err(error) = self.validate_import_constraint(&constraint, &manifest, &state) {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
+        }
         if manifest.id == DEFAULT_THEME_ID {
             let _ = fs::remove_dir_all(&staging_dir);
             bail!("default 是保留主题标识");
@@ -319,6 +546,8 @@ impl CodexThemeStore {
                     .join(&manifest.id)
                     .join(&operation_id),
             ),
+            version_backup_dir: None,
+            staged_version_backup_dir: None,
             finished_at: None,
             result: None,
         };
@@ -393,6 +622,466 @@ impl CodexThemeStore {
         self.summary_for(installed, &committed.current_theme_id)
     }
 
+    fn validate_import_constraint(
+        &self,
+        constraint: &ImportConstraint,
+        manifest: &CodexThemeManifest,
+        state: &ThemeState,
+    ) -> anyhow::Result<()> {
+        match constraint {
+            ImportConstraint::Standard => Ok(()),
+            ImportConstraint::ExpectedId(expected) => {
+                if manifest.id != *expected {
+                    bail!("下载的主题 ID 与请求不一致，已拒绝安装");
+                }
+                Ok(())
+            }
+            ImportConstraint::DiyCreate { theme_id } => {
+                if manifest.id != *theme_id || manifest.diy.is_none() {
+                    bail!("DIY 主题暂存包与创建请求不一致");
+                }
+                if state
+                    .themes
+                    .iter()
+                    .any(|theme| theme.manifest.id == *theme_id)
+                    || self.library_dir().join(theme_id).exists()
+                {
+                    bail!("DIY 主题 ID 已存在，请重新创建");
+                }
+                Ok(())
+            }
+            ImportConstraint::DiyEdit {
+                theme_id,
+                expected_integrity_sha256,
+            } => {
+                if manifest.id != *theme_id || manifest.diy.is_none() {
+                    bail!("DIY 主题暂存包与编辑请求不一致");
+                }
+                let existing = state
+                    .themes
+                    .iter()
+                    .find(|theme| theme.manifest.id == *theme_id)
+                    .context("要编辑的 DIY 主题不存在")?;
+                if existing.manifest.diy.is_none() {
+                    bail!("仅能编辑由 DIY 工作台创建的主题");
+                }
+                if existing.integrity_sha256 != *expected_integrity_sha256 {
+                    bail!("DIY 主题在编辑期间已发生变化，请重新打开后再保存");
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub fn save_diy_theme(&self, input: CodexThemeDiyInput) -> anyhow::Result<CodexThemeSummary> {
+        let CodexThemeDiyInput {
+            theme_id,
+            expected_integrity_sha256,
+            name,
+            author,
+            description,
+            mut settings,
+            background_path,
+            remove_background,
+        } = input;
+        let name = name.trim().to_string();
+        let author = if author.trim().is_empty() {
+            default_diy_author()
+        } else {
+            author.trim().to_string()
+        };
+        let description = description.trim().to_string();
+        validate_text_field("主题名称", &name, 1, 80)?;
+        validate_text_field("主题作者", &author, 1, 80)?;
+        if description.chars().count() > 400 || description.chars().any(char::is_control) {
+            bail!("主题描述无效或过长");
+        }
+        validate_diy_effect_settings(&settings)?;
+        settings.background_file_name = None;
+
+        let background_path = match background_path {
+            Some(value) if value.trim().is_empty() => bail!("DIY 背景路径不能为空"),
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
+        if remove_background && background_path.is_some() {
+            bail!("不能同时选择新背景并移除背景");
+        }
+        let selected_background = background_path
+            .as_deref()
+            .map(Path::new)
+            .map(validate_diy_background_source)
+            .transpose()?;
+
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let state = self.read_state()?;
+        let normalized_theme_id = match theme_id {
+            Some(value) if value.trim().is_empty() => bail!("DIY 主题 ID 不能为空"),
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
+        let expected_integrity_sha256 = match expected_integrity_sha256 {
+            Some(value) if value.trim().is_empty() => {
+                bail!("DIY 主题完整性标识不能为空")
+            }
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
+
+        let (theme_id, version, replace_existing, constraint, retained_background) =
+            if let Some(theme_id) = normalized_theme_id {
+                validate_theme_id(&theme_id, false)?;
+                if !theme_id.starts_with(DIY_THEME_ID_PREFIX) {
+                    bail!("仅能编辑由 DIY 工作台创建的主题");
+                }
+                let existing = state
+                    .themes
+                    .iter()
+                    .find(|theme| theme.manifest.id == theme_id)
+                    .context("要编辑的 DIY 主题不存在")?;
+                let existing_diy = existing
+                    .manifest
+                    .diy
+                    .as_ref()
+                    .context("仅能编辑由 DIY 工作台创建的主题")?;
+                let expected_integrity_sha256 = expected_integrity_sha256
+                    .as_deref()
+                    .context("DIY 主题缺少打开编辑器时的完整性标识，请重新打开后再保存")?;
+                if existing.integrity_sha256 != expected_integrity_sha256 {
+                    bail!("DIY 主题在编辑期间已发生变化，请重新打开后再保存");
+                }
+                let retained_background = if selected_background.is_none() && !remove_background {
+                    let mut retained = self.load_existing_diy_background(existing)?;
+                    if let Some(background) = retained.as_mut()
+                        && let Some(file_name) = existing_diy.background_file_name.as_ref()
+                    {
+                        background.file_name = file_name.clone();
+                    }
+                    retained
+                } else {
+                    None
+                };
+                (
+                    theme_id.clone(),
+                    next_diy_version(&existing.manifest.version)?,
+                    true,
+                    ImportConstraint::DiyEdit {
+                        theme_id,
+                        expected_integrity_sha256: expected_integrity_sha256.to_string(),
+                    },
+                    retained_background,
+                )
+            } else {
+                if expected_integrity_sha256.is_some() {
+                    bail!("新建 DIY 主题不能携带已有主题完整性标识");
+                }
+                let theme_id = self.unique_diy_theme_id(&state, &name)?;
+                (
+                    theme_id.clone(),
+                    "1.0.0".to_string(),
+                    false,
+                    ImportConstraint::DiyCreate { theme_id },
+                    None,
+                )
+            };
+
+        let background = if remove_background {
+            None
+        } else {
+            selected_background.or(retained_background)
+        };
+        let automatic_palette = automatic_diy_palette(background.as_ref());
+        apply_automatic_diy_palette(&mut settings, &automatic_palette);
+        settings.density = "comfortable".to_string();
+        settings.font_scale_percent = 100;
+        settings.background_file_name = background
+            .as_ref()
+            .map(|background| background.file_name.clone());
+        normalize_diy_settings(&mut settings)?;
+
+        let build_id = format!("{DIY_BUILD_PREFIX}{}", operation_id());
+        let build_dir = self.staging_dir().join(&build_id);
+        let package_dir = build_dir.join("package");
+        let save_result = (|| -> anyhow::Result<CodexThemeSummary> {
+            write_diy_package(
+                &package_dir,
+                &theme_id,
+                &name,
+                &version,
+                &author,
+                &description,
+                &settings,
+                background.as_ref(),
+            )?;
+            validate_package(&package_dir).context("生成的 DIY 主题未通过完整性校验")?;
+            self.import_theme_checked_locked(&package_dir, replace_existing, constraint)
+        })();
+        let cleanup_result = remove_dir_all_with_retry(&build_dir);
+        match (save_result, cleanup_result) {
+            (Ok(summary), _) => Ok(summary),
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(cleanup_error)) => Err(error.context(format!(
+                "DIY 主题保存失败，暂存目录清理也失败: {cleanup_error}"
+            ))),
+        }
+    }
+
+    pub fn preview_diy_background(
+        &self,
+        source: impl AsRef<Path>,
+    ) -> anyhow::Result<CodexThemeDiyBackgroundPreview> {
+        let background = validate_diy_background_source(source.as_ref())?;
+        diy_background_preview(&background)
+    }
+
+    pub fn diy_theme_background_preview(
+        &self,
+        theme_id: &str,
+    ) -> anyhow::Result<CodexThemeDiyBackgroundPreview> {
+        let theme_id = theme_id.trim();
+        validate_theme_id(theme_id, false)?;
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let state = self.read_state()?;
+        let theme = state
+            .themes
+            .iter()
+            .find(|theme| theme.manifest.id == theme_id)
+            .context("要预览的 DIY 主题不存在")?;
+        let diy = theme
+            .manifest
+            .diy
+            .as_ref()
+            .context("仅能读取由 DIY 工作台创建的主题背景")?;
+        let file_name = diy
+            .background_file_name
+            .as_ref()
+            .context("该 DIY 主题没有可预览的背景")?;
+        validate_background_file_name(file_name)?;
+        let mut background = self
+            .load_existing_diy_background(theme)?
+            .context("该 DIY 主题没有可预览的背景")?;
+        background.file_name = file_name.clone();
+        diy_background_preview(&background)
+    }
+
+    fn unique_diy_theme_id(&self, state: &ThemeState, name: &str) -> anyhow::Result<String> {
+        let slug = diy_id_slug(name);
+        let seed = operation_id();
+        for nonce in 0..1024_u16 {
+            let digest = sha256_bytes(format!("{seed}:{name}:{nonce}").as_bytes());
+            let suffix = digest
+                .strip_prefix("sha256:")
+                .unwrap_or(&digest)
+                .chars()
+                .take(12)
+                .collect::<String>();
+            let theme_id = format!("{DIY_THEME_ID_PREFIX}{slug}-{suffix}");
+            if !state
+                .themes
+                .iter()
+                .any(|theme| theme.manifest.id == theme_id)
+                && !self.library_dir().join(&theme_id).exists()
+            {
+                return Ok(theme_id);
+            }
+        }
+        bail!("无法生成唯一的 DIY 主题 ID，请重试")
+    }
+
+    fn load_existing_diy_background(
+        &self,
+        theme: &InstalledTheme,
+    ) -> anyhow::Result<Option<DiyBackground>> {
+        let Some(relative_path) = theme.manifest.asset_variables.get(DIY_BACKGROUND_VARIABLE)
+        else {
+            return Ok(None);
+        };
+        let package_root = self.library_dir().join(&theme.manifest.id);
+        let path = checked_join(&package_root, relative_path)?;
+        validate_diy_background_source(&path).map(Some)
+    }
+
+    pub async fn download_official_theme(
+        &self,
+        theme_id: &str,
+    ) -> anyhow::Result<CodexThemeSummary> {
+        let definition = OFFICIAL_THEMES
+            .iter()
+            .find(|theme| theme.id == theme_id)
+            .context("该主题不在 CCP 官方下载目录中")?;
+
+        {
+            let _lock = self.acquire_lock()?;
+            self.recover_pending_locked()?;
+            let state = self.read_state()?;
+            if state
+                .themes
+                .iter()
+                .any(|theme| theme.manifest.id == theme_id)
+            {
+                bail!("该主题已安装，无需重复下载");
+            }
+        }
+
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .user_agent(format!("CCP/{}", crate::version::VERSION))
+            .build()
+            .context("无法初始化主题下载客户端")?;
+        let url = format!("{OFFICIAL_THEME_RAW_BASE_URL}/{}.zip", definition.id);
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .context("无法连接 CCP 官方主题仓库")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("CCP 官方主题下载失败，GitHub 返回 HTTP {status}");
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_TOTAL_BYTES)
+        {
+            bail!("CCP 官方主题压缩包超过 32 MiB 限制");
+        }
+
+        let mut archive_bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("CCP 官方主题下载中断")?;
+            if archive_bytes.len().saturating_add(chunk.len()) > MAX_TOTAL_BYTES as usize {
+                bail!("CCP 官方主题压缩包超过 32 MiB 限制");
+            }
+            archive_bytes.extend_from_slice(&chunk);
+        }
+        if archive_bytes.is_empty() {
+            bail!("CCP 官方主题下载结果为空");
+        }
+        let downloaded_sha256 = sha256_bytes(&archive_bytes);
+        if downloaded_sha256 != format!("sha256:{}", definition.archive_sha256) {
+            bail!("CCP 官方主题压缩包完整性校验失败");
+        }
+
+        let download_dir = self
+            .staging_dir()
+            .join(format!("download-{}", operation_id()));
+        let archive_path = download_dir.join(format!("{}.zip", definition.id));
+        let install_result = (|| -> anyhow::Result<CodexThemeSummary> {
+            fs::create_dir_all(&download_dir).context("无法创建主题下载暂存目录")?;
+            fs::write(&archive_path, archive_bytes).context("无法暂存下载的主题压缩包")?;
+            self.import_theme_checked(
+                &archive_path,
+                false,
+                ImportConstraint::ExpectedId(definition.id.to_string()),
+            )
+        })();
+        let _ = fs::remove_dir_all(&download_dir);
+        install_result.with_context(|| format!("无法安装官方主题“{}”", definition.name))
+    }
+
+    pub fn delete_theme(&self, theme_id: &str) -> anyhow::Result<CodexThemeOperationResult> {
+        if theme_id == DEFAULT_THEME_ID {
+            bail!("Codex 默认主题不能删除");
+        }
+        validate_theme_id(theme_id, false)?;
+
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        if state.current_theme_id == theme_id {
+            bail!("当前主题正在使用，请先恢复默认主题或切换到其他主题");
+        }
+        if !state
+            .themes
+            .iter()
+            .any(|theme| theme.manifest.id == theme_id)
+        {
+            bail!("主题不存在或已经删除");
+        }
+
+        let target_dir = self.library_dir().join(theme_id);
+        if !target_dir.is_dir() {
+            bail!("主题文件缺失，已保留状态记录以便诊断");
+        }
+        let operation_id = operation_id();
+        let staging_dir = self.staging_dir().join(&operation_id);
+        let staged_theme_dir = staging_dir.join("theme");
+        let version_backup_dir = self.backups_dir().join(theme_id);
+        let staged_version_backup_dir = staging_dir.join("versions");
+        fs::create_dir_all(&staging_dir).context("无法创建主题删除暂存目录")?;
+
+        let mut journal = MutationJournal {
+            operation_id: operation_id.clone(),
+            operation_type: "delete".to_string(),
+            theme_id: theme_id.to_string(),
+            phase: "prepared".to_string(),
+            started_at: now_secs(),
+            state_before: state.clone(),
+            staging_dir: Some(PathBuf::from("staging").join(&operation_id)),
+            target_dir: Some(PathBuf::from("library").join(theme_id)),
+            backup_dir: Some(PathBuf::from("staging").join(&operation_id).join("theme")),
+            version_backup_dir: Some(PathBuf::from("backups").join(theme_id)),
+            staged_version_backup_dir: Some(
+                PathBuf::from("staging")
+                    .join(&operation_id)
+                    .join("versions"),
+            ),
+            finished_at: None,
+            result: None,
+        };
+        if let Err(error) = self.write_journal(&journal) {
+            let _ = fs::remove_dir_all(&staging_dir);
+            return Err(error);
+        }
+
+        let transaction_result = (|| -> anyhow::Result<()> {
+            fs::rename(&target_dir, &staged_theme_dir)
+                .context("主题正在被占用，无法移入删除暂存区")?;
+            journal.phase = "files-staged".to_string();
+            self.write_journal(&journal)?;
+
+            if version_backup_dir.exists() {
+                fs::rename(&version_backup_dir, &staged_version_backup_dir)
+                    .context("主题历史版本正在被占用，无法删除")?;
+                journal.phase = "backups-staged".to_string();
+                self.write_journal(&journal)?;
+            }
+
+            state.themes.retain(|theme| theme.manifest.id != theme_id);
+            self.write_state(&state)?;
+            journal.phase = "state-committed".to_string();
+            self.write_journal(&journal)?;
+            Ok(())
+        })();
+
+        if let Err(error) = transaction_result {
+            if let Err(rollback_error) = self.rollback_journal(&journal) {
+                return Err(error.context(format!("主题删除失败，回滚也失败: {rollback_error:#}")));
+            }
+            return Err(error);
+        }
+
+        if !self.journal_commit_is_valid(&journal)? {
+            self.rollback_journal(&journal)?;
+            bail!("主题删除提交后复核失败，已恢复原主题");
+        }
+        remove_dir_all_with_retry(&staging_dir).context("主题已从列表删除，但暂存文件清理失败")?;
+        self.archive_journal(&journal, "committed")?;
+
+        Ok(CodexThemeOperationResult {
+            theme_id: theme_id.to_string(),
+            persisted: true,
+            runtime_applied: false,
+            restart_required: false,
+            rolled_back: false,
+            generation: state.generation,
+            message: "主题已删除。".to_string(),
+        })
+    }
+
     pub fn apply_theme(&self, theme_id: &str) -> anyhow::Result<CodexThemeOperationResult> {
         if theme_id == DEFAULT_THEME_ID {
             return self.restore_default_theme();
@@ -447,113 +1136,166 @@ impl CodexThemeStore {
     pub fn active_manager_background(&self) -> anyhow::Result<CodexThemeManagerBackground> {
         let _lock = self.acquire_lock()?;
         self.recover_pending_locked()?;
-        let state = self.read_state()?;
+        let mut state = self.read_state()?;
+        self.migrate_manager_background_library_locked(&mut state)?;
         self.active_manager_background_for_state(&state)
+    }
+
+    pub fn manager_background_library(&self) -> anyhow::Result<CodexManagerBackgroundLibrary> {
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        self.migrate_manager_background_library_locked(&mut state)?;
+        self.manager_background_library_for_state(&state)
     }
 
     pub fn set_manager_background(
         &self,
         source: impl AsRef<Path>,
     ) -> anyhow::Result<CodexThemeManagerBackground> {
-        let (bytes, background) = validate_manager_background_source(source.as_ref())?;
+        let source = source.as_ref();
+        let (bytes, mut background) = validate_manager_background_source(source)?;
+        background.id = manager_background_id(&background.sha256);
+        background.file_name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("CCP 背景")
+            .to_string();
         let _lock = self.acquire_lock()?;
         self.recover_pending_locked()?;
         let mut state = self.read_state()?;
+        self.migrate_manager_background_library_locked(&mut state)?;
         let state_before = state.clone();
-        let current_path = self.manager_background_dir().join(MANAGER_BACKGROUND_FILE);
-        let previous_path = self
-            .manager_background_dir()
-            .join(PREVIOUS_MANAGER_BACKGROUND_FILE);
-        let old_current = state
-            .manager_background
-            .as_ref()
-            .and_then(|_| fs::read(&current_path).ok());
-        let old_previous = fs::read(&previous_path).ok();
-        let staging_dir = self.staging_dir().join(operation_id());
-        let staging_path = staging_dir.join(MANAGER_BACKGROUND_FILE);
-
-        crate::settings::atomic_write(&staging_path, &bytes).context("无法暂存管理工具背景")?;
-        let staged = fs::read(&staging_path).context("无法复核暂存的管理工具背景")?;
-        if staged != bytes {
-            let _ = fs::remove_dir_all(&staging_dir);
-            bail!("管理工具背景暂存复核失败");
-        }
-
-        let commit = (|| -> anyhow::Result<()> {
-            if let Some(previous) = old_current.as_deref() {
-                crate::settings::atomic_write(&previous_path, previous)
-                    .context("无法保留上一张管理工具背景")?;
-            }
-            crate::settings::atomic_write(&current_path, &staged)
-                .context("无法写入管理工具背景")?;
-            state.manager_background = Some(background);
+        if let Some(existing) = state
+            .manager_backgrounds
+            .iter()
+            .find(|item| item.sha256 == background.sha256)
+        {
+            state.current_manager_background_id = Some(existing.id.clone());
+            state.manager_background = None;
             state.generation = state.generation.saturating_add(1);
             self.write_state(&state)
-                .context("无法提交管理工具背景状态")?;
-            Ok(())
-        })();
+                .context("无法切换到已保存的 CCP 背景")?;
+            return self.active_manager_background_for_state(&state);
+        }
 
-        if let Err(error) = commit {
-            restore_optional_file(&current_path, old_current.as_deref());
-            restore_optional_file(&previous_path, old_previous.as_deref());
+        let target_path = self.manager_background_item_path(&background.id)?;
+        fs::create_dir_all(self.manager_background_library_dir())
+            .context("无法创建 CCP 背景图库目录")?;
+        crate::settings::atomic_write(&target_path, &bytes).context("无法保存 CCP 背景到图库")?;
+        let saved = fs::read(&target_path).context("无法复核保存的 CCP 背景")?;
+        if saved != bytes {
+            let _ = fs::remove_file(&target_path);
+            bail!("CCP 背景保存复核失败");
+        }
+        state.manager_backgrounds.push(background.clone());
+        state.current_manager_background_id = Some(background.id.clone());
+        state.manager_background = None;
+        state.generation = state.generation.saturating_add(1);
+        if let Err(error) = self.write_state(&state) {
+            let _ = fs::remove_file(&target_path);
             let _ = self.write_state(&state_before);
-            let _ = fs::remove_dir_all(&staging_dir);
-            return Err(error.context("设置管理工具背景失败，已恢复上一状态"));
+            return Err(error.context("保存 CCP 背景失败，已恢复上一状态"));
         }
-
-        if old_current.is_none() && previous_path.exists() {
-            let _ = fs::remove_file(&previous_path);
-        }
-        let _ = fs::remove_dir_all(&staging_dir);
-        let verified = self.read_state()?;
-        self.active_manager_background_for_state(&verified)
+        self.active_manager_background_for_state(&state)
     }
 
     pub fn clear_manager_background(&self) -> anyhow::Result<CodexThemeManagerBackground> {
         let _lock = self.acquire_lock()?;
         self.recover_pending_locked()?;
         let mut state = self.read_state()?;
-        if state.manager_background.is_some() {
+        self.migrate_manager_background_library_locked(&mut state)?;
+        if state.current_manager_background_id.is_some() || state.manager_background.is_some() {
+            state.current_manager_background_id = None;
             state.manager_background = None;
             state.generation = state.generation.saturating_add(1);
             self.write_state(&state)
                 .context("无法清除管理工具背景状态")?;
         }
-        for path in [
-            self.manager_background_dir().join(MANAGER_BACKGROUND_FILE),
-            self.manager_background_dir()
-                .join(PREVIOUS_MANAGER_BACKGROUND_FILE),
-        ] {
-            if path.exists() {
-                let _ = fs::remove_file(path);
-            }
+        self.active_manager_background_for_state(&state)
+    }
+
+    pub fn apply_manager_background(
+        &self,
+        background_id: &str,
+    ) -> anyhow::Result<CodexThemeManagerBackground> {
+        validate_manager_background_id(background_id)?;
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        self.migrate_manager_background_library_locked(&mut state)?;
+        let background = state
+            .manager_backgrounds
+            .iter()
+            .find(|item| item.id == background_id)
+            .context("要应用的 CCP 背景不存在")?;
+        let bytes = self.read_manager_background_item(background)?;
+        if bytes.is_empty() {
+            bail!("要应用的 CCP 背景文件为空");
+        }
+        if state.current_manager_background_id.as_deref() != Some(background_id) {
+            state.current_manager_background_id = Some(background_id.to_string());
+            state.manager_background = None;
+            state.generation = state.generation.saturating_add(1);
+            self.write_state(&state).context("无法应用 CCP 背景")?;
         }
         self.active_manager_background_for_state(&state)
+    }
+
+    pub fn delete_manager_background(
+        &self,
+        background_id: &str,
+    ) -> anyhow::Result<CodexManagerBackgroundLibrary> {
+        validate_manager_background_id(background_id)?;
+        let _lock = self.acquire_lock()?;
+        self.recover_pending_locked()?;
+        let mut state = self.read_state()?;
+        self.migrate_manager_background_library_locked(&mut state)?;
+        if state.current_manager_background_id.as_deref() == Some(background_id) {
+            bail!("正在使用的 CCP 背景不能删除，请先切换或恢复默认");
+        }
+        let index = state
+            .manager_backgrounds
+            .iter()
+            .position(|item| item.id == background_id)
+            .context("要删除的 CCP 背景不存在")?;
+        let state_before = state.clone();
+        let path = self.manager_background_item_path(background_id)?;
+        let old_bytes = fs::read(&path).context("无法读取要删除的 CCP 背景")?;
+        state.manager_backgrounds.remove(index);
+        state.generation = state.generation.saturating_add(1);
+        self.write_state(&state)
+            .context("无法提交 CCP 背景删除状态")?;
+        if let Err(error) = fs::remove_file(&path) {
+            let _ = self.write_state(&state_before);
+            let _ = crate::settings::atomic_write(&path, &old_bytes);
+            return Err(error.into());
+        }
+        self.manager_background_library_for_state(&state)
     }
 
     fn active_manager_background_for_state(
         &self,
         state: &ThemeState,
     ) -> anyhow::Result<CodexThemeManagerBackground> {
-        if let Some(background) = state.manager_background.as_ref() {
-            let path = self.manager_background_dir().join(MANAGER_BACKGROUND_FILE);
-            if let Ok(bytes) = fs::read(path) {
-                let mime_matches = image_mime(&bytes) == Some(background.mime_type.as_str());
-                let hash_matches = sha256_bytes(&bytes) == background.sha256;
-                if mime_matches && hash_matches {
-                    return Ok(CodexThemeManagerBackground {
-                        theme_id: state.current_theme_id.clone(),
-                        generation: state.generation,
-                        data_uri: Some(data_uri(&background.mime_type, &bytes)),
-                        source_variable: Some(USER_MANAGER_BACKGROUND_SOURCE.to_string()),
-                        is_default: false,
-                        width: Some(background.width),
-                        height: Some(background.height),
-                        mime_type: Some(background.mime_type.clone()),
-                        user_override: true,
-                    });
-                }
-            }
+        if let Some(background_id) = state.current_manager_background_id.as_deref()
+            && let Some(background) = state
+                .manager_backgrounds
+                .iter()
+                .find(|item| item.id == background_id)
+        {
+            let bytes = self.read_manager_background_item(background)?;
+            return Ok(CodexThemeManagerBackground {
+                theme_id: state.current_theme_id.clone(),
+                generation: state.generation,
+                data_uri: Some(data_uri(&background.mime_type, &bytes)),
+                source_variable: Some(USER_MANAGER_BACKGROUND_SOURCE.to_string()),
+                is_default: false,
+                width: Some(background.width),
+                height: Some(background.height),
+                mime_type: Some(background.mime_type.clone()),
+                user_override: true,
+            });
         }
 
         let payload = self.active_theme_payload_for_state(state)?;
@@ -584,6 +1326,90 @@ impl CodexThemeStore {
         })
     }
 
+    fn manager_background_library_for_state(
+        &self,
+        state: &ThemeState,
+    ) -> anyhow::Result<CodexManagerBackgroundLibrary> {
+        let mut items = Vec::with_capacity(state.manager_backgrounds.len());
+        for background in &state.manager_backgrounds {
+            let bytes = self.read_manager_background_item(background)?;
+            items.push(CodexManagerBackgroundItem {
+                id: background.id.clone(),
+                file_name: background.file_name.clone(),
+                preview_data_uri: manager_background_preview_data_uri(&bytes)?,
+                width: background.width,
+                height: background.height,
+                mime_type: background.mime_type.clone(),
+                updated_at: background.updated_at,
+                current: state.current_manager_background_id.as_deref()
+                    == Some(background.id.as_str()),
+            });
+        }
+        items.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        Ok(CodexManagerBackgroundLibrary {
+            items,
+            current_background_id: state.current_manager_background_id.clone(),
+            generation: state.generation,
+        })
+    }
+
+    fn migrate_manager_background_library_locked(
+        &self,
+        state: &mut ThemeState,
+    ) -> anyhow::Result<()> {
+        if !state.manager_backgrounds.is_empty() || state.manager_background.is_none() {
+            return Ok(());
+        }
+        let mut background = state.manager_background.clone().unwrap();
+        let legacy_path = self.manager_background_dir().join(MANAGER_BACKGROUND_FILE);
+        let bytes = fs::read(&legacy_path).context("无法迁移现有 CCP 背景")?;
+        if image_mime(&bytes) != Some(background.mime_type.as_str())
+            || sha256_bytes(&bytes) != background.sha256
+        {
+            bail!("现有 CCP 背景完整性校验失败，未执行迁移");
+        }
+        background.id = manager_background_id(&background.sha256);
+        background.file_name = "已迁移的 CCP 背景".to_string();
+        let target = self.manager_background_item_path(&background.id)?;
+        let state_before = state.clone();
+        fs::create_dir_all(self.manager_background_library_dir())
+            .context("无法创建 CCP 背景图库目录")?;
+        crate::settings::atomic_write(&target, &bytes).context("无法迁移现有 CCP 背景到图库")?;
+        state.manager_backgrounds.push(background.clone());
+        state.current_manager_background_id = Some(background.id.clone());
+        state.manager_background = None;
+        if let Err(error) = self.write_state(state) {
+            let _ = fs::remove_file(&target);
+            *state = state_before;
+            return Err(error.context("无法提交 CCP 背景图库迁移状态"));
+        }
+        let _ = fs::remove_file(legacy_path);
+        Ok(())
+    }
+
+    fn read_manager_background_item(
+        &self,
+        background: &StoredManagerBackground,
+    ) -> anyhow::Result<Vec<u8>> {
+        validate_manager_background_id(&background.id)?;
+        let bytes = fs::read(self.manager_background_item_path(&background.id)?)
+            .context("CCP 背景图库文件不存在")?;
+        if image_mime(&bytes) != Some(background.mime_type.as_str())
+            || sha256_bytes(&bytes) != background.sha256
+        {
+            bail!("CCP 背景图库文件完整性校验失败");
+        }
+        Ok(bytes)
+    }
+
+    fn manager_background_item_path(&self, background_id: &str) -> anyhow::Result<PathBuf> {
+        validate_manager_background_id(background_id)?;
+        Ok(self
+            .manager_background_dir()
+            .join(MANAGER_BACKGROUND_LIBRARY_DIR)
+            .join(format!("{background_id}.bin")))
+    }
+
     fn commit_active_theme(&self, state: &mut ThemeState, theme_id: &str) -> anyhow::Result<()> {
         let operation_id = operation_id();
         let mut journal = MutationJournal {
@@ -600,6 +1426,8 @@ impl CodexThemeStore {
             staging_dir: None,
             target_dir: None,
             backup_dir: None,
+            version_backup_dir: None,
+            staged_version_backup_dir: None,
             finished_at: None,
             result: None,
         };
@@ -693,6 +1521,7 @@ impl CodexThemeStore {
             updated_at: item.updated_at,
             integrity_sha256: Some(item.integrity_sha256.clone()),
             previous_version_available: item.previous_version_available,
+            diy: item.manifest.diy.clone(),
         })
     }
 
@@ -710,7 +1539,12 @@ impl CodexThemeStore {
                     if let Some(staging) =
                         self.resolve_journal_path(journal.staging_dir.as_ref())?
                     {
-                        let _ = fs::remove_dir_all(staging);
+                        if journal.operation_type == "delete" {
+                            remove_dir_all_with_retry(&staging)
+                                .context("无法完成已提交主题的删除清理")?;
+                        } else {
+                            let _ = fs::remove_dir_all(staging);
+                        }
                     }
                     self.archive_journal(&journal, "recovered-commit")?;
                 } else {
@@ -719,6 +1553,19 @@ impl CodexThemeStore {
                 continue;
             }
             self.rollback_journal(&journal)?;
+        }
+        self.cleanup_stale_diy_builds_locked()?;
+        Ok(())
+    }
+
+    fn cleanup_stale_diy_builds_locked(&self) -> anyhow::Result<()> {
+        for entry in fs::read_dir(self.staging_dir()).context("无法读取主题暂存目录")? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(DIY_BUILD_PREFIX) && entry.file_type()?.is_dir() {
+                remove_dir_all_with_retry(&entry.path())
+                    .context("无法清理未完成的 DIY 暂存目录")?;
+            }
         }
         Ok(())
     }
@@ -739,6 +1586,22 @@ impl CodexThemeStore {
                 if backup.exists() && !target.exists() {
                     fs::rename(backup, target).context("无法恢复上一主题版本")?;
                 }
+            }
+        }
+        if let Some(staged_versions) =
+            self.resolve_journal_path(journal.staged_version_backup_dir.as_ref())?
+        {
+            if staged_versions.exists() {
+                let original_versions = self
+                    .resolve_journal_path(journal.version_backup_dir.as_ref())?
+                    .context("主题版本备份恢复路径缺失")?;
+                if original_versions.exists() {
+                    bail!("主题版本备份恢复目标已存在");
+                }
+                if let Some(parent) = original_versions.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::rename(staged_versions, original_versions).context("无法恢复主题历史版本")?;
             }
         }
         self.write_state(&journal.state_before)?;
@@ -765,6 +1628,17 @@ impl CodexThemeStore {
                 return Ok(false);
             };
             return Ok(manifest == installed.manifest && integrity == installed.integrity_sha256);
+        }
+        if journal.operation_type == "delete" {
+            let target_absent = self
+                .resolve_journal_path(journal.target_dir.as_ref())?
+                .is_none_or(|target| !target.exists());
+            return Ok(target_absent
+                && state.current_theme_id != journal.theme_id
+                && !state
+                    .themes
+                    .iter()
+                    .any(|theme| theme.manifest.id == journal.theme_id));
         }
         Ok(state.current_theme_id == journal.theme_id)
     }
@@ -888,13 +1762,310 @@ impl CodexThemeStore {
     fn manager_background_dir(&self) -> PathBuf {
         self.root.join("manager-background")
     }
+
+    fn manager_background_library_dir(&self) -> PathBuf {
+        self.manager_background_dir()
+            .join(MANAGER_BACKGROUND_LIBRARY_DIR)
+    }
 }
 
-fn restore_optional_file(path: &Path, bytes: Option<&[u8]>) {
-    if let Some(bytes) = bytes {
-        let _ = crate::settings::atomic_write(path, bytes);
-    } else if path.exists() {
-        let _ = fs::remove_file(path);
+fn default_diy_author() -> String {
+    "CCP 用户".to_string()
+}
+
+fn default_diy_image_layout() -> String {
+    DIY_IMAGE_LAYOUT_CARD.to_string()
+}
+
+fn default_diy_automatic_palette() -> CodexThemeDiyAutomaticPalette {
+    CodexThemeDiyAutomaticPalette {
+        mode: "dark".to_string(),
+        accent_color: "#0A84FF".to_string(),
+        background_color: "#111418".to_string(),
+        surface_color: "#20252B".to_string(),
+        text_color: "#F3F5F7".to_string(),
+    }
+}
+
+fn automatic_diy_palette(background: Option<&DiyBackground>) -> CodexThemeDiyAutomaticPalette {
+    let Some(background) = background else {
+        return default_diy_automatic_palette();
+    };
+    let sample = background.image.thumbnail(64, 64).to_rgba8();
+    let mut color_weight = 0_u64;
+    let mut red_sum = 0_u64;
+    let mut green_sum = 0_u64;
+    let mut blue_sum = 0_u64;
+    let mut accent_weight = 0_u64;
+    let mut accent_red_sum = 0_u64;
+    let mut accent_green_sum = 0_u64;
+    let mut accent_blue_sum = 0_u64;
+
+    for pixel in sample.pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        if alpha < 32 {
+            continue;
+        }
+        let alpha = u64::from(alpha);
+        color_weight = color_weight.saturating_add(alpha);
+        red_sum = red_sum.saturating_add(u64::from(red) * alpha);
+        green_sum = green_sum.saturating_add(u64::from(green) * alpha);
+        blue_sum = blue_sum.saturating_add(u64::from(blue) * alpha);
+
+        let maximum = red.max(green).max(blue);
+        let minimum = red.min(green).min(blue);
+        let chroma = maximum.saturating_sub(minimum);
+        let luma = rgb_luma([red, green, blue]);
+        if chroma < 32 || !(30..=225).contains(&luma) {
+            continue;
+        }
+        let balance = 255_u64.saturating_sub(u64::from(luma.abs_diff(128)));
+        let weight = alpha
+            .saturating_mul(u64::from(chroma).pow(2))
+            .saturating_mul(128 + balance);
+        accent_weight = accent_weight.saturating_add(weight);
+        accent_red_sum = accent_red_sum.saturating_add(u64::from(red) * weight);
+        accent_green_sum = accent_green_sum.saturating_add(u64::from(green) * weight);
+        accent_blue_sum = accent_blue_sum.saturating_add(u64::from(blue) * weight);
+    }
+
+    if color_weight == 0 {
+        return default_diy_automatic_palette();
+    }
+    let average = [
+        (red_sum / color_weight) as u8,
+        (green_sum / color_weight) as u8,
+        (blue_sum / color_weight) as u8,
+    ];
+    let mode = if rgb_luma(average) >= 154 {
+        "light"
+    } else {
+        "dark"
+    };
+    let mut accent = if accent_weight == 0 {
+        [10, 132, 255]
+    } else {
+        [
+            (accent_red_sum / accent_weight) as u8,
+            (accent_green_sum / accent_weight) as u8,
+            (accent_blue_sum / accent_weight) as u8,
+        ]
+    };
+    let (background_color, surface_color, text_color, accent_target) = if mode == "light" {
+        (
+            mix_rgb(average, [247, 248, 250], 90),
+            mix_rgb(average, [255, 255, 255], 95),
+            [23, 26, 30],
+            [12, 78, 158],
+        )
+    } else {
+        (
+            mix_rgb(average, [16, 19, 23], 86),
+            mix_rgb(average, [31, 36, 42], 90),
+            [243, 245, 247],
+            [102, 184, 255],
+        )
+    };
+    for _ in 0..8 {
+        if contrast_ratio(accent, surface_color) >= 3.0 {
+            break;
+        }
+        accent = mix_rgb(accent, accent_target, 22);
+    }
+
+    CodexThemeDiyAutomaticPalette {
+        mode: mode.to_string(),
+        accent_color: rgb_hex(accent),
+        background_color: rgb_hex(background_color),
+        surface_color: rgb_hex(surface_color),
+        text_color: rgb_hex(text_color),
+    }
+}
+
+fn apply_automatic_diy_palette(
+    settings: &mut CodexThemeDiySettings,
+    palette: &CodexThemeDiyAutomaticPalette,
+) {
+    settings.mode.clone_from(&palette.mode);
+    settings.accent_color.clone_from(&palette.accent_color);
+    settings
+        .background_color
+        .clone_from(&palette.background_color);
+    settings.surface_color.clone_from(&palette.surface_color);
+    settings.text_color.clone_from(&palette.text_color);
+}
+
+fn rgb_luma([red, green, blue]: [u8; 3]) -> u8 {
+    ((u32::from(red) * 2_126 + u32::from(green) * 7_152 + u32::from(blue) * 722) / 10_000) as u8
+}
+
+fn mix_rgb(source: [u8; 3], target: [u8; 3], target_percent: u8) -> [u8; 3] {
+    let target_percent = u16::from(target_percent.min(100));
+    let source_percent = 100_u16.saturating_sub(target_percent);
+    [
+        ((u16::from(source[0]) * source_percent + u16::from(target[0]) * target_percent) / 100)
+            as u8,
+        ((u16::from(source[1]) * source_percent + u16::from(target[1]) * target_percent) / 100)
+            as u8,
+        ((u16::from(source[2]) * source_percent + u16::from(target[2]) * target_percent) / 100)
+            as u8,
+    ]
+}
+
+fn rgb_hex([red, green, blue]: [u8; 3]) -> String {
+    format!("#{red:02X}{green:02X}{blue:02X}")
+}
+
+fn contrast_ratio(left: [u8; 3], right: [u8; 3]) -> f32 {
+    let left = relative_luminance(left);
+    let right = relative_luminance(right);
+    (left.max(right) + 0.05) / (left.min(right) + 0.05)
+}
+
+fn relative_luminance(color: [u8; 3]) -> f32 {
+    let channel = |value: u8| {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+}
+
+fn validate_diy_effect_settings(settings: &CodexThemeDiySettings) -> anyhow::Result<()> {
+    if !(8..=90).contains(&settings.glass_opacity) {
+        bail!("玻璃透光度必须在 10% 至 92% 之间");
+    }
+    if settings.blur_px > 48 {
+        bail!("模糊强度必须在 0 至 48px 之间");
+    }
+    if settings.radius_px > 16 {
+        bail!("圆角必须在 0 至 16px 之间");
+    }
+    if !(90..=110).contains(&settings.font_scale_percent) {
+        bail!("文字大小必须在 90% 至 110% 之间");
+    }
+    Ok(())
+}
+
+fn normalize_diy_settings(settings: &mut CodexThemeDiySettings) -> anyhow::Result<()> {
+    settings.mode = settings.mode.trim().to_ascii_lowercase();
+    settings.density = settings.density.trim().to_ascii_lowercase();
+    settings.image_layout = settings.image_layout.trim().to_ascii_lowercase();
+    settings.accent_color = normalize_hex_color("主色", &settings.accent_color)?;
+    settings.background_color = normalize_hex_color("背景色", &settings.background_color)?;
+    settings.surface_color = normalize_hex_color("表面色", &settings.surface_color)?;
+    settings.text_color = normalize_hex_color("文字色", &settings.text_color)?;
+    validate_diy_settings(settings)
+}
+
+fn validate_diy_settings(settings: &CodexThemeDiySettings) -> anyhow::Result<()> {
+    if !matches!(settings.mode.as_str(), "dark" | "light") {
+        bail!("DIY 主题外观模式仅支持 dark 或 light");
+    }
+    if !matches!(settings.density.as_str(), "compact" | "comfortable") {
+        bail!("DIY 主题密度仅支持 compact 或 comfortable");
+    }
+    if !matches!(
+        settings.image_layout.as_str(),
+        DIY_IMAGE_LAYOUT_FULLSCREEN | DIY_IMAGE_LAYOUT_BANNER | DIY_IMAGE_LAYOUT_CARD
+    ) {
+        bail!("DIY 主题图片布局仅支持 fullscreen、banner 或 card");
+    }
+    for (label, color) in [
+        ("主色", &settings.accent_color),
+        ("背景色", &settings.background_color),
+        ("表面色", &settings.surface_color),
+        ("文字色", &settings.text_color),
+    ] {
+        validate_hex_color(label, color)?;
+    }
+    validate_diy_effect_settings(settings)?;
+    if let Some(file_name) = settings.background_file_name.as_deref() {
+        validate_background_file_name(file_name)?;
+    }
+    Ok(())
+}
+
+fn normalize_hex_color(label: &str, value: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    validate_hex_color(label, value)?;
+    Ok(value.to_ascii_uppercase())
+}
+
+fn validate_hex_color(label: &str, value: &str) -> anyhow::Result<()> {
+    if value.len() != 7
+        || !value.starts_with('#')
+        || !value.as_bytes()[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("{label}必须使用完整的 #RRGGBB 格式");
+    }
+    Ok(())
+}
+
+fn validate_background_file_name(value: &str) -> anyhow::Result<()> {
+    if value.is_empty()
+        || value.chars().count() > 255
+        || value.chars().any(char::is_control)
+        || value.contains(['/', '\\', ':'])
+        || matches!(value, "." | "..")
+    {
+        bail!("DIY 背景文件名无效");
+    }
+    Ok(())
+}
+
+fn next_diy_version(current: &str) -> anyhow::Result<String> {
+    let parts = current.split('.').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        bail!("DIY 主题版本记录损坏");
+    }
+    let major = parts[0].parse::<u32>().context("DIY 主题主版本号无效")?;
+    let minor = parts[1].parse::<u32>().context("DIY 主题次版本号无效")?;
+    let patch = parts[2]
+        .parse::<u32>()
+        .context("DIY 主题修订版本号无效")?
+        .checked_add(1)
+        .context("DIY 主题修订版本号已达到上限")?;
+    Ok(format!("{major}.{minor}.{patch}"))
+}
+
+fn diy_id_slug(name: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for byte in name.bytes() {
+        let normalized = if byte.is_ascii_alphanumeric() {
+            Some(byte.to_ascii_lowercase() as char)
+        } else if byte.is_ascii_whitespace() || matches!(byte, b'-' | b'_') {
+            Some('-')
+        } else {
+            None
+        };
+        let Some(character) = normalized else {
+            continue;
+        };
+        if character == '-' {
+            if slug.is_empty() || previous_dash {
+                continue;
+            }
+            previous_dash = true;
+        } else {
+            previous_dash = false;
+        }
+        slug.push(character);
+        if slug.len() >= 20 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "theme".to_string()
+    } else {
+        slug.to_string()
     }
 }
 
@@ -938,6 +2109,21 @@ fn operation_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("{}-{nanos}", std::process::id())
+}
+
+fn remove_dir_all_with_retry(path: &Path) -> std::io::Result<()> {
+    let mut last_error = None;
+    for attempt in 0..3 {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    Err(last_error.expect("remove_dir_all retry must retain an error"))
 }
 
 fn now_secs() -> u64 {
@@ -1130,6 +2316,76 @@ fn expected_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn validate_diy_background_source(path: &Path) -> anyhow::Result<DiyBackground> {
+    let source = path.to_string_lossy().to_ascii_lowercase();
+    if ["http://", "https://", "data:", "file://"]
+        .iter()
+        .any(|prefix| source.starts_with(prefix))
+    {
+        bail!("DIY 背景只允许用户选择的本地图片文件");
+    }
+    let metadata = fs::symlink_metadata(path).context("DIY 背景文件不存在")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("DIY 背景必须是本地普通图片文件");
+    }
+    if metadata.len() == 0 || metadata.len() > DIY_BACKGROUND_MAX_BYTES {
+        bail!("DIY 背景必须小于 8 MiB");
+    }
+    let expected_mime = expected_image_mime(path).context("DIY 背景只支持 PNG、JPEG 或 WebP")?;
+    let bytes = fs::read(path).context("无法读取 DIY 背景")?;
+    let reader = image::ImageReader::new(Cursor::new(&bytes))
+        .with_guessed_format()
+        .context("无法识别 DIY 背景格式")?;
+    let format = reader.format().context("无法识别 DIY 背景格式")?;
+    let (actual_mime, extension) = match format {
+        image::ImageFormat::Png => ("image/png", "png"),
+        image::ImageFormat::Jpeg => ("image/jpeg", "jpg"),
+        image::ImageFormat::WebP => ("image/webp", "webp"),
+        _ => bail!("DIY 背景只支持 PNG、JPEG 或 WebP"),
+    };
+    if actual_mime != expected_mime {
+        bail!("DIY 背景扩展名与真实图片格式不一致");
+    }
+    let (width, height) = reader.into_dimensions().context("无法读取 DIY 背景尺寸")?;
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if width == 0 || height == 0 || pixels > DIY_BACKGROUND_MAX_PIXELS {
+        bail!("DIY 背景像素总数不能超过 100,000,000");
+    }
+    let image = image::load_from_memory_with_format(&bytes, format)
+        .context("DIY 背景文件已损坏或无法完整解码")?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("DIY 背景文件名不是有效文本")?
+        .to_string();
+    validate_background_file_name(&file_name)?;
+
+    Ok(DiyBackground {
+        bytes,
+        image,
+        extension,
+        file_name,
+    })
+}
+
+fn diy_background_preview(
+    background: &DiyBackground,
+) -> anyhow::Result<CodexThemeDiyBackgroundPreview> {
+    let preview = background.image.thumbnail(
+        DIY_BACKGROUND_PREVIEW_MAX_WIDTH,
+        DIY_BACKGROUND_PREVIEW_MAX_HEIGHT,
+    );
+    let mut encoded = Cursor::new(Vec::new());
+    preview
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .context("无法生成 DIY 背景预览")?;
+    Ok(CodexThemeDiyBackgroundPreview {
+        file_name: background.file_name.clone(),
+        data_uri: data_uri("image/png", encoded.get_ref()),
+        automatic_palette: automatic_diy_palette(Some(background)),
+    })
+}
+
 fn validate_manager_background_source(
     path: &Path,
 ) -> anyhow::Result<(Vec<u8>, StoredManagerBackground)> {
@@ -1176,6 +2432,8 @@ fn validate_manager_background_source(
     Ok((
         bytes.clone(),
         StoredManagerBackground {
+            id: String::new(),
+            file_name: String::new(),
             mime_type: actual_mime.to_string(),
             width,
             height,
@@ -1183,6 +2441,786 @@ fn validate_manager_background_source(
             updated_at: now_secs(),
         },
     ))
+}
+
+fn manager_background_id(sha256: &str) -> String {
+    let digest = sha256.strip_prefix("sha256:").unwrap_or(sha256);
+    format!("ccp-bg-{}", digest.chars().take(20).collect::<String>())
+}
+
+fn validate_manager_background_id(background_id: &str) -> anyhow::Result<()> {
+    if !is_namespaced_identifier(background_id, "ccp-bg-") {
+        bail!("CCP 背景 ID 无效");
+    }
+    Ok(())
+}
+
+fn manager_background_preview_data_uri(bytes: &[u8]) -> anyhow::Result<String> {
+    let image = image::load_from_memory(bytes).context("无法解码 CCP 背景预览")?;
+    let preview = image.thumbnail(720, 405);
+    let mut encoded = Cursor::new(Vec::new());
+    preview
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .context("无法生成 CCP 背景预览")?;
+    Ok(data_uri("image/png", encoded.get_ref()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_diy_package(
+    root: &Path,
+    theme_id: &str,
+    name: &str,
+    version: &str,
+    author: &str,
+    description: &str,
+    settings: &CodexThemeDiySettings,
+    background: Option<&DiyBackground>,
+) -> anyhow::Result<()> {
+    let assets_dir = root.join("assets");
+    fs::create_dir_all(&assets_dir).context("无法创建 DIY 主题资源目录")?;
+
+    let css = render_diy_css(theme_id, settings, background.is_some())?;
+    let preview = render_diy_preview(settings, background)?;
+    let style_path = "assets/theme.css".to_string();
+    let preview_path = "assets/preview.png".to_string();
+    crate::settings::atomic_write(&root.join(&style_path), css.as_bytes())
+        .context("无法写入 DIY 主题样式")?;
+    crate::settings::atomic_write(&root.join(&preview_path), &preview)
+        .context("无法写入 DIY 主题预览")?;
+
+    let mut assets = vec![style_path.clone(), preview_path.clone()];
+    let mut asset_variables = BTreeMap::new();
+    if let Some(background) = background {
+        let relative_path = format!("assets/background.{}", background.extension);
+        crate::settings::atomic_write(&root.join(&relative_path), &background.bytes)
+            .context("无法写入 DIY 主题背景")?;
+        assets.push(relative_path.clone());
+        asset_variables.insert(DIY_BACKGROUND_VARIABLE.to_string(), relative_path);
+    }
+
+    let scope_class = diy_scope_class(theme_id)?;
+    let manifest = CodexThemeManifest {
+        format_version: 1,
+        id: theme_id.to_string(),
+        name: name.to_string(),
+        version: version.to_string(),
+        author: author.to_string(),
+        description: description.to_string(),
+        preview: preview_path,
+        entry_style: style_path,
+        assets,
+        css_variables: BTreeMap::new(),
+        root_attributes: CodexThemeRootAttributes {
+            classes: vec![scope_class],
+            attributes: BTreeMap::from([
+                ("data-ccp-theme-shell".to_string(), settings.mode.clone()),
+                ("data-ccp-theme-origin".to_string(), "ccp-diy".to_string()),
+            ]),
+        },
+        asset_variables,
+        diy: Some(settings.clone()),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    crate::settings::atomic_write(&root.join("theme.json"), &manifest_bytes)
+        .context("无法写入 DIY 主题 manifest")?;
+    Ok(())
+}
+
+fn diy_scope_class(theme_id: &str) -> anyhow::Result<String> {
+    if !theme_id.starts_with(DIY_THEME_ID_PREFIX) {
+        bail!("DIY 主题 ID 命名空间无效");
+    }
+    let scope = format!("ccp-theme-{theme_id}");
+    if !is_namespaced_identifier(&scope, "ccp-theme-") {
+        bail!("DIY 主题作用域无效");
+    }
+    Ok(scope)
+}
+
+fn render_diy_css(
+    theme_id: &str,
+    settings: &CodexThemeDiySettings,
+    has_background: bool,
+) -> anyhow::Result<String> {
+    validate_diy_settings(settings)?;
+    let scope = diy_scope_class(theme_id)?;
+    let surface = rgba_css(&settings.surface_color, settings.glass_opacity)?;
+    let surface_strong = rgba_css(
+        &settings.surface_color,
+        settings.glass_opacity.saturating_add(10).min(100),
+    )?;
+    let border = rgba_css(&settings.text_color, 18)?;
+    let muted_text = rgba_css(&settings.text_color, 68)?;
+    let background_image = if has_background {
+        "var(--ccp-theme-art, none)"
+    } else {
+        "none"
+    };
+    let canvas_tint = rgba_css(
+        &settings.background_color,
+        if settings.mode == "dark" { 24 } else { 30 },
+    )?;
+    let canvas_background = if has_background
+        && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN
+    {
+        format!("linear-gradient({canvas_tint}, {canvas_tint}), {background_image}")
+    } else {
+        "linear-gradient(135deg, color-mix(in srgb, var(--ccp-theme-diy-accent) 34%, var(--ccp-theme-diy-background)), var(--ccp-theme-diy-background))".to_string()
+    };
+    let has_hero_image = has_background
+        && matches!(
+            settings.image_layout.as_str(),
+            DIY_IMAGE_LAYOUT_BANNER | DIY_IMAGE_LAYOUT_CARD
+        );
+    let (
+        hero_visual_background,
+        hero_visual_width,
+        hero_visual_height,
+        hero_visual_border,
+        hero_visual_color,
+        hero_content_opacity,
+    ) = if !has_hero_image {
+        (
+            "var(--ccp-theme-diy-surface-strong)".to_string(),
+            "58px",
+            "58px",
+            "var(--ccp-theme-diy-border)",
+            "var(--ccp-theme-diy-accent)",
+            "1",
+        )
+    } else if settings.image_layout == DIY_IMAGE_LAYOUT_BANNER {
+        (
+            format!("{background_image} center / cover no-repeat"),
+            "min(720px, 78cqw)",
+            "clamp(132px, 20cqh, 180px)",
+            "var(--ccp-theme-diy-border)",
+            "transparent",
+            "0",
+        )
+    } else {
+        (
+            format!(
+                "{background_image} center / contain no-repeat, var(--ccp-theme-diy-surface-strong)"
+            ),
+            "min(480px, 62cqw)",
+            "clamp(200px, 30cqh, 270px)",
+            "var(--ccp-theme-diy-border)",
+            "transparent",
+            "0",
+        )
+    };
+    let spacing = if settings.density == "compact" { 8 } else { 12 };
+    let control_height = if settings.density == "compact" {
+        34
+    } else {
+        40
+    };
+
+    Ok(format!(
+        r#"/* Generated by CCP DIY Theme Builder. User CSS is never inserted. */
+.{scope} {{
+  color-scheme: {mode};
+  --ccp-theme-diy-accent: {accent};
+  --ccp-theme-diy-background: {background};
+  --ccp-theme-diy-surface: {surface};
+  --ccp-theme-diy-surface-strong: {surface_strong};
+  --ccp-theme-diy-text: {text};
+  --ccp-theme-diy-muted-text: {muted_text};
+  --ccp-theme-diy-border: {border};
+  --ccp-theme-diy-radius: {radius}px;
+  --ccp-theme-diy-blur: {blur}px;
+  --ccp-theme-diy-image-layout: {image_layout};
+  --ccp-theme-diy-spacing: {spacing}px;
+  --ccp-theme-diy-control-height: {control_height}px;
+  background-color: var(--ccp-theme-diy-background);
+  background-image: {canvas_background};
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  background-attachment: fixed;
+  color: var(--ccp-theme-diy-text);
+}}
+
+.{scope} body,
+.{scope} #root {{
+  background-color: transparent !important;
+  color: var(--ccp-theme-diy-text);
+}}
+
+.{scope} main,
+.{scope} [data-testid="thread-view"],
+.{scope} [data-testid="home"] {{
+  color: var(--ccp-theme-diy-text);
+}}
+
+.{scope} main.main-surface {{
+  background: var(--ccp-theme-diy-surface) !important;
+  border-color: var(--ccp-theme-diy-border) !important;
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.16) !important;
+}}
+
+.{scope} main.main-surface > header.app-header-tint {{
+  background: var(--ccp-theme-diy-surface-strong) !important;
+  border-color: var(--ccp-theme-diy-border) !important;
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.18) !important;
+}}
+
+.{scope} nav,
+.{scope} aside,
+.{scope} [data-testid="left-sidebar"],
+.{scope} [data-testid="top-bar"] {{
+  background: var(--ccp-theme-diy-surface);
+  border-color: var(--ccp-theme-diy-border);
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.16);
+}}
+
+.{scope} aside.app-shell-left-panel {{
+  background: var(--ccp-theme-diy-surface) !important;
+  color: var(--ccp-theme-diy-text) !important;
+}}
+
+.{scope} [role="main"]:has(
+  :is([data-feature="game-source"], [data-testid="home-icon"])
+) {{
+  background: transparent !important;
+  color: var(--ccp-theme-diy-text) !important;
+  overflow-x: hidden !important;
+}}
+
+.{scope} [data-testid="home-icon"] {{
+  border: 1px solid var(--ccp-theme-diy-border) !important;
+  width: {hero_visual_width} !important;
+  height: {hero_visual_height} !important;
+  min-width: {hero_visual_width} !important;
+  min-height: {hero_visual_height} !important;
+  border-color: {hero_visual_border} !important;
+  border-radius: var(--ccp-theme-diy-radius) !important;
+  background: {hero_visual_background} !important;
+  color: {hero_visual_color} !important;
+  filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--ccp-theme-diy-background) 48%, transparent));
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.2) !important;
+  overflow: hidden !important;
+}}
+
+.{scope} [data-testid="home-icon"] > * {{
+  opacity: {hero_content_opacity} !important;
+}}
+
+.{scope} [data-feature="game-source"] {{
+  color: var(--ccp-theme-diy-text) !important;
+  text-shadow: 0 1px 12px color-mix(in srgb, var(--ccp-theme-diy-background) 58%, transparent) !important;
+}}
+
+.{scope} button,
+.{scope} input,
+.{scope} textarea,
+.{scope} select,
+.{scope} [role="button"],
+.{scope} [role="dialog"],
+.{scope} [role="menu"],
+.{scope} [data-testid="composer"] {{
+  border-radius: var(--ccp-theme-diy-radius);
+}}
+
+.{scope} input,
+.{scope} textarea,
+.{scope} select,
+.{scope} [role="dialog"],
+.{scope} [role="menu"],
+.{scope} [data-testid="composer"] {{
+  background: var(--ccp-theme-diy-surface-strong);
+  border-color: var(--ccp-theme-diy-border);
+  color: var(--ccp-theme-diy-text);
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.12);
+}}
+
+.{scope} .group\/home-suggestions button,
+.{scope} .composer-surface-chrome {{
+  border-color: var(--ccp-theme-diy-border) !important;
+  background: var(--ccp-theme-diy-surface-strong) !important;
+  color: var(--ccp-theme-diy-text) !important;
+  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.18) !important;
+}}
+
+.{scope} .composer-surface-chrome .ProseMirror {{
+  background: transparent !important;
+  color: var(--ccp-theme-diy-text) !important;
+}}
+
+.{scope} aside.app-shell-left-panel nav button,
+.{scope} .group\/home-suggestions button,
+.{scope} [data-testid="composer"] button {{
+  min-height: var(--ccp-theme-diy-control-height);
+}}
+
+.{scope} aside.app-shell-left-panel nav,
+.{scope} .group\/home-suggestions > div > div {{
+  gap: var(--ccp-theme-diy-spacing);
+}}
+
+.{scope} button:hover,
+.{scope} [role="button"]:hover,
+.{scope} [aria-selected="true"] {{
+  background-color: color-mix(in srgb, var(--ccp-theme-diy-accent) 18%, transparent);
+}}
+
+.{scope} a,
+.{scope} [data-accent="true"],
+.{scope} [aria-current="page"] {{
+  color: var(--ccp-theme-diy-accent);
+}}
+
+.{scope} ::placeholder,
+.{scope} [data-muted="true"] {{
+  color: var(--ccp-theme-diy-muted-text);
+}}
+
+.{scope} :focus-visible {{
+  outline: 2px solid var(--ccp-theme-diy-accent);
+  outline-offset: 2px;
+}}
+"#,
+        mode = settings.mode,
+        accent = settings.accent_color,
+        background = settings.background_color,
+        text = settings.text_color,
+        radius = settings.radius_px,
+        blur = settings.blur_px,
+        image_layout = settings.image_layout,
+    ))
+}
+
+fn rgba_css(color: &str, opacity_percent: u8) -> anyhow::Result<String> {
+    let [red, green, blue] = parse_hex_color(color)?;
+    Ok(format!(
+        "rgba({red}, {green}, {blue}, {:.2})",
+        f32::from(opacity_percent) / 100.0
+    ))
+}
+
+fn parse_hex_color(value: &str) -> anyhow::Result<[u8; 3]> {
+    validate_hex_color("颜色", value)?;
+    Ok([
+        u8::from_str_radix(&value[1..3], 16)?,
+        u8::from_str_radix(&value[3..5], 16)?,
+        u8::from_str_radix(&value[5..7], 16)?,
+    ])
+}
+
+fn render_diy_preview(
+    settings: &CodexThemeDiySettings,
+    background: Option<&DiyBackground>,
+) -> anyhow::Result<Vec<u8>> {
+    validate_diy_settings(settings)?;
+    let [background_red, background_green, background_blue] =
+        parse_hex_color(&settings.background_color)?;
+    let mut canvas = image::RgbaImage::from_pixel(
+        DIY_PREVIEW_WIDTH,
+        DIY_PREVIEW_HEIGHT,
+        image::Rgba([background_red, background_green, background_blue, 255]),
+    );
+    let [surface_red, surface_green, surface_blue] = parse_hex_color(&settings.surface_color)?;
+    let [text_red, text_green, text_blue] = parse_hex_color(&settings.text_color)?;
+    let [accent_red, accent_green, accent_blue] = parse_hex_color(&settings.accent_color)?;
+
+    if let Some(background) =
+        background.filter(|_| settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN)
+    {
+        let ambient = background.image.resize_to_fill(
+            DIY_PREVIEW_WIDTH,
+            DIY_PREVIEW_HEIGHT,
+            image::imageops::FilterType::Triangle,
+        );
+        overlay_rounded_image(&mut canvas, &ambient.to_rgba8(), 0, 0, 0);
+        fill_rounded_rect(
+            &mut canvas,
+            0,
+            0,
+            DIY_PREVIEW_WIDTH,
+            DIY_PREVIEW_HEIGHT,
+            0,
+            image::Rgba([
+                background_red,
+                background_green,
+                background_blue,
+                if settings.mode == "dark" { 48 } else { 62 },
+            ]),
+        );
+    }
+
+    let surface = image::Rgba([
+        surface_red,
+        surface_green,
+        surface_blue,
+        percent_to_alpha(settings.glass_opacity),
+    ]);
+    let strong_surface = image::Rgba([
+        surface_red,
+        surface_green,
+        surface_blue,
+        percent_to_alpha(settings.glass_opacity.saturating_add(7).min(100)),
+    ]);
+    let border = image::Rgba([text_red, text_green, text_blue, 42]);
+    let text = image::Rgba([text_red, text_green, text_blue, 222]);
+    let muted = image::Rgba([text_red, text_green, text_blue, 108]);
+    let accent = image::Rgba([accent_red, accent_green, accent_blue, 255]);
+    let radius = u32::from(settings.radius_px).saturating_add(4);
+    let main_radius = radius.saturating_add(8).min(24);
+
+    const SIDEBAR_WIDTH: u32 = 202;
+    fill_rounded_rect(
+        &mut canvas,
+        0,
+        0,
+        SIDEBAR_WIDTH,
+        DIY_PREVIEW_HEIGHT,
+        0,
+        surface,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        SIDEBAR_WIDTH,
+        18,
+        DIY_PREVIEW_WIDTH - SIDEBAR_WIDTH,
+        DIY_PREVIEW_HEIGHT - 18,
+        main_radius,
+        surface,
+    );
+    stroke_rounded_rect(
+        &mut canvas,
+        SIDEBAR_WIDTH,
+        18,
+        DIY_PREVIEW_WIDTH - SIDEBAR_WIDTH,
+        DIY_PREVIEW_HEIGHT - 18,
+        main_radius,
+        border,
+    );
+
+    // Current Codex sidebar: product title, new-task row, projects and recent sessions.
+    fill_rounded_rect(&mut canvas, 16, 23, 68, 14, 5, text);
+    fill_rounded_rect(&mut canvas, 91, 28, 9, 5, 2, muted);
+    fill_rounded_rect(&mut canvas, 174, 24, 13, 13, 6, muted);
+    fill_rounded_rect(&mut canvas, 9, 55, 184, 35, radius.min(9), strong_surface);
+    fill_rounded_rect(&mut canvas, 18, 65, 15, 15, 5, muted);
+    fill_rounded_rect(&mut canvas, 42, 67, 82, 11, 4, text);
+
+    for (index, y) in [112_u32, 216, 354].into_iter().enumerate() {
+        if index == 1 {
+            fill_rounded_rect(
+                &mut canvas,
+                9,
+                y - 7,
+                184,
+                112,
+                radius.min(9),
+                strong_surface,
+            );
+        }
+        fill_rounded_rect(&mut canvas, 16, y, 17, 13, 4, text);
+        fill_rounded_rect(&mut canvas, 42, y + 1, 116, 11, 4, text);
+        let child_count = if index == 1 { 3 } else { 2 };
+        for child in 0..child_count {
+            fill_rounded_rect(
+                &mut canvas,
+                39,
+                y + 29 + child * 24,
+                126 - child * 9,
+                9,
+                4,
+                muted,
+            );
+        }
+    }
+
+    fill_rounded_rect(&mut canvas, 0, 556, SIDEBAR_WIDTH, 1, 0, border);
+    fill_rounded_rect(&mut canvas, 16, 572, 15, 15, 7, muted);
+    fill_rounded_rect(&mut canvas, 42, 574, 66, 11, 4, text);
+    fill_rounded_rect(&mut canvas, 174, 573, 13, 13, 6, muted);
+
+    // Small window controls in the otherwise quiet main canvas.
+    fill_rounded_rect(&mut canvas, 918, 39, 12, 10, 3, muted);
+    fill_rounded_rect(&mut canvas, 940, 39, 12, 10, 3, muted);
+
+    let heading_y = if let Some(background) =
+        background.filter(|_| settings.image_layout != DIY_IMAGE_LAYOUT_FULLSCREEN)
+    {
+        let (visual_x, visual_y, visual_width, visual_height, cover) =
+            if settings.image_layout == DIY_IMAGE_LAYOUT_BANNER {
+                (
+                    DIY_PREVIEW_BANNER_X,
+                    DIY_PREVIEW_BANNER_Y,
+                    DIY_PREVIEW_BANNER_WIDTH,
+                    DIY_PREVIEW_BANNER_HEIGHT,
+                    true,
+                )
+            } else {
+                (
+                    DIY_PREVIEW_HERO_X,
+                    DIY_PREVIEW_HERO_Y,
+                    DIY_PREVIEW_HERO_WIDTH,
+                    DIY_PREVIEW_HERO_HEIGHT,
+                    false,
+                )
+            };
+        fill_rounded_rect(
+            &mut canvas,
+            visual_x,
+            visual_y,
+            visual_width,
+            visual_height,
+            radius.saturating_sub(2).min(8),
+            strong_surface,
+        );
+        let main = if cover {
+            background.image.resize_to_fill(
+                visual_width,
+                visual_height,
+                image::imageops::FilterType::Lanczos3,
+            )
+        } else {
+            background.image.resize(
+                visual_width.saturating_sub(20),
+                visual_height.saturating_sub(16),
+                image::imageops::FilterType::Lanczos3,
+            )
+        }
+        .to_rgba8();
+        let main_x = visual_x + visual_width.saturating_sub(main.width()) / 2;
+        let main_y = visual_y + visual_height.saturating_sub(main.height()) / 2;
+        overlay_rounded_image(
+            &mut canvas,
+            &main,
+            main_x,
+            main_y,
+            if cover {
+                radius.saturating_sub(2).min(8)
+            } else {
+                6
+            },
+        );
+        stroke_rounded_rect(
+            &mut canvas,
+            visual_x,
+            visual_y,
+            visual_width,
+            visual_height,
+            radius.saturating_sub(2).min(8),
+            image::Rgba([text_red, text_green, text_blue, 68]),
+        );
+        visual_y + visual_height + 26
+    } else {
+        let icon_size = 54;
+        let icon_x = DIY_PREVIEW_HERO_X + (DIY_PREVIEW_HERO_WIDTH - icon_size) / 2;
+        let icon_y = DIY_PREVIEW_HERO_Y + (DIY_PREVIEW_HERO_HEIGHT - icon_size) / 2;
+        fill_rounded_rect(
+            &mut canvas,
+            icon_x,
+            icon_y,
+            icon_size,
+            icon_size,
+            icon_size / 2,
+            strong_surface,
+        );
+        stroke_rounded_rect(
+            &mut canvas,
+            icon_x,
+            icon_y,
+            icon_size,
+            icon_size,
+            icon_size / 2,
+            border,
+        );
+        fill_rounded_rect(&mut canvas, icon_x + 17, icon_y + 17, 20, 20, 8, accent);
+        270
+    };
+
+    // Centered home heading below the visual.
+    fill_rounded_rect(&mut canvas, 376, heading_y, 176, 16, 6, text);
+    fill_rounded_rect(&mut canvas, 563, heading_y, 248, 16, 6, text);
+    fill_rounded_rect(&mut canvas, 563, heading_y + 22, 248, 2, 1, muted);
+
+    // Bottom composer with context strip and input surface.
+    const COMPOSER_X: u32 = 318;
+    const COMPOSER_Y: u32 = 444;
+    const COMPOSER_WIDTH: u32 = 548;
+    const COMPOSER_HEIGHT: u32 = 128;
+    fill_rounded_rect(
+        &mut canvas,
+        COMPOSER_X,
+        COMPOSER_Y,
+        COMPOSER_WIDTH,
+        COMPOSER_HEIGHT,
+        main_radius,
+        strong_surface,
+    );
+    stroke_rounded_rect(
+        &mut canvas,
+        COMPOSER_X,
+        COMPOSER_Y,
+        COMPOSER_WIDTH,
+        COMPOSER_HEIGHT,
+        main_radius,
+        border,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        COMPOSER_X,
+        COMPOSER_Y + 39,
+        COMPOSER_WIDTH,
+        1,
+        0,
+        border,
+    );
+    fill_rounded_rect(&mut canvas, 338, 458, 15, 13, 4, muted);
+    fill_rounded_rect(&mut canvas, 362, 460, 128, 10, 4, text);
+    fill_rounded_rect(&mut canvas, 512, 458, 15, 13, 4, muted);
+    fill_rounded_rect(&mut canvas, 536, 460, 42, 10, 4, text);
+    fill_rounded_rect(&mut canvas, 598, 458, 15, 13, 4, muted);
+    fill_rounded_rect(&mut canvas, 622, 460, 38, 10, 4, text);
+    fill_rounded_rect(&mut canvas, 340, 507, 112, 11, 4, muted);
+    fill_rounded_rect(&mut canvas, 339, 543, 17, 17, 8, muted);
+    fill_rounded_rect(&mut canvas, 369, 547, 66, 10, 4, accent);
+    fill_rounded_rect(&mut canvas, 804, 543, 17, 17, 8, muted);
+    fill_rounded_rect(&mut canvas, 829, 537, 27, 27, 14, text);
+
+    let mut cursor = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .context("无法编码 DIY 主题 PNG 预览")?;
+    Ok(cursor.into_inner())
+}
+
+fn percent_to_alpha(value: u8) -> u8 {
+    ((u16::from(value) * 255) / 100) as u8
+}
+
+fn fill_rounded_rect(
+    image: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    radius: u32,
+    color: image::Rgba<u8>,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let radius = radius.min(width / 2).min(height / 2);
+    for target_y in y..y.saturating_add(height).min(image.height()) {
+        for target_x in x..x.saturating_add(width).min(image.width()) {
+            if rounded_rect_contains(target_x, target_y, x, y, width, height, radius) {
+                blend_pixel(image.get_pixel_mut(target_x, target_y), color);
+            }
+        }
+    }
+}
+
+fn overlay_rounded_image(
+    target: &mut image::RgbaImage,
+    source: &image::RgbaImage,
+    x: u32,
+    y: u32,
+    radius: u32,
+) {
+    let width = source.width().min(target.width().saturating_sub(x));
+    let height = source.height().min(target.height().saturating_sub(y));
+    if width == 0 || height == 0 {
+        return;
+    }
+    let radius = radius.min(width / 2).min(height / 2);
+    for source_y in 0..height {
+        for source_x in 0..width {
+            let target_x = x + source_x;
+            let target_y = y + source_y;
+            if rounded_rect_contains(target_x, target_y, x, y, width, height, radius) {
+                blend_pixel(
+                    target.get_pixel_mut(target_x, target_y),
+                    *source.get_pixel(source_x, source_y),
+                );
+            }
+        }
+    }
+}
+
+fn stroke_rounded_rect(
+    image: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    radius: u32,
+    color: image::Rgba<u8>,
+) {
+    if width < 3 || height < 3 {
+        return;
+    }
+    fill_rounded_rect(image, x, y, width, 1, radius, color);
+    fill_rounded_rect(
+        image,
+        x,
+        y.saturating_add(height - 1),
+        width,
+        1,
+        radius,
+        color,
+    );
+    fill_rounded_rect(image, x, y, 1, height, radius, color);
+    fill_rounded_rect(
+        image,
+        x.saturating_add(width - 1),
+        y,
+        1,
+        height,
+        radius,
+        color,
+    );
+}
+
+fn rounded_rect_contains(
+    target_x: u32,
+    target_y: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    radius: u32,
+) -> bool {
+    if radius == 0 {
+        return true;
+    }
+    let local_x = target_x.saturating_sub(x);
+    let local_y = target_y.saturating_sub(y);
+    let right = width.saturating_sub(1);
+    let bottom = height.saturating_sub(1);
+    let corner_x = if local_x < radius {
+        radius
+    } else if local_x > right.saturating_sub(radius) {
+        right.saturating_sub(radius)
+    } else {
+        return true;
+    };
+    let corner_y = if local_y < radius {
+        radius
+    } else if local_y > bottom.saturating_sub(radius) {
+        bottom.saturating_sub(radius)
+    } else {
+        return true;
+    };
+    let delta_x = i64::from(local_x) - i64::from(corner_x);
+    let delta_y = i64::from(local_y) - i64::from(corner_y);
+    delta_x * delta_x + delta_y * delta_y <= i64::from(radius) * i64::from(radius)
+}
+
+fn blend_pixel(destination: &mut image::Rgba<u8>, source: image::Rgba<u8>) {
+    let alpha = u16::from(source[3]);
+    let inverse = 255_u16.saturating_sub(alpha);
+    for channel in 0..3 {
+        destination[channel] = ((u16::from(source[channel]) * alpha
+            + u16::from(destination[channel]) * inverse)
+            / 255) as u8;
+    }
+    destination[3] = 255;
 }
 
 fn normalize_css_line_endings(css: String) -> String {
@@ -1208,8 +3246,35 @@ fn validate_package(root: &Path) -> anyhow::Result<(CodexThemeManifest, String, 
     validate_text_field("主题名称", &manifest.name, 1, 80)?;
     validate_text_field("主题版本", &manifest.version, 1, 40)?;
     validate_text_field("主题作者", &manifest.author, 1, 80)?;
-    if manifest.description.len() > 400 {
-        bail!("主题描述过长");
+    if manifest.description.chars().count() > 400
+        || manifest.description.chars().any(char::is_control)
+    {
+        bail!("主题描述无效或过长");
+    }
+    if let Some(diy) = manifest.diy.as_ref() {
+        if !manifest.id.starts_with(DIY_THEME_ID_PREFIX) {
+            bail!("DIY 元数据只能用于 ccp-diy-* 主题");
+        }
+        validate_diy_settings(diy)?;
+        let expected_scope = diy_scope_class(&manifest.id)?;
+        if manifest.root_attributes.classes != [expected_scope]
+            || manifest
+                .root_attributes
+                .attributes
+                .get("data-ccp-theme-origin")
+                .map(String::as_str)
+                != Some("ccp-diy")
+        {
+            bail!("DIY 主题作用域或来源标记无效");
+        }
+        let background_declared = manifest
+            .asset_variables
+            .contains_key(DIY_BACKGROUND_VARIABLE);
+        if background_declared != diy.background_file_name.is_some()
+            || manifest.asset_variables.len() > usize::from(background_declared)
+        {
+            bail!("DIY 主题背景元数据与资源清单不一致");
+        }
     }
 
     let preview_path = checked_join(root, &manifest.preview)?;
@@ -1550,6 +3615,478 @@ mod tests {
         image.save(path).unwrap();
     }
 
+    fn diy_input(name: &str) -> CodexThemeDiyInput {
+        CodexThemeDiyInput {
+            theme_id: None,
+            expected_integrity_sha256: None,
+            name: name.to_string(),
+            author: "CCP Test".to_string(),
+            description: "A no-code theme".to_string(),
+            settings: CodexThemeDiySettings {
+                mode: "dark".to_string(),
+                accent_color: "#0A84FF".to_string(),
+                background_color: "#121416".to_string(),
+                surface_color: "#20242A".to_string(),
+                text_color: "#F2F4F7".to_string(),
+                glass_opacity: 78,
+                blur_px: 24,
+                radius_px: 8,
+                font_scale_percent: 100,
+                density: "comfortable".to_string(),
+                image_layout: DIY_IMAGE_LAYOUT_CARD.to_string(),
+                background_file_name: None,
+            },
+            background_path: None,
+            remove_background: false,
+        }
+    }
+
+    fn assert_no_active_diy_artifacts(store: &CodexThemeStore) {
+        assert_eq!(fs::read_dir(store.journal_dir()).unwrap().count(), 0);
+        assert!(fs::read_dir(store.staging_dir()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(DIY_BUILD_PREFIX)
+        }));
+    }
+
+    #[test]
+    fn diy_theme_create_generates_unique_safe_package_and_png_preview() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+
+        let first = store.save_diy_theme(diy_input("My Theme")).unwrap();
+        let second = store.save_diy_theme(diy_input("My Theme")).unwrap();
+
+        assert!(first.id.starts_with(DIY_THEME_ID_PREFIX));
+        assert!(second.id.starts_with(DIY_THEME_ID_PREFIX));
+        assert_ne!(first.id, second.id);
+        assert!(!first.current);
+        assert_eq!(first.version, "1.0.0");
+        assert_eq!(first.diy.as_ref().unwrap().accent_color, "#0A84FF");
+        assert_eq!(
+            first.diy.as_ref().unwrap().image_layout,
+            DIY_IMAGE_LAYOUT_CARD
+        );
+        let preview = first
+            .preview_data_uri
+            .as_deref()
+            .unwrap()
+            .strip_prefix("data:image/png;base64,")
+            .unwrap();
+        let preview = base64::engine::general_purpose::STANDARD
+            .decode(preview)
+            .unwrap();
+        let image = image::load_from_memory_with_format(&preview, image::ImageFormat::Png).unwrap();
+        assert_eq!(image.width(), DIY_PREVIEW_WIDTH);
+        assert_eq!(image.height(), DIY_PREVIEW_HEIGHT);
+
+        let package_root = store.library_dir().join(&first.id);
+        let css = fs::read_to_string(package_root.join("assets/theme.css")).unwrap();
+        assert!(css.contains(&format!(".ccp-theme-{}", first.id)));
+        assert!(css.contains("User CSS is never inserted"));
+        assert!(!css.to_ascii_lowercase().contains("@import"));
+        assert!(!css.to_ascii_lowercase().contains("javascript:"));
+        let manifest: CodexThemeManifest =
+            serde_json::from_slice(&fs::read(package_root.join("theme.json")).unwrap()).unwrap();
+        assert!(manifest.diy.is_some());
+        assert_no_active_diy_artifacts(&store);
+    }
+
+    #[test]
+    fn diy_theme_edit_preserves_id_versions_package_and_refreshes_active_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let created = store.save_diy_theme(diy_input("Editable")).unwrap();
+        store.apply_theme(&created.id).unwrap();
+        let generation_before = store.read_state().unwrap().generation;
+
+        let mut edited_input = diy_input("Editable Updated");
+        edited_input.theme_id = Some(created.id.clone());
+        edited_input.expected_integrity_sha256 = created.integrity_sha256.clone();
+        edited_input.settings.mode = "system".to_string();
+        edited_input.settings.accent_color = "red; } @import x".to_string();
+        edited_input.settings.density = "spacious".to_string();
+        edited_input.settings.font_scale_percent = 92;
+        edited_input.settings.image_layout = DIY_IMAGE_LAYOUT_BANNER.to_string();
+        let edited = store.save_diy_theme(edited_input).unwrap();
+
+        assert_eq!(edited.id, created.id);
+        assert_eq!(edited.version, "1.0.1");
+        assert!(edited.current);
+        assert!(edited.previous_version_available);
+        let edited_settings = edited.diy.as_ref().unwrap();
+        assert_eq!(edited_settings.mode, "dark");
+        assert_eq!(edited_settings.accent_color, "#0A84FF");
+        assert_eq!(edited_settings.density, "comfortable");
+        assert_eq!(edited_settings.font_scale_percent, 100);
+        assert_eq!(edited_settings.image_layout, DIY_IMAGE_LAYOUT_BANNER);
+        assert_eq!(
+            store.read_state().unwrap().generation,
+            generation_before + 1
+        );
+        assert!(store.backups_dir().join(&created.id).is_dir());
+
+        let state_after_edit = store.read_state().unwrap();
+        let mut stale_input = diy_input("Stale Edit");
+        stale_input.theme_id = Some(created.id.clone());
+        stale_input.expected_integrity_sha256 = created.integrity_sha256.clone();
+        let error = store.save_diy_theme(stale_input).unwrap_err();
+        assert!(error.to_string().contains("编辑期间已发生变化"));
+        assert_eq!(store.read_state().unwrap(), state_after_edit);
+        assert_no_active_diy_artifacts(&store);
+    }
+
+    #[test]
+    fn diy_theme_background_can_be_retained_replaced_and_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let background_path = temp.path().join("personal-background.png");
+        write_manager_background(&background_path, 640, 360, [32, 96, 160]);
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+
+        let selected_preview = store.preview_diy_background(&background_path).unwrap();
+        assert_eq!(selected_preview.file_name, "personal-background.png");
+        assert!(
+            selected_preview
+                .data_uri
+                .starts_with("data:image/png;base64,")
+        );
+
+        let mut create = diy_input("Background Theme");
+        create.background_path = Some(background_path.to_string_lossy().into_owned());
+        let created = store.save_diy_theme(create).unwrap();
+        assert_eq!(
+            created
+                .diy
+                .as_ref()
+                .unwrap()
+                .background_file_name
+                .as_deref(),
+            Some("personal-background.png")
+        );
+        let generated_preview = created
+            .preview_data_uri
+            .as_deref()
+            .unwrap()
+            .strip_prefix("data:image/png;base64,")
+            .unwrap();
+        let generated_preview = base64::engine::general_purpose::STANDARD
+            .decode(generated_preview)
+            .unwrap();
+        let generated_preview =
+            image::load_from_memory_with_format(&generated_preview, image::ImageFormat::Png)
+                .unwrap()
+                .to_rgba8();
+        assert_eq!(
+            &generated_preview
+                .get_pixel(
+                    DIY_PREVIEW_HERO_X + DIY_PREVIEW_HERO_WIDTH / 2,
+                    DIY_PREVIEW_HERO_Y + DIY_PREVIEW_HERO_HEIGHT - 12,
+                )
+                .0[..3],
+            &[32, 96, 160]
+        );
+        let generated_css = fs::read_to_string(
+            store
+                .library_dir()
+                .join(&created.id)
+                .join("assets/theme.css"),
+        )
+        .unwrap();
+        assert!(generated_css.contains("center / contain no-repeat"));
+        let installed_preview = store.diy_theme_background_preview(&created.id).unwrap();
+        assert_eq!(installed_preview.file_name, "personal-background.png");
+        let installed_preview = base64::engine::general_purpose::STANDARD
+            .decode(
+                installed_preview
+                    .data_uri
+                    .strip_prefix("data:image/png;base64,")
+                    .unwrap(),
+            )
+            .unwrap();
+        let installed_preview =
+            image::load_from_memory_with_format(&installed_preview, image::ImageFormat::Png)
+                .unwrap();
+        assert!(installed_preview.width() <= DIY_BACKGROUND_PREVIEW_MAX_WIDTH);
+        assert!(installed_preview.height() <= DIY_BACKGROUND_PREVIEW_MAX_HEIGHT);
+
+        let mut retain = diy_input("Background Theme Retained");
+        retain.theme_id = Some(created.id.clone());
+        retain.expected_integrity_sha256 = created.integrity_sha256.clone();
+        retain.settings.background_color = "#111827".to_string();
+        let retained = store.save_diy_theme(retain).unwrap();
+        assert_eq!(
+            retained
+                .diy
+                .as_ref()
+                .unwrap()
+                .background_file_name
+                .as_deref(),
+            Some("personal-background.png")
+        );
+        let retained_manifest = store
+            .read_state()
+            .unwrap()
+            .themes
+            .into_iter()
+            .find(|theme| theme.manifest.id == created.id)
+            .unwrap()
+            .manifest;
+        let retained_asset = retained_manifest
+            .asset_variables
+            .get(DIY_BACKGROUND_VARIABLE)
+            .unwrap();
+        let retained_asset_path = store.library_dir().join(&created.id).join(retained_asset);
+        assert!(retained_asset_path.is_file());
+        let retained_bytes = fs::read(&retained_asset_path).unwrap();
+
+        let replacement_path = temp.path().join("replacement-background.png");
+        write_manager_background(&replacement_path, 800, 450, [180, 40, 96]);
+        let mut replace = diy_input("Background Theme Replaced");
+        replace.theme_id = Some(created.id.clone());
+        replace.expected_integrity_sha256 = retained.integrity_sha256.clone();
+        replace.background_path = Some(replacement_path.to_string_lossy().into_owned());
+        let replaced = store.save_diy_theme(replace).unwrap();
+        assert_eq!(replaced.version, "1.0.2");
+        assert_eq!(
+            replaced
+                .diy
+                .as_ref()
+                .unwrap()
+                .background_file_name
+                .as_deref(),
+            Some("replacement-background.png")
+        );
+        let replaced_manifest = store
+            .read_state()
+            .unwrap()
+            .themes
+            .into_iter()
+            .find(|theme| theme.manifest.id == created.id)
+            .unwrap()
+            .manifest;
+        let replaced_asset = replaced_manifest
+            .asset_variables
+            .get(DIY_BACKGROUND_VARIABLE)
+            .unwrap();
+        assert_ne!(
+            fs::read(store.library_dir().join(&created.id).join(replaced_asset)).unwrap(),
+            retained_bytes
+        );
+
+        let mut remove = diy_input("Background Theme Without Image");
+        remove.theme_id = Some(created.id.clone());
+        remove.expected_integrity_sha256 = replaced.integrity_sha256.clone();
+        remove.remove_background = true;
+        let removed = store.save_diy_theme(remove).unwrap();
+        assert_eq!(removed.version, "1.0.3");
+        assert!(removed.diy.as_ref().unwrap().background_file_name.is_none());
+        let removed_manifest = store
+            .read_state()
+            .unwrap()
+            .themes
+            .into_iter()
+            .find(|theme| theme.manifest.id == created.id)
+            .unwrap()
+            .manifest;
+        assert!(removed_manifest.asset_variables.is_empty());
+        assert!(
+            !fs::read_dir(store.library_dir().join(&created.id).join("assets"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("background."))
+        );
+        assert!(store.diy_theme_background_preview(&created.id).is_err());
+        assert_no_active_diy_artifacts(&store);
+    }
+
+    #[test]
+    fn diy_automatic_palette_is_deterministic_and_readable() {
+        let temp = tempfile::tempdir().unwrap();
+        let dark_path = temp.path().join("dark.png");
+        let light_path = temp.path().join("light.png");
+        let neutral_path = temp.path().join("neutral.png");
+        write_manager_background(&dark_path, 640, 360, [18, 32, 48]);
+        write_manager_background(&light_path, 640, 360, [228, 236, 244]);
+        write_manager_background(&neutral_path, 640, 360, [128, 128, 128]);
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+
+        let dark = store.preview_diy_background(&dark_path).unwrap();
+        let dark_again = store.preview_diy_background(&dark_path).unwrap();
+        let light = store.preview_diy_background(&light_path).unwrap();
+        let neutral = store.preview_diy_background(&neutral_path).unwrap();
+
+        assert_eq!(dark.automatic_palette, dark_again.automatic_palette);
+        assert_eq!(dark.automatic_palette.mode, "dark");
+        assert_eq!(light.automatic_palette.mode, "light");
+        assert_eq!(neutral.automatic_palette.accent_color, "#0A84FF");
+        for palette in [dark.automatic_palette, light.automatic_palette] {
+            let accent = parse_hex_color(&palette.accent_color).unwrap();
+            let surface = parse_hex_color(&palette.surface_color).unwrap();
+            assert!(contrast_ratio(accent, surface) >= 3.0);
+        }
+    }
+
+    #[test]
+    fn diy_image_layout_defaults_for_legacy_settings() {
+        let settings = diy_input("Legacy layout").settings;
+        let mut value = serde_json::to_value(settings).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("image_layout")
+            .unwrap();
+
+        let restored: CodexThemeDiySettings = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.image_layout, DIY_IMAGE_LAYOUT_CARD);
+    }
+
+    #[test]
+    fn diy_image_layouts_generate_distinct_css_and_previews() {
+        let temp = tempfile::tempdir().unwrap();
+        let background_path = temp.path().join("layout-background.png");
+        write_manager_background(&background_path, 640, 360, [32, 96, 160]);
+        let background = validate_diy_background_source(&background_path).unwrap();
+        let mut settings = diy_input("Layout modes").settings;
+
+        settings.image_layout = DIY_IMAGE_LAYOUT_FULLSCREEN.to_string();
+        let fullscreen_css = render_diy_css("ccp-diy-layout-fullscreen", &settings, true).unwrap();
+        let fullscreen_preview = render_diy_preview(&settings, Some(&background)).unwrap();
+        assert!(fullscreen_css.contains("--ccp-theme-diy-image-layout: fullscreen;"));
+        assert!(fullscreen_css.contains("background-image: linear-gradient(rgba("));
+        assert!(fullscreen_css.contains("opacity: 1 !important;"));
+
+        settings.image_layout = DIY_IMAGE_LAYOUT_BANNER.to_string();
+        let banner_css = render_diy_css("ccp-diy-layout-banner", &settings, true).unwrap();
+        let banner_preview = render_diy_preview(&settings, Some(&background)).unwrap();
+        assert!(banner_css.contains("--ccp-theme-diy-image-layout: banner;"));
+        assert!(banner_css.contains("center / cover no-repeat"));
+        assert!(banner_css.contains("opacity: 0 !important;"));
+        assert!(banner_css.contains("background-image: linear-gradient(135deg"));
+
+        settings.image_layout = DIY_IMAGE_LAYOUT_CARD.to_string();
+        let card_css = render_diy_css("ccp-diy-layout-card", &settings, true).unwrap();
+        let card_preview = render_diy_preview(&settings, Some(&background)).unwrap();
+        assert!(card_css.contains("--ccp-theme-diy-image-layout: card;"));
+        assert!(card_css.contains("center / contain no-repeat"));
+        assert!(card_css.contains("opacity: 0 !important;"));
+        assert!(card_css.contains("background-image: linear-gradient(135deg"));
+
+        assert_ne!(fullscreen_preview, banner_preview);
+        assert_ne!(banner_preview, card_preview);
+        for preview in [fullscreen_preview, banner_preview, card_preview] {
+            let image =
+                image::load_from_memory_with_format(&preview, image::ImageFormat::Png).unwrap();
+            assert_eq!(image.width(), DIY_PREVIEW_WIDTH);
+            assert_eq!(image.height(), DIY_PREVIEW_HEIGHT);
+        }
+    }
+
+    #[test]
+    fn diy_theme_rejects_invalid_structured_values_without_state_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let state_before = store.read_state().unwrap();
+
+        let mut invalid_inputs = Vec::new();
+        let mut empty_name = diy_input("valid");
+        empty_name.name = "  ".to_string();
+        invalid_inputs.push(empty_name);
+        let mut bad_opacity = diy_input("bad opacity");
+        bad_opacity.settings.glass_opacity = 7;
+        invalid_inputs.push(bad_opacity);
+        let mut bad_blur = diy_input("bad blur");
+        bad_blur.settings.blur_px = 49;
+        invalid_inputs.push(bad_blur);
+        let mut bad_radius = diy_input("bad radius");
+        bad_radius.settings.radius_px = 17;
+        invalid_inputs.push(bad_radius);
+        let mut bad_image_layout = diy_input("bad image layout");
+        bad_image_layout.settings.image_layout = "floating".to_string();
+        invalid_inputs.push(bad_image_layout);
+        let mut empty_id = diy_input("empty id");
+        empty_id.theme_id = Some("  ".to_string());
+        invalid_inputs.push(empty_id);
+        let mut empty_background_path = diy_input("empty background path");
+        empty_background_path.background_path = Some("  ".to_string());
+        invalid_inputs.push(empty_background_path);
+
+        for input in invalid_inputs {
+            assert!(store.save_diy_theme(input).is_err());
+            assert_eq!(store.read_state().unwrap(), state_before);
+            assert_no_active_diy_artifacts(&store);
+        }
+    }
+
+    #[test]
+    fn diy_theme_rejects_non_diy_overwrite_and_unsafe_backgrounds() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("plain-theme");
+        write_theme(
+            &source,
+            "ccp-diy-plain-import",
+            ":root { --ccp-plain-theme: 1; }",
+        );
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let imported = store.import_theme(&source).unwrap();
+        let state_before = store.read_state().unwrap();
+        let css_before = fs::read_to_string(
+            store
+                .library_dir()
+                .join(&imported.id)
+                .join("assets/theme.css"),
+        )
+        .unwrap();
+        let mut overwrite = diy_input("Attempted Overwrite");
+        overwrite.theme_id = Some(imported.id.clone());
+        let error = store.save_diy_theme(overwrite).unwrap_err();
+        assert!(format!("{error:#}").contains("仅能编辑"));
+        assert_eq!(store.read_state().unwrap(), state_before);
+        assert_eq!(
+            fs::read_to_string(
+                store
+                    .library_dir()
+                    .join(&imported.id)
+                    .join("assets/theme.css")
+            )
+            .unwrap(),
+            css_before
+        );
+
+        let actual_png = temp.path().join("actual.png");
+        let mismatched = temp.path().join("mismatched.jpg");
+        write_manager_background(&actual_png, 320, 180, [10, 20, 30]);
+        fs::copy(&actual_png, &mismatched).unwrap();
+        let mut bad_background = diy_input("Bad Background");
+        bad_background.background_path = Some(mismatched.to_string_lossy().into_owned());
+        assert!(store.save_diy_theme(bad_background).is_err());
+
+        let mut directory_background = diy_input("Directory Background");
+        directory_background.background_path = Some(temp.path().to_string_lossy().into_owned());
+        assert!(store.save_diy_theme(directory_background).is_err());
+        assert_eq!(store.read_state().unwrap(), state_before);
+        assert_no_active_diy_artifacts(&store);
+    }
+
+    #[test]
+    fn stale_diy_build_directory_is_removed_during_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let store_root = temp.path().join("store");
+        let store = CodexThemeStore::open(&store_root).unwrap();
+        let stale = store.staging_dir().join("diy-build-stale");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("partial"), b"partial").unwrap();
+        drop(store);
+
+        CodexThemeStore::open(&store_root).unwrap();
+        assert!(!stale.exists());
+    }
+
     #[test]
     fn default_theme_is_always_first() {
         let temp = tempfile::tempdir().unwrap();
@@ -1759,13 +4296,13 @@ mod tests {
     }
 
     #[test]
-    fn manager_background_override_is_validated_persisted_and_clearable() {
+    fn manager_background_library_deduplicates_switches_persists_and_deletes() {
         let temp = tempfile::tempdir().unwrap();
         let store_root = temp.path().join("store");
         let first_source = temp.path().join("first.png");
         let second_source = temp.path().join("second.png");
         write_manager_background(&first_source, 1920, 1080, [12, 34, 56]);
-        write_manager_background(&second_source, 4096, 2160, [78, 90, 123]);
+        write_manager_background(&second_source, 2048, 1152, [78, 90, 123]);
         let first_source_bytes = fs::read(&first_source).unwrap();
 
         let store = CodexThemeStore::open(&store_root).unwrap();
@@ -1785,31 +4322,99 @@ mod tests {
                 .starts_with("data:image/png;base64,")
         );
         assert_eq!(fs::read(&first_source).unwrap(), first_source_bytes);
+        let first_library = store.manager_background_library().unwrap();
+        assert_eq!(first_library.items.len(), 1);
+        let first_id = first_library.current_background_id.clone().unwrap();
+        assert!(
+            first_library.items[0]
+                .preview_data_uri
+                .starts_with("data:image/png;base64,")
+        );
 
         let second = store.set_manager_background(&second_source).unwrap();
-        assert_eq!(second.width, Some(4096));
+        assert_eq!(second.width, Some(2048));
+        let second_library = store.manager_background_library().unwrap();
+        assert_eq!(second_library.items.len(), 2);
+        let second_id = second_library.current_background_id.clone().unwrap();
+        assert_ne!(first_id, second_id);
+
+        store.set_manager_background(&first_source).unwrap();
+        let deduplicated = store.manager_background_library().unwrap();
+        assert_eq!(deduplicated.items.len(), 2);
         assert_eq!(
-            fs::read(
-                store
-                    .manager_background_dir()
-                    .join(PREVIOUS_MANAGER_BACKGROUND_FILE)
-            )
-            .unwrap(),
-            first_source_bytes
+            deduplicated.current_background_id.as_deref(),
+            Some(first_id.as_str())
         );
+
+        store.apply_manager_background(&second_id).unwrap();
+        let after_delete = store.delete_manager_background(&first_id).unwrap();
+        assert_eq!(after_delete.items.len(), 1);
+        assert_eq!(
+            after_delete.current_background_id.as_deref(),
+            Some(second_id.as_str())
+        );
+        assert!(store.delete_manager_background(&second_id).is_err());
 
         drop(store);
         let reopened = CodexThemeStore::open(&store_root).unwrap();
         assert!(reopened.active_manager_background().unwrap().user_override);
         let cleared = reopened.clear_manager_background().unwrap();
         assert!(!cleared.user_override);
-        assert!(cleared.data_uri.is_none());
+        let retained = reopened.manager_background_library().unwrap();
+        assert_eq!(retained.items.len(), 1);
+        assert!(retained.current_background_id.is_none());
+        reopened.apply_manager_background(&second_id).unwrap();
+        assert_eq!(
+            reopened
+                .manager_background_library()
+                .unwrap()
+                .current_background_id
+                .as_deref(),
+            Some(second_id.as_str())
+        );
+
+        let serialized_state = serde_json::to_string(&reopened.read_state().unwrap()).unwrap();
+        assert!(!serialized_state.contains(&temp.path().to_string_lossy().to_string()));
+    }
+
+    #[test]
+    fn legacy_manager_background_is_migrated_into_the_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy.png");
+        write_manager_background(&source, 1920, 1080, [24, 80, 136]);
+        let (bytes, legacy_background) = validate_manager_background_source(&source).unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        fs::create_dir_all(store.manager_background_dir()).unwrap();
+        crate::settings::atomic_write(
+            &store.manager_background_dir().join(MANAGER_BACKGROUND_FILE),
+            &bytes,
+        )
+        .unwrap();
+        let mut legacy_state = store.read_state().unwrap();
+        legacy_state.manager_background = Some(legacy_background);
+        store.write_state(&legacy_state).unwrap();
+
+        let library = store.manager_background_library().unwrap();
+        assert_eq!(library.items.len(), 1);
+        assert_eq!(library.items[0].file_name, "已迁移的 CCP 背景");
+        assert!(library.items[0].current);
+        assert_eq!(
+            library.current_background_id.as_deref(),
+            Some(library.items[0].id.as_str())
+        );
         assert!(
-            !reopened
+            store
+                .manager_background_item_path(&library.items[0].id)
+                .unwrap()
+                .is_file()
+        );
+        assert!(
+            !store
                 .manager_background_dir()
                 .join(MANAGER_BACKGROUND_FILE)
                 .exists()
         );
+        assert!(store.active_manager_background().unwrap().user_override);
     }
 
     #[test]
@@ -1984,6 +4589,23 @@ mod tests {
     #[test]
     fn repository_theme_directories_and_archives_compile_to_the_same_payload() {
         let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog_ids = OFFICIAL_THEMES
+            .iter()
+            .map(|theme| theme.id)
+            .collect::<BTreeSet<_>>();
+        let expected_ids = [
+            "codex-dream-skin-macos",
+            "codex-dream-skin-windows",
+            "aurora-glass",
+            "clockwork-fox-spirit",
+            "cyber-changan",
+            "obsidian-gold",
+            "verdant-sanctuary",
+            "lotus-fire-nezha",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(catalog_ids, expected_ids);
         for (theme_id, expected_shell) in [
             ("codex-dream-skin-macos", "light"),
             ("codex-dream-skin-windows", "light"),
@@ -1998,6 +4620,15 @@ mod tests {
             let archive = repository_root
                 .join("Theme")
                 .join(format!("{theme_id}.zip"));
+            let definition = OFFICIAL_THEMES
+                .iter()
+                .find(|theme| theme.id == theme_id)
+                .unwrap();
+            assert_eq!(
+                sha256_bytes(&fs::read(&archive).unwrap()),
+                format!("sha256:{}", definition.archive_sha256),
+                "official archive hash drifted for {theme_id}"
+            );
             let expected_class = format!(
                 "ccp-theme-{}",
                 theme_id.strip_prefix("codex-").unwrap_or(theme_id)
@@ -2076,6 +4707,198 @@ mod tests {
     }
 
     #[test]
+    fn delete_inactive_theme_removes_package_and_previous_versions() {
+        let temp = tempfile::tempdir().unwrap();
+        let version_one = temp.path().join("delete-v1");
+        let version_two = temp.path().join("delete-v2");
+        write_theme_version(
+            &version_one,
+            "delete-theme",
+            "1.0.0",
+            ":root { --ccp-delete-version: 1; }",
+        );
+        write_theme_version(
+            &version_two,
+            "delete-theme",
+            "2.0.0",
+            ":root { --ccp-delete-version: 2; }",
+        );
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        store.import_theme(&version_one).unwrap();
+        store.import_theme_with_options(&version_two, true).unwrap();
+        assert!(store.library_dir().join("delete-theme").exists());
+        assert!(store.backups_dir().join("delete-theme").exists());
+
+        let deleted = store.delete_theme("delete-theme").unwrap();
+        assert!(deleted.persisted);
+        assert!(!deleted.restart_required);
+        assert!(!store.library_dir().join("delete-theme").exists());
+        assert!(!store.backups_dir().join("delete-theme").exists());
+        assert_eq!(store.list_themes().unwrap().themes.len(), 1);
+    }
+
+    #[test]
+    fn delete_rejects_default_and_current_theme() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("active-delete");
+        write_theme(
+            &source,
+            "active-delete",
+            ":root { --ccp-active-delete: 1; }",
+        );
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        assert!(store.delete_theme(DEFAULT_THEME_ID).is_err());
+        store.import_theme(&source).unwrap();
+        store.apply_theme("active-delete").unwrap();
+        let error = store.delete_theme("active-delete").unwrap_err();
+        assert!(format!("{error:#}").contains("正在使用"));
+        assert!(store.library_dir().join("active-delete").exists());
+    }
+
+    #[test]
+    fn unfinished_delete_journal_restores_theme_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("delete-recovery");
+        write_theme(
+            &source,
+            "delete-recovery",
+            ":root { --ccp-delete-recovery: 1; }",
+        );
+        let store_root = temp.path().join("store");
+        let store = CodexThemeStore::open(&store_root).unwrap();
+        store.import_theme(&source).unwrap();
+        let before = store.read_state().unwrap();
+        let operation_id = "interrupted-delete";
+        let staging = store.staging_dir().join(operation_id);
+        let staged_theme = staging.join("theme");
+        fs::create_dir_all(&staging).unwrap();
+        fs::rename(store.library_dir().join("delete-recovery"), &staged_theme).unwrap();
+        let journal = MutationJournal {
+            operation_id: operation_id.to_string(),
+            operation_type: "delete".to_string(),
+            theme_id: "delete-recovery".to_string(),
+            phase: "files-staged".to_string(),
+            started_at: now_secs(),
+            state_before: before,
+            staging_dir: Some(PathBuf::from("staging").join(operation_id)),
+            target_dir: Some(PathBuf::from("library").join("delete-recovery")),
+            backup_dir: Some(PathBuf::from("staging").join(operation_id).join("theme")),
+            version_backup_dir: Some(PathBuf::from("backups").join("delete-recovery")),
+            staged_version_backup_dir: Some(
+                PathBuf::from("staging").join(operation_id).join("versions"),
+            ),
+            finished_at: None,
+            result: None,
+        };
+        store.write_journal(&journal).unwrap();
+        drop(store);
+
+        let reopened = CodexThemeStore::open(&store_root).unwrap();
+        assert!(reopened.library_dir().join("delete-recovery").exists());
+        assert!(
+            reopened
+                .read_state()
+                .unwrap()
+                .themes
+                .iter()
+                .any(|theme| theme.manifest.id == "delete-recovery")
+        );
+        assert!(!reopened.staging_dir().join(operation_id).exists());
+    }
+
+    #[test]
+    fn committed_delete_journal_finishes_staging_cleanup() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("committed-delete");
+        write_theme(
+            &source,
+            "committed-delete",
+            ":root { --ccp-committed-delete: 1; }",
+        );
+        let store_root = temp.path().join("store");
+        let store = CodexThemeStore::open(&store_root).unwrap();
+        store.import_theme(&source).unwrap();
+        let before = store.read_state().unwrap();
+        let operation_id = "committed-delete-cleanup";
+        let staging = store.staging_dir().join(operation_id);
+        let staged_theme = staging.join("theme");
+        fs::create_dir_all(&staging).unwrap();
+        fs::rename(store.library_dir().join("committed-delete"), &staged_theme).unwrap();
+        let mut committed = before.clone();
+        committed
+            .themes
+            .retain(|theme| theme.manifest.id != "committed-delete");
+        store.write_state(&committed).unwrap();
+        let journal = MutationJournal {
+            operation_id: operation_id.to_string(),
+            operation_type: "delete".to_string(),
+            theme_id: "committed-delete".to_string(),
+            phase: "state-committed".to_string(),
+            started_at: now_secs(),
+            state_before: before,
+            staging_dir: Some(PathBuf::from("staging").join(operation_id)),
+            target_dir: Some(PathBuf::from("library").join("committed-delete")),
+            backup_dir: Some(PathBuf::from("staging").join(operation_id).join("theme")),
+            version_backup_dir: Some(PathBuf::from("backups").join("committed-delete")),
+            staged_version_backup_dir: Some(
+                PathBuf::from("staging").join(operation_id).join("versions"),
+            ),
+            finished_at: None,
+            result: None,
+        };
+        store.write_journal(&journal).unwrap();
+        drop(store);
+
+        let reopened = CodexThemeStore::open(&store_root).unwrap();
+        assert!(!reopened.library_dir().join("committed-delete").exists());
+        assert!(!reopened.staging_dir().join(operation_id).exists());
+        assert!(
+            !reopened
+                .read_state()
+                .unwrap()
+                .themes
+                .iter()
+                .any(|theme| theme.manifest.id == "committed-delete")
+        );
+        assert!(
+            reopened
+                .history_dir()
+                .join(format!("{operation_id}.json"))
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn official_download_rejects_an_installed_theme_before_network_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("installed-official");
+        write_theme(
+            &source,
+            "aurora-glass",
+            ":root { --ccp-installed-official: 1; }",
+        );
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        store.import_theme(&source).unwrap();
+
+        let error = store
+            .download_official_theme("aurora-glass")
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("已安装"));
+    }
+
+    #[tokio::test]
+    async fn official_download_rejects_unknown_theme_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let error = store
+            .download_official_theme("not-in-the-catalog")
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("官方下载目录"));
+    }
+
+    #[test]
     fn repository_lock_reports_busy() {
         let temp = tempfile::tempdir().unwrap();
         let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
@@ -2104,6 +4927,8 @@ mod tests {
             staging_dir: None,
             target_dir: None,
             backup_dir: None,
+            version_backup_dir: None,
+            staged_version_backup_dir: None,
             finished_at: None,
             result: None,
         };

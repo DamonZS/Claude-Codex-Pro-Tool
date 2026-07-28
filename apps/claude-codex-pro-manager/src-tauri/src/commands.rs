@@ -14,8 +14,9 @@ use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
 use claude_codex_pro_core::codex_theme::{
-    CodexThemeList, CodexThemeManagerBackground, CodexThemeOperationResult, CodexThemeStore,
-    CodexThemeSummary,
+    CodexManagerBackgroundLibrary, CodexThemeDiyAutomaticPalette, CodexThemeDiyBackgroundPreview,
+    CodexThemeDiyInput, CodexThemeList, CodexThemeManagerBackground, CodexThemeOperationResult,
+    CodexThemeStore, CodexThemeSummary,
 };
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
@@ -237,6 +238,7 @@ pub struct PluginHubWindowPayload {
 fn empty_codex_theme_list() -> CodexThemeList {
     CodexThemeList {
         themes: Vec::new(),
+        official_themes: Vec::new(),
         current_theme_id: "default".to_string(),
         generation: 0,
     }
@@ -256,6 +258,21 @@ fn empty_codex_theme_summary() -> CodexThemeSummary {
         updated_at: 0,
         integrity_sha256: None,
         previous_version_available: false,
+        diy: None,
+    }
+}
+
+fn empty_codex_theme_diy_background_preview() -> CodexThemeDiyBackgroundPreview {
+    CodexThemeDiyBackgroundPreview {
+        file_name: String::new(),
+        data_uri: String::new(),
+        automatic_palette: CodexThemeDiyAutomaticPalette {
+            mode: "dark".to_string(),
+            accent_color: "#0A84FF".to_string(),
+            background_color: "#111418".to_string(),
+            surface_color: "#20252B".to_string(),
+            text_color: "#F3F5F7".to_string(),
+        },
     }
 }
 
@@ -270,6 +287,14 @@ fn empty_codex_theme_background() -> CodexThemeManagerBackground {
         height: None,
         mime_type: None,
         user_override: false,
+    }
+}
+
+fn empty_codex_manager_background_library() -> CodexManagerBackgroundLibrary {
+    CodexManagerBackgroundLibrary {
+        items: Vec::new(),
+        current_background_id: None,
+        generation: 0,
     }
 }
 
@@ -5853,10 +5878,77 @@ pub fn list_codex_themes() -> CommandResult<CodexThemeList> {
 #[tauri::command]
 pub fn load_codex_theme_background() -> CommandResult<CodexThemeManagerBackground> {
     match CodexThemeStore::open_default().and_then(|store| store.active_manager_background()) {
-        Ok(background) => ok("Codex 主题背景已加载。", background),
+        Ok(background) => ok("CCP 当前背景已加载。", background),
         Err(error) => failed(
             &format!("Codex 主题背景加载失败：{error}"),
             empty_codex_theme_background(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn list_codex_manager_backgrounds() -> CommandResult<CodexManagerBackgroundLibrary> {
+    match CodexThemeStore::open_default().and_then(|store| store.manager_background_library()) {
+        Ok(library) => ok("CCP 背景图库已加载。", library),
+        Err(error) => failed(
+            &format!("CCP 背景图库加载失败：{error}"),
+            empty_codex_manager_background_library(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn preview_codex_diy_theme_background(
+    source_path: String,
+) -> CommandResult<CodexThemeDiyBackgroundPreview> {
+    let source_path = source_path.trim().to_string();
+    if source_path.is_empty() {
+        return failed(
+            "请选择 DIY 主题背景图片。",
+            empty_codex_theme_diy_background_preview(),
+        );
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        CodexThemeStore::open_default()?.preview_diy_background(source_path)
+    })
+    .await;
+    match result {
+        Ok(Ok(preview)) => ok("DIY 主题背景已通过校验。", preview),
+        Ok(Err(error)) => failed(
+            &format!("DIY 主题背景校验失败：{error}"),
+            empty_codex_theme_diy_background_preview(),
+        ),
+        Err(error) => failed(
+            &format!("DIY 主题背景预览任务异常结束：{error}"),
+            empty_codex_theme_diy_background_preview(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn load_codex_diy_theme_background(
+    theme_id: String,
+) -> CommandResult<CodexThemeDiyBackgroundPreview> {
+    let theme_id = theme_id.trim().to_string();
+    if theme_id.is_empty() {
+        return failed(
+            "请选择要编辑的 DIY 主题。",
+            empty_codex_theme_diy_background_preview(),
+        );
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        CodexThemeStore::open_default()?.diy_theme_background_preview(&theme_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(preview)) => ok("DIY 主题原背景已加载。", preview),
+        Ok(Err(error)) => failed(
+            &format!("DIY 主题原背景加载失败：{error}"),
+            empty_codex_theme_diy_background_preview(),
+        ),
+        Err(error) => failed(
+            &format!("DIY 主题原背景任务异常结束：{error}"),
+            empty_codex_theme_diy_background_preview(),
         ),
     }
 }
@@ -5874,7 +5966,7 @@ pub async fn set_codex_manager_background(
     })
     .await;
     match result {
-        Ok(Ok(background)) => ok("管理工具背景已应用。", background),
+        Ok(Ok(background)) => ok("CCP 背景已保存到图库并应用。", background),
         Ok(Err(error)) => failed(
             &format!("管理工具背景设置失败：{error}"),
             empty_codex_theme_background(),
@@ -5889,10 +5981,40 @@ pub async fn set_codex_manager_background(
 #[tauri::command]
 pub fn clear_codex_manager_background() -> CommandResult<CodexThemeManagerBackground> {
     match CodexThemeStore::open_default().and_then(|store| store.clear_manager_background()) {
-        Ok(background) => ok("已恢复当前主题背景。", background),
+        Ok(background) => ok("已恢复 CCP 默认背景，图库内容已保留。", background),
         Err(error) => failed(
             &format!("管理工具背景恢复失败：{error}"),
             empty_codex_theme_background(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn apply_codex_manager_background(
+    background_id: String,
+) -> CommandResult<CodexThemeManagerBackground> {
+    match CodexThemeStore::open_default()
+        .and_then(|store| store.apply_manager_background(background_id.trim()))
+    {
+        Ok(background) => ok("CCP 背景已切换。", background),
+        Err(error) => failed(
+            &format!("CCP 背景切换失败：{error}"),
+            empty_codex_theme_background(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn delete_codex_manager_background(
+    background_id: String,
+) -> CommandResult<CodexManagerBackgroundLibrary> {
+    match CodexThemeStore::open_default()
+        .and_then(|store| store.delete_manager_background(background_id.trim()))
+    {
+        Ok(library) => ok("CCP 背景已删除。", library),
+        Err(error) => failed(
+            &format!("CCP 背景删除失败：{error}"),
+            empty_codex_manager_background_library(),
         ),
     }
 }
@@ -5921,6 +6043,56 @@ pub async fn import_codex_theme(
             &format!("主题导入任务异常结束：{error}"),
             empty_codex_theme_summary(),
         ),
+    }
+}
+
+#[tauri::command]
+pub async fn save_codex_diy_theme(input: CodexThemeDiyInput) -> CommandResult<CodexThemeSummary> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        CodexThemeStore::open_default()?.save_diy_theme(input)
+    })
+    .await;
+    match result {
+        Ok(Ok(theme)) => ok("DIY 主题已安全保存到主题中心。", theme),
+        Ok(Err(error)) => failed(
+            &format!("DIY 主题保存失败：{error}"),
+            empty_codex_theme_summary(),
+        ),
+        Err(error) => failed(
+            &format!("DIY 主题保存任务异常结束：{error}"),
+            empty_codex_theme_summary(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn download_codex_theme(theme_id: String) -> CommandResult<CodexThemeSummary> {
+    let theme_id = theme_id.trim().to_string();
+    if theme_id.is_empty() {
+        return failed("请选择要下载的主题。", empty_codex_theme_summary());
+    }
+    let result = match CodexThemeStore::open_default() {
+        Ok(store) => store.download_official_theme(&theme_id).await,
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(theme) => ok("主题已从 CCP 官方仓库下载并通过校验。", theme),
+        Err(error) => failed(
+            &format!("主题下载失败：{error}"),
+            empty_codex_theme_summary(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn delete_codex_theme(theme_id: String) -> CommandResult<CodexThemeOperationResult> {
+    let theme_id = theme_id.trim().to_string();
+    match CodexThemeStore::open_default().and_then(|store| store.delete_theme(&theme_id)) {
+        Ok(outcome) => ok(&outcome.message.clone(), outcome),
+        Err(error) => {
+            let message = format!("主题删除失败：{error}");
+            failed(&message, failed_codex_theme_operation(&theme_id, &message))
+        }
     }
 }
 

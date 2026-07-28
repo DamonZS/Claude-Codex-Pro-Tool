@@ -1853,6 +1853,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let routes = read_frontend_file("lib/routes.ts");
     let types = read_frontend_file("types.ts");
     let theme_screen = read_frontend_file("components/CodexThemeCenterScreen.tsx");
+    let theme_diy_dialog = read_frontend_file("components/CodexThemeDiyDialog.tsx");
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
 
@@ -1868,18 +1869,43 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let route_type = source_section(&types, "export type Route =", "export type LegacyRoute");
     assert!(route_type.contains("| \"themes\""));
     for contract in [
-        "管理工具高清背景",
-        "至少 1920 x 1080",
-        "设置背景",
+        "CCP 外观",
+        "Codex 主题",
+        "添加背景",
+        "至少 1920 × 1080",
+        "ccp-background-grid",
         "actions.setCodexManagerBackground()",
         "actions.clearCodexManagerBackground()",
-        "background.user_override",
+        "actions.applyCodexManagerBackground(item.id)",
+        "actions.deleteCodexManagerBackground(item.id)",
+        "actions.downloadCodexTheme(theme.id)",
+        "actions.deleteCodexTheme(theme.id)",
+        "下载主题",
+        "导入主题",
+        "制作指南",
     ] {
         assert!(
             theme_screen.contains(contract),
             "theme background UI is missing: {contract}"
         );
     }
+    assert!(theme_diy_dialog.contains("createPortal("));
+    assert!(theme_diy_dialog.contains("document.querySelector<HTMLElement>(\".ops-shell\")"));
+    assert!(theme_diy_dialog.contains("actions.previewCodexDiyThemeBackground(path)"));
+    assert!(theme_diy_dialog.contains("actions.loadCodexDiyThemeBackground(theme.id)"));
+    for contract in [
+        "全屏透明背景",
+        "上方长条",
+        "中央大卡片",
+        "updateSetting(\"image_layout\"",
+        "is-layout-${settings.image_layout}",
+    ] {
+        assert!(
+            theme_diy_dialog.contains(contract),
+            "DIY image layout UI is missing: {contract}"
+        );
+    }
+    assert!(!theme_diy_dialog.contains("<span>作者"));
 
     let registered_commands = source_section(
         &manager_lib,
@@ -1889,9 +1915,17 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     for command in [
         "list_codex_themes",
         "load_codex_theme_background",
+        "list_codex_manager_backgrounds",
+        "preview_codex_diy_theme_background",
+        "load_codex_diy_theme_background",
         "set_codex_manager_background",
         "clear_codex_manager_background",
+        "apply_codex_manager_background",
+        "delete_codex_manager_background",
         "import_codex_theme",
+        "save_codex_diy_theme",
+        "download_codex_theme",
+        "delete_codex_theme",
         "apply_codex_theme",
         "restore_codex_default_theme",
     ] {
@@ -1914,10 +1948,40 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let background_command = source_section(
         &commands,
         "pub fn load_codex_theme_background()",
-        "pub async fn set_codex_manager_background(",
+        "pub fn list_codex_manager_backgrounds()",
     );
     assert!(background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
     assert!(background_command.contains("store.active_manager_background()"));
+
+    let background_library_command = source_section(
+        &commands,
+        "pub fn list_codex_manager_backgrounds()",
+        "pub async fn preview_codex_diy_theme_background(",
+    );
+    assert!(background_library_command.contains("-> CommandResult<CodexManagerBackgroundLibrary>"));
+    assert!(background_library_command.contains("store.manager_background_library()"));
+
+    let preview_diy_background_command = source_section(
+        &commands,
+        "pub async fn preview_codex_diy_theme_background(",
+        "pub async fn load_codex_diy_theme_background(",
+    );
+    assert!(preview_diy_background_command.contains("source_path: String"));
+    assert!(preview_diy_background_command.contains(".preview_diy_background(source_path)"));
+    assert!(
+        preview_diy_background_command.contains("-> CommandResult<CodexThemeDiyBackgroundPreview>")
+    );
+
+    let load_diy_background_command = source_section(
+        &commands,
+        "pub async fn load_codex_diy_theme_background(",
+        "pub async fn set_codex_manager_background(",
+    );
+    assert!(load_diy_background_command.contains("theme_id: String"));
+    assert!(load_diy_background_command.contains(".diy_theme_background_preview(&theme_id)"));
+    assert!(
+        load_diy_background_command.contains("-> CommandResult<CodexThemeDiyBackgroundPreview>")
+    );
 
     let set_background_command = source_section(
         &commands,
@@ -1931,15 +1995,37 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let clear_background_command = source_section(
         &commands,
         "pub fn clear_codex_manager_background()",
-        "pub async fn import_codex_theme(",
+        "pub fn apply_codex_manager_background(",
     );
     assert!(clear_background_command.contains("store.clear_manager_background()"));
     assert!(clear_background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
 
+    let apply_background_command = source_section(
+        &commands,
+        "pub fn apply_codex_manager_background(",
+        "pub fn delete_codex_manager_background(",
+    );
+    assert!(apply_background_command.contains("background_id: String"));
+    assert!(
+        apply_background_command.contains("store.apply_manager_background(background_id.trim())")
+    );
+    assert!(apply_background_command.contains("-> CommandResult<CodexThemeManagerBackground>"));
+
+    let delete_background_command = source_section(
+        &commands,
+        "pub fn delete_codex_manager_background(",
+        "pub async fn import_codex_theme(",
+    );
+    assert!(delete_background_command.contains("background_id: String"));
+    assert!(
+        delete_background_command.contains("store.delete_manager_background(background_id.trim())")
+    );
+    assert!(delete_background_command.contains("-> CommandResult<CodexManagerBackgroundLibrary>"));
+
     let import_command = source_section(
         &commands,
         "pub async fn import_codex_theme(",
-        "pub fn apply_codex_theme(",
+        "pub async fn save_codex_diy_theme(",
     );
     for contract in [
         "source_path: String,",
@@ -1951,6 +2037,32 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "import command contract is missing: {contract}"
         );
     }
+
+    let save_diy_command = source_section(
+        &commands,
+        "pub async fn save_codex_diy_theme(",
+        "pub async fn download_codex_theme(",
+    );
+    assert!(save_diy_command.contains("input: CodexThemeDiyInput"));
+    assert!(save_diy_command.contains(".save_diy_theme(input)"));
+    assert!(save_diy_command.contains("-> CommandResult<CodexThemeSummary>"));
+
+    let download_command = source_section(
+        &commands,
+        "pub async fn download_codex_theme(",
+        "pub fn delete_codex_theme(",
+    );
+    assert!(download_command.contains("theme_id: String"));
+    assert!(download_command.contains("store.download_official_theme(&theme_id).await"));
+    assert!(download_command.contains("-> CommandResult<CodexThemeSummary>"));
+
+    let delete_command = source_section(
+        &commands,
+        "pub fn delete_codex_theme(",
+        "pub fn apply_codex_theme(",
+    );
+    assert!(delete_command.contains("store.delete_theme(&theme_id)"));
+    assert!(delete_command.contains("-> CommandResult<CodexThemeOperationResult>"));
 
     let apply_command = source_section(
         &commands,
@@ -2044,6 +2156,31 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         types.contains("export type CodexThemeImportResult = CommandResult<CodexThemeSummary>;")
     );
 
+    let manager_background_type = source_section(
+        &types,
+        "export type CodexManagerBackgroundItem = {",
+        "export type CodexThemeImportResult",
+    );
+    for contract in [
+        "id: string;",
+        "file_name: string;",
+        "preview_data_uri: string;",
+        "width: number;",
+        "height: number;",
+        "mime_type: string;",
+        "updated_at: number;",
+        "current: boolean;",
+        "export type CodexManagerBackgroundLibraryResult = CommandResult<{",
+        "items: CodexManagerBackgroundItem[];",
+        "current_background_id: string | null;",
+        "generation: number;",
+    ] {
+        assert!(
+            manager_background_type.contains(contract),
+            "CCP manager background type is missing: {contract}"
+        );
+    }
+
     let operation_type = source_section(
         &types,
         "export type CodexThemeOperationResult",
@@ -2077,12 +2214,30 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         updated_at: 2,
         integrity_sha256: Some("fixture-sha256".to_string()),
         previous_version_available: true,
+        diy: Some(claude_codex_pro_core::codex_theme::CodexThemeDiySettings {
+            mode: "dark".to_string(),
+            accent_color: "#0A84FF".to_string(),
+            background_color: "#121416".to_string(),
+            surface_color: "#20242A".to_string(),
+            text_color: "#F2F4F7".to_string(),
+            glass_opacity: 78,
+            blur_px: 24,
+            radius_px: 8,
+            font_scale_percent: 100,
+            density: "comfortable".to_string(),
+            image_layout: "card".to_string(),
+            background_file_name: Some("background.png".to_string()),
+        }),
     };
     let list_json = serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
         status: "ok".to_string(),
         message: "loaded".to_string(),
         payload: claude_codex_pro_core::codex_theme::CodexThemeList {
             themes: vec![theme.clone()],
+            official_themes: vec![claude_codex_pro_core::codex_theme::CodexOfficialTheme {
+                id: "official-theme".to_string(),
+                name: "Official Theme".to_string(),
+            }],
             current_theme_id: theme.id.clone(),
             generation: 3,
         },
@@ -2094,10 +2249,12 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "status",
             "message",
             "themes",
+            "official_themes",
             "current_theme_id",
             "generation",
         ],
     );
+    assert_json_keys(&list_json["official_themes"][0], &["id", "name"]);
     assert_json_keys(
         &list_json["themes"][0],
         &[
@@ -2113,6 +2270,50 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "updated_at",
             "integrity_sha256",
             "previous_version_available",
+            "diy",
+        ],
+    );
+    assert_json_keys(
+        &list_json["themes"][0]["diy"],
+        &[
+            "mode",
+            "accent_color",
+            "background_color",
+            "surface_color",
+            "text_color",
+            "glass_opacity",
+            "blur_px",
+            "radius_px",
+            "font_scale_percent",
+            "density",
+            "image_layout",
+            "background_file_name",
+        ],
+    );
+
+    let diy_input_json =
+        serde_json::to_value(claude_codex_pro_core::codex_theme::CodexThemeDiyInput {
+            theme_id: Some("ccp-diy-fixture".to_string()),
+            expected_integrity_sha256: Some("sha256:fixture".to_string()),
+            name: "Fixture DIY".to_string(),
+            author: "CCP Test".to_string(),
+            description: "fixture".to_string(),
+            settings: theme.diy.clone().expect("fixture DIY settings"),
+            background_path: None,
+            remove_background: false,
+        })
+        .expect("serialize DIY theme input");
+    assert_json_keys(
+        &diy_input_json,
+        &[
+            "theme_id",
+            "expected_integrity_sha256",
+            "name",
+            "author",
+            "description",
+            "settings",
+            "background_path",
+            "remove_background",
         ],
     );
 
@@ -2150,6 +2351,52 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         ],
     );
 
+    let background_library_json =
+        serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
+            status: "ok".to_string(),
+            message: "loaded".to_string(),
+            payload: claude_codex_pro_core::codex_theme::CodexManagerBackgroundLibrary {
+                items: vec![
+                    claude_codex_pro_core::codex_theme::CodexManagerBackgroundItem {
+                        id: "ccp-bg-fixture".to_string(),
+                        file_name: "fixture.webp".to_string(),
+                        preview_data_uri: "data:image/png;base64,fixture".to_string(),
+                        width: 3840,
+                        height: 2160,
+                        mime_type: "image/webp".to_string(),
+                        updated_at: 4,
+                        current: true,
+                    },
+                ],
+                current_background_id: Some("ccp-bg-fixture".to_string()),
+                generation: 4,
+            },
+        })
+        .expect("serialize manager background library command result");
+    assert_json_keys(
+        &background_library_json,
+        &[
+            "status",
+            "message",
+            "items",
+            "current_background_id",
+            "generation",
+        ],
+    );
+    assert_json_keys(
+        &background_library_json["items"][0],
+        &[
+            "id",
+            "file_name",
+            "preview_data_uri",
+            "width",
+            "height",
+            "mime_type",
+            "updated_at",
+            "current",
+        ],
+    );
+
     let import_json = serde_json::to_value(claude_codex_pro_manager_lib::commands::CommandResult {
         status: "ok".to_string(),
         message: "imported".to_string(),
@@ -2173,6 +2420,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "updated_at",
             "integrity_sha256",
             "previous_version_available",
+            "diy",
         ],
     );
 
@@ -2287,6 +2535,18 @@ fn codex_theme_center_frontend_ipc_calls_match_tauri_commands() {
         "load_codex_theme_background must not receive frontend arguments"
     );
 
+    let background_library_call = ipc_call(&frontend, "list_codex_manager_backgrounds");
+    assert!(background_library_call.contains("call<CodexManagerBackgroundLibraryResult>"));
+    assert_eq!(
+        background_library_call
+            .split_once("\"list_codex_manager_backgrounds\"")
+            .expect("manager background list command literal")
+            .1
+            .trim(),
+        ")",
+        "list_codex_manager_backgrounds must not receive frontend arguments"
+    );
+
     let set_background_call = ipc_call(&frontend, "set_codex_manager_background");
     assert!(set_background_call.contains("call<CodexThemeBackgroundResult>"));
     assert!(set_background_call.contains("sourcePath"));
@@ -2304,6 +2564,16 @@ fn codex_theme_center_frontend_ipc_calls_match_tauri_commands() {
         "clear_codex_manager_background must not receive frontend arguments"
     );
 
+    let apply_background_call = ipc_call(&frontend, "apply_codex_manager_background");
+    assert!(apply_background_call.contains("call<CodexThemeBackgroundResult>"));
+    assert!(apply_background_call.contains("backgroundId"));
+    assert!(!apply_background_call.contains("background_id"));
+
+    let delete_background_call = ipc_call(&frontend, "delete_codex_manager_background");
+    assert!(delete_background_call.contains("call<CodexManagerBackgroundLibraryResult>"));
+    assert!(delete_background_call.contains("backgroundId"));
+    assert!(!delete_background_call.contains("background_id"));
+
     let import_call = ipc_call(&frontend, "import_codex_theme");
     assert!(import_call.contains("call<CodexThemeImportResult>"));
     for argument in ["sourcePath", "replaceExisting"] {
@@ -2314,6 +2584,16 @@ fn codex_theme_center_frontend_ipc_calls_match_tauri_commands() {
     }
     assert!(!import_call.contains("source_path"));
     assert!(!import_call.contains("replace_existing"));
+
+    let download_call = ipc_call(&frontend, "download_codex_theme");
+    assert!(download_call.contains("call<CodexThemeImportResult>"));
+    assert!(download_call.contains("themeId"));
+    assert!(!download_call.contains("theme_id"));
+
+    let delete_call = ipc_call(&frontend, "delete_codex_theme");
+    assert!(delete_call.contains("call<CodexThemeOperationResult>"));
+    assert!(delete_call.contains("themeId"));
+    assert!(!delete_call.contains("theme_id"));
 
     let apply_call = ipc_call(&frontend, "apply_codex_theme");
     assert!(apply_call.contains("call<CodexThemeOperationResult>"));

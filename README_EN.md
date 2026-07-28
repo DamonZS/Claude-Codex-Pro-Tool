@@ -96,7 +96,9 @@ The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG co
 ### Codex Theme System
 
 - Provides a dedicated top-level page with a three-column gallery of installed themes; the Codex default theme always appears first.
-- Supports importing, previewing, applying, and restoring themes. Built-in theme packages live in [`Theme/`](Theme/).
+- Separates **CCP Appearance** from **Codex Themes**. The CCP background library stores, switches, and removes multiple local high-resolution images, while restoring the default keeps the library intact.
+- Includes a no-code DIY workspace for glass transmission, blur, radius, font scale, and local background images. Tone, palette, and density are generated automatically, with live preview and later editing.
+- Supports on-demand downloads from the official GitHub theme library, local imports, previews, applying themes, deleting inactive themes, and restoring the default. Curated packages and the advanced authoring guide live in [`Theme/`](Theme/).
 - Validates packages in a temporary directory, atomically replaces the active version, and keeps the previous version for rollback.
 - Keeps renderer-only visual injection separate from localization and model-label injection so themes do not alter inputs, menus, or native interactions.
 - Reports the active state clearly and applies the selected theme after Codex restarts.

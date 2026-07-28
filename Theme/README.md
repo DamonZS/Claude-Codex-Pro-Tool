@@ -45,7 +45,7 @@ remote loading code are intentionally excluded. Importing a package does not
 apply it automatically or change Provider, model, credential, localization,
 input, menu, or session settings.
 
-## Optional Manager background
+## CCP Manager background library
 
 A theme package can also provide the environment background used behind the
 CCP Manager liquid-glass shell. Add the local image to `assets`, then map it in
@@ -75,7 +75,104 @@ away from the edges because the Manager uses a centered `cover` crop at
 different window sizes. If the variable is absent or invalid, the built-in
 light or dark Manager background is used automatically.
 
-Users can also choose **Theme Center > Set background** without editing a
-theme package. That local override has the highest priority and is stored in
-CCP's theme state directory; **Restore theme background** removes only the
-override and falls back to the active theme variable or the built-in image.
+Users can also open **Theme Center > CCP Appearance > Add background** without
+editing a theme package. CCP validates and stores multiple local high-resolution
+images in a content-addressed library, so the same image is not duplicated.
+Selecting another card switches immediately. **CCP default background** only
+deactivates the current library image; it does not delete saved backgrounds.
+
+## Build your own Codex theme
+
+For most themes, use **CCP Manager > Theme Center > DIY Theme**. The visual
+workspace creates and validates the manifest, scoped CSS, preview image, and
+optional local background automatically. It exposes glass transmission, blur,
+radius, and font scale while deriving tone and an accessible palette from the
+selected image. Density stays at the Codex default. Live preview and reopening
+a DIY theme for later changes are supported; no JSON or CSS is required.
+
+Use the manual package workflow below only when a theme needs selectors or
+layout behavior that the safe visual controls do not expose.
+
+Do not edit files inside CCP's installed theme library. Those files are covered
+by integrity records and transaction recovery. Copy one of the directories in
+this repository to a new working directory, give it a new ID, and import the
+finished directory or ZIP through **Theme Center > Codex Themes > Import theme**.
+
+A complete package intended for sharing normally uses this layout:
+
+```text
+my-codex-theme/
+  theme.json
+  theme.css
+  preview.png
+  background.png
+  LICENSE
+  NOTICE.md
+```
+
+`theme.json`, its `entry_style` file and the declared preview image are the
+technical minimum. Add local artwork only when the theme uses it, and include
+the applicable `LICENSE`/`NOTICE.md` whenever the package is distributed.
+
+`theme.json` declares every file that the theme can use. Start with this shape:
+
+```json
+{
+  "format_version": 1,
+  "id": "my-codex-theme",
+  "name": "My Codex Theme",
+  "version": "1.0.0",
+  "author": "Your name",
+  "description": "A short description",
+  "preview": "preview.png",
+  "entry_style": "theme.css",
+  "assets": ["theme.css", "background.png"],
+  "root_attributes": {
+    "classes": ["ccp-theme-my-codex-theme"],
+    "attributes": {
+      "data-ccp-theme-shell": "dark"
+    }
+  },
+  "asset_variables": {
+    "--ccp-theme-art": "background.png",
+    "--ccp-theme-manager-background": "background.png"
+  }
+}
+```
+
+Use a globally unique lowercase `id` containing only letters, digits and
+hyphens. Root classes must start with `ccp-theme-`; custom root attributes must
+start with `data-ccp-theme-`. Keep every CSS selector under your theme class so
+the style does not affect Codex when another theme is active:
+
+```css
+:root.ccp-theme-my-codex-theme {
+  --my-surface: rgb(16 18 24 / 0.82);
+}
+
+:root.ccp-theme-my-codex-theme body {
+  background: var(--ccp-theme-art) center / cover fixed no-repeat;
+}
+```
+
+Theme packages are visual assets only. Remote URLs, `@import`, JavaScript,
+Renderer injection, unscoped input/menu rewrites, symlinks and files outside
+the package are rejected. Use local PNG, JPEG or WebP images. The preview must
+be a real screenshot of the theme; a 3840x2160 background is recommended for
+high-DPI displays. Keep each file under 8 MB and the complete unpacked package
+under 32 MB.
+
+To create a ZIP whose root directly contains `theme.json`:
+
+```powershell
+Compress-Archive -Path .\my-codex-theme\* -DestinationPath .\my-codex-theme.zip -Force
+```
+
+```bash
+cd my-codex-theme && zip -r ../my-codex-theme.zip .
+```
+
+Import the directory first while designing, then import the final ZIP to prove
+that both forms compile to the same payload. CCP validates the manifest, CSS,
+images, paths and size in a temporary directory before atomically installing
+the theme. Applying a theme is a separate action and requires restarting Codex.
