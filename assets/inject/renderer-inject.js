@@ -823,39 +823,53 @@
       .claude-codex-pro-service-tier-button[data-active="true"] { border-color: #0f766e; background: #eef6f5; color: #0f766e; }
       .claude-codex-pro-service-tier-button:disabled { opacity: .55; cursor: not-allowed; }
       .claude-codex-pro-control-deck {
-        --ccp-deck-bg: #090f13;
-        --ccp-deck-panel: #10191e;
-        --ccp-deck-panel-raised: #142127;
-        --ccp-deck-line: rgba(122, 214, 196, .17);
+        --ccp-deck-bg: rgba(5, 13, 14, .48);
+        --ccp-deck-panel: rgba(9, 20, 21, .52);
+        --ccp-deck-panel-raised: rgba(17, 32, 33, .72);
+        --ccp-deck-line: rgba(204, 246, 238, .22);
         --ccp-deck-text: #e7f2ef;
-        --ccp-deck-muted: #8ea49f;
+        --ccp-deck-muted: #aec2bd;
         --ccp-deck-energy: #43d6b5;
         --ccp-deck-amber: #f3b85b;
+        --ccp-deck-sheen: linear-gradient(132deg, rgba(255, 255, 255, .18), rgba(255, 255, 255, .035) 24%, transparent 49%, rgba(67, 214, 181, .055) 78%, rgba(255, 255, 255, .08));
       }
       .claude-codex-pro-modal-overlay:has(.claude-codex-pro-control-deck) {
-        background: rgba(2, 8, 11, .72);
-        backdrop-filter: blur(10px) saturate(.8);
+        background: rgba(2, 7, 9, .34);
+        backdrop-filter: blur(18px) saturate(1.18) contrast(1.04);
+        -webkit-backdrop-filter: blur(18px) saturate(1.18) contrast(1.04);
         isolation: isolate;
       }
       .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
-        width: min(920px, calc(100vw - 44px));
-        height: min(700px, calc(100vh - 40px));
+        width: min(1080px, calc(100vw - 44px));
+        height: min(760px, calc(100vh - 40px));
         max-height: calc(100vh - 40px);
         display: grid;
-        grid-template-columns: 190px minmax(0, 1fr);
+        grid-template-columns: 176px minmax(0, 1fr);
         grid-template-rows: auto minmax(0, 1fr);
         position: relative;
         isolation: isolate;
         overflow: hidden;
-        border: 1px solid rgba(91, 217, 190, .25);
-        border-radius: 16px;
-        background:
-          linear-gradient(rgba(67, 214, 181, .025) 1px, transparent 1px) 0 0 / 24px 24px,
-          linear-gradient(90deg, rgba(67, 214, 181, .025) 1px, transparent 1px) 0 0 / 24px 24px,
-          var(--ccp-deck-bg);
+        border: 1px solid rgba(222, 250, 245, .34);
+        border-radius: 12px;
+        background-color: var(--ccp-deck-bg);
+        background-image: var(--ccp-deck-sheen);
         color: var(--ccp-deck-text);
         font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-        box-shadow: 0 36px 110px rgba(0, 0, 0, .58), 0 0 48px rgba(67, 214, 181, .06);
+        text-rendering: geometricPrecision;
+        -webkit-font-smoothing: antialiased;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .52), inset 1px 0 0 rgba(255, 255, 255, .12), inset 0 -1px 0 rgba(0, 0, 0, .38), 0 38px 110px rgba(0, 0, 0, .46), 0 0 56px rgba(67, 214, 181, .08);
+        backdrop-filter: blur(46px) saturate(1.72) contrast(1.08);
+        -webkit-backdrop-filter: blur(46px) saturate(1.72) contrast(1.08);
+      }
+      .claude-codex-pro-modal-content.claude-codex-pro-control-deck::before {
+        content: "";
+        position: absolute;
+        z-index: 3;
+        inset: 1px;
+        border: 1px solid rgba(255, 255, 255, .1);
+        border-radius: 11px;
+        pointer-events: none;
+        mask-image: linear-gradient(145deg, #000 0 26%, transparent 58%);
       }
       .claude-codex-pro-control-deck .claude-codex-pro-modal-header {
         grid-column: 1 / -1;
@@ -863,7 +877,11 @@
         box-sizing: border-box;
         padding: 15px 18px;
         border-bottom: 1px solid var(--ccp-deck-line);
-        background: rgba(10, 19, 23, .94);
+        background-color: rgba(7, 17, 18, .48);
+        background-image: var(--ccp-deck-sheen);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
+        backdrop-filter: blur(30px) saturate(1.55);
+        -webkit-backdrop-filter: blur(30px) saturate(1.55);
       }
       .claude-codex-pro-deck-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
       .claude-codex-pro-deck-mark {
@@ -872,12 +890,12 @@
         display: grid;
         place-items: center;
         border: 1px solid rgba(67, 214, 181, .42);
-        border-radius: 10px;
+        border-radius: 8px;
         background: linear-gradient(145deg, rgba(67, 214, 181, .18), rgba(67, 214, 181, .03));
         color: var(--ccp-deck-energy);
         font: 750 12px/1 ui-monospace, "Cascadia Code", monospace;
         letter-spacing: .04em;
-        box-shadow: inset 0 0 20px rgba(67, 214, 181, .08);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .24), inset 0 -1px 0 rgba(0, 0, 0, .25), 0 10px 28px rgba(0, 0, 0, .12);
       }
       .claude-codex-pro-deck-heading { min-width: 0; }
       .claude-codex-pro-deck-kicker {
@@ -901,7 +919,7 @@
         place-items: center;
         border: 1px solid rgba(142, 164, 159, .25);
         border-radius: 9px;
-        background: rgba(255, 255, 255, .025);
+        background: rgba(255, 255, 255, .045);
         color: var(--ccp-deck-muted);
         font-size: 18px;
       }
@@ -915,7 +933,11 @@
         min-width: 0;
         padding: 18px 12px;
         border-right: 1px solid var(--ccp-deck-line);
-        background: rgba(10, 17, 21, .74);
+        background-color: rgba(6, 15, 16, .34);
+        background-image: var(--ccp-deck-sheen);
+        box-shadow: inset -1px 0 0 rgba(255, 255, 255, .06);
+        backdrop-filter: blur(32px) saturate(1.5);
+        -webkit-backdrop-filter: blur(32px) saturate(1.5);
       }
       .claude-codex-pro-control-deck .claude-codex-pro-tab-button {
         width: 100%;
@@ -945,21 +967,29 @@
         grid-row: 2;
         min-height: 0;
         padding: 20px 22px 24px;
-        background: rgba(11, 18, 22, .46);
+        background: rgba(8, 17, 18, .18);
         scrollbar-color: rgba(67, 214, 181, .28) transparent;
       }
       .claude-codex-pro-deck-hero {
         margin-bottom: 18px;
         padding: 17px 18px;
         border: 1px solid rgba(67, 214, 181, .2);
-        border-radius: 12px;
-        background: linear-gradient(125deg, rgba(67, 214, 181, .115), rgba(20, 33, 39, .72) 55%, rgba(243, 184, 91, .04));
+        border-radius: 8px;
+        background-color: rgba(18, 37, 37, .58);
+        background-image: var(--ccp-deck-sheen);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 16px 34px rgba(0, 0, 0, .12);
+        backdrop-filter: blur(22px) saturate(1.38);
+        -webkit-backdrop-filter: blur(22px) saturate(1.38);
       }
       .claude-codex-pro-deck-hero-label { color: var(--ccp-deck-energy); font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace; letter-spacing: .14em; }
       .claude-codex-pro-deck-hero h2 { margin: 7px 0 6px; color: #f2fbf8; font-size: 19px; line-height: 1.25; font-weight: 650; }
       .claude-codex-pro-deck-hero p { margin: 0; color: var(--ccp-deck-muted); font-size: 12px; line-height: 1.55; }
-      .claude-codex-pro-deck-capabilities { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
-      .claude-codex-pro-deck-capabilities span { border: 1px solid rgba(142, 164, 159, .18); border-radius: 6px; background: rgba(4, 10, 13, .34); color: #b8cbc6; font-size: 10px; padding: 5px 8px; }
+      .claude-codex-pro-deck-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 15px; }
+      .claude-codex-pro-deck-capabilities span { min-height: 34px; display: grid; place-items: center; border: 1px solid rgba(208, 246, 238, .2); border-radius: 6px; background: rgba(4, 10, 13, .28); color: #d2e7e2; font-size: 10px; font-weight: 600; padding: 5px 8px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); }
+      .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
+      .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-hero,
+      .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-section-title,
+      .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > [data-codex-service-tier-controls="true"] { grid-column: 1 / -1; }
       .claude-codex-pro-deck-section-title {
         display: flex;
         align-items: center;
@@ -971,14 +1001,20 @@
       }
       .claude-codex-pro-deck-section-title::after { content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, var(--ccp-deck-line), transparent); }
       .claude-codex-pro-control-deck .claude-codex-pro-row {
-        margin: 0 0 8px;
+        min-width: 0;
+        min-height: 70px;
+        margin: 0;
         padding: 12px 13px;
         border: 1px solid rgba(142, 164, 159, .12);
-        border-radius: 10px;
-        background: rgba(19, 30, 35, .72);
+        border-radius: 8px;
+        background-color: var(--ccp-deck-panel-raised);
+        background-image: var(--ccp-deck-sheen);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .11), inset 0 -1px 0 rgba(0, 0, 0, .18), 0 9px 22px rgba(0, 0, 0, .08);
+        backdrop-filter: blur(18px) saturate(1.32);
+        -webkit-backdrop-filter: blur(18px) saturate(1.32);
       }
       .claude-codex-pro-control-deck .claude-codex-pro-row:first-child { border-top: 1px solid rgba(142, 164, 159, .12); }
-      .claude-codex-pro-control-deck .claude-codex-pro-row:hover { border-color: rgba(67, 214, 181, .2); background: rgba(21, 35, 40, .82); }
+      .claude-codex-pro-control-deck .claude-codex-pro-row:hover { border-color: rgba(188, 245, 233, .34); background-color: rgba(25, 47, 46, .78); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 13px 30px rgba(0, 0, 0, .12); }
       .claude-codex-pro-control-deck .claude-codex-pro-row-title { color: #e2efec; font-weight: 600; }
       .claude-codex-pro-control-deck .claude-codex-pro-row-description,
       .claude-codex-pro-control-deck .claude-codex-pro-about,
@@ -1010,6 +1046,12 @@
       .claude-codex-pro-control-deck .claude-codex-pro-contact-card,
       .claude-codex-pro-control-deck .claude-codex-pro-ad-empty { border-color: rgba(67, 214, 181, .18); background: rgba(19, 30, 35, .72); box-shadow: none; }
       .claude-codex-pro-control-deck :is(button, input, a):focus-visible { outline: 2px solid var(--ccp-deck-energy); outline-offset: 2px; }
+      @media (max-width: 900px) {
+        .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] { grid-template-columns: minmax(0, 1fr); }
+        .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-hero,
+        .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-section-title,
+        .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > [data-codex-service-tier-controls="true"] { grid-column: 1; }
+      }
       @media (max-width: 720px) {
         .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
           width: min(calc(100vw - 20px), 620px);
@@ -1025,6 +1067,7 @@
         .claude-codex-pro-control-deck .claude-codex-pro-modal-body { grid-column: 1; grid-row: 3; padding: 14px; }
         .claude-codex-pro-deck-kicker { letter-spacing: .1em; }
         .claude-codex-pro-control-deck .claude-codex-pro-service-tier-control { min-width: 0; }
+        .claude-codex-pro-deck-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
       @media (prefers-reduced-motion: reduce) {
         .claude-codex-pro-control-deck *, .claude-codex-pro-control-deck *::before, .claude-codex-pro-control-deck *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }

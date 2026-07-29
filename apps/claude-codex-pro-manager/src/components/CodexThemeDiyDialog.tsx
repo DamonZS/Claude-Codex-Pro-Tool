@@ -49,6 +49,12 @@ type DiyDraft = {
 };
 
 type BackgroundChoice = "none" | "keep" | "replace" | "remove";
+type DiyTextTone = "light" | "dark";
+
+const DIY_TEXT_COLORS: Record<DiyTextTone, string> = {
+  light: "#F3F5F7",
+  dark: "#17191C",
+};
 
 const DEFAULT_AUTOMATIC_PALETTE: CodexThemeDiyAutomaticPalette = {
   mode: "dark",
@@ -77,6 +83,7 @@ function draftForTheme(theme: CodexThemeSummary | null): DiyDraft {
   settings.blur_px = Math.min(48, Math.max(0, settings.blur_px));
   settings.font_scale_percent = 100;
   settings.density = "comfortable";
+  settings.text_color = DIY_TEXT_COLORS[diyTextTone(settings.text_color)];
   return {
     name: theme?.name ?? "我的 Codex 主题",
     description: theme?.description ?? "",
@@ -91,9 +98,19 @@ function settingsWithAutomaticPalette(
   return {
     ...current,
     ...palette,
+    text_color: current.text_color,
     font_scale_percent: 100,
     density: "comfortable",
   };
+}
+
+function diyTextTone(color: string): DiyTextTone {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
+  if (!match) return "light";
+  const luma = Number.parseInt(match[1], 16) * 0.2126
+    + Number.parseInt(match[2], 16) * 0.7152
+    + Number.parseInt(match[3], 16) * 0.0722;
+  return luma >= 128 ? "light" : "dark";
 }
 
 function fileNameFromPath(path: string) {
@@ -114,42 +131,10 @@ const IMAGE_LAYOUT_LABELS: Record<CodexThemeDiyImageLayout, string> = {
 };
 
 const IMAGE_LAYOUT_DESCRIPTIONS: Record<CodexThemeDiyImageLayout, string> = {
-  fullscreen: "图片铺满 Codex 画布并位于透明玻璃层后，中央保留原生图标。",
-  banner: "图片以宽幅横条显示在首页标题上方，自动裁切填满区域。",
-  card: "图片以中央大卡片显示并保留完整比例，不铺满整个画布。",
+  fullscreen: "图片以原始亮度铺满 Codex 画布，不叠加全屏蒙层，中央保留原生图标。",
+  banner: "图片以原始亮度显示为首页上方长条，界面色调自动与图片协调。",
+  card: "图片以原始亮度显示为中央大卡片并保留完整比例，界面色调自动协调。",
 };
-
-function RangeControl({
-  id,
-  label,
-  value,
-  min,
-  max,
-  unit,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  unit: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="codex-diy-range-control" htmlFor={id}>
-      <span><strong>{label}</strong><output>{value}{unit}</output></span>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
-  );
-}
 
 function CodexDiyPreview({
   draft,
@@ -165,9 +150,9 @@ function CodexDiyPreview({
     "--diy-background": settings.background_color,
     "--diy-surface": settings.surface_color,
     "--diy-text": settings.text_color,
-    "--diy-opacity": `${settings.glass_opacity}%`,
-    "--diy-blur": `${settings.blur_px}px`,
-    "--diy-radius": `${settings.radius_px}px`,
+    "--diy-text-shadow": diyTextTone(settings.text_color) === "dark"
+      ? "0 1px 2px rgb(255 255 255 / 0.72)"
+      : "0 1px 2px rgb(0 0 0 / 0.68)",
   } as CSSProperties;
 
   return (
@@ -443,7 +428,7 @@ export function CodexThemeDiyDialog({ actions, operation, theme, onClose }: Code
                   type="text"
                   maxLength={80}
                   value={draft.name}
-                  placeholder="例如：深海玻璃"
+                  placeholder="例如：暖阳主题"
                   aria-invalid={draft.name.trim().length < 1}
                   onChange={(event) => { setDraft({ ...draft, name: event.target.value }); setSubmitError(""); }}
                 />
@@ -466,17 +451,21 @@ export function CodexThemeDiyDialog({ actions, operation, theme, onClose }: Code
                 <Sparkles aria-hidden="true" />
                 <span>
                   <strong>配色与明暗自动生成</strong>
-                  <small>根据背景亮度与色彩生成可读界面，密度保持 Codex 默认。</small>
+                  <small>根据图片生成统一实色色调，保留 Codex 原生清晰度与控件样式。</small>
                 </span>
                 <b>{draft.settings.mode === "dark" ? "自动深色" : "自动浅色"}</b>
               </div>
-            </fieldset>
-
-            <fieldset>
-              <legend>玻璃与尺寸</legend>
-              <RangeControl id="diy-opacity" label="玻璃透光度" value={100 - draft.settings.glass_opacity} min={10} max={92} unit="%" onChange={(value) => updateSetting("glass_opacity", 100 - value)} />
-              <RangeControl id="diy-blur" label="模糊强度" value={draft.settings.blur_px} min={0} max={48} unit="px" onChange={(value) => updateSetting("blur_px", value)} />
-              <RangeControl id="diy-radius" label="圆角" value={draft.settings.radius_px} min={0} max={16} unit="px" onChange={(value) => updateSetting("radius_px", value)} />
+              <div className="codex-diy-segment-field codex-diy-text-color-field">
+                <span>字体颜色</span>
+                <div className="codex-diy-segmented codex-diy-text-color" role="radiogroup" aria-label="字体颜色">
+                  <button type="button" role="radio" aria-checked={diyTextTone(draft.settings.text_color) === "light"} className={diyTextTone(draft.settings.text_color) === "light" ? "is-active" : ""} disabled={controlsDisabled} onClick={() => updateSetting("text_color", DIY_TEXT_COLORS.light)}>
+                    白字
+                  </button>
+                  <button type="button" role="radio" aria-checked={diyTextTone(draft.settings.text_color) === "dark"} className={diyTextTone(draft.settings.text_color) === "dark" ? "is-active" : ""} disabled={controlsDisabled} onClick={() => updateSetting("text_color", DIY_TEXT_COLORS.dark)}>
+                    黑字
+                  </button>
+                </div>
+              </div>
             </fieldset>
 
             <fieldset>

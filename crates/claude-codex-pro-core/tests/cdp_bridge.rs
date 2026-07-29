@@ -258,8 +258,13 @@ fn injection_script_uses_pangu_control_deck_theme() {
     assert!(script.contains("new KeyboardEvent(\"keydown\", { key: \"Escape\""));
     assert!(script.contains("document.activeElement.blur()"));
     assert!(script.contains("@media (max-width: 720px)"));
+    assert!(script.contains("@media (max-width: 900px)"));
     assert!(script.contains("@media (prefers-reduced-motion: reduce)"));
     assert!(script.contains(":focus-visible"));
+    assert!(script.contains("backdrop-filter: blur(46px) saturate(1.72) contrast(1.08)"));
+    assert!(script.contains("grid-template-columns: repeat(2, minmax(0, 1fr))"));
+    assert!(script.contains("--ccp-deck-sheen"));
+    assert!(!script.contains("rgba(67, 214, 181, .025) 1px"));
     assert!(!script.contains("claude-codex-pro-comic-shell"));
     assert!(!script.contains("POWER PANEL"));
 

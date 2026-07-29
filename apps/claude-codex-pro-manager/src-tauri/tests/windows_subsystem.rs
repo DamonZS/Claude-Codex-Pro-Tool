@@ -1906,6 +1906,12 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         );
     }
     assert!(!theme_diy_dialog.contains("<span>作者"));
+    for removed_control in ["玻璃透光度", "模糊强度", "<legend>玻璃与尺寸</legend>"] {
+        assert!(
+            !theme_diy_dialog.contains(removed_control),
+            "obsolete DIY visual control is still exposed: {removed_control}"
+        );
+    }
 
     let registered_commands = source_section(
         &manager_lib,

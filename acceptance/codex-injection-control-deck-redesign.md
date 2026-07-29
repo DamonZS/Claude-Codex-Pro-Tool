@@ -10,6 +10,9 @@
    - 弹窗仍在 `document.body` 末尾创建，具有独立 stacking context。
 
 2. **形成 CCP 差异化视觉**
+   - 弹窗外壳、Header、侧栏和操作行具有统一的半透明玻璃、折射边缘与内高光，不再显示网格背景或不透明黑色底板。
+   - 背后的 Codex 界面轮廓可透过遮罩和弹窗外壳辨认，正文与设置说明仍清晰可读。
+   - 常用桌面宽度下能力指标形成一行，设置项采用双列高密度布局；小于 900px 时设置项自动单列，小于 720px 时保持原横向导航。
    - 存在 `claude-codex-pro-control-deck` 主题标识。
    - 可见文案包含 `PANGU LOCAL CONTROL DECK`、`本机运行`、`模型桥接`、`盘古记忆` 和 `可审查回退`。
    - 不再包含 `claude-codex-pro-comic-shell`、`POWER PANEL`、漫画字体和旧漫画主题 token。

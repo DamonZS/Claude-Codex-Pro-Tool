@@ -42,6 +42,8 @@ const DIY_BUILD_PREFIX: &str = "diy-build-";
 const DIY_IMAGE_LAYOUT_FULLSCREEN: &str = "fullscreen";
 const DIY_IMAGE_LAYOUT_BANNER: &str = "banner";
 const DIY_IMAGE_LAYOUT_CARD: &str = "card";
+const DIY_TEXT_COLOR_LIGHT: &str = "#F3F5F7";
+const DIY_TEXT_COLOR_DARK: &str = "#17191C";
 const DIY_BACKGROUND_VARIABLE: &str = "--ccp-theme-art";
 const DIY_BACKGROUND_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const DIY_BACKGROUND_MAX_PIXELS: u64 = 100_000_000;
@@ -1473,18 +1475,22 @@ impl CodexThemeStore {
             .iter()
             .find(|item| item.manifest.id == state.current_theme_id)
             .context("当前主题记录已损坏")?;
-        let style_path = checked_join(
-            &self.library_dir().join(&installed.manifest.id),
-            &installed.manifest.entry_style,
-        )?;
-        let css = normalize_css_line_endings(
-            fs::read_to_string(&style_path).context("当前主题样式不可读取")?,
-        );
-        validate_css(&css)?;
-        let runtime = compile_runtime_resources(
-            &self.library_dir().join(&installed.manifest.id),
-            &installed.manifest,
-        )?;
+        let package_root = self.library_dir().join(&installed.manifest.id);
+        let runtime = compile_runtime_resources(&package_root, &installed.manifest)?;
+        let css = if let Some(settings) = installed.manifest.diy.as_ref() {
+            render_diy_css(
+                &installed.manifest.id,
+                settings,
+                runtime.asset_data_uris.contains_key("--ccp-theme-art"),
+            )?
+        } else {
+            let style_path = checked_join(&package_root, &installed.manifest.entry_style)?;
+            let css = normalize_css_line_endings(
+                fs::read_to_string(&style_path).context("当前主题样式不可读取")?,
+            );
+            validate_css(&css)?;
+            css
+        };
         Ok(CodexThemePayload {
             theme_id: installed.manifest.id.clone(),
             generation: state.generation,
@@ -1892,7 +1898,6 @@ fn apply_automatic_diy_palette(
         .background_color
         .clone_from(&palette.background_color);
     settings.surface_color.clone_from(&palette.surface_color);
-    settings.text_color.clone_from(&palette.text_color);
 }
 
 fn rgb_luma([red, green, blue]: [u8; 3]) -> u8 {
@@ -1958,6 +1963,12 @@ fn normalize_diy_settings(settings: &mut CodexThemeDiySettings) -> anyhow::Resul
     settings.background_color = normalize_hex_color("背景色", &settings.background_color)?;
     settings.surface_color = normalize_hex_color("表面色", &settings.surface_color)?;
     settings.text_color = normalize_hex_color("文字色", &settings.text_color)?;
+    if !matches!(
+        settings.text_color.as_str(),
+        DIY_TEXT_COLOR_LIGHT | DIY_TEXT_COLOR_DARK
+    ) {
+        bail!("DIY 主题文字颜色仅支持白字或黑字");
+    }
     validate_diy_settings(settings)
 }
 
@@ -2544,28 +2555,46 @@ fn render_diy_css(
 ) -> anyhow::Result<String> {
     validate_diy_settings(settings)?;
     let scope = diy_scope_class(theme_id)?;
-    let surface = rgba_css(&settings.surface_color, settings.glass_opacity)?;
-    let surface_strong = rgba_css(
-        &settings.surface_color,
-        settings.glass_opacity.saturating_add(10).min(100),
-    )?;
-    let border = rgba_css(&settings.text_color, 18)?;
-    let muted_text = rgba_css(&settings.text_color, 68)?;
+    let border = rgba_css(&settings.text_color, 24)?;
+    let muted_text = rgba_css(&settings.text_color, 74)?;
+    let text_is_light = rgb_luma(parse_hex_color(&settings.text_color)?) >= 128;
+    let text_shadow = if text_is_light {
+        "rgb(0 0 0 / 0.68)"
+    } else {
+        "rgb(255 255 255 / 0.72)"
+    };
+    let strong_text_shadow = if text_is_light {
+        "rgb(0 0 0 / 0.72)"
+    } else {
+        "rgb(255 255 255 / 0.78)"
+    };
     let background_image = if has_background {
         "var(--ccp-theme-art, none)"
     } else {
         "none"
     };
-    let canvas_tint = rgba_css(
-        &settings.background_color,
-        if settings.mode == "dark" { 24 } else { 30 },
-    )?;
-    let canvas_background = if has_background
-        && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN
-    {
-        format!("linear-gradient({canvas_tint}, {canvas_tint}), {background_image}")
+    let fullscreen_background =
+        has_background && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN;
+    let shell_surface = if fullscreen_background {
+        rgba_css(&settings.background_color, 18)?
     } else {
-        "linear-gradient(135deg, color-mix(in srgb, var(--ccp-theme-diy-accent) 34%, var(--ccp-theme-diy-background)), var(--ccp-theme-diy-background))".to_string()
+        settings.background_color.clone()
+    };
+    let panel_surface = if fullscreen_background {
+        rgba_css(&settings.surface_color, 30)?
+    } else {
+        settings.surface_color.clone()
+    };
+    let content_surface = if fullscreen_background {
+        rgba_css(&settings.surface_color, 72)?
+    } else {
+        settings.surface_color.clone()
+    };
+    let sidebar_surface = settings.surface_color.clone();
+    let canvas_background = if fullscreen_background {
+        background_image.to_string()
+    } else {
+        "none".to_string()
     };
     let has_hero_image = has_background
         && matches!(
@@ -2581,7 +2610,7 @@ fn render_diy_css(
         hero_content_opacity,
     ) = if !has_hero_image {
         (
-            "var(--ccp-theme-diy-surface-strong)".to_string(),
+            "var(--ccp-theme-diy-content-surface)".to_string(),
             "58px",
             "58px",
             "var(--ccp-theme-diy-border)",
@@ -2600,7 +2629,7 @@ fn render_diy_css(
     } else {
         (
             format!(
-                "{background_image} center / contain no-repeat, var(--ccp-theme-diy-surface-strong)"
+                "{background_image} center / contain no-repeat, var(--ccp-theme-diy-content-surface)"
             ),
             "min(480px, 62cqw)",
             "clamp(200px, 30cqh, 270px)",
@@ -2609,35 +2638,28 @@ fn render_diy_css(
             "0",
         )
     };
-    let spacing = if settings.density == "compact" { 8 } else { 12 };
-    let control_height = if settings.density == "compact" {
-        34
-    } else {
-        40
-    };
-
     Ok(format!(
         r#"/* Generated by CCP DIY Theme Builder. User CSS is never inserted. */
 .{scope} {{
   color-scheme: {mode};
   --ccp-theme-diy-accent: {accent};
   --ccp-theme-diy-background: {background};
-  --ccp-theme-diy-surface: {surface};
-  --ccp-theme-diy-surface-strong: {surface_strong};
+  --ccp-theme-diy-shell-surface: {shell_surface};
+  --ccp-theme-diy-panel-surface: {panel_surface};
+  --ccp-theme-diy-content-surface: {content_surface};
+  --ccp-theme-diy-sidebar-surface: {sidebar_surface};
   --ccp-theme-diy-text: {text};
   --ccp-theme-diy-muted-text: {muted_text};
   --ccp-theme-diy-border: {border};
-  --ccp-theme-diy-radius: {radius}px;
-  --ccp-theme-diy-blur: {blur}px;
+  --ccp-theme-diy-text-shadow: {text_shadow};
+  --ccp-theme-diy-text-shadow-strong: {strong_text_shadow};
   --ccp-theme-diy-image-layout: {image_layout};
-  --ccp-theme-diy-spacing: {spacing}px;
-  --ccp-theme-diy-control-height: {control_height}px;
-  background-color: var(--ccp-theme-diy-background);
-  background-image: {canvas_background};
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
-  background-attachment: fixed;
+  background-color: var(--ccp-theme-diy-background) !important;
+  background-image: {canvas_background} !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  background-size: cover !important;
+  background-attachment: fixed !important;
   color: var(--ccp-theme-diy-text);
 }}
 
@@ -2645,6 +2667,9 @@ fn render_diy_css(
 .{scope} #root {{
   background-color: transparent !important;
   color: var(--ccp-theme-diy-text);
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
 }}
 
 .{scope} main,
@@ -2654,29 +2679,45 @@ fn render_diy_css(
 }}
 
 .{scope} main.main-surface {{
-  background: var(--ccp-theme-diy-surface) !important;
+  background: var(--ccp-theme-diy-shell-surface) !important;
   border-color: var(--ccp-theme-diy-border) !important;
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.16) !important;
+  backdrop-filter: none !important;
 }}
 
 .{scope} main.main-surface > header.app-header-tint {{
-  background: var(--ccp-theme-diy-surface-strong) !important;
+  background: var(--ccp-theme-diy-panel-surface) !important;
   border-color: var(--ccp-theme-diy-border) !important;
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.18) !important;
+  backdrop-filter: none !important;
+}}
+
+.{scope} main.main-surface > header.app-header-tint :is(div, section),
+.{scope} [data-testid="top-bar"] :is(div, section) {{
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
 }}
 
 .{scope} nav,
 .{scope} aside,
 .{scope} [data-testid="left-sidebar"],
 .{scope} [data-testid="top-bar"] {{
-  background: var(--ccp-theme-diy-surface);
+  background: var(--ccp-theme-diy-panel-surface);
   border-color: var(--ccp-theme-diy-border);
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.16);
+  backdrop-filter: none;
 }}
 
 .{scope} aside.app-shell-left-panel {{
-  background: var(--ccp-theme-diy-surface) !important;
+  background: var(--ccp-theme-diy-sidebar-surface) !important;
   color: var(--ccp-theme-diy-text) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}}
+
+.{scope} aside.app-shell-left-panel :is(a, button, div, span, p, strong, small, h1, h2, h3, li),
+.{scope} [data-testid="left-sidebar"] :is(a, button, div, span, p, strong, small, h1, h2, h3, li) {{
+  color: var(--ccp-theme-diy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
+  text-shadow: 0 1px 2px var(--ccp-theme-diy-text-shadow) !important;
 }}
 
 .{scope} [role="main"]:has(
@@ -2694,11 +2735,12 @@ fn render_diy_css(
   min-width: {hero_visual_width} !important;
   min-height: {hero_visual_height} !important;
   border-color: {hero_visual_border} !important;
-  border-radius: var(--ccp-theme-diy-radius) !important;
+  border-radius: 8px !important;
   background: {hero_visual_background} !important;
   color: {hero_visual_color} !important;
-  filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--ccp-theme-diy-background) 48%, transparent));
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.2) !important;
+  opacity: 1 !important;
+  filter: none !important;
+  backdrop-filter: none !important;
   overflow: hidden !important;
 }}
 
@@ -2708,85 +2750,44 @@ fn render_diy_css(
 
 .{scope} [data-feature="game-source"] {{
   color: var(--ccp-theme-diy-text) !important;
-  text-shadow: 0 1px 12px color-mix(in srgb, var(--ccp-theme-diy-background) 58%, transparent) !important;
-}}
-
-.{scope} button,
-.{scope} input,
-.{scope} textarea,
-.{scope} select,
-.{scope} [role="button"],
-.{scope} [role="dialog"],
-.{scope} [role="menu"],
-.{scope} [data-testid="composer"] {{
-  border-radius: var(--ccp-theme-diy-radius);
-}}
-
-.{scope} input,
-.{scope} textarea,
-.{scope} select,
-.{scope} [role="dialog"],
-.{scope} [role="menu"],
-.{scope} [data-testid="composer"] {{
-  background: var(--ccp-theme-diy-surface-strong);
-  border-color: var(--ccp-theme-diy-border);
-  color: var(--ccp-theme-diy-text);
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.12);
+  -webkit-text-fill-color: currentColor !important;
+  font-weight: 600 !important;
+  text-shadow: 0 1px 3px var(--ccp-theme-diy-text-shadow-strong) !important;
 }}
 
 .{scope} .group\/home-suggestions button,
-.{scope} .composer-surface-chrome {{
+.{scope} .composer-surface-chrome,
+.{scope} [data-testid="composer"] {{
   border-color: var(--ccp-theme-diy-border) !important;
-  background: var(--ccp-theme-diy-surface-strong) !important;
+  background: var(--ccp-theme-diy-content-surface) !important;
   color: var(--ccp-theme-diy-text) !important;
-  backdrop-filter: blur(var(--ccp-theme-diy-blur)) saturate(1.18) !important;
+  backdrop-filter: none !important;
 }}
 
+.{scope} .group\/home-suggestions button * {{
+  color: inherit !important;
+  -webkit-text-fill-color: currentColor !important;
+  opacity: 1 !important;
+  font-weight: 550 !important;
+  text-shadow: 0 1px 2px var(--ccp-theme-diy-text-shadow) !important;
+}}
+
+.{scope} .composer-surface-chrome :is(div, section, header, footer),
+.{scope} [data-testid="composer"] :is(div, section, header, footer),
 .{scope} .composer-surface-chrome .ProseMirror {{
-  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
   color: var(--ccp-theme-diy-text) !important;
-}}
-
-.{scope} aside.app-shell-left-panel nav button,
-.{scope} .group\/home-suggestions button,
-.{scope} [data-testid="composer"] button {{
-  min-height: var(--ccp-theme-diy-control-height);
-}}
-
-.{scope} aside.app-shell-left-panel nav,
-.{scope} .group\/home-suggestions > div > div {{
-  gap: var(--ccp-theme-diy-spacing);
-}}
-
-.{scope} button:hover,
-.{scope} [role="button"]:hover,
-.{scope} [aria-selected="true"] {{
-  background-color: color-mix(in srgb, var(--ccp-theme-diy-accent) 18%, transparent);
-}}
-
-.{scope} a,
-.{scope} [data-accent="true"],
-.{scope} [aria-current="page"] {{
-  color: var(--ccp-theme-diy-accent);
-}}
-
-.{scope} ::placeholder,
-.{scope} [data-muted="true"] {{
-  color: var(--ccp-theme-diy-muted-text);
-}}
-
-.{scope} :focus-visible {{
-  outline: 2px solid var(--ccp-theme-diy-accent);
-  outline-offset: 2px;
+  box-shadow: none !important;
 }}
 "#,
         mode = settings.mode,
         accent = settings.accent_color,
         background = settings.background_color,
         text = settings.text_color,
-        radius = settings.radius_px,
-        blur = settings.blur_px,
         image_layout = settings.image_layout,
+        text_shadow = text_shadow,
+        strong_text_shadow = strong_text_shadow,
     ))
 }
 
@@ -2832,40 +2833,28 @@ fn render_diy_preview(
             image::imageops::FilterType::Triangle,
         );
         overlay_rounded_image(&mut canvas, &ambient.to_rgba8(), 0, 0, 0);
-        fill_rounded_rect(
-            &mut canvas,
-            0,
-            0,
-            DIY_PREVIEW_WIDTH,
-            DIY_PREVIEW_HEIGHT,
-            0,
-            image::Rgba([
-                background_red,
-                background_green,
-                background_blue,
-                if settings.mode == "dark" { 48 } else { 62 },
-            ]),
-        );
     }
 
+    let fullscreen_background =
+        background.is_some() && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN;
     let surface = image::Rgba([
         surface_red,
         surface_green,
         surface_blue,
-        percent_to_alpha(settings.glass_opacity),
+        if fullscreen_background { 224 } else { 255 },
     ]);
     let strong_surface = image::Rgba([
         surface_red,
         surface_green,
         surface_blue,
-        percent_to_alpha(settings.glass_opacity.saturating_add(7).min(100)),
+        if fullscreen_background { 245 } else { 255 },
     ]);
-    let border = image::Rgba([text_red, text_green, text_blue, 42]);
-    let text = image::Rgba([text_red, text_green, text_blue, 222]);
-    let muted = image::Rgba([text_red, text_green, text_blue, 108]);
+    let border = image::Rgba([text_red, text_green, text_blue, 62]);
+    let text = image::Rgba([text_red, text_green, text_blue, 245]);
+    let muted = image::Rgba([text_red, text_green, text_blue, 166]);
     let accent = image::Rgba([accent_red, accent_green, accent_blue, 255]);
-    let radius = u32::from(settings.radius_px).saturating_add(4);
-    let main_radius = radius.saturating_add(8).min(24);
+    let radius = 8;
+    let main_radius = 16;
 
     const SIDEBAR_WIDTH: u32 = 202;
     fill_rounded_rect(
@@ -3088,10 +3077,6 @@ fn render_diy_preview(
         .write_to(&mut cursor, image::ImageFormat::Png)
         .context("无法编码 DIY 主题 PNG 预览")?;
     Ok(cursor.into_inner())
-}
-
-fn percent_to_alpha(value: u8) -> u8 {
-    ((u16::from(value) * 255) / 100) as u8
 }
 
 fn fill_rounded_rect(
@@ -3627,7 +3612,7 @@ mod tests {
                 accent_color: "#0A84FF".to_string(),
                 background_color: "#121416".to_string(),
                 surface_color: "#20242A".to_string(),
-                text_color: "#F2F4F7".to_string(),
+                text_color: DIY_TEXT_COLOR_LIGHT.to_string(),
                 glass_opacity: 78,
                 blur_px: 24,
                 radius_px: 8,
@@ -3693,6 +3678,58 @@ mod tests {
             serde_json::from_slice(&fs::read(package_root.join("theme.json")).unwrap()).unwrap();
         assert!(manifest.diy.is_some());
         assert_no_active_diy_artifacts(&store);
+    }
+
+    #[test]
+    fn active_diy_payload_regenerates_css_from_manifest_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let created = store
+            .save_diy_theme(diy_input("Fresh Runtime CSS"))
+            .unwrap();
+        let style_path = store
+            .library_dir()
+            .join(&created.id)
+            .join("assets/theme.css");
+        fs::write(
+            &style_path,
+            ".legacy { backdrop-filter: blur(40px); } [role=\"dialog\"] { background: white; }",
+        )
+        .unwrap();
+
+        store.apply_theme(&created.id).unwrap();
+        let payload = store.active_theme_payload().unwrap();
+
+        assert!(payload.css.contains("Generated by CCP DIY Theme Builder"));
+        assert!(!payload.css.contains("blur(40px)"));
+        assert!(!payload.css.contains("[role=\"dialog\"]"));
+    }
+
+    #[test]
+    fn diy_text_color_is_preserved_and_uses_opposite_shadow() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let mut input = diy_input("Dark text");
+        input.settings.text_color = DIY_TEXT_COLOR_DARK.to_string();
+
+        let created = store.save_diy_theme(input).unwrap();
+        assert_eq!(
+            created.diy.as_ref().unwrap().text_color,
+            DIY_TEXT_COLOR_DARK
+        );
+        let css = fs::read_to_string(
+            store
+                .library_dir()
+                .join(&created.id)
+                .join("assets/theme.css"),
+        )
+        .unwrap();
+        assert!(css.contains("--ccp-theme-diy-text: #17191C;"));
+        assert!(css.contains("--ccp-theme-diy-text-shadow: rgb(255 255 255 / 0.72);"));
+
+        let mut invalid = diy_input("Invalid text color");
+        invalid.settings.text_color = "#123456".to_string();
+        assert!(store.save_diy_theme(invalid).is_err());
     }
 
     #[test]
@@ -3958,7 +3995,14 @@ mod tests {
         let fullscreen_css = render_diy_css("ccp-diy-layout-fullscreen", &settings, true).unwrap();
         let fullscreen_preview = render_diy_preview(&settings, Some(&background)).unwrap();
         assert!(fullscreen_css.contains("--ccp-theme-diy-image-layout: fullscreen;"));
-        assert!(fullscreen_css.contains("background-image: linear-gradient(rgba("));
+        assert!(
+            fullscreen_css.contains("background-image: var(--ccp-theme-art, none) !important;")
+        );
+        assert!(fullscreen_css.contains("--ccp-theme-diy-sidebar-surface: #20242A;"));
+        assert!(
+            fullscreen_css.contains("background: var(--ccp-theme-diy-sidebar-surface) !important;")
+        );
+        assert!(fullscreen_css.contains("color: var(--ccp-theme-diy-text) !important;"));
         assert!(fullscreen_css.contains("opacity: 1 !important;"));
 
         settings.image_layout = DIY_IMAGE_LAYOUT_BANNER.to_string();
@@ -3967,7 +4011,7 @@ mod tests {
         assert!(banner_css.contains("--ccp-theme-diy-image-layout: banner;"));
         assert!(banner_css.contains("center / cover no-repeat"));
         assert!(banner_css.contains("opacity: 0 !important;"));
-        assert!(banner_css.contains("background-image: linear-gradient(135deg"));
+        assert!(banner_css.contains("background-image: none !important;"));
 
         settings.image_layout = DIY_IMAGE_LAYOUT_CARD.to_string();
         let card_css = render_diy_css("ccp-diy-layout-card", &settings, true).unwrap();
@@ -3975,7 +4019,17 @@ mod tests {
         assert!(card_css.contains("--ccp-theme-diy-image-layout: card;"));
         assert!(card_css.contains("center / contain no-repeat"));
         assert!(card_css.contains("opacity: 0 !important;"));
-        assert!(card_css.contains("background-image: linear-gradient(135deg"));
+        assert!(card_css.contains("background-image: none !important;"));
+
+        for css in [&fullscreen_css, &banner_css, &card_css] {
+            assert!(css.contains("border-radius: 8px !important;"));
+            assert!(css.contains("opacity: 1 !important;"));
+            assert!(css.contains("-webkit-text-fill-color: currentColor !important;"));
+            assert!(!css.contains("blur("));
+            assert!(!css.contains("[role=\"dialog\"]"));
+            assert!(!css.contains("[role=\"menu\"]"));
+            assert!(!css.contains("linear-gradient(rgba("));
+        }
 
         assert_ne!(fullscreen_preview, banner_preview);
         assert_ne!(banner_preview, card_preview);

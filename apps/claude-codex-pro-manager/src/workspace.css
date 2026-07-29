@@ -4929,7 +4929,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .codex-diy-field,
 .codex-diy-color-control,
-.codex-diy-range-control,
 .codex-diy-segment-field {
   display: grid;
   min-width: 0;
@@ -4938,23 +4937,20 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .codex-diy-field > span,
 .codex-diy-color-control > label,
-.codex-diy-range-control > span,
 .codex-diy-segment-field > span {
   color: var(--workspace-text-secondary);
   font-size: 12px;
   font-weight: 650;
 }
 
-.codex-diy-field > span,
-.codex-diy-range-control > span {
+.codex-diy-field > span {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.codex-diy-field small,
-.codex-diy-range-control output {
+.codex-diy-field small {
   color: var(--workspace-text-tertiary);
   font: 10px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
@@ -5164,21 +5160,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   text-transform: uppercase;
 }
 
-.codex-diy-range-control input {
-  width: 100%;
-  accent-color: var(--workspace-blue);
-  cursor: pointer;
-}
-
-.codex-diy-range-control output {
-  min-width: 44px;
-  border: 1px solid var(--workspace-border);
-  border-radius: 4px;
-  background: var(--workspace-surface-subtle);
-  padding: 3px 5px;
-  text-align: center;
-}
-
 .codex-diy-background-control {
   display: grid;
   min-width: 0;
@@ -5341,20 +5322,19 @@ html.dark > body > .supplier-model-dropdown-menu,
   grid-template-columns: 132px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--diy-text) 18%, transparent);
-  border-radius: var(--diy-radius);
-  background-color: var(--diy-background);
+  border-radius: 8px;
+  background: var(--diy-background);
   color: var(--diy-text);
   box-shadow: 0 22px 54px rgb(0 0 0 / 0.22);
   font-size: 12px;
 }
 
-.codex-diy-preview::before {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  background: color-mix(in srgb, var(--diy-background) 18%, transparent);
-  content: "";
-  pointer-events: none;
+.codex-diy-preview :is(.codex-diy-preview-sidebar, .codex-diy-preview-home-title, .codex-diy-preview-context, .codex-diy-preview-input) {
+  text-shadow: var(--diy-text-shadow);
+}
+
+.codex-diy-text-color {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .codex-diy-preview-backdrop-art {
@@ -5365,7 +5345,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: saturate(1.04) contrast(1.02);
   pointer-events: none;
   user-select: none;
 }
@@ -5373,9 +5352,25 @@ html.dark > body > .supplier-model-dropdown-menu,
 .codex-diy-preview-sidebar,
 .codex-diy-preview-workspace,
 .codex-diy-preview-composer {
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), transparent);
-  backdrop-filter: blur(var(--diy-blur)) saturate(135%);
-  -webkit-backdrop-filter: blur(var(--diy-blur)) saturate(135%);
+  background: var(--diy-surface);
+}
+
+.codex-diy-preview-workspace {
+  background: var(--diy-background);
+}
+
+.codex-diy-preview.is-layout-fullscreen .codex-diy-preview-sidebar {
+  background: var(--diy-surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.codex-diy-preview.is-layout-fullscreen .codex-diy-preview-workspace {
+  background: color-mix(in srgb, var(--diy-background) 78%, transparent);
+}
+
+.codex-diy-preview.is-layout-fullscreen .codex-diy-preview-composer {
+  background: color-mix(in srgb, var(--diy-surface) 96%, transparent);
 }
 
 .codex-diy-preview-sidebar {
@@ -5433,7 +5428,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 .codex-diy-preview-settings {
   min-height: 30px;
   overflow: hidden;
-  border-radius: calc(var(--diy-radius) * 0.68);
+  border-radius: 6px;
   color: color-mix(in srgb, var(--diy-text) 78%, transparent);
   padding: 0 7px;
   text-overflow: ellipsis;
@@ -5441,7 +5436,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 }
 
 .codex-diy-preview-sidebar nav span.is-active {
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), var(--diy-primary) 18%);
+  background: color-mix(in srgb, var(--diy-surface) 82%, var(--diy-primary) 18%);
   color: var(--diy-text);
 }
 
@@ -5449,12 +5444,12 @@ html.dark > body > .supplier-model-dropdown-menu,
   display: grid;
   min-width: 0;
   gap: 1px;
-  border-radius: calc(var(--diy-radius) * 0.72);
+  border-radius: 6px;
   padding: 2px 0 5px;
 }
 
 .codex-diy-preview-project.is-current {
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), var(--diy-primary) 12%);
+  background: color-mix(in srgb, var(--diy-surface) 88%, var(--diy-primary) 12%);
 }
 
 .codex-diy-preview-project > span {
@@ -5484,7 +5479,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-top-left-radius: calc(var(--diy-radius) + 4px);
+  border-top-left-radius: 10px;
   box-shadow: inset 1px 0 color-mix(in srgb, white 12%, transparent);
 }
 
@@ -5529,8 +5524,8 @@ html.dark > body > .supplier-model-dropdown-menu,
   height: 108px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--diy-text) 18%, transparent);
-  border-radius: var(--diy-radius);
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), transparent);
+  border-radius: 8px;
+  background: var(--diy-surface);
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
 }
 
@@ -5539,8 +5534,8 @@ html.dark > body > .supplier-model-dropdown-menu,
   height: 138px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--diy-text) 18%, transparent);
-  border-radius: var(--diy-radius);
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), transparent);
+  border-radius: 8px;
+  background: var(--diy-surface);
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
 }
 
@@ -5549,7 +5544,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   width: 100%;
   height: 100%;
   object-fit: contain;
-  filter: drop-shadow(0 10px 22px rgb(0 0 0 / 0.24));
+  filter: none;
   pointer-events: none;
   user-select: none;
 }
@@ -5570,9 +5565,8 @@ html.dark > body > .supplier-model-dropdown-menu,
   place-items: center;
   border: 2px solid color-mix(in srgb, var(--diy-text) 36%, transparent);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--diy-surface) var(--diy-opacity), transparent);
+  background: var(--diy-surface);
   color: color-mix(in srgb, var(--diy-text) 52%, transparent);
-  backdrop-filter: blur(var(--diy-blur));
 }
 
 .codex-diy-preview-home-title {
@@ -5594,7 +5588,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   min-width: 0;
   grid-template-rows: 34px 66px;
   border: 1px solid color-mix(in srgb, var(--diy-text) 16%, transparent);
-  border-radius: calc(var(--diy-radius) + 6px);
+  border-radius: 14px;
   color: color-mix(in srgb, var(--diy-text) 50%, transparent);
   box-shadow: 0 12px 30px rgb(0 0 0 / 0.14);
 }
@@ -9375,4 +9369,200 @@ html.dark > body > .supplier-model-dropdown-menu,
   border-color: var(--workspace-blue);
   outline: 0;
   box-shadow: 0 0 0 3px var(--workspace-focus);
+}
+
+/* Agent Control Glass: one material hierarchy shared by every CCP route. */
+.ops-shell {
+  --agent-glass-edge: rgb(226 244 255 / 0.42);
+  --agent-glass-edge-soft: rgb(255 255 255 / 0.16);
+  --agent-glass-highlight: rgb(255 255 255 / 0.5);
+  --agent-glass-shadow: rgb(0 0 0 / 0.24);
+  --agent-glass-shell: rgb(3 8 7 / 0.2);
+  --agent-glass-panel: rgb(5 12 10 / 0.34);
+  --agent-glass-raised: rgb(9 17 14 / 0.58);
+  --agent-glass-sheen: linear-gradient(
+    132deg,
+    rgb(255 255 255 / 0.2) 0%,
+    rgb(255 255 255 / 0.055) 18%,
+    transparent 46%,
+    rgb(93 181 255 / 0.045) 78%,
+    rgb(255 255 255 / 0.08) 100%
+  );
+}
+
+.ops-shell.light {
+  --agent-glass-edge: rgb(255 255 255 / 0.92);
+  --agent-glass-edge-soft: rgb(61 87 76 / 0.14);
+  --agent-glass-highlight: rgb(255 255 255 / 0.98);
+  --agent-glass-shadow: rgb(37 56 48 / 0.14);
+  --agent-glass-shell: rgb(241 248 245 / 0.38);
+  --agent-glass-panel: rgb(244 250 247 / 0.58);
+  --agent-glass-raised: rgb(251 253 252 / 0.86);
+  --agent-glass-sheen: linear-gradient(
+    132deg,
+    rgb(255 255 255 / 0.92) 0%,
+    rgb(255 255 255 / 0.3) 20%,
+    transparent 48%,
+    rgb(74 143 194 / 0.055) 78%,
+    rgb(255 255 255 / 0.4) 100%
+  );
+}
+
+.ops-rail,
+.ops-topbar,
+.ops-screen:not([data-route="overview"]),
+.ops-command-palette,
+.ops-theme-menu,
+.ops-supplier-menu,
+.ops-update-popover {
+  border-color: var(--agent-glass-edge) !important;
+  background-color: var(--agent-glass-shell) !important;
+  background-image: var(--agent-glass-sheen) !important;
+  box-shadow:
+    inset 0 1px 0 var(--agent-glass-highlight),
+    inset 1px 0 0 var(--agent-glass-edge-soft),
+    inset 0 -1px 0 rgb(0 0 0 / 0.3),
+    0 22px 54px var(--agent-glass-shadow) !important;
+  backdrop-filter: blur(30px) saturate(165%) contrast(106%) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(165%) contrast(106%) !important;
+}
+
+.ops-page-heading,
+.ops-panel,
+.panel,
+.supplier-card,
+.memory-start-card,
+.memory-outcome-item,
+.memory-recall-card,
+.memory-tool-card,
+.memory-assist-row,
+.plugin-hub-detail,
+.plugin-hub-row {
+  border-color: var(--agent-glass-edge-soft);
+  background-color: var(--agent-glass-panel);
+  background-image: var(--agent-glass-sheen);
+  box-shadow:
+    inset 0 1px 0 var(--agent-glass-highlight),
+    inset 0 -1px 0 rgb(0 0 0 / 0.18),
+    0 14px 34px rgb(0 0 0 / 0.1);
+  backdrop-filter: blur(22px) saturate(148%);
+  -webkit-backdrop-filter: blur(22px) saturate(148%);
+}
+
+.ops-shell.light :is(
+  .ops-page-heading,
+  .ops-panel,
+  .panel,
+  .supplier-card,
+  .memory-start-card,
+  .memory-outcome-item,
+  .memory-recall-card,
+  .memory-tool-card,
+  .memory-assist-row,
+  .plugin-hub-detail,
+  .plugin-hub-row
+) {
+  background-color: var(--agent-glass-panel);
+  box-shadow:
+    inset 0 1px 0 var(--agent-glass-highlight),
+    inset 0 -1px 0 rgb(48 75 62 / 0.1),
+    0 14px 34px rgb(43 67 56 / 0.08);
+}
+
+.ops-rail::after,
+.ops-topbar::after,
+.ops-screen:not([data-route="overview"])::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 1px;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 7px;
+  pointer-events: none;
+  mask-image: linear-gradient(145deg, #000 0 24%, transparent 56%);
+}
+
+.ops-rail > *,
+.ops-topbar > *,
+.ops-screen > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ops-rail nav a,
+.ops-rail nav button,
+.ops-rail-utility,
+.ops-command-search,
+.ops-runtime-chip,
+.ops-icon-command,
+.ops-domain-tabs,
+.ops-agent-scope {
+  border-color: rgb(255 255 255 / 0.1);
+  background-image: linear-gradient(145deg, rgb(255 255 255 / 0.1), transparent 48%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.ops-rail nav :is(a, button):hover,
+.ops-rail-utility:hover,
+.ops-command-search:hover,
+.ops-runtime-chip:hover,
+.ops-icon-command:hover:not(:disabled) {
+  border-color: var(--agent-glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--agent-glass-highlight),
+    0 8px 20px rgb(0 0 0 / 0.12);
+  transform: translateY(-1px);
+}
+
+.overview-topology-node {
+  box-shadow:
+    inset 0 1px 0 var(--agent-glass-highlight),
+    inset 1px 0 0 var(--agent-glass-edge-soft),
+    inset 0 -1px 0 rgb(0 0 0 / 0.36),
+    0 34px 72px rgb(0 0 0 / 0.28),
+    0 1px 0 rgb(255 255 255 / 0.08) !important;
+}
+
+.overview-topology-node::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 7px;
+  pointer-events: none;
+  mask-image: linear-gradient(135deg, #000, transparent 52%);
+}
+
+.ops-shell :is(input, textarea, select, pre, code, table) {
+  text-shadow: none;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ops-shell :is(
+    .ops-rail nav a,
+    .ops-rail nav button,
+    .ops-rail-utility,
+    .ops-command-search,
+    .ops-runtime-chip,
+    .ops-icon-command
+  ) {
+    transition: none;
+  }
+
+  .ops-shell :is(
+    .ops-rail nav a,
+    .ops-rail nav button,
+    .ops-rail-utility,
+    .ops-command-search,
+    .ops-runtime-chip,
+    .ops-icon-command
+  ):hover {
+    transform: none;
+  }
 }
