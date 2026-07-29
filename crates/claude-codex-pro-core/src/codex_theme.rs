@@ -1859,15 +1859,15 @@ fn automatic_diy_palette(background: Option<&DiyBackground>) -> CodexThemeDiyAut
     };
     let (background_color, surface_color, text_color, accent_target) = if mode == "light" {
         (
-            mix_rgb(average, [247, 248, 250], 90),
-            mix_rgb(average, [255, 255, 255], 95),
-            [23, 26, 30],
+            mix_rgb(average, [247, 248, 250], 55),
+            mix_rgb(average, [255, 255, 255], 68),
+            [23, 25, 28],
             [12, 78, 158],
         )
     } else {
         (
-            mix_rgb(average, [16, 19, 23], 86),
-            mix_rgb(average, [31, 36, 42], 90),
+            mix_rgb(average, [16, 19, 23], 55),
+            mix_rgb(average, [31, 36, 42], 62),
             [243, 245, 247],
             [102, 184, 255],
         )
@@ -1898,6 +1898,7 @@ fn apply_automatic_diy_palette(
         .background_color
         .clone_from(&palette.background_color);
     settings.surface_color.clone_from(&palette.surface_color);
+    settings.text_color.clone_from(&palette.text_color);
 }
 
 fn rgb_luma([red, green, blue]: [u8; 3]) -> u8 {
@@ -2676,6 +2677,17 @@ fn render_diy_css(
 .{scope} [data-testid="thread-view"],
 .{scope} [data-testid="home"] {{
   color: var(--ccp-theme-diy-text);
+}}
+
+.{scope} main.main-surface :is(h1, h2, h3, h4, h5, h6, p, span, strong, em, small, label, li, dt, dd, blockquote, code, pre, table, thead, tbody, tr, th, td, time, a):not(:where(dialog, dialog *)),
+.{scope} [data-testid="thread-view"] :is(h1, h2, h3, h4, h5, h6, p, span, strong, em, small, label, li, dt, dd, blockquote, code, pre, table, thead, tbody, tr, th, td, time, a):not(:where(dialog, dialog *)) {{
+  color: var(--ccp-theme-diy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
+}}
+
+.{scope} [data-testid="thread-view"] :is(.prose, [class*="markdown"], [class*="message-content"]) *:not(:where(dialog, dialog *)) {{
+  color: var(--ccp-theme-diy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
 }}
 
 .{scope} main.main-surface {{
@@ -3706,7 +3718,7 @@ mod tests {
     }
 
     #[test]
-    fn diy_text_color_is_preserved_and_uses_opposite_shadow() {
+    fn diy_text_color_follows_automatic_mode_and_uses_opposite_shadow() {
         let temp = tempfile::tempdir().unwrap();
         let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
         let mut input = diy_input("Dark text");
@@ -3715,7 +3727,7 @@ mod tests {
         let created = store.save_diy_theme(input).unwrap();
         assert_eq!(
             created.diy.as_ref().unwrap().text_color,
-            DIY_TEXT_COLOR_DARK
+            DIY_TEXT_COLOR_LIGHT
         );
         let css = fs::read_to_string(
             store
@@ -3724,12 +3736,18 @@ mod tests {
                 .join("assets/theme.css"),
         )
         .unwrap();
-        assert!(css.contains("--ccp-theme-diy-text: #17191C;"));
-        assert!(css.contains("--ccp-theme-diy-text-shadow: rgb(255 255 255 / 0.72);"));
+        assert!(css.contains("--ccp-theme-diy-text: #F3F5F7;"));
+        assert!(css.contains("--ccp-theme-diy-text-shadow: rgb(0 0 0 / 0.68);"));
+        assert!(css.contains("main.main-surface :is(h1, h2, h3"));
+        assert!(css.contains(":not(:where(dialog, dialog *))"));
 
         let mut invalid = diy_input("Invalid text color");
         invalid.settings.text_color = "#123456".to_string();
-        assert!(store.save_diy_theme(invalid).is_err());
+        let normalized = store.save_diy_theme(invalid).unwrap();
+        assert_eq!(
+            normalized.diy.as_ref().unwrap().text_color,
+            DIY_TEXT_COLOR_LIGHT
+        );
     }
 
     #[test]
@@ -3961,7 +3979,11 @@ mod tests {
         assert_eq!(dark.automatic_palette, dark_again.automatic_palette);
         assert_eq!(dark.automatic_palette.mode, "dark");
         assert_eq!(light.automatic_palette.mode, "light");
-        assert_eq!(neutral.automatic_palette.accent_color, "#0A84FF");
+        let neutral_accent = parse_hex_color(&neutral.automatic_palette.accent_color).unwrap();
+        assert!(neutral_accent[2] > neutral_accent[0]);
+        assert!(neutral_accent[2] > neutral_accent[1]);
+        assert_eq!(dark.automatic_palette.text_color, DIY_TEXT_COLOR_LIGHT);
+        assert_eq!(light.automatic_palette.text_color, DIY_TEXT_COLOR_DARK);
         for palette in [dark.automatic_palette, light.automatic_palette] {
             let accent = parse_hex_color(&palette.accent_color).unwrap();
             let surface = parse_hex_color(&palette.surface_color).unwrap();

@@ -381,10 +381,6 @@ function buildClientRecords({
   ];
 }
 
-function clientMatchesScope(client: ClientRecord, agentScope: AgentScope) {
-  return agentScope === "codex" ? client.id === "codex" : client.id !== "codex";
-}
-
 export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
   const {
     actions,
@@ -400,11 +396,10 @@ export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
     () => buildClientRecords({ claudeDesktop, claudeDesktopDevMode, claudeZhPatch, overview, settings, watcher }),
     [claudeDesktop, claudeDesktopDevMode, claudeZhPatch, overview, settings, watcher],
   );
-  const visibleClients = useMemo(
-    () => clients.filter((client) => clientMatchesScope(client, agentScope)),
-    [agentScope, clients],
-  );
-  const [selectedId, setSelectedId] = useState<ClientId>("codex");
+  const visibleClients = clients;
+  const [selectedId, setSelectedId] = useState<ClientId>(() => (
+    agentScope === "codex" ? "codex" : "claude-desktop"
+  ));
 
   useEffect(() => {
     if (!visibleClients.some((client) => client.id === selectedId) && visibleClients[0]) {
@@ -442,7 +437,7 @@ export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
         <aside className="clients-master-list">
           <header>
             <strong>本机客户端</strong>
-            <span>{visibleClients.length} 个当前范围</span>
+            <span>{visibleClients.length} 个本机客户端</span>
           </header>
           <div className="clients-master-items">
             {visibleClients.map((client) => {

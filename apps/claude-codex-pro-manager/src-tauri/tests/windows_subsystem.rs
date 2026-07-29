@@ -1365,7 +1365,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     assert!(!breadcrumb.contains("盘古"));
     let brand_button = jsx_button_containing(&app_shell, "className=\"ops-brand\"");
     assert!(brand_button.contains("className=\"ops-brand-mark\">CCP</span>"));
-    assert!(brand_button.contains("<strong>Control Plane</strong>"));
+    assert!(brand_button.contains("<strong>Claude Codex Pro</strong>"));
     assert!(!brand_button.contains("<strong>盘古</strong>"));
     assert!(manager_lib.contains(".title(\"CCP 管理工具\")"));
     assert!(tauri_config.contains("\"title\": \"CCP 管理工具\""));
@@ -1494,8 +1494,9 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "claudeDesktopDevMode?.devModeStatus.configured",
         "watcher?.enabled",
         "settings?.relayProfiles.find(",
-        "clients.filter((client) => clientMatchesScope(client, agentScope))",
-        "agentScope === \"codex\" ? client.id === \"codex\" : client.id !== \"codex\"",
+        "const visibleClients = clients",
+        "agentScope === \"codex\" ? \"codex\" : \"claude-desktop\"",
+        "{visibleClients.length} 个本机客户端",
         "<StateCell label=\"已安装\"",
         "<StateCell label=\"已启用\"",
         "<StateCell label=\"当前生效\"",

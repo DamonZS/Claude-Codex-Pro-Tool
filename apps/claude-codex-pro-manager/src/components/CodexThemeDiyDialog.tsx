@@ -98,7 +98,6 @@ function settingsWithAutomaticPalette(
   return {
     ...current,
     ...palette,
-    text_color: current.text_color,
     font_scale_percent: 100,
     density: "comfortable",
   };
@@ -450,21 +449,14 @@ export function CodexThemeDiyDialog({ actions, operation, theme, onClose }: Code
               <div className="codex-diy-auto-appearance">
                 <Sparkles aria-hidden="true" />
                 <span>
-                  <strong>配色与明暗自动生成</strong>
-                  <small>根据图片生成统一实色色调，保留 Codex 原生清晰度与控件样式。</small>
+                  <strong>提取图片主色调</strong>
+                  <small>从图片生成主色、表面色和对比文字色，保持工作区清晰可读。</small>
                 </span>
-                <b>{draft.settings.mode === "dark" ? "自动深色" : "自动浅色"}</b>
+                <b>{draft.settings.mode === "dark" ? "深色 · 白字" : "浅色 · 黑字"}</b>
               </div>
               <div className="codex-diy-segment-field codex-diy-text-color-field">
                 <span>字体颜色</span>
-                <div className="codex-diy-segmented codex-diy-text-color" role="radiogroup" aria-label="字体颜色">
-                  <button type="button" role="radio" aria-checked={diyTextTone(draft.settings.text_color) === "light"} className={diyTextTone(draft.settings.text_color) === "light" ? "is-active" : ""} disabled={controlsDisabled} onClick={() => updateSetting("text_color", DIY_TEXT_COLORS.light)}>
-                    白字
-                  </button>
-                  <button type="button" role="radio" aria-checked={diyTextTone(draft.settings.text_color) === "dark"} className={diyTextTone(draft.settings.text_color) === "dark" ? "is-active" : ""} disabled={controlsDisabled} onClick={() => updateSetting("text_color", DIY_TEXT_COLORS.dark)}>
-                    黑字
-                  </button>
-                </div>
+                <b>{draft.settings.mode === "dark" ? "自动白字" : "自动黑字"}</b>
               </div>
             </fieldset>
 
@@ -523,7 +515,7 @@ export function CodexThemeDiyDialog({ actions, operation, theme, onClose }: Code
           <section className="codex-diy-preview-pane" aria-labelledby="codex-diy-preview-title">
             <header>
               <div><strong id="codex-diy-preview-title">实时 Codex 预览</strong><span>控件修改即时呈现</span></div>
-              <div><span>{draft.settings.mode === "dark" ? "自动深色" : "自动浅色"}</span><span>{IMAGE_LAYOUT_LABELS[draft.settings.image_layout]}</span></div>
+              <div><span>图片主色调</span><span>{IMAGE_LAYOUT_LABELS[draft.settings.image_layout]}</span></div>
             </header>
             <div className="codex-diy-preview-stage">
               <CodexDiyPreview draft={draft} backgroundUrl={backgroundUrl} />

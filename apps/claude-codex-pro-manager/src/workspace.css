@@ -6439,6 +6439,334 @@ html.dark > body > .supplier-model-dropdown-menu,
   }
 }
 
+/* Agency finish gate: final material tokens override earlier glass experiments. */
+.ops-shell {
+  --finish-glass-shell: rgb(8 13 15 / 0.42);
+  --finish-glass-command: rgb(11 18 20 / 0.56);
+  --finish-glass-panel: rgb(13 21 23 / 0.66);
+  --finish-glass-raised: rgb(18 27 29 / 0.82);
+  --finish-data-surface: rgb(18 24 27 / 0.96);
+  --finish-edge: rgb(216 238 245 / 0.28);
+  --finish-edge-strong: rgb(235 249 253 / 0.46);
+  --finish-edge-muted: rgb(255 255 255 / 0.1);
+  --finish-highlight: rgb(255 255 255 / 0.34);
+  --finish-inner-dark: rgb(0 0 0 / 0.36);
+  --finish-depth: rgb(0 0 0 / 0.24);
+  --finish-reflection: linear-gradient(
+    142deg,
+    rgb(255 255 255 / 0.18) 0%,
+    rgb(255 255 255 / 0.055) 17%,
+    transparent 42%,
+    rgb(114 192 213 / 0.045) 76%,
+    rgb(255 255 255 / 0.075) 100%
+  );
+  --finish-transition: 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.ops-shell.light {
+  --finish-glass-shell: rgb(240 247 246 / 0.58);
+  --finish-glass-command: rgb(244 250 249 / 0.72);
+  --finish-glass-panel: rgb(247 251 250 / 0.78);
+  --finish-glass-raised: rgb(252 254 253 / 0.9);
+  --finish-data-surface: rgb(253 254 254 / 0.97);
+  --finish-edge: rgb(255 255 255 / 0.76);
+  --finish-edge-strong: rgb(255 255 255 / 0.96);
+  --finish-edge-muted: rgb(45 77 73 / 0.12);
+  --finish-highlight: rgb(255 255 255 / 0.98);
+  --finish-inner-dark: rgb(42 72 67 / 0.13);
+  --finish-depth: rgb(34 61 56 / 0.14);
+  --finish-reflection: linear-gradient(
+    142deg,
+    rgb(255 255 255 / 0.9) 0%,
+    rgb(255 255 255 / 0.3) 18%,
+    transparent 44%,
+    rgb(81 148 165 / 0.055) 78%,
+    rgb(255 255 255 / 0.44) 100%
+  );
+}
+
+.ops-shell :is(.ops-rail, .ops-topbar) {
+  border-color: var(--finish-edge) !important;
+  background-color: var(--finish-glass-command) !important;
+  background-image: var(--finish-reflection) !important;
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 1px 0 0 var(--finish-edge-muted),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 18px 46px var(--finish-depth) !important;
+  backdrop-filter: blur(34px) saturate(172%) contrast(106%) !important;
+  -webkit-backdrop-filter: blur(34px) saturate(172%) contrast(106%) !important;
+}
+
+.ops-shell :is(
+  .ops-command-palette,
+  .ops-theme-menu,
+  .ops-supplier-menu,
+  .ops-update-popover,
+  .supplier-drop-popover,
+  .supplier-model-dropdown-menu
+),
+.toast-wrap .toast-card {
+  border-color: var(--finish-edge-strong) !important;
+  background-color: var(--finish-glass-raised) !important;
+  background-image: var(--finish-reflection) !important;
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 24px 64px var(--finish-depth) !important;
+  backdrop-filter: blur(38px) saturate(178%) contrast(108%) !important;
+  -webkit-backdrop-filter: blur(38px) saturate(178%) contrast(108%) !important;
+}
+
+.ops-shell :is(
+  .ops-page-heading,
+  .ops-panel,
+  .panel,
+  .overview-kpi-card,
+  .overview-glass-panel,
+  .supplier-card,
+  .supplier-editor-card,
+  .supplier-ccswitch-collapse-card,
+  .context-manager-card,
+  .session-history-card,
+  .session-codex-card,
+  .session-claude-card,
+  .memory-start-card,
+  .memory-outcome-item,
+  .memory-recall-card,
+  .memory-tool-card,
+  .memory-assist-row,
+  .plugin-hub-detail,
+  .plugin-hub-row,
+  .ops-setting-card,
+  .contact-card,
+  .codex-theme-card,
+  .ccp-background-card,
+  .system-prompt-card,
+  .system-prompt-status-panel
+) {
+  border-color: var(--finish-edge) !important;
+  background-color: var(--finish-glass-panel) !important;
+  background-image: var(--finish-reflection) !important;
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 1px 0 0 var(--finish-edge-muted),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 14px 34px rgb(0 0 0 / 0.11) !important;
+  backdrop-filter: blur(24px) saturate(150%) contrast(104%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(150%) contrast(104%) !important;
+}
+
+.ops-shell :is(
+  .supplier-member-row,
+  .supplier-profile-row,
+  .supplier-direct-model-row,
+  .context-entry-row,
+  .codex-session-row,
+  .info-row,
+  .clients-master-items > *,
+  .plugin-hub-list > button
+) {
+  border-color: var(--finish-edge-muted);
+  background-color: color-mix(in srgb, var(--finish-glass-raised) 78%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--finish-highlight) 52%, transparent);
+  transition:
+    border-color var(--finish-transition),
+    background-color var(--finish-transition),
+    box-shadow var(--finish-transition),
+    transform var(--finish-transition);
+}
+
+.ops-shell :is(
+  .supplier-card,
+  .memory-start-card,
+  .memory-outcome-item,
+  .memory-recall-card,
+  .memory-tool-card,
+  .memory-assist-row,
+  .plugin-hub-row,
+  .ops-setting-card,
+  .codex-theme-card,
+  .ccp-background-card,
+  .system-prompt-card,
+  .supplier-member-row,
+  .supplier-profile-row,
+  .context-entry-row,
+  .codex-session-row
+) {
+  transition:
+    border-color var(--finish-transition),
+    background-color var(--finish-transition),
+    box-shadow var(--finish-transition),
+    transform var(--finish-transition);
+}
+
+.ops-shell :is(
+  .supplier-card,
+  .memory-start-card,
+  .memory-recall-card,
+  .memory-tool-card,
+  .memory-assist-row,
+  .plugin-hub-row,
+  .ops-setting-card,
+  .codex-theme-card,
+  .ccp-background-card,
+  .system-prompt-card,
+  .supplier-member-row,
+  .supplier-profile-row,
+  .context-entry-row,
+  .codex-session-row
+):hover {
+  border-color: var(--finish-edge-strong) !important;
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 18px 38px var(--finish-depth) !important;
+  transform: translateY(-1px);
+}
+
+.ops-shell :is(button, [role="button"], a, input, textarea, select):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--workspace-blue) 82%, white 18%);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--workspace-blue) 20%, transparent);
+}
+
+.ops-shell :is(
+  input,
+  textarea,
+  select,
+  pre,
+  code,
+  table,
+  .mono,
+  .log-view,
+  .log-lines,
+  .supplier-config-json,
+  .supplier-ccswitch-editor-body
+) {
+  background-color: var(--finish-data-surface) !important;
+  background-image: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.overview-topology-node {
+  border-color: var(--finish-edge-strong) !important;
+  background-color: var(--finish-glass-raised) !important;
+  background-image: var(--finish-reflection) !important;
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 1px 0 0 var(--finish-edge-muted),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 28px 64px var(--finish-depth) !important;
+  transition:
+    border-color var(--finish-transition),
+    box-shadow var(--finish-transition),
+    transform var(--finish-transition);
+}
+
+.overview-topology-node:hover {
+  box-shadow:
+    inset 0 1px 0 var(--finish-highlight),
+    inset 1px 0 0 var(--finish-edge-strong),
+    inset 0 -1px 0 var(--finish-inner-dark),
+    0 34px 76px var(--finish-depth) !important;
+  transform: translateY(-2px);
+}
+
+.ops-shell.dark .overview-topology-node.protocol {
+  border-color: rgb(151 255 203 / 0.58) !important;
+  background-color: rgb(10 68 42 / 0.56) !important;
+  background-image: linear-gradient(
+    138deg,
+    rgb(220 255 237 / 0.24) 0%,
+    rgb(108 246 174 / 0.08) 24%,
+    transparent 54%,
+    rgb(0 169 91 / 0.12) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgb(230 255 242 / 0.56),
+    inset 1px 0 0 rgb(184 255 219 / 0.2),
+    inset 0 -1px 0 rgb(0 24 14 / 0.42),
+    0 28px 64px rgb(0 18 10 / 0.3) !important;
+  backdrop-filter: blur(18px) saturate(148%) contrast(106%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(148%) contrast(106%) !important;
+}
+
+.ops-shell.dark .overview-topology-node.protocol :is(div strong, footer b) {
+  color: #f1fff7 !important;
+  text-shadow: 0 1px 2px rgb(0 22 12 / 0.72);
+}
+
+.ops-shell.dark .overview-topology-node.protocol :is(header, div small, footer span) {
+  color: rgb(205 244 222 / 0.88) !important;
+  text-shadow: 0 1px 2px rgb(0 22 12 / 0.66);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .ops-shell :is(.ops-rail, .ops-topbar, .ops-page-heading, .ops-panel, .panel),
+  .toast-wrap .toast-card {
+    background-color: var(--finish-data-surface) !important;
+    background-image: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .ops-shell :is(.ops-rail, .ops-topbar, .ops-page-heading, .ops-panel, .panel),
+  .toast-wrap .toast-card {
+    border: 1px solid CanvasText !important;
+    background: Canvas !important;
+    color: CanvasText !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ops-shell :is(
+    .supplier-card,
+    .memory-start-card,
+    .memory-recall-card,
+    .memory-tool-card,
+    .memory-assist-row,
+    .plugin-hub-row,
+    .ops-setting-card,
+    .codex-theme-card,
+    .ccp-background-card,
+    .system-prompt-card,
+    .supplier-member-row,
+    .supplier-profile-row,
+    .context-entry-row,
+    .codex-session-row,
+    .overview-topology-node
+  ) {
+    transition: none !important;
+  }
+
+  .ops-shell :is(
+    .supplier-card,
+    .memory-start-card,
+    .memory-recall-card,
+    .memory-tool-card,
+    .memory-assist-row,
+    .plugin-hub-row,
+    .ops-setting-card,
+    .codex-theme-card,
+    .ccp-background-card,
+    .system-prompt-card,
+    .supplier-member-row,
+    .supplier-profile-row,
+    .context-entry-row,
+    .codex-session-row,
+    .overview-topology-node
+  ):hover {
+    transform: none !important;
+  }
+}
+
 /* Approved Liquid Glass shell
  * Keeps the existing workspace contracts and business surfaces intact while
  * adding the material, depth, update entry, and high-DPI behavior approved in

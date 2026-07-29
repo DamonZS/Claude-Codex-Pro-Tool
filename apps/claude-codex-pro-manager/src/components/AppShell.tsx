@@ -312,7 +312,7 @@ export function AppShell({
         <button className="ops-brand" onClick={() => navigate("overview")} title="CCP 概览" type="button">
           <span aria-hidden="true" className="ops-brand-mark">CCP</span>
           <span className="ops-brand-copy">
-            <strong>Control Plane</strong>
+            <strong>Claude Codex Pro</strong>
             <small>Local AI Operations</small>
           </span>
         </button>

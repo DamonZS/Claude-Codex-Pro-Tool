@@ -166,7 +166,9 @@ pub fn detect_status() -> ClaudeDesktopStatus {
 }
 
 pub fn detect_status_light() -> ClaudeDesktopStatus {
-    let (process_count, executable_paths) = claude_process_inventory();
+    let (process_count, runtime_paths) = claude_process_inventory();
+    let executable_paths =
+        merge_claude_executable_paths(runtime_paths, || claude_desktop_installed_executable_path());
     let install_kind = install_kind(&executable_paths);
     let process_ids = claude_process_ids();
     let debug_probe = detect_debug_probe(&process_ids);
@@ -208,6 +210,35 @@ pub fn detect_status_light() -> ClaudeDesktopStatus {
         integrity_message: "Executable integrity audit deferred for faster startup.".to_string(),
         executable_audits: Vec::new(),
     }
+}
+
+fn merge_claude_executable_paths(
+    mut runtime_paths: Vec<String>,
+    discover_installed: impl FnOnce() -> Option<PathBuf>,
+) -> Vec<String> {
+    if runtime_paths.is_empty() {
+        if let Some(path) = discover_installed() {
+            runtime_paths.push(path.to_string_lossy().to_string());
+        }
+    }
+    runtime_paths.sort();
+    runtime_paths.dedup();
+    runtime_paths
+}
+
+#[cfg(windows)]
+fn claude_desktop_installed_executable_path() -> Option<PathBuf> {
+    claude_desktop_executable_path()
+}
+
+#[cfg(target_os = "macos")]
+fn claude_desktop_installed_executable_path() -> Option<PathBuf> {
+    macos_runtime::discover_bundle_default().map(|bundle| bundle.executable_path)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn claude_desktop_installed_executable_path() -> Option<PathBuf> {
+    None
 }
 
 pub fn detect_integrity() -> Value {
@@ -2054,6 +2085,30 @@ fn sha256_file(path: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopped_claude_uses_installed_executable_discovery() {
+        let paths = merge_claude_executable_paths(Vec::new(), || {
+            Some(PathBuf::from(
+                "C:\\Program Files\\WindowsApps\\Claude_1.0\\app\\Claude.exe",
+            ))
+        });
+
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("Claude.exe"));
+        assert_eq!(install_kind(&paths), "msix");
+    }
+
+    #[test]
+    fn running_claude_does_not_invoke_installed_fallback() {
+        let paths = merge_claude_executable_paths(
+            vec!["C:\\Users\\me\\AppData\\Local\\Programs\\Claude\\Claude.exe".to_string()],
+            || panic!("installed fallback must not run for an active process"),
+        );
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(install_kind(&paths), "desktop");
+    }
 
     #[test]
     fn install_kind_detects_msix_windowsapps_path() {
