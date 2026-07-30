@@ -619,7 +619,7 @@
       #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass} {
         position: fixed;
         top: var(--claude-codex-pro-menu-top, 8px);
-        left: var(--claude-codex-pro-menu-left, 44px);
+        left: var(--claude-codex-pro-menu-left, calc(100vw - 220px));
         right: auto;
         transform: none;
         z-index: 2147483647;
@@ -840,11 +840,11 @@
         isolation: isolate;
       }
       .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
-        width: min(1080px, calc(100vw - 44px));
-        height: min(760px, calc(100vh - 40px));
-        max-height: calc(100vh - 40px);
+        width: min(780px, calc(100vw - 72px));
+        height: min(540px, calc(100vh - 64px));
+        max-height: calc(100vh - 64px);
         display: grid;
-        grid-template-columns: 176px minmax(0, 1fr);
+        grid-template-columns: 148px minmax(0, 1fr);
         grid-template-rows: auto minmax(0, 1fr);
         position: relative;
         isolation: isolate;
@@ -873,9 +873,9 @@
       }
       .claude-codex-pro-control-deck .claude-codex-pro-modal-header {
         grid-column: 1 / -1;
-        min-height: 74px;
+        min-height: 60px;
         box-sizing: border-box;
-        padding: 15px 18px;
+        padding: 10px 14px;
         border-bottom: 1px solid var(--ccp-deck-line);
         background-color: rgba(7, 17, 18, .48);
         background-image: var(--ccp-deck-sheen);
@@ -883,10 +883,10 @@
         backdrop-filter: blur(30px) saturate(1.55);
         -webkit-backdrop-filter: blur(30px) saturate(1.55);
       }
-      .claude-codex-pro-deck-brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .claude-codex-pro-deck-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
       .claude-codex-pro-deck-mark {
-        width: 38px;
-        height: 38px;
+        width: 32px;
+        height: 32px;
         display: grid;
         place-items: center;
         border: 1px solid rgba(67, 214, 181, .42);
@@ -913,8 +913,8 @@
       .claude-codex-pro-deck-version { color: var(--ccp-deck-muted); font: 500 11px/1 ui-monospace, "Cascadia Code", monospace; }
       .claude-codex-pro-control-deck .claude-codex-pro-backend-indicator { width: 7px; height: 7px; }
       .claude-codex-pro-control-deck .claude-codex-pro-modal-close {
-        width: 40px;
-        height: 40px;
+        width: 34px;
+        height: 34px;
         display: grid;
         place-items: center;
         border: 1px solid rgba(142, 164, 159, .25);
@@ -931,7 +931,7 @@
         flex-direction: column;
         gap: 5px;
         min-width: 0;
-        padding: 18px 12px;
+        padding: 12px 9px;
         border-right: 1px solid var(--ccp-deck-line);
         background-color: rgba(6, 15, 16, .34);
         background-image: var(--ccp-deck-sheen);
@@ -949,7 +949,7 @@
         background: transparent;
         color: var(--ccp-deck-muted);
         font: 550 12px/1.2 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-        padding: 10px 11px;
+        padding: 8px 9px;
         text-align: left;
         cursor: pointer;
       }
@@ -966,13 +966,13 @@
         grid-column: 2;
         grid-row: 2;
         min-height: 0;
-        padding: 20px 22px 24px;
+        padding: 14px 16px 16px;
         background: rgba(8, 17, 18, .18);
         scrollbar-color: rgba(67, 214, 181, .28) transparent;
       }
       .claude-codex-pro-deck-hero {
-        margin-bottom: 18px;
-        padding: 17px 18px;
+        margin-bottom: 10px;
+        padding: 12px 14px;
         border: 1px solid rgba(67, 214, 181, .2);
         border-radius: 8px;
         background-color: rgba(18, 37, 37, .58);
@@ -982,10 +982,10 @@
         -webkit-backdrop-filter: blur(22px) saturate(1.38);
       }
       .claude-codex-pro-deck-hero-label { color: var(--ccp-deck-energy); font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace; letter-spacing: .14em; }
-      .claude-codex-pro-deck-hero h2 { margin: 7px 0 6px; color: #f2fbf8; font-size: 19px; line-height: 1.25; font-weight: 650; }
+      .claude-codex-pro-deck-hero h2 { margin: 5px 0 4px; color: #f2fbf8; font-size: 16px; line-height: 1.25; font-weight: 650; }
       .claude-codex-pro-deck-hero p { margin: 0; color: var(--ccp-deck-muted); font-size: 12px; line-height: 1.55; }
-      .claude-codex-pro-deck-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 15px; }
-      .claude-codex-pro-deck-capabilities span { min-height: 34px; display: grid; place-items: center; border: 1px solid rgba(208, 246, 238, .2); border-radius: 6px; background: rgba(4, 10, 13, .28); color: #d2e7e2; font-size: 10px; font-weight: 600; padding: 5px 8px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); }
+      .claude-codex-pro-deck-capabilities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+      .claude-codex-pro-deck-capabilities span { min-height: 28px; display: grid; place-items: center; border: 1px solid rgba(208, 246, 238, .2); border-radius: 6px; background: rgba(4, 10, 13, .28); color: #d2e7e2; font-size: 10px; font-weight: 600; padding: 3px 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); }
       .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
       .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-hero,
       .claude-codex-pro-panel[data-claude-codex-pro-panel="home"] > .claude-codex-pro-deck-section-title,
@@ -994,7 +994,7 @@
         display: flex;
         align-items: center;
         gap: 9px;
-        margin: 18px 2px 9px;
+        margin: 10px 2px 6px;
         color: #bcd0cb;
         font: 650 10px/1.3 ui-monospace, "Cascadia Code", monospace;
         letter-spacing: .12em;
@@ -1002,9 +1002,9 @@
       .claude-codex-pro-deck-section-title::after { content: ""; height: 1px; flex: 1; background: linear-gradient(90deg, var(--ccp-deck-line), transparent); }
       .claude-codex-pro-control-deck .claude-codex-pro-row {
         min-width: 0;
-        min-height: 70px;
+        min-height: 58px;
         margin: 0;
-        padding: 12px 13px;
+        padding: 9px 10px;
         border: 1px solid rgba(142, 164, 159, .12);
         border-radius: 8px;
         background-color: var(--ccp-deck-panel-raised);
@@ -1054,9 +1054,9 @@
       }
       @media (max-width: 720px) {
         .claude-codex-pro-modal-content.claude-codex-pro-control-deck {
-          width: min(calc(100vw - 20px), 620px);
-          height: min(760px, calc(100vh - 20px));
-          max-height: calc(100vh - 20px);
+          width: min(calc(100vw - 32px), 620px);
+          height: min(540px, calc(100vh - 32px));
+          max-height: calc(100vh - 32px);
           grid-template-columns: minmax(0, 1fr);
           grid-template-rows: auto auto minmax(0, 1fr);
         }
@@ -3440,12 +3440,13 @@
     if (!(node instanceof Element) || node.closest?.(`#${claudeCodexProMenuId}`) || isExtensionUiNode(node)) return null;
     const rect = node.getBoundingClientRect();
     if (!(rect.width > 0 && rect.height > 0)) return null;
-    if (rect.right < headerRect.left || rect.left > Math.min(window.innerWidth * 0.55, headerRect.right)) return null;
+    if (rect.right < headerRect.left || rect.left > headerRect.right) return null;
+    if (rect.bottom < headerRect.top || rect.top > headerRect.bottom) return null;
     if (!String(node.textContent || node.getAttribute("aria-label") || node.getAttribute("title") || "").trim() && !node.querySelector?.("svg")) return null;
     return rect;
   }
 
-  function normalizeStatusAnchorText(node) {
+  function codexTitlebarControlLabel(node) {
     if (!(node instanceof Element)) return "";
     const raw = [
       node.textContent,
@@ -3461,8 +3462,8 @@
       .toLowerCase();
   }
 
-  function findCodexHelpAnchor(header, headerRect) {
-    const helpKeywords = new Set(["帮助", "help"]);
+  function findCodexStatusRightAnchor(header, headerRect) {
+    const minimizeKeywords = ["minimize", "最小化"];
     const selector = [
       "button",
       "a",
@@ -3470,64 +3471,21 @@
       '[aria-label]',
       '[title]',
       '[data-testid]',
-      '[class*="truncate"]',
-      '[class*="text-sm"]',
-      '[class*="text-base"]',
     ].join(",");
-    const candidates = Array.from(header?.querySelectorAll?.(selector) || []);
-    return candidates
-      .map((node) => ({ node, rect: visibleRectForCodexStatusAnchor(node, headerRect), text: normalizeStatusAnchorText(node) }))
-      .filter((entry) => entry.rect && [...helpKeywords].some((keyword) => entry.text === keyword || entry.text.startsWith(`${keyword} `) || entry.text.endsWith(` ${keyword}`) || entry.text.includes(` ${keyword} `)))
+    const headerCandidates = Array.from(header?.querySelectorAll?.(selector) || []);
+    const windowControlCandidates = Array.from(document.querySelectorAll?.('[aria-label], [title], [data-testid]') || [])
+      .filter((node) => minimizeKeywords.some((keyword) => codexTitlebarControlLabel(node).includes(keyword)));
+    const candidates = [...new Set([...windowControlCandidates, ...headerCandidates])];
+    const entries = candidates
+      .map((node) => ({ node, rect: visibleRectForCodexStatusAnchor(node, headerRect), label: codexTitlebarControlLabel(node) }))
+      .filter((entry) => entry.rect && entry.rect.left >= headerRect.left + headerRect.width * 0.5);
+    const minimize = entries
+      .filter((entry) => minimizeKeywords.some((keyword) => entry.label.includes(keyword)))
+      .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top)[0];
+    if (minimize) return minimize;
+    const toolbarEntries = entries.filter((entry) => isHeaderToolbarButton(entry.node, header, entry.rect));
+    return (toolbarEntries.length ? toolbarEntries : entries)
       .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top)[0] || null;
-  }
-
-  function findCodexStatusLeftAnchor(header, headerRect) {
-    const helpAnchor = findCodexHelpAnchor(header, headerRect);
-    if (helpAnchor) return helpAnchor;
-    const selector = [
-      "button",
-      "a",
-      '[role="button"]',
-      '[aria-label]',
-      '[title]',
-      '[class*="truncate"]',
-      '[class*="text-sm"]',
-      '[class*="text-base"]',
-      '[data-testid]',
-      "h1",
-      "h2",
-      "svg",
-    ].join(",");
-    const candidates = Array.from(header?.querySelectorAll?.(selector) || []);
-    return candidates
-      .map((node) => ({ node, rect: visibleRectForCodexStatusAnchor(node, headerRect) }))
-      .filter((entry) => entry.rect)
-      .sort((a, b) => a.rect.left - b.rect.left || a.rect.top - b.rect.top)[0] || null;
-  }
-
-  function findCodexWindowLeftAnchor(header, headerRect) {
-    const topMenuAnchor = findCodexHelpAnchor(header, headerRect);
-    if (topMenuAnchor) return topMenuAnchor;
-    const leftRoots = [
-      document.querySelector("aside"),
-      document.querySelector("nav"),
-      document.querySelector('[role="navigation"]'),
-      document.querySelector('[class*="sidebar"]'),
-    ].filter(Boolean);
-    const viewportRect = {
-      left: 0,
-      right: Math.min(window.innerWidth * 0.55, headerRect?.right || window.innerWidth),
-    };
-    for (const root of leftRoots) {
-      const rootRect = root.getBoundingClientRect?.();
-      if (!rootRect || !(rootRect.width > 0 && rootRect.height > 0)) continue;
-      const anchor = findCodexStatusLeftAnchor(root, {
-        left: Math.max(0, rootRect.left),
-        right: Math.min(viewportRect.right, rootRect.right),
-      });
-      if (anchor) return anchor;
-    }
-    return findCodexStatusLeftAnchor(header, headerRect);
   }
 
   function numericCssValue(value) {
@@ -3564,26 +3522,30 @@
     if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
     if (!header) {
+      const menuWidth = menu.getBoundingClientRect().width || 168;
+      const fallbackLeft = Math.max(8, window.innerWidth - menuWidth - 16);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${fallbackLeft}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
       return;
     }
     const headerRect = header.getBoundingClientRect();
     if (headerRect.height) {
-      const anchor = findCodexWindowLeftAnchor(header, headerRect);
+      const anchor = findCodexStatusRightAnchor(header, headerRect);
       const anchorRect = anchor?.rect || null;
       const menuWidth = menu.getBoundingClientRect().width || 168;
       const minLeft = Math.max(8, headerRect.left + 8);
       const maxLeft = Math.max(minLeft, Math.min(window.innerWidth - menuWidth - 8, headerRect.right - menuWidth - 8));
-      const anchorLeft = anchorRect ? anchorRect.right + 8 : headerRect.left + 12;
+      const anchorLeft = anchorRect ? anchorRect.left - menuWidth - 8 : headerRect.right - menuWidth - 16;
       const left = Math.max(minLeft, Math.min(anchorLeft, maxLeft));
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${headerRect.top}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${left}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${headerRect.height}px`);
     } else {
+      const menuWidth = menu.getBoundingClientRect().width || 168;
+      const fallbackLeft = Math.max(8, window.innerWidth - menuWidth - 16);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "8px");
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", "44px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${fallbackLeft}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
     }
     updateCodexMemoryBadgePosition();
@@ -3596,13 +3558,14 @@
     const statusRect = statusMenu?.getBoundingClientRect?.();
     if (statusRect && statusRect.width > 0 && statusRect.height > 0) {
       const badgeWidth = badge.getBoundingClientRect().width || 150;
-      const left = Math.min(Math.max(8, statusRect.right + 8), Math.max(8, window.innerWidth - badgeWidth - 8));
+      const left = Math.max(8, statusRect.left - badgeWidth - 8);
       badge.style.setProperty("--codex-memory-badge-left", `${left}px`);
       badge.style.setProperty("--codex-memory-badge-top", `${statusRect.top}px`);
       badge.style.height = `${statusRect.height}px`;
       return;
     }
-    badge.style.setProperty("--codex-memory-badge-left", "44px");
+    const badgeWidth = badge.getBoundingClientRect().width || 150;
+    badge.style.setProperty("--codex-memory-badge-left", `${Math.max(8, window.innerWidth - badgeWidth - 192)}px`);
     badge.style.setProperty("--codex-memory-badge-top", "8px");
     badge.style.height = "30px";
   }

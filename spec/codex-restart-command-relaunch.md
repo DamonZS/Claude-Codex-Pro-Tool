@@ -35,8 +35,13 @@
 - restart 流程必须在有界超时内轮询旧 launcher 与 Codex 是否已退出；未退出时返回失败，不得继续启动一个会命中旧单例锁的新 launcher。
 - macOS 必须识别并终止 Codex App 主进程与旧 CCP 静默 launcher，不能把非 Windows 分支视为无需停止进程。
 - macOS 进程识别不得误杀 Codex CLI、CCP Manager 或 Codex Electron 子进程；只处理明确属于 Codex App 主可执行文件或静默 launcher 的 PID。
+- macOS 退出等待必须读取进程状态并排除 `Z` 僵尸记录；旧 launcher/Codex 已实际退出时不得因尚未回收的 PID 误报超时。
+- Manager 在 Unix 平台生成静默 launcher 后必须保留 `Child` 并在后台执行 `wait()` 回收退出状态，避免反复重启累积僵尸进程。
 - macOS 从标准 App 包运行时使用包内静默 launcher；从仓库 `target/debug` 或 `target/release` 直接运行 Manager 时，允许使用同目录且具备执行权限的 `claude-codex-pro`，便于本地验证构建。
 - `restart_claude_codex_pro` 仍必须调用 `spawn_claude_codex_pro_launch(...)` 启动静默 launcher。
+- 重启在生成新 launcher 时必须从实时 Codex `config.toml` / `auth.json` 把当前供应商凭据显式注入 launcher 子进程；用户不需要重新选择当前供应商来补写 Manager 全局进程环境。
+- macOS `.app` 启动必须通过 `/usr/bin/open --env` 把当前 provider 的 `env_key` 与凭据传给新 Codex，并保证环境参数位于 `--args` 之前。
+- 启动凭据只允许从实时配置读取并传给子进程，不得写入诊断日志、状态文件或用户提示。
 - 前端顶部按钮仍调用 `actions.restartCodex()`。
 - 前端在调用 `restart_claude_codex_pro` 前先提交一次可渲染的进行中提示，并等待浏览器完成绘制。
 - 后端返回后，前端必须把成功结果归一化为用户可理解的中文终态；注入状态未知或未成功时不得声称“注入成功”。
@@ -68,7 +73,7 @@
 
 ## 快速重启与结果字段约束
 
-- Manager 顶部按钮和客户端增强页触发的手动重启默认跳过本次重复的 Provider Sync，避免在关闭旧 Codex 后、拉起新 Codex 前进行全量供应商扫描。
+- Manager 顶部按钮和客户端增强页触发的手动重启默认跳过本次重复的 Provider Sync，避免在关闭旧 Codex 后、拉起新 Codex 前进行全量供应商扫描；这不跳过当前供应商实时凭据同步。
 - 快捷方式启动和直接运行 launcher 的正常启动流程仍保留 Provider Sync，不改变供应商同步的既有行为。
 - `restart_claude_codex_pro` 返回的 payload 不得使用 `status` 或 `message` 字段覆盖 `CommandResult` 的命令状态和用户提示。
 - launcher 的内部状态与消息使用 `launchStatus`、`launchMessage` 等独立字段返回，前端成功判断始终以外层 `CommandResult.status` 为准。

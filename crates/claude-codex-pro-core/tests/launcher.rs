@@ -10,8 +10,8 @@ use claude_codex_pro_core::app_paths::{
 use claude_codex_pro_core::launcher::{
     CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,
     build_codex_arguments, build_codex_command, build_macos_cleanup_command,
-    build_macos_open_command, build_packaged_activation, ensure_detached_helper,
-    launch_and_inject_with_hooks,
+    build_macos_open_command, build_macos_open_command_with_environment, build_packaged_activation,
+    ensure_detached_helper, launch_and_inject_with_hooks,
 };
 #[cfg(windows)]
 use claude_codex_pro_core::launcher::{
@@ -482,6 +482,24 @@ fn launcher_macos_open_command_appends_extra_codex_arguments_after_args() {
             "--force_high_performance_gpu".to_string(),
         ]
     );
+}
+
+#[test]
+fn launcher_macos_open_command_passes_provider_environment_before_app_arguments() {
+    let command = build_macos_open_command_with_environment(
+        Path::new("/Applications/Codex.app"),
+        9229,
+        &["--user-data-dir=/tmp/codex".to_string()],
+        Some(("OPENAI_API_KEY", "test-provider-key")),
+    );
+
+    assert_eq!(command[0], "open");
+    let env_index = command.iter().position(|part| part == "--env").unwrap();
+    let args_index = command.iter().position(|part| part == "--args").unwrap();
+    assert!(env_index < args_index);
+    assert_eq!(command[env_index + 1], "OPENAI_API_KEY=test-provider-key");
+    assert!(command.contains(&"--remote-debugging-port=9229".to_string()));
+    assert!(command.contains(&"--user-data-dir=/tmp/codex".to_string()));
 }
 
 #[test]

@@ -1,0 +1,18 @@
+{
+  "score": 28,
+  "threshold": 90,
+  "passed": false,
+  "verdict": "revise",
+  "category_match": true,
+  "reasoning": "The current screenshot only matches the light shell palette. The main home experience is blank because the legacy Dream Skin selector expands Codex 26.721's new empty first child instead of the home layout that contains the game-source heading.",
+  "suggestions": [
+    "Anchor the Dream Skin home layout to the direct child containing data-feature=game-source",
+    "Apply the selector upgrade during runtime payload generation so installed legacy packages are repaired without re-download",
+    "Verify the hero artwork, heading, suggestions, and composer are visible after restart"
+  ],
+  "next_actions": [
+    "Rewrite the legacy Dream Skin first-child home anchor in the active runtime payload",
+    "Run the focused theme payload tests and rebuild the default Release binaries",
+    "Restart Codex through the rebuilt launcher and compare the rendered home page with the supplied reference"
+  ]
+}

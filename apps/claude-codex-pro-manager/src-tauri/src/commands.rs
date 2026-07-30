@@ -3115,6 +3115,12 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
 fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
     let launcher = resolve_silent_launcher_path()?;
     let mut command = std::process::Command::new(&launcher);
+    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
+    if let Some((env_key, api_key)) =
+        claude_codex_pro_core::relay_config::codex_provider_auth_environment_from_home(&home)
+    {
+        command.env(env_key, api_key);
+    }
     if !request.app_path.trim().is_empty() {
         command.arg("--app-path").arg(request.app_path.trim());
     }
@@ -3131,10 +3137,17 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    command
+    let child = command
         .spawn()
-        .map(|_| ())
-        .map_err(|error| anyhow::anyhow!("Codex 启动器启动失败：{error}"))
+        .map_err(|error| anyhow::anyhow!("Codex 启动器启动失败：{error}"))?;
+    #[cfg(unix)]
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    #[cfg(not(unix))]
+    drop(child);
+    Ok(())
 }
 
 fn is_executable_file(path: &Path) -> bool {

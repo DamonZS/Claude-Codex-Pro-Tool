@@ -1,8 +1,8 @@
 use claude_codex_pro_core::watcher::{
     build_spawn_launcher_command, build_watcher_install_plan, cdp_listening, codex_process_ids,
     disable_watcher_at, enable_watcher_at, filter_killable_launcher_processes,
-    filter_restartable_launcher_processes, should_recover_stale_launcher,
-    wait_for_process_ids_to_exit_with, watcher_disabled_flag,
+    filter_restartable_launcher_processes, parse_macos_running_process_inventory,
+    should_recover_stale_launcher, wait_for_process_ids_to_exit_with, watcher_disabled_flag,
 };
 
 #[test]
@@ -203,4 +203,22 @@ fn process_exit_wait_stops_after_the_bounded_number_of_checks() {
     assert!(!exited);
     assert_eq!(checks, 3);
     assert_eq!(sleeps, 2);
+}
+
+#[test]
+fn macos_process_inventory_excludes_zombies_from_running_processes() {
+    let output = "  101 Ss   /Applications/Codex.app/Contents/MacOS/ChatGPT\n\
+                  202 Z    /Applications/Claude Codex Pro.app/Contents/MacOS/claude-codex-pro\n\
+                  303 S+   /tmp/claude-codex-pro\n";
+
+    assert_eq!(
+        parse_macos_running_process_inventory(output),
+        vec![
+            (
+                101,
+                "/Applications/Codex.app/Contents/MacOS/ChatGPT".to_string()
+            ),
+            (303, "/tmp/claude-codex-pro".to_string()),
+        ]
+    );
 }

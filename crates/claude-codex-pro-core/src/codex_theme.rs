@@ -30,10 +30,8 @@ const MAX_ROOT_ATTRIBUTE_VALUE_BYTES: usize = 256;
 const MAX_RUNTIME_ASSET_DATA_URI_BYTES: usize = 48 * 1024 * 1024;
 const MAX_MANAGER_BACKGROUND_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_MANAGER_BACKGROUND_PIXELS: u64 = 100_000_000;
-const MIN_MANAGER_BACKGROUND_WIDTH: u32 = 1920;
-const MIN_MANAGER_BACKGROUND_HEIGHT: u32 = 1080;
-const MANAGER_BACKGROUND_VARIABLE: &str = "--ccp-theme-manager-background";
-const LEGACY_THEME_ART_VARIABLE: &str = "--ccp-theme-art";
+const MIN_MANAGER_BACKGROUND_WIDTH: u32 = 1280;
+const MIN_MANAGER_BACKGROUND_HEIGHT: u32 = 720;
 const USER_MANAGER_BACKGROUND_SOURCE: &str = "user-selected";
 const MANAGER_BACKGROUND_FILE: &str = "current.bin";
 const MANAGER_BACKGROUND_LIBRARY_DIR: &str = "library";
@@ -60,6 +58,58 @@ const DIY_PREVIEW_BANNER_Y: u32 = 80;
 const DIY_PREVIEW_BANNER_WIDTH: u32 = 620;
 const DIY_PREVIEW_BANNER_HEIGHT: u32 = 150;
 const OFFICIAL_THEME_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool/63ef4da6fbc22832553bab126c93e56aea2a91a6/Theme";
+const DREAM_SKIN_HOME_LAYOUT_COMPAT_MARKER: &str =
+    "/* CCP current Codex home-layout compatibility. */";
+const LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR: &str = r#":is([data-feature="game-source"], [data-testid="home-icon"])
+) > div:first-child"#;
+const CURRENT_DREAM_SKIN_HOME_LAYOUT_ANCHOR: &str = r#":is([data-feature="game-source"], [data-testid="home-icon"])
+) > div:has([data-feature="game-source"])"#;
+const LIGHT_THEME_RUNTIME_COMPAT_CSS: &str = r#"
+/* CCP light-theme runtime compatibility for current Codex color tokens. */
+:root[data-ccp-theme-shell="light"] {
+  --color-text-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --color-text-foreground-secondary: var(--ccp-theme-muted, #716367) !important;
+  --color-text-accent: var(--ccp-theme-accent, #d94d5c) !important;
+  --color-background-surface: var(--ccp-theme-background, #f8f4f5) !important;
+  --color-background-panel: var(--ccp-theme-panel, #ffffff) !important;
+  --color-background-control: var(--ccp-theme-panel, #ffffff) !important;
+  --color-background-elevated-primary: var(--ccp-theme-panel-alt, #fff7f8) !important;
+  --color-border: var(--ccp-theme-border, rgba(190, 112, 121, .28)) !important;
+  --color-border-focus: var(--ccp-theme-accent, #d94d5c) !important;
+  --color-token-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --color-token-text-primary: var(--ccp-theme-text, #241d1f) !important;
+  --color-token-text-secondary: var(--ccp-theme-muted, #716367) !important;
+  --color-token-bg-primary: var(--ccp-theme-panel, #ffffff) !important;
+  --color-token-bg-secondary: var(--ccp-theme-panel-alt, #fff7f8) !important;
+  --color-token-input-background: var(--ccp-theme-panel, #ffffff) !important;
+  --color-token-input-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --color-token-input-placeholder-foreground: var(--ccp-theme-muted, #716367) !important;
+  --color-token-menu-background: var(--ccp-theme-panel, #ffffff) !important;
+  --color-token-menu-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --color-token-list-hover-background: color-mix(in srgb, var(--ccp-theme-accent, #d94d5c) 12%, transparent) !important;
+  --vscode-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --vscode-descriptionForeground: var(--ccp-theme-muted, #716367) !important;
+  --vscode-menu-background: var(--ccp-theme-panel, #ffffff) !important;
+  --vscode-menu-foreground: var(--ccp-theme-text, #241d1f) !important;
+  --vscode-list-hoverBackground: color-mix(in srgb, var(--ccp-theme-accent, #d94d5c) 12%, transparent) !important;
+  --vscode-input-background: var(--ccp-theme-panel, #ffffff) !important;
+  --vscode-input-foreground: var(--ccp-theme-text, #241d1f) !important;
+}
+
+:root[data-ccp-theme-shell="light"] body,
+:root[data-ccp-theme-shell="light"] #root {
+  color: var(--ccp-theme-text, #241d1f) !important;
+}
+
+:root[data-ccp-theme-shell="light"] main:has(
+  [role="main"] :is([data-feature="game-source"], [data-testid="home-icon"])
+) {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--ccp-theme-background, #f8f4f5) 96%, transparent), color-mix(in srgb, var(--ccp-theme-panel-alt, #fff7f8) 84%, transparent)),
+    var(--ccp-theme-art) right center / cover no-repeat !important;
+  color: var(--ccp-theme-text, #241d1f) !important;
+}
+"#;
 
 #[derive(Debug, Clone, Copy)]
 struct OfficialThemeDefinition {
@@ -1300,30 +1350,15 @@ impl CodexThemeStore {
             });
         }
 
-        let payload = self.active_theme_payload_for_state(state)?;
-        let selected = [MANAGER_BACKGROUND_VARIABLE, LEGACY_THEME_ART_VARIABLE]
-            .into_iter()
-            .find_map(|variable| {
-                payload
-                    .asset_data_uris
-                    .get(variable)
-                    .cloned()
-                    .map(|data_uri| (variable.to_string(), data_uri))
-            });
-        let (source_variable, data_uri) = selected
-            .map(|(variable, data_uri)| (Some(variable), Some(data_uri)))
-            .unwrap_or((None, None));
-        let mime_type = selected_manager_background_mime(&data_uri);
-
         Ok(CodexThemeManagerBackground {
-            theme_id: payload.theme_id,
-            generation: payload.generation,
-            data_uri,
-            source_variable,
-            is_default: payload.is_default,
+            theme_id: state.current_theme_id.clone(),
+            generation: state.generation,
+            data_uri: None,
+            source_variable: None,
+            is_default: true,
             width: None,
             height: None,
-            mime_type,
+            mime_type: None,
             user_override: false,
         })
     }
@@ -1477,7 +1512,7 @@ impl CodexThemeStore {
             .context("当前主题记录已损坏")?;
         let package_root = self.library_dir().join(&installed.manifest.id);
         let runtime = compile_runtime_resources(&package_root, &installed.manifest)?;
-        let css = if let Some(settings) = installed.manifest.diy.as_ref() {
+        let mut css = if let Some(settings) = installed.manifest.diy.as_ref() {
             render_diy_css(
                 &installed.manifest.id,
                 settings,
@@ -1491,6 +1526,16 @@ impl CodexThemeStore {
             validate_css(&css)?;
             css
         };
+        css = apply_official_theme_runtime_compat(&installed.manifest.id, css);
+        if installed
+            .manifest
+            .root_attributes
+            .attributes
+            .get("data-ccp-theme-shell")
+            .is_some_and(|shell| shell == "light")
+        {
+            css.push_str(LIGHT_THEME_RUNTIME_COMPAT_CSS);
+        }
         Ok(CodexThemePayload {
             theme_id: installed.manifest.id.clone(),
             generation: state.generation,
@@ -1773,6 +1818,24 @@ impl CodexThemeStore {
         self.manager_background_dir()
             .join(MANAGER_BACKGROUND_LIBRARY_DIR)
     }
+}
+
+fn apply_official_theme_runtime_compat(theme_id: &str, css: String) -> String {
+    if !matches!(
+        theme_id,
+        "codex-dream-skin-macos" | "codex-dream-skin-windows"
+    ) {
+        return css;
+    }
+
+    let mut upgraded = css.replace(
+        LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR,
+        CURRENT_DREAM_SKIN_HOME_LAYOUT_ANCHOR,
+    );
+    upgraded.push('\n');
+    upgraded.push_str(DREAM_SKIN_HOME_LAYOUT_COMPAT_MARKER);
+    upgraded.push('\n');
+    upgraded
 }
 
 fn default_diy_author() -> String {
@@ -2092,15 +2155,6 @@ fn data_uri(mime_type: &str, bytes: &[u8]) -> String {
         "data:{mime_type};base64,{}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
-}
-
-fn selected_manager_background_mime(data_uri: &Option<String>) -> Option<String> {
-    data_uri.as_deref().and_then(|value| {
-        ["image/png", "image/jpeg", "image/webp"]
-            .into_iter()
-            .find(|mime| value.starts_with(&format!("data:{mime};base64,")))
-            .map(str::to_string)
-    })
 }
 
 fn operation_result(theme_id: &str, generation: u64, message: &str) -> CodexThemeOperationResult {
@@ -2427,9 +2481,11 @@ fn validate_manager_background_source(
     let (width, height) = reader
         .into_dimensions()
         .context("无法读取管理工具背景尺寸")?;
-    if width < MIN_MANAGER_BACKGROUND_WIDTH || height < MIN_MANAGER_BACKGROUND_HEIGHT {
+    let long_edge = width.max(height);
+    let short_edge = width.min(height);
+    if long_edge < MIN_MANAGER_BACKGROUND_WIDTH || short_edge < MIN_MANAGER_BACKGROUND_HEIGHT {
         bail!(
-            "管理工具背景至少需要 {} x {} 像素",
+            "管理工具背景长边至少需要 {} 像素，短边至少需要 {} 像素",
             MIN_MANAGER_BACKGROUND_WIDTH,
             MIN_MANAGER_BACKGROUND_HEIGHT
         );
@@ -4306,7 +4362,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_background_prefers_dedicated_asset_and_falls_back_to_theme_art() {
+    fn codex_theme_assets_never_become_manager_backgrounds() {
         let temp = tempfile::tempdir().unwrap();
         let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
 
@@ -4327,17 +4383,10 @@ mod tests {
         store.import_theme(&legacy_source).unwrap();
         store.apply_theme("legacy-background").unwrap();
         let legacy_background = store.active_manager_background().unwrap();
-        assert_eq!(
-            legacy_background.source_variable.as_deref(),
-            Some(LEGACY_THEME_ART_VARIABLE)
-        );
-        assert!(
-            legacy_background
-                .data_uri
-                .as_deref()
-                .unwrap()
-                .starts_with("data:image/png;base64,")
-        );
+        assert!(legacy_background.data_uri.is_none());
+        assert!(legacy_background.source_variable.is_none());
+        assert!(legacy_background.is_default);
+        assert!(!legacy_background.user_override);
 
         let dedicated_source = temp.path().join("dedicated-source");
         write_theme_with_runtime_resources(
@@ -4354,12 +4403,11 @@ mod tests {
         store.import_theme(&dedicated_source).unwrap();
         store.apply_theme("dedicated-background").unwrap();
         let dedicated_background = store.active_manager_background().unwrap();
-        assert_eq!(
-            dedicated_background.source_variable.as_deref(),
-            Some(MANAGER_BACKGROUND_VARIABLE)
-        );
+        assert!(dedicated_background.data_uri.is_none());
+        assert!(dedicated_background.source_variable.is_none());
         assert_eq!(dedicated_background.theme_id, "dedicated-background");
-        assert!(!dedicated_background.is_default);
+        assert!(dedicated_background.is_default);
+        assert!(!dedicated_background.user_override);
 
         store.restore_default_theme().unwrap();
         assert!(
@@ -4454,6 +4502,21 @@ mod tests {
     }
 
     #[test]
+    fn manager_background_accepts_landscape_dimensions_in_either_storage_orientation() {
+        let temp = tempfile::tempdir().unwrap();
+        let landscape = temp.path().join("landscape.jpg");
+        let rotated_storage = temp.path().join("rotated-storage.jpg");
+        let hd = temp.path().join("hd.jpg");
+        write_manager_background(&landscape, 1920, 1200, [42, 96, 150]);
+        write_manager_background(&rotated_storage, 1200, 1920, [42, 96, 150]);
+        write_manager_background(&hd, 1280, 720, [42, 96, 150]);
+
+        assert!(validate_manager_background_source(&landscape).is_ok());
+        assert!(validate_manager_background_source(&rotated_storage).is_ok());
+        assert!(validate_manager_background_source(&hd).is_ok());
+    }
+
+    #[test]
     fn legacy_manager_background_is_migrated_into_the_library() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("legacy.png");
@@ -4499,13 +4562,13 @@ mod tests {
         let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
 
         let low_resolution = temp.path().join("low.png");
-        write_manager_background(&low_resolution, 1919, 1080, [1, 2, 3]);
+        write_manager_background(&low_resolution, 1279, 720, [1, 2, 3]);
         assert!(
             store
                 .set_manager_background(&low_resolution)
                 .unwrap_err()
                 .to_string()
-                .contains("1920 x 1080")
+                .contains("长边至少需要 1280 像素，短边至少需要 720 像素")
         );
 
         let fake = temp.path().join("fake.png");
@@ -4663,6 +4726,33 @@ mod tests {
     }
 
     #[test]
+    fn dream_skin_runtime_compat_targets_the_current_home_layout_child() {
+        let legacy_css = format!(
+            r#"html.theme [role="main"]:has(
+  {LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR} > div:first-child {{ min-height: 430px; }}"#
+        );
+
+        let upgraded = apply_official_theme_runtime_compat("codex-dream-skin-macos", legacy_css);
+
+        assert!(upgraded.contains(CURRENT_DREAM_SKIN_HOME_LAYOUT_ANCHOR));
+        assert!(!upgraded.contains(LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR));
+        assert!(upgraded.contains(DREAM_SKIN_HOME_LAYOUT_COMPAT_MARKER));
+    }
+
+    #[test]
+    fn unrelated_theme_runtime_css_is_not_rewritten() {
+        let css = format!(
+            r#"html.theme [role="main"]:has(
+  {LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR} {{ min-height: 100%; }}"#
+        );
+
+        assert_eq!(
+            apply_official_theme_runtime_compat("aurora-glass", css.clone()),
+            css
+        );
+    }
+
+    #[test]
     fn repository_theme_directories_and_archives_compile_to_the_same_payload() {
         let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let catalog_ids = OFFICIAL_THEMES
@@ -4724,11 +4814,36 @@ mod tests {
                 let payload = store.active_theme_payload().unwrap();
 
                 assert!(payload.css.contains("var(--ccp-theme-art)"));
+                if expected_shell == "light" {
+                    assert!(
+                        payload
+                            .css
+                            .contains("CCP light-theme runtime compatibility")
+                    );
+                    assert!(payload.css.contains("--color-token-foreground"));
+                    assert!(payload.css.contains("--vscode-foreground"));
+                    assert!(
+                        payload
+                            .css
+                            .contains(":root[data-ccp-theme-shell=\"light\"] main:has(")
+                    );
+                } else {
+                    assert!(
+                        !payload
+                            .css
+                            .contains("CCP light-theme runtime compatibility")
+                    );
+                }
                 assert!(
                     payload.css.contains(r#"[data-feature="game-source"]"#)
                         || payload.css.contains(r#"[data-testid="home-icon"]"#),
                     "{theme_id} compiled from {source:?} must target a Codex native home fingerprint"
                 );
+                if theme_id.starts_with("codex-dream-skin-") {
+                    assert!(payload.css.contains(DREAM_SKIN_HOME_LAYOUT_COMPAT_MARKER));
+                    assert!(payload.css.contains(CURRENT_DREAM_SKIN_HOME_LAYOUT_ANCHOR));
+                    assert!(!payload.css.contains(LEGACY_DREAM_SKIN_HOME_LAYOUT_ANCHOR));
+                }
                 for legacy_selector in [
                     ".dream-home-shell",
                     ".dream-skin-home-shell",

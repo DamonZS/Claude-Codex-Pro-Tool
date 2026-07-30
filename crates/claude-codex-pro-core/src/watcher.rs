@@ -145,7 +145,7 @@ pub fn filter_restartable_launcher_processes<'a>(
 #[cfg(target_os = "macos")]
 fn macos_process_inventory() -> Vec<(u32, String)> {
     let Ok(output) = Command::new("/bin/ps")
-        .args(["-axo", "pid=,comm="])
+        .args(["-axo", "pid=,stat=,comm="])
         .output()
     else {
         return Vec::new();
@@ -153,13 +153,23 @@ fn macos_process_inventory() -> Vec<(u32, String)> {
     if !output.status.success() {
         return Vec::new();
     }
-    String::from_utf8_lossy(&output.stdout)
+    parse_macos_running_process_inventory(&String::from_utf8_lossy(&output.stdout))
+}
+
+pub fn parse_macos_running_process_inventory(output: &str) -> Vec<(u32, String)> {
+    output
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            let split = line.find(char::is_whitespace)?;
-            let process_id = line[..split].parse().ok()?;
-            let executable = line[split..].trim();
+            let pid_end = line.find(char::is_whitespace)?;
+            let process_id = line[..pid_end].parse().ok()?;
+            let remainder = line[pid_end..].trim_start();
+            let state_end = remainder.find(char::is_whitespace)?;
+            let state = &remainder[..state_end];
+            if state.starts_with('Z') {
+                return None;
+            }
+            let executable = remainder[state_end..].trim_start();
             (!executable.is_empty()).then(|| (process_id, executable.to_string()))
         })
         .collect()

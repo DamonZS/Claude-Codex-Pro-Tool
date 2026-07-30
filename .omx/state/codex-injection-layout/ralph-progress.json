@@ -1,0 +1,13 @@
+{
+  "score": 90,
+  "threshold": 90,
+  "passed": true,
+  "verdict": "pass",
+  "category_match": true,
+  "reasoning": "The status cluster is moved away from the macOS project-title region to the right titlebar controls, and the control deck maximum footprint is reduced from 1080x760 to 780x540 with matching density reductions. Live Codex rendering remains the final device-level check after reinjection.",
+  "suggestions": [],
+  "next_actions": [
+    "Restart Codex through CCP so the rebuilt injection asset is loaded",
+    "Confirm the right titlebar cluster does not cover native controls at the user's normal window size"
+  ]
+}

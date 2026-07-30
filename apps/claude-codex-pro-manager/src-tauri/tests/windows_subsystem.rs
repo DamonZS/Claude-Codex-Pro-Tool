@@ -1876,7 +1876,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
         "CCP 外观",
         "Codex 主题",
         "添加背景",
-        "至少 1920 × 1080",
+        "长边 ≥ 1280，短边 ≥ 720",
         "ccp-background-grid",
         "actions.setCodexManagerBackground()",
         "actions.clearCodexManagerBackground()",
@@ -1893,6 +1893,48 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
             "theme background UI is missing: {contract}"
         );
     }
+    let workspace_css = read_frontend_file("workspace.css");
+    let theme_heading_css = source_section(
+        &workspace_css,
+        ".codex-theme-heading {",
+        ".codex-theme-eyebrow {",
+    );
+    assert!(theme_heading_css.contains("position: relative"));
+    assert!(theme_heading_css.contains("z-index: 40"));
+    assert!(theme_heading_css.contains("overflow: visible"));
+    assert!(theme_heading_css.contains("align-items: center"));
+    let import_options_css = source_section(
+        &workspace_css,
+        ".codex-theme-import-options {",
+        ".codex-theme-import-options button {",
+    );
+    assert!(import_options_css.contains("z-index: 50"));
+    assert!(theme_screen.contains("createPortal("));
+    assert!(theme_screen.contains("<Button\n        ref={buttonRef}"));
+    assert!(theme_screen.contains("variant=\"outline\""));
+    assert!(theme_screen.contains("aria-haspopup=\"dialog\""));
+    assert!(
+        !theme_screen.contains("className=\"button button-outline codex-theme-download-trigger\"")
+    );
+    assert!(theme_screen.contains("<dialog"));
+    assert!(theme_screen.contains("dialog.showModal()"));
+    assert!(theme_screen.contains("document.body"));
+    assert!(theme_screen.contains("codex-theme-download-portal"));
+    assert!(theme_screen.contains("window.addEventListener(\"scroll\", updatePosition, true)"));
+    let download_portal_css = source_section(
+        &workspace_css,
+        ".codex-theme-download-portal {",
+        ".codex-theme-status-row {",
+    );
+    assert!(download_portal_css.contains("position: fixed"));
+    assert!(download_portal_css.contains("inset: auto"));
+    assert!(download_portal_css.contains("backdrop-filter: none"));
+    assert!(download_portal_css.contains(":root.light .codex-theme-download-portal"));
+    assert!(download_portal_css.contains("background: #ffffff"));
+    assert!(download_portal_css.contains(":root.dark .codex-theme-download-portal"));
+    assert!(download_portal_css.contains("background: #20252d"));
+    assert!(download_portal_css.contains(".codex-theme-download-portal::backdrop"));
+    assert!(download_portal_css.contains("background: transparent"));
     assert!(theme_diy_dialog.contains("createPortal("));
     assert!(theme_diy_dialog.contains("document.querySelector<HTMLElement>(\".ops-shell\")"));
     assert!(theme_diy_dialog.contains("actions.previewCodexDiyThemeBackground(path)"));
@@ -3131,6 +3173,22 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     assert!(restart_command.contains("request,"));
     assert!(commands_rs.contains("fn default_debug_port() -> u16 {\n    9230\n}"));
     assert!(!commands_rs.contains("fn default_debug_port() -> u16 {\n    9229\n}"));
+
+    let silent_launcher = commands_rs
+        .split("fn spawn_silent_launcher")
+        .nth(1)
+        .and_then(|rest| rest.split("fn is_executable_file").next())
+        .expect("spawn_silent_launcher source");
+    assert!(silent_launcher.contains("codex_provider_auth_environment_from_home(&home)"));
+    assert!(silent_launcher.contains("command.env(env_key, api_key)"));
+    assert!(silent_launcher.contains("std::thread::spawn(move ||"));
+    assert!(silent_launcher.contains("child.wait()"));
+    assert!(
+        silent_launcher
+            .find("command.env(env_key, api_key)")
+            .expect("launcher credential environment")
+            < silent_launcher.find(".spawn()").expect("launcher spawn")
+    );
 }
 
 #[test]
@@ -3209,6 +3267,13 @@ fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
     assert!(route_toggle.contains("actions.clearRelayMode"));
     assert!(route_toggle.contains("actions.restoreClaudeDesktopProviderOfficial"));
     assert!(route_toggle.contains("运行中的代理配置已撤销"));
+    assert_eq!(
+        route_toggle
+            .matches("saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles })")
+            .count(),
+        2,
+        "Claude Desktop active-route shutdown must persist routeEnabled=false before returning"
+    );
 
     let supplier_import = screens
         .split("const importFromCcswitch = async")
@@ -4007,7 +4072,7 @@ fn codex_memory_badge_aligns_with_injection_status_strip() {
     let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
         .expect("read renderer inject");
 
-    assert!(codex_inject.contains("const left = Math.min(Math.max(8, statusRect.right + 8)"));
+    assert!(codex_inject.contains("const left = Math.max(8, statusRect.left - badgeWidth - 8);"));
     assert!(codex_inject.contains("badge.style.height = `${statusRect.height}px`;"));
     assert!(codex_inject.contains("window.__claudeCodexProMemoryAssistRuntime"));
     assert!(codex_inject.contains("function codexMemoryExposeRuntime"));
@@ -4020,7 +4085,7 @@ fn codex_memory_badge_aligns_with_injection_status_strip() {
     assert!(codex_inject.contains("background: transparent;"));
     assert!(codex_inject.contains("<span>盘古记忆</span>"));
     assert!(codex_inject.contains("display: inline-flex;"));
-    assert!(!codex_inject.contains("statusRect.right + 12"));
+    assert!(!codex_inject.contains("statusRect.right + 8"));
 }
 
 #[test]

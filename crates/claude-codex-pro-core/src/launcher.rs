@@ -813,11 +813,22 @@ impl LaunchHooks for DefaultLaunchHooks {
                 MacosCleanupPolicy::QuitIfNotPreviouslyRunning
             };
             let command = build_macos_open_command(app_dir, debug_port, extra_args);
-            let executable = command
+            let home = crate::relay_config::default_codex_home_dir();
+            let provider_environment =
+                crate::relay_config::codex_provider_auth_environment_from_home(&home);
+            let spawn_command = build_macos_open_command_with_environment(
+                app_dir,
+                debug_port,
+                extra_args,
+                provider_environment
+                    .as_ref()
+                    .map(|(env_key, api_key)| (env_key.as_str(), api_key.as_str())),
+            );
+            let executable = spawn_command
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("macOS open command is empty"))?;
             let child = Command::new(executable)
-                .args(&command[1..])
+                .args(&spawn_command[1..])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -2833,13 +2844,26 @@ pub fn build_macos_open_command(
     debug_port: u16,
     extra_args: &[String],
 ) -> Vec<String> {
-    let mut command = vec![
-        "open".to_string(),
+    build_macos_open_command_with_environment(app_dir, debug_port, extra_args, None)
+}
+
+pub fn build_macos_open_command_with_environment(
+    app_dir: &Path,
+    debug_port: u16,
+    extra_args: &[String],
+    environment: Option<(&str, &str)>,
+) -> Vec<String> {
+    let mut command = vec!["open".to_string()];
+    if let Some((env_key, value)) = environment {
+        command.push("--env".to_string());
+        command.push(format!("{env_key}={value}"));
+    }
+    command.extend([
         "-W".to_string(),
         "-a".to_string(),
         app_dir.to_string_lossy().to_string(),
         "--args".to_string(),
-    ];
+    ]);
     command.extend(build_codex_arguments(debug_port, extra_args));
     command
 }

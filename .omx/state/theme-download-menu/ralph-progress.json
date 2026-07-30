@@ -1,0 +1,12 @@
+{
+  "score": 94,
+  "threshold": 90,
+  "passed": true,
+  "verdict": "pass",
+  "category_match": true,
+  "reasoning": "The latest screenshot exposed a separate trigger regression: legacy button classes left the download icon and label unstyled and split across lines, while the desktop heading stayed top-aligned. The trigger now reuses the standard outline Button component and the desktop heading aligns its action group vertically at center, without changing the Top Layer dialog fix.",
+  "suggestions": [],
+  "next_actions": [
+    "Open the rebuilt Manager on macOS and confirm the five actions share one centered row and the download trigger keeps its icon and label inline"
+  ]
+}

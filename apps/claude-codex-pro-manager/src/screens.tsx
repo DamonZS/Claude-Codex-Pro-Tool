@@ -1532,6 +1532,8 @@ export function SupplierScreen({
     if (isDisablingActiveRoute && supplierRouteGroup === "claude-desktop") {
       const restored = await (actions.restoreClaudeDesktopProviderOfficial as unknown as (skipConfirm?: boolean) => Promise<{ status?: Status } | null>)(true);
       if (!restored || !statusOk(restored.status)) return;
+      const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+      if (!saved) return;
       actions.showNotice({ title: "供应商路由", message: "已关闭 Claude Desktop 供应商路由，运行中的代理配置已撤销。", status: "ok" });
       return;
     }

@@ -14,7 +14,8 @@ import {
   Upload,
   WandSparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { CodexThemeDiyDialog } from "@/components/CodexThemeDiyDialog";
 import { Button } from "@/components/ui/button";
@@ -23,11 +24,104 @@ import { statusOk } from "@/lib/helpers";
 import type {
   CodexManagerBackgroundItem,
   CodexManagerBackgroundLibraryResult,
+  CodexOfficialTheme,
   CodexThemeBackgroundResult,
   CodexThemeListResult,
   CodexThemeOperationState,
   CodexThemeSummary,
 } from "@/types";
+
+type ThemeDownloadMenuProps = {
+  actions: AppActions;
+  installedThemeIds: Set<string>;
+  officialThemes: CodexOfficialTheme[];
+  operation: CodexThemeOperationState | null;
+};
+
+function ThemeDownloadMenu({ actions, installedThemeIds, officialThemes, operation }: ThemeDownloadMenuProps) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<CSSProperties>({});
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDialogElement>(null);
+
+  const updatePosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPosition({
+      top: Math.min(rect.bottom + 6, window.innerHeight - 24),
+      right: Math.max(12, window.innerWidth - rect.right),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const dialog = menuRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      if (dialog?.open) dialog.close();
+    };
+  }, [open, updatePosition]);
+
+  return (
+    <>
+      <Button
+        ref={buttonRef}
+        type="button"
+        variant="outline"
+        className="codex-theme-download-trigger"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Download aria-hidden="true" />
+        下载主题
+      </Button>
+      {open ? createPortal(
+        <dialog
+          ref={menuRef}
+          className="codex-theme-import-options codex-theme-download-options codex-theme-download-portal"
+          style={position}
+          aria-label="下载官方主题"
+          onCancel={(event) => {
+            event.preventDefault();
+            setOpen(false);
+          }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}
+        >
+          {officialThemes.map((theme) => {
+            const installed = installedThemeIds.has(theme.id);
+            return (
+              <button
+                type="button"
+                role="menuitem"
+                key={theme.id}
+                disabled={Boolean(operation) || installed}
+                onClick={() => {
+                  setOpen(false);
+                  void actions.downloadCodexTheme(theme.id);
+                }}
+              >
+                {installed ? <Check aria-hidden="true" /> : <Download aria-hidden="true" />}
+                <span>
+                  <strong>{theme.name}</strong>
+                  <small>{installed ? "已安装" : theme.id}</small>
+                </span>
+              </button>
+            );
+          })}
+        </dialog>,
+        document.body,
+      ) : null}
+    </>
+  );
+}
 
 type CodexThemeCenterScreenProps = {
   actions: AppActions;
@@ -271,34 +365,7 @@ export function CodexThemeCenterScreen({ actions, background, managerBackgrounds
                 <BookOpen aria-hidden="true" />
                 制作指南
               </Button>
-              <details className="codex-theme-import-menu codex-theme-download-menu">
-            <summary className="button button-outline" aria-label="下载官方主题">
-              <Download aria-hidden="true" />
-              下载主题
-            </summary>
-            <div className="codex-theme-import-options codex-theme-download-options">
-              {officialThemes.map((theme) => {
-                const installed = installedThemeIds.has(theme.id);
-                return (
-                  <button
-                    type="button"
-                    key={theme.id}
-                    disabled={Boolean(operation) || installed}
-                    onClick={(event) => {
-                      event.currentTarget.closest("details")?.removeAttribute("open");
-                      void actions.downloadCodexTheme(theme.id);
-                    }}
-                  >
-                    {installed ? <Check aria-hidden="true" /> : <Download aria-hidden="true" />}
-                    <span>
-                      <strong>{theme.name}</strong>
-                      <small>{installed ? "已安装" : theme.id}</small>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-              </details>
+              <ThemeDownloadMenu actions={actions} installedThemeIds={installedThemeIds} officialThemes={officialThemes} operation={operation} />
               <details className="codex-theme-import-menu">
             <summary className="button button-default" aria-label="导入主题">
               <Upload aria-hidden="true" />
@@ -356,7 +423,7 @@ export function CodexThemeCenterScreen({ actions, background, managerBackgrounds
             <button type="button" className="ccp-background-add-card" disabled={Boolean(operation)} onClick={() => void actions.setCodexManagerBackground()}>
               <ImagePlus aria-hidden="true" />
               <strong>添加高清背景</strong>
-              <span>PNG、JPEG 或 WebP<br />至少 1920 × 1080</span>
+              <span>PNG、JPEG 或 WebP<br />长边 ≥ 1280，短边 ≥ 720</span>
             </button>
           </div>
         )

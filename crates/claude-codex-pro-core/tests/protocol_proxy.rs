@@ -1727,6 +1727,7 @@ fn claude_desktop_direct_mode_catalog_uses_manual_ids_without_request_rewrite() 
     let relay = RelayProfile {
         id: "desktop-direct".to_string(),
         target_app: "claude-desktop".to_string(),
+        route_enabled: true,
         model_mapping_enabled: false,
         model_list: "claude-sonnet-5 [1M]\nclaude-opus-4-8".to_string(),
         ..Default::default()
@@ -1753,6 +1754,7 @@ fn claude_desktop_mapping_mode_catalog_ignores_stale_manual_list() {
     let relay = RelayProfile {
         id: "desktop-mapped".to_string(),
         target_app: "claude-desktop".to_string(),
+        route_enabled: true,
         model_mapping_enabled: true,
         model_list: "claude-sonnet-stale [1M]".to_string(),
         model_mapping_json: json!([
@@ -1795,6 +1797,7 @@ fn claude_desktop_direct_default_names_respect_individual_1m_flags() {
     let relay = RelayProfile {
         id: "desktop-default-names".to_string(),
         target_app: "claude-desktop".to_string(),
+        route_enabled: true,
         model_mapping_enabled: false,
         model_list: "claude-Fable-5 [1M]\nclaude-opus-4-7\nclaude-opus-4-8\nclaude-opus-4-6"
             .to_string(),
@@ -1811,6 +1814,25 @@ fn claude_desktop_direct_default_names_respect_individual_1m_flags() {
     for index in 1..4 {
         assert!(body["data"][index].get("supports1m").is_none());
     }
+}
+
+#[test]
+fn claude_desktop_disabled_route_exposes_no_proxy_models() {
+    let relay = RelayProfile {
+        id: "desktop-disabled".to_string(),
+        target_app: "claude-desktop".to_string(),
+        route_enabled: false,
+        model_list: "claude-sonnet-4-6".to_string(),
+        ..Default::default()
+    };
+    let settings = BackendSettings {
+        active_claude_desktop_relay_id: relay.id.clone(),
+        relay_profiles: vec![relay],
+        ..Default::default()
+    };
+
+    let body = claude_desktop_models_response_for_settings(&settings);
+    assert_eq!(body["data"], json!([]));
 }
 
 #[test]

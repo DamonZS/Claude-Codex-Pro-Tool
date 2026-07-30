@@ -4016,7 +4016,10 @@ html.dark > body > .supplier-model-dropdown-menu,
 }
 
 .codex-theme-heading {
-  align-items: flex-start;
+  position: relative;
+  z-index: 40;
+  overflow: visible;
+  align-items: center;
   margin-bottom: 14px;
 }
 
@@ -4050,6 +4053,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .codex-theme-import-menu {
   position: relative;
+  z-index: 41;
 }
 
 .codex-theme-import-menu > summary {
@@ -4097,9 +4101,19 @@ html.dark > body > .supplier-model-dropdown-menu,
   color: var(--workspace-blue);
 }
 
+.codex-theme-download-trigger {
+  display: inline-flex;
+  height: 36px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .codex-theme-import-options {
   position: absolute;
-  z-index: 30;
+  z-index: 50;
   top: calc(100% + 6px);
   right: 0;
   display: grid;
@@ -4140,6 +4154,39 @@ html.dark > body > .supplier-model-dropdown-menu,
   width: min(310px, calc(100vw - 48px));
   max-height: 360px;
   overflow-y: auto;
+}
+
+.codex-theme-download-portal {
+  position: fixed;
+  inset: auto;
+  z-index: 100000;
+  max-height: min(360px, calc(100vh - 72px));
+  margin: 0;
+  padding: 5px;
+  opacity: 1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --workspace-control-radius: 6px;
+  --workspace-surface-muted: #f0f2f4;
+}
+
+:root.light .codex-theme-download-portal {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #172033;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 0.24);
+}
+
+:root.dark .codex-theme-download-portal {
+  border-color: #46505f;
+  background: #20252d;
+  color: #f3f6fa;
+  box-shadow: 0 20px 52px rgb(0 0 0 / 0.58);
+  --workspace-surface-muted: #252a31;
+}
+
+.codex-theme-download-portal::backdrop {
+  background: transparent;
 }
 
 .codex-theme-download-options button > span {

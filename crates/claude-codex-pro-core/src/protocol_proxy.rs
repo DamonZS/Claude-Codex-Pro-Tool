@@ -995,6 +995,9 @@ pub fn claude_desktop_models_response_for_settings(
     settings: &crate::settings::BackendSettings,
 ) -> Value {
     let relay = settings.active_relay_profile_for_target("claude-desktop");
+    if !relay.route_enabled {
+        return claude_desktop_models_response_from_inference_models(Vec::new());
+    }
     claude_desktop_models_response_from_inference_models(claude_desktop_inference_models(
         &relay.model_list,
         Some(relay.model_mapping_enabled),
@@ -1023,7 +1026,10 @@ pub fn local_claude_desktop_gateway_health_response() -> anyhow::Result<ProxyHtt
         &relay.model_mapping_json,
     )
     .len();
-    let ready = !base_url.trim().is_empty() && !api_key.trim().is_empty() && model_count > 0;
+    let ready = relay.route_enabled
+        && !base_url.trim().is_empty()
+        && !api_key.trim().is_empty()
+        && model_count > 0;
     let status = if ready {
         "200 OK"
     } else {
@@ -1057,7 +1063,15 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
 ) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = load_proxy_settings(&SettingsStore::default())?;
     let relay = settings.active_relay_profile_for_target("claude-desktop");
+    ensure_claude_desktop_route_enabled(&relay)?;
     open_claude_desktop_messages_proxy_request_with_relay(body, &relay, &settings, metadata).await
+}
+
+fn ensure_claude_desktop_route_enabled(relay: &RelayProfile) -> anyhow::Result<()> {
+    if !relay.route_enabled {
+        anyhow::bail!("Claude Desktop 供应商路由已关闭，请重启 Claude Desktop 使官方配置生效");
+    }
+    Ok(())
 }
 
 async fn open_claude_desktop_messages_proxy_request_with_relay(
@@ -4722,6 +4736,24 @@ mod tests {
             load_proxy_settings(&store).expect("missing settings use established defaults");
 
         assert_eq!(settings, BackendSettings::default());
+    }
+
+    #[test]
+    fn claude_desktop_messages_route_gate_stops_disabled_profiles() {
+        let disabled = RelayProfile {
+            target_app: "claude-desktop".to_string(),
+            route_enabled: false,
+            ..RelayProfile::default()
+        };
+        let error = ensure_claude_desktop_route_enabled(&disabled)
+            .expect_err("disabled Claude Desktop route must stop before upstream forwarding");
+        assert!(error.to_string().contains("供应商路由已关闭"));
+
+        let enabled = RelayProfile {
+            route_enabled: true,
+            ..disabled
+        };
+        ensure_claude_desktop_route_enabled(&enabled).unwrap();
     }
 
     #[test]

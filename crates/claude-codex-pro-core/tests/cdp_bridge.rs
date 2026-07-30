@@ -146,24 +146,25 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 }
 
 #[test]
-fn injection_script_exposes_left_anchored_codex_status_entry() {
+fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("const claudeCodexProMenuVersion = \""));
     assert!(script.contains("menu.dataset.claudeCodexProMenuVersion = claudeCodexProMenuVersion;"));
-    assert!(script.contains("findCodexStatusLeftAnchor"));
-    assert!(script.contains("findCodexWindowLeftAnchor"));
-    assert!(script.contains("normalizeStatusAnchorText"));
-    assert!(script.contains("findCodexHelpAnchor"));
-    assert!(script.contains("const helpKeywords = new Set([\"帮助\", \"help\"])"));
-    assert!(script.contains("const topMenuAnchor = findCodexHelpAnchor(header, headerRect);"));
-    assert!(script.contains("if (topMenuAnchor) return topMenuAnchor;"));
-    assert!(script.contains("document.querySelector(\"aside\")"));
+    assert!(script.contains("findCodexStatusRightAnchor"));
+    assert!(script.contains("codexTitlebarControlLabel"));
+    assert!(script.contains("const minimizeKeywords = [\"minimize\", \"最小化\"]"));
+    assert!(script.contains("document.querySelectorAll?.('[aria-label], [title], [data-testid]')"));
+    assert!(script.contains("rect.top > headerRect.bottom"));
+    assert!(script.contains("rect.left >= headerRect.left + headerRect.width * 0.5"));
+    assert!(script.contains("anchorRect.left - menuWidth - 8"));
+    assert!(script.contains("headerRect.right - menuWidth - 16"));
     assert!(script.contains("--claude-codex-pro-menu-left"));
     assert!(script.contains("CCP ${claudeCodexProVersion}"));
-    assert!(
-        script.contains("setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", \"44px\")")
-    );
+    assert!(script.contains(
+        "setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", `${fallbackLeft}px`)"
+    ));
+    assert!(script.contains("statusRect.left - badgeWidth - 8"));
     assert!(!script.contains("data-codex-frontend-indicator=\"true\""));
     assert!(script.contains("data-codex-backend-indicator=\"true\""));
     assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));
@@ -186,6 +187,21 @@ fn injection_script_exposes_left_anchored_codex_status_entry() {
     assert!(script.contains("trigger.querySelector(\"[data-codex-backend-indicator]\")"));
     assert!(script.contains(".claude-codex-pro-window-status-title"));
     assert!(script.contains("trigger.dataset.claudeCodexProTriggerLabel = \"ccp-status-v2\""));
+}
+
+#[test]
+fn injection_script_uses_compact_pangu_control_deck_layout() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("width: min(780px, calc(100vw - 72px))"));
+    assert!(script.contains("height: min(540px, calc(100vh - 64px))"));
+    assert!(script.contains("grid-template-columns: 148px minmax(0, 1fr)"));
+    assert!(script.contains("min-height: 60px"));
+    assert!(script.contains("min-height: 58px"));
+    assert!(script.contains("overflow-y: auto"));
+    assert!(script.contains("@media (max-width: 900px)"));
+    assert!(script.contains("@media (max-width: 720px)"));
+    assert!(script.contains("height: min(540px, calc(100vh - 32px))"));
 }
 
 #[test]

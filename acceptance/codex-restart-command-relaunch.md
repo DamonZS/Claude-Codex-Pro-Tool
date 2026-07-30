@@ -79,3 +79,15 @@
 19. macOS 本地 release 可解析 launcher
    - 通过标准：标准 `.app` 继续解析包内 companion；直接运行 `target/debug` 或 `target/release/claude-codex-pro-manager` 时，可解析同目录可执行的 `claude-codex-pro`，App Translocation 仍被拒绝。
    - 证据：Manager Rust 单元测试与默认 release 构建。
+
+20. macOS 退出等待忽略僵尸进程
+   - 通过标准：macOS `ps` 解析包含进程状态；`Z` 状态 PID 不进入运行中进程清单，正常 Codex/launcher PID 仍可识别；Manager 在 Unix 平台后台 `wait()` 回收静默 launcher 子进程。
+   - 证据：core watcher 单元测试与 Manager command 源码契约测试。
+
+21. 首次重启直接携带当前供应商凭据
+   - 通过标准：Manager 新启动后直接点击重启，会从实时 Codex home 读取当前 provider 凭据并通过 `Command::env` 注入新 launcher，不要求用户重新选择供应商或先修改 Manager 全局进程环境。
+   - 证据：Manager command 源码契约测试与 core relay config 测试。
+
+22. macOS `.app` 启动显式传递 provider 环境
+   - 通过标准：launcher 从实时 `config.toml` / `auth.json` 读取 `env_key` 和凭据，并在 `/usr/bin/open` 命令的 `--args` 前加入 `--env KEY=VALUE`；诊断日志与状态 payload 不包含凭据。
+   - 证据：core launcher 单元测试与日志源码检查。
