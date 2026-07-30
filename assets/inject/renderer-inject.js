@@ -55,7 +55,7 @@
   const codexDeleteStyleVersion = "14";
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
-  const claudeCodexProMenuVersion = "11";
+  const claudeCodexProMenuVersion = "12";
   const claudeCodexProTriggerVersion = "6";
   const claudeCodexProModalTheme = "pangu-control-deck";
   const codexDeleteVersion = "7";
@@ -3462,7 +3462,36 @@
       .toLowerCase();
   }
 
+  function codexWindowControlsOverlayAnchor(headerRect) {
+    const windowControlsOverlay = navigator.windowControlsOverlay;
+    if (!windowControlsOverlay?.getTitlebarAreaRect) return null;
+    let overlayRect = null;
+    try {
+      overlayRect = windowControlsOverlay.getTitlebarAreaRect();
+    } catch {
+      return null;
+    }
+    if (!(overlayRect?.width > 0 && overlayRect.height > 0)) return null;
+    if (!(overlayRect.right < window.innerWidth - 1)) return null;
+    if (overlayRect.bottom < headerRect.top || overlayRect.top > headerRect.bottom) return null;
+    if (overlayRect.right < headerRect.left + headerRect.width * 0.5 || overlayRect.right > headerRect.right) return null;
+    return {
+      node: null,
+      label: "window-controls-overlay",
+      rect: {
+        left: overlayRect.right,
+        right: window.innerWidth,
+        top: overlayRect.top,
+        bottom: overlayRect.bottom,
+        width: window.innerWidth - overlayRect.right,
+        height: overlayRect.height,
+      },
+    };
+  }
+
   function findCodexStatusRightAnchor(header, headerRect) {
+    const overlayAnchor = codexWindowControlsOverlayAnchor(headerRect);
+    if (overlayAnchor) return overlayAnchor;
     const minimizeKeywords = ["minimize", "最小化"];
     const selector = [
       "button",
@@ -10685,6 +10714,14 @@
     });
   };
   window.addEventListener("resize", window.__claudeCodexProResizeHandler);
+  const windowControlsOverlay = navigator.windowControlsOverlay;
+  if (windowControlsOverlay?.removeEventListener && window.__claudeCodexProWindowControlsOverlayHandler) {
+    windowControlsOverlay.removeEventListener("geometrychange", window.__claudeCodexProWindowControlsOverlayHandler);
+  }
+  window.__claudeCodexProWindowControlsOverlayHandler = () => window.__claudeCodexProResizeHandler?.();
+  if (windowControlsOverlay?.addEventListener) {
+    windowControlsOverlay.addEventListener("geometrychange", window.__claudeCodexProWindowControlsOverlayHandler);
+  }
   window.__codexSessionDeleteObserver?.disconnect();
   window.__codexSessionDeleteObserver = new MutationObserver(scheduleScan);
   window.__codexSessionDeleteObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });

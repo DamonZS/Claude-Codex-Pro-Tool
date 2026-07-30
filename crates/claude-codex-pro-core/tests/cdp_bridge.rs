@@ -149,10 +149,17 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("const claudeCodexProMenuVersion = \""));
+    assert!(script.contains("const claudeCodexProMenuVersion = \"12\""));
     assert!(script.contains("menu.dataset.claudeCodexProMenuVersion = claudeCodexProMenuVersion;"));
     assert!(script.contains("findCodexStatusRightAnchor"));
     assert!(script.contains("codexTitlebarControlLabel"));
+    assert!(script.contains("function codexWindowControlsOverlayAnchor(headerRect)"));
+    assert!(script.contains("navigator.windowControlsOverlay"));
+    assert!(script.contains("getTitlebarAreaRect"));
+    assert!(script.contains("overlayRect.right < window.innerWidth - 1"));
+    assert!(script.contains("left: overlayRect.right"));
+    assert!(script.contains("const overlayAnchor = codexWindowControlsOverlayAnchor(headerRect);"));
+    assert!(script.contains("if (overlayAnchor) return overlayAnchor;"));
     assert!(script.contains("const minimizeKeywords = [\"minimize\", \"最小化\"]"));
     assert!(script.contains("document.querySelectorAll?.('[aria-label], [title], [data-testid]')"));
     assert!(script.contains("rect.top > headerRect.bottom"));
@@ -165,6 +172,8 @@ fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
         "setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", `${fallbackLeft}px`)"
     ));
     assert!(script.contains("statusRect.left - badgeWidth - 8"));
+    assert!(script.contains("windowControlsOverlay.addEventListener(\"geometrychange\""));
+    assert!(script.contains("windowControlsOverlay.removeEventListener(\"geometrychange\""));
     assert!(!script.contains("data-codex-frontend-indicator=\"true\""));
     assert!(script.contains("data-codex-backend-indicator=\"true\""));
     assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));

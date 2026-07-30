@@ -5,22 +5,26 @@
 ## 验收项
 
 1. 状态入口使用右侧锚点
-   - 通过标准：脚本包含右侧锚点查找函数，优先识别最小化控件，并从 Header 右半区识别文件打开或工具按钮。
+   - 通过标准：Windows 优先读取 `navigator.windowControlsOverlay.getTitlebarAreaRect()`，以可用标题栏矩形右边界作为系统最小化控件左缘；覆盖层不可用时再识别 DOM 最小化控件，并从 Header 右半区识别文件打开或工具按钮。
    - 证据：`injection_script_anchors_status_entry_to_right_titlebar_controls` 测试。
 
 2. 注入入口不覆盖项目名称和原生控件
-   - 通过标准：状态入口计算为锚点左侧位置；盘古记忆入口位于状态入口左侧；缺少锚点时使用窗口右侧安全回退。
+   - 通过标准：只接受右侧确有系统控制区的覆盖层矩形；状态入口计算为锚点左侧位置；盘古记忆入口位于状态入口左侧；缺少锚点时使用窗口右侧安全回退。
    - 证据：注入脚本契约测试。
 
-3. 控制舱尺寸紧凑
+3. 窗口几何变化后重新定位
+   - 通过标准：脚本订阅窗口控制覆盖层的 `geometrychange`，并复用现有 resize 定位处理器重新计算注入入口位置。
+   - 证据：`injection_script_anchors_status_entry_to_right_titlebar_controls` 测试。
+
+4. 控制舱尺寸紧凑
    - 通过标准：桌面最大宽高不超过 `780px × 540px`，侧栏、Header、Hero 和设置卡片采用紧凑尺寸；内容区保持独立滚动。
    - 证据：`injection_script_uses_compact_pangu_control_deck_layout` 测试。
 
-4. 响应式与功能无回归
+5. 响应式与功能无回归
    - 通过标准：900px、720px 媒体查询、四个导航入口、设置开关、关闭隔离和服务模式继续存在。
    - 证据：完整 `cdp_bridge` 测试。
 
-5. 构建通过
+6. 构建通过
    - 通过标准：`cargo fmt --check`、完整 `cdp_bridge` 测试和 `cargo build --release` 成功。
 
 ## 非目标
