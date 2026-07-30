@@ -212,17 +212,13 @@ fn manager_uses_single_instance_guard_before_starting_tauri() {
 }
 
 #[test]
-fn launcher_binary_embeds_codex_icon_resource() {
+fn unified_binary_embeds_codex_icon_resource() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let launcher_build = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .unwrap()
-        .join("claude-codex-pro-launcher/build.rs");
-    let build_rs = std::fs::read_to_string(&launcher_build).expect("read launcher build.rs");
+    let manager_build = read_source_file(&manifest_dir.join("build.rs"));
+    let tauri_conf = read_source_file(&manifest_dir.join("tauri.conf.json"));
 
-    assert!(build_rs.contains("WindowsResource"));
-    assert!(build_rs.contains("icons/icon.ico"));
+    assert!(manager_build.contains("tauri_build::try_build"));
+    assert!(tauri_conf.contains("\"icons/icon.ico\""));
 }
 
 #[test]
@@ -232,12 +228,6 @@ fn manager_runs_as_invoker_while_installer_requests_administrator_privileges() {
         std::fs::read_to_string(manifest_dir.join("build.rs")).expect("read manager build.rs");
     let windows_manifest = std::fs::read_to_string(manifest_dir.join("windows-app-manifest.xml"))
         .expect("read windows app manifest");
-    let launcher_build = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .unwrap()
-        .join("claude-codex-pro-launcher/build.rs");
-    let launcher_build = std::fs::read_to_string(&launcher_build).expect("read launcher build.rs");
     let windows_installer = manifest_dir
         .parent()
         .and_then(std::path::Path::parent)
@@ -248,7 +238,6 @@ fn manager_runs_as_invoker_while_installer_requests_administrator_privileges() {
         std::fs::read_to_string(&windows_installer).expect("read windows installer");
 
     assert!(manager_build.contains("windows-app-manifest.xml"));
-    assert!(launcher_build.contains("windows-app-manifest.xml"));
     assert!(windows_manifest.contains("asInvoker"));
     assert!(!windows_manifest.contains("requireAdministrator"));
     assert!(windows_manifest.contains("Microsoft.Windows.Common-Controls"));
@@ -262,16 +251,75 @@ fn manager_launch_button_spawns_silent_launcher_binary() {
         "/src/commands.rs"
     )));
 
-    assert!(commands_rs.contains("SILENT_BINARY"));
-    assert!(commands_rs.contains("resolve_silent_launcher_path()"));
-    assert!(commands_rs.contains("macos_bundle_companion_path_from_exe"));
-    assert!(commands_rs.contains("is_macos_app_translocation_path"));
-    assert!(commands_rs.contains("target\").join(\"debug\").join(&launcher_name)"));
-    assert!(commands_rs.contains("target\").join(\"release\").join(&launcher_name)"));
-    assert!(commands_rs.contains("安装不完整，缺少 Codex 启动器"));
-    assert!(!commands_rs.contains("已搜索路径：{searched}"));
+    assert!(commands_rs.contains("std::env::current_exe()"));
+    assert!(commands_rs.contains("command.arg(\"--launcher\")"));
     assert!(commands_rs.contains("std::process::Command::new"));
     assert!(!commands_rs.contains("launch_and_inject_with_hooks(options"));
+}
+
+#[test]
+fn manager_and_launcher_ship_as_one_cross_platform_binary() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .unwrap();
+    let manager_cargo = read_source_file(&manifest_dir.join("Cargo.toml"));
+    let manager_main = read_source_file(&manifest_dir.join("src/main.rs"));
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let launcher_cargo =
+        read_source_file(&repo_root.join("apps/claude-codex-pro-launcher/Cargo.toml"));
+    let windows_installer =
+        read_source_file(&repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"));
+    let macos_packager =
+        read_source_file(&repo_root.join("scripts/installer/macos/package-dmg.sh"));
+
+    assert!(manager_cargo.contains("name = \"claude-codex-pro\""));
+    assert!(manager_cargo.contains("claude-codex-pro-launcher ="));
+    assert!(!manager_cargo.contains("name = \"claude-codex-pro-manager\"\npath = \"src/main.rs\""));
+    assert!(launcher_cargo.contains("[lib]"));
+    assert!(!launcher_cargo.contains("[[bin]]"));
+    assert!(manager_main.contains("claude_codex_pro_launcher::should_handle_args(&args)"));
+    assert!(manager_main.contains("claude_codex_pro_launcher::run(args)"));
+    assert!(
+        manager_main
+            .find("should_handle_args(&args)")
+            .expect("unified mode dispatch")
+            < manager_main
+                .find("claude_codex_pro_manager_lib::run()")
+                .expect("Tauri manager startup")
+    );
+
+    let spawn = source_section(
+        &commands,
+        "fn spawn_silent_launcher",
+        "pub fn resolve_silent_launcher_path",
+    );
+    assert!(spawn.contains("std::env::current_exe()"));
+    assert!(spawn.contains("command.arg(\"--launcher\")"));
+    assert!(!spawn.contains("resolve_silent_launcher_path()?"));
+
+    assert!(windows_installer.contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro.exe""#));
+    assert!(
+        !windows_installer
+            .contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe""#)
+    );
+    assert!(!windows_installer.contains("Claude Codex Pro Manager.lnk"));
+    assert!(macos_packager.contains("create_app \"Claude Codex Pro\" \"claude-codex-pro\""));
+    assert!(!macos_packager.contains("create_app \"Claude Codex Pro Manager\""));
+    assert!(!macos_packager.contains("$BINARY_DIR/claude-codex-pro-manager"));
+
+    for workflow in [
+        ".github/workflows/pr-build.yml",
+        ".github/workflows/release-assets.yml",
+        ".github/workflows/auto-release-installers.yml",
+    ] {
+        let source = read_source_file(&repo_root.join(workflow));
+        assert!(!source.contains("target/release/claude-codex-pro-manager.exe"));
+        assert!(!source.contains("Claude Codex Pro Manager.app"));
+        assert!(!source.contains("ClaudeCodexProManager"));
+    }
 }
 
 #[test]
@@ -289,7 +337,7 @@ fn codex_launch_and_injected_status_do_not_auto_open_manager() {
         .parent()
         .unwrap();
     let launcher_main =
-        std::fs::read_to_string(repo_root.join("apps/claude-codex-pro-launcher/src/main.rs"))
+        std::fs::read_to_string(repo_root.join("apps/claude-codex-pro-launcher/src/lib.rs"))
             .expect("read launcher main");
     let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
         .expect("read renderer inject");
@@ -354,7 +402,7 @@ fn assert_release_workflow_uses_current_hosted_runners(workflow: &str) {
 }
 
 #[test]
-fn macos_packager_hides_silent_launcher_but_not_manager() {
+fn macos_packager_builds_one_visible_unified_app() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let packager = manifest_dir
         .parent()
@@ -369,19 +417,13 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
     assert!(script.contains("BINARY_DIR=\"${BINARY_DIR:-$ROOT/target/release}\""));
     assert!(script.contains("claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"));
     assert!(script.contains(
-        "create_app \"Claude Codex Pro\" \"ClaudeCodexPro\" \"$BINARY_DIR/claude-codex-pro\" \"com.damonzs.claudecodexpro\" \"true\""
+        "create_app \"Claude Codex Pro\" \"claude-codex-pro\" \"$BINARY_DIR/claude-codex-pro\" \"com.damonzs.claudecodexpro\" \"false\""
     ));
-    assert!(script.contains(
-        "create_app \"Claude Codex Pro Manager\" \"ClaudeCodexProManager\" \"$BINARY_DIR/claude-codex-pro-manager\" \"com.damonzs.claudecodexpro.manager\" \"false\""
-    ));
-    assert!(script.contains("install_manager_runtime \"claude-codex-pro\""));
-    assert!(script.contains("install_manager_runtime \"claude-codex-pro-mcp\""));
-    assert!(
-        script
-            .contains("for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp")
-    );
+    assert!(!script.contains("create_app \"Claude Codex Pro Manager\""));
+    assert!(script.contains("install_app_runtime \"claude-codex-pro-mcp\""));
+    assert!(script.contains("for runtime in claude-codex-pro claude-codex-pro-mcp"));
     let verify_position = script
-        .find("verify_manager_runtime_before_signing\n")
+        .find("verify_app_runtime_before_signing\n")
         .expect("runtime verification invocation");
     let sign_position = script
         .find("sign_app \"$STAGE/Claude Codex Pro.app\"")
@@ -390,7 +432,7 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
 }
 
 #[test]
-fn macos_workflows_verify_all_manager_bundle_runtimes() {
+fn macos_workflows_verify_all_unified_bundle_runtimes() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
@@ -403,10 +445,9 @@ fn macos_workflows_verify_all_manager_bundle_runtimes() {
         ".github/workflows/auto-release-installers.yml",
     ] {
         let source = std::fs::read_to_string(repo_root.join(workflow)).expect("read workflow");
-        assert!(source.contains(
-            "for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp"
-        ));
-        assert!(source.contains("Claude Codex Pro Manager.app/Contents/MacOS/$runtime"));
+        assert!(source.contains("for runtime in claude-codex-pro claude-codex-pro-mcp"));
+        assert!(source.contains("app=\"dist/macos/stage/Claude Codex Pro.app\""));
+        assert!(!source.contains("Claude Codex Pro Manager.app"));
     }
 }
 
@@ -457,10 +498,10 @@ fn public_release_packages_do_not_include_user_supplier_or_memory_state() {
 
     assert!(windows_installer.contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro.exe""#));
     assert!(
-        windows_installer
+        !windows_installer
             .contains(r#"File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe""#)
     );
-    assert!(windows_installer.contains("Claude Codex Pro Manager.lnk"));
+    assert!(!windows_installer.contains("Claude Codex Pro Manager.lnk"));
     assert!(windows_installer.contains("Uninstall Claude Codex Pro.lnk"));
     for forbidden in [
         "settings.json",
@@ -474,8 +515,8 @@ fn public_release_packages_do_not_include_user_supplier_or_memory_state() {
         assert!(!windows_installer.contains(forbidden));
         assert!(!macos_packager.contains(forbidden));
     }
-    assert!(macos_packager.contains("create_app \"Claude Codex Pro Manager\""));
-    assert!(macos_packager.contains("$BINARY_DIR/claude-codex-pro-manager"));
+    assert!(macos_packager.contains("create_app \"Claude Codex Pro\" \"claude-codex-pro\""));
+    assert!(!macos_packager.contains("create_app \"Claude Codex Pro Manager\""));
 }
 
 #[test]
@@ -489,7 +530,7 @@ fn windows_installer_registers_anonymous_installation_without_blocking_install()
     let windows_installer =
         read_source_file(&repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"));
     let launcher_main =
-        read_source_file(&repo_root.join("apps/claude-codex-pro-launcher/src/main.rs"));
+        read_source_file(&repo_root.join("apps/claude-codex-pro-launcher/src/lib.rs"));
 
     let registration_command = concat!(
         "nsExec::ExecToLog '\"$INSTDIR\\claude-codex-pro.exe\" ",
@@ -518,7 +559,7 @@ fn windows_installer_registers_anonymous_installation_without_blocking_install()
     assert!(launcher_main.contains("--app-version"));
     assert!(launcher_main.contains("install_registration::register_current_installation"));
     let main_body = launcher_main
-        .split("async fn main() -> Result<()> {")
+        .split("pub async fn run(args: Vec<String>) -> Result<()> {")
         .nth(1)
         .and_then(|rest| rest.split("fn installation_registration_version").next())
         .expect("launcher main body");
@@ -526,7 +567,7 @@ fn windows_installer_registers_anonymous_installation_without_blocking_install()
         .find("installation_registration_version(&args)")
         .expect("registration argument branch");
     let normal_launcher = main_body
-        .find("run_launcher().await")
+        .find("run_launcher(&args).await")
         .expect("normal launcher call");
     assert!(registration_branch < normal_launcher);
     assert!(!main_body[..registration_branch].contains("acquire_single_instance_guard"));
@@ -561,7 +602,7 @@ fn github_release_workflow_builds_separate_macos_x64_and_arm64_dmgs() {
     assert!(workflow.contains("package-dmg.sh \"$VERSION\" \"${{ matrix.arch }}\""));
     assert!(workflow.contains("target/${{ matrix.target }}/release"));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
-    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
+    assert!(!workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
 }
 
 #[test]
@@ -634,7 +675,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(pr_build.contains("run: cargo build --release"));
     assert!(pr_build.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
-    assert!(workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
+    assert!(!workflow.contains("Copy-Item target/release/claude-codex-pro-manager.exe"));
     assert_release_workflow_uses_current_hosted_runners(&workflow);
     assert!(workflow.contains("x86_64-apple-darwin"));
     assert!(workflow.contains("aarch64-apple-darwin"));
@@ -752,7 +793,8 @@ fn pr_build_workflow_refreshes_manager_frontend_before_packaging() {
     assert!(workflow.contains("node-version: \"24\""));
     assert!(workflow.contains("runner: macos-latest"));
     assert!(workflow.matches("runner: macos-latest").count() >= 2);
-    assert!(workflow.contains("dist/macos/stage/Claude Codex Pro Manager.app"));
+    assert!(workflow.contains("dist/macos/stage/Claude Codex Pro.app"));
+    assert!(!workflow.contains("dist/macos/stage/Claude Codex Pro Manager.app"));
     assert!(!workflow.contains("Claude Codex Pro 绠＄悊宸ュ叿.app"));
     assert!(!workflow.contains("Claude Codex Pro 管理工具.app"));
     for deprecated in [
@@ -2686,7 +2728,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
             .unwrap()
             .parent()
             .unwrap()
-            .join("claude-codex-pro-launcher/src/main.rs"),
+            .join("claude-codex-pro-launcher/src/lib.rs"),
     );
 
     assert!(app_tsx.contains("ops-shell"));
@@ -2994,7 +3036,8 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(tauri_conf.contains("\"height\": 820"));
     assert!(tauri_conf.contains("\"minWidth\": 960"));
     assert!(tauri_conf.contains("\"minHeight\": 640"));
-    assert!(tauri_conf.contains("cargo build --manifest-path ../../Cargo.toml -p claude-codex-pro-launcher --bin claude-codex-pro && npm run vite:dev"));
+    assert!(tauri_conf.contains("\"beforeDevCommand\": \"npm run vite:dev\""));
+    assert!(!tauri_conf.contains("cargo build -p claude-codex-pro-launcher"));
 }
 
 #[test]
@@ -3177,7 +3220,7 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
     let silent_launcher = commands_rs
         .split("fn spawn_silent_launcher")
         .nth(1)
-        .and_then(|rest| rest.split("fn is_executable_file").next())
+        .and_then(|rest| rest.split("pub fn resolve_silent_launcher_path").next())
         .expect("spawn_silent_launcher source");
     assert!(silent_launcher.contains("codex_provider_auth_environment_from_home(&home)"));
     assert!(silent_launcher.contains("command.env(env_key, api_key)"));
@@ -3404,10 +3447,10 @@ fn silent_launcher_logs_fatal_startup_errors() {
         .and_then(std::path::Path::parent)
         .and_then(std::path::Path::parent)
         .unwrap()
-        .join("apps/claude-codex-pro-launcher/src/main.rs");
+        .join("apps/claude-codex-pro-launcher/src/lib.rs");
     let launcher_main = std::fs::read_to_string(&launcher_main).expect("read launcher main.rs");
 
-    assert!(launcher_main.contains("async fn run_launcher()"));
+    assert!(launcher_main.contains("async fn run_launcher(args: &[String])"));
     assert!(launcher_main.contains("\"launcher.fatal\""));
     assert!(launcher_main.contains("\"error\": error.to_string()"));
 }
@@ -5125,7 +5168,7 @@ fn manual_restart_skips_the_duplicate_provider_sync() {
             .unwrap()
             .parent()
             .unwrap()
-            .join("claude-codex-pro-launcher/src/main.rs"),
+            .join("claude-codex-pro-launcher/src/lib.rs"),
     );
 
     assert!(app.contains("const restartCodex = async (skipProviderSync = true)"));

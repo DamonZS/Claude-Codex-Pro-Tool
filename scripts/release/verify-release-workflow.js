@@ -49,20 +49,21 @@ for (const forbidden of ["settings.json", "relayProfiles", "memory_assist.sqlite
 }
 
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro.exe"', "Windows installer app source");
-mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer manager source");
+mustNotContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer legacy manager source");
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-mcp.exe"', "Windows installer MCP source");
 mustContain(windowsInstaller, 'Delete "$INSTDIR\\claude-codex-pro-mcp.exe"', "Windows installer MCP uninstall");
 mustContain(macosPackager, "create_app \"Claude Codex Pro\"", "macOS app bundle");
-mustContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS manager bundle");
-mustContain(macosPackager, 'local binary_path="$BINARY_DIR/claude-codex-pro-mcp"', "macOS MCP source");
-mustContain(macosPackager, 'Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp', "macOS Manager MCP destination");
-mustContain(macosPackager, 'codesign --force --sign - "$app_dir/Contents/MacOS/claude-codex-pro-mcp"', "macOS MCP signing");
-mustContain(macosPackager, 'codesign --verify --strict "$app_dir/Contents/MacOS/claude-codex-pro-mcp"', "macOS MCP signature verification");
+mustNotContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS legacy manager bundle");
+mustContain(macosPackager, 'install_app_runtime "claude-codex-pro-mcp"', "macOS MCP source");
+mustContain(macosPackager, 'local destination="$STAGE/Claude Codex Pro.app/Contents/MacOS/$runtime_name"', "macOS MCP destination");
+mustContain(macosPackager, "for runtime in claude-codex-pro claude-codex-pro-mcp", "macOS runtime signing and verification");
 
 for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   mustContain(source, "Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/", `${label} Windows MCP staging`);
-  mustContain(source, 'test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"', `${label} macOS MCP verification`);
-  mustContain(source, 'codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-mcp"', `${label} macOS MCP signature verification`);
+  mustContain(source, 'app="dist/macos/stage/Claude Codex Pro.app"', `${label} macOS app verification`);
+  mustContain(source, "for runtime in claude-codex-pro claude-codex-pro-mcp", `${label} macOS runtime verification`);
+  mustNotContain(source, "target/release/claude-codex-pro-manager", `${label} legacy manager staging`);
+  mustNotContain(source, "Claude Codex Pro Manager.app", `${label} legacy manager app`);
   mustContain(source, "windows-x64-setup.exe", label);
   mustContain(source, "windows-x64.zip", label);
   mustContain(source, "latest.json", label);

@@ -5,31 +5,25 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use super::{
-    InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
-    install_root_or_default, option_or_current_exe,
+    InstallOptions, LEGACY_MANAGER_NAME, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle,
+    SILENT_BINARY, SILENT_NAME, install_root_or_default, option_or_current_exe,
 };
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
     let install_root = install_root_or_default(options);
     let display_name = if manager { MANAGER_NAME } else { SILENT_NAME };
-    let executable_name = if manager {
-        "ClaudeCodexProManager"
-    } else {
-        "ClaudeCodexPro"
-    };
+    let executable_name = SILENT_BINARY;
     let binary = if manager {
         MANAGER_BINARY
     } else {
         SILENT_BINARY
     };
-    let target = option_or_current_exe(
-        if manager {
-            &options.manager_path
-        } else {
-            &options.launcher_path
-        },
-        binary,
-    );
+    let unified_path = options
+        .manager_path
+        .as_ref()
+        .or(options.launcher_path.as_ref())
+        .cloned();
+    let target = option_or_current_exe(&unified_path, binary);
     let (target, binary_source, binary_target_name) =
         if is_bundle_executable_target(&target, executable_name) {
             let sidecar = target
@@ -40,10 +34,9 @@ pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBund
         } else {
             (target, None, None)
         };
-    let identifier_suffix = if manager { ".manager" } else { "" };
     MacosAppBundle {
         app_path: install_root.join(format!("{display_name}.app")),
-        info_plist: info_plist(display_name, executable_name, identifier_suffix),
+        info_plist: info_plist(display_name, executable_name, ""),
         launch_script: format!("#!/bin/sh\nexec \"{}\"\n", target.to_string_lossy()),
         binary_source,
         binary_target_name,
@@ -67,7 +60,6 @@ fn is_bundle_executable_target(target: &Path, executable_name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn install_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
-    write_bundle(&build_app_bundle(options, false))?;
     write_bundle(&build_app_bundle(options, true))?;
     Ok(())
 }
@@ -75,7 +67,7 @@ pub fn install_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
 #[cfg(target_os = "macos")]
 pub fn uninstall_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
     let install_root = install_root_or_default(options);
-    for name in [SILENT_NAME, MANAGER_NAME] {
+    for name in [SILENT_NAME, LEGACY_MANAGER_NAME] {
         let app = install_root.join(format!("{name}.app"));
         if app.exists() {
             fs::remove_dir_all(app)?;
@@ -114,10 +106,16 @@ fn write_bundle(bundle: &MacosAppBundle) -> anyhow::Result<()> {
         }
     }
     let executable = macos.join(executable_name_from_plist(&bundle.info_plist));
-    fs::write(&executable, &bundle.launch_script)?;
-    let mut permissions = fs::metadata(&executable)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(executable, permissions)?;
+    let executable_is_copied_binary = bundle
+        .binary_target_name
+        .as_deref()
+        .is_some_and(|name| executable.file_name().and_then(|value| value.to_str()) == Some(name));
+    if !executable_is_copied_binary || !executable.exists() {
+        fs::write(&executable, &bundle.launch_script)?;
+        let mut permissions = fs::metadata(&executable)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(executable, permissions)?;
+    }
     copy_icon(&resources)?;
     Ok(())
 }
@@ -169,7 +167,7 @@ fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str
   <key>CFBundleIconFile</key>
   <string>claude-codex-pro.png</string>
   <key>LSUIElement</key>
-  <true/>
+  <false/>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
 </dict>

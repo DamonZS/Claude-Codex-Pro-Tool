@@ -10,7 +10,7 @@ name = "claude_codex_pro_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "claude-codex-pro-manager"
+name = "claude-codex-pro"
 path = "src/main.rs"
 test = false
 
@@ -19,6 +19,7 @@ anyhow.workspace = true
 async-trait = "0.1"
 claude-codex-pro-core = { path = "../../../crates/claude-codex-pro-core" }
 claude-codex-pro-data = { path = "../../../crates/claude-codex-pro-data" }
+claude-codex-pro-launcher = { path = "../../claude-codex-pro-launcher" }
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true

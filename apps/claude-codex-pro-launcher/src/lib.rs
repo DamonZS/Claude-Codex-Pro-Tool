@@ -1,5 +1,3 @@
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
 use anyhow::{Context, Result};
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
@@ -57,9 +55,13 @@ struct LauncherBridgeWatchdogRuntime {
     task: tokio::task::JoinHandle<()>,
 }
 
+pub fn should_handle_args(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| arg == "--launcher" || arg == "--register-installation")
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
+pub async fn run(args: Vec<String>) -> Result<()> {
     if let Some(app_version) = installation_registration_version(&args)? {
         return claude_codex_pro_core::install_registration::register_current_installation(
             &app_version,
@@ -67,7 +69,7 @@ async fn main() -> Result<()> {
         .await;
     }
 
-    if let Err(error) = run_launcher().await {
+    if let Err(error) = run_launcher(&args).await {
         let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
             "launcher.fatal",
             json!({
@@ -93,16 +95,15 @@ fn installation_registration_version(args: &[String]) -> Result<Option<String>> 
     Ok(Some(app_version.to_string()))
 }
 
-async fn run_launcher() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let options = parse_launch_options(&args);
+async fn run_launcher(args: &[String]) -> Result<()> {
+    let options = parse_launch_options(args);
     let Some(_guard) = acquire_single_instance_guard(options.debug_port)? else {
         activate_existing_codex_app(&options).await?;
         return Ok(());
     };
     let hooks = LauncherHooks::new(
         options.status_store.clone(),
-        skip_provider_sync_requested(&args),
+        skip_provider_sync_requested(args),
     );
     let handle = launch_and_inject_with_hooks(options, &hooks).await?;
     handle.wait_for_codex_exit().await?;
@@ -1096,14 +1097,7 @@ fn open_url(url: &str) -> anyhow::Result<()> {
 }
 
 fn manager_exe_path() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    let dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let suffix = if cfg!(windows) { ".exe" } else { "" };
-    dir.join(format!(
-        "{}{}",
-        claude_codex_pro_core::install::MANAGER_BINARY,
-        suffix
-    ))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn default_user_script_manager() -> UserScriptManager {
@@ -1164,7 +1158,7 @@ mod tests {
 
     #[test]
     fn launcher_uses_single_instance_guard_before_launching() {
-        let source = include_str!("main.rs");
+        let source = include_str!("lib.rs");
 
         assert!(source.contains("acquire_single_instance_guard(options.debug_port)?"));
         assert!(source.contains("LAUNCHER_GUARD_PORT"));
@@ -1181,7 +1175,7 @@ mod tests {
 
     #[test]
     fn launcher_hooks_forward_computer_use_guard_methods() {
-        let source = include_str!("main.rs");
+        let source = include_str!("lib.rs");
 
         assert!(source.contains("async fn ensure_computer_use_config"));
         assert!(source.contains("self.core.ensure_computer_use_config(settings).await"));
@@ -1191,14 +1185,9 @@ mod tests {
     }
 
     #[test]
-    fn manager_update_prompt_uses_sidecar_manager_binary_name() {
+    fn manager_update_prompt_uses_unified_current_executable() {
         let path = manager_exe_path();
-
-        assert!(
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(claude_codex_pro_core::install::MANAGER_BINARY))
-        );
+        assert_eq!(path, std::env::current_exe().unwrap());
     }
 }
 

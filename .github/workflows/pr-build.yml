@@ -59,7 +59,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-          Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
       - name: Build Windows installer
@@ -156,17 +155,14 @@ jobs:
       - name: Verify macOS bundle structure
         run: |
           set -euo pipefail
-          for app in "dist/macos/stage/Claude Codex Pro.app" "dist/macos/stage/Claude Codex Pro Manager.app"; do
-            test -f "$app/Contents/Info.plist"
-            test -f "$app/Contents/PkgInfo"
-            test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-            plutil -lint "$app/Contents/Info.plist" >/dev/null
-            codesign -dv "$app" >/dev/null 2>&1
-            echo "verified: $app"
-          done
-          for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp; do
-            test -x "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/$runtime"
-            codesign --verify --strict "dist/macos/stage/Claude Codex Pro Manager.app/Contents/MacOS/$runtime"
+          app="dist/macos/stage/Claude Codex Pro.app"
+          test -f "$app/Contents/Info.plist"
+          test -f "$app/Contents/PkgInfo"
+          plutil -lint "$app/Contents/Info.plist" >/dev/null
+          codesign -dv "$app" >/dev/null 2>&1
+          for runtime in claude-codex-pro claude-codex-pro-mcp; do
+            test -x "$app/Contents/MacOS/$runtime"
+            codesign --verify --strict "$app/Contents/MacOS/$runtime"
           done
 
       - name: Upload macOS DMG

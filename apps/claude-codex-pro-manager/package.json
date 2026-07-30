@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "cargo build -p claude-codex-pro-launcher --release && tauri build",
+    "build": "tauri build",
     "check": "tsc --noEmit -p tsconfig.json",
     "vite:dev": "vite --host 127.0.0.1 --port 1420",
     "vite:build": "vite build"

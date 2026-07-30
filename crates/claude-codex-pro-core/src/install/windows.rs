@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use super::LEGACY_MANAGER_NAME;
 use super::{
-    InstallOptions, MANAGER_BINARY, MANAGER_NAME, SILENT_BINARY, SILENT_NAME,
-    install_root_or_default, option_or_current_exe,
+    InstallOptions, MANAGER_BINARY, MANAGER_NAME, SILENT_NAME, install_root_or_default,
+    option_or_current_exe,
 };
 
 const INSTALL_SUBKEY: &str = r"Software\Claude Codex Pro";
@@ -25,8 +27,14 @@ pub struct WindowsEntrypointPlan {
 
 pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypointPlan {
     let install_root = install_root_or_default(options);
-    let launcher_path = option_or_current_exe(&options.launcher_path, SILENT_BINARY);
-    let manager_path = option_or_current_exe(&options.manager_path, MANAGER_BINARY);
+    let unified_path = options
+        .manager_path
+        .as_ref()
+        .or(options.launcher_path.as_ref())
+        .cloned()
+        .unwrap_or_else(|| option_or_current_exe(&None, MANAGER_BINARY));
+    let launcher_path = unified_path.clone();
+    let manager_path = unified_path;
     let icon_path = default_icon_path();
     WindowsEntrypointPlan {
         silent_shortcut: install_root
@@ -54,12 +62,6 @@ pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let install_root = PathBuf::from(&plan.install_root);
     std::fs::create_dir_all(&install_root)?;
     create_entrypoint_shortcut(
-        PathBuf::from(&plan.silent_shortcut),
-        PathBuf::from(&plan.launcher_path),
-        "Launch Claude Codex Pro silently",
-        PathBuf::from(&plan.silent_icon_path),
-    )?;
-    create_entrypoint_shortcut(
         PathBuf::from(&plan.manager_shortcut),
         PathBuf::from(&plan.manager_path),
         "Open Claude Codex Pro management tool",
@@ -74,6 +76,9 @@ pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
     let plan = build_windows_entrypoint_plan(options);
     let _ = std::fs::remove_file(&plan.silent_shortcut);
     let _ = std::fs::remove_file(&plan.manager_shortcut);
+    let _ = std::fs::remove_file(
+        PathBuf::from(&plan.install_root).join(format!("{LEGACY_MANAGER_NAME}.lnk")),
+    );
     let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
     let _ = crate::windows_integration::delete_current_user_key(INSTALL_SUBKEY);
     Ok(())

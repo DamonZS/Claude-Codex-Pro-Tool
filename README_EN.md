@@ -63,7 +63,7 @@ Download the latest release from [GitHub Releases](https://github.com/DamonZS/Cl
 
 The installer provides two entry points:
 
-- `Claude Codex Pro`: a silent launcher that starts Codex and loads the enhancement layer.
+- `Claude Codex Pro`: the unified desktop program; it opens the manager by default and uses `--launcher` for the independent background process that starts Codex and loads enhancements.
 - `Claude Codex Pro Manager`: the operations console for Codex, Claude, providers, plugins, scripts, memory, logs, installation maintenance, and updates.
 
 The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG contains `Claude Codex Pro.app` and `Claude Codex Pro 管理工具.app`.
@@ -519,14 +519,14 @@ Primary outputs:
 
 ```text
 target/release/claude-codex-pro.exe
-target/release/claude-codex-pro-manager.exe
+target/release/claude-codex-pro-mcp.exe
 ```
 
 On macOS or Linux, the files do not have an `.exe` suffix:
 
 ```text
 target/release/claude-codex-pro
-target/release/claude-codex-pro-manager
+target/release/claude-codex-pro-mcp
 ```
 
 You can also build from the manager directory:
@@ -536,7 +536,7 @@ cd apps/claude-codex-pro-manager
 npm run build
 ```
 
-This script builds the silent launcher first and then runs `tauri build`. Official installers still use the repository's NSIS and DMG packaging scripts.
+This script builds the unified desktop program. Official installers still use the repository's NSIS and DMG packaging scripts.
 
 ### Windows Installer
 
@@ -549,7 +549,7 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -630,8 +630,8 @@ latest.json
 
 ```text
 apps/
-  claude-codex-pro-launcher/          Silent launcher
-  claude-codex-pro-manager/           Tauri manager
+  claude-codex-pro-launcher/          Internal launcher library
+  claude-codex-pro-manager/           Unified Tauri binary and manager
 assets/inject/
   renderer-inject.js                  Codex enhancement script
   claude-chinese-inject.js            Claude Chinese wrapper script

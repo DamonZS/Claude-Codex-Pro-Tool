@@ -36,8 +36,8 @@ Section "Install"
   Pop $0
 
   File "${ROOT}\dist\windows\app\claude-codex-pro.exe"
-  File "${ROOT}\dist\windows\app\claude-codex-pro-manager.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-mcp.exe"
+  Delete "$INSTDIR\claude-codex-pro-manager.exe"
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
@@ -47,18 +47,16 @@ Section "Install"
   RMDir "$SMPROGRAMS\Claude Codex Pro"
 
   CreateShortcut "$DESKTOP\Claude Codex Pro.lnk" "$INSTDIR\claude-codex-pro.exe" "" "$INSTDIR\claude-codex-pro.exe"
-  CreateShortcut "$DESKTOP\Claude Codex Pro Manager.lnk" "$INSTDIR\claude-codex-pro-manager.exe" "" "$INSTDIR\claude-codex-pro-manager.exe"
   CreateDirectory "$SMPROGRAMS\Claude Codex Pro"
   CreateShortcut "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro.lnk" "$INSTDIR\claude-codex-pro.exe" "" "$INSTDIR\claude-codex-pro.exe"
-  CreateShortcut "$SMPROGRAMS\Claude Codex Pro\Claude Codex Pro Manager.lnk" "$INSTDIR\claude-codex-pro-manager.exe" "" "$INSTDIR\claude-codex-pro-manager.exe"
-  CreateShortcut "$SMPROGRAMS\Claude Codex Pro\Uninstall Claude Codex Pro.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\claude-codex-pro-manager.exe"
+  CreateShortcut "$SMPROGRAMS\Claude Codex Pro\Uninstall Claude Codex Pro.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\claude-codex-pro.exe"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Claude Codex Pro" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayName" "Claude Codex Pro"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "Publisher" "DamonZS"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayIcon" "$INSTDIR\claude-codex-pro-manager.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "DisplayIcon" "$INSTDIR\claude-codex-pro.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro" "UninstallString" "$INSTDIR\uninstall.exe"
 

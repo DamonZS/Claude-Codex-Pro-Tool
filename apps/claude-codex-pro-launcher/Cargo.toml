@@ -5,10 +5,9 @@ edition.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "claude-codex-pro"
-path = "src/main.rs"
-test = false
+[lib]
+name = "claude_codex_pro_launcher"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
@@ -18,6 +17,3 @@ claude-codex-pro-data = { path = "../../crates/claude-codex-pro-data" }
 directories.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-
-[build-dependencies]
-winresource.workspace = true

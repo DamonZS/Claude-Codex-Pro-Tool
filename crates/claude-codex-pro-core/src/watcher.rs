@@ -67,6 +67,7 @@ pub fn cdp_listening(port: u16) -> bool {
 pub fn build_spawn_launcher_command(launcher_path: &str, debug_port: u16) -> Vec<String> {
     vec![
         launcher_path.to_string(),
+        "--launcher".to_string(),
         "--debug-port".to_string(),
         debug_port.to_string(),
     ]
@@ -74,7 +75,7 @@ pub fn build_spawn_launcher_command(launcher_path: &str, debug_port: u16) -> Vec
 
 pub fn build_watcher_install_plan(launcher_path: PathBuf, debug_port: u16) -> WatcherInstallPlan {
     let launcher = launcher_path.to_string_lossy().to_string();
-    let arguments = format!("--debug-port {debug_port}");
+    let arguments = format!("--launcher --debug-port {debug_port}");
     WatcherInstallPlan {
         run_value_name: WATCHER_RUN_NAME.to_string(),
         run_value: format!("\"{launcher}\" {arguments}"),

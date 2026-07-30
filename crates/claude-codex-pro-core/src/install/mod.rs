@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 pub mod macos;
 pub mod windows;
 
-pub const SILENT_NAME: &str = "Claude Code Pro";
-pub const MANAGER_NAME: &str = "Claude Code Pro 管理工具";
+pub const SILENT_NAME: &str = "Claude Codex Pro";
+pub const MANAGER_NAME: &str = SILENT_NAME;
 pub const SILENT_BINARY: &str = "claude-codex-pro";
-pub const MANAGER_BINARY: &str = "claude-codex-pro-manager";
+pub const MANAGER_BINARY: &str = SILENT_BINARY;
+pub const LEGACY_MANAGER_BINARY: &str = "claude-codex-pro-manager";
+pub const LEGACY_MANAGER_NAME: &str = "Claude Code Pro 管理工具";
 /// The Pangu memory MCP server binary (phase 4 / ADR 0002). Resolved as a
 /// sibling of the manager exe via `companion_binary_path` so client MCP configs
 /// can point at an absolute path.
@@ -76,11 +78,11 @@ impl ShortcutState {
 }
 
 pub fn shortcut_names() -> (&'static str, &'static str) {
-    ("Claude Code Pro.lnk", "Claude Code Pro 管理工具.lnk")
+    ("Claude Codex Pro.lnk", "Claude Codex Pro.lnk")
 }
 
 pub fn app_bundle_names() -> (&'static str, &'static str) {
-    ("Claude Code Pro.app", "Claude Code Pro 管理工具.app")
+    ("Claude Codex Pro.app", "Claude Codex Pro.app")
 }
 
 pub fn inspect_entrypoints() -> EntryPointState {

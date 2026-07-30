@@ -63,7 +63,7 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 
 安装后有两个入口：
 
-- `Claude Codex Pro`：静默启动器，用来启动 Codex 并加载增强能力。
+- `Claude Codex Pro`：统一桌面程序；默认打开管理工具，内部以 `--launcher` 启动独立后台进程并加载 Codex 增强能力。
 - `Claude Codex Pro 管理工具`：运维控制台，用来管理 Codex、Claude、供应商、插件、脚本、记忆、日志、安装维护和更新。
 
 Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
@@ -515,14 +515,14 @@ cargo build --release
 
 ```text
 target/release/claude-codex-pro.exe
-target/release/claude-codex-pro-manager.exe
+target/release/claude-codex-pro-mcp.exe
 ```
 
 macOS 或 Linux 上没有 `.exe` 后缀：
 
 ```text
 target/release/claude-codex-pro
-target/release/claude-codex-pro-manager
+target/release/claude-codex-pro-mcp
 ```
 
 也可以在管理工具目录运行：
@@ -532,7 +532,7 @@ cd apps/claude-codex-pro-manager
 npm run build
 ```
 
-该脚本会先构建静默启动器，再执行 `tauri build`。当前正式安装包仍以仓库里的 NSIS / DMG 脚本为准。
+该脚本构建统一桌面程序。正式安装包仍以仓库里的 NSIS / DMG 脚本为准。
 
 ### Windows 安装包
 
@@ -545,7 +545,7 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-Copy-Item target/release/claude-codex-pro-manager.exe dist/windows/app/
+Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -626,8 +626,8 @@ latest.json
 
 ```text
 apps/
-  claude-codex-pro-launcher/          静默启动器
-  claude-codex-pro-manager/           Tauri 管理工具
+  claude-codex-pro-launcher/          内部 launcher 库
+  claude-codex-pro-manager/           统一 Tauri 主程序与管理工具
 assets/inject/
   renderer-inject.js                  Codex 增强脚本
   claude-chinese-inject.js            Claude 中文包装窗口脚本

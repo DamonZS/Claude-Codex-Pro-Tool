@@ -2228,7 +2228,6 @@ fn installed_memory_assist_data_dir_from_exe(exe: &Path) -> Option<PathBuf> {
     let extension = if cfg!(windows) { ".exe" } else { "" };
     let expected = [
         format!("claude-codex-pro{extension}"),
-        format!("claude-codex-pro-manager{extension}"),
         format!("claude-codex-pro-mcp{extension}"),
     ];
     if !expected.iter().all(|name| install_dir.join(name).is_file()) {
@@ -6559,7 +6558,7 @@ mod tests {
 
     #[test]
     fn actionable_feedback_is_extracted_as_lesson_memory() {
-        let text = "你没有构建新版吗？以后前端 UI 改动后必须重新构建 target\\debug\\claude-codex-pro-manager.exe 并验证，否则管理工具应用里不会变化。";
+        let text = "你没有构建新版吗？以后前端 UI 改动后必须重新构建 target\\debug\\claude-codex-pro.exe 并验证，否则管理工具应用里不会变化。";
 
         let memory = extract_learnable_memory(text).expect("actionable lesson should be learned");
 
@@ -7495,19 +7494,15 @@ mod tests {
     }
 
     #[test]
-    fn installed_data_dir_requires_all_companion_binaries_and_rejects_target_output() {
+    fn installed_data_dir_requires_unified_binary_and_mcp_and_rejects_target_output() {
         let temp = tempfile::tempdir().unwrap();
         let install_dir = temp.path().join("Claude Codex Pro");
         fs::create_dir_all(&install_dir).unwrap();
         let extension = if cfg!(windows) { ".exe" } else { "" };
-        for binary in [
-            "claude-codex-pro",
-            "claude-codex-pro-manager",
-            "claude-codex-pro-mcp",
-        ] {
+        for binary in ["claude-codex-pro", "claude-codex-pro-mcp"] {
             fs::write(install_dir.join(format!("{binary}{extension}")), []).unwrap();
         }
-        let exe = install_dir.join(format!("claude-codex-pro-manager{extension}"));
+        let exe = install_dir.join(format!("claude-codex-pro{extension}"));
         assert_eq!(
             installed_memory_assist_data_dir_from_exe(&exe),
             Some(install_dir.join("data").join("memory-assist"))
@@ -7515,16 +7510,12 @@ mod tests {
 
         let dev_dir = temp.path().join("target").join("release");
         fs::create_dir_all(&dev_dir).unwrap();
-        for binary in [
-            "claude-codex-pro",
-            "claude-codex-pro-manager",
-            "claude-codex-pro-mcp",
-        ] {
+        for binary in ["claude-codex-pro", "claude-codex-pro-mcp"] {
             fs::write(dev_dir.join(format!("{binary}{extension}")), []).unwrap();
         }
         assert_eq!(
             installed_memory_assist_data_dir_from_exe(
-                &dev_dir.join(format!("claude-codex-pro-manager{extension}"))
+                &dev_dir.join(format!("claude-codex-pro{extension}"))
             ),
             None
         );

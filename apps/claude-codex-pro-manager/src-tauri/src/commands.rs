@@ -19,7 +19,7 @@ use claude_codex_pro_core::codex_theme::{
     CodexThemeStore, CodexThemeSummary,
 };
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
-use claude_codex_pro_core::install::{MCP_BINARY, SILENT_BINARY};
+use claude_codex_pro_core::install::MCP_BINARY;
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistMigrationRequest, MemoryAssistMigrationResult, MemoryAssistStatus,
     MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryCaptureProgressStatus,
@@ -3113,8 +3113,9 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
 }
 
 fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
-    let launcher = resolve_silent_launcher_path()?;
+    let launcher = std::env::current_exe().context("无法定位 Claude Codex Pro 运行文件")?;
     let mut command = std::process::Command::new(&launcher);
+    command.arg("--launcher");
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     if let Some((env_key, api_key)) =
         claude_codex_pro_core::relay_config::codex_provider_auth_environment_from_home(&home)
@@ -3150,106 +3151,8 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 pub fn resolve_silent_launcher_path() -> anyhow::Result<PathBuf> {
-    let current_exe = std::env::current_exe().context("无法定位 CCP Manager 运行文件")?;
-    resolve_silent_launcher_path_from_exe(&current_exe)
-}
-
-fn resolve_silent_launcher_path_from_exe(current_exe: &Path) -> anyhow::Result<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        if claude_codex_pro_core::install::is_macos_app_translocation_path(current_exe) {
-            bail!("CCP 正从临时隔离位置运行，请将 App 移到“应用程序”后重新打开")
-        }
-
-        if let Some(companion) =
-            claude_codex_pro_core::install::macos_bundle_companion_path_from_exe(
-                current_exe,
-                SILENT_BINARY,
-            )
-        {
-            if is_executable_file(&companion) {
-                return Ok(companion);
-            }
-            bail!("CCP Manager 安装不完整，缺少 Codex 启动器，请重新安装")
-        }
-
-        let companion = claude_codex_pro_core::install::companion_binary_path_from_exe(
-            current_exe,
-            SILENT_BINARY,
-        );
-        if is_executable_file(&companion) {
-            return Ok(companion);
-        }
-        bail!("当前 CCP Manager 不是标准 macOS App，且同目录缺少可执行的 Codex 启动器")
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let companion = claude_codex_pro_core::install::companion_binary_path_from_exe(
-            current_exe,
-            SILENT_BINARY,
-        );
-        if is_executable_file(&companion) {
-            return Ok(companion);
-        }
-
-        let exe_dir = current_exe.parent().unwrap_or_else(|| Path::new("."));
-        let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
-        let launcher_name = format!("{SILENT_BINARY}{exe_suffix}");
-        let mut candidates = vec![
-            exe_dir.join(&launcher_name),
-            PathBuf::from("target").join("debug").join(&launcher_name),
-            PathBuf::from("target").join("release").join(&launcher_name),
-        ];
-        if let Some(profile_dir) = exe_dir.parent() {
-            candidates.push(profile_dir.join("debug").join(&launcher_name));
-            candidates.push(profile_dir.join("release").join(&launcher_name));
-            if let Some(target_dir) = profile_dir.parent() {
-                candidates.push(target_dir.join("debug").join(&launcher_name));
-                candidates.push(target_dir.join("release").join(&launcher_name));
-            }
-        }
-
-        candidates.sort();
-        candidates.dedup();
-
-        if let Some(path) = candidates
-            .iter()
-            .find(|path| is_executable_file(path))
-            .cloned()
-        {
-            return Ok(path);
-        }
-
-        // 已安装场景下 NSIS 会把 claude-codex-pro.exe 与管理器放在同一 $INSTDIR；
-        // dev 场景下 beforeDevCommand 会先 `cargo build -p claude-codex-pro-launcher`
-        // 把它产到 target/debug。两种入口都缺失时，多半是直接跑了 manager.exe 却
-        // 没先编译 launcher。给出可执行的恢复指引，而不是只抛一串搜索路径。
-        bail!(
-            "未找到静默启动器 {launcher_name}。开发环境请先运行 \
-         `cargo build -p claude-codex-pro-launcher --bin claude-codex-pro`（或直接 `npm run dev`），\
-         已安装环境请重新运行安装包修复。"
-        )
-    }
+    std::env::current_exe().context("无法定位 Claude Codex Pro 运行文件")
 }
 
 #[tauri::command]
@@ -10785,7 +10688,7 @@ mod tests {
     #[test]
     fn startup_options_honors_show_update_argument() {
         assert!(should_show_update(
-            ["claude-codex-pro-manager.exe", "--show-update"],
+            ["claude-codex-pro.exe", "--show-update"],
             None
         ));
     }
@@ -12179,23 +12082,11 @@ model_reasoning_effort = "high"
         assert!(result.message.contains("只能打开 http 或 https"));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn macos_standalone_manager_resolves_adjacent_silent_launcher() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = tempfile::tempdir().unwrap();
-        let manager = root.path().join("claude-codex-pro-manager");
-        let launcher = root.path().join("claude-codex-pro");
-        std::fs::write(&manager, b"manager").unwrap();
-        std::fs::write(&launcher, b"launcher").unwrap();
-        let mut permissions = std::fs::metadata(&launcher).unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&launcher, permissions).unwrap();
-
+    fn silent_launcher_resolves_to_unified_current_executable() {
         assert_eq!(
-            resolve_silent_launcher_path_from_exe(&manager).unwrap(),
-            launcher
+            resolve_silent_launcher_path().unwrap(),
+            std::env::current_exe().unwrap()
         );
     }
 }

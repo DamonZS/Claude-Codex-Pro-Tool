@@ -66,7 +66,7 @@ const now = () => Date.now();
 
 function previewSettings() {
   return {
-    codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro-manager.exe",
+    codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe",
     codexExtraArgs: [],
     providerSyncEnabled: true,
     providerSyncSavedProviders: [],
@@ -625,7 +625,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_claude_desktop") return ok("预览模式已模拟启动官方 Claude。", { preview: true });
   if (command === "load_overview") {
     return ok("预览模式已加载概览。", {
-      codex_app: { status: "found", path: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro-manager.exe" },
+      codex_app: { status: "found", path: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe" },
       codex_version: "preview",
       silent_shortcut: { status: "not_checked", path: null },
       management_shortcut: { status: "installed", path: "Desktop\\Claude Code Pro.lnk" },

@@ -1,6 +1,6 @@
 #[test]
 fn launcher_does_not_open_manager_for_update_prompts() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
 
     assert!(!source.contains("notify_manager_when_update_available"));
     assert!(!source.contains("open_manager_with_update_prompt"));
@@ -10,7 +10,7 @@ fn launcher_does_not_open_manager_for_update_prompts() {
 
 #[test]
 fn launcher_runtime_uses_default_launch_debug_port() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
 
     assert!(source.contains("LaunchOptions::default().debug_port"));
     assert!(!source.contains("LauncherRuntimeService::new(\r\n                9229"));
@@ -19,7 +19,7 @@ fn launcher_runtime_uses_default_launch_debug_port() {
 
 #[test]
 fn launcher_watchdog_reinjects_with_full_context_and_updates_status() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
     let watchdog = source
         .split("async fn start_bridge_watchdog")
         .nth(1)
@@ -38,7 +38,7 @@ fn launcher_watchdog_reinjects_with_full_context_and_updates_status() {
 
 #[test]
 fn launcher_registers_theme_as_an_isolated_new_document_script() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
     let injection = source
         .split("async fn try_inject_with_context")
         .nth(1)
@@ -60,7 +60,7 @@ fn launcher_registers_theme_as_an_isolated_new_document_script() {
 
 #[test]
 fn launcher_theme_loading_failure_is_non_blocking_and_redacted() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
     let helpers = source
         .split("fn log_codex_theme_injection_skipped")
         .nth(1)
@@ -79,7 +79,7 @@ fn launcher_theme_loading_failure_is_non_blocking_and_redacted() {
 
 #[test]
 fn active_non_default_theme_enables_injection_for_new_and_existing_codex_instances() {
-    let source = include_str!("../src/main.rs");
+    let source = include_str!("../src/lib.rs");
 
     assert!(source.contains("fn active_codex_theme_requires_injection() -> bool"));
     assert!(source.contains("let enabled = !payload.is_default;"));

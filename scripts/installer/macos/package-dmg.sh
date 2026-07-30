@@ -89,10 +89,10 @@ create_app() {
 PLIST
 }
 
-install_manager_runtime() {
+install_app_runtime() {
   local runtime_name="$1"
   local binary_path="$BINARY_DIR/$runtime_name"
-  local destination="$STAGE/Claude Codex Pro Manager.app/Contents/MacOS/$runtime_name"
+  local destination="$STAGE/Claude Codex Pro.app/Contents/MacOS/$runtime_name"
 
   if [ ! -x "$binary_path" ]; then
     echo "error: runtime binary not found or not executable: $binary_path" >&2
@@ -144,29 +144,25 @@ verify_app() {
   done
 }
 
-verify_manager_runtime_before_signing() {
-  local macos_dir="$STAGE/Claude Codex Pro Manager.app/Contents/MacOS"
-  for runtime in ClaudeCodexProManager claude-codex-pro claude-codex-pro-mcp; do
+verify_app_runtime_before_signing() {
+  local macos_dir="$STAGE/Claude Codex Pro.app/Contents/MacOS"
+  for runtime in claude-codex-pro claude-codex-pro-mcp; do
     if [ ! -x "$macos_dir/$runtime" ]; then
-      echo "error: Manager bundle runtime missing or not executable: $runtime" >&2
+      echo "error: app bundle runtime missing or not executable: $runtime" >&2
       return 1
     fi
   done
 }
 
 prepare_icon
-create_app "Claude Codex Pro" "ClaudeCodexPro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "true"
-create_app "Claude Codex Pro Manager" "ClaudeCodexProManager" "$BINARY_DIR/claude-codex-pro-manager" "com.damonzs.claudecodexpro.manager" "false"
-install_manager_runtime "claude-codex-pro"
-install_manager_runtime "claude-codex-pro-mcp"
+create_app "Claude Codex Pro" "claude-codex-pro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "false"
+install_app_runtime "claude-codex-pro-mcp"
 ln -s /Applications "$STAGE/Applications"
 
-verify_manager_runtime_before_signing
+verify_app_runtime_before_signing
 sign_app "$STAGE/Claude Codex Pro.app"
-sign_app "$STAGE/Claude Codex Pro Manager.app"
 
 verify_app "$STAGE/Claude Codex Pro.app"
-verify_app "$STAGE/Claude Codex Pro Manager.app"
 
 hdiutil create -volname "Claude Codex Pro" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 echo "$DMG"
