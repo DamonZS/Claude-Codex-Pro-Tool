@@ -20,7 +20,7 @@ Claude / Claude Desktop 的 Anthropic Messages 配置还存在鉴权字段语义
 - Claude / Claude Desktop 必须严格使用各自已保存的活动供应商 ID，不能在 ID 失效时静默回退到同目标的第一个历史 Profile。
 - Codex 协议转换必须原样透传请求模型；使用 `gpt-5.6-sol` 时不得改写为 `gpt-5.4`，也不得为一次代理请求额外发送另一模型的推理请求。
 - Anthropic Messages 模型发现和 Claude Desktop 消息代理必须保留 Key 字段的鉴权语义：`ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` 使用 Bearer，`ANTHROPIC_API_KEY` 使用原生 `x-api-key`；不通过重试重复发送推理请求。
-- Anthropic Messages 的“测试连接”只验证当前编辑 Profile 的 Base URL 网络可达性，不触发模型发现或推理请求。
+- Anthropic Messages 的“测试连接”验证当前编辑 Profile 的标准模型目录与凭据，不触发推理请求。
 - Claude Desktop 的真实 `/v1/messages` 代理在 `modelMappingEnabled=true` 且 `routeId` 精确命中时发送对应 `requestModel`；映射关闭或未命中时保留入站 `model`；每个入站请求最多产生一次 Messages POST。
 - Claude Code / Claude Desktop 请求携带的 `?beta=true`、`anthropic-version` 与 `anthropic-beta` 必须按白名单透传到 Messages 上游，避免 Beta 客户端与非 Beta 响应流不匹配。
 - Claude Messages 流必须增量校验 `content_block_start`、`content_block_delta`、`content_block_stop` 生命周期；网络拆包不能导致事件丢失，HTTP 200 不能直接等同于协议流成功。
@@ -35,7 +35,7 @@ Claude / Claude Desktop 的 Anthropic Messages 配置还存在鉴权字段语义
 - 除修复本工具造成的已知文本/JSON 分裂状态外，不自动修改或替换用户模型映射；真实对话只应用用户已保存且精确命中的 `requestModel`。
 - 不把本地默认模型、历史模型列表或映射值作为“获取模型”的远端发现结果。
 - 不读取任意第三方价格目录作为模型发现结果。
-- 不把模型目录请求、配置保存或页面加载当作推理请求；用户主动执行的连接测试只验证 Base URL 网络可达性，不验证模型、Key 或真实推理。
+- 不把模型目录请求、配置保存或页面加载当作推理请求；用户主动执行的连接测试验证模型目录与 Key，但不验证真实推理。
 - 不持久化或输出 Claude Messages 请求正文、响应正文、工具输入和完整 SSE 数据。
 
 ## 功能要求
@@ -57,8 +57,8 @@ Claude / Claude Desktop 的 Anthropic Messages 配置还存在鉴权字段语义
 - 标准模型目录候选回退不得改变当前 Key、鉴权字段或请求方法；401、403、429、5xx、网络错误和 200 空目录不能通过其他候选掩盖。
 - 模型发现状态记录脱敏的候选端点、HTTP 状态、解析数量和最终命中端点；不得记录 API Key、Authorization 值、URL 查询参数或响应正文。
 - 标准接口没有返回合格模型时，不回退到价格目录、`modelList`、`modelMapping`、`modelMappingJson` 或本地默认模型。真实对话不使用任何模型目录回退。
-- Anthropic Messages 的“测试连接”与“获取模型”严格分离：测试连接仅向当前 Profile 的规范化 Base URL 发送一次 GET，并携带 `Accept: */*`、`Accept-Encoding: identity`；不得请求 `/v1/models`、`/v1/messages`，不得发送 Key、模型或请求正文。
-- Anthropic Messages 测试连接收到任意 HTTP 响应即表示网络可达，并保留实际 HTTP 状态用于诊断；DNS、连接、TLS 或超时等传输错误才判定为连接失败。该结果不得表述为模型或推理可用。
+- Anthropic Messages 的“测试连接”与真实推理严格分离：测试连接使用当前 Profile 的标准模型目录候选与 Key 发起认证 GET；不得请求 `/v1/messages`，不得发送模型或请求正文。
+- 测试连接只有在模型目录返回 HTTP 2xx 且结构可识别时成功；401/403、404/405、无法解析的业务响应及传输错误均失败，并给出对应诊断。结果只表示地址、凭据和模型目录可用，不得表述为推理可用。
 - “获取模型”继续使用当前 Profile 的解析后 Key 独立请求 `/v1/models`，固定发送 Bearer，不继承 Anthropic Messages 的 `x-api-key` 与版本头；该约束只作用于模型目录请求。
 - Claude Desktop 真实对话使用当前活动 Profile 的解析后 Key、上游 Base URL 和鉴权语义；精确应用当前 Profile 已启用的保存映射，不得发起模型目录请求，也不得回退到全局 Key、环境变量 Key 或其他历史 Profile。
 - 保存 Claude Profile 时，以当前编辑器显式 Key 为最高优先级，并同步替换 `configContents`、`authContents` 中所有旧凭据别名；重新打开编辑器、获取模型、应用配置和消息代理必须解析到同一最新 Key。

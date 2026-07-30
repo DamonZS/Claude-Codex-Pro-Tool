@@ -258,8 +258,8 @@ function overviewEventTone(eventName: string): OverviewTimelineTone {
 
 function overviewEventLabel(eventName: string) {
   const labels: Array<[string, string]> = [
-    ["test_relay_profile.reachability_ok", "供应商连接测试通过"],
-    ["test_relay_profile.reachability_failed", "供应商连接测试失败"],
+    ["test_relay_profile.validation_ok", "供应商连接测试通过"],
+    ["test_relay_profile.validation_failed", "供应商连接测试失败"],
     ["fetch_relay_profile_models.ok", "供应商模型目录已刷新"],
     ["fetch_relay_profile_models.failed", "供应商模型目录刷新失败"],
     ["restart", "Codex 重启流程"],

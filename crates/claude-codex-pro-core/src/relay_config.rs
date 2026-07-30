@@ -552,28 +552,12 @@ pub async fn test_relay_profile(
     profile: &RelayProfile,
     _model: &str,
 ) -> anyhow::Result<RelayProfileTestResult> {
-    let uses_anthropic_messages = relay_profile_uses_anthropic_messages(profile);
-    let base_url = if uses_anthropic_messages && !profile.upstream_base_url.trim().is_empty() {
-        profile.upstream_base_url.trim().to_string()
-    } else {
-        relay_profile_base_url(profile)
-    };
-    let base_url = base_url.trim().trim_end_matches('/');
-    if base_url.is_empty() {
-        anyhow::bail!("Base URL 不能为空");
-    }
-
-    let client = crate::http_client::proxied_client("ClaudeCodexPro/RelayTest")?;
-    let response = client
-        .get(base_url)
-        .header(reqwest::header::ACCEPT, "*/*")
-        .header(reqwest::header::ACCEPT_ENCODING, "identity")
-        .send()
-        .await?;
+    let (models, endpoint) =
+        crate::model_catalog::discover_relay_profile_model_ids(profile).await?;
     Ok(RelayProfileTestResult {
-        http_status: response.status().as_u16(),
-        endpoint: base_url.to_string(),
-        response_preview: "Base URL 可访问；此结果仅表示网络可达。".to_string(),
+        http_status: 200,
+        endpoint,
+        response_preview: format!("认证模型目录验证成功，共返回 {} 个模型。", models.len()),
     })
 }
 

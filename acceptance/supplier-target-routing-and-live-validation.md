@@ -43,7 +43,8 @@
    - 对更长的可解析会话正文，`input_tokens` 估算值必须单调增加；无效 JSON 返回明确错误而不是伪造成功。
 
 6. **前端目标分流**
-   - “测试连接”对当前 Base URL 只发送一次无认证 `GET`；测试过程不调用模型发现或任何推理接口，不发送 API Key、自定义 Header 或请求 Body。服务端返回任意 HTTP 状态均显示网络可达，传输错误才显示连接失败。
+   - “测试连接”使用当前表单的 Base URL 与 API Key 请求标准模型目录，不调用任何推理接口且不发送请求 Body；`https://host/v1` 首选 `GET https://host/v1/models`。
+   - HTTP 2xx 且模型目录结构可识别时显示连接成功；401/403 显示凭据无效或无权限；所有候选均为 404/405 时显示 Base URL 或接口路径错误；传输错误显示网络连接失败。404 不得包装为成功状态。
    - 供应商卡片不再写死调用 `switchCodexRelayProfile`。
    - Codex、Claude、Claude Desktop 标签分别按 `activeRelayId`、`activeClaudeRelayId`、`activeClaudeDesktopRelayId` 显示“使用中”。
    - Claude/Claude Desktop 切换提示中不出现 Codex。

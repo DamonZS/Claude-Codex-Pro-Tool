@@ -8346,7 +8346,7 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
         profile.name.trim()
     };
     log_manager_event(
-        "manager.test_relay_profile.reachability_start",
+        "manager.test_relay_profile.validation_start",
         json!({
             "profileId": profile.id,
             "targetApp": profile.target_app,
@@ -8356,7 +8356,7 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
     match claude_codex_pro_core::relay_config::test_relay_profile(&profile, "").await {
         Ok(result) => {
             log_manager_event(
-                "manager.test_relay_profile.reachability_ok",
+                "manager.test_relay_profile.validation_ok",
                 json!({
                     "profileId": profile.id,
                     "endpoint": result.endpoint,
@@ -8366,8 +8366,8 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
             CommandResult {
                 status: "ok".to_string(),
                 message: format!(
-                    "供应商 {profile_name} 的 Base URL 可访问；HTTP {}。此测试仅检查网络可达性。",
-                    result.http_status
+                    "供应商 {profile_name} 连接成功；已通过认证模型目录验证（HTTP {}）。{}",
+                    result.http_status, result.response_preview
                 ),
                 payload: RelayProfileTestPayload {
                     http_status: result.http_status,
@@ -8377,12 +8377,24 @@ pub async fn test_relay_profile(profile: RelayProfile) -> CommandResult<RelayPro
             }
         }
         Err(error) => {
+            let error_message = error.to_string();
+            let guidance =
+                if error_message.contains("HTTP 401") || error_message.contains("HTTP 403") {
+                    "API 地址存在，但当前 API Key 无效或没有模型目录权限"
+                } else if error_message.contains("HTTP 404/405")
+                    || error_message.contains("HTTP 404")
+                    || error_message.contains("HTTP 405")
+                {
+                    "标准模型目录不存在，请检查 Base URL 是否包含正确的 API 版本路径"
+                } else {
+                    "未能通过认证模型目录验证"
+                };
             log_manager_event(
-                "manager.test_relay_profile.reachability_failed",
-                json!({ "profileId": profile.id, "error": error.to_string() }),
+                "manager.test_relay_profile.validation_failed",
+                json!({ "profileId": profile.id, "error": error_message }),
             );
             failed(
-                &format!("供应商 {profile_name} Base URL 连接失败：{error}"),
+                &format!("供应商 {profile_name} 连接测试失败：{guidance}。详情：{error_message}"),
                 RelayProfileTestPayload {
                     http_status: 0,
                     endpoint: String::new(),

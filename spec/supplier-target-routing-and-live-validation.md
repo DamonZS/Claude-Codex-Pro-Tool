@@ -97,7 +97,7 @@
 
 ## UI / 交互要求
 
-- “测试连接”只检查当前表单 Base URL 的网络可达性：只允许向该 URL 发送一次不带认证的 `GET`，不得获取模型、选择模型或请求 `/messages`、`/responses`、`/chat/completions`，也不得发送 API Key、自定义鉴权 Header 或 Body。收到任意 HTTP 状态均表示地址可达，只有 DNS、连接、TLS、超时等传输错误表示连接失败。
+- “测试连接”必须验证当前表单中的 Base URL 与 API Key：使用标准模型目录候选地址发起带认证的 `GET`，不得请求 `/messages`、`/responses`、`/chat/completions` 或发送请求 Body。HTTP 2xx 且响应可解析为模型目录（允许明确空数组）才表示连接成功；401/403 必须提示凭据无效或无权限，所有候选均为 404/405 必须提示 Base URL 或接口路径错误，DNS、连接、TLS、超时等传输错误必须提示网络连接失败。
 - “使用中”状态按当前标签的目标专属 ID 判断。
 - 点击 Claude 或 Claude Desktop 供应商不得出现“切换 Codex 供应商”或 `config.toml` 错误提示。
 - 点击后立即显示“正在切换 {目标} 供应商”的反馈；完成后显示成功或具体失败原因。

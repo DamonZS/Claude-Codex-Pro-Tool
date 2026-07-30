@@ -60,8 +60,8 @@
    - 通过标准：回归测试验证 `gpt-5.6-sol` 经 Responses -> Chat Completions 转换后保持不变；代理实现对每个正常入站请求只执行一次上游推理 POST，模型发现流程不调用推理端点。
 
 17. Anthropic 连接测试、模型发现与真实消息相互独立
-   - 通过标准：供应商“测试连接”只向当前 Profile 的 Base URL 发送一次 GET，包含 `Accept: */*` 与 `Accept-Encoding: identity`，不请求 `/v1/models` 或 `/v1/messages`，不发送 Key、模型或正文。
-   - 通过标准：任意 HTTP 状态均返回“Base URL 可访问”并保留实际状态；监听端口不存在等传输错误返回失败，且不进行第二次请求。
+   - 通过标准：供应商“测试连接”使用当前 Profile 的 Key 请求标准模型目录，不请求 `/v1/messages`，不发送模型或正文。
+   - 通过标准：模型目录返回 HTTP 2xx 且结构可识别时成功；401/403、所有候选均为 404/405、无法解析的业务响应及传输错误返回失败，404 不得显示为连接成功。
    - 通过标准：用户主动“获取模型”仍使用当前 Profile 和当前 Key 请求 `/v1/models`；真实 Claude Desktop 消息仍只向 `/v1/messages` 单次 POST，并按当前 Profile 选择 Bearer 或 `x-api-key` 与 `anthropic-version`。
 
 18. 最新 Key 全链路一致

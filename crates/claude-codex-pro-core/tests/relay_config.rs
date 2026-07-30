@@ -3367,15 +3367,16 @@ goals = true
 }
 
 #[tokio::test]
-async fn anthropic_profile_test_checks_base_url_once_without_auth_model_or_body() {
-    let server = spawn_profile_test_server(503);
-    let expected_endpoint = server.base_url.clone();
+async fn anthropic_profile_test_validates_authenticated_model_catalog() {
+    let server = spawn_profile_test_server(200, r#"{"data":[{"id":"claude-sonnet-4-5"}]}"#);
+    let expected_endpoint = format!("{}/v1/models", server.base_url);
     let profile = RelayProfile {
         id: "anthropic-reachability".to_string(),
         target_app: "claude-desktop".to_string(),
         api_format: "Anthropic Messages".to_string(),
         base_url: server.base_url.clone(),
         api_key: "test-current-editor-key".to_string(),
+        api_key_explicit: true,
         auth_field: "ANTHROPIC_API_KEY".to_string(),
         protocol: RelayProtocol::Responses,
         test_model: "stale-test-model".to_string(),
@@ -3387,24 +3388,24 @@ async fn anthropic_profile_test_checks_base_url_once_without_auth_model_or_body(
     let result = test_relay_profile(&profile, "ignored-model").await.unwrap();
     let requests = server.finish();
 
-    assert_eq!(result.http_status, 503, "any HTTP response is reachable");
+    assert_eq!(result.http_status, 200);
     assert_eq!(result.endpoint, expected_endpoint);
+    assert!(result.response_preview.contains("1 个模型"));
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     assert_eq!(request.method, "GET");
-    assert_eq!(request.path, "/");
-    assert_eq!(request.accept, "*/*");
-    assert_eq!(request.accept_encoding, "identity");
-    assert!(request.authorization.is_empty());
+    assert_eq!(request.path, "/v1/models");
+    assert_eq!(request.accept, "application/json");
+    assert_eq!(request.authorization, "Bearer test-current-editor-key");
     assert!(request.x_api_key.is_empty());
     assert!(request.anthropic_version.is_empty());
     assert!(request.body.is_empty());
 }
 
 #[tokio::test]
-async fn openai_profile_test_checks_base_url_once_without_auth_model_or_body() {
-    let server = spawn_profile_test_server(401);
-    let expected_endpoint = server.base_url.clone();
+async fn openai_profile_test_validates_authenticated_model_catalog() {
+    let server = spawn_profile_test_server(200, r#"{"data":[{"id":"gpt-5.6"}]}"#);
+    let expected_endpoint = format!("{}/v1/models", server.base_url);
     let profile = RelayProfile {
         id: "openai-reachability".to_string(),
         target_app: "codex".to_string(),
@@ -3422,18 +3423,40 @@ async fn openai_profile_test_checks_base_url_once_without_auth_model_or_body() {
     let result = test_relay_profile(&profile, "ignored-model").await.unwrap();
     let requests = server.finish();
 
-    assert_eq!(result.http_status, 401, "any HTTP response is reachable");
+    assert_eq!(result.http_status, 200);
     assert_eq!(result.endpoint, expected_endpoint);
+    assert!(result.response_preview.contains("1 个模型"));
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     assert_eq!(request.method, "GET");
-    assert_eq!(request.path, "/");
-    assert_eq!(request.accept, "*/*");
-    assert_eq!(request.accept_encoding, "identity");
-    assert!(request.authorization.is_empty());
+    assert_eq!(request.path, "/v1/models");
+    assert_eq!(request.accept, "application/json");
+    assert_eq!(request.authorization, "Bearer test-current-editor-key");
     assert!(request.x_api_key.is_empty());
     assert!(request.anthropic_version.is_empty());
     assert!(request.body.is_empty());
+}
+
+#[tokio::test]
+async fn profile_test_rejects_missing_model_endpoint_instead_of_accepting_404() {
+    let server = spawn_profile_test_server(404, r#"{"error":"not found"}"#);
+    let profile = RelayProfile {
+        id: "openai-missing-models".to_string(),
+        target_app: "codex".to_string(),
+        api_format: "OpenAI Responses".to_string(),
+        base_url: server.base_url.clone(),
+        api_key: "test-current-editor-key".to_string(),
+        api_key_explicit: true,
+        ..RelayProfile::default()
+    };
+
+    let error = test_relay_profile(&profile, "").await.unwrap_err();
+    let requests = server.finish();
+
+    assert!(error.to_string().contains("HTTP 404/405"));
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/models");
+    assert_eq!(requests[0].authorization, "Bearer test-current-editor-key");
 }
 
 #[tokio::test]
@@ -3463,14 +3486,13 @@ struct ProfileTestRequest {
     method: String,
     path: String,
     accept: String,
-    accept_encoding: String,
     authorization: String,
     x_api_key: String,
     anthropic_version: String,
     body: String,
 }
 
-fn spawn_profile_test_server(status: u16) -> ProfileTestServer {
+fn spawn_profile_test_server(status: u16, response_body: &'static str) -> ProfileTestServer {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
@@ -3489,14 +3511,14 @@ fn spawn_profile_test_server(status: u16) -> ProfileTestServer {
             .unwrap_or_default();
         write!(
             stream,
-            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
         )
         .unwrap();
         vec![ProfileTestRequest {
             method,
             path,
             accept: profile_test_header(&raw_request, "accept"),
-            accept_encoding: profile_test_header(&raw_request, "accept-encoding"),
             authorization: profile_test_header(&raw_request, "authorization"),
             x_api_key: profile_test_header(&raw_request, "x-api-key"),
             anthropic_version: profile_test_header(&raw_request, "anthropic-version"),
