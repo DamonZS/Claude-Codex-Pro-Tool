@@ -57,6 +57,7 @@ mustNotContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS 
 mustContain(macosPackager, 'install_app_runtime "claude-codex-pro-mcp"', "macOS MCP source");
 mustContain(macosPackager, 'local destination="$STAGE/Claude Codex Pro.app/Contents/MacOS/$runtime_name"', "macOS MCP destination");
 mustContain(macosPackager, "for runtime in claude-codex-pro claude-codex-pro-mcp", "macOS runtime signing and verification");
+mustContain(macosPackager, 'codesign --force --deep --sign - "$app_dir"', "macOS deep app bundle signing");
 
 for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   mustContain(source, "Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/", `${label} Windows MCP staging`);

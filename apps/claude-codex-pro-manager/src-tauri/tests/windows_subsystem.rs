@@ -422,8 +422,9 @@ fn macos_packager_builds_one_visible_unified_app() {
     assert!(!script.contains("create_app \"Claude Codex Pro Manager\""));
     assert!(script.contains("install_app_runtime \"claude-codex-pro-mcp\""));
     assert!(script.contains("for runtime in claude-codex-pro claude-codex-pro-mcp"));
+    assert!(script.contains("codesign --force --deep --sign - \"$app_dir\""));
     let verify_position = script
-        .find("verify_app_runtime_before_signing\n")
+        .rfind("verify_app_runtime_before_signing")
         .expect("runtime verification invocation");
     let sign_position = script
         .find("sign_app \"$STAGE/Claude Codex Pro.app\"")

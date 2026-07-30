@@ -148,6 +148,7 @@ fn claude_desktop_model_catalog_uses_desktop_target_instead_of_codex_target() {
     codex.model_list = "codex-only-model".to_string();
     let mut desktop = profile("desktop-a", "claude-desktop");
     desktop.model_list = "desktop-upstream-model".to_string();
+    desktop.route_enabled = true;
     let settings = BackendSettings {
         relay_profiles: vec![codex, desktop],
         active_relay_id: "codex-a".to_string(),

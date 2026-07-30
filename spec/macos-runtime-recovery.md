@@ -34,5 +34,6 @@ macOS 安装包中出现三类可复现问题：Manager 无法定位静默 Codex
 
 - Rust 测试覆盖标准 bundle、用户 Applications、App Translocation 排除、缺失 sidecar、Claude 启动验证和更新浏览器兜底。
 - macOS 打包契约验证三个二进制及签名顺序。
+- 内嵌运行时逐个签名后，App Bundle 必须使用深度签名覆盖嵌套代码，确保 x86_64 Runner 不会把 `claude-codex-pro-mcp` 判定为未签名子组件。
 - 前端类型检查、生产构建和 Manager 契约测试通过。
 - Windows 主机验证不得替代 macOS CI/实机对 DMG、启动、权限、签名和汉化的最终验证。

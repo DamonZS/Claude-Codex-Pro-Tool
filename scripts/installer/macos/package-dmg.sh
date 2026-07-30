@@ -113,7 +113,7 @@ sign_app() {
     fi
   done
   codesign --force --sign - "$app_dir/Contents/MacOS/$executable"
-  codesign --force --sign - "$app_dir"
+  codesign --force --deep --sign - "$app_dir"
 }
 
 verify_app() {

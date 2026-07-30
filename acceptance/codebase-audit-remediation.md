@@ -11,6 +11,7 @@
 - Unix 测试证明原子写和备份文件权限为 `0600`，相关目录为 `0700`。
 - Claude 汉化提权命令中不存在向 `S-1-5-32-545` 授予递归 Modify 的参数。
 - Windows 和 macOS 发布契约均断言 MCP 二进制随包分发并纳入签名/卸载路径。
+- macOS 打包脚本逐个签名运行时后使用 `codesign --force --deep --sign -` 签名 App Bundle；发布契约测试锁定该参数，x64 DMG 构建不得再因 MCP 子组件未签名失败。
 - 自动发布契约断言 tag SHA 校验、取消清理和稳定 release URL，且拒绝 `/untagged-`。
 - `repair_backend` 错误分支返回失败；启动命令使用 blocking pool。
 - 设置草稿和记忆搜索均有防止旧响应覆盖新状态的请求版本保护。

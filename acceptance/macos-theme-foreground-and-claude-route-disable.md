@@ -11,6 +11,7 @@
 5. 关闭活动 Claude Desktop 路由的前端分支先确认官方模式恢复成功，再调用 `saveSupplierSettings` 持久化 `nextProfiles`，保存成功后才显示关闭完成提示。
 6. 关闭后 Profile 的 `routeEnabled` 为 `false`，`claudeDesktopMode` 为 `direct`，对应配置元数据同步为 Direct。
 7. `routeEnabled=false` 时 Claude Desktop 模型目录为空、健康状态不为 ready，消息代理在发起上游请求前返回路由已关闭错误；重新开启后保持现有代理行为。
+8. 验证 Claude Desktop 活动供应商模型目录归属的测试必须显式开启该 Profile 的路由，避免用默认关闭状态错误断言非空目录。
 8. Core 定向主题/代理测试、Manager 路由契约测试、TypeScript 检查、前端构建、Rust 格式检查和默认 Release 构建通过。
 
 ## 非范围
