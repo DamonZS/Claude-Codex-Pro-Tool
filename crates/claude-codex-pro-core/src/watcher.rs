@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+#[cfg(any(windows, target_os = "macos"))]
+use std::process::Command;
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 pub const WATCHER_INTERVAL_SECONDS: f64 = 3.0;
@@ -86,12 +88,13 @@ pub fn codex_process_ids<'a>(processes: impl IntoIterator<Item = (u32, &'a str)>
     processes
         .into_iter()
         .filter_map(|(process_id, executable)| {
-            let executable = executable.to_ascii_lowercase();
+            let executable = executable.replace('\\', "/").to_ascii_lowercase();
             (executable.contains("\\windowsapps\\openai.codex_")
-                || executable.ends_with("\\codex.exe")
+                || executable.contains("/windowsapps/openai.codex_")
                 || executable.ends_with("/codex.exe")
-                || executable.ends_with("\\chatgpt.exe")
-                || executable.ends_with("/chatgpt.exe"))
+                || executable.ends_with("/chatgpt.exe")
+                || executable.ends_with("/codex.app/contents/macos/chatgpt")
+                || executable.ends_with("/codex.app/contents/macos/codex"))
             .then_some(process_id)
         })
         .collect()
@@ -127,11 +130,48 @@ pub fn filter_restartable_launcher_processes<'a>(
     processes
         .into_iter()
         .filter(|(process_id, exe_file)| {
+            let executable_name = Path::new(exe_file)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(exe_file);
             *process_id != current_process_id
-                && exe_file.eq_ignore_ascii_case("claude-codex-pro.exe")
+                && (executable_name.eq_ignore_ascii_case("claude-codex-pro.exe")
+                    || executable_name.eq_ignore_ascii_case("claude-codex-pro"))
         })
         .map(|(process_id, _)| process_id)
         .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_inventory() -> Vec<(u32, String)> {
+    let Ok(output) = Command::new("/bin/ps")
+        .args(["-axo", "pid=,comm="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let split = line.find(char::is_whitespace)?;
+            let process_id = line[..split].parse().ok()?;
+            let executable = line[split..].trim();
+            (!executable.is_empty()).then(|| (process_id, executable.to_string()))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_macos_process(process_id: u32) -> bool {
+    Command::new("/bin/kill")
+        .args(["-TERM", &process_id.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 pub fn should_recover_stale_launcher(has_codex_process: bool, cdp_listening: bool) -> bool {
@@ -194,7 +234,17 @@ pub fn find_codex_processes() -> Vec<u32> {
         .collect()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn find_codex_processes() -> Vec<u32> {
+    let processes = macos_process_inventory();
+    codex_process_ids(
+        processes
+            .iter()
+            .map(|(process_id, executable)| (*process_id, executable.as_str())),
+    )
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn find_codex_processes() -> Vec<u32> {
     Vec::new()
 }
@@ -210,7 +260,18 @@ pub fn find_restartable_launcher_processes() -> Vec<u32> {
     )
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn find_restartable_launcher_processes() -> Vec<u32> {
+    let processes = macos_process_inventory();
+    filter_restartable_launcher_processes(
+        processes
+            .iter()
+            .map(|(process_id, executable)| (*process_id, executable.as_str())),
+        std::process::id(),
+    )
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn find_restartable_launcher_processes() -> Vec<u32> {
     Vec::new()
 }
@@ -262,7 +323,28 @@ pub fn wait_for_processes_to_exit(process_ids: &[u32], timeout: Duration) -> boo
     )
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn wait_for_processes_to_exit(process_ids: &[u32], timeout: Duration) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+    let max_checks = timeout
+        .as_millis()
+        .div_ceil(POLL_INTERVAL.as_millis())
+        .saturating_add(1)
+        .min(usize::MAX as u128) as usize;
+    wait_for_process_ids_to_exit_with(
+        process_ids,
+        max_checks,
+        || {
+            macos_process_inventory()
+                .into_iter()
+                .map(|(process_id, _)| process_id)
+                .collect()
+        },
+        || std::thread::sleep(POLL_INTERVAL),
+    )
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn wait_for_processes_to_exit(_process_ids: &[u32], _timeout: Duration) -> bool {
     true
 }
@@ -305,7 +387,15 @@ pub fn stop_launcher_processes_for_codex_restart() -> usize {
     stopped
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn stop_launcher_processes_for_codex_restart() -> usize {
+    find_restartable_launcher_processes()
+        .into_iter()
+        .filter(|process_id| terminate_macos_process(*process_id))
+        .count()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn stop_launcher_processes_for_codex_restart() -> usize {
     0
 }
@@ -321,7 +411,15 @@ pub fn stop_codex_processes() -> usize {
     stopped
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn stop_codex_processes() -> usize {
+    find_codex_processes()
+        .into_iter()
+        .filter(|process_id| terminate_macos_process(*process_id))
+        .count()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn stop_codex_processes() -> usize {
     0
 }

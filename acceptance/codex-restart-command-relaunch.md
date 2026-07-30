@@ -71,3 +71,11 @@
 17. Windows 保留端口不阻断 launcher
    - 通过标准：单例端口绑定返回 `PermissionDenied` / `os error 10013` 时使用文件锁回退；第二个实例仍因文件锁冲突被拒绝。
    - 证据：`claude-codex-pro-core` ports 单元测试。
+
+18. macOS 真实关闭旧 Codex 与 launcher
+   - 通过标准：macOS 的 `find_codex_processes`、`find_restartable_launcher_processes`、停止函数和退出等待均有真实实现，不再使用非 Windows 空操作；只匹配 Codex App 主进程与 CCP 静默 launcher，不误杀 Codex CLI、Manager 或 Electron 子进程。
+   - 证据：core watcher 单元测试、平台源码契约测试与 macOS 本机构建。
+
+19. macOS 本地 release 可解析 launcher
+   - 通过标准：标准 `.app` 继续解析包内 companion；直接运行 `target/debug` 或 `target/release/claude-codex-pro-manager` 时，可解析同目录可执行的 `claude-codex-pro`，App Translocation 仍被拒绝。
+   - 证据：Manager Rust 单元测试与默认 release 构建。

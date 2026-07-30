@@ -319,8 +319,10 @@ impl SystemPromptStore {
             .into_iter()
             .find(|p| p.id == id)
             .context("提示词不存在")?;
+        let configured_instruction = self.configured_instruction_path()?;
         if state.active_prompt_id.is_some()
-            && self.configured_instruction_path()?.as_deref() != Some(&self.managed_path_string())
+            && configured_instruction.is_some()
+            && configured_instruction.as_deref() != Some(&self.managed_path_string())
         {
             bail!("Codex 指令配置已被外部修改，请先处理当前外部配置");
         }
@@ -616,6 +618,26 @@ mod tests {
         assert_eq!(
             store.configured_instruction_path().unwrap().as_deref(),
             Some("external.md")
+        );
+    }
+
+    #[test]
+    fn missing_managed_config_key_can_be_reenabled() {
+        let (_root, store) = store();
+        store
+            .enable("builtin-gpt56-sol", SystemPromptMode::Preserve)
+            .unwrap();
+        fs::write(store.config_path(), "model = \"gpt-test\"\n").unwrap();
+
+        let recovered = store
+            .enable("builtin-gpt56-sol", SystemPromptMode::Preserve)
+            .unwrap();
+
+        assert!(recovered.managed);
+        assert!(!recovered.externally_modified);
+        assert_eq!(
+            store.configured_instruction_path().unwrap().as_deref(),
+            Some(store.managed_path_string().as_str())
         );
     }
 }

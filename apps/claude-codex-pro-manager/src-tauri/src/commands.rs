@@ -3167,16 +3167,26 @@ fn resolve_silent_launcher_path_from_exe(current_exe: &Path) -> anyhow::Result<P
             bail!("CCP 正从临时隔离位置运行，请将 App 移到“应用程序”后重新打开")
         }
 
-        let Some(companion) = claude_codex_pro_core::install::macos_bundle_companion_path_from_exe(
+        if let Some(companion) =
+            claude_codex_pro_core::install::macos_bundle_companion_path_from_exe(
+                current_exe,
+                SILENT_BINARY,
+            )
+        {
+            if is_executable_file(&companion) {
+                return Ok(companion);
+            }
+            bail!("CCP Manager 安装不完整，缺少 Codex 启动器，请重新安装")
+        }
+
+        let companion = claude_codex_pro_core::install::companion_binary_path_from_exe(
             current_exe,
             SILENT_BINARY,
-        ) else {
-            bail!("当前 CCP Manager 不是标准 macOS App，请重新安装正式版本")
-        };
+        );
         if is_executable_file(&companion) {
             return Ok(companion);
         }
-        bail!("CCP Manager 安装不完整，缺少 Codex 启动器，请重新安装")
+        bail!("当前 CCP Manager 不是标准 macOS App，且同目录缺少可执行的 Codex 启动器")
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -12154,5 +12164,25 @@ model_reasoning_effort = "high"
 
         assert_eq!(result.status, "failed");
         assert!(result.message.contains("只能打开 http 或 https"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_standalone_manager_resolves_adjacent_silent_launcher() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let manager = root.path().join("claude-codex-pro-manager");
+        let launcher = root.path().join("claude-codex-pro");
+        std::fs::write(&manager, b"manager").unwrap();
+        std::fs::write(&launcher, b"launcher").unwrap();
+        let mut permissions = std::fs::metadata(&launcher).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&launcher, permissions).unwrap();
+
+        assert_eq!(
+            resolve_silent_launcher_path_from_exe(&manager).unwrap(),
+            launcher
+        );
     }
 }

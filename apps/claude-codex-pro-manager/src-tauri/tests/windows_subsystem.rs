@@ -3164,6 +3164,41 @@ fn codex_restart_feedback_is_immediate_specific_and_auto_dismissable() {
 }
 
 #[test]
+fn codex_restart_has_real_macos_process_control() {
+    let watcher = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../crates/claude-codex-pro-core/src/watcher.rs"
+    ));
+
+    assert!(watcher.contains("fn macos_process_inventory()"));
+    assert!(watcher.contains("Command::new(\"/bin/ps\")"));
+    assert!(watcher.contains("fn terminate_macos_process(process_id: u32) -> bool"));
+    assert!(watcher.contains("Command::new(\"/bin/kill\")"));
+    assert!(watcher.contains("/codex.app/contents/macos/chatgpt"));
+
+    let macos_wait = watcher
+        .split("#[cfg(target_os = \"macos\")]\npub fn wait_for_processes_to_exit")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[cfg(not(any(windows, target_os = \"macos\")))]")
+                .next()
+        })
+        .expect("macOS process exit wait implementation");
+    assert!(macos_wait.contains("wait_for_process_ids_to_exit_with("));
+    assert!(macos_wait.contains("macos_process_inventory()"));
+
+    let macos_stop = watcher
+        .split("#[cfg(target_os = \"macos\")]\npub fn stop_codex_processes")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("#[cfg(not(any(windows, target_os = \"macos\")))]")
+                .next()
+        })
+        .expect("macOS Codex stop implementation");
+    assert!(macos_stop.contains("terminate_macos_process"));
+}
+
+#[test]
 fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
     let screens = read_all_frontend_sources().replace("\r\n", "\n");
     let route_toggle = screens

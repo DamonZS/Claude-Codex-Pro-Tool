@@ -90,6 +90,21 @@ fn codex_process_filter_keeps_windowsapps_and_normal_codex_processes() {
 }
 
 #[test]
+fn codex_process_filter_recognizes_macos_app_main_process_only() {
+    let processes = [
+        (11, "/Applications/Codex.app/Contents/MacOS/ChatGPT"),
+        (
+            12,
+            "/Applications/Codex.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+        ),
+        (13, "/Applications/Codex.app/Contents/Resources/codex"),
+        (14, "/Users/test/.local/bin/codex"),
+    ];
+
+    assert_eq!(codex_process_ids(processes), vec![11]);
+}
+
+#[test]
 fn launcher_process_filter_protects_current_process_ancestry() {
     let processes = [
         (10, 0, "claude-codex-pro.exe"),
@@ -115,6 +130,26 @@ fn repair_restart_launcher_filter_only_protects_current_process() {
         filter_restartable_launcher_processes(processes, 20),
         vec![10, 30]
     );
+    assert_eq!(
+        filter_restartable_launcher_processes(processes, 30),
+        vec![10]
+    );
+}
+
+#[test]
+fn repair_restart_launcher_filter_recognizes_macos_silent_launcher_only() {
+    let processes = [
+        (
+            10,
+            "/Applications/Claude Codex Pro.app/Contents/MacOS/claude-codex-pro",
+        ),
+        (
+            20,
+            "/Applications/Claude Codex Pro Manager.app/Contents/MacOS/claude-codex-pro-manager",
+        ),
+        (30, "/tmp/claude-codex-pro"),
+    ];
+
     assert_eq!(
         filter_restartable_launcher_processes(processes, 30),
         vec![10]

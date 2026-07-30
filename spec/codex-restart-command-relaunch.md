@@ -33,6 +33,9 @@
 - `restart_claude_codex_pro` 必须使用 `stop_launcher_processes_for_codex_restart()` 清理旧 launcher。
 - `restart_claude_codex_pro` 仍必须调用 `stop_codex_processes()` 关闭旧 Codex。
 - restart 流程必须在有界超时内轮询旧 launcher 与 Codex 是否已退出；未退出时返回失败，不得继续启动一个会命中旧单例锁的新 launcher。
+- macOS 必须识别并终止 Codex App 主进程与旧 CCP 静默 launcher，不能把非 Windows 分支视为无需停止进程。
+- macOS 进程识别不得误杀 Codex CLI、CCP Manager 或 Codex Electron 子进程；只处理明确属于 Codex App 主可执行文件或静默 launcher 的 PID。
+- macOS 从标准 App 包运行时使用包内静默 launcher；从仓库 `target/debug` 或 `target/release` 直接运行 Manager 时，允许使用同目录且具备执行权限的 `claude-codex-pro`，便于本地验证构建。
 - `restart_claude_codex_pro` 仍必须调用 `spawn_claude_codex_pro_launch(...)` 启动静默 launcher。
 - 前端顶部按钮仍调用 `actions.restartCodex()`。
 - 前端在调用 `restart_claude_codex_pro` 前先提交一次可渲染的进行中提示，并等待浏览器完成绘制。
@@ -54,6 +57,7 @@
 - 进程退出等待逻辑放在 core watcher，manager 只负责按顺序调用停止、等待和启动。
 - launcher watchdog 保留现有轻量轮询间隔，不引入新依赖或常驻 UI。
 - 回归测试覆盖 `crates/claude-codex-pro-core/tests/launcher.rs`、`crates/claude-codex-pro-core/tests/watcher.rs` 与 `apps/claude-codex-pro-manager/src-tauri/tests/windows_subsystem.rs`。
+- macOS 进程枚举、终止与退出等待复用 core watcher，不新增平台依赖。
 - 不终止 Codex 进程做验证；只做构建和回归测试。
 
 ## 交付范围
