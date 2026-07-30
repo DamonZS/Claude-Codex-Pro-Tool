@@ -6,7 +6,7 @@ macOS 安装包中出现三类可复现问题：Manager 无法定位静默 Codex
 
 ## 目标
 
-- 正式 macOS Manager App 内包含 Manager、`claude-codex-pro` 和 MCP 三个运行时二进制。
+- 正式 macOS App 内包含统一主程序 `claude-codex-pro` 和独立 MCP 两个运行时二进制。
 - launcher 仅从当前真实 App bundle 解析 companion，并排除 App Translocation 和不存在的 debug/release 猜测路径。
 - Claude Desktop 可从系统 Applications、用户 Applications、运行进程和 bundle identifier 发现。
 - Claude 启动结果以真实进程为证据；未形成进程时不得报告成功。
@@ -22,7 +22,7 @@ macOS 安装包中出现三类可复现问题：Manager 无法定位静默 Codex
 
 ## 功能要求
 
-1. macOS 打包脚本在最终签名前校验 Manager App `Contents/MacOS` 内三个运行时均存在且可执行。
+1. macOS 打包脚本在最终签名前校验 App `Contents/MacOS` 内统一主程序与 MCP 两个运行时均存在且可执行。
 2. companion 解析支持标准 bundle 布局，并拒绝 `/AppTranslocation/` 路径。
 3. Claude 候选必须包含有效 `Info.plist`、受支持的 bundle identifier 和可执行的 `Contents/MacOS` 文件。
 4. Claude 启动命令在有界时间内验证真实进程，失败时返回失败而非“已启动”。
@@ -33,7 +33,9 @@ macOS 安装包中出现三类可复现问题：Manager 无法定位静默 Codex
 ## 验证
 
 - Rust 测试覆盖标准 bundle、用户 Applications、App Translocation 排除、缺失 sidecar、Claude 启动验证和更新浏览器兜底。
-- macOS 打包契约验证三个二进制及签名顺序。
-- 内嵌运行时逐个签名后，App Bundle 必须使用深度签名覆盖嵌套代码，确保 x86_64 Runner 不会把 `claude-codex-pro-mcp` 判定为未签名子组件。
+- macOS 打包契约验证两个二进制及从内到外的签名顺序。
+- MCP 必须先独立签名并立即严格验证；统一主程序不得进入 helper 签名循环，且只能签名一次。
+- App Bundle 必须在所有内嵌运行时验证通过后最后签名；`--deep` 只用于最终严格验证，不作为修复内嵌运行时签名的手段。
+- x86_64 与 arm64 CI 日志必须输出 Runner 架构、Mach-O 架构和逐项签名信息，失败时能定位到具体二进制。
 - 前端类型检查、生产构建和 Manager 契约测试通过。
 - Windows 主机验证不得替代 macOS CI/实机对 DMG、启动、权限、签名和汉化的最终验证。

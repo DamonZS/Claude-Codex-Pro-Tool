@@ -421,8 +421,22 @@ fn macos_packager_builds_one_visible_unified_app() {
     ));
     assert!(!script.contains("create_app \"Claude Codex Pro Manager\""));
     assert!(script.contains("install_app_runtime \"claude-codex-pro-mcp\""));
-    assert!(script.contains("for runtime in claude-codex-pro claude-codex-pro-mcp"));
-    assert!(script.contains("codesign --force --deep --sign - \"$app_dir\""));
+    assert!(script.contains("sign_and_verify_binary \"MCP runtime\" \"$mcp_runtime\""));
+    assert!(script.contains("sign_and_verify_binary \"main executable\" \"$main_executable\""));
+    assert!(script.contains("codesign --force --sign - \"$app_dir\""));
+    assert!(script.contains("codesign --verify --deep --strict --verbose=4 \"$app_dir\""));
+    assert!(!script.contains("codesign --force --deep --sign - \"$app_dir\""));
+    let mcp_sign_position = script
+        .find("sign_and_verify_binary \"MCP runtime\" \"$mcp_runtime\"")
+        .expect("MCP signing invocation");
+    let main_sign_position = script
+        .find("sign_and_verify_binary \"main executable\" \"$main_executable\"")
+        .expect("main executable signing invocation");
+    let bundle_sign_position = script
+        .find("codesign --force --sign - \"$app_dir\"")
+        .expect("bundle signing invocation");
+    assert!(mcp_sign_position < main_sign_position);
+    assert!(main_sign_position < bundle_sign_position);
     let verify_position = script
         .rfind("verify_app_runtime_before_signing")
         .expect("runtime verification invocation");

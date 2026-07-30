@@ -103,17 +103,40 @@ install_app_runtime() {
   chmod +x "$destination"
 }
 
+describe_macos_binary() {
+  local label="$1"
+  local binary_path="$2"
+
+  echo "codesign target: $label ($binary_path)"
+  file "$binary_path"
+  lipo -info "$binary_path"
+}
+
+sign_and_verify_binary() {
+  local label="$1"
+  local binary_path="$2"
+
+  describe_macos_binary "$label" "$binary_path"
+  codesign --force --sign - "$binary_path"
+  codesign --verify --strict --verbose=4 "$binary_path"
+  codesign -d --verbose=4 "$binary_path" 2>&1
+}
+
 sign_app() {
   local app_dir="$1"
   local executable
+  local main_executable
+  local mcp_runtime
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_dir/Contents/Info.plist")"
-  for runtime in claude-codex-pro claude-codex-pro-mcp; do
-    if [ -f "$app_dir/Contents/MacOS/$runtime" ]; then
-      codesign --force --sign - "$app_dir/Contents/MacOS/$runtime"
-    fi
-  done
-  codesign --force --sign - "$app_dir/Contents/MacOS/$executable"
-  codesign --force --deep --sign - "$app_dir"
+  main_executable="$app_dir/Contents/MacOS/$executable"
+  mcp_runtime="$app_dir/Contents/MacOS/claude-codex-pro-mcp"
+
+  echo "codesign host architecture: $(uname -m)"
+  sign_and_verify_binary "MCP runtime" "$mcp_runtime"
+  sign_and_verify_binary "main executable" "$main_executable"
+  codesign --force --sign - "$app_dir"
+  codesign --verify --deep --strict --verbose=4 "$app_dir"
+  codesign -d --verbose=4 "$app_dir" 2>&1
 }
 
 verify_app() {
@@ -130,13 +153,13 @@ verify_app() {
     echo "error: missing PkgInfo in $app_dir" >&2
     return 1
   fi
-  codesign --verify --strict "$app_dir" || {
+  codesign --verify --deep --strict --verbose=4 "$app_dir" || {
     echo "error: codesign verification failed for $app_dir" >&2
     return 1
   }
   for runtime in claude-codex-pro claude-codex-pro-mcp; do
     if [ -f "$app_dir/Contents/MacOS/$runtime" ]; then
-      codesign --verify --strict "$app_dir/Contents/MacOS/$runtime" || {
+      codesign --verify --strict --verbose=4 "$app_dir/Contents/MacOS/$runtime" || {
         echo "error: runtime codesign verification failed for $runtime in $app_dir" >&2
         return 1
       }
