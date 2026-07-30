@@ -21,11 +21,17 @@ pub const CODEX_SKILLS_ALTERNATIVE_MARKETPLACE_SOURCE: &str =
     "https://github.com/DKeken/codex-skills-alternative";
 pub const CODEX_SKILLS_ALTERNATIVE_ZIP_URL: &str =
     "https://codeload.github.com/DKeken/codex-skills-alternative/zip/refs/heads/main";
+pub const MATT_POCOCK_SKILLS_MARKETPLACE: &str = "mattpocock-skills";
+pub const MATT_POCOCK_SKILLS_MARKETPLACE_SOURCE: &str = "https://github.com/mattpocock/skills";
+pub const MATT_POCOCK_SKILLS_ZIP_URL: &str =
+    "https://codeload.github.com/mattpocock/skills/zip/refs/heads/main";
 const OPENAI_PLUGINS_DOWNLOAD_LIMIT_BYTES: usize = 128 * 1024 * 1024;
 const OPENAI_PLUGINS_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
 const GIT_MARKETPLACE_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(90);
 const CODEX_SKILLS_ALTERNATIVE_DOWNLOAD_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_SKILLS_ALTERNATIVE_PLUGIN_NAME: &str = "codex-skills-alternative";
+const MATT_POCOCK_SKILLS_DOWNLOAD_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const MATT_POCOCK_SKILLS_PLUGIN_NAME: &str = "mattpocock-skills";
 const OPENAI_CURATED_MARKETPLACE_ALIASES: [&str; 2] =
     [OPENAI_CURATED_MARKETPLACE, OPENAI_API_CURATED_MARKETPLACE];
 
@@ -93,10 +99,20 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
             marketplace_config_points_to_root(home, CODEX_SKILLS_ALTERNATIVE_MARKETPLACE, root)
         })
         .unwrap_or(false);
-    let config_registered =
-        openai_config_registered && hashgraph_config_registered && product_design_config_registered;
+    let matt_marketplace_root = local_matt_pocock_skills_marketplace_root(home)
+        .ok()
+        .flatten();
+    let matt_config_registered = matt_marketplace_root
+        .as_deref()
+        .map(|root| marketplace_config_points_to_root(home, MATT_POCOCK_SKILLS_MARKETPLACE, root))
+        .unwrap_or(false);
+    let config_registered = openai_config_registered
+        && hashgraph_config_registered
+        && product_design_config_registered
+        && matt_config_registered;
     let local_sources_ready = marketplace_root.is_some()
         && product_design_marketplace_root.is_some()
+        && matt_marketplace_root.is_some()
         && hashgraph_marketplace_local_snapshot_ready(home);
     let needs_repair = marketplace_root.is_none() || !config_registered || !local_sources_ready;
     let message = match (
@@ -122,6 +138,15 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
         && hashgraph_config_registered
     {
         "Codex Product Design Skill 插件仓库尚未注册到 config.toml。".to_string()
+    } else {
+        message
+    };
+    let message = if !matt_config_registered
+        && openai_config_registered
+        && hashgraph_config_registered
+        && product_design_config_registered
+    {
+        "Codex Matt Pocock Skills 仓库尚未注册到 config.toml。".to_string()
     } else {
         message
     };
@@ -152,6 +177,16 @@ pub fn status_from_home(home: &Path) -> CodexPluginMarketplaceStatus {
                 .map(|path| path.to_string_lossy().to_string())
                 .unwrap_or_else(|| CODEX_SKILLS_ALTERNATIVE_MARKETPLACE_SOURCE.to_string()),
             configured: product_design_config_registered,
+        },
+        CodexPluginMarketplaceRepositoryStatus {
+            label: "Matt Pocock Skills 仓库".to_string(),
+            name: MATT_POCOCK_SKILLS_MARKETPLACE.to_string(),
+            source_type: "local".to_string(),
+            source: matt_marketplace_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| MATT_POCOCK_SKILLS_MARKETPLACE_SOURCE.to_string()),
+            configured: matt_config_registered,
         },
     ];
 
@@ -357,6 +392,10 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
         initialize_product_design_marketplace_from_github(home).await?;
         initialized = true;
     }
+    if local_matt_pocock_skills_marketplace_root(home)?.is_none() {
+        initialize_matt_pocock_skills_marketplace_from_github(home).await?;
+        initialized = true;
+    }
     initialized |= ensure_git_marketplace_snapshot(
         home,
         HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
@@ -400,7 +439,8 @@ pub async fn repair_from_home(home: &Path) -> anyhow::Result<CodexPluginMarketpl
     }
     let mut configured = ensure_openai_curated_marketplace_config(home)?
         | ensure_hashgraph_awesome_codex_marketplace_config(home)?
-        | ensure_product_design_skill_marketplace_config(home)?;
+        | ensure_product_design_skill_marketplace_config(home)?
+        | ensure_matt_pocock_skills_marketplace_config(home)?;
     // Also (re)apply any user-defined marketplaces. This is the missing write
     // path that made third-party repos never take effect: without it, a user's
     // custom marketplace was only ever persisted to settings and never landed in
@@ -599,13 +639,21 @@ pub fn ensure_product_design_skill_marketplace_config(home: &Path) -> anyhow::Re
     )
 }
 
+pub fn ensure_matt_pocock_skills_marketplace_config(home: &Path) -> anyhow::Result<bool> {
+    let Some(marketplace_root) = local_matt_pocock_skills_marketplace_root(home)? else {
+        return Ok(false);
+    };
+    ensure_marketplace_config(home, MATT_POCOCK_SKILLS_MARKETPLACE, &marketplace_root)
+}
+
 /// Names reserved by the built-in marketplaces. A user repo may not reuse these
 /// or it would silently overwrite / be overwritten by the built-in repair pass.
-const RESERVED_MARKETPLACE_NAMES: [&str; 4] = [
+const RESERVED_MARKETPLACE_NAMES: [&str; 5] = [
     OPENAI_CURATED_MARKETPLACE,
     OPENAI_API_CURATED_MARKETPLACE,
     HASHGRAPH_AWESOME_CODEX_MARKETPLACE,
     CODEX_SKILLS_ALTERNATIVE_MARKETPLACE,
+    MATT_POCOCK_SKILLS_MARKETPLACE,
 ];
 
 /// Write one user-defined marketplace into `config.toml`. This is the write
@@ -723,6 +771,18 @@ fn local_product_design_marketplace_root(home: &Path) -> anyhow::Result<Option<P
     }
 }
 
+fn local_matt_pocock_skills_marketplace_root(home: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let root = home
+        .join("plugins")
+        .join("cache")
+        .join("mattpocock-skills-marketplace");
+    if validate_matt_pocock_skills_marketplace_root(&root).is_ok() {
+        Ok(Some(root))
+    } else {
+        Ok(None)
+    }
+}
+
 async fn initialize_openai_curated_marketplace_from_github(home: &Path) -> anyhow::Result<()> {
     let bytes = download_openai_plugins_zip().await?;
     install_openai_plugins_zip(home, &bytes)
@@ -731,6 +791,11 @@ async fn initialize_openai_curated_marketplace_from_github(home: &Path) -> anyho
 async fn initialize_product_design_marketplace_from_github(home: &Path) -> anyhow::Result<()> {
     let bytes = download_codex_skills_alternative_zip().await?;
     install_product_design_marketplace_zip(home, &bytes)
+}
+
+async fn initialize_matt_pocock_skills_marketplace_from_github(home: &Path) -> anyhow::Result<()> {
+    let bytes = download_matt_pocock_skills_zip().await?;
+    install_matt_pocock_skills_marketplace_zip(home, &bytes)
 }
 
 async fn download_openai_plugins_zip() -> anyhow::Result<Vec<u8>> {
@@ -775,6 +840,30 @@ async fn download_codex_skills_alternative_zip() -> anyhow::Result<Vec<u8>> {
     if bytes.len() > CODEX_SKILLS_ALTERNATIVE_DOWNLOAD_LIMIT_BYTES {
         anyhow::bail!(
             "DKeken/codex-skills-alternative download is too large: {} bytes",
+            bytes.len()
+        );
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn download_matt_pocock_skills_zip() -> anyhow::Result<Vec<u8>> {
+    let client =
+        crate::http_client::proxied_client(&format!("ClaudeCodexPro/{}", crate::version::VERSION))?;
+    let bytes = client
+        .get(MATT_POCOCK_SKILLS_ZIP_URL)
+        .header(reqwest::header::ACCEPT, "application/zip")
+        .timeout(OPENAI_PLUGINS_DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+        .context("failed to download mattpocock/skills marketplace")?
+        .error_for_status()
+        .context("mattpocock/skills marketplace download returned an error status")?
+        .bytes()
+        .await
+        .context("failed to read mattpocock/skills download body")?;
+    if bytes.len() > MATT_POCOCK_SKILLS_DOWNLOAD_LIMIT_BYTES {
+        anyhow::bail!(
+            "mattpocock/skills download is too large: {} bytes",
             bytes.len()
         );
     }
@@ -851,6 +940,138 @@ fn install_product_design_marketplace_zip(home: &Path, bytes: &[u8]) -> anyhow::
         let _ = std::fs::remove_dir_all(&marketplace_staging);
     }
     result
+}
+
+fn install_matt_pocock_skills_marketplace_zip(home: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let destination = home
+        .join("plugins")
+        .join("cache")
+        .join("mattpocock-skills-marketplace");
+    let staging_parent = home.join(".tmp");
+    std::fs::create_dir_all(&staging_parent)
+        .with_context(|| format!("failed to create {}", staging_parent.display()))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let source_staging = staging_parent.join(format!("mattpocock-skills-source-{stamp}"));
+    let marketplace_staging = staging_parent.join(format!("mattpocock-skills-marketplace-{stamp}"));
+    for path in [&source_staging, &marketplace_staging] {
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+    }
+    let result = extract_openai_plugins_zip(bytes, &source_staging)
+        .and_then(|_| validate_matt_pocock_skills_source_root(&source_staging))
+        .and_then(|_| {
+            build_matt_pocock_skills_marketplace_snapshot(&source_staging, &marketplace_staging)
+        })
+        .and_then(|_| validate_matt_pocock_skills_marketplace_root(&marketplace_staging))
+        .and_then(|_| {
+            replace_directory_with_backup_name(
+                &marketplace_staging,
+                &destination,
+                "mattpocock-skills.previous-claude-codex-pro",
+            )
+        });
+    let _ = std::fs::remove_dir_all(&source_staging);
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&marketplace_staging);
+    }
+    result
+}
+
+fn validate_matt_pocock_skills_source_root(root: &Path) -> anyhow::Result<()> {
+    let manifest = root.join(".claude-plugin").join("plugin.json");
+    let ask_matt = root
+        .join("skills")
+        .join("engineering")
+        .join("ask-matt")
+        .join("SKILL.md");
+    if !manifest.is_file() || !ask_matt.is_file() {
+        anyhow::bail!("mattpocock/skills source is missing its plugin manifest or ask-matt skill");
+    }
+    Ok(())
+}
+
+fn build_matt_pocock_skills_marketplace_snapshot(
+    source: &Path,
+    destination: &Path,
+) -> anyhow::Result<()> {
+    let plugin_root = destination
+        .join("plugins")
+        .join(MATT_POCOCK_SKILLS_PLUGIN_NAME);
+    let plugin_manifest_root = plugin_root.join(".codex-plugin");
+    std::fs::create_dir_all(destination.join(".agents").join("plugins"))?;
+    std::fs::create_dir_all(&plugin_manifest_root)?;
+    std::fs::copy(
+        source.join(".claude-plugin").join("plugin.json"),
+        plugin_manifest_root.join("plugin.json"),
+    )?;
+    copy_directory_recursive(&source.join("skills"), &plugin_root.join("skills"))?;
+    for file_name in ["README.md", "LICENSE"] {
+        let source_file = source.join(file_name);
+        if source_file.is_file() {
+            std::fs::copy(&source_file, plugin_root.join(file_name))?;
+        }
+    }
+    let marketplace = serde_json::json!({
+        "name": MATT_POCOCK_SKILLS_MARKETPLACE,
+        "interface": { "displayName": "Matt Pocock Skills" },
+        "plugins": [{
+            "name": MATT_POCOCK_SKILLS_PLUGIN_NAME,
+            "source": { "source": "local", "path": "./plugins/mattpocock-skills" },
+            "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+            "category": "Engineering"
+        }]
+    });
+    let marketplace_path = destination
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    std::fs::write(
+        &marketplace_path,
+        ensure_trailing_newline(serde_json::to_string_pretty(&marketplace)?),
+    )?;
+    Ok(())
+}
+
+fn validate_matt_pocock_skills_marketplace_root(root: &Path) -> anyhow::Result<()> {
+    let marketplace_path = root
+        .join(".agents")
+        .join("plugins")
+        .join("marketplace.json");
+    let marketplace: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&marketplace_path)?)?;
+    if marketplace.get("name").and_then(serde_json::Value::as_str)
+        != Some(MATT_POCOCK_SKILLS_MARKETPLACE)
+    {
+        anyhow::bail!("Matt Pocock Skills marketplace name mismatch");
+    }
+    let authentication = marketplace
+        .get("plugins")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|plugins| plugins.first())
+        .and_then(|plugin| plugin.get("policy"))
+        .and_then(|policy| policy.get("authentication"))
+        .and_then(serde_json::Value::as_str);
+    if authentication != Some("ON_INSTALL") {
+        anyhow::bail!("Matt Pocock Skills marketplace authentication policy must be ON_INSTALL");
+    }
+    let plugin_root = root.join("plugins").join(MATT_POCOCK_SKILLS_PLUGIN_NAME);
+    if !plugin_root
+        .join(".codex-plugin")
+        .join("plugin.json")
+        .is_file()
+        || !plugin_root
+            .join("skills")
+            .join("engineering")
+            .join("ask-matt")
+            .join("SKILL.md")
+            .is_file()
+    {
+        anyhow::bail!("Matt Pocock Skills marketplace snapshot is incomplete");
+    }
+    Ok(())
 }
 
 fn validate_codex_skills_alternative_source_root(root: &Path) -> anyhow::Result<()> {
@@ -1653,6 +1874,33 @@ mod tests {
         validate_product_design_marketplace_root(&destination).unwrap();
     }
 
+    fn write_matt_pocock_skills_marketplace(home: &Path) {
+        let source = home.join("matt-skills-source");
+        std::fs::create_dir_all(source.join(".claude-plugin")).unwrap();
+        std::fs::create_dir_all(source.join("skills").join("engineering").join("ask-matt"))
+            .unwrap();
+        std::fs::write(
+            source.join(".claude-plugin").join("plugin.json"),
+            r#"{"name":"mattpocock-skills","version":"1.2.0","skills":["./skills/engineering/ask-matt"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source
+                .join("skills")
+                .join("engineering")
+                .join("ask-matt")
+                .join("SKILL.md"),
+            "---\nname: ask-matt\n---\n# Ask Matt\n",
+        )
+        .unwrap();
+        let destination = home
+            .join("plugins")
+            .join("cache")
+            .join("mattpocock-skills-marketplace");
+        build_matt_pocock_skills_marketplace_snapshot(&source, &destination).unwrap();
+        validate_matt_pocock_skills_marketplace_root(&destination).unwrap();
+    }
+
     fn write_simple_marketplace(root: &Path, name: &str, plugin: &str) {
         let marketplace_path = root
             .join(".agents")
@@ -1702,8 +1950,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         write_marketplace(temp.path());
         write_product_design_marketplace(temp.path());
+        write_matt_pocock_skills_marketplace(temp.path());
         ensure_openai_curated_marketplace_config(temp.path()).unwrap();
         ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+        ensure_matt_pocock_skills_marketplace_config(temp.path()).unwrap();
         ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
         std::fs::create_dir_all(
             temp.path()
@@ -1726,16 +1976,19 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         write_marketplace(temp.path());
         write_product_design_marketplace(temp.path());
+        write_matt_pocock_skills_marketplace(temp.path());
 
         let changed = ensure_openai_curated_marketplace_config(temp.path()).unwrap();
         let third_party_changed =
             ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
         let product_design_changed =
             ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+        let matt_changed = ensure_matt_pocock_skills_marketplace_config(temp.path()).unwrap();
 
         assert!(changed);
         assert!(third_party_changed);
         assert!(product_design_changed);
+        assert!(matt_changed);
         let status = status_from_home(temp.path());
         assert!(status.config_registered);
         assert!(status.needs_repair);
@@ -1745,6 +1998,7 @@ mod tests {
         assert!(config.contains("[marketplaces.openai-api-curated]"));
         assert!(config.contains("[marketplaces.awesome-codex-plugins]"));
         assert!(config.contains("[marketplaces.codex-skills-alternative]"));
+        assert!(config.contains("[marketplaces.mattpocock-skills]"));
         assert!(config.contains("source_type = \"git\""));
         assert!(config.contains(
             "source = \"https://github.com/hashgraph-online/awesome-codex-plugins.git\""
@@ -1753,12 +2007,15 @@ mod tests {
         assert!(config.contains("codex-skills-alternative-marketplace"));
         assert!(config.contains("ref = \"main\""));
         assert!(config.contains("sparse_paths = [\".agents/plugins\", \"plugins\"]"));
-        assert_eq!(status.repositories.len(), 3);
+        assert_eq!(status.repositories.len(), 4);
         assert!(status.repositories.iter().any(|repository| {
             repository.name == HASHGRAPH_AWESOME_CODEX_MARKETPLACE && repository.configured
         }));
         assert!(status.repositories.iter().any(|repository| {
             repository.name == CODEX_SKILLS_ALTERNATIVE_MARKETPLACE && repository.configured
+        }));
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == MATT_POCOCK_SKILLS_MARKETPLACE && repository.configured
         }));
         assert!(!config.contains("[plugins."));
     }
@@ -1807,6 +2064,24 @@ mod tests {
         assert!(!status.config_registered);
         assert!(status.repositories.iter().any(|repository| {
             repository.name == CODEX_SKILLS_ALTERNATIVE_MARKETPLACE && !repository.configured
+        }));
+    }
+
+    #[test]
+    fn status_requires_matt_pocock_skills_marketplace() {
+        let temp = tempfile::tempdir().unwrap();
+        write_marketplace(temp.path());
+        write_product_design_marketplace(temp.path());
+        ensure_openai_curated_marketplace_config(temp.path()).unwrap();
+        ensure_hashgraph_awesome_codex_marketplace_config(temp.path()).unwrap();
+        ensure_product_design_skill_marketplace_config(temp.path()).unwrap();
+
+        let status = status_from_home(temp.path());
+
+        assert!(status.needs_repair);
+        assert!(!status.config_registered);
+        assert!(status.repositories.iter().any(|repository| {
+            repository.name == MATT_POCOCK_SKILLS_MARKETPLACE && !repository.configured
         }));
     }
 
@@ -1875,6 +2150,41 @@ mod tests {
         assert!(config.contains("[marketplaces.codex-skills-alternative]"));
         assert!(config.contains("source_type = \"local\""));
         assert!(config.contains("codex-skills-alternative-marketplace"));
+        assert!(!config.contains("[plugins."));
+    }
+
+    #[test]
+    fn matt_pocock_skills_marketplace_snapshot_is_valid_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        write_matt_pocock_skills_marketplace(temp.path());
+
+        let first = ensure_matt_pocock_skills_marketplace_config(temp.path()).unwrap();
+        let second = ensure_matt_pocock_skills_marketplace_config(temp.path()).unwrap();
+
+        assert!(first);
+        assert!(!second);
+        let root = local_matt_pocock_skills_marketplace_root(temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(
+            root.join("plugins")
+                .join(MATT_POCOCK_SKILLS_PLUGIN_NAME)
+                .join("skills")
+                .join("engineering")
+                .join("ask-matt")
+                .join("SKILL.md")
+                .is_file()
+        );
+        let marketplace = std::fs::read_to_string(
+            root.join(".agents")
+                .join("plugins")
+                .join("marketplace.json"),
+        )
+        .unwrap();
+        assert!(marketplace.contains(r#""authentication": "ON_INSTALL""#));
+        let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+        assert!(config.contains("[marketplaces.mattpocock-skills]"));
+        assert!(config.contains("mattpocock-skills-marketplace"));
         assert!(!config.contains("[plugins."));
     }
 

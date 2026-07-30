@@ -380,6 +380,13 @@ function previewCodexPluginMarketplace(message = "预览模式 Codex OpenAI 插�
           source: "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace",
           configured: true,
         },
+        {
+          label: "Matt Pocock Skills 仓库",
+          name: "mattpocock-skills",
+          sourceType: "local",
+          source: "~\\.codex\\plugins\\cache\\mattpocock-skills-marketplace",
+          configured: true,
+        },
       ],
     },
   });
@@ -864,6 +871,13 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
             name: "codex-skills-alternative",
             sourceType: "local",
             source: "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace",
+            configured: true,
+          },
+          {
+            label: "Matt Pocock Skills 仓库",
+            name: "mattpocock-skills",
+            sourceType: "local",
+            source: "~\\.codex\\plugins\\cache\\mattpocock-skills-marketplace",
             configured: true,
           },
         ],

@@ -10,6 +10,11 @@ export const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE =
   "https://github.com/DKeken/codex-skills-alternative";
 export const CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE =
   "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace";
+export const CODEX_MATT_POCOCK_SKILLS_MARKETPLACE_NAME = "mattpocock-skills";
+export const CODEX_MATT_POCOCK_SKILLS_MARKETPLACE_SOURCE =
+  "https://github.com/mattpocock/skills";
+export const CODEX_MATT_POCOCK_SKILLS_MARKETPLACE_LOCAL_SOURCE =
+  "~\\.codex\\plugins\\cache\\mattpocock-skills-marketplace";
 export const PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX = "tools-plugin-repository-repair";
 export const SUPPLIER_DRAG_MIME_TYPE = "application/x-claude-codex-pro-supplier-id";
 

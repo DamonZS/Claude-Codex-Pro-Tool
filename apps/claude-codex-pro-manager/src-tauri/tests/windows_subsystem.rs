@@ -940,6 +940,9 @@ fn plugin_memory_tools_ui_regression_is_locked_down() {
     assert!(app_tsx.contains("Product Design Skill 仓库"));
     assert!(app_tsx.contains("codex-skills-alternative"));
     assert!(app_tsx.contains("codex-skills-alternative-marketplace"));
+    assert!(app_tsx.contains("Matt Pocock Skills 仓库"));
+    assert!(app_tsx.contains("mattpocock-skills"));
+    assert!(app_tsx.contains("https://github.com/mattpocock/skills"));
     assert!(app_tsx.contains("codexMarketplaceAutoRegisterRef"));
     assert!(app_tsx.contains("repairCodexPluginMarketplace(true)"));
     assert!(app_tsx.contains("repository.configured ? \"配置已写入\" : \"配置未写入\""));
