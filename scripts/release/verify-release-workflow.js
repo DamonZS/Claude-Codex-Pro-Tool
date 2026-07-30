@@ -73,12 +73,13 @@ for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   mustContain(source, "package-dmg.sh", `${label} macOS DMG build`);
   mustContain(source, "dist/macos/", `${label} macOS artifact path`);
   mustContain(source, "runs-on: windows-latest", `${label} Windows runner`);
-  mustContain(source, "runner: macos-latest", `${label} macOS runner`);
-  assert.ok(source.match(/runner: macos-latest/g)?.length >= 2, `${label} must use macos-latest for both macOS matrix entries`);
+  mustContain(source, "runner: macos-15-intel", `${label} macOS x64 Intel runner`);
+  mustContain(source, "runner: macos-latest", `${label} macOS arm64 runner`);
+  assert.equal(source.match(/runner: macos-latest/g)?.length, 1, `${label} must reserve macos-latest for arm64`);
   mustContain(source, "uses: actions/checkout@v5", `${label} checkout action`);
   mustContain(source, "uses: actions/setup-node@v5", `${label} setup-node action`);
   mustContain(source, 'node-version: "24"', `${label} Node.js version`);
-  for (const deprecated of ["windows-2025", "macos-15-intel", "macos-14", "macos-26-intel", "macos-26", "actions/checkout@v4", "actions/setup-node@v4", 'node-version: "22"']) {
+  for (const deprecated of ["windows-2025", "macos-14", "macos-26-intel", "macos-26", "actions/checkout@v4", "actions/setup-node@v4", 'node-version: "22"']) {
     mustNotContain(source, deprecated, `${label} deprecated runner/action`);
   }
 }

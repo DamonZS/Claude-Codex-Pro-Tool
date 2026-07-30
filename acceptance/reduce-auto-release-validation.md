@@ -13,7 +13,8 @@
    - 证据：工作流契约测试。
 
 3. 自动发布保留产物验证和发布行为。
-   - 通过标准：Windows installer/ZIP、macOS DMG/ZIP、bundle/plist/codesign、资产数量、上传、`latest.json`、发布和失败草稿清理逻辑保持存在。
+- 通过标准：Windows installer/ZIP、macOS DMG/ZIP、bundle/plist/codesign、资产数量、上传、`latest.json`、发布和失败草稿清理逻辑保持存在。
+- 通过标准：三个发布 workflow 的 x64 matrix 使用 `macos-15-intel`，arm64 matrix 使用 `macos-latest`，避免 ARM runner 交叉签名 x64 MCP 子组件。
    - 证据：现有工作流契约断言通过。
 
 4. PR Build 保留完整质量门禁。

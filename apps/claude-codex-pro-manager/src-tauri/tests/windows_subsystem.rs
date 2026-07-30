@@ -378,14 +378,14 @@ fn watcher_install_uses_resolved_existing_launcher_path() {
 
 fn assert_release_workflow_uses_current_hosted_runners(workflow: &str) {
     assert!(workflow.contains("runs-on: windows-latest"));
+    assert!(workflow.contains("runner: macos-15-intel"));
     assert!(workflow.contains("runner: macos-latest"));
-    assert!(workflow.matches("runner: macos-latest").count() >= 2);
+    assert_eq!(workflow.matches("runner: macos-latest").count(), 1);
     assert!(workflow.contains("uses: actions/checkout@v5"));
     assert!(workflow.contains("uses: actions/setup-node@v5"));
     assert!(workflow.contains("node-version: \"24\""));
     for deprecated in [
         "windows-2025",
-        "macos-15-intel",
         "macos-14",
         "macos-26-intel",
         "macos-26",
@@ -792,14 +792,14 @@ fn pr_build_workflow_refreshes_manager_frontend_before_packaging() {
     assert!(workflow.contains("uses: actions/setup-node@v5"));
     assert!(workflow.contains("uses: actions/upload-artifact@v5"));
     assert!(workflow.contains("node-version: \"24\""));
+    assert!(workflow.contains("runner: macos-15-intel"));
     assert!(workflow.contains("runner: macos-latest"));
-    assert!(workflow.matches("runner: macos-latest").count() >= 2);
+    assert_eq!(workflow.matches("runner: macos-latest").count(), 1);
     assert!(workflow.contains("dist/macos/stage/Claude Codex Pro.app"));
     assert!(!workflow.contains("dist/macos/stage/Claude Codex Pro Manager.app"));
     assert!(!workflow.contains("Claude Codex Pro 绠＄悊宸ュ叿.app"));
     assert!(!workflow.contains("Claude Codex Pro 管理工具.app"));
     for deprecated in [
-        "macos-15-intel",
         "macos-14",
         "actions/checkout@v4",
         "actions/setup-node@v4",
@@ -3270,7 +3270,8 @@ fn codex_restart_has_real_macos_process_control() {
     let watcher = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../crates/claude-codex-pro-core/src/watcher.rs"
-    ));
+    ))
+    .replace("\r\n", "\n");
 
     assert!(watcher.contains("fn macos_process_inventory()"));
     assert!(watcher.contains("Command::new(\"/bin/ps\")"));

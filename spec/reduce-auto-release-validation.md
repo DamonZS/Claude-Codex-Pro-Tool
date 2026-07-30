@@ -24,6 +24,7 @@
 - Windows 和 macOS 自动发布 job 都保留 `npm run vite:build`。
 - Windows 保留 `cargo build --release`、NSIS、ZIP 和上传步骤。
 - macOS 保留目标架构 release build、DMG、ZIP、bundle/plist/codesign 验证和上传步骤。
+- macOS x64 必须在 Intel hosted runner 上原生构建与签名，arm64 使用当前 `macos-latest`；不得在 Apple Silicon runner 上交叉签名 x64 嵌套运行时。
 - `pr-build.yml` 保留 `npm run check`、`npm run vite:build`、`cargo test --workspace` 和 release build。
 - 自动 Release Notes 不再声称 TypeScript 检查或 workspace 测试已在发布工作流中运行。
 
