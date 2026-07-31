@@ -75,7 +75,7 @@ pub fn user_data_candidates_from(local: Option<&Path>, roaming: Option<&Path>) -
 pub fn find_macos_codex_app(search_roots: &[PathBuf]) -> Option<PathBuf> {
     for root in search_roots {
         for candidate in macos_app_candidates(root) {
-            if candidate.is_dir() {
+            if is_macos_codex_bundle(&candidate) {
                 return Some(candidate);
             }
         }
@@ -85,6 +85,7 @@ pub fn find_macos_codex_app(search_roots: &[PathBuf]) -> Option<PathBuf> {
 
 pub fn find_macos_codex_app_default() -> Option<PathBuf> {
     find_macos_codex_app(&macos_codex_search_roots_default())
+        .or_else(find_macos_codex_app_from_spotlight)
 }
 
 pub fn resolve_codex_app_dir(app_dir: Option<&Path>) -> Option<PathBuf> {
@@ -247,7 +248,25 @@ pub fn find_running_codex_app_dir() -> Option<PathBuf> {
         .find(|path| codex_app_version(path).is_some())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn find_running_codex_app_dir() -> Option<PathBuf> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| {
+            line.contains("/Contents/MacOS/ChatGPT") || line.contains("/Contents/MacOS/Codex")
+        })
+        .filter_map(macos_app_bundle_from_process_line)
+        .find(|app| is_macos_codex_bundle(app))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn find_running_codex_app_dir() -> Option<PathBuf> {
     None
 }
@@ -274,6 +293,14 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
     }
 
     if path.extension() == Some(OsStr::new("app")) {
+        let name = path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if name.contains("chatgpt") && !is_macos_codex_bundle(path) {
+            return None;
+        }
         return Some(path.to_path_buf());
     }
 
@@ -325,7 +352,12 @@ pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {
 
 pub fn build_codex_executable(app_dir: &Path) -> PathBuf {
     if app_dir.extension() == Some(OsStr::new("app")) {
-        return app_dir.join("Contents").join("MacOS").join("Codex");
+        let macos_dir = app_dir.join("Contents").join("MacOS");
+        let chatgpt = macos_dir.join("ChatGPT");
+        if chatgpt.exists() {
+            return chatgpt;
+        }
+        return macos_dir.join("Codex");
     }
     let shell = app_dir.join("ChatGPT.exe");
     if shell.exists() {
@@ -434,10 +466,76 @@ fn macos_app_candidates(root: &Path) -> Vec<PathBuf> {
     if root.extension() == Some(OsStr::new("app")) {
         return vec![root.to_path_buf()];
     }
-    ["Codex.app", "OpenAI Codex.app", "OpenAI.Codex.app"]
-        .into_iter()
-        .map(|name| root.join(name))
-        .collect()
+    let mut candidates = [
+        "Codex.app",
+        "OpenAI Codex.app",
+        "OpenAI.Codex.app",
+        "ChatGPT.app",
+        "OpenAI ChatGPT.app",
+    ]
+    .into_iter()
+    .map(|name| root.join(name))
+    .collect::<Vec<_>>();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        candidates.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension() == Some(OsStr::new("app"))),
+        );
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn is_macos_codex_bundle(app: &Path) -> bool {
+    if !app.is_dir() || app.extension() != Some(OsStr::new("app")) {
+        return false;
+    }
+    let name = app
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let resources = app.join("Contents").join("Resources");
+    let macos = app.join("Contents").join("MacOS");
+    let has_main_executable = macos.join("ChatGPT").exists() || macos.join("Codex").exists();
+    if name.contains("codex") {
+        return has_main_executable;
+    }
+    name.contains("chatgpt") && resources.join("codex").exists() && has_main_executable
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_codex_app_from_spotlight() -> Option<PathBuf> {
+    let output = std::process::Command::new("mdfind")
+        .arg(
+            "kMDItemContentType == 'com.apple.application-bundle' && (kMDItemFSName == 'Codex.app' || kMDItemFSName == 'OpenAI Codex.app' || kMDItemFSName == 'OpenAI.Codex.app' || kMDItemFSName == 'ChatGPT.app' || kMDItemFSName == 'OpenAI ChatGPT.app')",
+        )
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|app| is_macos_codex_bundle(app))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn find_macos_codex_app_from_spotlight() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_from_process_line(line: &str) -> Option<PathBuf> {
+    let app_end = line.find(".app/")? + ".app".len();
+    let app_start = line[..app_end].find('/')?;
+    Some(PathBuf::from(&line[app_start..app_end]))
 }
 
 fn version_tuple(path: &Path) -> Option<Vec<u32>> {

@@ -647,6 +647,15 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
     });
   }
+  if (command === "run_maintenance_check") {
+    return ok("检查完成，预览模式已确认管理工具状态。", {
+      codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe",
+      claudeAppPaths: [],
+      repairedItems: ["CCP 启动入口已确认正常"],
+      remainingIssues: [],
+      details: ["预览模式不会修改真实系统。"],
+    });
+  }
   if (command === "load_ads") {
     return ok("预览模式已加载公告。", {
       version: announcementConfig.version,

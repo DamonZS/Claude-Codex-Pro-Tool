@@ -44,6 +44,14 @@ export type OverviewResult = CommandResult<{
   logs_path: string;
 }>;
 
+export type MaintenanceCheckResult = CommandResult<{
+  codexAppPath: string;
+  claudeAppPaths: string[];
+  repairedItems: string[];
+  remainingIssues: string[];
+  details: string[];
+}>;
+
 export type AnnouncementItem = {
   id: string;
   type: string;

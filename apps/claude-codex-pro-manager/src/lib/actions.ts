@@ -24,6 +24,7 @@ import type {
   LocalSession,
   LocalSessionsResult,
   LogsResult,
+  MaintenanceCheckResult,
   MemoryItemEditRequest,
   MemoryNewProjectGuideResult,
   MemoryOutcomeDashboardResult,
@@ -49,6 +50,7 @@ import type {
 export function createActionsShape() {
   return {
     refreshRoute: async (_route?: Route, _options?: { notify?: boolean }) => {},
+    runMaintenanceCheck: async () => null as MaintenanceCheckResult | null,
     showNotice: (_notice: { title: string; message: string; status?: Status } | null) => {},
     openClaudeChinese: async () => {},
     installClaudeZhPatch: async () => {},

@@ -62,6 +62,7 @@ pub fn run() {
             commands::backend_version,
             commands::startup_options,
             commands::load_overview,
+            commands::run_maintenance_check,
             commands::load_claude_desktop_status,
             commands::load_claude_desktop_status_light,
             commands::load_claude_desktop_integrity,

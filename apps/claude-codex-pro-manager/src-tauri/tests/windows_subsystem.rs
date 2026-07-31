@@ -4985,6 +4985,64 @@ fn settings_and_tools_route_keep_full_ops_controls() {
 }
 
 #[test]
+fn maintenance_check_runs_full_scan_auto_repair_with_visible_feedback() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app = read_frontend_file("App.tsx");
+    let screens = read_frontend_file("screens.tsx");
+    let actions = read_frontend_file("lib/actions.ts");
+    let types = read_frontend_file("types.ts");
+    let bridge = read_frontend_file("tauriBridge.ts");
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+
+    let maintenance_panel = screens
+        .split("export function MaintenanceToolsPanel")
+        .nth(1)
+        .and_then(|rest| rest.split("export function").next())
+        .expect("maintenance tools panel source");
+    assert!(maintenance_panel.contains("actions.runMaintenanceCheck()"));
+    assert!(!maintenance_panel.contains("actions.refreshRoute(\"maintenance\")"));
+
+    let maintenance_action = app
+        .split("const runMaintenanceCheck = async () => {")
+        .nth(1)
+        .and_then(|rest| rest.split("const refreshRoute").next())
+        .expect("maintenance action source");
+    assert!(maintenance_action.contains("正在全量扫描 Codex、Claude 和管理工具"));
+    assert!(maintenance_action.contains("status: \"running\""));
+    assert!(maintenance_action.contains("await waitForPaint()"));
+    assert!(maintenance_action.contains("call<MaintenanceCheckResult>(\"run_maintenance_check\")"));
+    assert!(maintenance_action.contains("refreshOverview(true)"));
+    assert!(maintenance_action.contains("refreshSettings(true)"));
+    assert!(maintenance_action.contains("refreshClaude(true)"));
+    assert!(maintenance_action.contains("refreshWatcher(true)"));
+    assert!(maintenance_action.contains("notifyResult({ title: \"维护检查\""));
+    assert!(
+        maintenance_action.find("await waitForPaint()").unwrap()
+            < maintenance_action.find("run_maintenance_check").unwrap()
+    );
+
+    assert!(
+        actions.contains("runMaintenanceCheck: async () => null as MaintenanceCheckResult | null")
+    );
+    assert!(types.contains("export type MaintenanceCheckResult = CommandResult<{"));
+    assert!(types.contains("codexAppPath: string"));
+    assert!(types.contains("claudeAppPaths: string[]"));
+    assert!(types.contains("repairedItems: string[]"));
+    assert!(types.contains("remainingIssues: string[]"));
+    assert!(bridge.contains("command === \"run_maintenance_check\""));
+
+    assert!(commands.contains("pub async fn run_maintenance_check()"));
+    assert!(commands.contains("resolve_codex_app_dir(None)"));
+    assert!(commands.contains("settings.codex_app_path = codex_app_path"));
+    assert!(commands.contains("SettingsStore::default().save(&settings)"));
+    assert!(commands.contains("install::repair_shortcuts"));
+    assert!(commands.contains("ensure_cli_wrapper"));
+    assert!(commands.contains("ensure_detached_helper"));
+    assert!(lib.contains("commands::run_maintenance_check"));
+}
+
+#[test]
 fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let vite_config = manifest_dir.parent().unwrap().join("vite.config.ts");

@@ -4050,7 +4050,7 @@ export function MaintenanceToolsPanel({
           <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "正常" : compactDisplayPath(watcher?.disabled_flag)} />
         </div>
         <div className="action-row">
-          <Button onClick={() => void actions.refreshRoute("maintenance")} size="sm">检查</Button>
+          <Button onClick={() => void actions.runMaintenanceCheck()} size="sm">检查</Button>
           <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复快捷方式</Button>
           <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
         </div>

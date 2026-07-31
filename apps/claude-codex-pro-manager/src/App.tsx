@@ -212,6 +212,7 @@ import type {
   LocalSessionProjectGroup,
   LocalSessionsResult,
   LogsResult,
+  MaintenanceCheckResult,
   McpbPackageResult,
   MemoryCandidate,
   MemoryCandidateResult,
@@ -2286,6 +2287,28 @@ export function App() {
     }
   };
 
+  const runMaintenanceCheck = async () => {
+    setNotice({
+      title: "维护检查",
+      message: "正在全量扫描 Codex、Claude 和管理工具，并自动修复安全异常...",
+      status: "running",
+    });
+    await waitForPaint();
+    const result = await run(
+      () => call<MaintenanceCheckResult>("run_maintenance_check"),
+      "维护检查",
+    );
+    if (!result) return null;
+    await Promise.all([
+      refreshOverview(true),
+      refreshSettings(true),
+      refreshClaude(true),
+      refreshWatcher(true),
+    ]);
+    notifyResult({ title: "维护检查", message: result.message, status: result.status });
+    return result;
+  };
+
   const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {
     const shouldNotify = options.notify === true;
     const refreshTitle = `刷新${routeLabel(target)}`;
@@ -2431,6 +2454,7 @@ export function App() {
   const actionsRef = useRef<AppActions | null>(null);
   actionsRef.current = {
       refreshRoute,
+      runMaintenanceCheck,
       showNotice: setNotice,
       openClaudeChinese,
       installClaudeZhPatch,
@@ -2556,6 +2580,7 @@ export function App() {
 
   const actions = useMemo<AppActions>(() => ({
       refreshRoute: (...args) => actionsRef.current!.refreshRoute(...args),
+      runMaintenanceCheck: (...args) => actionsRef.current!.runMaintenanceCheck(...args),
       showNotice: (...args) => actionsRef.current!.showNotice(...args),
       openClaudeChinese: (...args) => actionsRef.current!.openClaudeChinese(...args),
       installClaudeZhPatch: (...args) => actionsRef.current!.installClaudeZhPatch(...args),
