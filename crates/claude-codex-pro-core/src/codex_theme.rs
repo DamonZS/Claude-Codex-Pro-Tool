@@ -2772,6 +2772,7 @@ fn render_diy_css(
   -webkit-text-fill-color: currentColor !important;
 }}
 
+.{scope} main,
 .{scope} main.main-surface {{
   background: var(--ccp-theme-diy-shell-surface) !important;
   border-color: var(--ccp-theme-diy-border) !important;
@@ -2814,7 +2815,7 @@ fn render_diy_css(
   text-shadow: 0 1px 2px var(--ccp-theme-diy-text-shadow) !important;
 }}
 
-.{scope} [role="main"]:has(
+.{scope} :is(main, [role="main"]):has(
   :is([data-feature="game-source"], [data-testid="home-icon"])
 ) {{
   background: transparent !important;
@@ -2822,7 +2823,7 @@ fn render_diy_css(
   overflow-x: hidden !important;
 }}
 
-.{scope} [role="main"]:has(
+.{scope} :is(main, [role="main"]):has(
   :is([data-feature="game-source"], [data-testid="home-icon"])
 ) > div:has([data-feature="game-source"]) > div:first-child {{
   flex: 0 0 auto !important;
@@ -4333,8 +4334,11 @@ mod tests {
         assert!(card_css.contains("background-image: none !important;"));
 
         for css in [&fullscreen_css, &banner_css, &card_css] {
+            assert!(css.contains("main,\n."));
+            assert!(css.contains("main.main-surface {"));
             assert!(css.contains("opacity: 1 !important;"));
             assert!(css.contains("-webkit-text-fill-color: currentColor !important;"));
+            assert!(css.contains(":is(main, [role=\"main\"]):has("));
             assert!(
                 css.contains(") > div:has([data-feature=\"game-source\"]) > div:first-child {")
             );

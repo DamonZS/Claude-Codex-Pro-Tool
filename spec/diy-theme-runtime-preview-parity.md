@@ -55,6 +55,7 @@ DIY 主题工作台已经提供全屏背景、上方长条和中央大卡片三�
 
 ### 共同行为
 
+- Codex 主工作区必须同时兼容新版原生 `main` 元素与旧版 `[role="main"]` 结构；不得依赖 `main-surface` 这类可能变化的类名才能应用工作区表面。
 - 首页标题字重使用 450，与实时预览一致。
 - 首页主视觉组不再沿用 Codex 的底部对齐逻辑；三种模式都从主工作区顶部 64px 处开始，图片变高时标题随图片向下移动，而不是图片向上漂移。
 - 图片主视觉使用独立的 `background-color`、`background-image`、`background-position`、`background-size` 和 `background-repeat` 长属性，避免 Chromium 丢弃包含图片层和纯颜色层的无效简写。

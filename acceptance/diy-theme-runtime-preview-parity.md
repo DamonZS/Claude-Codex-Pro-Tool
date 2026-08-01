@@ -6,6 +6,7 @@
 
 ### 运行时 CSS
 
+- DIY CSS 对原生 `main` 应用工作区表面，并保留旧 `[role="main"]` 首页结构兼容；真实 Renderer 中主工作区计算背景不得继续是 Codex 默认不透明白色。
 - 全屏 DIY CSS 包含 78% 自动背景色工作区表面、96% 自动表面色 Composer 和完全不透明侧栏。
 - 全屏根画布继续引用 `var(--ccp-theme-art, none)`，不包含额外全屏渐变，相关表面 `backdrop-filter` 为 `none`。
 - 全屏原生首页图标使用 `50%` 圆角。
