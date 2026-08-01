@@ -493,6 +493,7 @@ pub struct UpstreamProxyResponse {
     pub status_code: u16,
     pub content_type: String,
     pub is_stream: bool,
+    pub requires_response_conversion: bool,
     pub response: reqwest::Response,
 }
 
@@ -902,14 +903,16 @@ async fn open_responses_proxy_request_with_relay(
     body: &str,
     relay: &RelayProfile,
 ) -> anyhow::Result<UpstreamProxyResponse> {
-    if relay.protocol != RelayProtocol::ChatCompletions {
-        anyhow::bail!("当前中转未启用 Chat Completions 协议代理");
+    if !relay.route_enabled {
+        anyhow::bail!("当前 Codex 供应商未开启路由");
     }
-    if relay.base_url.trim().is_empty() {
-        anyhow::bail!("Chat Completions 上游 Base URL 不能为空");
+    let base_url = relay_profile_upstream_base_url(relay);
+    let api_key = crate::settings::relay_profile_resolved_api_key(relay);
+    if base_url.trim().is_empty() {
+        anyhow::bail!("上游 Base URL 不能为空");
     }
-    if relay.api_key.trim().is_empty() {
-        anyhow::bail!("Chat Completions 上游 Key 不能为空");
+    if api_key.trim().is_empty() {
+        anyhow::bail!("上游 Key 不能为空");
     }
 
     let request_json: Value = serde_json::from_str(body)?;
@@ -917,17 +920,24 @@ async fn open_responses_proxy_request_with_relay(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let chat_request = responses_to_chat_completions(request_json.clone())?;
+    let upstream_request = match relay.protocol {
+        RelayProtocol::Responses => request_json.clone(),
+        RelayProtocol::ChatCompletions => responses_to_chat_completions(request_json.clone())?,
+    };
     let client = if is_stream {
         crate::http_client::streaming_proxy_client(&relay.user_agent)?
     } else {
         crate::http_client::proxied_client(&relay.user_agent)?
     };
+    let upstream_url = match relay.protocol {
+        RelayProtocol::Responses => responses_url(&base_url),
+        RelayProtocol::ChatCompletions => chat_completions_url(&base_url),
+    };
     let upstream = client
-        .post(chat_completions_url(&relay.base_url))
-        .bearer_auth(relay.api_key.trim())
+        .post(upstream_url)
+        .bearer_auth(api_key.trim())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&chat_request)
+        .json(&upstream_request)
         .send()
         .await?;
     let status_code = upstream.status().as_u16();
@@ -942,8 +952,17 @@ async fn open_responses_proxy_request_with_relay(
         status_code,
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
+        requires_response_conversion: relay.protocol == RelayProtocol::ChatCompletions,
         response: upstream,
     })
+}
+
+fn relay_profile_upstream_base_url(relay: &RelayProfile) -> String {
+    if !relay.upstream_base_url.trim().is_empty() {
+        relay.upstream_base_url.trim().to_string()
+    } else {
+        relay.base_url.trim().to_string()
+    }
 }
 
 pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse> {
@@ -977,6 +996,7 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
         status_code,
         is_stream: false,
         content_type,
+        requires_response_conversion: false,
         response: upstream,
     })
 }
@@ -1248,6 +1268,7 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         status_code,
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
+        requires_response_conversion: false,
         response: upstream,
     })
 }
@@ -1560,6 +1581,7 @@ pub async fn open_chat_completions_proxy_request(
         status_code,
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
+        requires_response_conversion: false,
         response: upstream,
     })
 }
@@ -1570,6 +1592,7 @@ pub async fn handle_responses_proxy_request(body: &str) -> anyhow::Result<ProxyH
     let status_code = upstream.status_code;
     let upstream_content_type = upstream.content_type.clone();
     let is_stream = upstream.is_stream;
+    let requires_response_conversion = upstream.requires_response_conversion;
     let upstream_body = upstream.response.bytes().await?;
 
     if !(200..300).contains(&status_code) {
@@ -1579,6 +1602,14 @@ pub async fn handle_responses_proxy_request(body: &str) -> anyhow::Result<ProxyH
             status: http_status_line(status_code),
             content_type: "application/json; charset=utf-8".to_string(),
             body: serde_json::to_vec(&error)?,
+        });
+    }
+
+    if !requires_response_conversion {
+        return Ok(ProxyHttpResponse {
+            status: http_status_line(status_code),
+            content_type: upstream_content_type,
+            body: upstream_body.to_vec(),
         });
     }
 
@@ -1613,6 +1644,26 @@ pub fn chat_completions_url(base_url: &str) -> String {
         format!("{base}/chat/completions")
     } else {
         format!("{base}/v1/chat/completions")
+    };
+    while url.contains("/v1/v1") {
+        url = url.replace("/v1/v1", "/v1");
+    }
+    url
+}
+
+pub fn responses_url(base_url: &str) -> String {
+    let skip_version_prefix = base_url.trim().ends_with('#');
+    let base = base_url.trim().trim_end_matches('#').trim_end_matches('/');
+    if base.to_ascii_lowercase().ends_with("/responses") {
+        return base.to_string();
+    }
+    let origin_only = base
+        .split_once("://")
+        .map_or(!base.contains('/'), |(_, rest)| !rest.contains('/'));
+    let mut url = if skip_version_prefix || has_version_suffix(base) || !origin_only {
+        format!("{base}/responses")
+    } else {
+        format!("{base}/v1/responses")
     };
     while url.contains("/v1/v1") {
         url = url.replace("/v1/v1", "/v1");
@@ -4793,6 +4844,7 @@ mod tests {
             base_url: format!("http://{address}"),
             api_key: "test-key".to_string(),
             protocol: RelayProtocol::ChatCompletions,
+            route_enabled: true,
             ..RelayProfile::default()
         };
         let body = json!({
@@ -4822,6 +4874,45 @@ mod tests {
         assert!(headers.starts_with("POST /v1/chat/completions HTTP/1.1"));
         assert_eq!(request_json["model"], "gpt-5.6-sol");
         assert!(!request_body.contains("gpt-5.4"));
+    }
+
+    #[tokio::test]
+    async fn responses_proxy_transparently_forwards_native_responses_upstream() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || capture_upstream_requests(listener));
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            api_key: "test-key".to_string(),
+            protocol: RelayProtocol::Responses,
+            route_enabled: true,
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "input": "preserve responses payload",
+            "stream": false
+        })
+        .to_string();
+
+        let response = open_responses_proxy_request_with_relay(&body, &relay)
+            .await
+            .expect("proxy request should succeed");
+        assert_eq!(response.status_code, 200);
+        assert!(!response.requires_response_conversion);
+        drop(response);
+
+        let (request_count, request) = server.join().expect("mock upstream should finish");
+        let (headers, request_body) = request
+            .split_once("\r\n\r\n")
+            .expect("captured request should contain headers and body");
+        let request_json: Value =
+            serde_json::from_str(request_body).expect("captured body should be JSON");
+
+        assert_eq!(request_count, 1);
+        assert!(headers.starts_with("POST /v1/responses HTTP/1.1"));
+        assert_eq!(request_json["input"], "preserve responses payload");
+        assert_eq!(request_json["model"], "gpt-5.6-sol");
     }
 
     #[tokio::test]

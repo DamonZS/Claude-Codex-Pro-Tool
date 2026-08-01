@@ -8484,6 +8484,25 @@ body {
   color: rgba(203, 213, 225, 0.72);
 }
 
+/* The supplier editor owns the available route height. Its form body is the
+ * only vertical scroll region, so the header and actions remain visible. */
+.ops-screen[data-route="supplier"]:has(.supplier-ccswitch-editor) {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.ops-screen[data-route="supplier"]:has(.supplier-ccswitch-editor) > .ops-page-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ops-screen[data-route="supplier"]:has(.supplier-ccswitch-editor) .supplier-ccswitch-editor {
+  height: 100%;
+  min-height: 0;
+}
+
 /* Claude supplier editor: cc-switch structure, manager dark tone. */
 .supplier-ccswitch-editor {
   position: relative;
@@ -8530,10 +8549,14 @@ body {
   align-content: start;
   gap: 20px;
   width: 100%;
+  min-height: 0;
   max-width: none;
   margin: 0;
   padding: 32px max(16px, calc((100% - 880px) / 2));
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .supplier-ccswitch-form-grid.two {
@@ -9039,11 +9062,21 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
 }
 
 .supplier-ccswitch-savebar > span {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ops-muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-ccswitch-savebar .action-row {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
 @media (max-width: 860px) {

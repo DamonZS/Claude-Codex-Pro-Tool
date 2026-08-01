@@ -34,13 +34,20 @@
   - `install_patch_at_with_resources_impl()` 的写入顺序：先写 i18n 资源 → **第 4 步 `write_locale_config()` 写 `locale=zh-CN`** → 之后 `find_patchable_chunks()` + 逐个 `patch_chunk()`（chunk 数量多，实测耗时约 2.5 分钟）→ 最后才 `status_for_paths()` 校验。
 - 根因：`install_claude_zh_patch_internal()` 开头调了 `close_claude_desktop_for_patch()` 关闭 Claude，但 **MSIX 版 Claude 会被系统/用户自动重新拉起**；在 locale 写入（早）到最终校验（晚约 2.5 分钟）的长窗口里，重启的 Claude 把它自己的 `config.json` 的 `locale` 覆盖回 `en-US`。最终 `status_for_paths()` 读到 en-US → `locale_configured=false` → 整体判 failed。这又触发缺陷 #1 的 `false` 返回，形成“卡死 + 没成功”的合并症状。
 
+### 缺陷 #3：提权写入 locale 后，`Claude-3p/config.json` 的 ACL 未明确归还给原用户
+
+- 提权入口已经接收启动管理工具的目标用户 SID。该 SID 代表补丁完成后实际运行 Claude、读取和更新 `%LOCALAPPDATA%\\Claude-3p\\config.json` 的用户，而不是提权子进程的管理员令牌。
+- 若提权写入或 ACL 收紧后只保留 `OWNER RIGHTS`，文件所有者、提权管理员和原用户的实际访问语义会随所有者变化，不能保证 Claude 进程仍可读写配置。这会造成 locale 已落盘但随后 Claude 无法更新/读取配置的回归。
+- 修复必须在写入该 `config.json` 后使用已传入的目标用户 SID 显式恢复访问，并同时保留 `SYSTEM` 的系统访问；不得以 `OWNER RIGHTS` 作为目标用户授权的替代。
+
 ## 目标
 
 ### 包含
 
 1. **修缺陷 #1**：确保提权/内部 CLI 子进程在完成 `--internal-install-claude-zh-patch` / `--internal-restore-claude-zh-patch` 后，**无论成功失败都立即干净退出，绝不 fall through 成 GUI**。父进程 `Start-Process -Wait` 应能及时拿到退出码，不再挂到超时。
 2. **修缺陷 #2**：确保补丁完成后 `locale_config` 稳定为 `zh-CN`，不被补丁过程中重启的 Claude 覆盖，从而 `locale_configured` 校验能通过、整体 `status == "ok"`。
-3. 保持既有安全边界与行为：提权判定逻辑（`patch_needs_elevation` / MSIX 需 UAC）不变；备份/还原语义不变；不弱化完整性校验（不得靠“跳过 locale 检查”来蒙混通过）。
+3. **修缺陷 #3**：提权入口已传入的目标用户 SID 必须被用于 `%LOCALAPPDATA%\\Claude-3p\\config.json` 写入后的 ACL 修复；目标 SID 与 `SYSTEM` 都获得显式、足以读写该配置的 DACL 授权。
+4. 保持既有安全边界与行为：提权判定逻辑（`patch_needs_elevation` / MSIX 需 UAC）不变；备份/还原语义不变；不弱化完整性校验（不得靠“跳过 locale 检查”来蒙混通过）。
 
 ### 不包含
 
@@ -49,6 +56,8 @@
 - 不改前端 `installClaudeZhPatch` 的交互流程与按钮（后端返回结构不变时前端无需改）。
 - 不改 i18n 资源内容、chunk patch 算法、语言白名单逻辑。
 - 不删除用户数据、备份，不改动 Claude 官方文件的补丁/还原策略边界。
+- 不修改 Claude Desktop 开发模式、调试开关或开发者配置。
+- 不修改供应商/Profile/路由配置，也不修改 Codex 或 Claude 的主题、主题包及主题注入逻辑。
 
 ## 用户视角
 
@@ -78,10 +87,16 @@
    - **重启后不被回刷的说明**：`complete_claude_zh_patch_install` 成功后会主动重启 Claude；实现须保证被重启的是「读取到 zh-CN 后的新实例」，而非补丁期间残留的旧 en-US 实例（例如确保重启前旧实例确已终止）。
    - **有界等待**：所有「确认 Claude 已关闭」的等待必须有超时上限（参考既有 `wait_for_claude_process_exit` 的 5s 语义），不得引入无限循环或无上限重试导致新的卡死。
    - 不得为此扩大提权范围、不得改写入目标目录策略、不得弱化完整性校验。
+6. **`Claude-3p/config.json` 的提权后 ACL（缺陷 #3）**：
+   - 提权入口已获得的目标用户 SID 必须原样传递到写入后 ACL 处理；不得回退为提权进程当前身份、文件所有者或名称猜测。
+   - 每次提权路径写入 `%LOCALAPPDATA%\\Claude-3p\\config.json` 后，DACL 必须包含目标用户 SID 与 `SYSTEM`（`S-1-5-18`）的显式、非继承 ACE；权限至少覆盖 Claude 对该配置所需的读取和更新。
+   - 可继续保留最小权限和既有继承保护策略，但 `OWNER RIGHTS`（`S-1-3-4`）不得作为目标用户或 `SYSTEM` 授权的唯一来源或替代项。
+   - 单文件 ACL 写入不得使用会把处理失败降级为成功退出码的继续执行模式；若底层工具存在这类语义，必须移除该模式或在命令后验证真实 DACL。
+   - 不得改变 config 的 JSON merge 语义、写入目标、备份路径或既有 UAC 判定；ACL 修复失败必须返回可诊断错误，不能报告补丁成功。
 
 ## 技术约束
 
-- 改动区域：`apps/claude-codex-pro-manager/src-tauri/src/commands.rs`（`handle_internal_cli` / 提权流程）、`apps/claude-codex-pro-manager/src-tauri/src/main.rs`（内部命令早退）、`crates/claude-codex-pro-core/src/claude_zh_patch.rs`（locale 写入时机/兜底、必要时关闭 Claude 的稳健性）。
+- 改动区域：`apps/claude-codex-pro-manager/src-tauri/src/commands.rs`（`handle_internal_cli` / 提权流程 / 目标用户 SID 传递）、`apps/claude-codex-pro-manager/src-tauri/src/main.rs`（内部命令早退）、`crates/claude-codex-pro-core/src/claude_zh_patch.rs`（locale 写入时机/兜底、必要时关闭 Claude 的稳健性）。仅当复用 ACL 写入 helper 必要时，可最小修改 `crates/claude-codex-pro-core/src/settings.rs`。
 - 安全敏感区（AGENTS.md 已标注 `install_patch_at*` / `run_claude_zh_patch_elevated` 涉及提权写文件）——最小必要改动，不扩大提权范围，不改写入目标目录策略。
 - 遵守 [[windows-subsystem-test-contract]]：`apps/claude-codex-pro-manager/src-tauri/tests/windows_subsystem.rs` 对 `commands.rs` / `main.rs` / `claude_zh_patch.rs` 有大量按源码文本的存在性/切片断言（如 `handle_internal_cli()`、`--internal-install-claude-zh-patch`、`detected_patch_needs_elevation()`、`ensure_patch_writable(paths)?;` 等）。若改动撞断言，可同步更新锚点，但不得改动被断言的用户可见文案文本本身。
 - 遵守 [[tauri-sync-command-blocks-ui]]：`install_claude_zh_patch` 是 async 命令，内部同步阻塞的提权等待应保持在 spawn_blocking / 不阻塞主线程的既有结构（若已如此则不动）。
@@ -90,7 +105,7 @@
 ## 交付范围
 
 - 代码：上述三个文件的最小必要改动。
-- 测试：新增/更新 `windows_subsystem.rs`（或 core 单测）覆盖：内部 CLI 命令后进程会退出（结构断言：内部分支存在 `process::exit` / 无条件早退）；locale 写入在 chunk 之后或有兜底重写（结构/单测断言）。既有 52 个 windows_subsystem 测试与 core `claude_zh_patch` 单测不回归。
+- 测试：新增/更新 `windows_subsystem.rs`（或 core 单测）覆盖：内部 CLI 命令后进程会退出（结构断言：内部分支存在 `process::exit` / 无条件早退）；locale 写入在 chunk 之后或有兜底重写；提权入口的目标用户 SID 被传到 `Claude-3p/config.json` ACL 处理，且不以 `OWNER RIGHTS` 替代显式 SID 与 `SYSTEM` ACE。既有 52 个 windows_subsystem 测试与 core `claude_zh_patch` 单测不回归。
 - 文档：本 spec 与对应 `acceptance/claude-zh-patch-elevated-hang-and-locale-fix.md`。
 - 不交付：文案汉化、提权判定改动、前端交互改动（除非后端返回结构变化必须联动）。
 

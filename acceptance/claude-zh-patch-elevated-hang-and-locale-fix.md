@@ -42,12 +42,28 @@
 - 引入无上限的关闭等待 / 重试，造成新的卡死风险。
 - locale 落盘与主动重启之间仍夹着 chunk 打补丁等耗时步骤。
 
+### B3. 缺陷 #3 —— 提权后 `Claude-3p/config.json` ACL 归还给目标用户
+
+**通过：**
+- 提权入口接收的目标用户 SID 被原样传入 `%LOCALAPPDATA%\\Claude-3p\\config.json` 的写入后 ACL 处理；实现不以提权进程当前身份、文件所有者或用户名称猜测替代该 SID。
+- 写入后，目标用户 SID 和 `SYSTEM`（`S-1-5-18`）均在该文件的 DACL 中拥有显式、非继承且足以读取和更新配置的 ACE。
+- `OWNER RIGHTS`（`S-1-3-4`）不是目标用户或 `SYSTEM` 授权的唯一来源；即使 DACL 中保留该 ACE，也不能取代上述两条显式授权。
+- 单文件 ACL 命令不会通过继续执行选项吞掉处理失败；对不存在或无法授权的目标，底层失败必须形成非成功结果并向上传播。
+- JSON merge、`locale=zh-CN`、备份与目标路径保持原语义；ACL 修复失败时操作返回失败，不得显示为已完整安装。
+
+**失败：**
+- 写入后只能从 `OWNER RIGHTS`、管理员所有者或提权进程身份获得访问，DACL 中找不到目标用户 SID 或 `SYSTEM` 的显式 ACE。
+- 目标用户 SID 在提权入口已存在，但在中间调用中丢失、被替换或未用于 ACL。
+- ACL 错误被吞掉，补丁仍返回 `ok`。
+- ACL 工具明确报告处理失败，但因继续执行参数返回成功退出码，调用方仍把操作判为成功。
+
 ### C. 不回归 / 不越界
 
 **通过：**
 - 提权判定（`patch_needs_elevation` / `detected_patch_needs_elevation` / `install_root_patch_needs_elevation`）逻辑未改。
 - 无任何用户可见文案被汉化/翻译改写（除非为表达新行为新增极少量中文提示）。
 - 未引入新依赖；未改发布/安装/数据库。
+- 未修改 Claude Desktop 开发模式/调试配置、供应商/Profile/路由或 Codex/Claude 主题相关文件。
 - 未回滚工作区中其它会话的改动。
 
 ## 必需的验证方式
@@ -64,7 +80,12 @@
    - main.rs / handle_internal_cli 内部命令分支确有无条件 `process::exit`。
    - write_locale_config 调用点在 chunk 循环之后，或存在校验前兜底重写。
    - locale_configured / status_for_paths 6 项校验未被弱化。
-5. **真机验证（用户侧，尽力而为）**：
+   - 提权入口的目标用户 SID 一直传到 `Claude-3p/config.json` ACL 处理；实现未把 `OWNER RIGHTS` 当作该 SID 或 `SYSTEM` 的替代。
+5. **Windows ACL 证据**：
+   - 对测试 `config.json` 或用户实际 `%LOCALAPPDATA%\\Claude-3p\\config.json` 执行写入后，使用 `Get-Acl` 或等价 Windows API 检查 DACL。报告可脱敏的目标 SID，并证明目标 SID 与 `S-1-5-18` 均有 `IsInherited = $false` 的读写 ACE。
+   - 同一检查中确认不存在以 `S-1-3-4` / `OWNER RIGHTS` 作为两者授权替代的情形；若保留该 ACE，仍须同时证明目标 SID 和 `SYSTEM` 的显式 ACE 存在。
+   - 自动化测试至少覆盖 SID 参数转发和 ACL 命令/API 的显式目标 SID + `SYSTEM` 分支；Windows 可运行时应补真实 ACL 断言，不能只做源码字符串断言。
+6. **真机验证（用户侧，尽力而为）**：
    - 重新构建启动管理器 → 点「Claude 一键汉化」→ UAC 授权 → 观察：数十秒内返回；概览页显示 6 项校验全绿（含 locale）；Claude 自动重启且界面为中文。
    - 日志出现 `elevated.exit`（父进程拿到退出码）、`internal.finish` status=ok、Local config.json 的 locale=zh-CN 落盘。
    - 说明：真机验证依赖用户实际点击 + UAC，评审代理若无法触发，需明确标注“待用户真机确认”，并以 1–4 的自动化证据为主。
@@ -72,14 +93,15 @@
 ## 完成所需证据
 
 - 三类 cargo 命令的实际输出（通过/失败 + 关键行）。
-- 静态审查 4 项的代码位置引用（文件:行）。
-- git diff 摘要：仅 commands.rs / main.rs / claude_zh_patch.rs（+ 必要的测试文件），无越界改动。
+- 静态审查 4 项的代码位置引用（文件:行），以及目标 SID 与 `SYSTEM` ACL 证据。
+- git diff 摘要：仅 commands.rs / main.rs / claude_zh_patch.rs（必要时 `settings.rs`，以及必要测试文件），无开发模式、供应商/Profile/路由或主题相关越界改动。
 
 ## 非目标 / 不在本次检查范围
 
 - 不验证提权判定是否“该不该弹 UAC”（MSIX 弹 UAC 是既定正确行为）。
 - 不做全量汉化完整性人工逐条核对（交由既有 status 校验）。
 - 不验证非 MSIX（可写桌面版）路径的行为变化（本次聚焦 MSIX 提权路径的两个缺陷）。
+- 不验证或修改 Claude Desktop 开发模式、供应商/Profile/路由、Codex/Claude 主题及主题注入。
 
 ### D. 新版 Claude chunk 兼容
 

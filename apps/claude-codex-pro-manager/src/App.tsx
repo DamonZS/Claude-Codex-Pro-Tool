@@ -99,7 +99,7 @@ import {
   supplierApiKeyFromConfigContents,
   supplierCategoryLabel,
   supplierIdFromName,
-  supplierProfileHasApiKey,
+  supplierProfileCanActivate,
   supplierProfileIsCcswitch,
   supplierProtocolLabel,
   supplierRelayModeLabel,
@@ -2086,7 +2086,7 @@ export function App() {
       return;
     }
     const targetProfile = current.relayProfiles.find((profile) => profile.id === profileId);
-    if (targetProfile && !supplierProfileHasApiKey(targetProfile)) {
+    if (targetProfile && !supplierProfileCanActivate(targetProfile)) {
       setNotice({ title: "供应商切换", message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
       return;
     }
@@ -2123,7 +2123,7 @@ export function App() {
       setNotice({ title: `${targetLabel} 供应商切换`, message: "目标供应商不存在，请刷新后重试。", status: "failed" });
       return null;
     }
-    if (!supplierProfileHasApiKey(targetProfile)) {
+    if (!supplierProfileCanActivate(targetProfile)) {
       setNotice({ title: `${targetLabel} 供应商切换`, message: "该供应商缺少 API Key。记录已可保存，请补入 Key 后再切换写入。", status: "failed" });
       return null;
     }

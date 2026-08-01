@@ -526,6 +526,49 @@ base_url = "http://127.0.0.1:57321/v1"
 }
 
 #[test]
+fn responses_profile_with_route_enabled_points_codex_to_local_proxy() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-responses".to_string(),
+        base_url: "https://responses.example.test/v1".to_string(),
+        upstream_base_url: "https://responses.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        api_key_explicit: true,
+        protocol: RelayProtocol::Responses,
+        relay_mode: RelayMode::PureApi,
+        route_enabled: true,
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
+
+    let live = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(live.contains(r#"base_url = "http://127.0.0.1:57321/v1""#));
+    assert!(!live.contains("https://responses.example.test/v1"));
+}
+
+#[test]
+fn responses_profile_with_route_disabled_keeps_direct_upstream() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-responses".to_string(),
+        base_url: "https://responses.example.test/v1".to_string(),
+        upstream_base_url: "https://responses.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        api_key_explicit: true,
+        protocol: RelayProtocol::Responses,
+        relay_mode: RelayMode::PureApi,
+        route_enabled: false,
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
+
+    let live = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(live.contains(r#"base_url = "https://responses.example.test/v1""#));
+}
+
+#[test]
 fn default_supplier_profile_id_is_used_as_provider_table() {
     let mut profile = RelayProfile {
         id: "default".to_string(),
@@ -2168,6 +2211,105 @@ experimental_bearer_token = "sk-relay"
             .unwrap();
     assert_eq!(auth["auth_mode"], "chatgpt");
     assert_eq!(auth["tokens"]["access_token"], "official-edited");
+    assert!(auth.get("OPENAI_API_KEY").is_none());
+}
+
+#[test]
+fn official_api_login_profile_preserves_live_api_key_when_switching() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("auth.json"),
+        r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-live"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model_provider = "custom"
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example.test/v1"
+"#,
+    )
+    .unwrap();
+
+    let profile = RelayProfile {
+        relay_mode: RelayMode::Official,
+        official_mix_api_key: false,
+        auth_contents: r#"{"auth_mode":"apikey"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
+
+    let auth: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(temp.path().join("auth.json")).unwrap())
+            .unwrap();
+    assert_eq!(auth["auth_mode"], "apikey");
+    assert_eq!(auth["OPENAI_API_KEY"], "sk-live");
+}
+
+#[test]
+fn official_api_login_profile_is_not_promoted_to_pure_api_by_live_auth_backfill() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model_provider = "manual_api"
+
+[model_providers.manual_api]
+name = "Manual API"
+base_url = "https://manual.example/v1"
+wire_api = "responses"
+requires_openai_auth = true
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("auth.json"),
+        r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-manual"}"#,
+    )
+    .unwrap();
+    let mut profile = RelayProfile {
+        id: "official".to_string(),
+        relay_mode: RelayMode::Official,
+        official_mix_api_key: false,
+        auth_contents: r#"{"auth_mode":"apikey"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+    let mut common = String::new();
+
+    backfill_relay_profile_from_home_with_common(temp.path(), &mut profile, &mut common).unwrap();
+
+    assert_eq!(profile.relay_mode, RelayMode::Official);
+    assert!(!profile.official_mix_api_key);
+    let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
+    assert_eq!(auth["auth_mode"], "apikey");
+    assert_eq!(auth["OPENAI_API_KEY"], "sk-manual");
+}
+
+#[test]
+fn official_chatgpt_login_profile_preserves_live_tokens_when_switching() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"access_token":"sk-live-login"},"OPENAI_API_KEY":"sk-old"}"#,
+    )
+    .unwrap();
+    let profile = RelayProfile {
+        relay_mode: RelayMode::Official,
+        official_mix_api_key: false,
+        auth_contents: r#"{"auth_mode":"chatgpt"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
+
+    let auth: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(temp.path().join("auth.json")).unwrap())
+            .unwrap();
+    assert_eq!(auth["auth_mode"], "chatgpt");
+    assert_eq!(auth["tokens"]["access_token"], "sk-live-login");
     assert!(auth.get("OPENAI_API_KEY").is_none());
 }
 

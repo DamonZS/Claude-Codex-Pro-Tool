@@ -318,6 +318,7 @@ pub fn install_patch_at_with_resources_elevated_for_user(
     resources: Option<&RemoteI18nResources>,
     target_user_sid: Option<&str>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
+    let target_user_sid = required_elevated_target_user_sid(target_user_sid)?;
     prepare_elevated_patch_access(paths, target_user_sid)?;
     ensure_patch_writable(paths)?;
     install_patch_at_with_resources_impl(paths, resources, false, target_user_sid)
@@ -421,14 +422,16 @@ fn install_patch_at_with_resources_impl(
     }
     clear_claude_renderer_cache(paths, &mut changed_files);
 
-    // Best effort: if Claude was relaunched during the long chunk patch phase,
-    // close it again immediately before writing locale so it cannot flush en-US back.
-    let _ = crate::claude_desktop::close_claude_desktop_for_patch();
+    // Claude can be relaunched during the long chunk patch phase. Confirm it is
+    // closed immediately before writing locale so it cannot flush en-US back.
+    if !crate::claude_desktop::close_claude_desktop_for_patch() {
+        anyhow::bail!("写入 Claude locale 配置前关闭 Claude Desktop 失败");
+    }
 
     backup_file(&paths.locale_config_path, paths)?;
-    write_locale_config(&paths.locale_config_path)?;
+    write_locale_config(&paths.locale_config_path, elevated_target_user_sid)?;
     if !locale_configured(&paths.locale_config_path) {
-        write_locale_config(&paths.locale_config_path)?;
+        write_locale_config(&paths.locale_config_path, elevated_target_user_sid)?;
     }
     changed_files.push(paths.locale_config_path.to_string_lossy().to_string());
 
@@ -509,9 +512,14 @@ pub fn restore_patch_at_elevated_for_user(
     paths: &ClaudeZhPatchPaths,
     target_user_sid: Option<&str>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
+    let target_user_sid = required_elevated_target_user_sid(target_user_sid)?;
     prepare_elevated_patch_access(paths, target_user_sid)?;
     ensure_patch_writable(paths)?;
-    restore_patch_at(paths)
+    let outcome = restore_patch_at(paths)?;
+    if paths.locale_config_path.exists() {
+        secure_locale_config_for_target_user(&paths.locale_config_path, target_user_sid)?;
+    }
+    Ok(outcome)
 }
 
 fn remove_zh_cn_artifacts(
@@ -936,7 +944,7 @@ fn default_backup_dir() -> PathBuf {
         .join(BACKUP_DIR_NAME)
 }
 
-fn write_locale_config(path: &Path) -> anyhow::Result<()> {
+fn write_locale_config(path: &Path, target_user_sid: Option<&str>) -> anyhow::Result<()> {
     let mut config = if path.exists() {
         serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path)?)
             .unwrap_or_else(|_| json!({}))
@@ -947,7 +955,63 @@ fn write_locale_config(path: &Path) -> anyhow::Result<()> {
         config = json!({});
     }
     config["locale"] = json!("zh-CN");
-    crate::settings::atomic_write(path, serde_json::to_string_pretty(&config)?.as_bytes())
+    crate::settings::atomic_write(path, serde_json::to_string_pretty(&config)?.as_bytes())?;
+    secure_locale_config_for_target_user(path, target_user_sid)?;
+    Ok(())
+}
+
+fn required_elevated_target_user_sid(
+    target_user_sid: Option<&str>,
+) -> anyhow::Result<Option<&str>> {
+    #[cfg(windows)]
+    {
+        let target_user_sid = target_user_sid
+            .filter(|value| windows_sid_principal(value).is_some())
+            .ok_or_else(|| anyhow::anyhow!("Claude 汉化提权缺少有效的原用户 SID"))?;
+        Ok(Some(target_user_sid))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(target_user_sid)
+    }
+}
+
+#[cfg(windows)]
+fn secure_locale_config_for_target_user(
+    path: &Path,
+    target_user_sid: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(target_user_sid) = target_user_sid else {
+        return Ok(());
+    };
+    let principal = windows_sid_principal(target_user_sid)
+        .ok_or_else(|| anyhow::anyhow!("Claude locale 配置目标用户 SID 无效"))?;
+    let args = locale_config_acl_grant_args(path.to_string_lossy().to_string(), &principal);
+    run_hidden_windows_command("icacls.exe", &args).with_context(|| {
+        format!(
+            "写入 Claude locale 配置后恢复目标用户文件权限失败：{}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn secure_locale_config_for_target_user(
+    _path: &Path,
+    _target_user_sid: Option<&str>,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn locale_config_acl_grant_args(path: String, principal: &str) -> Vec<String> {
+    vec![
+        path,
+        "/inheritance:r".to_string(),
+        "/grant:r".to_string(),
+        format!("{principal}:(F)"),
+        "*S-1-5-18:(F)".to_string(),
+    ]
 }
 
 fn ensure_patch_writable(paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
@@ -2001,6 +2065,62 @@ fn valid_i18n_resource_with_min_keys(path: &Path, min_keys: usize) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    fn current_windows_user_sid_for_test() -> String {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let sid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert!(sid.starts_with("S-1-5-"));
+        sid
+    }
+
+    #[cfg(windows)]
+    fn explicit_windows_acl_entries(path: &Path) -> String {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = Command::new("powershell.exe");
+        command.env("CCP_TEST_ACL_PATH", path);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"$ErrorActionPreference='Stop'; $acl=Get-Acl -LiteralPath $env:CCP_TEST_ACL_PATH; $acl.GetAccessRules($true,$false,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { "$($_.IdentityReference.Value)|$($_.IsInherited)|$($_.AccessControlType)|$([int]$_.FileSystemRights)" }"#,
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "Get-Acl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[cfg(windows)]
+    fn assert_explicit_target_and_system_full_control(path: &Path, sid: &str) {
+        let acl = explicit_windows_acl_entries(path);
+        let target_entry = format!("{sid}|False|Allow|2032127");
+        assert!(
+            acl.lines().any(|line| line.trim() == target_entry),
+            "target user SID is not explicitly granted full control: {acl}"
+        );
+        assert!(
+            acl.lines()
+                .any(|line| line.trim() == "S-1-5-18|False|Allow|2032127"),
+            "SYSTEM is not explicitly granted full control: {acl}"
+        );
+    }
+
     fn sample_paths(root: &Path) -> ClaudeZhPatchPaths {
         ClaudeZhPatchPaths {
             install_root: root.join("AnthropicClaude"),
@@ -2209,7 +2329,7 @@ mod tests {
             format!("console.log('Claude runtime without locale array');\n/* {TEXT_MARKER} */"),
         )
         .unwrap();
-        write_locale_config(&paths.locale_config_path).unwrap();
+        write_locale_config(&paths.locale_config_path, None).unwrap();
 
         let status = status_for_paths(&paths);
 
@@ -2881,6 +3001,95 @@ mod tests {
     }
 
     #[test]
+    fn locale_config_acl_grants_target_sid_and_system_explicitly() {
+        let principal = "*S-1-5-21-1-2-3-1001";
+        let args = locale_config_acl_grant_args(
+            r"C:\Users\Damon\AppData\Local\Claude-3p\config.json".to_string(),
+            principal,
+        );
+
+        assert!(args.iter().any(|arg| arg == "/inheritance:r"));
+        assert!(args.iter().any(|arg| arg == "/grant:r"));
+        assert!(args.iter().any(|arg| arg == &format!("{principal}:(F)")));
+        assert!(args.iter().any(|arg| arg == "*S-1-5-18:(F)"));
+        assert!(args.iter().all(|arg| !arg.contains("S-1-3-4")));
+        assert!(args.iter().all(|arg| arg != "/C"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_locale_config_grants_target_user_and_system_after_atomic_replace() {
+        let sid = current_windows_user_sid_for_test();
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("Claude-3p").join("config.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
+
+        write_locale_config(&path, Some(&sid)).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["theme"], "dark");
+        assert_eq!(config["locale"], "zh-CN");
+
+        assert_explicit_target_and_system_full_control(&path, &sid);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn secure_locale_config_propagates_acl_failures() {
+        let sid = current_windows_user_sid_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let missing_path = temp.path().join("missing-config.json");
+
+        let error = secure_locale_config_for_target_user(&missing_path, Some(&sid)).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("写入 Claude locale 配置后恢复目标用户文件权限失败"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn elevated_restore_regrants_target_user_and_system() {
+        let sid = current_windows_user_sid_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = sample_paths(temp.path());
+        create_sample_install(&paths);
+        std::fs::create_dir_all(paths.locale_config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &paths.locale_config_path,
+            r#"{"theme":"dark","locale":"zh-CN"}"#,
+        )
+        .unwrap();
+
+        let outcome = restore_patch_at_elevated_for_user(&paths, Some(&sid)).unwrap();
+
+        assert_eq!(outcome.status.status, "not_installed");
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&paths.locale_config_path).unwrap())
+                .unwrap();
+        assert_eq!(config["theme"], "dark");
+        assert!(config.get("locale").is_none());
+        assert_explicit_target_and_system_full_control(&paths.locale_config_path, &sid);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn elevated_target_user_sid_is_required_and_validated() {
+        assert!(required_elevated_target_user_sid(None).is_err());
+        assert!(required_elevated_target_user_sid(Some("DAMON\\Damon")).is_err());
+        assert_eq!(
+            required_elevated_target_user_sid(Some("S-1-5-21-1-2-3-1001")).unwrap(),
+            Some("S-1-5-21-1-2-3-1001")
+        );
+    }
+
+    #[test]
     fn elevated_install_skips_preflight_writable_probe() {
         let temp = tempfile::tempdir().unwrap();
         let paths = ClaudeZhPatchPaths {
@@ -2905,7 +3114,16 @@ mod tests {
         };
         create_sample_install(&paths);
 
-        let outcome = install_patch_at_with_resources_elevated(&paths, None).unwrap();
+        #[cfg(windows)]
+        let target_user_sid = Some(current_windows_user_sid_for_test());
+        #[cfg(not(windows))]
+        let target_user_sid: Option<String> = None;
+        let outcome = install_patch_at_with_resources_elevated_for_user(
+            &paths,
+            None,
+            target_user_sid.as_deref(),
+        )
+        .unwrap();
 
         assert!(
             outcome

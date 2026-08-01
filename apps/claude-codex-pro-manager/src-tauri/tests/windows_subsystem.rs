@@ -2820,7 +2820,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         );
     }
     assert!(overview_screen.contains("const profiles = settings?.relayProfiles ?? [];"));
-    assert!(overview_screen.contains("supplierProfileHasApiKey(profile)"));
+    assert!(overview_screen.contains("supplierProfileCanActivate(profile)"));
     assert!(overview_screen.contains("•••••••• · 已配置"));
     assert!(overview_screen.contains("actions.testRelayProfile(selectedProfile)"));
     assert!(
@@ -3330,9 +3330,27 @@ fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
         route_toggle
             .matches("saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles })")
             .count(),
-        2,
-        "Claude Desktop active-route shutdown must persist routeEnabled=false before returning"
+        3,
+        "Codex and Claude Desktop active-route shutdown must persist routeEnabled=false before returning"
     );
+    let codex_shutdown = route_toggle
+        .split("if (isDisablingActiveRoute && supplierRouteGroup === \"codex\")")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("if (isDisablingActiveRoute && supplierRouteGroup === \"claude-desktop\")")
+                .next()
+        })
+        .expect("Codex active-route shutdown source");
+    let clear_index = codex_shutdown
+        .find("actions.clearRelayMode")
+        .expect("Codex route shutdown clears runtime config");
+    let save_index = codex_shutdown
+        .find("saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles })")
+        .expect("Codex route shutdown persists disabled profiles");
+    let notice_index = codex_shutdown
+        .find("已关闭 Codex 供应商路由")
+        .expect("Codex route shutdown reports completion");
+    assert!(clear_index < save_index && save_index < notice_index);
 
     let supplier_import = screens
         .split("const importFromCcswitch = async")
@@ -3533,7 +3551,8 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
             .contains("actions.switchSupplierProfile(targetApp, normalized.id, nextSettings)")
     );
     assert!(supplier_screen.contains("applySupplier?: boolean"));
-    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true, applySupplier: true })"));
+    assert!(supplier_screen.contains("saveDraft({ applySupplier: true })"));
+    assert!(!supplier_screen.contains("saveDraft({ stayInEditor: true, applySupplier: true })"));
     assert!(supplier_screen.contains(
         "targetApp === \"claude-desktop\" && !!originalId && currentActiveId === originalId"
     ));
@@ -3561,12 +3580,27 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
             .contains("title: shouldApplySupplier ? \"供应商保存并应用\" : \"供应商保存\"")
     );
     assert!(supplier_screen.contains("const savedProfile = saved.relayProfiles.find((profile) => profile.id === normalized.id) ?? normalized;"));
-    assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean; applySupplier?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
-    assert!(supplier_screen.contains("setDraft(null);"));
-    assert!(supplier_screen.contains("saveDraft({ stayInEditor: true, applySupplier: true })"));
     assert!(
         supplier_screen
-            .contains("!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())")
+            .contains("setSupplierTargetFilter(supplierTargetForProfile(savedProfile));")
+    );
+    assert!(supplier_screen.contains("const canSwitch = !generated.aggregateEnabled;"));
+    assert!(!supplier_screen.contains(
+        "const canSwitch = !!editingExisting && appSettings?.relayProfilesEnabled !== false;"
+    ));
+    assert!(supplier_screen.contains("const saveDraft = async (options: { stayInEditor?: boolean; applySupplier?: boolean } = {}): Promise<SupplierSaveResult | null> => {"));
+    assert!(supplier_screen.contains("setDraft(null);"));
+    assert!(
+        supplier_screen.contains(
+            "const isCodexOfficialLogin = supplierProfileIsCodexOfficialLogin(normalized);"
+        )
+    );
+    assert!(app_tsx.contains("&& !supplierProfileIsCcswitch(profile);"));
+    assert!(app_tsx.contains("relayMode: \"pureApi\" as const"));
+    assert!(
+        supplier_screen.contains(
+            "!normalized.name.trim() || (!aggregateDraft && !isCodexOfficialLogin && !normalized.baseUrl.trim())"
+        )
     );
     assert!(!supplier_screen.contains(
         "!normalized.name.trim() || !normalized.baseUrl.trim() || !normalized.apiKey.trim()"
@@ -3627,9 +3661,9 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(app_tsx.contains("function supplierApiKeyFromConfigContents(contents: string)"));
     assert!(app_tsx.contains("ANTHROPIC_API_KEY"));
     assert!(app_tsx.contains("parsed.env"));
-    assert!(app_tsx.contains("supplierProfileHasApiKey(targetProfile)"));
+    assert!(app_tsx.contains("supplierProfileCanActivate(targetProfile)"));
     assert!(
-        supplier_screen.contains("shouldApplySupplier && !supplierProfileHasApiKey(normalized)")
+        supplier_screen.contains("shouldApplySupplier && !supplierProfileCanActivate(normalized)")
     );
     assert!(app_tsx.contains("function supplierProfileIsCcswitch(profile: RelayProfile)"));
     assert!(app_tsx.contains(
@@ -3975,6 +4009,15 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(styles.contains(".supplier-url-link"));
     assert!(styles.contains(".supplier-ccswitch-editor"));
     assert!(styles.contains("grid-template-rows: auto minmax(0, 1fr) auto;"));
+    assert!(styles.contains(".ops-screen[data-route=\"supplier\"]:has(.supplier-ccswitch-editor)"));
+    assert!(styles.contains("grid-template-rows: auto minmax(0, 1fr);"));
+    assert!(styles.contains(
+        ".ops-screen[data-route=\"supplier\"]:has(.supplier-ccswitch-editor) > .ops-page-content"
+    ));
+    assert!(styles.contains("overscroll-behavior: contain;"));
+    assert!(styles.contains("scrollbar-gutter: stable;"));
+    assert!(styles.contains(".supplier-ccswitch-savebar .action-row"));
+    assert!(styles.contains("flex-wrap: nowrap;"));
     assert!(styles.contains("overflow-y: auto;"));
     assert!(styles.contains(".supplier-control-row"));
     assert!(styles.contains("justify-content: space-between;"));
@@ -4772,6 +4815,61 @@ fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
     assert!(commands_rs.contains("apple_script_string(&shell_command)"));
     assert!(core_zh_patch.contains("home.join(\".claude-codex-pro\")"));
     assert!(core_zh_patch.contains(".join(\"Application Support\")"));
+}
+
+#[test]
+fn claude_zh_patch_locale_acl_uses_original_user_sid_and_system() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let core_zh_patch = repository_root.join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
+    let core_claude_desktop = read_source_file(
+        &repository_root.join("crates/claude-codex-pro-core/src/claude_desktop.rs"),
+    );
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let install = source_section(
+        &core_zh_patch,
+        "fn install_patch_at_with_resources_impl(",
+        "pub fn restore_patch_at(",
+    );
+    let locale_acl = source_section(
+        &core_zh_patch,
+        "fn locale_config_acl_grant_args(",
+        "fn ensure_patch_writable(",
+    );
+    let current_user_sid = source_section(
+        &commands_rs,
+        "fn current_user_sid()",
+        "fn current_user_data_dirs()",
+    );
+
+    assert!(install.contains("if !crate::claude_desktop::close_claude_desktop_for_patch()"));
+    assert!(
+        install
+            .contains("write_locale_config(&paths.locale_config_path, elevated_target_user_sid)?;")
+    );
+    assert!(
+        core_zh_patch.contains("secure_locale_config_for_target_user(path, target_user_sid)?;")
+    );
+    assert!(core_zh_patch.contains("fn locale_config_acl_grant_args("));
+    assert!(core_zh_patch.contains("format!(\"{principal}:(F)\")"));
+    assert!(core_zh_patch.contains("\"*S-1-5-18:(F)\".to_string()"));
+    assert!(core_zh_patch.contains("run_hidden_windows_command(\"icacls.exe\", &args)"));
+    assert!(!locale_acl.contains("\"/C\""));
+    assert!(
+        core_zh_patch
+            .contains("let target_user_sid = required_elevated_target_user_sid(target_user_sid)?;")
+    );
+    assert!(commands_rs.contains("current_user_sid().ok_or_else("));
+    assert!(current_user_sid.contains("CommandExt"));
+    assert!(current_user_sid.contains("windows_create_no_window()"));
+    assert!(core_claude_desktop.contains("close_claude_processes_until_absent("));
 }
 
 #[test]

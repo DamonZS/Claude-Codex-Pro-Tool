@@ -49,14 +49,24 @@ const DIY_BACKGROUND_PREVIEW_MAX_WIDTH: u32 = 1280;
 const DIY_BACKGROUND_PREVIEW_MAX_HEIGHT: u32 = 720;
 const DIY_PREVIEW_WIDTH: u32 = 960;
 const DIY_PREVIEW_HEIGHT: u32 = 600;
-const DIY_PREVIEW_HERO_X: u32 = 386;
-const DIY_PREVIEW_HERO_Y: u32 = 104;
-const DIY_PREVIEW_HERO_WIDTH: u32 = 390;
-const DIY_PREVIEW_HERO_HEIGHT: u32 = 196;
-const DIY_PREVIEW_BANNER_X: u32 = 270;
-const DIY_PREVIEW_BANNER_Y: u32 = 80;
-const DIY_PREVIEW_BANNER_WIDTH: u32 = 620;
-const DIY_PREVIEW_BANNER_HEIGHT: u32 = 150;
+const DIY_PREVIEW_SIDEBAR_WIDTH: u32 = 176;
+const DIY_PREVIEW_HERO_X: u32 = 328;
+const DIY_PREVIEW_HERO_Y: u32 = 85;
+const DIY_PREVIEW_HERO_WIDTH: u32 = 480;
+const DIY_PREVIEW_HERO_HEIGHT: u32 = 184;
+const DIY_PREVIEW_BANNER_X: u32 = 255;
+const DIY_PREVIEW_BANNER_Y: u32 = 85;
+const DIY_PREVIEW_BANNER_WIDTH: u32 = 627;
+const DIY_PREVIEW_BANNER_HEIGHT: u32 = 144;
+const DIY_PREVIEW_COMPOSER_X: u32 = 231;
+const DIY_PREVIEW_COMPOSER_Y: u32 = 444;
+const DIY_PREVIEW_COMPOSER_WIDTH: u32 = 674;
+const DIY_PREVIEW_COMPOSER_HEIGHT: u32 = 136;
+const DIY_PREVIEW_VISUAL_RADIUS: u32 = 8;
+const DIY_PREVIEW_SHADOW_OFFSET_Y: u32 = 13;
+const DIY_PREVIEW_SHADOW_SIGMA: f32 = 16.0;
+const DIY_PREVIEW_SHADOW_PADDING: u32 = 48;
+const DIY_PREVIEW_SHADOW_ALPHA: u8 = 46;
 const OFFICIAL_THEME_RAW_BASE_URL: &str = "https://raw.githubusercontent.com/DamonZS/Claude-Codex-Pro-Tool/63ef4da6fbc22832553bab126c93e56aea2a91a6/Theme";
 const DREAM_SKIN_HOME_LAYOUT_COMPAT_MARKER: &str =
     "/* CCP current Codex home-layout compatibility. */";
@@ -1512,6 +1522,7 @@ impl CodexThemeStore {
             .context("当前主题记录已损坏")?;
         let package_root = self.library_dir().join(&installed.manifest.id);
         let runtime = compile_runtime_resources(&package_root, &installed.manifest)?;
+        let is_diy = installed.manifest.diy.is_some();
         let mut css = if let Some(settings) = installed.manifest.diy.as_ref() {
             render_diy_css(
                 &installed.manifest.id,
@@ -1527,12 +1538,13 @@ impl CodexThemeStore {
             css
         };
         css = apply_official_theme_runtime_compat(&installed.manifest.id, css);
-        if installed
-            .manifest
-            .root_attributes
-            .attributes
-            .get("data-ccp-theme-shell")
-            .is_some_and(|shell| shell == "light")
+        if !is_diy
+            && installed
+                .manifest
+                .root_attributes
+                .attributes
+                .get("data-ccp-theme-shell")
+                .is_some_and(|shell| shell == "light")
         {
             css.push_str(LIGHT_THEME_RUNTIME_COMPAT_CSS);
         }
@@ -2633,17 +2645,17 @@ fn render_diy_css(
     let fullscreen_background =
         has_background && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN;
     let shell_surface = if fullscreen_background {
-        rgba_css(&settings.background_color, 18)?
+        rgba_css(&settings.background_color, 78)?
     } else {
         settings.background_color.clone()
     };
     let panel_surface = if fullscreen_background {
-        rgba_css(&settings.surface_color, 30)?
+        rgba_css(&settings.background_color, 78)?
     } else {
         settings.surface_color.clone()
     };
     let content_surface = if fullscreen_background {
-        rgba_css(&settings.surface_color, 72)?
+        rgba_css(&settings.surface_color, 96)?
     } else {
         settings.surface_color.clone()
     };
@@ -2659,40 +2671,54 @@ fn render_diy_css(
             DIY_IMAGE_LAYOUT_BANNER | DIY_IMAGE_LAYOUT_CARD
         );
     let (
-        hero_visual_background,
+        hero_visual_background_color,
+        hero_visual_background_image,
+        hero_visual_background_size,
         hero_visual_width,
         hero_visual_height,
         hero_visual_border,
         hero_visual_color,
         hero_content_opacity,
+        hero_visual_radius,
+        hero_visual_shadow,
     ) = if !has_hero_image {
         (
             "var(--ccp-theme-diy-content-surface)".to_string(),
+            "none".to_string(),
+            "auto",
             "58px",
             "58px",
             "var(--ccp-theme-diy-border)",
             "var(--ccp-theme-diy-accent)",
             "1",
+            "50%",
+            "none",
         )
     } else if settings.image_layout == DIY_IMAGE_LAYOUT_BANNER {
         (
-            format!("{background_image} center / cover no-repeat"),
-            "min(720px, 78cqw)",
-            "clamp(132px, 20cqh, 180px)",
+            "var(--ccp-theme-diy-content-surface)".to_string(),
+            background_image.to_string(),
+            "cover",
+            "min(88%, 470px)",
+            "108px",
             "var(--ccp-theme-diy-border)",
             "transparent",
             "0",
+            "8px",
+            "0 10px 24px rgb(0 0 0 / 0.18)",
         )
     } else {
         (
-            format!(
-                "{background_image} center / contain no-repeat, var(--ccp-theme-diy-content-surface)"
-            ),
-            "min(480px, 62cqw)",
-            "clamp(200px, 30cqh, 270px)",
+            "var(--ccp-theme-diy-content-surface)".to_string(),
+            background_image.to_string(),
+            "contain",
+            "min(76%, 360px)",
+            "138px",
             "var(--ccp-theme-diy-border)",
             "transparent",
             "0",
+            "8px",
+            "0 10px 24px rgb(0 0 0 / 0.18)",
         )
     };
     Ok(format!(
@@ -2796,6 +2822,16 @@ fn render_diy_css(
   overflow-x: hidden !important;
 }}
 
+.{scope} [role="main"]:has(
+  :is([data-feature="game-source"], [data-testid="home-icon"])
+) > div:has([data-feature="game-source"]) > div:first-child {{
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+  align-items: flex-start !important;
+  padding-top: 40px !important;
+  padding-bottom: 0 !important;
+}}
+
 .{scope} [data-testid="home-icon"] {{
   border: 1px solid var(--ccp-theme-diy-border) !important;
   width: {hero_visual_width} !important;
@@ -2803,9 +2839,14 @@ fn render_diy_css(
   min-width: {hero_visual_width} !important;
   min-height: {hero_visual_height} !important;
   border-color: {hero_visual_border} !important;
-  border-radius: 8px !important;
-  background: {hero_visual_background} !important;
+  border-radius: {hero_visual_radius} !important;
+  background-color: {hero_visual_background_color} !important;
+  background-image: {hero_visual_background_image} !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  background-size: {hero_visual_background_size} !important;
   color: {hero_visual_color} !important;
+  box-shadow: {hero_visual_shadow} !important;
   opacity: 1 !important;
   filter: none !important;
   backdrop-filter: none !important;
@@ -2819,7 +2860,7 @@ fn render_diy_css(
 .{scope} [data-feature="game-source"] {{
   color: var(--ccp-theme-diy-text) !important;
   -webkit-text-fill-color: currentColor !important;
-  font-weight: 600 !important;
+  font-weight: 450 !important;
   text-shadow: 0 1px 3px var(--ccp-theme-diy-text-shadow-strong) !important;
 }}
 
@@ -2905,13 +2946,14 @@ fn render_diy_preview(
 
     let fullscreen_background =
         background.is_some() && settings.image_layout == DIY_IMAGE_LAYOUT_FULLSCREEN;
-    let surface = image::Rgba([
-        surface_red,
-        surface_green,
-        surface_blue,
-        if fullscreen_background { 224 } else { 255 },
+    let workspace_surface = image::Rgba([
+        background_red,
+        background_green,
+        background_blue,
+        if fullscreen_background { 199 } else { 255 },
     ]);
-    let strong_surface = image::Rgba([
+    let sidebar_surface = image::Rgba([surface_red, surface_green, surface_blue, 255]);
+    let content_surface = image::Rgba([
         surface_red,
         surface_green,
         surface_blue,
@@ -2922,42 +2964,41 @@ fn render_diy_preview(
     let muted = image::Rgba([text_red, text_green, text_blue, 166]);
     let accent = image::Rgba([accent_red, accent_green, accent_blue, 255]);
     let radius = 8;
-    let main_radius = 16;
+    let main_radius = 13;
 
-    const SIDEBAR_WIDTH: u32 = 202;
     fill_rounded_rect(
         &mut canvas,
         0,
         0,
-        SIDEBAR_WIDTH,
+        DIY_PREVIEW_SIDEBAR_WIDTH,
         DIY_PREVIEW_HEIGHT,
         0,
-        surface,
+        sidebar_surface,
     );
     fill_rounded_rect(
         &mut canvas,
-        SIDEBAR_WIDTH,
-        18,
-        DIY_PREVIEW_WIDTH - SIDEBAR_WIDTH,
-        DIY_PREVIEW_HEIGHT - 18,
+        DIY_PREVIEW_SIDEBAR_WIDTH,
+        0,
+        DIY_PREVIEW_WIDTH - DIY_PREVIEW_SIDEBAR_WIDTH,
+        DIY_PREVIEW_HEIGHT,
         main_radius,
-        surface,
+        workspace_surface,
     );
     stroke_rounded_rect(
         &mut canvas,
-        SIDEBAR_WIDTH,
-        18,
-        DIY_PREVIEW_WIDTH - SIDEBAR_WIDTH,
-        DIY_PREVIEW_HEIGHT - 18,
+        DIY_PREVIEW_SIDEBAR_WIDTH,
+        0,
+        DIY_PREVIEW_WIDTH - DIY_PREVIEW_SIDEBAR_WIDTH,
+        DIY_PREVIEW_HEIGHT,
         main_radius,
         border,
     );
 
     // Current Codex sidebar: product title, new-task row, projects and recent sessions.
     fill_rounded_rect(&mut canvas, 16, 23, 68, 14, 5, text);
-    fill_rounded_rect(&mut canvas, 91, 28, 9, 5, 2, muted);
-    fill_rounded_rect(&mut canvas, 174, 24, 13, 13, 6, muted);
-    fill_rounded_rect(&mut canvas, 9, 55, 184, 35, radius.min(9), strong_surface);
+    fill_rounded_rect(&mut canvas, 82, 28, 9, 5, 2, muted);
+    fill_rounded_rect(&mut canvas, 151, 24, 13, 13, 6, muted);
+    fill_rounded_rect(&mut canvas, 9, 55, 158, 35, radius.min(9), content_surface);
     fill_rounded_rect(&mut canvas, 18, 65, 15, 15, 5, muted);
     fill_rounded_rect(&mut canvas, 42, 67, 82, 11, 4, text);
 
@@ -2967,21 +3008,21 @@ fn render_diy_preview(
                 &mut canvas,
                 9,
                 y - 7,
-                184,
+                158,
                 112,
                 radius.min(9),
-                strong_surface,
+                content_surface,
             );
         }
         fill_rounded_rect(&mut canvas, 16, y, 17, 13, 4, text);
-        fill_rounded_rect(&mut canvas, 42, y + 1, 116, 11, 4, text);
+        fill_rounded_rect(&mut canvas, 42, y + 1, 105, 11, 4, text);
         let child_count = if index == 1 { 3 } else { 2 };
         for child in 0..child_count {
             fill_rounded_rect(
                 &mut canvas,
                 39,
                 y + 29 + child * 24,
-                126 - child * 9,
+                108 - child * 9,
                 9,
                 4,
                 muted,
@@ -2989,14 +3030,14 @@ fn render_diy_preview(
         }
     }
 
-    fill_rounded_rect(&mut canvas, 0, 556, SIDEBAR_WIDTH, 1, 0, border);
+    fill_rounded_rect(&mut canvas, 0, 556, DIY_PREVIEW_SIDEBAR_WIDTH, 1, 0, border);
     fill_rounded_rect(&mut canvas, 16, 572, 15, 15, 7, muted);
     fill_rounded_rect(&mut canvas, 42, 574, 66, 11, 4, text);
-    fill_rounded_rect(&mut canvas, 174, 573, 13, 13, 6, muted);
+    fill_rounded_rect(&mut canvas, 151, 573, 13, 13, 6, muted);
 
     // Small window controls in the otherwise quiet main canvas.
-    fill_rounded_rect(&mut canvas, 918, 39, 12, 10, 3, muted);
-    fill_rounded_rect(&mut canvas, 940, 39, 12, 10, 3, muted);
+    fill_rounded_rect(&mut canvas, 907, 16, 13, 12, 3, muted);
+    fill_rounded_rect(&mut canvas, 932, 16, 13, 12, 3, muted);
 
     let heading_y = if let Some(background) =
         background.filter(|_| settings.image_layout != DIY_IMAGE_LAYOUT_FULLSCREEN)
@@ -3019,15 +3060,15 @@ fn render_diy_preview(
                     false,
                 )
             };
-        fill_rounded_rect(
+        draw_diy_preview_shadow(
             &mut canvas,
             visual_x,
             visual_y,
             visual_width,
             visual_height,
-            radius.saturating_sub(2).min(8),
-            strong_surface,
+            DIY_PREVIEW_VISUAL_RADIUS,
         );
+        let mut visual = image::RgbaImage::from_pixel(visual_width, visual_height, content_surface);
         let main = if cover {
             background.image.resize_to_fill(
                 visual_width,
@@ -3036,39 +3077,39 @@ fn render_diy_preview(
             )
         } else {
             background.image.resize(
-                visual_width.saturating_sub(20),
-                visual_height.saturating_sub(16),
+                visual_width,
+                visual_height,
                 image::imageops::FilterType::Lanczos3,
             )
         }
         .to_rgba8();
-        let main_x = visual_x + visual_width.saturating_sub(main.width()) / 2;
-        let main_y = visual_y + visual_height.saturating_sub(main.height()) / 2;
+        let main_x = visual_width.saturating_sub(main.width()) / 2;
+        let main_y = visual_height.saturating_sub(main.height()) / 2;
+        overlay_rounded_image(&mut visual, &main, main_x, main_y, 0);
         overlay_rounded_image(
             &mut canvas,
-            &main,
-            main_x,
-            main_y,
-            if cover {
-                radius.saturating_sub(2).min(8)
-            } else {
-                6
-            },
+            &visual,
+            visual_x,
+            visual_y,
+            DIY_PREVIEW_VISUAL_RADIUS,
         );
-        stroke_rounded_rect(
+        stroke_rounded_rect_outline(
             &mut canvas,
             visual_x,
             visual_y,
             visual_width,
             visual_height,
-            radius.saturating_sub(2).min(8),
+            DIY_PREVIEW_VISUAL_RADIUS,
             image::Rgba([text_red, text_green, text_blue, 68]),
         );
-        visual_y + visual_height + 26
+        visual_y + visual_height + 16
     } else {
-        let icon_size = 54;
-        let icon_x = DIY_PREVIEW_HERO_X + (DIY_PREVIEW_HERO_WIDTH - icon_size) / 2;
-        let icon_y = DIY_PREVIEW_HERO_Y + (DIY_PREVIEW_HERO_HEIGHT - icon_size) / 2;
+        let hero_size = 77;
+        let icon_size = 64;
+        let hero_x = DIY_PREVIEW_SIDEBAR_WIDTH
+            + (DIY_PREVIEW_WIDTH - DIY_PREVIEW_SIDEBAR_WIDTH - hero_size) / 2;
+        let icon_x = hero_x + (hero_size - icon_size) / 2;
+        let icon_y = DIY_PREVIEW_HERO_Y + (hero_size - icon_size) / 2;
         fill_rounded_rect(
             &mut canvas,
             icon_x,
@@ -3076,7 +3117,7 @@ fn render_diy_preview(
             icon_size,
             icon_size,
             icon_size / 2,
-            strong_surface,
+            sidebar_surface,
         );
         stroke_rounded_rect(
             &mut canvas,
@@ -3088,57 +3129,143 @@ fn render_diy_preview(
             border,
         );
         fill_rounded_rect(&mut canvas, icon_x + 17, icon_y + 17, 20, 20, 8, accent);
-        270
+        DIY_PREVIEW_HERO_Y + hero_size + 16
     };
 
     // Centered home heading below the visual.
-    fill_rounded_rect(&mut canvas, 376, heading_y, 176, 16, 6, text);
-    fill_rounded_rect(&mut canvas, 563, heading_y, 248, 16, 6, text);
-    fill_rounded_rect(&mut canvas, 563, heading_y + 22, 248, 2, 1, muted);
+    fill_rounded_rect(&mut canvas, 351, heading_y, 176, 16, 6, text);
+    fill_rounded_rect(&mut canvas, 538, heading_y, 248, 16, 6, text);
+    fill_rounded_rect(&mut canvas, 538, heading_y + 22, 248, 2, 1, muted);
 
     // Bottom composer with context strip and input surface.
-    const COMPOSER_X: u32 = 318;
-    const COMPOSER_Y: u32 = 444;
-    const COMPOSER_WIDTH: u32 = 548;
-    const COMPOSER_HEIGHT: u32 = 128;
     fill_rounded_rect(
         &mut canvas,
-        COMPOSER_X,
-        COMPOSER_Y,
-        COMPOSER_WIDTH,
-        COMPOSER_HEIGHT,
+        DIY_PREVIEW_COMPOSER_X,
+        DIY_PREVIEW_COMPOSER_Y,
+        DIY_PREVIEW_COMPOSER_WIDTH,
+        DIY_PREVIEW_COMPOSER_HEIGHT,
         main_radius,
-        strong_surface,
+        content_surface,
     );
     stroke_rounded_rect(
         &mut canvas,
-        COMPOSER_X,
-        COMPOSER_Y,
-        COMPOSER_WIDTH,
-        COMPOSER_HEIGHT,
+        DIY_PREVIEW_COMPOSER_X,
+        DIY_PREVIEW_COMPOSER_Y,
+        DIY_PREVIEW_COMPOSER_WIDTH,
+        DIY_PREVIEW_COMPOSER_HEIGHT,
         main_radius,
         border,
     );
     fill_rounded_rect(
         &mut canvas,
-        COMPOSER_X,
-        COMPOSER_Y + 39,
-        COMPOSER_WIDTH,
+        DIY_PREVIEW_COMPOSER_X,
+        DIY_PREVIEW_COMPOSER_Y + 45,
+        DIY_PREVIEW_COMPOSER_WIDTH,
         1,
         0,
         border,
     );
-    fill_rounded_rect(&mut canvas, 338, 458, 15, 13, 4, muted);
-    fill_rounded_rect(&mut canvas, 362, 460, 128, 10, 4, text);
-    fill_rounded_rect(&mut canvas, 512, 458, 15, 13, 4, muted);
-    fill_rounded_rect(&mut canvas, 536, 460, 42, 10, 4, text);
-    fill_rounded_rect(&mut canvas, 598, 458, 15, 13, 4, muted);
-    fill_rounded_rect(&mut canvas, 622, 460, 38, 10, 4, text);
-    fill_rounded_rect(&mut canvas, 340, 507, 112, 11, 4, muted);
-    fill_rounded_rect(&mut canvas, 339, 543, 17, 17, 8, muted);
-    fill_rounded_rect(&mut canvas, 369, 547, 66, 10, 4, accent);
-    fill_rounded_rect(&mut canvas, 804, 543, 17, 17, 8, muted);
-    fill_rounded_rect(&mut canvas, 829, 537, 27, 27, 14, text);
+    let composer_x = DIY_PREVIEW_COMPOSER_X;
+    let composer_y = DIY_PREVIEW_COMPOSER_Y;
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 20,
+        composer_y + 16,
+        15,
+        13,
+        4,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 44,
+        composer_y + 18,
+        128,
+        10,
+        4,
+        text,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 194,
+        composer_y + 16,
+        15,
+        13,
+        4,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 218,
+        composer_y + 18,
+        42,
+        10,
+        4,
+        text,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 280,
+        composer_y + 16,
+        15,
+        13,
+        4,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 304,
+        composer_y + 18,
+        38,
+        10,
+        4,
+        text,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 22,
+        composer_y + 68,
+        112,
+        11,
+        4,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 21,
+        composer_y + 105,
+        17,
+        17,
+        8,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 51,
+        composer_y + 109,
+        66,
+        10,
+        4,
+        accent,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 600,
+        composer_y + 105,
+        17,
+        17,
+        8,
+        muted,
+    );
+    fill_rounded_rect(
+        &mut canvas,
+        composer_x + 625,
+        composer_y + 99,
+        27,
+        27,
+        14,
+        text,
+    );
 
     let mut cursor = Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(canvas)
@@ -3167,6 +3294,46 @@ fn fill_rounded_rect(
             }
         }
     }
+}
+
+fn draw_diy_preview_shadow(
+    image: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    radius: u32,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let padding = DIY_PREVIEW_SHADOW_PADDING;
+    let mut shadow = image::RgbaImage::new(
+        width.saturating_add(padding.saturating_mul(2)),
+        height.saturating_add(padding.saturating_mul(2)),
+    );
+    for target_y in padding..padding.saturating_add(height) {
+        for target_x in padding..padding.saturating_add(width) {
+            if rounded_rect_contains(target_x, target_y, padding, padding, width, height, radius) {
+                shadow.put_pixel(
+                    target_x,
+                    target_y,
+                    image::Rgba([0, 0, 0, DIY_PREVIEW_SHADOW_ALPHA]),
+                );
+            }
+        }
+    }
+    let shadow = image::DynamicImage::ImageRgba8(shadow)
+        .blur(DIY_PREVIEW_SHADOW_SIGMA)
+        .to_rgba8();
+    overlay_rounded_image(
+        image,
+        &shadow,
+        x.saturating_sub(padding),
+        y.saturating_add(DIY_PREVIEW_SHADOW_OFFSET_Y)
+            .saturating_sub(padding),
+        0,
+    );
 }
 
 fn overlay_rounded_image(
@@ -3228,6 +3395,47 @@ fn stroke_rounded_rect(
         radius,
         color,
     );
+}
+
+fn stroke_rounded_rect_outline(
+    image: &mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    radius: u32,
+    color: image::Rgba<u8>,
+) {
+    if width < 3 || height < 3 {
+        return;
+    }
+    let inner_x = x.saturating_add(1);
+    let inner_y = y.saturating_add(1);
+    let inner_width = width.saturating_sub(2);
+    let inner_height = height.saturating_sub(2);
+    let inner_radius = radius.saturating_sub(1);
+    for target_y in y..y.saturating_add(height).min(image.height()) {
+        for target_x in x..x.saturating_add(width).min(image.width()) {
+            let inside_outer =
+                rounded_rect_contains(target_x, target_y, x, y, width, height, radius);
+            let inside_inner = target_x >= inner_x
+                && target_y >= inner_y
+                && target_x < inner_x.saturating_add(inner_width)
+                && target_y < inner_y.saturating_add(inner_height)
+                && rounded_rect_contains(
+                    target_x,
+                    target_y,
+                    inner_x,
+                    inner_y,
+                    inner_width,
+                    inner_height,
+                    inner_radius,
+                );
+            if inside_outer && !inside_inner {
+                blend_pixel(image.get_pixel_mut(target_x, target_y), color);
+            }
+        }
+    }
 }
 
 fn rounded_rect_contains(
@@ -3906,7 +4114,9 @@ mod tests {
                 .join("assets/theme.css"),
         )
         .unwrap();
-        assert!(generated_css.contains("center / contain no-repeat"));
+        assert!(generated_css.contains("background-image: var(--ccp-theme-art, none) !important;"));
+        assert!(generated_css.contains("background-size: contain !important;"));
+        assert!(!generated_css.contains("center / contain no-repeat"));
         let installed_preview = store.diy_theme_background_preview(&created.id).unwrap();
         assert_eq!(installed_preview.file_name, "personal-background.png");
         let installed_preview = base64::engine::general_purpose::STANDARD
@@ -4077,17 +4287,32 @@ mod tests {
             fullscreen_css.contains("background-image: var(--ccp-theme-art, none) !important;")
         );
         assert!(fullscreen_css.contains("--ccp-theme-diy-sidebar-surface: #20242A;"));
+        assert!(fullscreen_css.contains("--ccp-theme-diy-shell-surface: rgba(18, 20, 22, 0.78);"));
+        assert!(fullscreen_css.contains("--ccp-theme-diy-panel-surface: rgba(18, 20, 22, 0.78);"));
+        assert!(
+            fullscreen_css.contains("--ccp-theme-diy-content-surface: rgba(32, 36, 42, 0.96);")
+        );
         assert!(
             fullscreen_css.contains("background: var(--ccp-theme-diy-sidebar-surface) !important;")
         );
         assert!(fullscreen_css.contains("color: var(--ccp-theme-diy-text) !important;"));
         assert!(fullscreen_css.contains("opacity: 1 !important;"));
+        assert!(fullscreen_css.contains("border-radius: 50% !important;"));
+        assert!(fullscreen_css.contains("box-shadow: none !important;"));
 
         settings.image_layout = DIY_IMAGE_LAYOUT_BANNER.to_string();
         let banner_css = render_diy_css("ccp-diy-layout-banner", &settings, true).unwrap();
         let banner_preview = render_diy_preview(&settings, Some(&background)).unwrap();
         assert!(banner_css.contains("--ccp-theme-diy-image-layout: banner;"));
-        assert!(banner_css.contains("center / cover no-repeat"));
+        assert!(banner_css.contains(
+            "background-color: var(--ccp-theme-diy-content-surface) !important;\n  background-image: var(--ccp-theme-art, none) !important;"
+        ));
+        assert!(banner_css.contains("background-size: cover !important;"));
+        assert!(!banner_css.contains("background: var(--ccp-theme-art, none) center /"));
+        assert!(banner_css.contains("min(88%, 470px)"));
+        assert!(banner_css.contains("height: 108px !important;"));
+        assert!(banner_css.contains("border-radius: 8px !important;"));
+        assert!(banner_css.contains("box-shadow: 0 10px 24px rgb(0 0 0 / 0.18) !important;"));
         assert!(banner_css.contains("opacity: 0 !important;"));
         assert!(banner_css.contains("background-image: none !important;"));
 
@@ -4095,19 +4320,99 @@ mod tests {
         let card_css = render_diy_css("ccp-diy-layout-card", &settings, true).unwrap();
         let card_preview = render_diy_preview(&settings, Some(&background)).unwrap();
         assert!(card_css.contains("--ccp-theme-diy-image-layout: card;"));
-        assert!(card_css.contains("center / contain no-repeat"));
+        assert!(card_css.contains(
+            "background-color: var(--ccp-theme-diy-content-surface) !important;\n  background-image: var(--ccp-theme-art, none) !important;"
+        ));
+        assert!(card_css.contains("background-size: contain !important;"));
+        assert!(!card_css.contains("background: var(--ccp-theme-art, none) center /"));
+        assert!(card_css.contains("min(76%, 360px)"));
+        assert!(card_css.contains("height: 138px !important;"));
+        assert!(card_css.contains("border-radius: 8px !important;"));
+        assert!(card_css.contains("box-shadow: 0 10px 24px rgb(0 0 0 / 0.18) !important;"));
         assert!(card_css.contains("opacity: 0 !important;"));
         assert!(card_css.contains("background-image: none !important;"));
 
         for css in [&fullscreen_css, &banner_css, &card_css] {
-            assert!(css.contains("border-radius: 8px !important;"));
             assert!(css.contains("opacity: 1 !important;"));
             assert!(css.contains("-webkit-text-fill-color: currentColor !important;"));
+            assert!(
+                css.contains(") > div:has([data-feature=\"game-source\"]) > div:first-child {")
+            );
+            assert!(css.contains("padding-top: 40px !important;"));
+            assert!(css.contains("align-items: flex-start !important;"));
             assert!(!css.contains("blur("));
             assert!(!css.contains("[role=\"dialog\"]"));
             assert!(!css.contains("[role=\"menu\"]"));
             assert!(!css.contains("linear-gradient(rgba("));
+            assert!(css.contains("font-weight: 450 !important;"));
         }
+
+        assert_eq!(
+            (
+                DIY_PREVIEW_BANNER_X,
+                DIY_PREVIEW_BANNER_Y,
+                DIY_PREVIEW_BANNER_WIDTH,
+                DIY_PREVIEW_BANNER_HEIGHT,
+            ),
+            (255, 85, 627, 144),
+        );
+        assert_eq!(
+            (
+                DIY_PREVIEW_HERO_X,
+                DIY_PREVIEW_HERO_Y,
+                DIY_PREVIEW_HERO_WIDTH,
+                DIY_PREVIEW_HERO_HEIGHT,
+            ),
+            (328, 85, 480, 184),
+        );
+        assert_eq!(DIY_PREVIEW_VISUAL_RADIUS, 8);
+
+        let fullscreen_image =
+            image::load_from_memory_with_format(&fullscreen_preview, image::ImageFormat::Png)
+                .unwrap()
+                .to_rgba8();
+        assert_eq!(
+            *fullscreen_image.get_pixel(20, 500),
+            image::Rgba([32, 36, 42, 255]),
+            "fullscreen preview sidebar must stay fully opaque",
+        );
+        let mut expected_workspace = image::Rgba([32, 96, 160, 255]);
+        blend_pixel(&mut expected_workspace, image::Rgba([18, 20, 22, 199]));
+        assert_eq!(
+            *fullscreen_image.get_pixel(900, 350),
+            expected_workspace,
+            "fullscreen preview workspace must match the 78% live preview surface",
+        );
+        let mut expected_composer = expected_workspace;
+        blend_pixel(&mut expected_composer, image::Rgba([32, 36, 42, 245]));
+        assert_eq!(
+            *fullscreen_image.get_pixel(895, 500),
+            expected_composer,
+            "fullscreen preview composer must match the 96% live preview surface",
+        );
+
+        let card_image =
+            image::load_from_memory_with_format(&card_preview, image::ImageFormat::Png)
+                .unwrap()
+                .to_rgba8();
+        assert_eq!(
+            &card_image
+                .get_pixel(
+                    DIY_PREVIEW_HERO_X + DIY_PREVIEW_HERO_WIDTH / 2,
+                    DIY_PREVIEW_HERO_Y + 2,
+                )
+                .0[..3],
+            &[32, 96, 160],
+            "card contain image must use the full preview visual height",
+        );
+        let shadow_pixel = card_image.get_pixel(
+            DIY_PREVIEW_HERO_X + DIY_PREVIEW_HERO_WIDTH / 2,
+            DIY_PREVIEW_HERO_Y + DIY_PREVIEW_HERO_HEIGHT + 8,
+        );
+        assert!(
+            shadow_pixel[0] < 18 && shadow_pixel[1] < 20 && shadow_pixel[2] < 22,
+            "card preview must include the live-preview shadow below the visual",
+        );
 
         assert_ne!(fullscreen_preview, banner_preview);
         assert_ne!(banner_preview, card_preview);
@@ -4117,6 +4422,75 @@ mod tests {
             assert_eq!(image.width(), DIY_PREVIEW_WIDTH);
             assert_eq!(image.height(), DIY_PREVIEW_HEIGHT);
         }
+    }
+
+    #[test]
+    fn diy_runtime_payload_keeps_download_theme_compat_isolated() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = CodexThemeStore::open(temp.path().join("store")).unwrap();
+        let background_path = temp.path().join("diy-light-background.png");
+        write_manager_background(&background_path, 640, 360, [224, 232, 240]);
+
+        let mut input = diy_input("Light DIY compatibility isolation");
+        input.settings.mode = "light".to_string();
+        input.settings.background_color = "#F1F4F7".to_string();
+        input.settings.surface_color = "#FFFFFF".to_string();
+        input.settings.text_color = DIY_TEXT_COLOR_DARK.to_string();
+        input.settings.image_layout = DIY_IMAGE_LAYOUT_BANNER.to_string();
+        input.background_path = Some(background_path.to_string_lossy().into_owned());
+        let diy = store.save_diy_theme(input).unwrap();
+        store.apply_theme(&diy.id).unwrap();
+        let diy_payload = store.active_theme_payload().unwrap();
+
+        assert!(
+            diy_payload
+                .css
+                .contains("Generated by CCP DIY Theme Builder")
+        );
+        assert!(
+            !diy_payload
+                .css
+                .contains("CCP light-theme runtime compatibility")
+        );
+        assert!(
+            !diy_payload
+                .css
+                .contains(":root[data-ccp-theme-shell=\"light\"] main:has(")
+        );
+
+        let imported_root = temp.path().join("imported-light");
+        write_theme_with_runtime_resources(
+            &imported_root,
+            "imported-light",
+            serde_json::json!({}),
+            serde_json::json!({
+                "classes": ["ccp-theme-imported-light"],
+                "attributes": {
+                    "data-ccp-theme-shell": "light"
+                }
+            }),
+            serde_json::json!({}),
+            &["assets/theme.css"],
+        );
+        store.import_theme(&imported_root).unwrap();
+        store.apply_theme("imported-light").unwrap();
+        let imported_payload = store.active_theme_payload().unwrap();
+
+        assert!(
+            imported_payload
+                .css
+                .starts_with(":root.ccp-theme-runtime { background-image: var(--ccp-theme-art); }")
+        );
+        assert!(
+            imported_payload
+                .css
+                .contains("CCP light-theme runtime compatibility")
+        );
+        assert!(
+            imported_payload
+                .css
+                .contains(":root[data-ccp-theme-shell=\"light\"] main:has(")
+        );
     }
 
     #[test]

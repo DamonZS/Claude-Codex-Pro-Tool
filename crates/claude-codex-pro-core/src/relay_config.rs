@@ -1834,6 +1834,15 @@ fn restore_profile_auth_from_live_config(
 }
 
 fn sync_profile_mode_from_backfilled_live(profile: &mut RelayProfile) {
+    if profile.relay_mode == crate::settings::RelayMode::Official
+        && !profile.official_mix_api_key
+        && auth_mode_is_api_key(&profile.auth_contents)
+    {
+        // Codex's official API-login mode stores the credential in the live
+        // auth.json, not in the CCP profile. Do not reinterpret that login as
+        // a user-created pure API provider while switching away and back.
+        return;
+    }
     if codex_auth_api_key(&profile.auth_contents)
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
@@ -1853,12 +1862,73 @@ fn sync_profile_mode_from_backfilled_live(profile: &mut RelayProfile) {
 }
 
 fn official_profile_auth_for_switch(home: &Path, auth_contents: &str) -> anyhow::Result<String> {
+    let live = read_optional_text(&home.join("auth.json"))?;
+    let profile_value = serde_json::from_str::<Value>(auth_contents.trim()).ok();
+    let live_value = serde_json::from_str::<Value>(live.trim()).ok();
+    let auth_mode = profile_value
+        .as_ref()
+        .and_then(auth_mode_from_value)
+        .or_else(|| live_value.as_ref().and_then(auth_mode_from_value));
+
+    if auth_mode.is_some_and(|mode| {
+        mode.eq_ignore_ascii_case("apikey") || mode.eq_ignore_ascii_case("chatgpt")
+    }) {
+        let mut merged = live_value
+            .as_ref()
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(profile_object) = profile_value.as_ref().and_then(Value::as_object) {
+            for (key, value) in profile_object {
+                if key == "OPENAI_API_KEY"
+                    && value
+                        .as_str()
+                        .is_some_and(|candidate| candidate.trim().is_empty())
+                {
+                    continue;
+                }
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        if auth_mode.is_some_and(|mode| mode.eq_ignore_ascii_case("chatgpt")) {
+            merged.remove("OPENAI_API_KEY");
+        } else if !merged
+            .get("OPENAI_API_KEY")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            merged.remove("OPENAI_API_KEY");
+        }
+        return Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&Value::Object(merged))?
+        ));
+    }
+
     let source = if auth_contents.trim().is_empty() {
-        read_optional_text(&home.join("auth.json"))?
+        live
     } else {
         auth_contents.to_string()
     };
     remove_openai_api_key_from_auth_contents(&source)
+}
+
+fn auth_mode_from_value(value: &Value) -> Option<&str> {
+    value
+        .as_object()
+        .and_then(|object| object.get("auth_mode"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+}
+
+fn auth_mode_is_api_key(contents: &str) -> bool {
+    serde_json::from_str::<Value>(contents.trim())
+        .ok()
+        .and_then(|value| {
+            auth_mode_from_value(&value).map(|mode| mode.eq_ignore_ascii_case("apikey"))
+        })
+        .unwrap_or(false)
 }
 
 fn codex_auth_api_key(auth_contents: &str) -> Option<String> {
@@ -2027,11 +2097,17 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
         provider["requires_openai_auth"] = toml_edit::value(true);
     }
     provider["env_key"] = toml_edit::value(provider_env_key);
-    let provider_base_url = codex_base_url_for_protocol(
-        base_url.trim(),
-        profile.protocol,
-        crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-    );
+    let provider_base_url = if profile.route_enabled {
+        crate::protocol_proxy::local_responses_proxy_base_url(
+            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        )
+    } else {
+        codex_base_url_for_protocol(
+            base_url.trim(),
+            profile.protocol,
+            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        )
+    };
     if !provider_base_url.trim().is_empty() {
         provider["base_url"] = toml_edit::value(provider_base_url.trim());
     }
@@ -2264,6 +2340,17 @@ fn normalize_claude_relay_profile_for_storage(profile: &mut RelayProfile) -> any
 pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow::Result<()> {
     if relay_profile_targets_claude(profile) {
         return normalize_claude_relay_profile_for_storage(profile);
+    }
+    let legacy_ccswitch_profile_has_edited_endpoint = profile
+        .import_source
+        .trim()
+        .eq_ignore_ascii_case("cc-switch")
+        && (!profile.base_url.trim().is_empty() || !profile.upstream_base_url.trim().is_empty());
+    if profile.relay_mode == crate::settings::RelayMode::Official
+        && !profile.official_mix_api_key
+        && legacy_ccswitch_profile_has_edited_endpoint
+    {
+        profile.relay_mode = crate::settings::RelayMode::PureApi;
     }
     if profile.relay_mode == crate::settings::RelayMode::Official && !profile.official_mix_api_key {
         profile.config_contents.clear();

@@ -521,10 +521,15 @@ export function supplierModelMappingJsonFromText(text: string) {
 }
 
 export function withSupplierPreservedImportedFiles(profile: RelayProfile): RelayProfile {
+  const codexProfileHasEditedEndpoint = (profile.targetApp || "codex") === "codex"
+    && !!(profile.baseUrl || profile.upstreamBaseUrl || "").trim();
+  const submittedProfile = codexProfileHasEditedEndpoint
+    ? { ...profile, relayMode: "pureApi" as const, officialMixApiKey: false }
+    : profile;
   const currentApiKey = (profile.apiKey || "").trim();
   const apiKeyExplicit = profile.apiKeyExplicit === true;
   const normalized = normalizeSupplierProfile({
-    ...profile,
+    ...submittedProfile,
     apiKey: currentApiKey,
     apiKeyExplicit,
   });
@@ -693,6 +698,18 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
 
 export function supplierProfileHasApiKey(profile: RelayProfile) {
   return !!supplierProfileResolvedApiKey(profile);
+}
+
+export function supplierProfileIsCodexOfficialLogin(profile: RelayProfile) {
+  const targetApp = String(profile.targetApp || "codex").trim().toLowerCase();
+  return targetApp === "codex"
+    && profile.relayMode === "official"
+    && !profile.officialMixApiKey
+    && !supplierProfileIsCcswitch(profile);
+}
+
+export function supplierProfileCanActivate(profile: RelayProfile) {
+  return supplierProfileIsCodexOfficialLogin(profile) || supplierProfileHasApiKey(profile);
 }
 
 export function supplierProfileIsCcswitch(profile: RelayProfile) {

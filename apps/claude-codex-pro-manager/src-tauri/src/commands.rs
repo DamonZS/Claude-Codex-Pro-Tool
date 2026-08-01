@@ -1807,7 +1807,12 @@ fn run_claude_zh_patch_elevated(
     if result_path.exists() {
         let _ = fs::remove_file(&result_path);
     }
-    let target_user_sid = current_user_sid().unwrap_or_default();
+    #[cfg(windows)]
+    let target_user_sid = current_user_sid().ok_or_else(|| {
+        anyhow::anyhow!("无法获取当前 Windows 用户 SID，已停止 Claude 汉化管理员授权")
+    })?;
+    #[cfg(not(windows))]
+    let target_user_sid = String::new();
     let (target_appdata, target_localappdata) = current_user_data_dirs();
     let target_install_root = install_root
         .map(|path| path.to_string_lossy().to_string())
@@ -2021,11 +2026,14 @@ fn run_elevated_process_with_timeout(
     }
 }
 
+#[cfg(windows)]
 fn current_user_sid() -> Option<String> {
-    let output = std::process::Command::new("whoami.exe")
-        .args(["/user", "/fo", "csv", "/nh"])
-        .output()
-        .ok()?;
+    use std::os::windows::process::CommandExt;
+
+    let mut command = std::process::Command::new("whoami.exe");
+    command.args(["/user", "/fo", "csv", "/nh"]);
+    command.creation_flags(claude_codex_pro_core::windows_create_no_window());
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -7627,7 +7635,10 @@ fn set_active_supplier_profile_for_target(
     if profile.aggregate_enabled {
         bail!("聚合供应商尚不能直接切换使用。");
     }
-    if relay_profile_resolved_api_key(profile).trim().is_empty() {
+    let is_codex_official_login = target_app == "codex"
+        && profile.relay_mode == claude_codex_pro_core::settings::RelayMode::Official
+        && !profile.official_mix_api_key;
+    if !is_codex_official_login && relay_profile_resolved_api_key(profile).trim().is_empty() {
         bail!("该供应商缺少 API Key，请补入后再切换。");
     }
     match target_app {
@@ -10739,6 +10750,25 @@ mod tests {
 
         assert_eq!(settings.active_relay_id, "codex-a");
         assert_eq!(settings.active_claude_desktop_relay_id, "desktop-a");
+    }
+
+    #[test]
+    fn target_supplier_selection_allows_codex_official_login_without_profile_key() {
+        let mut settings = BackendSettings {
+            relay_profiles: vec![RelayProfile {
+                id: "official".to_string(),
+                target_app: "codex".to_string(),
+                relay_mode: claude_codex_pro_core::settings::RelayMode::Official,
+                official_mix_api_key: false,
+                auth_contents: r#"{"auth_mode":"apikey"}"#.to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        set_active_supplier_profile_for_target(&mut settings, "codex", "official").unwrap();
+
+        assert_eq!(settings.active_relay_id, "official");
     }
 
     struct TestEnvVarGuard {

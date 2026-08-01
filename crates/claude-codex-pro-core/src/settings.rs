@@ -1024,7 +1024,7 @@ impl SettingsStore {
         let mut settings = normalize_settings_config_sections(settings.clone());
         settings.codex_extra_args = normalize_codex_extra_args(&settings.codex_extra_args);
         let bytes = serde_json::to_vec_pretty(&settings)?;
-        atomic_write(&self.path, &bytes)
+        direct_write(&self.path, &bytes)
     }
 
     pub fn update(&self, payload: Value) -> anyhow::Result<BackendSettings> {
@@ -1050,7 +1050,7 @@ impl SettingsStore {
             Value::String(settings.relay_context_config_contents.clone()),
         );
         let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
-        atomic_write(&self.path, &bytes)?;
+        direct_write(&self.path, &bytes)?;
         Ok(settings)
     }
 
@@ -1895,6 +1895,15 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn direct_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        create_private_dir_all(parent)?;
+    }
+    write_private_file(path, bytes)?;
+    secure_private_path(path)?;
+    Ok(())
+}
+
 pub(crate) fn create_private_dir_all(path: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
@@ -2436,6 +2445,90 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
             assert!(config["env"].get(alias).is_none());
             assert!(auth.get(alias).is_none());
         }
+    }
+
+    #[test]
+    fn settings_store_save_and_load_preserves_codex_supplier_credentials_and_url() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let settings = BackendSettings {
+            relay_profiles: vec![RelayProfile {
+                id: "codex-new-supplier".to_string(),
+                name: "Codex New Supplier".to_string(),
+                model: "gpt-5.5".to_string(),
+                base_url: "https://relay.example/v1".to_string(),
+                upstream_base_url: "https://relay.example/v1".to_string(),
+                api_key: "test-codex-key".to_string(),
+                api_key_explicit: true,
+                relay_mode: RelayMode::PureApi,
+                target_app: "codex".to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        let profile = &loaded.relay_profiles[0];
+        let persisted: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+
+        assert_eq!(profile.api_key, "test-codex-key");
+        assert_eq!(profile.base_url, "https://relay.example/v1");
+        assert_eq!(profile.upstream_base_url, "https://relay.example/v1");
+        assert_eq!(
+            serde_json::from_str::<Value>(&profile.auth_contents).unwrap()["OPENAI_API_KEY"],
+            "test-codex-key"
+        );
+        assert!(profile.config_contents.contains("https://relay.example/v1"));
+        assert!(persisted["relayProfiles"][0].get("apiKey").is_none());
+        assert!(persisted["relayProfiles"][0].get("baseUrl").is_none());
+        assert_eq!(
+            persisted["relayProfiles"][0]["upstreamBaseUrl"],
+            "https://relay.example/v1"
+        );
+    }
+
+    #[test]
+    fn settings_store_repairs_legacy_ccswitch_official_profile_with_edited_url() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+        let settings = BackendSettings {
+            relay_profiles: vec![RelayProfile {
+                id: "legacy-ccswitch".to_string(),
+                name: "Legacy Provider (ccswitch)".to_string(),
+                model: "gpt-5.5".to_string(),
+                base_url: "https://edited.example/v1".to_string(),
+                upstream_base_url: "https://edited.example/v1".to_string(),
+                api_key: "test-edited-key".to_string(),
+                api_key_explicit: true,
+                relay_mode: RelayMode::Official,
+                official_mix_api_key: false,
+                import_source: "cc-switch".to_string(),
+                user_agent: "ccswitch:codex".to_string(),
+                target_app: "codex".to_string(),
+                ..RelayProfile::default()
+            }],
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        let profile = &loaded.relay_profiles[0];
+
+        assert_eq!(profile.relay_mode, RelayMode::PureApi);
+        assert_eq!(profile.base_url, "https://edited.example/v1");
+        assert_eq!(profile.upstream_base_url, "https://edited.example/v1");
+        assert!(
+            profile
+                .config_contents
+                .contains(r#"model_provider = "legacy-ccswitch""#)
+        );
+        assert!(
+            profile
+                .config_contents
+                .contains(r#"base_url = "https://edited.example/v1""#)
+        );
     }
 
     #[test]
@@ -3804,6 +3897,26 @@ experimental_bearer_token = "sk-existing"
 
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(saved["providerSyncEnabled"], true);
+    }
+
+    #[test]
+    fn settings_store_save_and_update_do_not_create_atomic_temp_files() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+
+        store.save(&BackendSettings::default()).unwrap();
+        store.update(json!({"providerSyncEnabled": true})).unwrap();
+
+        let temp_files = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert!(
+            temp_files.is_empty(),
+            "unexpected temp files: {temp_files:?}"
+        );
     }
 
     #[cfg(windows)]

@@ -91,7 +91,8 @@ import {
   normalizeSupplierProfile,
   redactSupplierConfig,
   supplierIdFromName,
-  supplierProfileHasApiKey,
+  supplierProfileCanActivate,
+  supplierProfileIsCodexOfficialLogin,
   supplierProfileIsCcswitch,
   supplierProtocolLabel,
   supplierRelayModeLabel,
@@ -421,7 +422,7 @@ export function OverviewScreen({
       ? settings?.activeClaudeDesktopRelayId
       : settings?.activeRelayId;
   const selectedIsCurrent = Boolean(selectedProfile && selectedProfile.id === selectedActiveId);
-  const selectedHasCredential = Boolean(selectedProfile && supplierProfileHasApiKey(selectedProfile));
+  const selectedHasCredential = Boolean(selectedProfile && supplierProfileCanActivate(selectedProfile));
   const launch = overview?.latest_launch;
   const proxyOnline = Boolean(launch?.helper_port_online);
   const codexRunning = launch?.status === "running" || launch?.status === "degraded";
@@ -511,7 +512,7 @@ export function OverviewScreen({
           <div className="overview-provider-list">
             {scopedProfiles.length ? scopedProfiles.map((profile) => {
               const current = activeProfileIds.has(profile.id);
-              const hasCredential = supplierProfileHasApiKey(profile);
+              const hasCredential = supplierProfileCanActivate(profile);
               const routeOffline = Boolean(profile.routeEnabled && !proxyOnline);
               const statusLabel = !hasCredential ? "缺少 Key" : current ? routeOffline ? "代理离线" : profile.routeEnabled ? "在线" : "当前" : profile.routeEnabled ? "路由" : "待用";
               const statusTone = !hasCredential || routeOffline ? "warning" : current ? "ok" : "muted";
@@ -1307,7 +1308,8 @@ export function SupplierScreen({
     const normalized = supplierProfileIsCcswitch(routedDraft)
       ? withSupplierPreservedImportedFiles(routedDraft)
       : normalizeSupplierProfile(withSupplierGeneratedFiles(routedDraft));
-    if (!normalized.name.trim() || (!aggregateDraft && !normalized.baseUrl.trim())) {
+    const isCodexOfficialLogin = supplierProfileIsCodexOfficialLogin(normalized);
+    if (!normalized.name.trim() || (!aggregateDraft && !isCodexOfficialLogin && !normalized.baseUrl.trim())) {
       window.alert(aggregateDraft ? "请填写聚合供应商名称后再保存。" : "请填写供应商名称和 Base URL 后再保存。API Key 可以后续补入。");
       return null;
     }
@@ -1351,7 +1353,7 @@ export function SupplierScreen({
       options.applySupplier === true
       || (targetApp === "claude-desktop" && !!originalId && currentActiveId === originalId)
     );
-    if (shouldApplySupplier && !supplierProfileHasApiKey(normalized)) {
+    if (shouldApplySupplier && !supplierProfileCanActivate(normalized)) {
       actions.showNotice({
         title: "供应商应用",
         message: "该供应商缺少 API Key，未修改当前生效配置。可取消“保存并使用”，先作为非活动配置保存。",
@@ -1381,6 +1383,7 @@ export function SupplierScreen({
           setDraft(normalizeDraftProfile(savedProfile));
           setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(savedProfile)));
         } else {
+          setSupplierTargetFilter(supplierTargetForProfile(savedProfile));
           closeSupplierEditor();
         }
         actions.showNotice({
@@ -1406,7 +1409,7 @@ export function SupplierScreen({
       actions.showNotice({ title: "供应商切换", message: "聚合供应商已经保存为真实配置记录；当前版本还没有聚合轮转代理，不能直接写入 Codex。", status: "failed" });
       return;
     }
-    await saveDraft({ stayInEditor: true, applySupplier: true });
+    await saveDraft({ applySupplier: true });
   };
   const removeProfile = async (profile: RelayProfile) => {
     if (!appSettings || profiles.length <= 1) {
@@ -1526,6 +1529,8 @@ export function SupplierScreen({
     if (isDisablingActiveRoute && supplierRouteGroup === "codex") {
       const cleared = await (actions.clearRelayMode as unknown as () => Promise<{ status?: Status } | null>)();
       if (!cleared || !statusOk(cleared.status)) return;
+      const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+      if (!saved) return;
       actions.showNotice({ title: "供应商路由", message: "已关闭 Codex 供应商路由，运行中的代理配置已撤销。", status: "ok" });
       return;
     }
@@ -1844,7 +1849,7 @@ export function SupplierScreen({
 
   if (draft) {
     const generated = normalizeDraftProfile(draft);
-    const canSwitch = !!editingExisting && appSettings?.relayProfilesEnabled !== false;
+    const canSwitch = !generated.aggregateEnabled;
     const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
     const isCodexSupplier = generated.targetApp === "codex" || !generated.targetApp;
     const apiFormatOption = supplierApiFormatOption(generated.apiFormat || "Anthropic Messages");

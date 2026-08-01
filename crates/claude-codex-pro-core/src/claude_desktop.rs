@@ -762,14 +762,43 @@ fn claude_process_inventory() -> (usize, Vec<String>) {
 }
 
 pub fn close_claude_desktop_for_patch() -> bool {
-    let process_ids = claude_process_ids();
-    if process_ids.is_empty() {
-        return true;
+    close_claude_processes_until_absent(
+        std::time::Duration::from_secs(5),
+        claude_process_ids,
+        terminate_claude_processes,
+        std::thread::sleep,
+    )
+}
+
+fn close_claude_processes_until_absent<Scan, Terminate, Pause>(
+    timeout: std::time::Duration,
+    mut scan: Scan,
+    mut terminate: Terminate,
+    mut pause: Pause,
+) -> bool
+where
+    Scan: FnMut() -> Vec<u32>,
+    Terminate: FnMut(&[u32]) -> usize,
+    Pause: FnMut(std::time::Duration),
+{
+    let deadline = std::time::Instant::now() + timeout;
+    let mut consecutive_empty_scans = 0;
+    loop {
+        let process_ids = scan();
+        if process_ids.is_empty() {
+            consecutive_empty_scans += 1;
+            if consecutive_empty_scans >= 2 {
+                return true;
+            }
+        } else {
+            consecutive_empty_scans = 0;
+            let _ = terminate(&process_ids);
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        pause(std::time::Duration::from_millis(150));
     }
-    if terminate_claude_processes(&process_ids) == 0 {
-        return false;
-    }
-    wait_for_claude_process_exit(&process_ids, std::time::Duration::from_secs(5))
 }
 
 #[cfg(windows)]
@@ -2085,6 +2114,59 @@ fn sha256_file(path: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_for_patch_rescans_and_terminates_restarted_claude() {
+        let mut scans = std::collections::VecDeque::from([
+            vec![10],
+            Vec::new(),
+            vec![20],
+            Vec::new(),
+            Vec::new(),
+        ]);
+        let mut terminated = Vec::new();
+
+        let closed = close_claude_processes_until_absent(
+            std::time::Duration::from_secs(1),
+            || {
+                scans
+                    .pop_front()
+                    .expect("scan sequence should be sufficient")
+            },
+            |process_ids| {
+                terminated.extend_from_slice(process_ids);
+                process_ids.len()
+            },
+            |_| {},
+        );
+
+        assert!(closed);
+        assert_eq!(terminated, vec![10, 20]);
+        assert!(scans.is_empty());
+    }
+
+    #[test]
+    fn close_for_patch_fails_when_claude_outlives_timeout() {
+        let mut scans = 0;
+        let mut terminated = Vec::new();
+
+        let closed = close_claude_processes_until_absent(
+            std::time::Duration::ZERO,
+            || {
+                scans += 1;
+                vec![30]
+            },
+            |process_ids| {
+                terminated.extend_from_slice(process_ids);
+                process_ids.len()
+            },
+            |_| panic!("an expired timeout must not pause"),
+        );
+
+        assert!(!closed);
+        assert_eq!(scans, 1);
+        assert_eq!(terminated, vec![30]);
+    }
 
     #[test]
     fn stopped_claude_uses_installed_executable_discovery() {
