@@ -5279,6 +5279,7 @@ fn provider_sync_skipped_status_is_not_reported_as_success() {
 #[test]
 fn history_session_repair_toasts_progress_and_restarts_codex_only_after_success() {
     let app_tsx = read_frontend_file("App.tsx");
+    let commands = include_str!("../src/commands.rs");
     let repair_action = app_tsx
         .split("const repairHistorySessions = async () => {")
         .nth(1)
@@ -5292,6 +5293,8 @@ fn history_session_repair_toasts_progress_and_restarts_codex_only_after_success(
     assert!(repair_action.contains("statusOk(result.status)"));
     assert!(repair_action.contains("即将重启 Codex"));
     assert!(repair_action.contains("await restartCodex(true)"));
+    assert!(commands.contains("run_provider_sync_with_target_waiting"));
+    assert!(commands.contains("PROVIDER_SYNC_MANUAL_WAIT_SECS"));
     assert!(
         repair_action.find("statusOk(result.status)").unwrap()
             < repair_action.find("await restartCodex(true)").unwrap()

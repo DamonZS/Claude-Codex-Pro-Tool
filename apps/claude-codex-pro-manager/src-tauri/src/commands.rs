@@ -5427,7 +5427,11 @@ pub async fn sync_providers_now(target_provider: Option<String>) -> CommandResul
         .filter(|value| !value.is_empty());
     let target_for_settings = target_provider.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        claude_codex_pro_data::run_provider_sync_with_target(None, target_provider.as_deref())
+        claude_codex_pro_data::run_provider_sync_with_target_waiting(
+            None,
+            target_provider.as_deref(),
+            Duration::from_secs(claude_codex_pro_data::PROVIDER_SYNC_MANUAL_WAIT_SECS),
+        )
     })
     .await
     .map_err(|error| anyhow::anyhow!("供应商同步任务失败：{error}"));

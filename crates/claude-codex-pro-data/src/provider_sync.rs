@@ -4,13 +4,14 @@ use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_PROVIDER: &str = "openai";
 const SESSION_DIRS: [&str; 2] = ["sessions", "archived_sessions"];
 const BACKUP_KEEP_COUNT: usize = 5;
 const PROVIDER_SYNC_MANAGED_BY: &str = "Claude Codex Pro provider sync";
 const PROVIDER_SYNC_LOCK_STALE_AFTER_SECS: u64 = 60 * 60;
+pub const PROVIDER_SYNC_MANUAL_WAIT_SECS: u64 = 90;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +123,22 @@ pub fn run_provider_sync_with_target(
     codex_home: Option<&Path>,
     explicit_target_provider: Option<&str>,
 ) -> ProviderSyncResult {
+    run_provider_sync_with_lock_wait(codex_home, explicit_target_provider, None)
+}
+
+pub fn run_provider_sync_with_target_waiting(
+    codex_home: Option<&Path>,
+    explicit_target_provider: Option<&str>,
+    wait_timeout: Duration,
+) -> ProviderSyncResult {
+    run_provider_sync_with_lock_wait(codex_home, explicit_target_provider, Some(wait_timeout))
+}
+
+fn run_provider_sync_with_lock_wait(
+    codex_home: Option<&Path>,
+    explicit_target_provider: Option<&str>,
+    lock_wait_timeout: Option<Duration>,
+) -> ProviderSyncResult {
     let home = codex_home
         .map(Path::to_path_buf)
         .unwrap_or_else(|| dirs_home().join(".codex"));
@@ -150,7 +167,7 @@ pub fn run_provider_sync_with_target(
             }
         };
     let lock_dir = home.join("tmp/provider-sync.lock");
-    if acquire_lock(&lock_dir).is_err() {
+    if acquire_lock_with_wait(&lock_dir, lock_wait_timeout).is_err() {
         return result(
             ProviderSyncStatus::Skipped,
             format!("Provider sync lock exists: {}", lock_dir.to_string_lossy()),
@@ -474,6 +491,25 @@ fn acquire_lock(path: &Path) -> std::io::Result<()> {
         path.join("owner.json"),
         json!({"pid": std::process::id(), "startedAt": now_secs()}).to_string(),
     )
+}
+
+fn acquire_lock_with_wait(path: &Path, wait_timeout: Option<Duration>) -> std::io::Result<()> {
+    let Some(wait_timeout) = wait_timeout else {
+        return acquire_lock(path);
+    };
+    let deadline = Instant::now() + wait_timeout;
+    loop {
+        match acquire_lock(path) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn is_stale_lock(path: &Path) -> bool {

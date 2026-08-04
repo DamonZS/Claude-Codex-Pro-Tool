@@ -1,6 +1,6 @@
 use claude_codex_pro_data::{
     ProviderSyncStatus, ProviderSyncTargetSource, load_provider_sync_targets, run_provider_sync,
-    run_provider_sync_with_target,
+    run_provider_sync_with_target, run_provider_sync_with_target_waiting,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -743,6 +743,69 @@ fn provider_sync_recovers_stale_lock() {
         )
         .unwrap();
     assert_eq!(provider, "custom");
+}
+
+#[test]
+fn provider_sync_waiting_retries_until_active_lock_releases() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join(".codex");
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join("config.toml"), "model_provider = \"custom\"\n").unwrap();
+    write_rollout(
+        &home.join("sessions/rollout-active-lock.jsonl"),
+        "old-provider",
+        "thread-1",
+        "C:/workspace",
+    );
+    create_state_db(&home.join("state_5.sqlite"));
+    let lock = home.join("tmp/provider-sync.lock");
+    fs::create_dir_all(&lock).unwrap();
+    fs::write(
+        lock.join("owner.json"),
+        json!({"pid": std::process::id(), "startedAt": 1_900_000_000u64}).to_string(),
+    )
+    .unwrap();
+
+    let lock_to_release = lock.clone();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        fs::remove_dir_all(lock_to_release).unwrap();
+    });
+    let result = run_provider_sync_with_target_waiting(Some(&home), None, Duration::from_secs(2));
+    releaser.join().unwrap();
+
+    assert_eq!(result.status, ProviderSyncStatus::Synced);
+    assert_eq!(result.sqlite_provider_rows_updated, 1);
+}
+
+#[test]
+fn provider_sync_waiting_times_out_on_active_lock_without_writes() {
+    let tmp = tempdir().unwrap();
+    let home = tmp.path().join(".codex");
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join("config.toml"), "model_provider = \"custom\"\n").unwrap();
+    let rollout = home.join("sessions/rollout-active-lock-timeout.jsonl");
+    write_rollout(&rollout, "old-provider", "thread-1", "C:/workspace");
+    create_state_db(&home.join("state_5.sqlite"));
+    let original_rollout = fs::read(&rollout).unwrap();
+    let original_db = fs::read(home.join("state_5.sqlite")).unwrap();
+    let lock = home.join("tmp/provider-sync.lock");
+    fs::create_dir_all(&lock).unwrap();
+    fs::write(
+        lock.join("owner.json"),
+        json!({"pid": std::process::id(), "startedAt": 1_900_000_000u64}).to_string(),
+    )
+    .unwrap();
+
+    let result =
+        run_provider_sync_with_target_waiting(Some(&home), None, Duration::from_millis(150));
+
+    assert_eq!(result.status, ProviderSyncStatus::Skipped);
+    assert!(result.message.to_lowercase().contains("lock"));
+    assert_eq!(fs::read(&rollout).unwrap(), original_rollout);
+    assert_eq!(fs::read(home.join("state_5.sqlite")).unwrap(), original_db);
+    assert!(lock.exists());
+    fs::remove_dir_all(lock).unwrap();
 }
 
 #[test]
