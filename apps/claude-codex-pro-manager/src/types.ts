@@ -301,6 +301,10 @@ export type CredentialEnvironmentResult = CommandResult<{
   canClearUser: boolean;
   profileHasKey: boolean;
   restartRequired: boolean;
+  userScope: string;
+  userScopeAvailable: boolean;
+  userScopeError?: string | null;
+  externalSourceLikely: boolean;
 }>;
 
 export type UnifiedToolAppState = {
@@ -624,6 +628,8 @@ export type SystemPromptResult = CommandResult<{
   mode: SystemPromptMode | null;
   managed: boolean;
   externallyModified: boolean;
+  storageRecovered: boolean;
+  orphanedManaged: boolean;
 }>;
 
 export type RelayProfileTestResult = CommandResult<{

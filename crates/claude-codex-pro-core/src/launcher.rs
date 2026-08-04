@@ -756,21 +756,12 @@ impl LaunchHooks for DefaultLaunchHooks {
                         process_id: None,
                     });
                 }
-                if let Some(sync) =
-                    crate::credential_environment::sync_codex_user_credential_environment_from_home(
-                        &crate::relay_config::default_codex_home_dir(),
-                    )?
-                {
-                    let _ = crate::diagnostic_log::append_diagnostic_log(
-                        "launcher.codex_credential_environment.synced",
-                        serde_json::json!({
-                            "variableName": sync.variable_name,
-                            "userChanged": sync.user_changed,
-                            "processChanged": sync.process_changed
-                        }),
-                    );
-                }
-                let process_id = activate_packaged_app(app_user_model_id, arguments).await?;
+                let process_id = activate_packaged_app_with_provider_environment(
+                    app_user_model_id,
+                    arguments,
+                    crate::relay_config::default_codex_home_dir(),
+                )
+                .await?;
                 let packaged_launch = match activation {
                     CodexLaunch::PackagedActivation {
                         app_user_model_id,
@@ -827,7 +818,12 @@ impl LaunchHooks for DefaultLaunchHooks {
             let executable = spawn_command
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("macOS open command is empty"))?;
-            let child = Command::new(executable)
+            let mut open_command = Command::new(executable);
+            remove_inherited_codex_provider_environment(open_command.as_std_mut(), &home);
+            if let Some((env_key, api_key)) = provider_environment.as_ref() {
+                open_command.env(env_key, api_key);
+            }
+            let child = open_command
                 .args(&spawn_command[1..])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -853,6 +849,7 @@ impl LaunchHooks for DefaultLaunchHooks {
         // Read the live files at spawn time so a stale inherited variable cannot
         // override the credential or env_key selected by the active provider.
         let home = crate::relay_config::default_codex_home_dir();
+        remove_inherited_codex_provider_environment(child_command.as_std_mut(), &home);
         if let Some((env_key, api_key)) =
             crate::relay_config::codex_provider_auth_environment_from_home(&home)
         {
@@ -2847,6 +2844,17 @@ pub fn build_macos_open_command(
     build_macos_open_command_with_environment(app_dir, debug_port, extra_args, None)
 }
 
+pub fn remove_inherited_codex_provider_environment(
+    command: &mut std::process::Command,
+    home: &Path,
+) {
+    for variable_name in
+        crate::relay_config::codex_provider_credential_environment_keys_from_home(home)
+    {
+        command.env_remove(variable_name);
+    }
+}
+
 pub fn build_macos_open_command_with_environment(
     app_dir: &Path,
     debug_port: u16,
@@ -2854,9 +2862,9 @@ pub fn build_macos_open_command_with_environment(
     environment: Option<(&str, &str)>,
 ) -> Vec<String> {
     let mut command = vec!["open".to_string()];
-    if let Some((env_key, value)) = environment {
+    if let Some((env_key, _)) = environment {
         command.push("--env".to_string());
-        command.push(format!("{env_key}={value}"));
+        command.push(env_key.to_string());
     }
     command.extend([
         "-W".to_string(),
@@ -3210,6 +3218,15 @@ pub async fn activate_packaged_app(
     anyhow::bail!("Packaged app activation is only supported on Windows")
 }
 
+#[cfg(not(windows))]
+async fn activate_packaged_app_with_provider_environment(
+    _app_user_model_id: &str,
+    _arguments: &str,
+    _home: PathBuf,
+) -> anyhow::Result<u32> {
+    anyhow::bail!("Packaged app activation is only supported on Windows")
+}
+
 #[cfg(windows)]
 pub async fn activate_packaged_app(
     app_user_model_id: &str,
@@ -3219,6 +3236,24 @@ pub async fn activate_packaged_app(
     let arguments = arguments.to_string();
     tokio::task::spawn_blocking(move || {
         activate_packaged_app_blocking(&app_user_model_id, &arguments)
+    })
+    .await
+    .context("packaged app activation task failed")?
+}
+
+#[cfg(windows)]
+async fn activate_packaged_app_with_provider_environment(
+    app_user_model_id: &str,
+    arguments: &str,
+    home: PathBuf,
+) -> anyhow::Result<u32> {
+    let app_user_model_id = app_user_model_id.to_string();
+    let arguments = arguments.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::credential_environment::with_temporary_codex_user_credential_environment_from_home(
+            &home,
+            || activate_packaged_app_blocking(&app_user_model_id, &arguments),
+        )
     })
     .await
     .context("packaged app activation task failed")?

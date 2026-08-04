@@ -980,6 +980,19 @@ function SupplierModelDropdown({
   );
 }
 
+function credentialEnvironmentScopeLabel(scope: string): string {
+  switch (scope) {
+    case "windows-user-environment":
+      return "当前 CCP 进程和 Windows 当前用户环境";
+    case "macos-launchd-user-session":
+      return "当前 CCP 进程和 macOS launchd 用户会话";
+    case "linux-systemd-user-manager":
+      return "当前 CCP 进程和 Linux systemd 用户会话";
+    default:
+      return "当前 CCP 进程和可管理的用户会话环境";
+  }
+}
+
 export function SupplierScreen({
   // 供应商主列表 / 编辑 / 聚合配置
   actions,
@@ -1016,6 +1029,7 @@ export function SupplierScreen({
   const [draft, setDraft] = useState<RelayProfile | null>(null);
   const [modelFetch, setModelFetch] = useState<RelayProfileModelsResult | null>(null);
   const [supplierSaveBusy, setSupplierSaveBusy] = useState(false);
+  const [supplierRouteToggleBusy, setSupplierRouteToggleBusy] = useState(false);
   const [supplierRefreshBusy, setSupplierRefreshBusy] = useState(false);
   const [credentialEnvironmentBusy, setCredentialEnvironmentBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -1039,6 +1053,7 @@ export function SupplierScreen({
   } | null>(null);
   const supplierCardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const lastFocusedProfileIdRef = useRef<string | null>(null);
+  const supplierRouteToggleInFlightRef = useRef(false);
   const supplierModelFetchRequestRef = useRef(0);
   const supplierDirectModelRowIdRef = useRef(0);
   const supplierCodexCatalogRowIdRef = useRef(0);
@@ -1153,7 +1168,12 @@ export function SupplierScreen({
     setShowSupplierApiKey(false);
     setEditingId(null);
     const targetApp = supplierTargetFilter;
-    const profile = withSupplierRoutingState({ ...createSupplierProfile(appSettings), targetApp }, targetApp, supplierRoutingEnabledForTarget(targetApp));
+    const profile = withSupplierRoutingState({
+      ...createSupplierProfile(appSettings),
+      id: uniqueSupplierProfileId(appSettings.relayProfiles, "provider"),
+      name: "供应商",
+      targetApp,
+    }, targetApp, supplierRoutingEnabledForTarget(targetApp));
     setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(profile.modelList)));
     setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(profile)));
     setSupplierDirectModelsOpen(true);
@@ -1195,6 +1215,12 @@ export function SupplierScreen({
     supplierModelFetchRequestRef.current += 1;
     setDraft((current) => current ? normalizeDraftProfile({ ...current, ...patch }) : current);
   };
+  // Keep the name field editable without regenerating the profile on every
+  // keystroke. Generated config normalization can otherwise race the input
+  // value and make imported supplier names appear immutable.
+  const updateSupplierName = (name: string) => {
+    setDraft((current) => current ? { ...current, name } : current);
+  };
   const closeSupplierEditor = () => {
     supplierModelFetchRequestRef.current += 1;
     setModelFetch(null);
@@ -1215,7 +1241,8 @@ export function SupplierScreen({
   const clearCredentialEnvironment = async () => {
     if (!credentialEnvironment?.canClearUser || credentialEnvironmentBusy) return;
     const variableName = credentialEnvironment.variableName;
-    if (!window.confirm(`确认删除用户环境变量「${variableName}」？不会修改 CODEX_HOME 或系统级环境变量。`)) return;
+    const scopeLabel = credentialEnvironmentScopeLabel(credentialEnvironment.userScope);
+    if (!window.confirm(`确认从${scopeLabel}删除环境变量「${variableName}」？不会删除 auth.json 凭据、修改 CODEX_HOME 或系统级环境变量。`)) return;
     setCredentialEnvironmentBusy(true);
     try {
       await actions.clearCodexUserCredentialEnvironment(variableName);
@@ -1304,7 +1331,8 @@ export function SupplierScreen({
     const normalizedId = supplierIdFromName(requestedId || draft.name);
     const idWasNormalized = requestedId !== normalizedId;
     const targetApp = supplierTargetForProfile(draft);
-    const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId }, targetApp, !!draft.routeEnabled);
+    const saveName = draft.name.trim() || normalizedId;
+    const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId, name: saveName }, targetApp, !!draft.routeEnabled);
     const normalized = supplierProfileIsCcswitch(routedDraft)
       ? withSupplierPreservedImportedFiles(routedDraft)
       : normalizeSupplierProfile(withSupplierGeneratedFiles(routedDraft));
@@ -1412,15 +1440,18 @@ export function SupplierScreen({
     await saveDraft({ applySupplier: true });
   };
   const removeProfile = async (profile: RelayProfile) => {
-    if (!appSettings || profiles.length <= 1) {
-      window.alert("至少保留一个供应商配置。");
+    if (!appSettings) {
+      window.alert("设置尚未加载，无法删除供应商。");
       return;
     }
     if (!window.confirm(`确认删除供应商「${profile.name || profile.id}」？`)) return;
     const nextProfiles = profiles
       .filter((item) => item.id !== profile.id)
       .map((item) => item.aggregateEnabled ? { ...item, aggregateMembers: (item.aggregateMembers ?? []).filter((id) => id !== profile.id) } : item);
-    const nextForTarget = (_targetApp: SupplierTargetApp, currentId: string) => currentId === profile.id ? "" : currentId;
+    const nextForTarget = (targetApp: SupplierTargetApp, currentId: string) => {
+      if (currentId !== profile.id) return currentId;
+      return nextProfiles.find((item) => supplierTargetForProfile(item) === targetApp)?.id ?? "";
+    };
     const saved = await saveSupplierSettings({
       ...appSettings,
       relayProfiles: nextProfiles,
@@ -1517,34 +1548,40 @@ export function SupplierScreen({
     await saveSupplierSettings({ ...appSettings, relayProfilesEnabled: enabled });
   };
   const toggleVisibleSupplierRouting = async (enabled: boolean) => {
-    if (!appSettings || !routableSupplierProfiles.length) return;
-    const visibleIds = new Set(routableSupplierProfiles.map((profile) => profile.id));
-    const nextProfiles = appSettings.relayProfiles.map((profile) => {
-      if (!visibleIds.has(profile.id)) return profile;
-      return withSupplierRoutingState(profile, supplierRouteGroup, enabled);
-    });
-    actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
-    const activeProfileId = activeSupplierIdForTarget(supplierRouteGroup);
-    const isDisablingActiveRoute = !enabled && visibleIds.has(activeProfileId);
-    if (isDisablingActiveRoute && supplierRouteGroup === "codex") {
-      const cleared = await (actions.clearRelayMode as unknown as () => Promise<{ status?: Status } | null>)();
-      if (!cleared || !statusOk(cleared.status)) return;
-      const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
-      if (!saved) return;
-      actions.showNotice({ title: "供应商路由", message: "已关闭 Codex 供应商路由，运行中的代理配置已撤销。", status: "ok" });
-      return;
-    }
-    if (isDisablingActiveRoute && supplierRouteGroup === "claude-desktop") {
-      const restored = await (actions.restoreClaudeDesktopProviderOfficial as unknown as (skipConfirm?: boolean) => Promise<{ status?: Status } | null>)(true);
-      if (!restored || !statusOk(restored.status)) return;
-      const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
-      if (!saved) return;
-      actions.showNotice({ title: "供应商路由", message: "已关闭 Claude Desktop 供应商路由，运行中的代理配置已撤销。", status: "ok" });
-      return;
-    }
-    const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
-    if (saved) {
-      actions.showNotice({ title: "供应商路由", message: enabled ? `已开启 ${supplierRouteGroupLabel} 供应商路由。` : `已关闭 ${supplierRouteGroupLabel} 供应商路由。`, status: "ok" });
+    if (!appSettings || !routableSupplierProfiles.length || supplierRouteToggleInFlightRef.current) return;
+    supplierRouteToggleInFlightRef.current = true;
+    setSupplierRouteToggleBusy(true);
+    try {
+      const visibleIds = new Set(routableSupplierProfiles.map((profile) => profile.id));
+      const nextProfiles = appSettings.relayProfiles.map((profile) => {
+        if (!visibleIds.has(profile.id)) return profile;
+        return withSupplierRoutingState(profile, supplierRouteGroup, enabled);
+      });
+      const nextSettings = { ...appSettings, relayProfiles: nextProfiles };
+      actions.showNotice({ title: "供应商路由", message: enabled ? `正在开启 ${supplierRouteGroupLabel} 供应商路由...` : `正在关闭 ${supplierRouteGroupLabel} 供应商路由...`, status: "running" });
+      const activeProfileId = activeSupplierIdForTarget(supplierRouteGroup);
+      const isDisablingActiveRoute = !enabled && visibleIds.has(activeProfileId);
+      if (isDisablingActiveRoute && supplierRouteGroup === "codex") {
+        const switched = await actions.switchSupplierProfile("codex", activeProfileId, nextSettings);
+        if (!switched || !statusOk(switched.status)) return;
+        actions.showNotice({ title: "供应商路由", message: "已关闭 Codex 供应商路由，运行中的代理配置已撤销。", status: "ok" });
+        return;
+      }
+      if (isDisablingActiveRoute && supplierRouteGroup === "claude-desktop") {
+        const restored = await (actions.restoreClaudeDesktopProviderOfficial as unknown as (skipConfirm?: boolean) => Promise<{ status?: Status } | null>)(true);
+        if (!restored || !statusOk(restored.status)) return;
+        const saved = await saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles });
+        if (!saved) return;
+        actions.showNotice({ title: "供应商路由", message: "已关闭 Claude Desktop 供应商路由，运行中的代理配置已撤销。", status: "ok" });
+        return;
+      }
+      const saved = await saveSupplierSettings(nextSettings);
+      if (saved) {
+        actions.showNotice({ title: "供应商路由", message: enabled ? `已开启 ${supplierRouteGroupLabel} 供应商路由。` : `已关闭 ${supplierRouteGroupLabel} 供应商路由。`, status: "ok" });
+      }
+    } finally {
+      supplierRouteToggleInFlightRef.current = false;
+      setSupplierRouteToggleBusy(false);
     }
   };
   const supplierOrderFromIds = (ids: string[]) => {
@@ -1573,7 +1610,7 @@ export function SupplierScreen({
     [profiles, supplierRouteGroup],
   );
   const supplierRouteSwitchEnabled = routableSupplierProfiles.some((profile) => !!profile.routeEnabled);
-  const supplierRouteSwitchDisabled = !appSettings || !routableSupplierProfiles.length;
+  const supplierRouteSwitchDisabled = supplierRouteToggleBusy || !appSettings || !routableSupplierProfiles.length;
   const setSupplierCardRef = (profileId: string) => (node: HTMLDivElement | null) => {
     if (node) {
       supplierCardRefs.current.set(profileId, node);
@@ -1797,7 +1834,7 @@ export function SupplierScreen({
           <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => duplicateProfile(profile)} title="\u590d\u5236" type="button"><Copy className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled title="\u68c0\u6d4b\u8fde\u901a" type="button"><Activity className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled title="\u7528\u91cf\u914d\u7f6e" type="button"><BarChart3 className="h-4 w-4" /></button>
-          <button className="supplier-card-action-button" disabled={profiles.length <= 1 || options.overlay} onClick={() => void removeProfile(profile)} title="\u5220\u9664\u4f9b\u5e94\u5546" type="button"><Trash2 className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => void removeProfile(profile)} title="\u5220\u9664\u4f9b\u5e94\u5546" type="button"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
     );
@@ -1821,7 +1858,7 @@ export function SupplierScreen({
           <div className="supplier-editor-card">
             <div className="supplier-editor-titleline"><strong>{generated.name}</strong><span className="supplier-badge">聚合</span></div>
             <div className="supplier-form-grid">
-              <label className="ops-form-field"><span>名称</span><input onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={generated.name} /></label>
+              <label className="ops-form-field"><span>名称</span><input onChange={(event) => updateSupplierName(event.currentTarget.value)} value={generated.name} /></label>
               <label className="ops-form-field"><span>测试模型</span><input onChange={(event) => updateDraft({ testModel: event.currentTarget.value, model: event.currentTarget.value })} value={generated.testModel || generated.model} /></label>
               <label className="ops-form-field span-2"><span>聚合策略</span><select className="ops-select" onChange={(event) => updateDraft({ aggregateStrategy: event.currentTarget.value })} value={generated.aggregateStrategy || "failover"}>{AGGREGATE_STRATEGIES.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.label}</option>)}</select></label>
             </div>
@@ -1952,7 +1989,7 @@ env_key = "OPENAI_API_KEY"
         <div className="supplier-ccswitch-editor-body"><section className="supplier-ccswitch-form-card">
           <div className="supplier-form-avatar-shell"><div className="supplier-form-avatar">{formAvatar}</div></div>
           <div className="supplier-preset-strip">{SUPPLIER_PRESETS.filter((preset) => preset.id === "openai" || preset.id === "anthropic").map((preset) => <button className={preset.id === generated.id ? "active" : ""} key={preset.id} onClick={() => applyPreset(preset)} type="button"><strong>{preset.name}</strong><span>{preset.targetApp === "claude-desktop" ? "Claude Desktop" : preset.targetApp === "claude" ? "Claude" : "Codex"}</span></button>)}</div>
-          <label className="ops-form-field"><span>供应商名称</span><input onBlur={(event) => updateNewDraftIdFromName(event.currentTarget.value)} onChange={(event) => updateDraft({ name: event.currentTarget.value })} value={cleanName} /></label>
+          <label className="ops-form-field"><span>供应商名称</span><input onBlur={(event) => updateNewDraftIdFromName(event.currentTarget.value)} onChange={(event) => updateSupplierName(event.currentTarget.value)} value={draft.name} /></label>
           <label className="ops-form-field"><span>备注</span><input onChange={(event) => updateDraft({ notes: event.currentTarget.value })} placeholder="例如：公司专用账号" value={generated.notes || ""} /></label>
           <label className="ops-form-field"><span>官网链接</span><input onChange={(event) => updateDraft({ websiteUrl: event.currentTarget.value })} placeholder="https://example.com" value={generated.websiteUrl || ""} /></label>
           <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value, apiKeyExplicit: true })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
@@ -2119,10 +2156,17 @@ env_key = "OPENAI_API_KEY"
     );
   }
 
+  const credentialEnvironmentExternalSource = Boolean(
+    credentialEnvironment?.externalSourceLikely,
+  );
+  const credentialEnvironmentScopeUnavailable = Boolean(
+    credentialEnvironment?.present && !credentialEnvironment.userScopeAvailable,
+  );
+
 
   return (
     <div className="supplier-list-shell">
-      {credentialEnvironment?.present ? <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>{credentialEnvironment.conflict ? "检测到凭据环境变量冲突" : "检测到凭据环境变量"}</strong><p>{credentialEnvironment.conflict ? `${credentialEnvironment.variableName} 与当前 Codex 供应商凭据不一致，可能覆盖 config.toml / auth.json 并导致 401；不会清理 CODEX_HOME。` : `${credentialEnvironment.variableName} 已存在，当前未发现与活动供应商的值冲突。`}{credentialEnvironment.restartRequired ? " 请完全退出并重新启动 Codex。" : ""}</p><span className="supplier-env-chip">{credentialEnvironment.variableName} {credentialEnvironment.userPresent ? "用户环境" : credentialEnvironment.systemPresent ? "系统环境" : "当前进程"}</span></div><div className="supplier-env-actions"><Button disabled={!credentialEnvironment.canClearUser || credentialEnvironmentBusy} onClick={() => void clearCredentialEnvironment()} size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button disabled={credentialEnvironmentBusy} onClick={() => void refreshCredentialEnvironment()} size="sm" variant="outline"><RefreshCw className={`h-4 w-4 ${credentialEnvironmentBusy ? "spin" : ""}`} />{credentialEnvironmentBusy ? "检测中" : "检测"}</Button></div></div> : null}
+      {credentialEnvironment && (credentialEnvironment.present || credentialEnvironment.restartRequired) ? <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>{credentialEnvironment.conflict ? "检测到凭据环境变量冲突" : "检测到凭据环境变量"}</strong><p>{credentialEnvironment.conflict ? `${credentialEnvironment.variableName} 与当前 Codex 供应商凭据不一致，可能覆盖 config.toml / auth.json 并导致 401；不会清理 CODEX_HOME。` : credentialEnvironment.present ? `${credentialEnvironment.variableName} 已存在，当前未发现与活动供应商的值冲突。` : `${credentialEnvironment.variableName} 已从 CCP 可管理的作用域清理。`}{credentialEnvironmentScopeUnavailable ? " 用户会话环境暂不可访问，CCP 未执行扩大范围的清理。" : ""}{credentialEnvironmentExternalSource ? " 该值来自 CCP 外部启动环境，需在原设置来源中清理。" : ""}{credentialEnvironment.restartRequired ? " 请完全退出并重新启动 Codex。" : ""}</p><span className="supplier-env-chip">{credentialEnvironment.variableName} {credentialEnvironment.userPresent ? "用户会话" : credentialEnvironment.systemPresent ? "系统环境" : credentialEnvironment.processPresent ? "当前进程" : "已清理"}</span></div><div className="supplier-env-actions"><Button disabled={!credentialEnvironment.canClearUser || credentialEnvironmentBusy} onClick={() => void clearCredentialEnvironment()} size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button disabled={credentialEnvironmentBusy} onClick={() => void refreshCredentialEnvironment()} size="sm" variant="outline"><RefreshCw className={`h-4 w-4 ${credentialEnvironmentBusy ? "spin" : ""}`} />{credentialEnvironmentBusy ? "检测中" : "检测"}</Button></div></div> : null}
       <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
       <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
       <div className="supplier-card-list">

@@ -6063,6 +6063,29 @@ html.dark > body > .supplier-model-dropdown-menu,
   gap: 16px;
 }
 
+.system-prompt-storage-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgb(217 119 6 / 0.4);
+  border-radius: 6px;
+  color: #92400e;
+  background: rgb(245 158 11 / 0.12);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.system-prompt-storage-warning svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.dark .system-prompt-storage-warning {
+  color: #fbbf24;
+}
+
 .system-prompt-categories {
   gap: 4px;
   overflow-x: auto;

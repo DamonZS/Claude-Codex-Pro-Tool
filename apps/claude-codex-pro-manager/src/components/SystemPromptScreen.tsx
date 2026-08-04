@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, Check, CircleHelp, CirclePlus, FileText, Github, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { ArrowRightLeft, Check, CircleHelp, CirclePlus, FileText, Github, LoaderCircle, Pencil, Plus, RefreshCw, TriangleAlert, Trash2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import guideMarkdown from "@/content/ccp-deepseek-guide.md?raw";
@@ -95,10 +95,10 @@ export function SystemPromptScreen({ actions, prompts }: Props) {
           <small>当前状态</small>
           <strong className={prompts?.managed ? "is-active" : ""}>
             <span className="system-prompt-dot" />
-            <span>{prompts?.activeTitle || (prompts?.activePath ? "外部提示词" : "未启用提示词")}</span>
+            <span>{prompts?.activeTitle || (prompts?.orphanedManaged ? "CCP 托管提示词（状态未记录）" : prompts?.activePath ? "外部提示词" : "未启用提示词")}</span>
             {prompts?.managed && activeMode ? <em>{activeMode === "preserve" ? "保留指令文件" : "替换指令文件"}</em> : null}
           </strong>
-          <p>{prompts?.externallyModified ? "Codex 配置已被其他程序修改，CCP 未执行覆盖。" : prompts?.managed ? `当前通过 model_instructions_file 加载（${activeMode === "preserve" ? "保留原提示词" : "替换原提示词"}）。` : prompts?.activePath || "选择下方模板后启用。"}</p>
+          <p>{prompts?.orphanedManaged ? "Codex 仍在加载 CCP 托管文件；重新启用任一模板可接管，之后停用会移除该托管配置。" : prompts?.externallyModified ? "Codex 配置已被其他程序修改，CCP 未执行覆盖。" : prompts?.managed ? `当前通过 model_instructions_file 加载（${activeMode === "preserve" ? "保留原提示词" : "替换原提示词"}）。` : prompts?.activePath || "选择下方模板后启用。"}</p>
         </div>
         <div className="system-prompt-mode">
           <div><strong>启用方式 <CircleHelp aria-hidden="true" /></strong><p>点击模板开关时，使用这里选择的方式。</p></div>
@@ -118,6 +118,13 @@ export function SystemPromptScreen({ actions, prompts }: Props) {
         </div>
         <Button variant="ghost" onClick={() => void actions.refreshSystemPrompts(false)}><RefreshCw aria-hidden="true" />刷新</Button>
       </div>
+
+      {prompts?.storageRecovered ? (
+        <div className="system-prompt-storage-warning" role="status">
+          <TriangleAlert aria-hidden="true" />
+          <span>原状态文件暂时无法读取（权限不足或文件占用），已切换到当前用户可写的恢复存储；原文件未被覆盖，其中的旧自定义提示词暂不可见。</span>
+        </div>
+      ) : null}
 
       {prompts === null ? (
         <div className="system-prompt-empty"><LoaderCircle className="spin" /><strong>正在加载系统提示词</strong></div>

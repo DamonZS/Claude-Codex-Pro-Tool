@@ -20,7 +20,7 @@ export function uniqueSupplierProfileId(profiles: RelayProfile[], base: string) 
 export function createSupplierProfile(settings: BackendSettings): RelayProfile {
   return normalizeSupplierProfile(withSupplierGeneratedFiles({
     id: uniqueSupplierProfileId(settings.relayProfiles, "provider"),
-    name: `供应商 ${settings.relayProfiles.length + 1}`,
+    name: "",
     model: "gpt-5.5",
     baseUrl: "",
     upstreamBaseUrl: "",
@@ -61,7 +61,14 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
   const hasExplicitModelList = typeof profile.modelList === "string";
   const modelList = hasExplicitModelList ? profile.modelList : "";
   const apiKey = supplierProfileResolvedApiKey(profile);
-  const baseUrl = profile.baseUrl || profile.upstreamBaseUrl || "";
+  const storedBaseUrl = profile.baseUrl || "";
+  const upstreamBaseUrl = profile.upstreamBaseUrl || "";
+  // The local protocol proxy belongs in generated runtime config only. Keep
+  // the provider record pointed at its real upstream endpoint when an older
+  // route-enabled save left the proxy URL in baseUrl.
+  const baseUrl = isLocalSupplierProxyUrl(storedBaseUrl)
+    ? upstreamBaseUrl
+    : storedBaseUrl || upstreamBaseUrl;
   const model = profile.model || profile.testModel || firstSupplierModel(modelList) || "gpt-5.5";
   const targetApp = profile.targetApp || "codex";
   const modelMappingEnabled = typeof profile.modelMappingEnabled === "boolean"
@@ -74,11 +81,12 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
   return {
     ...profile,
     id: supplierIdFromName(profile.id || profile.name),
-    name: profile.name || profile.id || "未命名供应商",
+    // Empty is intentional for a new profile; never replace it with the id.
+    name: profile.name ?? "",
     model,
     testModel: profile.testModel || model,
     baseUrl,
-    upstreamBaseUrl: profile.upstreamBaseUrl || baseUrl,
+    upstreamBaseUrl: upstreamBaseUrl || baseUrl,
     apiKey,
     protocol: profile.protocol || "responses",
     relayMode: profile.relayMode === "official" ? "official" : "pureApi",
@@ -268,6 +276,10 @@ function supplierModelMappingDefaultForEntry(entry: SupplierModelMappingJsonEntr
   const routeId = typeof entry.routeId === "string" ? entry.routeId.trim() : "";
   return SUPPLIER_MODEL_MAPPING_DEFAULTS.find((row) =>
     row.role === role || row.label.toLowerCase() === label || row.routeId === routeId);
+}
+
+function isLocalSupplierProxyUrl(value: string) {
+  return /^https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/v1\/?$/i.test(value.trim());
 }
 
 function supplierModelMappingRowFromEntry(entry: SupplierModelMappingJsonEntry): SupplierModelMappingRow | null {
@@ -794,7 +806,7 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
     "disable_response_storage = true",
     "",
     `[model_providers.${providerId}]`,
-    `name = ${tomlString(providerId)}`,
+    `name = ${tomlString(profile.name.trim() || providerId)}`,
     'wire_api = "responses"',
     "requires_openai_auth = true",
     'env_key = "OPENAI_API_KEY"',

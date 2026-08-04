@@ -1942,9 +1942,8 @@ fn codex_auth_api_key(auth_contents: &str) -> Option<String> {
 
 /// Resolve the `OPENAI_API_KEY` a freshly launched Codex should see, reading the
 /// live `auth.json` under the given Codex home. The launcher passes this value
-/// explicitly on spawn so the child does not depend on the HKCU environment
-/// broadcast having propagated yet (the classic "provider switch didn't take"
-/// case when Codex is started right after switching).
+/// explicitly at the final Codex launch boundary so inherited user-session
+/// environment cannot select stale credentials.
 pub fn codex_provider_auth_key_from_home(home: &Path) -> Option<String> {
     let auth_contents = read_optional_text(&home.join("auth.json")).ok()?;
     codex_auth_api_key(&auth_contents)
@@ -1959,6 +1958,30 @@ pub fn codex_provider_auth_environment_from_home(home: &Path) -> Option<(String,
         .and_then(|contents| active_provider_env_key_from_config(&contents))
         .unwrap_or_else(|| CODEX_PROVIDER_AUTH_ENV_KEY.to_string());
     Some((env_key, api_key))
+}
+
+/// Return every credential environment name declared by the live Codex
+/// provider configuration, plus the default name. Launch boundaries remove
+/// these inherited values before injecting only the active provider credential.
+pub fn codex_provider_credential_environment_keys_from_home(home: &Path) -> Vec<String> {
+    let mut keys = vec![CODEX_PROVIDER_AUTH_ENV_KEY.to_string()];
+    if let Ok(contents) = read_optional_text(&home.join("config.toml"))
+        && let Ok(doc) = parse_toml_document(&contents)
+        && let Some(providers) = doc.get("model_providers").and_then(Item::as_table)
+    {
+        keys.extend(providers.iter().filter_map(|(_, provider)| {
+            provider
+                .as_table()
+                .and_then(|provider| provider.get("env_key"))
+                .and_then(Item::as_str)
+                .map(str::trim)
+                .filter(|env_key| valid_environment_variable_name(env_key))
+                .map(ToString::to_string)
+        }));
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    keys
 }
 
 fn active_provider_env_key_from_config(config_contents: &str) -> Option<String> {
@@ -2025,6 +2048,13 @@ fn relay_profile_base_url(profile: &RelayProfile) -> String {
     }
 }
 
+fn relay_profile_storage_base_url(profile: &RelayProfile) -> String {
+    if !profile.upstream_base_url.trim().is_empty() {
+        return profile.upstream_base_url.trim().to_string();
+    }
+    relay_profile_base_url(profile)
+}
+
 fn relay_profile_api_key(profile: &RelayProfile) -> String {
     if profile.api_key_explicit {
         return profile.api_key.trim().to_string();
@@ -2073,7 +2103,15 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     doc.as_table_mut().remove(CHAT_UPSTREAM_BASE_URL_KEY);
     retain_only_provider_table(&mut doc, &provider_id);
     let provider = ensure_provider_table(&mut doc, &provider_id)?;
-    if provider
+    let display_name = profile
+        .name
+        .trim()
+        .strip_suffix("(ccswitch)")
+        .map(str::trim)
+        .unwrap_or_else(|| profile.name.trim());
+    if !display_name.is_empty() {
+        provider["name"] = toml_edit::value(display_name);
+    } else if provider
         .get("name")
         .and_then(Item::as_str)
         .map(str::trim)
@@ -2361,13 +2399,16 @@ pub fn normalize_relay_profile_for_storage(profile: &mut RelayProfile) -> anyhow
         profile.auth_contents = remove_openai_api_key_from_auth_contents(&profile.auth_contents)?;
         return Ok(());
     }
-    let source_base_url = relay_profile_base_url(profile);
+    let source_base_url = relay_profile_storage_base_url(profile);
     let source_api_key = relay_profile_api_key(profile);
     let config_can_be_completed = !profile.config_contents.trim().is_empty()
         || profile.relay_mode == crate::settings::RelayMode::PureApi
         || profile.official_mix_api_key;
     if config_can_be_completed {
-        if let Ok(config_contents) = complete_relay_profile_config(profile) {
+        let mut storage_profile = profile.clone();
+        storage_profile.base_url = source_base_url.clone();
+        storage_profile.upstream_base_url = source_base_url.clone();
+        if let Ok(config_contents) = complete_relay_profile_config(&storage_profile) {
             profile.config_contents = config_contents;
         }
     }

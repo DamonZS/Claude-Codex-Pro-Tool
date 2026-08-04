@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, WPARAM};
+use windows::Win32::Foundation::{
+    BOOL, CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE, HWND, LPARAM, MAX_PATH,
+    WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0, WPARAM,
+};
 #[cfg(windows)]
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -28,14 +31,15 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 #[cfg(windows)]
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_ROUTINE_FLAGS, REG_SZ,
-    RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteKeyW,
-    RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, REG_EXPAND_SZ, REG_ROUTINE_FLAGS,
+    REG_SZ, REG_VALUE_TYPE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey,
+    RegCreateKeyW, RegDeleteKeyW, RegDeleteValueW, RegGetValueW, RegOpenKeyExW, RegSetValueExW,
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-    AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
+    AttachThreadInput, CreateMutexW, GetCurrentThreadId, INFINITE, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW, ReleaseMutex,
+    TerminateProcess, WaitForSingleObject,
 };
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -61,6 +65,44 @@ use windows::core::{Interface, PCWSTR, PWSTR};
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
 const CF_UNICODETEXT_FORMAT: u32 = 13;
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistryStringValue {
+    pub value: String,
+    pub value_type: REG_VALUE_TYPE,
+}
+
+#[cfg(windows)]
+pub(crate) struct NamedMutexGuard {
+    handle: HANDLE,
+}
+
+#[cfg(windows)]
+impl Drop for NamedMutexGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseMutex(self.handle);
+            let _ = CloseHandle(self.handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn acquire_named_mutex(name: &str) -> anyhow::Result<NamedMutexGuard> {
+    let name = wide_null(name);
+    let handle = unsafe { CreateMutexW(None, false, PCWSTR(name.as_ptr())) }
+        .context("创建 Codex 凭据环境互斥体失败")?;
+    let wait_result = unsafe { WaitForSingleObject(handle, INFINITE) };
+    if wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED {
+        let _ = unsafe { CloseHandle(handle) };
+        if wait_result == WAIT_FAILED {
+            return Err(std::io::Error::last_os_error()).context("等待 Codex 凭据环境互斥体失败");
+        }
+        anyhow::bail!("等待 Codex 凭据环境互斥体返回意外状态")
+    }
+    Ok(NamedMutexGuard { handle })
+}
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,27 +245,42 @@ fn shell_open(target: impl AsRef<OsStr>) -> anyhow::Result<()> {
 
 #[cfg(windows)]
 pub fn set_current_user_string_value(subkey: &str, name: &str, value: &str) -> anyhow::Result<()> {
+    set_current_user_registry_string_value(
+        subkey,
+        name,
+        &RegistryStringValue {
+            value: value.to_string(),
+            value_type: REG_SZ,
+        },
+    )
+}
+
+#[cfg(windows)]
+pub(crate) fn set_current_user_registry_string_value(
+    subkey: &str,
+    name: &str,
+    value: &RegistryStringValue,
+) -> anyhow::Result<()> {
+    if value.value_type != REG_SZ && value.value_type != REG_EXPAND_SZ {
+        anyhow::bail!("不支持的注册表字符串类型")
+    }
     with_created_current_user_key(subkey, |key| {
-        let value = wide_null(value);
-        let bytes = slice_as_u8(&value);
+        let encoded = wide_null(&value.value);
+        let bytes = slice_as_u8(&encoded);
         unsafe {
             RegSetValueExW(
                 key,
                 PCWSTR(wide_null(name).as_ptr()),
                 0,
-                REG_SZ,
+                value.value_type,
                 Some(bytes),
             )
         }
         .ok()
         .with_context(|| format!("写入注册表值 {subkey}\\{name} 失败"))
     })?;
-    // Writing HKCU\Environment only updates the registry; already-running
-    // processes keep their inherited environment block. Broadcasting
-    // WM_SETTINGCHANGE with "Environment" tells the shell (and any process that
-    // listens) to reload user env vars, so a Codex started afterwards from the
-    // Start menu / another shell can actually see the new OPENAI_API_KEY. We
-    // still pass the value directly on spawn for children we launch ourselves.
+    // Environment changes only reach future process environment blocks after
+    // the user shell reloads them.
     if subkey.eq_ignore_ascii_case(WINDOWS_USER_ENVIRONMENT_KEY) {
         broadcast_environment_change();
     }
@@ -254,10 +311,12 @@ fn broadcast_environment_change() {
 
 #[cfg(windows)]
 pub fn delete_current_user_value(subkey: &str, name: &str) -> anyhow::Result<()> {
+    let broadcast_change = subkey.eq_ignore_ascii_case(WINDOWS_USER_ENVIRONMENT_KEY);
+    let subkey_name = subkey.to_string();
     let subkey = wide_null(subkey);
     let name = wide_null(name);
     let mut key = HKEY::default();
-    if unsafe {
+    let open_result = unsafe {
         RegOpenKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR(subkey.as_ptr()),
@@ -265,73 +324,99 @@ pub fn delete_current_user_value(subkey: &str, name: &str) -> anyhow::Result<()>
             KEY_SET_VALUE,
             &mut key,
         )
-    }
-    .is_err()
-    {
+    };
+    if open_result == ERROR_FILE_NOT_FOUND {
         return Ok(());
     }
-    let _guard = RegistryKeyGuard(key);
-    let result = unsafe { RegDeleteValueW(key, PCWSTR(name.as_ptr())) }
+    open_result
         .ok()
-        .or_else(|_| Ok(()));
-    if result.is_ok()
-        && String::from_utf16_lossy(&subkey)
-            .trim_end_matches('\0')
-            .eq_ignore_ascii_case(WINDOWS_USER_ENVIRONMENT_KEY)
-    {
+        .with_context(|| format!("打开注册表项 {subkey_name} 失败"))?;
+    let _guard = RegistryKeyGuard(key);
+    let delete_result = unsafe { RegDeleteValueW(key, PCWSTR(name.as_ptr())) };
+    if delete_result != ERROR_FILE_NOT_FOUND {
+        delete_result
+            .ok()
+            .with_context(|| format!("删除注册表值 {subkey_name} 失败"))?;
+    }
+    if broadcast_change {
         broadcast_environment_change();
     }
-    result
+    Ok(())
 }
 
 #[cfg(windows)]
-pub fn current_user_string_value(subkey: &str, name: &str) -> Option<String> {
-    registry_string_value(HKEY_CURRENT_USER, subkey, name)
+pub(crate) fn current_user_registry_string_value_result(
+    subkey: &str,
+    name: &str,
+) -> anyhow::Result<Option<RegistryStringValue>> {
+    registry_string_value_result(HKEY_CURRENT_USER, subkey, name)
 }
 
 #[cfg(windows)]
 pub fn local_machine_string_value(subkey: &str, name: &str) -> Option<String> {
-    registry_string_value(HKEY_LOCAL_MACHINE, subkey, name)
+    registry_string_value_result(HKEY_LOCAL_MACHINE, subkey, name)
+        .ok()
+        .flatten()
+        .map(|value| value.value)
 }
 
 #[cfg(windows)]
-fn registry_string_value(root: HKEY, subkey: &str, name: &str) -> Option<String> {
+fn registry_string_value_result(
+    root: HKEY,
+    subkey: &str,
+    name: &str,
+) -> anyhow::Result<Option<RegistryStringValue>> {
+    let subkey_label = subkey.to_string();
+    let name_label = name.to_string();
     let subkey = wide_null(subkey);
     let name = wide_null(name);
-    let flags = REG_ROUTINE_FLAGS(RRF_RT_REG_SZ.0 | RRF_RT_REG_EXPAND_SZ.0);
+    let flags = REG_ROUTINE_FLAGS(RRF_RT_REG_SZ.0 | RRF_RT_REG_EXPAND_SZ.0 | RRF_NOEXPAND.0);
+    let mut value_type = REG_VALUE_TYPE::default();
     let mut size = 0u32;
-    unsafe {
+    let size_result = unsafe {
         RegGetValueW(
             root,
             PCWSTR(subkey.as_ptr()),
             PCWSTR(name.as_ptr()),
             flags,
-            None,
+            Some(&mut value_type),
             None,
             Some(&mut size),
         )
+    };
+    if size_result == ERROR_FILE_NOT_FOUND || size_result == ERROR_PATH_NOT_FOUND {
+        return Ok(None);
     }
-    .ok()
-    .ok()?;
+    size_result
+        .ok()
+        .with_context(|| format!("读取注册表值 {subkey_label}\\{name_label} 大小失败"))?;
     if size == 0 {
-        return None;
+        return Ok(None);
     }
     let mut value = vec![0u16; (size as usize).div_ceil(2)];
-    unsafe {
+    let read_result = unsafe {
         RegGetValueW(
             root,
             PCWSTR(subkey.as_ptr()),
             PCWSTR(name.as_ptr()),
             flags,
-            None,
+            Some(&mut value_type),
             Some(value.as_mut_ptr().cast()),
             Some(&mut size),
         )
+    };
+    if read_result == ERROR_FILE_NOT_FOUND || read_result == ERROR_PATH_NOT_FOUND {
+        return Ok(None);
     }
-    .ok()
-    .ok()?;
+    read_result
+        .ok()
+        .with_context(|| format!("读取注册表值 {subkey_label}\\{name_label} 失败"))?;
     let len = value.iter().position(|ch| *ch == 0).unwrap_or(value.len());
-    Some(String::from_utf16_lossy(&value[..len])).filter(|value| !value.trim().is_empty())
+    let value = String::from_utf16_lossy(&value[..len]);
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(RegistryStringValue { value, value_type }))
 }
 
 #[cfg(windows)]

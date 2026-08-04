@@ -8,6 +8,7 @@ use toml_edit::DocumentMut;
 
 const STORE_DIR: &str = "system-prompts";
 const STATE_FILE: &str = "state.json";
+const RECOVERY_STATE_FILE: &str = "state.recovery.json";
 const MANAGED_FILE: &str = "ccp-system-prompt.md";
 const MAX_PROMPTS: usize = 200;
 const MAX_CONTENT_BYTES: usize = 1024 * 1024;
@@ -81,6 +82,10 @@ pub struct SystemPromptSnapshot {
     pub mode: Option<SystemPromptMode>,
     pub managed: bool,
     pub externally_modified: bool,
+    #[serde(default)]
+    pub storage_recovered: bool,
+    #[serde(default)]
+    pub orphaned_managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,6 +117,8 @@ struct PromptState {
 pub struct SystemPromptStore {
     root: PathBuf,
     codex_home: PathBuf,
+    state_path: PathBuf,
+    storage_recovered: bool,
 }
 
 impl SystemPromptStore {
@@ -123,12 +130,40 @@ impl SystemPromptStore {
     }
 
     pub fn open(root: impl Into<PathBuf>, codex_home: impl Into<PathBuf>) -> anyhow::Result<Self> {
-        let store = Self {
-            root: root.into(),
-            codex_home: codex_home.into(),
+        let root = root.into();
+        let codex_home = codex_home.into();
+        fs::create_dir_all(&root).context("无法创建系统提示词存储目录")?;
+        fs::create_dir_all(&codex_home).context("无法创建 Codex 配置目录")?;
+        let primary_state_path = root.join(STATE_FILE);
+        let recovery_state_path = root.join(RECOVERY_STATE_FILE);
+        let recovery_exists = recovery_state_path
+            .try_exists()
+            .context("无法检查系统提示词恢复状态文件")?;
+        let (state_path, storage_recovered) = if recovery_exists {
+            (recovery_state_path, true)
+        } else {
+            match fs::read(&primary_state_path) {
+                Ok(_) => (primary_state_path, false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (primary_state_path, false)
+                }
+                Err(error) if state_access_requires_recovery(&error) => (recovery_state_path, true),
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "无法读取系统提示词状态文件 {}",
+                            primary_state_path.display()
+                        )
+                    });
+                }
+            }
         };
-        fs::create_dir_all(&store.root).context("无法创建系统提示词存储目录")?;
-        fs::create_dir_all(&store.codex_home).context("无法创建 Codex 配置目录")?;
+        let store = Self {
+            root,
+            codex_home,
+            state_path,
+            storage_recovered,
+        };
         if !store.state_path().exists() {
             store.write_state(&PromptState::default())?;
         }
@@ -143,6 +178,8 @@ impl SystemPromptStore {
         prompts.extend(custom);
         let configured = self.configured_instruction_path()?;
         let managed_path = self.managed_path_string();
+        let orphaned_managed =
+            state.active_prompt_id.is_none() && configured.as_deref() == Some(&managed_path);
         let managed =
             state.active_prompt_id.is_some() && configured.as_deref() == Some(&managed_path);
         let externally_modified = state.active_prompt_id.is_some() && !managed;
@@ -159,6 +196,8 @@ impl SystemPromptStore {
             mode: state.mode,
             managed,
             externally_modified,
+            storage_recovered: self.storage_recovered,
+            orphaned_managed,
         })
     }
 
@@ -328,8 +367,10 @@ impl SystemPromptStore {
         }
         if state.active_prompt_id.is_none() {
             let current = self.configured_instruction_path()?;
-            state.previous_instruction_present = current.is_some();
-            state.previous_instruction_path = current;
+            let managed_path = self.managed_path_string();
+            let is_orphaned_managed = current.as_deref() == Some(&managed_path);
+            state.previous_instruction_present = current.is_some() && !is_orphaned_managed;
+            state.previous_instruction_path = current.filter(|path| path != &managed_path);
         }
         let mut content = String::new();
         if mode == SystemPromptMode::Preserve {
@@ -374,7 +415,7 @@ impl SystemPromptStore {
     }
 
     fn state_path(&self) -> PathBuf {
-        self.root.join(STATE_FILE)
+        self.state_path.clone()
     }
     fn managed_path(&self) -> PathBuf {
         self.root.join(MANAGED_FILE)
@@ -386,7 +427,10 @@ impl SystemPromptStore {
         self.codex_home.join("config.toml")
     }
     fn read_state(&self) -> anyhow::Result<PromptState> {
-        serde_json::from_slice(&fs::read(self.state_path())?).context("系统提示词状态文件损坏")
+        let path = self.state_path();
+        let bytes = fs::read(&path)
+            .with_context(|| format!("无法读取系统提示词状态文件 {}", path.display()))?;
+        serde_json::from_slice(&bytes).context("系统提示词状态文件损坏")
     }
     fn write_state(&self, state: &PromptState) -> anyhow::Result<()> {
         crate::settings::atomic_write(&self.state_path(), &serde_json::to_vec_pretty(state)?)
@@ -467,6 +511,18 @@ fn builtin_prompts() -> Vec<SystemPromptItem> {
             },
         )
         .collect()
+}
+
+fn state_access_requires_recovery(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return matches!(error.raw_os_error(), Some(5 | 32 | 33));
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn default_category() -> String {
@@ -639,5 +695,127 @@ mod tests {
             store.configured_instruction_path().unwrap().as_deref(),
             Some(store.managed_path_string().as_str())
         );
+    }
+
+    #[test]
+    fn orphaned_managed_config_is_removed_after_takeover_and_disable() {
+        let (_root, store) = store();
+        let managed_path = store.managed_path_string();
+        fs::write(store.managed_path(), "ORPHANED MANAGED PROMPT").unwrap();
+        store.write_config_instruction(Some(&managed_path)).unwrap();
+
+        let orphaned = store.list().unwrap();
+        assert!(orphaned.orphaned_managed);
+        assert!(!orphaned.managed);
+
+        let enabled = store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        assert!(!enabled.orphaned_managed);
+        assert!(enabled.managed);
+
+        let disabled = store.disable().unwrap();
+        assert!(!disabled.managed);
+        assert!(!disabled.orphaned_managed);
+        assert_eq!(store.configured_instruction_path().unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn permission_denied_state_uses_stable_recovery_without_overwriting_primary() {
+        use fs2::FileExt;
+
+        let root = tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let codex_home = root.path().join("codex");
+        let store = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        store
+            .save(SaveSystemPromptRequest {
+                id: String::new(),
+                title: "旧状态哨兵".to_string(),
+                filename: "primary-sentinel.md".to_string(),
+                description: String::new(),
+                category: "测试".to_string(),
+                content: "PRIMARY SENTINEL".to_string(),
+            })
+            .unwrap();
+        store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        let primary_path = store.state_path();
+        let primary_bytes = fs::read(&primary_path).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&primary_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        let denied = fs::read(&primary_path).unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(33));
+        assert!(state_access_requires_recovery(&denied));
+
+        let recovered = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        let snapshot = recovered.list().unwrap();
+        assert_eq!(snapshot.prompts.len(), 5);
+        assert!(snapshot.storage_recovered);
+        assert!(snapshot.orphaned_managed);
+        assert!(state_root.join("state.recovery.json").is_file());
+
+        let reopened = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        assert!(reopened.list().unwrap().storage_recovered);
+        drop(lock);
+        assert_eq!(fs::read(&primary_path).unwrap(), primary_bytes);
+
+        let saved = reopened
+            .save(SaveSystemPromptRequest {
+                id: String::new(),
+                title: "恢复状态测试".to_string(),
+                filename: "recovery-test.md".to_string(),
+                description: String::new(),
+                category: "测试".to_string(),
+                content: "RECOVERY CONTENT".to_string(),
+            })
+            .unwrap();
+        assert!(
+            saved
+                .prompts
+                .iter()
+                .any(|item| item.title == "恢复状态测试")
+        );
+        let enabled = reopened
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        assert!(enabled.storage_recovered);
+        assert!(enabled.managed);
+        assert!(!enabled.orphaned_managed);
+        let disabled = reopened.disable().unwrap();
+        assert!(disabled.storage_recovered);
+        assert!(!disabled.managed);
+        assert_eq!(reopened.configured_instruction_path().unwrap(), None);
+        assert_eq!(fs::read(&primary_path).unwrap(), primary_bytes);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_access_denied_error_uses_recovery_state() {
+        let error = std::io::Error::from_raw_os_error(5);
+
+        assert!(state_access_requires_recovery(&error));
+    }
+
+    #[test]
+    fn corrupt_primary_state_does_not_silently_create_recovery_state() {
+        let root = tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let codex_home = root.path().join("codex");
+        let store = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        fs::write(store.state_path(), b"{not valid json").unwrap();
+
+        let error = SystemPromptStore::open(&state_root, &codex_home)
+            .and_then(|store| store.list())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("状态文件损坏"));
+        assert!(!state_root.join("state.recovery.json").exists());
     }
 }

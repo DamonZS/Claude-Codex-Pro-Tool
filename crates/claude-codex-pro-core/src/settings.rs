@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
@@ -16,6 +18,8 @@ static SETTINGS_WRITE_TURN: Mutex<u64> = Mutex::new(0);
 static SETTINGS_WRITE_READY: Condvar = Condvar::new();
 static NEXT_SETTINGS_WRITE_TICKET: AtomicU64 = AtomicU64::new(0);
 static NEXT_ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static CURRENT_WINDOWS_USER_SID: OnceLock<String> = OnceLock::new();
 
 struct SettingsWriteGuard {
     turn: MutexGuard<'static, u64>,
@@ -1945,17 +1949,29 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     {
         use std::io::Write;
 
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
+        let mut options = OpenOptions::new();
+        options.write(true).create(true);
+        #[cfg(not(windows))]
+        options.truncate(true);
+        let mut file = options
             .open(path)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
         #[cfg(windows)]
-        secure_private_path(path)?;
+        secure_then_truncate_windows_file(path, &file, secure_private_path)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn secure_then_truncate_windows_file<F>(path: &Path, file: &File, secure: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&Path) -> anyhow::Result<()>,
+{
+    secure(path)?;
+    file.set_len(0)
+        .with_context(|| format!("failed to truncate private file {}", path.display()))?;
     Ok(())
 }
 
@@ -1981,15 +1997,13 @@ fn secure_private_path(path: &Path) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
-    // Use well-known SIDs instead of USERDOMAIN/USERNAME: launchers and
-    // elevated helpers can inherit environment variables for a different
-    // account than the process token. OWNER RIGHTS follows the actual file
-    // owner, while LocalSystem keeps elevated maintenance flows working.
+    let user_sid = current_windows_user_sid()?;
+    let user_principal = format!("*{user_sid}:(F)");
     let mut command = Command::new("icacls.exe");
     command
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
-        .args(["*S-1-3-4:(F)", "*S-1-5-18:(F)"])
+        .args([user_principal.as_str(), "*S-1-5-18:(F)"])
         .creation_flags(windows_create_no_window());
     let output = command
         .output()
@@ -2002,6 +2016,47 @@ fn secure_private_path(path: &Path) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn current_windows_user_sid() -> anyhow::Result<&'static str> {
+    if let Some(sid) = CURRENT_WINDOWS_USER_SID.get() {
+        return Ok(sid.as_str());
+    }
+    let sid = detect_current_windows_user_sid()
+        .context("failed to determine current Windows user SID")?;
+    let _ = CURRENT_WINDOWS_USER_SID.set(sid);
+    CURRENT_WINDOWS_USER_SID
+        .get()
+        .map(String::as_str)
+        .context("failed to cache current Windows user SID")
+}
+
+#[cfg(windows)]
+fn detect_current_windows_user_sid() -> Option<String> {
+    use crate::windows_create_no_window;
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let mut command = Command::new("whoami.exe");
+    command
+        .args(["/user", "/fo", "csv", "/nh"])
+        .creation_flags(windows_create_no_window());
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split(',')
+        .map(|part| part.trim().trim_matches('"'))
+        .find(|part| {
+            part.starts_with("S-1-")
+                && part
+                    .chars()
+                    .skip(4)
+                    .all(|ch| ch.is_ascii_digit() || ch == '-')
+        })
+        .map(str::to_string)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -3953,6 +4008,86 @@ experimental_bearer_token = "sk-existing"
             !acl.contains("(I)"),
             "ACL still contains inherited entries: {acl}"
         );
+        let sid = current_windows_user_sid_for_test();
+        let explicit_acl = explicit_windows_acl_entries(&path);
+        assert!(
+            explicit_acl
+                .lines()
+                .any(|line| line.trim() == format!("{sid}|False|Allow|2032127")),
+            "current user SID is not explicitly granted full control: {explicit_acl}"
+        );
+        assert!(
+            explicit_acl
+                .lines()
+                .any(|line| line.trim() == "S-1-5-18|False|Allow|2032127"),
+            "SYSTEM is not explicitly granted full control: {explicit_acl}"
+        );
+        assert!(
+            !explicit_acl.contains("S-1-3-4|False|Allow|2032127"),
+            "OWNER RIGHTS must not replace explicit user authorization: {explicit_acl}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_windows_security_does_not_truncate_existing_file() {
+        let dir = temp_dir();
+        let path = dir.join("existing-private.json");
+        let original = br#"{"preserve":true}"#;
+        std::fs::write(&path, original).unwrap();
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+
+        let error = secure_then_truncate_windows_file(&path, &file, |_| {
+            anyhow::bail!("forced security failure")
+        })
+        .unwrap_err();
+        drop(file);
+
+        assert!(error.to_string().contains("forced security failure"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    fn current_windows_user_sid_for_test() -> String {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let sid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert!(sid.starts_with("S-1-5-"));
+        sid
+    }
+
+    #[cfg(windows)]
+    fn explicit_windows_acl_entries(path: &Path) -> String {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        let mut command = Command::new("powershell.exe");
+        command.env("CCP_TEST_ACL_PATH", path);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"$ErrorActionPreference='Stop'; $acl=Get-Acl -LiteralPath $env:CCP_TEST_ACL_PATH; $acl.GetAccessRules($true,$false,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { "$($_.IdentityReference.Value)|$($_.IsInherited)|$($_.AccessControlType)|$([int]$_.FileSystemRights)" }"#,
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "Get-Acl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     #[cfg(unix)]

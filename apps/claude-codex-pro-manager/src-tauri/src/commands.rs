@@ -3142,11 +3142,10 @@ fn spawn_silent_launcher(request: &LaunchRequest) -> anyhow::Result<()> {
     let mut command = std::process::Command::new(&launcher);
     command.arg("--launcher");
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
-    if let Some((env_key, api_key)) =
-        claude_codex_pro_core::relay_config::codex_provider_auth_environment_from_home(&home)
-    {
-        command.env(env_key, api_key);
-    }
+    claude_codex_pro_core::launcher::remove_inherited_codex_provider_environment(
+        &mut command,
+        &home,
+    );
     if !request.app_path.trim().is_empty() {
         command.arg("--app-path").arg(request.app_path.trim());
     }
@@ -5166,20 +5165,8 @@ fn normalize_settings_before_save(mut settings: BackendSettings) -> BackendSetti
         claude_codex_pro_core::relay_config::sanitize_common_config_contents(
             &settings.relay_context_config_contents,
         );
-    for profile in &mut settings.relay_profiles {
-        if let Err(error) =
-            claude_codex_pro_core::relay_config::normalize_relay_profile_for_storage(profile)
-        {
-            log_manager_event(
-                "manager.normalize_relay_profile_for_storage.failed",
-                json!({
-                    "profileId": profile.id,
-                    "profileName": profile.name,
-                    "error": error.to_string()
-                }),
-            );
-        }
-    }
+    // Keep supplier records exactly as submitted. Runtime route activation
+    // writes the local proxy endpoint only to Codex's active config.
     let common_config = relay_combined_common_config(&settings);
     if !common_config.trim().is_empty() {
         for profile in &mut settings.relay_profiles {
@@ -6079,6 +6066,8 @@ fn empty_system_prompt_snapshot() -> SystemPromptSnapshot {
         mode: None,
         managed: false,
         externally_modified: false,
+        storage_recovered: false,
+        orphaned_managed: false,
     }
 }
 
@@ -7211,7 +7200,17 @@ pub fn diagnose_codex_credential_environment() -> CommandResult<CredentialEnviro
         claude_codex_pro_core::credential_environment::diagnose_codex_credential_environment(
             &settings,
         );
-    let message = if diagnostic.conflict {
+    let message = if !diagnostic.user_scope_available {
+        format!(
+            "检测到 {}，但 {} 用户会话环境暂不可访问；CCP 未扩大清理范围。",
+            diagnostic.variable_name, diagnostic.user_scope
+        )
+    } else if diagnostic.external_source_likely {
+        format!(
+            "检测到 {} 来自 CCP 外部启动环境；CCP 可清理当前进程副本，但重启后仍可能由原设置来源再次注入。",
+            diagnostic.variable_name
+        )
+    } else if diagnostic.conflict {
         format!(
             "检测到 {} 与当前 Codex 供应商凭据不一致，可能导致 401 Invalid token。",
             diagnostic.variable_name
@@ -7237,11 +7236,11 @@ pub fn clear_codex_user_credential_environment(
         &request.variable_name,
     ) {
         Ok(diagnostic) => ok(
-            "用户级凭据环境变量已清理。当前运行中的 Codex 仍可能保留旧值，请完全退出后重新启动。",
+            "用户会话凭据环境变量已清理。当前运行中的 Codex 仍可能保留旧值，请完全退出后重新启动。",
             diagnostic,
         ),
         Err(error) => failed(
-            &format!("清理用户级凭据环境变量失败：{error}"),
+            &format!("清理用户会话凭据环境变量失败：{error}"),
             claude_codex_pro_core::credential_environment::diagnose_codex_credential_environment(
                 &settings,
             ),
@@ -7686,14 +7685,6 @@ fn switch_relay_profile_blocking(
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
-            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
-                return failed(
-                    &format!(
-                        "供应商配置已切换，但同步 Codex 启动凭据失败：{error}。请修复后重新点击使用。"
-                    ),
-                    relay_switch_payload(result.settings, status, result.backup_path),
-                );
-            }
             log_manager_event(
                 "manager.switch_relay_profile.ok",
                 json!({
@@ -8626,14 +8617,6 @@ fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
         ) {
             Ok(result) => {
                 let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
-                if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
-                    return failed(
-                        &format!(
-                            "供应商配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
-                        ),
-                        relay_payload(status, result.backup_path),
-                    );
-                }
                 log_relay_apply_result(
                     "manager.apply_relay_injection.ok",
                     &relay,
@@ -8691,14 +8674,6 @@ fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
-            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
-                return failed(
-                    &format!(
-                        "Relay 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
-                    ),
-                    relay_payload(status, result.backup_path),
-                );
-            }
             log_relay_apply_result(
                 "manager.apply_relay_injection.ok",
                 &relay,
@@ -8773,14 +8748,6 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
                         relay_payload(status, result.backup_path),
                     );
                 }
-                if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
-                    return failed(
-                        &format!(
-                            "纯 API 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
-                        ),
-                        relay_payload(status, result.backup_path),
-                    );
-                }
                 log_relay_apply_result(
                     "manager.apply_pure_api_injection.ok",
                     &relay,
@@ -8822,14 +8789,6 @@ fn apply_pure_api_injection_blocking() -> CommandResult<RelayPayload> {
             if !status.configured {
                 return failed(
                     "纯 API 配置已写入，但未检测到完整的自定义供应商。请检查 config.toml 与供应商 API 密钥。",
-                    relay_payload(status, result.backup_path),
-                );
-            }
-            if let Err(error) = sync_codex_credential_environment_after_apply(&home) {
-                return failed(
-                    &format!(
-                        "纯 API 配置已写入，但同步 Codex 启动凭据失败：{error}。请修复后重新应用。"
-                    ),
                     relay_payload(status, result.backup_path),
                 );
             }
@@ -8994,23 +8953,6 @@ fn log_relay_apply_result(
             "error": error
         }),
     );
-}
-
-fn sync_codex_credential_environment_after_apply(home: &Path) -> anyhow::Result<()> {
-    let Some(result) = claude_codex_pro_core::credential_environment::
-        sync_codex_user_credential_environment_from_home(home)?
-    else {
-        return Ok(());
-    };
-    log_manager_event(
-        "manager.codex_credential_environment.synced",
-        json!({
-            "variableName": result.variable_name,
-            "userChanged": result.user_changed,
-            "processChanged": result.process_changed
-        }),
-    );
-    Ok(())
 }
 
 fn log_manager_event(event: &str, detail: Value) {

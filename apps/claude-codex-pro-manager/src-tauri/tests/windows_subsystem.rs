@@ -106,14 +106,14 @@ fn manager_startup_restores_claude_desktop_proxy_helper() {
 }
 
 #[test]
-fn manager_syncs_live_codex_credentials_only_after_successful_provider_writes() {
+fn manager_provider_writes_do_not_persist_codex_credentials() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let sync_call = "sync_codex_credential_environment_after_apply(&home)";
     assert_eq!(
         commands.matches(sync_call).count(),
-        5,
-        "only the five production provider-write success paths should synchronize credentials"
+        0,
+        "provider writes must not synchronize credentials into the manager or user environment"
     );
 
     let switch = source_section(
@@ -132,45 +132,19 @@ fn manager_syncs_live_codex_credentials_only_after_successful_provider_writes() 
         "pub async fn clear_relay_injection()",
     );
 
-    for (name, section, expected_calls) in [
-        ("switch", switch, 1usize),
-        ("relay apply", relay, 2usize),
-        ("pure API apply", pure_api, 2usize),
+    for (name, section) in [
+        ("switch", switch),
+        ("relay apply", relay),
+        ("pure API apply", pure_api),
     ] {
-        assert_eq!(section.matches(sync_call).count(), expected_calls, "{name}");
-        for (sync_index, _) in section.match_indices(sync_call) {
-            let prefix = &section[..sync_index];
-            let success_index = prefix
-                .rfind("Ok(result) => {")
-                .unwrap_or_else(|| panic!("{name} sync is not inside a successful write branch"));
-            let failure_index = prefix.rfind("Err(error) => {").unwrap_or_default();
-            assert!(
-                success_index > failure_index,
-                "{name} sync must not run from a failed write branch"
-            );
-        }
-    }
-
-    let helper = source_section(
-        &commands,
-        "fn sync_codex_credential_environment_after_apply(",
-        "fn log_manager_event(",
-    );
-    assert!(helper.contains("sync_codex_user_credential_environment_from_home(home)?"));
-    let payload_start = helper
-        .find("json!({")
-        .expect("credential synchronization log payload");
-    let payload = &helper[payload_start..];
-    for field in ["variableName", "userChanged", "processChanged"] {
+        assert!(!section.contains(sync_call), "{name}");
         assert!(
-            payload.contains(field),
-            "missing redacted log field: {field}"
+            !section.contains("sync_codex_user_credential_environment"),
+            "{name} must not mutate the manager or persistent user environment"
         );
-    }
-    for forbidden in ["apiKey", "api_key", "token", "secret", "credential"] {
         assert!(
-            !payload.contains(forbidden),
-            "credential synchronization log payload exposes forbidden field: {forbidden}"
+            !section.contains("std::env::set_var"),
+            "{name} must not mutate the manager process environment"
         );
     }
 }
@@ -3237,16 +3211,11 @@ fn codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port() {
         .nth(1)
         .and_then(|rest| rest.split("pub fn resolve_silent_launcher_path").next())
         .expect("spawn_silent_launcher source");
-    assert!(silent_launcher.contains("codex_provider_auth_environment_from_home(&home)"));
-    assert!(silent_launcher.contains("command.env(env_key, api_key)"));
+    assert!(!silent_launcher.contains("codex_provider_auth_environment_from_home(&home)"));
+    assert!(!silent_launcher.contains("command.env(env_key, api_key)"));
+    assert!(silent_launcher.contains("remove_inherited_codex_provider_environment("));
     assert!(silent_launcher.contains("std::thread::spawn(move ||"));
     assert!(silent_launcher.contains("child.wait()"));
-    assert!(
-        silent_launcher
-            .find("command.env(env_key, api_key)")
-            .expect("launcher credential environment")
-            < silent_launcher.find(".spawn()").expect("launcher spawn")
-    );
 }
 
 #[test]
@@ -5414,4 +5383,18 @@ fn manager_liquid_glass_shell_uses_real_update_state_and_keeps_dense_content_opa
     let assets = manifest_dir.parent().unwrap().join("src/assets");
     assert!(assets.join("workspace-dark.jpg").is_file());
     assert!(assets.join("workspace-light.jpg").is_file());
+}
+
+#[test]
+fn credential_environment_ui_describes_platform_scope_and_external_source_boundaries() {
+    let screens = read_frontend_file("screens.tsx");
+
+    assert!(screens.contains("credentialEnvironment?.externalSourceLikely"));
+    assert!(screens.contains("credentialEnvironmentScopeLabel"));
+    assert!(screens.contains("Windows 当前用户环境"));
+    assert!(screens.contains("macOS launchd 用户会话"));
+    assert!(screens.contains("Linux systemd 用户会话"));
+    assert!(screens.contains("不会删除 auth.json 凭据"));
+    assert!(screens.contains("用户会话环境暂不可访问"));
+    assert!(screens.contains("CCP 外部启动环境，需在原设置来源中清理"));
 }

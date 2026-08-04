@@ -1444,6 +1444,82 @@ fn manager_ui_exposes_pure_api_relay_mode_button() {
 }
 
 #[test]
+fn manager_disabling_active_codex_routing_reapplies_supplier_without_clearing_api_mode() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("core crate should live under crates/claude-codex-pro-core");
+    let source =
+        std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src/screens.tsx"))
+            .unwrap();
+    let handler_start = source
+        .find("const toggleVisibleSupplierRouting = async")
+        .expect("supplier routing handler should exist");
+    let handler_end = source[handler_start..]
+        .find("const supplierOrderFromIds")
+        .expect("supplier routing handler should have a stable boundary");
+    let handler = &source[handler_start..handler_start + handler_end];
+    let codex_branch_start = handler
+        .find("if (isDisablingActiveRoute && supplierRouteGroup === \"codex\")")
+        .expect("active Codex route-disable branch should exist");
+    let codex_branch_end = handler[codex_branch_start..]
+        .find("if (isDisablingActiveRoute && supplierRouteGroup === \"claude-desktop\")")
+        .expect("Codex and Claude Desktop branches should remain separate");
+    let codex_branch = &handler[codex_branch_start..codex_branch_start + codex_branch_end];
+    let direct_switch = "actions.switchSupplierProfile(\"codex\", activeProfileId, nextSettings)";
+    let switch_index = codex_branch
+        .find(direct_switch)
+        .expect("the Codex branch should reapply the active supplier");
+    let failure_guard_index = codex_branch
+        .find("if (!switched || !statusOk(switched.status)) return")
+        .expect("failed supplier reapplication should stop the route toggle");
+    let success_notice_index = codex_branch
+        .find("actions.showNotice")
+        .expect("successful route disable should report completion");
+
+    assert!(
+        handler.contains("const nextSettings = { ...appSettings, relayProfiles: nextProfiles }"),
+        "the direct switch must receive profiles with routing disabled",
+    );
+    assert!(
+        codex_branch.contains(direct_switch),
+        "disabling the active Codex route must reapply the same supplier in direct mode",
+    );
+    assert!(
+        !codex_branch.contains("actions.clearRelayMode"),
+        "the route toggle must not invoke the explicit official-mode cleanup action",
+    );
+    assert!(
+        !codex_branch.contains("saveSupplierSettings"),
+        "a failed supplier reapplication must not be followed by a settings-only save",
+    );
+    assert!(
+        switch_index < failure_guard_index && failure_guard_index < success_notice_index,
+        "the failed-switch guard must run before the success notice",
+    );
+    assert!(
+        source.contains(
+            "const [supplierRouteToggleBusy, setSupplierRouteToggleBusy] = useState(false)"
+        ),
+        "the route toggle should expose an in-flight disabled state",
+    );
+    assert!(
+        source.contains("const supplierRouteToggleInFlightRef = useRef(false)"),
+        "the route handler needs a synchronous duplicate-call guard",
+    );
+    assert!(
+        handler.contains("supplierRouteToggleInFlightRef.current")
+            && handler.contains("setSupplierRouteToggleBusy(true)")
+            && handler.contains("setSupplierRouteToggleBusy(false)"),
+        "the route handler must acquire and release its in-flight guard",
+    );
+    assert!(
+        source.contains("const supplierRouteSwitchDisabled = supplierRouteToggleBusy ||"),
+        "the visible route toggle must be disabled while a route change is running",
+    );
+}
+
+#[test]
 fn cdp_target_deserializes_websocket_field() {
     let target: CdpTarget = serde_json::from_value(json!({
         "id": "page-1",

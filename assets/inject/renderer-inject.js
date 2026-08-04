@@ -1099,6 +1099,7 @@
         position: fixed;
         top: var(--codex-memory-badge-top, 8px);
         left: var(--codex-memory-badge-left, 44px);
+        right: var(--codex-memory-badge-right, auto);
         transform: none;
         z-index: 2147483002;
         display: inline-flex;
@@ -3549,6 +3550,21 @@
 
   function updateFloatingClaudeCodexProMenuPosition(menu) {
     if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
+    // Windows title-bar controls are outside the WebView. Anchor the injected
+    // marker to the title-bar row, immediately left of native minimize.
+    if (/Windows/i.test(navigator.userAgent || "")) {
+      const menuWidth = menu.getBoundingClientRect().width || 168;
+      const memoryBadge = document.getElementById(codexMemoryBadgeId);
+      const memoryRect = memoryBadge?.getBoundingClientRect?.();
+      const left = memoryRect && memoryRect.width > 0
+        ? memoryRect.left - menuWidth - 8
+        : window.innerWidth - menuWidth - 260;
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "4px");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${Math.max(8, left)}px`);
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "24px");
+      updateCodexMemoryBadgePosition();
+      return;
+    }
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
     if (!header) {
       const menuWidth = menu.getBoundingClientRect().width || 168;
@@ -3583,18 +3599,40 @@
   function updateCodexMemoryBadgePosition() {
     const badge = document.getElementById(codexMemoryBadgeId);
     if (!badge) return;
+    const minimize = Array.from(document.querySelectorAll("button, [role=button]"))
+      .find((node) => /minimi[sz]e|最小化/i.test(`${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`));
+    const minimizeRect = minimize?.getBoundingClientRect?.();
+    if (minimizeRect && minimizeRect.width > 0 && minimizeRect.height > 0) {
+      const badgeWidth = badge.getBoundingClientRect().width || 150;
+      badge.style.setProperty("--codex-memory-badge-left", `${Math.max(8, minimizeRect.left - badgeWidth - 8)}px`);
+      badge.style.setProperty("--codex-memory-badge-right", "auto");
+      badge.style.setProperty("--codex-memory-badge-top", `${minimizeRect.top}px`);
+      badge.style.height = `${minimizeRect.height}px`;
+      return;
+    }
+    // Windows title-bar controls are outside the WebView DOM. Keep the
+    // injection marker in the title-bar row, immediately left of minimize.
+    if (/Windows/i.test(navigator.userAgent || "")) {
+      badge.style.setProperty("--codex-memory-badge-left", "auto");
+      badge.style.setProperty("--codex-memory-badge-right", "104px");
+      badge.style.setProperty("--codex-memory-badge-top", "4px");
+      badge.style.height = "24px";
+      return;
+    }
     const statusMenu = document.getElementById(claudeCodexProMenuId);
     const statusRect = statusMenu?.getBoundingClientRect?.();
     if (statusRect && statusRect.width > 0 && statusRect.height > 0) {
       const badgeWidth = badge.getBoundingClientRect().width || 150;
       const left = Math.max(8, statusRect.left - badgeWidth - 8);
       badge.style.setProperty("--codex-memory-badge-left", `${left}px`);
+      badge.style.setProperty("--codex-memory-badge-right", "auto");
       badge.style.setProperty("--codex-memory-badge-top", `${statusRect.top}px`);
       badge.style.height = `${statusRect.height}px`;
       return;
     }
     const badgeWidth = badge.getBoundingClientRect().width || 150;
     badge.style.setProperty("--codex-memory-badge-left", `${Math.max(8, window.innerWidth - badgeWidth - 192)}px`);
+    badge.style.setProperty("--codex-memory-badge-right", "auto");
     badge.style.setProperty("--codex-memory-badge-top", "8px");
     badge.style.height = "30px";
   }

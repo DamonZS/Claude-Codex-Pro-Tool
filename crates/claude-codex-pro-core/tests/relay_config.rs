@@ -11,12 +11,12 @@ use claude_codex_pro_core::relay_config::{
     backfill_relay_profile_from_home, backfill_relay_profile_from_home_with_common,
     chatgpt_auth_status_from_home, clear_relay_config_to_home,
     clear_relay_config_to_home_with_auth, codex_provider_auth_environment_from_home,
-    delete_context_entry_from_common_config, extract_common_config_from_config,
-    filter_common_config_for_selection, list_context_entries_from_common_config,
-    normalize_relay_profile_for_storage, relay_config_status_from_home,
-    sanitize_common_config_contents, set_codex_goals_feature_in_home,
-    strip_common_config_from_config, sync_live_config_context_entries, test_relay_profile,
-    upsert_context_entry_in_common_config,
+    codex_provider_credential_environment_keys_from_home, delete_context_entry_from_common_config,
+    extract_common_config_from_config, filter_common_config_for_selection,
+    list_context_entries_from_common_config, normalize_relay_profile_for_storage,
+    relay_config_status_from_home, sanitize_common_config_contents,
+    set_codex_goals_feature_in_home, strip_common_config_from_config,
+    sync_live_config_context_entries, test_relay_profile, upsert_context_entry_in_common_config,
 };
 use claude_codex_pro_core::settings::{
     RelayContextSelection, RelayMode, RelayProfile, RelayProtocol,
@@ -148,6 +148,33 @@ env_key = "ACTIVE_API_KEY"
     assert_eq!(
         std::fs::read_to_string(temp.path().join("auth.json")).unwrap(),
         auth
+    );
+}
+
+#[test]
+fn provider_environment_sanitizer_collects_default_and_all_declared_keys_without_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = r#"model_provider = "active"
+
+[model_providers.inactive]
+env_key = "CCP_TEST_INACTIVE_PROVIDER_KEY"
+
+[model_providers.active]
+env_key = "CCP_TEST_ACTIVE_PROVIDER_KEY"
+"#;
+    std::fs::write(temp.path().join("config.toml"), config).unwrap();
+
+    assert_eq!(
+        codex_provider_credential_environment_keys_from_home(temp.path()),
+        vec![
+            "CCP_TEST_ACTIVE_PROVIDER_KEY".to_string(),
+            "CCP_TEST_INACTIVE_PROVIDER_KEY".to_string(),
+            "OPENAI_API_KEY".to_string(),
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("config.toml")).unwrap(),
+        config
     );
 }
 

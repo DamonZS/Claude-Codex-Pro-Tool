@@ -13,7 +13,7 @@
 - 上方长条主视觉为 `min(88%, 470px)` x `108px`，使用 `center / cover no-repeat`、`8px` 圆角和预览同款阴影。
 - 中央大卡片主视觉为 `min(76%, 360px)` x `138px`，使用 `center / contain no-repeat`、`8px` 圆角和预览同款阴影。
 - 长条和卡片的主图通过 Chromium 可计算的独立背景长属性加载，`getComputedStyle(...).backgroundImage` 不是 `none`。
-- 三种布局的主视觉顶部相对 `[role="main"]` 均为 64px；长条标题位于主视觉下方，卡片增高后标题同步下移，Composer 的底部位置不变。
+- 三种布局均保留 Codex 原生首页 Flex 布局；标题与 Composer 宽度大于 0 且位于主工作区视口内，生成 CSS 不包含针对首页祖先容器的 `flex: 0 0 auto`、`padding-top: 40px` 或 `align-items: flex-start` 覆盖。
 - 三种布局的首页标题字重均为 450。
 
 ### PNG 预览

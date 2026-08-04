@@ -342,40 +342,110 @@ fn launcher_does_not_override_codex_app_environment() {
 }
 
 #[test]
-fn launcher_syncs_live_credentials_before_new_msix_activation_only() {
+fn launcher_scopes_live_credentials_around_new_msix_activation_only() {
     let source = include_str!("../src/launcher.rs").replace("\r\n", "\n");
     let reuse_event = source
         .find("launcher.packaged_activation_reuse_preexisting_cdp")
         .expect("packaged Codex reuse branch");
-    let sync_call = source
-        .find("sync_codex_user_credential_environment_from_home(")
-        .expect("live credential synchronization");
-    let activation = source[sync_call..]
-        .find("let process_id = activate_packaged_app(app_user_model_id, arguments).await?;")
-        .map(|offset| sync_call + offset)
-        .expect("packaged activation after synchronization");
+    let scoped_activation = source
+        .find("let process_id = activate_packaged_app_with_provider_environment(")
+        .expect("scoped packaged activation");
 
-    assert!(reuse_event < sync_call);
-    assert!(source[reuse_event..sync_call].contains("return Ok(CodexLaunch::PackagedActivation"));
-    assert!(sync_call < activation);
+    assert!(reuse_event < scoped_activation);
+    assert!(
+        source[reuse_event..scoped_activation]
+            .contains("return Ok(CodexLaunch::PackagedActivation")
+    );
+    assert!(!source.contains("sync_codex_user_credential_environment_from_home("));
 
-    let sync_region = &source[sync_call..activation];
-    let payload_start = sync_region
-        .find("serde_json::json!({")
-        .expect("redacted synchronization log payload");
-    let payload = &sync_region[payload_start..];
-    for field in ["variableName", "userChanged", "processChanged"] {
-        assert!(
-            payload.contains(field),
-            "missing redacted log field: {field}"
-        );
+    let helper_start = source
+        .find("#[cfg(windows)]\nasync fn activate_packaged_app_with_provider_environment(")
+        .expect("Windows scoped activation helper");
+    let helper_end = source[helper_start..]
+        .find("#[cfg(windows)]\nfn activate_packaged_app_blocking(")
+        .map(|offset| helper_start + offset)
+        .expect("packaged activation implementation after scoped helper");
+    let helper = &source[helper_start..helper_end];
+    assert!(helper.contains("with_temporary_codex_user_credential_environment_from_home("));
+    assert!(helper.contains("activate_packaged_app_blocking(&app_user_model_id, &arguments)"));
+}
+
+#[test]
+fn launcher_command_sanitizer_removes_inherited_provider_environment_only_from_child() {
+    const FIRST: &str = "CCP_TEST_INHERITED_PROVIDER_KEY_A";
+    const SECOND: &str = "CCP_TEST_INHERITED_PROVIDER_KEY_B";
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        format!(
+            r#"model_provider = "active"
+
+[model_providers.active]
+env_key = "{FIRST}"
+
+[model_providers.inactive]
+env_key = "{SECOND}"
+"#
+        ),
+    )
+    .unwrap();
+
+    let first_previous = std::env::var_os(FIRST);
+    let second_previous = std::env::var_os(SECOND);
+    unsafe {
+        std::env::set_var(FIRST, "first-parent-value");
+        std::env::set_var(SECOND, "second-parent-value");
     }
-    for forbidden in ["apiKey", "api_key", "token", "secret", "credential"] {
-        assert!(
-            !payload.contains(forbidden),
-            "synchronization log payload exposes forbidden field: {forbidden}"
-        );
+    struct RestoreEnvironment {
+        first: Option<std::ffi::OsString>,
+        second: Option<std::ffi::OsString>,
     }
+    impl Drop for RestoreEnvironment {
+        fn drop(&mut self) {
+            for (name, value) in [(FIRST, self.first.as_ref()), (SECOND, self.second.as_ref())] {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(name, value) },
+                    None => unsafe { std::env::remove_var(name) },
+                }
+            }
+        }
+    }
+    let _restore = RestoreEnvironment {
+        first: first_previous,
+        second: second_previous,
+    };
+
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd.exe");
+        command.args(["/d", "/c", &format!("set {FIRST} & set {SECOND}")]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = std::process::Command::new("sh");
+        command.args([
+            "-c",
+            &format!("printf '%s|%s' \"${{{FIRST}-missing}}\" \"${{{SECOND}-missing}}\""),
+        ]);
+        command
+    };
+
+    claude_codex_pro_core::launcher::remove_inherited_codex_provider_environment(
+        &mut command,
+        temp.path(),
+    );
+    let output = command.output().unwrap();
+
+    #[cfg(windows)]
+    assert!(
+        !output.status.success(),
+        "cmd set must fail when the first removed variable is undefined"
+    );
+    #[cfg(not(windows))]
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "missing|missing");
+    assert_eq!(std::env::var(FIRST).unwrap(), "first-parent-value");
+    assert_eq!(std::env::var(SECOND).unwrap(), "second-parent-value");
 }
 
 #[test]
@@ -554,7 +624,12 @@ fn launcher_macos_open_command_passes_provider_environment_before_app_arguments(
     let env_index = command.iter().position(|part| part == "--env").unwrap();
     let args_index = command.iter().position(|part| part == "--args").unwrap();
     assert!(env_index < args_index);
-    assert_eq!(command[env_index + 1], "OPENAI_API_KEY=test-provider-key");
+    assert_eq!(command[env_index + 1], "OPENAI_API_KEY");
+    assert!(
+        !command
+            .iter()
+            .any(|part| part.contains("test-provider-key"))
+    );
     assert!(command.contains(&"--remote-debugging-port=9229".to_string()));
     assert!(command.contains(&"--user-data-dir=/tmp/codex".to_string()));
 }

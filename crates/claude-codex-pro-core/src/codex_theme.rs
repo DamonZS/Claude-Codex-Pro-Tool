@@ -2823,16 +2823,6 @@ fn render_diy_css(
   overflow-x: hidden !important;
 }}
 
-.{scope} :is(main, [role="main"]):has(
-  :is([data-feature="game-source"], [data-testid="home-icon"])
-) > div:has([data-feature="game-source"]) > div:first-child {{
-  flex: 0 0 auto !important;
-  min-height: 0 !important;
-  align-items: flex-start !important;
-  padding-top: 40px !important;
-  padding-bottom: 0 !important;
-}}
-
 .{scope} [data-testid="home-icon"] {{
   border: 1px solid var(--ccp-theme-diy-border) !important;
   width: {hero_visual_width} !important;
@@ -2868,8 +2858,11 @@ fn render_diy_css(
 .{scope} .group\/home-suggestions button,
 .{scope} .composer-surface-chrome,
 .{scope} [data-testid="composer"] {{
+  display: block !important;
+  width: 100% !important;
+  min-height: 88px !important;
   border-color: var(--ccp-theme-diy-border) !important;
-  background: var(--ccp-theme-diy-content-surface) !important;
+  background: transparent !important;
   color: var(--ccp-theme-diy-text) !important;
   backdrop-filter: none !important;
 }}
@@ -2884,11 +2877,26 @@ fn render_diy_css(
 
 .{scope} .composer-surface-chrome :is(div, section, header, footer),
 .{scope} [data-testid="composer"] :is(div, section, header, footer),
+.{scope} [data-testid="prompt-composer"] :is(div, section, header, footer),
+.{scope} form:has(textarea) :is(div, section, header, footer),
+.{scope} form:has([contenteditable="true"]) :is(div, section, header, footer),
 .{scope} .composer-surface-chrome .ProseMirror {{
   background-color: transparent !important;
   background-image: none !important;
   color: var(--ccp-theme-diy-text) !important;
   box-shadow: none !important;
+}}
+.{scope} :is(.composer-surface-chrome, [data-testid="composer"], [data-testid="prompt-composer"], form:has(textarea), form:has([contenteditable="true"])) :is(*, *::before, *::after) {{
+  background-color: transparent !important;
+  background-image: none !important;
+}}
+.{scope} :is(textarea, [contenteditable="true"]) {{
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  min-height: 32px !important;
+  color: var(--ccp-theme-diy-text) !important;
+  -webkit-text-fill-color: currentColor !important;
 }}
 "#,
         mode = settings.mode,
@@ -4339,11 +4347,9 @@ mod tests {
             assert!(css.contains("opacity: 1 !important;"));
             assert!(css.contains("-webkit-text-fill-color: currentColor !important;"));
             assert!(css.contains(":is(main, [role=\"main\"]):has("));
-            assert!(
-                css.contains(") > div:has([data-feature=\"game-source\"]) > div:first-child {")
-            );
-            assert!(css.contains("padding-top: 40px !important;"));
-            assert!(css.contains("align-items: flex-start !important;"));
+            assert!(!css.contains("flex: 0 0 auto !important;"));
+            assert!(!css.contains("padding-top: 40px !important;"));
+            assert!(!css.contains("align-items: flex-start !important;"));
             assert!(!css.contains("blur("));
             assert!(!css.contains("[role=\"dialog\"]"));
             assert!(!css.contains("[role=\"menu\"]"));
