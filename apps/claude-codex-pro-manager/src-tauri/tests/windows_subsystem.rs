@@ -3030,7 +3030,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
 }
 
 #[test]
-fn claude_launch_waits_for_real_debug_readiness() {
+fn claude_launch_waits_for_real_window_readiness() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let core_claude = manifest_dir
         .parent()
@@ -3050,11 +3050,11 @@ fn claude_launch_waits_for_real_debug_readiness() {
         .and_then(|rest| rest.split("pub fn enter_claude_desktop_devtools").next())
         .expect("open_claude_desktop source");
 
-    assert!(open_section.contains("wait_for_claude_launch_readiness"));
+    assert!(open_section.contains("claude_launch_status_and_message"));
     assert!(open_section.contains("\"warning\""));
-    assert!(open_section.contains("Claude Desktop 已启动"));
-    assert!(core_claude.contains("struct LaunchReadiness"));
-    assert!(core_claude.contains("fn launch_readiness_from_status"));
+    assert!(open_section.contains("窗口未就绪"));
+    assert!(core_claude.contains("fn execute_claude_launch_plan"));
+    assert!(core_claude.contains("visible_window_infos_for_process(process_id)"));
     // The Node inspector debug port (`--inspect=127.0.0.1:9229`) was removed from
     // the launch command: it exposed an unauthenticated inspector any local
     // process could attach to and run code inside Claude's main process, and
@@ -3072,13 +3072,30 @@ fn claude_launch_waits_for_real_debug_readiness() {
     // (`args([... --inspect ...])`) rather than any mention of the string.
     assert!(!launch_section.contains("args([\"--inspect"));
     assert!(!launch_section.contains("--inspect=127.0.0.1:9229\"]"));
-    assert!(core_claude.contains("fn launch_readiness_warns_when_no_process_is_running"));
     assert!(
         core_claude
-            .contains("fn launch_readiness_is_ready_when_process_is_running_without_debug_port")
+            .contains("fn claude_desktop_launch_falls_back_after_accepted_request_without_process")
     );
+    assert!(
+        core_claude
+            .contains("fn claude_desktop_launch_does_not_duplicate_when_process_has_no_window")
+    );
+    assert!(core_claude.contains("fn claude_desktop_launch_all_failures_are_sanitized"));
+    assert!(core_claude.contains("HRESULT 0x80070005"));
     assert!(commands_rs.contains("\"warning\".to_string()"));
     assert!(commands_rs.contains("本地模型代理已请求启动"));
+
+    let manager_open = commands_rs
+        .split("pub async fn open_claude_desktop()")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("async fn ensure_claude_desktop_proxy_helper")
+                .next()
+        })
+        .expect("manager open_claude_desktop source");
+    assert!(manager_open.contains("if result.status == \"ok\""));
+    assert!(manager_open.contains("result.status.clone()"));
+    assert!(manager_open.contains("} else {\n        result\n    };"));
 }
 
 #[test]
@@ -3478,20 +3495,16 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
     assert!(core_claude.contains("let is_restart = !existing_process_ids.is_empty();"));
     assert!(core_claude.contains("terminate_claude_processes(&existing_process_ids)"));
     assert!(core_claude.contains("wait_for_claude_process_exit("));
-    assert!(
-        core_claude
-            .contains(".filter(|path| path.is_file() && !is_windowsapps_executable_path(path))")
-    );
+    assert!(core_claude.contains("fn build_claude_launch_plan("));
+    assert!(core_claude.contains("!is_windowsapps_executable_path_for_plan(&path)"));
     assert!(core_claude.contains("fn is_windowsapps_executable_path(path: &Path) -> bool"));
     assert!(core_claude.contains("normalized.contains(\"\\\\windowsapps\\\\\")"));
-    assert!(core_claude.contains(".or_else(|| {"));
-    assert!(core_claude.contains("claude_desktop_executable_path()"));
-    assert!(
-        core_claude.contains(".filter(|path| !is_windowsapps_executable_path(path.as_path()))")
-    );
-    assert!(core_claude.contains("let mut seen = std::collections::HashSet::new();"));
-    assert!(core_claude.contains("paths.sort_by(|left, right| right.cmp(left));"));
-    assert!(core_claude.contains("Claude Desktop 已关闭并重新启动。"));
+    assert!(core_claude.contains("activate_packaged_app_blocking(app_user_model_id, \"\")"));
+    assert!(core_claude.contains("shell:AppsFolder\\{app_user_model_id}"));
+    assert!(core_claude.contains("execute_claude_launch_plan("));
+    assert!(core_claude.contains("visible_window_infos_for_process(process_id)"));
+    assert!(core_claude.contains("Claude Desktop 已重启，窗口已打开。"));
+    assert!(core_claude.contains("但窗口未就绪；未继续重复启动"));
     assert!(
         core_claude.contains("action: if is_restart { \"restart\" } else { \"open\" }.to_string()")
     );

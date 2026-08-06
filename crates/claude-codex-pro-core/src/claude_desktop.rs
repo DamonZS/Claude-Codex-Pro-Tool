@@ -41,6 +41,38 @@ pub struct ClaudeDesktopActionResult {
     pub observed_window_titles: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ClaudeLaunchEntry {
+    DirectExecutable(PathBuf),
+    PackagedApp(String),
+    AppsFolderApp(String),
+}
+
+impl ClaudeLaunchEntry {
+    fn diagnostic_label(&self) -> &'static str {
+        match self {
+            Self::DirectExecutable(_) => "桌面程序",
+            Self::PackagedApp(_) => "MSIX 包激活",
+            Self::AppsFolderApp(_) => "AppsFolder 回退",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ClaudeLaunchObservation {
+    process_ids: Vec<u32>,
+    visible_process_id: Option<u32>,
+    window_titles: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ClaudeLaunchOutcome {
+    ready: bool,
+    process_id: Option<u32>,
+    window_titles: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeDesktopDraftResult {
@@ -378,39 +410,26 @@ pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
     }
 
     match launch_claude_desktop_app(executable_hint.as_deref()) {
-        Ok(()) => {
-            let readiness = wait_for_claude_launch_readiness(std::time::Duration::from_secs(8));
+        Ok(outcome) => {
             let action = if is_restart { "restart" } else { "open" }.to_string();
-            let process_id = claude_process_ids().first().copied();
-            let requested_message = if is_restart {
-                "Claude Desktop 已关闭并重新启动。"
-            } else {
-                "Claude Desktop 已启动。"
-            };
-            let status = if readiness.ready {
-                "ok"
-            } else if readiness.process_running {
-                "warning"
-            } else {
-                "failed"
-            };
+            let (status, message) = claude_launch_status_and_message(&outcome, is_restart);
             ClaudeDesktopActionResult {
-                status: status.to_string(),
-                message: format!("{requested_message} {}", readiness.message),
-                process_id,
+                status,
+                message,
+                process_id: outcome.process_id,
                 action,
                 foreground_verified: false,
                 foreground_process_id: None,
                 foreground_title: None,
-                observed_window_titles: Vec::new(),
+                observed_window_titles: outcome.window_titles,
             }
         }
-        Err(error) => ClaudeDesktopActionResult {
+        Err(_error) => ClaudeDesktopActionResult {
             status: "failed".to_string(),
             message: if is_restart {
-                format!("Claude Desktop was closed, but restart failed: {error}")
+                "Claude Desktop 已关闭，但重启入口调用失败。".to_string()
             } else {
-                format!("Unable to launch Claude Desktop: {error}")
+                "无法调用 Claude Desktop 启动入口。".to_string()
             },
             process_id: None,
             action: if is_restart { "restart" } else { "open" }.to_string(),
@@ -419,6 +438,56 @@ pub fn open_claude_desktop() -> ClaudeDesktopActionResult {
             foreground_title: None,
             observed_window_titles: Vec::new(),
         },
+    }
+}
+
+fn claude_launch_status_and_message(
+    outcome: &ClaudeLaunchOutcome,
+    is_restart: bool,
+) -> (String, String) {
+    let attempts = outcome.diagnostics.join("；");
+    if outcome.ready {
+        return (
+            "ok".to_string(),
+            format!(
+                "{} 启动记录：{attempts}",
+                successful_claude_launch_message(is_restart)
+            ),
+        );
+    }
+    if outcome.process_id.is_some() {
+        return (
+            "warning".to_string(),
+            format!("已观察到 Claude 进程，但窗口未就绪；未继续重复启动。启动记录：{attempts}"),
+        );
+    }
+
+    let repair_hint = if attempts.contains("HRESULT 0x80070005") {
+        " Windows 已拒绝 Claude 的 MSIX 激活或更新注册；请在 Windows 设置的“已安装的应用”中修复 Claude Desktop，仍失败时卸载后从官方来源重新安装。"
+    } else {
+        ""
+    };
+    (
+        "failed".to_string(),
+        format!("未检测到 Claude 进程，所有安全启动入口均失败。{repair_hint} 启动记录：{attempts}"),
+    )
+}
+
+#[cfg(windows)]
+fn successful_claude_launch_message(is_restart: bool) -> &'static str {
+    if is_restart {
+        "Claude Desktop 已重启，窗口已打开。"
+    } else {
+        "Claude Desktop 窗口已打开。"
+    }
+}
+
+#[cfg(not(windows))]
+fn successful_claude_launch_message(is_restart: bool) -> &'static str {
+    if is_restart {
+        "Claude Desktop 已重启。"
+    } else {
+        "Claude Desktop 已启动。"
     }
 }
 
@@ -868,6 +937,7 @@ fn wait_for_claude_process_exit(process_ids: &[u32], timeout: std::time::Duratio
     }
 }
 
+#[cfg(target_os = "macos")]
 fn wait_for_claude_launch_readiness(timeout: std::time::Duration) -> LaunchReadiness {
     let deadline = std::time::Instant::now() + timeout;
     let mut last_status = detect_status_light();
@@ -884,6 +954,7 @@ fn wait_for_claude_launch_readiness(timeout: std::time::Duration) -> LaunchReadi
     }
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn launch_readiness_from_status(status: &ClaudeDesktopStatus) -> LaunchReadiness {
     let process_running = status.process_count > 0;
     // Readiness no longer depends on a Node inspector / CDP debug port. We stopped
@@ -907,6 +978,7 @@ fn launch_readiness_from_status(status: &ClaudeDesktopStatus) -> LaunchReadiness
     }
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn launch_readiness_message(
     status: &ClaudeDesktopStatus,
     ready: bool,
@@ -1134,64 +1206,282 @@ fn ensure_claude_foreground(process_id: Option<u32>) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
-    if let Some(path) = executable_hint
-        .filter(|path| path.is_file() && !is_windowsapps_executable_path(path))
+fn launch_claude_desktop_app(
+    executable_hint: Option<&Path>,
+) -> anyhow::Result<ClaudeLaunchOutcome> {
+    let mut executable_paths = executable_hint
+        .filter(|path| path.is_file())
         .map(Path::to_path_buf)
-        .or_else(|| {
-            claude_desktop_executable_path()
-                .filter(|path| !is_windowsapps_executable_path(path.as_path()))
-        })
-    {
-        // Do NOT pass `--inspect=127.0.0.1:9229`. That opens a Node inspector on a
-        // fixed loopback port that ANY local process can connect to and use to run
-        // arbitrary code inside Claude Desktop's main process (reading the user's
-        // session tokens). Nothing in this project actually attaches to that port
-        // to inject — Claude localization uses a separate WebView wrapper window —
-        // so the flag was pure attack surface. Launch the app plainly instead.
-        let mut command = std::process::Command::new(path);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(crate::windows_create_no_window());
-        }
-        if command.spawn().is_ok() {
-            return Ok(());
+        .into_iter()
+        .collect::<Vec<_>>();
+    executable_paths.extend(
+        claude_desktop_executable_candidates_default()
+            .into_iter()
+            .flatten()
+            .filter(|path| path.is_file()),
+    );
+    let appx_paths = claude_desktop_appx_executable_paths()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let has_msix_candidate = executable_paths
+        .iter()
+        .chain(appx_paths.iter())
+        .any(|path| is_windowsapps_executable_path(path));
+    executable_paths.extend(appx_paths);
+
+    let mut app_user_model_ids = claude_desktop_app_user_model_ids();
+    if has_msix_candidate && app_user_model_ids.is_empty() {
+        app_user_model_ids.push("Claude_pzs8sxrjxfjjc!Claude".to_string());
+    }
+    let plan = build_claude_launch_plan(executable_paths, app_user_model_ids);
+    if plan.is_empty() {
+        return Ok(ClaudeLaunchOutcome {
+            diagnostics: vec!["未发现可用的桌面程序或 MSIX 包激活入口".to_string()],
+            ..ClaudeLaunchOutcome::default()
+        });
+    }
+
+    Ok(execute_claude_launch_plan(
+        &plan,
+        |entry| {
+            launch_claude_entry(entry)
+                .map_err(|error| sanitized_claude_launch_error(&format!("{error:#}")))
+        },
+        claude_launch_observation,
+        || std::thread::sleep(std::time::Duration::from_millis(250)),
+        12,
+        32,
+    ))
+}
+
+fn build_claude_launch_plan(
+    executable_paths: Vec<PathBuf>,
+    app_user_model_ids: Vec<String>,
+) -> Vec<ClaudeLaunchEntry> {
+    let mut seen_paths = std::collections::HashSet::new();
+    let mut plan = Vec::new();
+    for path in executable_paths {
+        let key = path
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        if !is_windowsapps_executable_path_for_plan(&path) && seen_paths.insert(key) {
+            plan.push(ClaudeLaunchEntry::DirectExecutable(path));
         }
     }
 
-    let script = r#"
-$app = Get-StartApps |
-  Where-Object { $_.Name -eq 'Claude' -or $_.AppID -like 'Claude_*!Claude' } |
-  Select-Object -First 1
-if (-not $app) {
-  $app = Get-StartApps |
-    Where-Object { $_.Name -like '*Claude*' -or $_.AppID -like '*Claude*' } |
-    Select-Object -First 1
-}
-if (-not $app) { throw 'Claude Desktop Start menu app entry was not found.' }
-Start-Process ('shell:AppsFolder\' + $app.AppID)
-"#;
-    let mut command = std::process::Command::new("powershell.exe");
-    command.args(["-NoProfile", "-Command", script]);
-    #[cfg(windows)]
+    let mut seen_app_ids = std::collections::HashSet::new();
+    for app_id in app_user_model_ids
+        .into_iter()
+        .filter(|app_id| app_id.trim().to_ascii_lowercase().ends_with("!claude"))
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(crate::windows_create_no_window());
+        if !seen_app_ids.insert(app_id.to_ascii_lowercase()) {
+            continue;
+        }
+        plan.push(ClaudeLaunchEntry::PackagedApp(app_id.clone()));
+        plan.push(ClaudeLaunchEntry::AppsFolderApp(app_id));
     }
-    let output = command.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let message = if !stderr.is_empty() { stderr } else { stdout };
-        let message = if message.is_empty() {
-            "PowerShell launch failed".to_string()
-        } else {
-            message
+    plan
+}
+
+fn execute_claude_launch_plan<L, O, S>(
+    plan: &[ClaudeLaunchEntry],
+    mut launch: L,
+    mut observe: O,
+    mut pause: S,
+    process_probe_count: usize,
+    window_probe_count: usize,
+) -> ClaudeLaunchOutcome
+where
+    L: FnMut(&ClaudeLaunchEntry) -> Result<(), String>,
+    O: FnMut() -> ClaudeLaunchObservation,
+    S: FnMut(),
+{
+    let mut diagnostics = Vec::new();
+    for entry in plan {
+        let label = entry.diagnostic_label();
+        let request_accepted = match launch(entry) {
+            Ok(()) => true,
+            Err(error) => {
+                diagnostics.push(format!(
+                    "{label}：入口调用失败（{}）",
+                    sanitized_claude_launch_error(&error)
+                ));
+                false
+            }
         };
-        anyhow::bail!("{message}");
+
+        let mut observation = ClaudeLaunchObservation::default();
+        let process_probes = if request_accepted {
+            process_probe_count.max(1)
+        } else {
+            1
+        };
+        for probe_index in 0..process_probes {
+            observation = observe();
+            if !observation.process_ids.is_empty() {
+                break;
+            }
+            if probe_index + 1 < process_probes {
+                pause();
+            }
+        }
+        if observation.process_ids.is_empty() {
+            if request_accepted {
+                diagnostics.push(format!("{label}：请求已接受，但未观察到进程"));
+            }
+            continue;
+        }
+
+        let process_id = observation
+            .visible_process_id
+            .or_else(|| observation.process_ids.first().copied());
+        if observation.visible_process_id.is_some() {
+            diagnostics.push(format!("{label}：已形成进程和可见窗口"));
+            return ClaudeLaunchOutcome {
+                ready: true,
+                process_id,
+                window_titles: observation.window_titles,
+                diagnostics,
+            };
+        }
+
+        for _ in 0..window_probe_count {
+            pause();
+            observation = observe();
+            if let Some(visible_process_id) = observation.visible_process_id {
+                diagnostics.push(format!("{label}：已形成进程和可见窗口"));
+                return ClaudeLaunchOutcome {
+                    ready: true,
+                    process_id: Some(visible_process_id),
+                    window_titles: observation.window_titles,
+                    diagnostics,
+                };
+            }
+        }
+
+        diagnostics.push(format!("{label}：已形成进程，但窗口未就绪"));
+        return ClaudeLaunchOutcome {
+            ready: false,
+            process_id,
+            window_titles: observation.window_titles,
+            diagnostics,
+        };
     }
-    Ok(())
+
+    ClaudeLaunchOutcome {
+        diagnostics,
+        ..ClaudeLaunchOutcome::default()
+    }
+}
+
+fn sanitized_claude_launch_error(error: &str) -> String {
+    let lowered = error.to_ascii_lowercase();
+    if lowered.contains("0x80070005")
+        || lowered.contains("80070005")
+        || lowered.contains("access is denied")
+        || lowered.contains("access denied")
+        || lowered.contains("拒绝访问")
+    {
+        "系统拒绝（HRESULT 0x80070005）".to_string()
+    } else if lowered.contains("not found")
+        || lowered.contains("cannot find")
+        || lowered.contains("找不到")
+    {
+        "入口不存在".to_string()
+    } else {
+        "系统调用失败".to_string()
+    }
+}
+
+#[cfg(windows)]
+fn launch_claude_entry(entry: &ClaudeLaunchEntry) -> anyhow::Result<()> {
+    match entry {
+        ClaudeLaunchEntry::DirectExecutable(path) => {
+            // Never pass Inspector/CDP arguments here. They are unrelated to
+            // launch readiness and would expose the Claude process to local code.
+            let mut command = std::process::Command::new(path);
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(crate::windows_create_no_window());
+            command.spawn()?;
+            Ok(())
+        }
+        ClaudeLaunchEntry::PackagedApp(app_user_model_id) => {
+            crate::launcher::activate_packaged_app_blocking(app_user_model_id, "")?;
+            Ok(())
+        }
+        ClaudeLaunchEntry::AppsFolderApp(app_user_model_id) => {
+            let mut command = std::process::Command::new("explorer.exe");
+            command.arg(format!(r"shell:AppsFolder\{app_user_model_id}"));
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(crate::windows_create_no_window());
+            command.spawn()?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+fn claude_launch_observation() -> ClaudeLaunchObservation {
+    let mut process_ids = claude_process_ids();
+    process_ids.sort_unstable();
+    process_ids.dedup();
+    for process_id in process_ids.iter().copied() {
+        let windows = crate::windows_integration::visible_window_infos_for_process(process_id);
+        if !windows.is_empty() {
+            let mut window_titles = windows
+                .into_iter()
+                .filter_map(|window| window.title)
+                .collect::<Vec<_>>();
+            window_titles.sort();
+            window_titles.dedup();
+            let _ = activate_process_window(process_id);
+            return ClaudeLaunchObservation {
+                process_ids,
+                visible_process_id: Some(process_id),
+                window_titles,
+            };
+        }
+    }
+    ClaudeLaunchObservation {
+        process_ids,
+        ..ClaudeLaunchObservation::default()
+    }
+}
+
+#[cfg(windows)]
+fn claude_desktop_app_user_model_ids() -> Vec<String> {
+    let script = r#"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+$apps = @(Get-StartApps)
+$apps |
+  Where-Object { $_.AppID -like '*!Claude' } |
+  Select-Object -ExpandProperty AppID -Unique |
+  ConvertTo-Json -Compress
+"#;
+    let Ok(Some(value)) = powershell_json(script) else {
+        return Vec::new();
+    };
+    let mut app_ids = match value {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect::<Vec<_>>(),
+        Value::String(app_id) => vec![app_id],
+        _ => Vec::new(),
+    };
+    app_ids.retain(|app_id| app_id.to_ascii_lowercase().ends_with("!claude"));
+    app_ids
+}
+
+fn is_windowsapps_executable_path_for_plan(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    normalized.contains("\\windowsapps\\")
 }
 
 #[cfg(windows)]
@@ -1324,7 +1614,9 @@ Get-AppxPackage |
 }
 
 #[cfg(target_os = "macos")]
-fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<()> {
+fn launch_claude_desktop_app(
+    executable_hint: Option<&Path>,
+) -> anyhow::Result<ClaudeLaunchOutcome> {
     let bundle = executable_hint
         .and_then(macos_runtime::resolve_bundle_path)
         .or_else(macos_runtime::discover_bundle_default)
@@ -1333,7 +1625,17 @@ fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<(
         .arg(&bundle.bundle_path)
         .output()?;
     if output.status.success() {
-        return Ok(());
+        let readiness = wait_for_claude_launch_readiness(std::time::Duration::from_secs(8));
+        return Ok(ClaudeLaunchOutcome {
+            ready: readiness.ready,
+            process_id: claude_process_ids().first().copied(),
+            diagnostics: vec![if readiness.ready {
+                "macOS open：已形成进程".to_string()
+            } else {
+                "macOS open：请求已接受，但未观察到进程".to_string()
+            }],
+            ..ClaudeLaunchOutcome::default()
+        });
     }
     let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
     anyhow::bail!(
@@ -1348,7 +1650,9 @@ fn launch_claude_desktop_app(executable_hint: Option<&Path>) -> anyhow::Result<(
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn launch_claude_desktop_app(_executable_hint: Option<&Path>) -> anyhow::Result<()> {
+fn launch_claude_desktop_app(
+    _executable_hint: Option<&Path>,
+) -> anyhow::Result<ClaudeLaunchOutcome> {
     anyhow::bail!("Claude Desktop launch is only supported on Windows and macOS")
 }
 
@@ -1866,6 +2170,7 @@ struct DebugProbe {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg(any(test, target_os = "macos"))]
 struct LaunchReadiness {
     ready: bool,
     process_running: bool,
@@ -2221,6 +2526,207 @@ mod tests {
         assert!(!is_windowsapps_executable_path(Path::new(
             "C:\\Users\\me\\AppData\\Local\\Programs\\Claude\\Claude.exe"
         )));
+    }
+
+    #[test]
+    fn claude_desktop_launch_falls_back_after_accepted_request_without_process() {
+        let plan = vec![
+            ClaudeLaunchEntry::PackagedApp("Claude_family!Claude".to_string()),
+            ClaudeLaunchEntry::AppsFolderApp("Claude_family!Claude".to_string()),
+            ClaudeLaunchEntry::PackagedApp("Claude_other!Claude".to_string()),
+        ];
+        let launched = std::cell::RefCell::new(Vec::new());
+        let observations = std::cell::RefCell::new(std::collections::VecDeque::from([
+            ClaudeLaunchObservation::default(),
+            ClaudeLaunchObservation {
+                process_ids: vec![4242],
+                visible_process_id: Some(4242),
+                window_titles: vec!["Claude".to_string()],
+            },
+        ]));
+
+        let outcome = execute_claude_launch_plan(
+            &plan,
+            |entry| {
+                launched.borrow_mut().push(entry.clone());
+                Ok(())
+            },
+            || observations.borrow_mut().pop_front().unwrap_or_default(),
+            || {},
+            1,
+            1,
+        );
+
+        assert!(outcome.ready);
+        assert_eq!(outcome.process_id, Some(4242));
+        assert_eq!(outcome.window_titles, vec!["Claude"]);
+        assert_eq!(launched.borrow().as_slice(), &plan[..2]);
+        assert!(outcome.diagnostics[0].contains("请求已接受，但未观察到进程"));
+        assert!(outcome.diagnostics[1].contains("进程和可见窗口"));
+    }
+
+    #[test]
+    fn claude_desktop_launch_falls_back_from_com_access_denied_to_appsfolder() {
+        let plan = vec![
+            ClaudeLaunchEntry::PackagedApp("Claude_family!Claude".to_string()),
+            ClaudeLaunchEntry::AppsFolderApp("Claude_family!Claude".to_string()),
+        ];
+        let launched = std::cell::RefCell::new(Vec::new());
+        let observations = std::cell::RefCell::new(std::collections::VecDeque::from([
+            ClaudeLaunchObservation::default(),
+            ClaudeLaunchObservation {
+                process_ids: vec![8080],
+                visible_process_id: Some(8080),
+                window_titles: vec!["Claude".to_string()],
+            },
+        ]));
+
+        let outcome = execute_claude_launch_plan(
+            &plan,
+            |entry| {
+                launched.borrow_mut().push(entry.clone());
+                match entry {
+                    ClaudeLaunchEntry::PackagedApp(_) => {
+                        Err("ActivateApplication HRESULT 0x80070005".to_string())
+                    }
+                    _ => Ok(()),
+                }
+            },
+            || observations.borrow_mut().pop_front().unwrap_or_default(),
+            || {},
+            1,
+            1,
+        );
+
+        assert!(outcome.ready);
+        assert_eq!(outcome.process_id, Some(8080));
+        assert_eq!(launched.borrow().as_slice(), plan.as_slice());
+        assert!(outcome.diagnostics[0].contains("HRESULT 0x80070005"));
+        assert!(outcome.diagnostics[1].contains("AppsFolder 回退"));
+    }
+
+    #[test]
+    fn claude_desktop_launch_does_not_duplicate_when_process_has_no_window() {
+        let plan = vec![
+            ClaudeLaunchEntry::PackagedApp("Claude_family!Claude".to_string()),
+            ClaudeLaunchEntry::PackagedApp("Claude_other!Claude".to_string()),
+        ];
+        let launched = std::cell::RefCell::new(Vec::new());
+        let observations = std::cell::RefCell::new(std::collections::VecDeque::from([
+            ClaudeLaunchObservation {
+                process_ids: vec![73],
+                visible_process_id: None,
+                window_titles: Vec::new(),
+            },
+            ClaudeLaunchObservation {
+                process_ids: vec![73],
+                visible_process_id: None,
+                window_titles: Vec::new(),
+            },
+        ]));
+
+        let outcome = execute_claude_launch_plan(
+            &plan,
+            |entry| {
+                launched.borrow_mut().push(entry.clone());
+                Ok(())
+            },
+            || observations.borrow_mut().pop_front().unwrap_or_default(),
+            || {},
+            1,
+            1,
+        );
+
+        assert!(!outcome.ready);
+        assert_eq!(outcome.process_id, Some(73));
+        assert_eq!(launched.borrow().as_slice(), &plan[..1]);
+        assert!(outcome.diagnostics.join(" ").contains("窗口未就绪"));
+        let (status, message) = claude_launch_status_and_message(&outcome, true);
+        assert_eq!(status, "warning");
+        assert!(message.contains("进程"));
+        assert!(message.contains("窗口未就绪"));
+        assert!(!message.contains("Claude_other"));
+    }
+
+    #[test]
+    fn claude_desktop_launch_all_failures_are_sanitized() {
+        let secret = "Bearer secret-token OPENAI_API_KEY=private";
+        let plan = vec![
+            ClaudeLaunchEntry::DirectExecutable(PathBuf::from(format!(
+                r"C:\Users\person\{secret}\Claude.exe"
+            ))),
+            ClaudeLaunchEntry::PackagedApp(format!("Claude_{secret}!Claude")),
+        ];
+        let calls = std::cell::Cell::new(0usize);
+
+        let outcome = execute_claude_launch_plan(
+            &plan,
+            |_| {
+                let current = calls.get();
+                calls.set(current + 1);
+                if current == 0 {
+                    Err(format!(
+                        "{secret}; package activation failed with HRESULT 0x80070005"
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            ClaudeLaunchObservation::default,
+            || {},
+            1,
+            0,
+        );
+
+        let diagnostics = outcome.diagnostics.join("；");
+        assert!(!outcome.ready);
+        assert!(outcome.process_id.is_none());
+        assert!(diagnostics.contains("入口调用失败"));
+        assert!(diagnostics.contains("HRESULT 0x80070005"));
+        assert!(diagnostics.contains("请求已接受，但未观察到进程"));
+        assert!(!diagnostics.contains(secret));
+        assert!(!diagnostics.contains("C:\\Users"));
+        let (status, message) = claude_launch_status_and_message(&outcome, false);
+        assert_eq!(status, "failed");
+        assert!(message.contains("HRESULT 0x80070005"));
+        assert!(message.contains("Windows 设置"));
+        assert!(message.contains("修复 Claude Desktop"));
+        assert!(!message.contains(secret));
+    }
+
+    #[test]
+    fn claude_desktop_launch_plan_distinguishes_normal_and_msix_installations() {
+        let normal = PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Claude\Claude.exe");
+        let fallback = PathBuf::from(r"C:\Program Files\Claude\Claude.exe");
+        let windowsapps = PathBuf::from(r"C:\Program Files\WindowsApps\Claude_1.0\app\Claude.exe");
+
+        let normal_plan = build_claude_launch_plan(
+            vec![normal.clone(), fallback.clone(), normal.clone()],
+            Vec::new(),
+        );
+        assert_eq!(
+            normal_plan,
+            vec![
+                ClaudeLaunchEntry::DirectExecutable(normal),
+                ClaudeLaunchEntry::DirectExecutable(fallback),
+            ]
+        );
+
+        let msix_plan = build_claude_launch_plan(
+            vec![windowsapps],
+            vec![
+                "Claude_other!Background".to_string(),
+                "Claude_family!Claude".to_string(),
+                "claude_family!claude".to_string(),
+            ],
+        );
+        assert_eq!(
+            msix_plan,
+            vec![
+                ClaudeLaunchEntry::PackagedApp("Claude_family!Claude".to_string()),
+                ClaudeLaunchEntry::AppsFolderApp("Claude_family!Claude".to_string()),
+            ]
+        );
     }
 
     #[test]
