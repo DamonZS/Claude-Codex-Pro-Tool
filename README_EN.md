@@ -24,7 +24,7 @@ Canonical repository:
 
 <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
-> **Highlighted capability: fix GPT-5.6 selection for third-party Codex APIs through injection.** When a third-party API or relay already provides `gpt-5.6` / `gpt-5.6-*`, but Codex Desktop still hides it behind a frontend model whitelist, CCP reads the active provider and local model catalog, then uses injection to synchronize Codex model configuration, model-request paths, and the model picker. This makes GPT-5.6 visible and selectable in the UI. The fix removes a Codex client-side selection restriction; successful inference still depends on whether the upstream API supports the selected model ID.
+> **Codex owns the model picker.** CCP does not inject model candidates, change the Codex model whitelist, or override model fields in requests. The Providers page can still manage provider catalogs and routing configuration, but Codex decides which models are visible and selectable based on its own version, login state, configuration, and upstream API capabilities.
 
 ## CCP at a Glance
 
@@ -119,7 +119,6 @@ The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG co
 - Inject a top status badge into Codex pages.
 - Unlock Codex plugin and plugin-marketplace entry points.
 - Adapt Codex plugin installation channels, including newer requests such as `vscode://codex/list-plugins` and `vscode://codex/plugin/install`.
-- Unlock the frontend model whitelist so third-party APIs that already support GPT-5.6 can expose it in the Codex model picker.
 - Provide service-tier controls.
 - Support image overlay configuration.
 - Restore session scroll positions.
@@ -386,18 +385,9 @@ If the installer build jobs succeed but the publishing job fails, GitHub shows o
 
 Launch Codex through the `Claude Codex Pro` entry point instead of starting the original Codex executable directly. If the badge still does not appear, open Diagnostics and Logs in the manager and check the helper port, CDP connection, and `renderer.script_loaded` records.
 
-### My third-party API supports GPT-5.6, but Codex still cannot select it
+### Who controls the Codex model picker?
 
-Some Codex versions continue to use an official frontend model whitelist. Even when the active third-party API returns GPT-5.6, the model picker can still show only older models. CCP's model-whitelist unlock patches Codex model-catalog responses, model-request paths, and the model picker through injection, then adds saved `gpt-5.6` / `gpt-5.6-*` models from the active provider.
-
-Use it as follows:
-
-1. On the Providers page, fetch models or add the exact GPT-5.6 model ID supported by the upstream service, then select `Save and Use`.
-2. In Settings, confirm that the model-whitelist unlock is enabled. It is enabled by default.
-3. Start or restart Codex through `Claude Codex Pro`. If Codex is already running, use `Repair Frontend Connection` in the manager and wait for the injection badge to return before opening the model picker.
-4. Reopen the model picker and select the GPT-5.6 model.
-
-The catalog also supports `model_catalog_json` in Codex `config.toml`, plus `~/.codex/model-catalog.gpt-5.6.json` and `~/.codex/model-catalog.json`. Injection only removes the client-side “not visible / not selectable” restriction. It cannot give GPT-5.6 to an API that does not support it. If the request fails after selection, verify the provider model ID, protocol, and upstream availability.
+The native Codex client controls the model picker, its visible models, and the selected model. CCP does not inject candidates, add a `CCP model enhancement` group, or override `model`, `model_slug`, or `modelId` in Codex requests. If a model is missing, check Codex's own version, login state, configuration, and the upstream provider catalog. CCP's provider model list is for configuration and routing; it does not promise to alter the native picker.
 
 ### Claude is not shown in Chinese
 

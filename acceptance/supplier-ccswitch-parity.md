@@ -43,7 +43,6 @@
      - `npm --prefix apps/claude-codex-pro-manager run vite:build`
      - `cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem supplier_screen_matches_ccswitch_style_layout_and_drag_sorting -- --nocapture`
      - `cargo test -p claude-codex-pro-core --manifest-path Cargo.toml --test model_catalog -- --nocapture`
-     - `cargo test -p claude-codex-pro-core --manifest-path Cargo.toml --test cdp_bridge injection_script_unlocks_custom_model_catalog -- --nocapture`
      - `cargo test -p claude-codex-pro-core --manifest-path Cargo.toml protocol_proxy -- --nocapture`
 
 ## 非范围

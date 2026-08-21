@@ -154,6 +154,24 @@ async fn bridge_routes_cover_all_current_paths() {
 }
 
 #[tokio::test]
+async fn codex_model_catalog_routes_remain_read_only() {
+    let ctx = test_context();
+
+    // The renderer may read this catalog for service-tier eligibility, but the
+    // route must continue to return the runtime catalog unchanged.
+    let catalog = handle_bridge_request(ctx.clone(), "/codex-model-catalog", json!({})).await;
+    assert_eq!(catalog["status"], "ok");
+    assert_eq!(catalog["model"], "qwen3-coder");
+    assert_eq!(catalog["model_provider"], "relay");
+    assert_eq!(catalog["provider_name"], "Relay");
+    assert_eq!(catalog["models"], json!(["qwen3-coder"]));
+
+    // Keep the legacy alias working for existing bridge clients.
+    let alias = handle_bridge_request(ctx, "/codex-config-model", json!({})).await;
+    assert_eq!(alias, catalog);
+}
+
+#[tokio::test]
 async fn settings_get_includes_runtime_codex_app_version() {
     let ctx = BridgeContext::new(
         Arc::new(FakeSettings::with_codex_app_version("26.601.21317")),
@@ -194,6 +212,29 @@ async fn settings_set_does_not_persist_runtime_codex_app_version() {
     let persisted = settings.settings.lock().unwrap().clone();
     let persisted_value = serde_json::to_value(persisted).unwrap();
     assert!(persisted_value.get("codexAppVersion").is_none());
+}
+
+#[tokio::test]
+async fn settings_ignore_legacy_codex_model_whitelist_flag() {
+    let settings = Arc::new(FakeSettings::default());
+    let ctx = BridgeContext::new(
+        settings.clone(),
+        Arc::new(FakeRuntime::default()),
+        Arc::new(FakeData::default()),
+    );
+
+    let updated = handle_bridge_request(
+        ctx.clone(),
+        "/settings/set",
+        json!({"codexAppModelWhitelistUnlock": false}),
+    )
+    .await;
+    let loaded = handle_bridge_request(ctx, "/settings/get", json!({})).await;
+
+    assert!(updated.get("codexAppModelWhitelistUnlock").is_none());
+    assert!(loaded.get("codexAppModelWhitelistUnlock").is_none());
+    let persisted = serde_json::to_value(settings.settings.lock().unwrap().clone()).unwrap();
+    assert!(persisted.get("codexAppModelWhitelistUnlock").is_none());
 }
 
 #[tokio::test]
@@ -1437,7 +1478,6 @@ impl BridgeSettingsService for FakeSettings {
             "codexAppPluginEntryUnlock",
             "codexAppPluginMarketplaceUnlock",
             "codexAppForcePluginInstall",
-            "codexAppModelWhitelistUnlock",
             "codexAppSessionDelete",
             "codexAppMarkdownExport",
             "codexAppProjectMove",

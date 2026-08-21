@@ -8,7 +8,7 @@ Validates: `spec/english-readme.md`
 2. `README_EN.md` starts with an English landing page and links back to `README.md` as `中文`.
 3. The English README covers:
    - product purpose and audience;
-   - GPT-5.6 third-party API model-selection injection fix;
+   - the boundary that Codex owns its native model picker and CCP does not inject model candidates;
    - Codex, Claude, providers, plugins, sessions, Pangu Memory, scripts, maintenance, and updates;
    - safety boundaries and local data locations;
    - FAQ and build/package/release commands;

@@ -78,7 +78,6 @@ function previewSettings() {
     codexAppPluginEntryUnlock: true,
     codexAppPluginMarketplaceUnlock: true,
     codexAppForcePluginInstall: false,
-    codexAppModelWhitelistUnlock: true,
     codexAppSessionDelete: true,
     codexAppMarkdownExport: true,
     codexAppProjectMove: true,

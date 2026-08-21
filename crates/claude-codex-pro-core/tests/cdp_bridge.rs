@@ -57,25 +57,23 @@ fn injection_script_prefixes_helper_url() {
 }
 
 #[test]
-fn injection_script_excludes_ccp_dialog_from_codex_model_menu_candidates() {
+fn injection_script_does_not_scan_codex_model_menus() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("function isClaudeCodexProDialogNode(node)"));
-    assert!(script.contains("[data-claude-codex-pro-dialog=\"true\"]"));
-    assert!(script.contains(".claude-codex-pro-modal-overlay"));
-    assert!(script.contains(".claude-codex-pro-modal-content"));
-    assert!(script.contains(".claude-codex-pro-control-deck"));
-    assert!(script.contains(".filter((node) => node && !isClaudeCodexProDialogNode(node))"));
-    assert!(script.contains("if (isClaudeCodexProDialogNode(node)) return false;"));
-    assert!(script.contains("function codexModelMenuItemLooksLikeModel(node, knownModels)"));
-    assert!(script.contains(
-        "const modelItemCount = nativeItems.filter((node) => codexModelMenuItemLooksLikeModel(node, known)).length;"
-    ));
-    assert!(script.contains("return modelItemCount >= (hasExplicitModelSemantics ? 1 : 2);"));
-    assert!(script.contains("function cleanupCodexInjectedModelGroups(validSurfaces)"));
-    assert!(script.contains(
-        "codexModelMenuCandidates().length || document.querySelector?.(\"[data-claude-codex-pro-model-group]\")"
-    ));
+    for forbidden in [
+        "function isClaudeCodexProDialogNode(node)",
+        "codexModelMenuCandidates",
+        "codexModelMenuItemLooksLikeModel",
+        "cleanupCodexInjectedModelGroups",
+        "installCodexModelDropdownObserver",
+        "data-claude-codex-pro-model-group",
+        "CCP 模型增强",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "obsolete model-menu marker: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -906,204 +904,54 @@ fn injection_script_does_not_add_delete_controls_on_archived_page() {
 }
 
 #[test]
-fn injection_script_unlocks_custom_model_catalog() {
+fn injection_script_does_not_modify_codex_model_selection() {
     let script = assets::injection_script(57321);
 
+    // The catalog endpoint remains a read-only source for service-tier state.
     assert!(script.contains("/codex-model-catalog"));
-    assert!(script.contains("codexModelCatalog"));
-    assert!(script.contains("patchModelArray"));
-    assert!(script.contains("patchStatsigModelDynamicConfig"));
-    assert!(script.contains("patchModelJsonResponse"));
-    assert!(script.contains("installAppServerModelRequestPatch"));
-    assert!(script.contains("model_descriptors"));
-    assert!(script.contains("codexConfiguredModelDescriptor"));
-    assert!(script.contains("applyCodexConfiguredModelDescriptor"));
-    assert!(script.contains("descriptor.display_name"));
-    assert!(script.contains("list-models-for-host"));
-    assert!(script.contains("appServerModelRequestMethod"));
-    assert!(script.contains("send-cli-request-for-host"));
-    assert!(script.contains("Response.prototype.json"));
-    assert!(script.contains("available_models"));
-    assert!(script.contains("modelWhitelistUnlock"));
-    assert!(script.contains("patchCodexModelDropdownDom"));
-    assert!(script.contains("installCodexModelDropdownObserver"));
-    assert!(script.contains("scheduleCodexModelDropdownPatch"));
-    assert!(script.contains("claudeCodexPro.injectedCodexModelSelection"));
-    assert!(script.contains("CCP 模型增强"));
-    assert!(script.contains("model_dropdown_dom_patched"));
-    assert!(script.contains("model_request_override_applied"));
-    assert!(script.contains("applyCodexModelSelectionRequestOverride"));
-}
+    assert!(script.contains("loadCodexModelCatalog"));
 
-#[test]
-fn injection_script_only_treats_the_owned_model_menu_surface_as_a_candidate() {
-    let result = run_model_menu_candidate_harness();
-
-    assert_eq!(result["candidates"], json!(["model-menu"]));
-}
-
-#[test]
-fn injection_script_removes_model_groups_outside_valid_menu_surfaces() {
-    let result = run_model_menu_candidate_harness();
-
-    assert_eq!(result["cleanupAvailable"], true);
-    assert_eq!(result["removedCount"], 1);
-    assert_eq!(result["staleGroupRemoved"], true);
-    assert_eq!(result["validGroupRemoved"], false);
-}
-
-fn run_model_menu_candidate_harness() -> serde_json::Value {
-    let script = assets::injection_script(57321);
-    let start = script
-        .find("const codexModelMenuSurfaceSelector")
-        .expect("model menu contract should have a start marker");
-    let end = script[start..]
-        .find("function codexModelMenuHasModel")
-        .map(|offset| start + offset)
-        .expect("model menu contract should have an end marker");
-    let contract = &script[start..end];
-
-    let temp = tempfile::tempdir().expect("temp dir should be created");
-    let harness_path = temp.path().join("model-menu-candidate-harness.cjs");
-    let mut harness = std::fs::File::create(&harness_path).expect("harness should be created");
-    write!(
-        harness,
-        r#"
-class FakeElement {{
-  constructor(name, attributes = {{}}, text = "") {{
-    this.name = name;
-    this.attributes = new Map(Object.entries(attributes));
-    this.textContent = text;
-    this.children = [];
-    this.parentElement = null;
-  }}
-
-  append(...children) {{
-    for (const child of children) {{
-      child.parentElement = this;
-      this.children.push(child);
-    }}
-    return this;
-  }}
-
-  remove() {{
-    this.removed = true;
-    if (!this.parentElement) return;
-    this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
-    this.parentElement = null;
-  }}
-
-  get id() {{ return this.getAttribute("id") || ""; }}
-  getAttribute(name) {{ return this.attributes.has(name) ? this.attributes.get(name) : null; }}
-  hasAttribute(name) {{ return this.attributes.has(name); }}
-  getBoundingClientRect() {{ return {{ width: 320, height: 240 }}; }}
-
-  matches(selector) {{
-    return String(selector).split(",").some((part) => {{
-      const value = part.trim();
-      if (value === "[role='menu']" || value === '[role="menu"]') return this.getAttribute("role") === "menu";
-      if (value === "[role='listbox']" || value === '[role="listbox"]') return this.getAttribute("role") === "listbox";
-      if (value === "[role='dialog']" || value === '[role="dialog"]') return this.getAttribute("role") === "dialog";
-      if (value === "[role='option']" || value === '[role="option"]') return this.getAttribute("role") === "option";
-      if (value === "[role='menuitem']" || value === '[role="menuitem"]') return this.getAttribute("role") === "menuitem";
-      if (value === "[data-value]") return this.hasAttribute("data-value");
-      if (value === "[data-radix-popper-content-wrapper]") return this.hasAttribute("data-radix-popper-content-wrapper");
-      if (value === "[data-side][data-align]") return this.hasAttribute("data-side") && this.hasAttribute("data-align");
-      if (value === "[data-claude-codex-pro-model-group]") return this.hasAttribute("data-claude-codex-pro-model-group");
-      if (value === '[data-claude-codex-pro-dialog="true"]') return this.getAttribute("data-claude-codex-pro-dialog") === "true";
-      if (value.startsWith(".")) return false;
-      return false;
-    }});
-  }}
-
-  closest(selector) {{
-    let current = this;
-    while (current) {{
-      if (current.matches(selector)) return current;
-      current = current.parentElement;
-    }}
-    return null;
-  }}
-
-  querySelectorAll(selector) {{
-    const matches = [];
-    const visit = (node) => {{
-      for (const child of node.children) {{
-        if (child.matches(selector)) matches.push(child);
-        visit(child);
-      }}
-    }};
-    visit(this);
-    return matches;
-  }}
-}}
-
-globalThis.Element = FakeElement;
-const parentDialog = new FakeElement("parent-dialog", {{ role: "dialog" }});
-const portalWrapper = new FakeElement("portal-wrapper", {{ "data-radix-popper-content-wrapper": "" }});
-const modelMenu = new FakeElement("model-menu", {{ role: "menu", id: "model-surface" }});
-const modelItem = new FakeElement("native-model", {{ role: "menuitem", "data-value": "gpt-5.4" }}, "5.4");
-const secondModelItem = new FakeElement("second-native-model", {{ role: "menuitem", "data-value": "gpt-5.5" }}, "5.5");
-const permissionMenu = new FakeElement("permission-menu", {{ role: "menu" }});
-const permissionItem = new FakeElement("permission-item", {{ role: "menuitem" }}, "Full access");
-const projectMenu = new FakeElement("project-menu", {{ role: "menu" }});
-const projectItem = new FakeElement("project-item", {{ role: "menuitem", "data-value": "Claude-Codex-Pro-Tool" }}, "Claude-Codex-Pro-Tool");
-const branchMenu = new FakeElement("branch-menu", {{ role: "menu" }});
-const branchItem = new FakeElement("branch-item", {{ role: "menuitem", "data-value": "codex/fix-model-menu" }}, "codex/fix-model-menu");
-const launchModeMenu = new FakeElement("launch-mode-menu", {{ role: "menu" }});
-const launchModeItem = new FakeElement("launch-mode-item", {{ role: "menuitem", "data-value": "codex-web" }}, "关联 Codex web");
-const reasoningMenu = new FakeElement("reasoning-menu", {{ role: "menu" }});
-const reasoningItem = new FakeElement("reasoning-item", {{ role: "menuitem", "data-value": "medium" }}, "中");
-const staleGroup = new FakeElement("stale-group", {{ "data-claude-codex-pro-model-group": "true" }});
-const validGroup = new FakeElement("valid-group", {{ "data-claude-codex-pro-model-group": "true" }});
-modelMenu.append(modelItem, secondModelItem);
-modelMenu.append(validGroup);
-portalWrapper.append(modelMenu, staleGroup);
-parentDialog.append(portalWrapper);
-permissionMenu.append(permissionItem);
-projectMenu.append(projectItem);
-branchMenu.append(branchItem);
-launchModeMenu.append(launchModeItem);
-reasoningMenu.append(reasoningItem);
-const allNodes = [
-  parentDialog, portalWrapper, modelMenu, modelItem, secondModelItem,
-  permissionMenu, permissionItem, projectMenu, projectItem,
-  branchMenu, branchItem, launchModeMenu, launchModeItem,
-  reasoningMenu, reasoningItem, staleGroup, validGroup,
-];
-globalThis.document = {{
-  querySelectorAll: (selector) => allNodes.filter((node) => node.matches(selector)),
-  getElementById: (id) => allNodes.find((node) => node.id === id) || null,
-}};
-function claudeCodexProModelNames() {{ return ["gpt-5.4", "gpt-5.5"]; }}
-{contract}
-const candidates = codexModelMenuCandidates();
-const cleanupAvailable = typeof cleanupCodexInjectedModelGroups === "function";
-const removedCount = cleanupAvailable ? cleanupCodexInjectedModelGroups(candidates) : null;
-process.stdout.write(JSON.stringify({{
-  candidates: candidates.map((node) => node.name),
-  cleanupAvailable,
-  removedCount,
-  staleGroupRemoved: !!staleGroup.removed,
-  validGroupRemoved: !!validGroup.removed,
-}}));
-"#,
-        contract = contract,
-    )
-    .expect("harness should be written");
-    drop(harness);
-
-    let output = Command::new("node")
-        .arg(&harness_path)
-        .output()
-        .expect("node should run model menu harness");
-    assert!(
-        output.status.success(),
-        "node harness failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("harness stdout should be JSON")
+    for forbidden in [
+        // JSON/Statsig/React/App Server model-list mutation paths.
+        "patchModelNameArray",
+        "patchModelArray",
+        "patchModelContainer",
+        "patchModelJsonResponse",
+        "installModelJsonResponsePatch",
+        "patchStatsigModelDynamicConfig",
+        "patchStatsigModelWhitelist",
+        "patchObjectGraphForModels",
+        "patchReactModelState",
+        "patchAppServerModelMessages",
+        "patchMcpModelResponseData",
+        "patchAppServerModelResult",
+        "patchAppServerModelRequestClient",
+        "installAppServerModelRequestPatch",
+        "patchCodexModelWhitelist",
+        // DOM menu scanning, injected groups and selection persistence.
+        "codexModelMenuSurfaceSelector",
+        "codexModelMenuCandidates",
+        "codexModelMenuHasModel",
+        "codexModelDropdownPatch",
+        "data-claude-codex-pro-model-group",
+        "data-claude-codex-pro-injected-model",
+        "CCP 模型增强",
+        "claudeCodexPro.injectedCodexModelSelection",
+        "readCodexInjectedModelSelection",
+        "writeCodexInjectedModelSelection",
+        "applyCodexModelSelectionRequestOverride",
+        "model_request_override_applied",
+        "model_dropdown_dom_patched",
+        "modelWhitelistUnlock",
+        "list-models-for-host",
+        "model/list",
+        "Response.prototype.json",
+    ] {
+        assert!(
+            !script.contains(forbidden),
+            "Codex model-selection injection marker must be absent: {forbidden}"
+        );
+    }
 }
 
 #[test]
@@ -1155,7 +1003,8 @@ fn injection_script_exposes_fast_service_tier_control() {
     assert!(script.contains("start-conversation"));
     assert!(script.contains("applyCodexRequestOverrides(\"thread/start\", message)"));
     assert!(
-        script.contains("applyCodexServiceTierRequestOverride(method, nextParams, threadIdHint)")
+        script
+            .contains("return applyCodexServiceTierRequestOverride(method, params, threadIdHint);")
     );
     assert!(script.contains("codex-service-tier-badge"));
     assert!(script.contains("installCodexServiceTierBadge"));

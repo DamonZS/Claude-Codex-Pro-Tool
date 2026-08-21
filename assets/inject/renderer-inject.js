@@ -87,9 +87,7 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
-  const codexAppServerModelRequestPatchVersion = "2";
   const codexPluginMarketplaceUnlockVersion = "13";
-  const codexInjectedModelSelectionKey = "claudeCodexPro.injectedCodexModelSelection";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -1372,14 +1370,13 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5 };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5 };
   }
 
   const claudeCodexProBackendSettingMap = {
     pluginEntryUnlock: "codexAppPluginEntryUnlock",
     pluginMarketplaceUnlock: "codexAppPluginMarketplaceUnlock",
     forcePluginInstall: "codexAppForcePluginInstall",
-    modelWhitelistUnlock: "codexAppModelWhitelistUnlock",
     sessionDelete: "codexAppSessionDelete",
     markdownExport: "codexAppMarkdownExport",
     projectMove: "codexAppProjectMove",
@@ -1422,7 +1419,6 @@
       "pluginEntryUnlock",
       "pluginMarketplaceUnlock",
       "forcePluginInstall",
-      "modelWhitelistUnlock",
       "sessionDelete",
       "markdownExport",
       "projectMove",
@@ -1451,7 +1447,6 @@
         pluginEntryUnlock: false,
         pluginMarketplaceUnlock: false,
         forcePluginInstall: false,
-        modelWhitelistUnlock: false,
         sessionDelete: false,
         markdownExport: false,
         projectMove: false,
@@ -1556,8 +1551,6 @@
     });
     refreshConversationViewControls();
     refreshCodexServiceTierControls();
-    installCodexModelDropdownObserver();
-    scheduleCodexModelDropdownPatch();
   }
 
   let claudeCodexProBackendSettings = { providerSyncEnabled: false, enhancementsEnabled: true, launchMode: "patch", codexAppVersion: "" };
@@ -3145,10 +3138,6 @@
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="forcePluginInstall" ${claudeCodexProBackendSettings.launchMode === "relay" ? 'disabled data-relay-unneeded="true"' : ""}><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">模型白名单解锁</div><div class="claude-codex-pro-row-description">从环境变量和 Codex config.toml 中的中转站 /v1/models 拉取模型，并补进模型选择列表。</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="modelWhitelistUnlock"><span></span></button>
-            </div>
-            <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">Fast 按钮</div><div class="claude-codex-pro-row-description">显示服务模式切换按钮；Fast 仅支持 ${codexServiceTierFastModelListLabel()}，其他模型按 Standard 发送。</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="serviceTierControls"><span></span></button>
             </div>
@@ -4005,6 +3994,17 @@
     if (Array.isArray(value.plugins)) return true;
     if (value.data && typeof value.data === "object") return looksLikePluginMarketplaceResult(value.data);
     return false;
+  }
+
+  function appServerModelRequestMethod(method, params) {
+    if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
+    if (method === "vscode://codex/list-plugins") return "list-plugins";
+    if (method === "vscode://codex/plugin/install") return "install-plugin";
+    if (method === "vscode://codex/plugin/uninstall") return "uninstall-plugin";
+    if (method === "plugin/list") return "list-plugins";
+    if (method === "plugin/install") return "install-plugin";
+    if (method === "plugin/uninstall") return "uninstall-plugin";
+    return String(method || "");
   }
 
   function patchPluginMarketplaceRequestClient(client) {
@@ -5389,7 +5389,6 @@
   let codexModelCatalog = { status: "loading", model: "", default_model: "", model_provider: "", provider_name: "", models: [], model_descriptors: [], sources: [], responses_api: { status: "unknown", message: "" } };
   let codexModelCatalogLoadedAt = 0;
   let codexModelCatalogPromise = null;
-  const claudeCodexProModelListRequestIds = new Set();
 
   if (window.__CLAUDE_CODEX_PRO_TEST_SERVICE_TIER__) {
     window.__claudeCodexProServiceTierTest = {
@@ -5428,72 +5427,6 @@
     return;
   }
 
-  function claudeCodexProModelUnlockEnabled() {
-    return !!claudeCodexProSettings().modelWhitelistUnlock;
-  }
-
-  function claudeCodexProModelNames() {
-    return uniqueValues([
-      codexModelCatalog.default_model,
-      codexModelCatalog.model,
-      ...(Array.isArray(codexModelCatalog.models) ? codexModelCatalog.models : []),
-      ...(Array.isArray(codexModelCatalog.model_descriptors)
-        ? codexModelCatalog.model_descriptors.map((descriptor) => descriptor?.model)
-        : []),
-    ]);
-  }
-
-
-  function readCodexInjectedModelSelection() {
-    try {
-      const selected = String(localStorage.getItem(codexInjectedModelSelectionKey) || "").trim();
-      return claudeCodexProModelNames().includes(selected) ? selected : "";
-    } catch {
-      return "";
-    }
-  }
-
-  function writeCodexInjectedModelSelection(modelName) {
-    const selected = String(modelName || "").trim();
-    if (!selected || !claudeCodexProModelNames().includes(selected)) return false;
-    try {
-      localStorage.setItem(codexInjectedModelSelectionKey, selected);
-    } catch {
-    }
-    window.__claudeCodexProInjectedCodexModel = selected;
-    sendClaudeCodexProDiagnostic("model_dom_selection_saved", {
-      model: selected,
-      provider: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "",
-    });
-    return true;
-  }
-
-  function applyCodexModelSelectionRequestOverride(method, params, threadIdHint = "") {
-    if (!claudeCodexProModelUnlockEnabled()) return params;
-    if (!codexServiceTierRequestMethods().has(method) || !params || typeof params !== "object") return params;
-    const selected = readCodexInjectedModelSelection();
-    if (!selected) return params;
-    const nextParams = { ...(params || {}), model: selected };
-    if (Object.prototype.hasOwnProperty.call(nextParams, "model_slug")) nextParams.model_slug = selected;
-    if (Object.prototype.hasOwnProperty.call(nextParams, "modelId")) nextParams.modelId = selected;
-    sendClaudeCodexProDiagnostic("model_request_override_applied", {
-      method,
-      threadId: codexServiceTierThreadIdForRequest(method, params, threadIdHint) || "",
-      model: selected,
-      provider: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "",
-    });
-    return nextParams;
-  }
-
-  function applyCodexRequestOverrides(method, params, threadIdHint = "") {
-    let nextParams = params;
-    if (claudeCodexProSettings().serviceTierControls) {
-      nextParams = applyCodexServiceTierRequestOverride(method, nextParams, threadIdHint);
-    }
-    nextParams = applyCodexModelSelectionRequestOverride(method, nextParams, threadIdHint);
-    return nextParams;
-  }
-
   async function loadCodexModelCatalog(force = false) {
     if (!force && codexModelCatalogPromise) return codexModelCatalogPromise;
     if (!force && codexModelCatalogLoadedAt && Date.now() - codexModelCatalogLoadedAt < 10000) return codexModelCatalog;
@@ -5501,9 +5434,7 @@
       .then((result) => {
         codexModelCatalog = result && typeof result === "object" ? result : { status: "failed", model: "", default_model: "", model_provider: "", provider_name: "", models: [], model_descriptors: [], sources: [], responses_api: { status: "unknown", message: "" } };
         codexModelCatalogLoadedAt = Date.now();
-        renderClaudeCodexProMenu();
-        patchCodexModelWhitelist();
-        scheduleCodexModelDropdownPatch();
+        refreshCodexServiceTierControls();
         return codexModelCatalog;
       })
       .catch((error) => {
@@ -5517,644 +5448,9 @@
     return codexModelCatalogPromise;
   }
 
-  function modelReasoningEfforts() {
-    return ["minimal", "low", "medium", "high", "xhigh"].map((reasoningEffort) => ({ reasoningEffort, description: `${reasoningEffort} effort` }));
-  }
-
-  function codexConfiguredModelDescriptor(modelName) {
-    if (!Array.isArray(codexModelCatalog.model_descriptors)) return null;
-    return codexModelCatalog.model_descriptors.find((descriptor) => descriptor && descriptor.model === modelName) || null;
-  }
-
-  function applyCodexConfiguredModelDescriptor(target, modelName) {
-    const descriptor = codexConfiguredModelDescriptor(modelName);
-    if (!descriptor || !target || typeof target !== "object") return false;
-    const displayName = String(descriptor.display_name || descriptor.displayName || "").trim();
-    const contextWindow = Number(descriptor.context_window || descriptor.contextWindow || 0);
-    let changed = false;
-    if (displayName) {
-      for (const key of ["name", "displayName", "display_name"]) {
-        if (target[key] !== displayName) {
-          target[key] = displayName;
-          changed = true;
-        }
-      }
-    }
-    if (Number.isFinite(contextWindow) && contextWindow > 0) {
-      for (const key of ["contextWindow", "context_window", "maxContextWindow", "max_context_window"]) {
-        if (target[key] !== contextWindow) {
-          target[key] = contextWindow;
-          changed = true;
-        }
-      }
-    }
-    return changed;
-  }
-
-  function claudeCodexProModelDescriptor(modelName) {
-    const descriptor = codexConfiguredModelDescriptor(modelName) || {};
-    const displayName = String(descriptor.display_name || descriptor.displayName || modelName).trim() || modelName;
-    const contextWindow = Number(descriptor.context_window || descriptor.contextWindow || 0);
-    return {
-      model: modelName,
-      id: modelName,
-      slug: modelName,
-      name: displayName,
-      displayName,
-      description: codexModelCatalog.provider_name || codexModelCatalog.model_provider || "Custom model",
-      hidden: false,
-      isDefault: (codexModelCatalog.default_model || codexModelCatalog.model) === modelName,
-      defaultReasoningEffort: "medium",
-      supportedReasoningEfforts: modelReasoningEfforts(),
-      ...(Number.isFinite(contextWindow) && contextWindow > 0 ? {
-        contextWindow,
-        context_window: contextWindow,
-        maxContextWindow: contextWindow,
-        max_context_window: contextWindow,
-      } : {}),
-    };
-  }
-
-  function modelArrayLooksPatchable(value, allowEmpty = false) {
-    return Array.isArray(value)
-      && (allowEmpty || value.length > 0)
-      && value.every((item) => item && typeof item === "object" && typeof item.model === "string");
-  }
-
-  function stringArrayLooksPatchable(value) {
-    return Array.isArray(value) && value.every((item) => typeof item === "string");
-  }
-
-  function patchModelNameArray(models) {
-    if (!stringArrayLooksPatchable(models)) return false;
-    const customModels = claudeCodexProModelNames();
-    if (!customModels.length) return false;
-    let changed = false;
-    customModels.forEach((modelName) => {
-      if (!models.includes(modelName)) {
-        models.push(modelName);
-        changed = true;
-      }
-    });
-    return changed;
-  }
-
-  function patchModelArray(models, allowEmpty = false) {
-    if (!modelArrayLooksPatchable(models, allowEmpty)) return false;
-    const customModels = claudeCodexProModelNames();
-    if (!customModels.length) return false;
-    let changed = false;
-    const existing = new Map(models.map((item) => [item.model, item]));
-    models.forEach((item) => {
-      if (customModels.includes(item.model)) {
-        if (item.hidden !== false) {
-          item.hidden = false;
-          changed = true;
-        }
-        if (applyCodexConfiguredModelDescriptor(item, item.model)) changed = true;
-      }
-    });
-    customModels.forEach((modelName) => {
-      if (!existing.has(modelName)) {
-        models.push(claudeCodexProModelDescriptor(modelName));
-        changed = true;
-      }
-    });
-    return changed;
-  }
-
-  function patchModelContainer(value) {
-    if (!value || typeof value !== "object") return false;
-    let changed = false;
-    if (patchModelArray(value.models, "defaultModel" in value || "availableModels" in value)) changed = true;
-    if (patchModelNameArray(value.models)) changed = true;
-    if (patchModelArray(value.data)) changed = true;
-    if (patchModelArray(value.result)) changed = true;
-    if (patchModelArray(value.pages?.[0]?.data)) changed = true;
-    if (patchModelArray(value.result?.data)) changed = true;
-    if (patchModelArray(value.result?.models)) changed = true;
-    if (patchModelArray(value.message?.result?.data)) changed = true;
-    if (patchModelArray(value.message?.result?.models)) changed = true;
-    const names = claudeCodexProModelNames();
-    if (value.availableModels instanceof Set) {
-      names.forEach((name) => {
-        if (!value.availableModels.has(name)) {
-          value.availableModels.add(name);
-          changed = true;
-        }
-      });
-    }
-    if (value.available_models instanceof Set) {
-      names.forEach((name) => {
-        if (!value.available_models.has(name)) {
-          value.available_models.add(name);
-          changed = true;
-        }
-      });
-    }
-    if (Array.isArray(value.availableModels)) {
-      names.forEach((name) => {
-        if (!value.availableModels.includes(name)) {
-          value.availableModels.push(name);
-          changed = true;
-        }
-      });
-    }
-    if (Array.isArray(value.available_models)) {
-      names.forEach((name) => {
-        if (!value.available_models.includes(name)) {
-          value.available_models.push(name);
-          changed = true;
-        }
-      });
-    }
-    if (Array.isArray(value.hiddenModels)) {
-      const before = value.hiddenModels.length;
-      value.hiddenModels = value.hiddenModels.filter((name) => !names.includes(name));
-      if (value.hiddenModels.length !== before) changed = true;
-    }
-    if (Array.isArray(value.hidden_models)) {
-      const before = value.hidden_models.length;
-      value.hidden_models = value.hidden_models.filter((name) => !names.includes(name));
-      if (value.hidden_models.length !== before) changed = true;
-    }
-    if (value.defaultModel == null && names.length > 0) {
-      value.defaultModel = claudeCodexProModelDescriptor(names[0]);
-      changed = true;
-    } else if (typeof value.defaultModel === "string" && names.includes(value.defaultModel) && value.model == null) {
-      value.model = value.defaultModel;
-      changed = true;
-    }
-    return changed;
-  }
-
-  async function patchModelJsonResponse(payload) {
-    if (!claudeCodexProModelUnlockEnabled()) return payload;
-    if (!claudeCodexProModelNames().length) await loadCodexModelCatalog();
-    if (!payload || typeof payload !== "object") return payload;
-    try {
-      patchModelContainer(payload);
-      patchObjectGraphForModels(payload, new WeakSet(), 0);
-    } catch (error) {
-      window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
-      window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
-    }
-    return payload;
-  }
-
-  function installModelJsonResponsePatch() {
-    if (window.__claudeCodexProModelJsonResponsePatchInstalled === "1") return;
-    window.__claudeCodexProModelJsonResponsePatchInstalled = "1";
-    window.__claudeCodexProModelJsonResponseOriginals = window.__claudeCodexProModelJsonResponseOriginals || {};
-    const originals = window.__claudeCodexProModelJsonResponseOriginals;
-    originals.responseJson = originals.responseJson || Response.prototype.json;
-    if (typeof originals.responseJson !== "function") return;
-    Response.prototype.json = async function claudeCodexProPatchedResponseJson(...args) {
-      const payload = await originals.responseJson.apply(this, args);
-      return await patchModelJsonResponse(payload);
-    };
-  }
-
-  function patchStatsigModelDynamicConfig(config) {
-    const names = claudeCodexProModelNames();
-    const value = config?.value;
-    if (!names.length || !value || typeof value !== "object") return config;
-    const availableModels = Array.isArray(value.available_models) ? [...value.available_models] : [];
-    let changed = false;
-    names.forEach((name) => {
-      if (!availableModels.includes(name)) {
-        availableModels.push(name);
-        changed = true;
-      }
-    });
-    const nextValue = {
-      ...value,
-      available_models: availableModels,
-      default_model: names[0] || value.default_model,
-    };
-    if (!changed && nextValue.default_model === value.default_model) return config;
-    try {
-      config.value = nextValue;
-    } catch {
-      return { ...config, value: nextValue };
-    }
-    return config;
-  }
-
-  function statsigClients() {
-    const root = window.__STATSIG__ || globalThis.__STATSIG__;
-    if (!root || typeof root !== "object") return [];
-    const clients = [root.firstInstance, typeof root.instance === "function" ? root.instance() : null];
-    if (root.instances && typeof root.instances === "object") clients.push(...Object.values(root.instances));
-    return clients.filter((client, index, array) => client && typeof client === "object" && array.indexOf(client) === index);
-  }
-
-  function patchStatsigModelWhitelist() {
-    statsigClients().forEach((client) => {
-      if (typeof client.getDynamicConfig !== "function") return;
-      if (!client.__claudeCodexProModelWhitelistPatched) {
-        const originalGetDynamicConfig = client.getDynamicConfig.bind(client);
-        client.getDynamicConfig = (name, options) => {
-          const result = originalGetDynamicConfig(name, options);
-          return patchStatsigModelDynamicConfig(result);
-        };
-        client.__claudeCodexProModelWhitelistPatched = true;
-      }
-      try {
-        patchStatsigModelDynamicConfig(client.getDynamicConfig("107580212", { disableExposureLog: true }));
-      } catch {
-      }
-    });
-  }
-
-  function patchObjectGraphForModels(root, visited, depth = 0) {
-    if (!root || typeof root !== "object" || visited.has(root) || depth > 5) return false;
-    visited.add(root);
-    let changed = patchModelContainer(root);
-    if (root instanceof Element || root === window || root === document || root === document.body || root === document.documentElement) return changed;
-    for (const key of Object.keys(root)) {
-      if (key === "ownerDocument" || key === "parentElement" || key === "parentNode" || key === "children" || key === "childNodes") continue;
-      let value;
-      try {
-        value = root[key];
-      } catch {
-        continue;
-      }
-      if (value && typeof value === "object" && patchObjectGraphForModels(value, visited, depth + 1)) changed = true;
-    }
-    return changed;
-  }
-
-  function reactFiberKeys(element) {
-    return Object.keys(element).filter((key) => key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance") || key.startsWith("__reactProps"));
-  }
-
-  const codexModelMenuSurfaceSelector = "[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper], [data-side][data-align]";
-  const codexModelMenuNativeItemSelector = "[role='option'], [role='menuitem'], [data-value]";
-
-  function isClaudeCodexProDialogNode(node) {
-    if (!(node instanceof Element)) return false;
-    const selector = '[data-claude-codex-pro-dialog="true"], .claude-codex-pro-modal-overlay, .claude-codex-pro-modal-content, .claude-codex-pro-control-deck';
-    return !!node.matches?.(selector) || !!node.closest?.(selector);
-  }
-
-  function patchReactModelState() {
-    const visited = new WeakSet();
-    const nodes = [document.body, ...document.querySelectorAll("button, [role='menu'], [role='dialog'], [data-radix-popper-content-wrapper]")]
-      .filter((node) => node && !isClaudeCodexProDialogNode(node));
-    let changed = false;
-    for (const node of nodes.slice(0, 220)) {
-      for (const key of reactFiberKeys(node)) {
-        if (patchObjectGraphForModels(node[key], visited)) changed = true;
-      }
-    }
-    return changed;
-  }
-
-  function codexModelMenuAnchorText(surface) {
-    const labelledBy = String(surface.getAttribute?.("aria-labelledby") || "")
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((id) => document.getElementById(id)?.textContent || "")
-      .join(" ");
-    const trigger = surface.id
-      ? Array.from(document.querySelectorAll("[aria-controls]")).find((node) => node.getAttribute("aria-controls") === surface.id)
-      : null;
-    return `${surface.getAttribute?.("aria-label") || ""} ${labelledBy} ${trigger?.textContent || ""} ${trigger?.getAttribute?.("aria-label") || ""}`;
-  }
-
-  function codexModelMenuItemLooksLikeModel(node, knownModels) {
-    const values = [
-      node.getAttribute?.("data-value") || "",
-      node.getAttribute?.("value") || "",
-      node.getAttribute?.("aria-label") || "",
-      node.textContent || "",
-    ].map((value) => String(value).trim().toLowerCase()).filter(Boolean);
-    const known = knownModels.map((value) => String(value).trim().toLowerCase()).filter(Boolean);
-    return values.some((value) => {
-      if (known.some((model) => value === model)) return true;
-      return /(?:^|[\s([{:])(?:gpt-[a-z0-9][a-z0-9._-]*|o[1-9](?:-[a-z0-9][a-z0-9._-]*)?|codex-mini-latest)(?:$|[\s)\]},:])/i.test(value);
-    });
-  }
-
-  function codexModelMenuHasNativeModelStructure(surface) {
-    const nativeItems = Array.from(surface.querySelectorAll(codexModelMenuNativeItemSelector))
-      .filter((node) => !node.hasAttribute("data-claude-codex-pro-injected-model"))
-      .filter((node) => node.closest(codexModelMenuSurfaceSelector) === surface);
-    if (!nativeItems.length) return false;
-    const anchorText = codexModelMenuAnchorText(surface);
-    const known = claudeCodexProModelNames();
-    const modelItemCount = nativeItems.filter((node) => codexModelMenuItemLooksLikeModel(node, known)).length;
-    const hasExplicitModelSemantics = /\bmodels?\b|模型/i.test(anchorText);
-    return modelItemCount >= (hasExplicitModelSemantics ? 1 : 2);
-  }
-
-
-  function codexModelMenuCandidates() {
-    return Array.from(document.querySelectorAll(codexModelMenuSurfaceSelector)).filter((node) => {
-      if (isClaudeCodexProDialogNode(node)) return false;
-      if (!codexModelMenuHasNativeModelStructure(node)) return false;
-      const rect = node.getBoundingClientRect?.();
-      if (!rect || rect.width < 120 || rect.height < 40) return false;
-      return true;
-    });
-  }
-
-  function cleanupCodexInjectedModelGroups(validSurfaces) {
-    const validSurfaceSet = new Set(validSurfaces);
-    let removedCount = 0;
-    document.querySelectorAll("[data-claude-codex-pro-model-group]").forEach((group) => {
-      if (validSurfaceSet.has(group.parentElement)) return;
-      group.remove();
-      removedCount += 1;
-    });
-    return removedCount;
-  }
-
-  function codexModelMenuHasModel(surface, modelName) {
-    return Array.from(surface.querySelectorAll("button, [role='menuitem'], [role='option'], [data-value]")).some((node) => {
-      const identity = `${node.textContent || ""} ${node.getAttribute?.("data-value") || ""}`;
-      return identity.includes(modelName);
-    });
-  }
-
-  function codexModelMenuDismiss(surface) {
-    try {
-      surface.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-    } catch {
-    }
-  }
-
-  function codexModelMenuMarkCurrentSelection() {
-    const selected = readCodexInjectedModelSelection();
-    if (!selected) return;
-    document.querySelectorAll("button, [role='button']").forEach((button) => {
-      const text = String(button.textContent || "");
-      if ((/GPT-|gpt-|Model/.test(text) || text.includes("??")) && button.querySelector?.("svg")) {
-        button.setAttribute("data-claude-codex-pro-selected-model", selected);
-        button.title = `CCP 已选择模型：${selected}`;
-      }
-    });
-  }
-
-
-  let codexModelDropdownPatchTimer = null;
-
-  function scheduleCodexModelDropdownPatch(delayMs = 80) {
-    if (codexModelDropdownPatchTimer) clearTimeout(codexModelDropdownPatchTimer);
-    codexModelDropdownPatchTimer = setTimeout(() => {
-      codexModelDropdownPatchTimer = null;
-      try {
-        patchCodexModelDropdownDom();
-      } catch (error) {
-        sendClaudeCodexProDiagnostic("model_dropdown_dom_patch_failed", {
-          errorName: error?.name || "",
-          errorMessage: error?.message || String(error),
-        });
-      }
-    }, delayMs);
-  }
-
-  function installCodexModelDropdownObserver() {
-    if (window.__claudeCodexProModelDropdownObserverInstalled) return;
-    window.__claudeCodexProModelDropdownObserverInstalled = true;
-    const root = document.body || document.documentElement;
-    if (root && window.MutationObserver) {
-      new MutationObserver(() => scheduleCodexModelDropdownPatch(30)).observe(root, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
-    }
-    if (window.__claudeCodexProModelDropdownPatchInterval) {
-      clearInterval(window.__claudeCodexProModelDropdownPatchInterval);
-    }
-    window.__claudeCodexProModelDropdownPatchInterval = setInterval(() => {
-      if (codexModelMenuCandidates().length || document.querySelector?.("[data-claude-codex-pro-model-group]")) {
-        scheduleCodexModelDropdownPatch(0);
-      }
-    }, 800);
-  }
-
-  function createCodexInjectedModelMenuItem(modelName) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.setAttribute("role", "menuitem");
-    button.dataset.claudeCodexProInjectedModel = modelName;
-    button.title = `CCP 模型增强：${modelName}`;
-    Object.assign(button.style, {
-      width: "100%",
-      border: "0",
-      borderRadius: "8px",
-      background: "transparent",
-      color: "inherit",
-      cursor: "pointer",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "flex-start",
-      gap: "2px",
-      padding: "8px 12px",
-      textAlign: "left",
-      font: "inherit",
-    });
-    button.innerHTML = `<span style="font-weight:600">${escapeHtml(modelName)}</span><span style="font-size:12px;opacity:.68">CCP 模型增强</span>`;
-    button.addEventListener("mouseenter", () => { button.style.background = "rgba(127,127,127,.12)"; });
-    button.addEventListener("mouseleave", () => { button.style.background = "transparent"; });
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!writeCodexInjectedModelSelection(modelName)) return;
-      patchReactModelState();
-      codexModelMenuMarkCurrentSelection();
-      window.dispatchEvent(new CustomEvent("claude-codex-pro-model-selected", { detail: { model: modelName } }));
-      showToast(`已选择 CCP 模型：${modelName}`, null);
-      codexModelMenuDismiss(button.closest("[role='menu'], [role='listbox'], [role='dialog'], [data-radix-popper-content-wrapper]") || document.body);
-    }, true);
-    return button;
-  }
-
-  function patchCodexModelDropdownDom() {
-    if (!claudeCodexProModelUnlockEnabled()) {
-      return cleanupCodexInjectedModelGroups([]) > 0;
-    }
-    const surfaces = codexModelMenuCandidates();
-    let changed = cleanupCodexInjectedModelGroups(surfaces) > 0;
-    const names = claudeCodexProModelNames();
-    if (!names.length) {
-      void loadCodexModelCatalog();
-      return changed;
-    }
-    for (const surface of surfaces) {
-      let group = surface.querySelector("[data-claude-codex-pro-model-group]");
-      group?.querySelectorAll("[data-claude-codex-pro-injected-model]").forEach((item) => {
-        if (names.includes(item.getAttribute("data-claude-codex-pro-injected-model"))) return;
-        item.remove();
-        changed = true;
-      });
-      const missingNames = names.filter((modelName) => !codexModelMenuHasModel(surface, modelName));
-      if (!missingNames.length) {
-        if (group && !group.querySelector("[data-claude-codex-pro-injected-model]")) {
-          group.remove();
-          changed = true;
-        }
-        continue;
-      }
-      if (!group) {
-        group = document.createElement("div");
-        group.dataset.claudeCodexProModelGroup = "true";
-        group.style.borderTop = "1px solid rgba(127,127,127,.18)";
-        group.style.marginTop = "6px";
-        group.style.paddingTop = "6px";
-        surface.appendChild(group);
-      }
-      missingNames.forEach((modelName) => {
-        group.appendChild(createCodexInjectedModelMenuItem(modelName));
-        changed = true;
-      });
-    }
-    codexModelMenuMarkCurrentSelection();
-    if (changed) {
-      sendClaudeCodexProDiagnostic("model_dropdown_dom_patched", { modelCount: names.length });
-    }
-    return changed;
-  }
-
-  function patchAppServerModelMessages() {
-    if (window.__claudeCodexProModelMessagePatchInstalled) return;
-    window.__claudeCodexProModelMessagePatchInstalled = true;
-    const originalDispatchEvent = window.dispatchEvent;
-    window.dispatchEvent = function patchedClaudeCodexProDispatchEvent(event) {
-      try {
-        const detail = event?.detail;
-        const request = detail?.request;
-        if (event?.type === "codex-message-from-view" && detail?.type === "mcp-request" && request?.method === "model/list") {
-          request.params = { ...(request.params || {}), includeHidden: true };
-          if (request.id != null) claudeCodexProModelListRequestIds.add(String(request.id));
-        }
-        if (event?.type === "message") patchMcpModelResponseData(event.data);
-      } catch (error) {
-        window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
-        window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
-      }
-      return originalDispatchEvent.call(this, event);
-    };
-
-    window.addEventListener("message", (event) => {
-      try {
-        patchMcpModelResponseData(event?.data);
-      } catch (error) {
-        window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
-        window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
-      }
-    }, true);
-  }
-
-  function patchMcpModelResponseData(data) {
-    if (data?.type !== "mcp-response") return false;
-    const message = data.message || data.response;
-    const requestId = message?.id != null ? String(message.id) : "";
-    if (claudeCodexProModelListRequestIds.size > 0 && !claudeCodexProModelListRequestIds.has(requestId)) return false;
-    claudeCodexProModelListRequestIds.delete(requestId);
-    return patchModelContainer(data) || patchModelContainer(message) || patchModelContainer(message?.result) || patchModelContainer(message?.result?.data);
-  }
-
-  function appServerModelRequestMethod(method, params) {
-    if (method === "send-cli-request-for-host" && params?.method) return String(params.method);
-    if (method === "vscode://codex/list-plugins") return "list-plugins";
-    if (method === "vscode://codex/plugin/install") return "install-plugin";
-    if (method === "vscode://codex/plugin/uninstall") return "uninstall-plugin";
-    if (method === "plugin/list") return "list-plugins";
-    if (method === "plugin/install") return "install-plugin";
-    if (method === "plugin/uninstall") return "uninstall-plugin";
-    return String(method || "");
-  }
-
-  function patchAppServerModelResult(method, result) {
-    if (method !== "list-models-for-host") return result;
-    try {
-      if (Array.isArray(result)) patchModelArray(result, true);
-      if (Array.isArray(result?.data)) patchModelArray(result.data, true);
-      if (Array.isArray(result?.models)) patchModelArray(result.models, true);
-      patchModelContainer(result);
-      patchObjectGraphForModels(result, new WeakSet(), 0);
-      sendClaudeCodexProDiagnostic("model_app_server_result_patched", {
-        method,
-        modelCount: Array.isArray(result?.data) ? result.data.length : Array.isArray(result?.models) ? result.models.length : Array.isArray(result) ? result.length : null,
-      });
-    } catch (error) {
-      window.__claudeCodexProModelPatchFailures = window.__claudeCodexProModelPatchFailures || [];
-      window.__claudeCodexProModelPatchFailures.push(String(error?.stack || error));
-    }
-    return result;
-  }
-
-  function patchAppServerModelRequestClient(client) {
-    if (!client || typeof client.sendRequest !== "function") return false;
-    if (client.__claudeCodexProModelRequestPatch === codexAppServerModelRequestPatchVersion) return true;
-    const originalSendRequest = client.__claudeCodexProModelOriginalSendRequest || client.sendRequest.bind(client);
-    client.__claudeCodexProModelOriginalSendRequest = originalSendRequest;
-    client.sendRequest = async function claudeCodexProModelPatchedSendRequest(method, params, options) {
-      const result = await originalSendRequest(method, params, options);
-      if (!claudeCodexProModelUnlockEnabled()) return result;
-      if (!claudeCodexProModelNames().length) await loadCodexModelCatalog();
-      return patchAppServerModelResult(appServerModelRequestMethod(String(method || ""), params), result);
-    };
-    client.__claudeCodexProModelRequestPatch = codexAppServerModelRequestPatchVersion;
-    return true;
-  }
-
-  function installAppServerModelRequestPatch() {
-    if (window.__claudeCodexProAppServerModelRequestPatchInstalled === codexAppServerModelRequestPatchVersion) return;
-    const patch = async () => {
-      try {
-        const module = await loadCodexAppModule("app-server-manager-signals-");
-        const candidates = Object.values(module).filter((value) => value && typeof value === "object");
-        let patchedCount = 0;
-        for (const candidate of candidates) {
-          if (patchAppServerModelRequestClient(candidate)) patchedCount += 1;
-          if (typeof candidate.sendRequest !== "function" && typeof candidate.get === "function") {
-            try {
-              if (patchAppServerModelRequestClient(candidate.get())) patchedCount += 1;
-            } catch {
-            }
-          }
-        }
-        if (patchedCount > 0) {
-          window.__claudeCodexProAppServerModelRequestPatchInstalled = codexAppServerModelRequestPatchVersion;
-          sendClaudeCodexProDiagnostic("model_app_server_request_patch_installed", {
-            candidateCount: candidates.length,
-            patchedCount,
-          });
-        } else {
-          sendClaudeCodexProDiagnostic("model_app_server_request_patch_not_found", {
-            exportCount: Object.keys(module || {}).length,
-            candidateCount: candidates.length,
-          });
-        }
-      } catch (error) {
-        sendClaudeCodexProDiagnostic("model_app_server_request_patch_failed", {
-          errorName: error?.name || "",
-          errorMessage: error?.message || String(error),
-        });
-      }
-    };
-    void patch();
-  }
-
-  function patchCodexModelWhitelist() {
-    if (!claudeCodexProModelUnlockEnabled()) return;
-    installModelJsonResponsePatch();
-    patchAppServerModelMessages();
-    installAppServerModelRequestPatch();
-    if (!claudeCodexProModelNames().length) {
-      loadCodexModelCatalog();
-      return;
-    }
-    patchStatsigModelWhitelist();
-    patchReactModelState();
-    installCodexModelDropdownObserver();
-    scheduleCodexModelDropdownPatch();
+  function applyCodexRequestOverrides(method, params, threadIdHint = "") {
+    if (!claudeCodexProSettings().serviceTierControls) return params;
+    return applyCodexServiceTierRequestOverride(method, params, threadIdHint);
   }
 
   function threadIdVariants(sessionId) {
@@ -9833,7 +9129,6 @@
     void codexMemoryLoadSession();
     void codexMemoryMaybeSuggestCandidate();
     scheduleThreadScrollSync();
-    patchCodexModelWhitelist();
   }
 
   function runScanStep(step) {

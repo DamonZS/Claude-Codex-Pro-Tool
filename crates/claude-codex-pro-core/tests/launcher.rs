@@ -918,7 +918,6 @@ fn settings_with_all_codex_frontend_injection_disabled() -> BackendSettings {
         codex_app_plugin_entry_unlock: false,
         codex_app_plugin_marketplace_unlock: false,
         codex_app_force_plugin_install: false,
-        codex_app_model_whitelist_unlock: false,
         codex_app_session_delete: false,
         codex_app_markdown_export: false,
         codex_app_project_move: false,

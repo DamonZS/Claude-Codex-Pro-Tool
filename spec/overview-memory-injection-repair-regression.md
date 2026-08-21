@@ -44,7 +44,7 @@
 - 当官方 Claude Desktop 因 MSIX/调试端口限制没有可用页面 CDP 或 Node Inspector 时，只显示诊断状态；不得自动打开 `Claude localization` / Claude 中文包装窗口作为兜底。
 - 修复前端连接对 Codex 旧启动记录必须先验证 CDP `/json` 和 helper `/backend/status` 当前在线；CDP 离线时不能继续在旧端口上等待强制刷新超时，可以自动终止旧 Codex/launcher 并通过新版 Claude Codex Pro 启动器重启 Codex 注入入口，最终必须返回成功、降级或失败详情。
 - 修复前端连接不能被 `enhancementsEnabled=false` 卡住；只要 Codex CDP 页面可用，就必须自动启动或修复 Codex helper 后端，然后执行强制注入。
-- 启动/重启 Codex 不能只看 `enhancementsEnabled` 总开关；当插件入口/插件仓库/强制安装/模型白名单/会话增强/原生菜单定位/服务等级/图片覆盖/Goals/盘古记忆注入等任一 Codex 前端能力开启时，启动器必须启动 helper 并执行 Codex 注入。
+- 启动/重启 Codex 不能只看 `enhancementsEnabled` 总开关；当插件入口/插件仓库/强制安装/Codex 原生模型选择（由 Codex 原生逻辑负责，不注入）/会话增强/原生菜单定位/服务等级/图片覆盖/Goals/盘古记忆注入等任一 Codex 前端能力开启时，启动器必须启动 helper 并执行 Codex 注入。
 - 本地 helper 端口被占用时必须验证 `/backend/status` 来自 Claude Codex Pro helper，不能把未知进程占用端口当作成功。
 - 修复后端服务遇到 helper 端口被旧 Claude Codex Pro 进程占用、但 `/backend/status` 没有响应时，必须尝试终止旧的本项目进程并重新启动 helper；若占用者不是本项目进程或无法恢复，必须保留失败并记录占用进程诊断信息。
 - Claude 一键开发模式写入完成后，必须同步启动并验证本地模型映射代理 `127.0.0.1:57331/backend/status`，不能在代理尚未监听时仅返回“已写入”。

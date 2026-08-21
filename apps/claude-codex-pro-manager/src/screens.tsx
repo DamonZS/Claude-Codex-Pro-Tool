@@ -4230,7 +4230,6 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["插件入口解锁", "codexAppPluginEntryUnlock"],
     ["插件市场解锁", "codexAppPluginMarketplaceUnlock"],
     ["特殊插件强制安装", "codexAppForcePluginInstall"],
-    ["模型白名单解锁", "codexAppModelWhitelistUnlock"],
     ["会话删除", "codexAppSessionDelete"],
     ["Markdown 导出", "codexAppMarkdownExport"],
     ["会话项目移动", "codexAppProjectMove"],

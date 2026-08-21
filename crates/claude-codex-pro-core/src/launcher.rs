@@ -97,7 +97,6 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_plugin_entry_unlock
         || settings.codex_app_plugin_marketplace_unlock
         || settings.codex_app_force_plugin_install
-        || settings.codex_app_model_whitelist_unlock
         || settings.codex_app_session_delete
         || settings.codex_app_markdown_export
         || settings.codex_app_project_move

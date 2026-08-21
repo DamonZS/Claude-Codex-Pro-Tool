@@ -223,9 +223,9 @@ function buildClientRecords({
           enabled: codexEnhancementsEnabled,
         },
         {
-          label: "模型与服务层级控制",
-          detail: "扩展模型白名单与服务层级选择",
-          enabled: settings ? settings.codexAppModelWhitelistUnlock || settings.codexAppServiceTierControls : null,
+          label: "服务层级控制",
+          detail: "按当前模型选择 Standard 或 Fast 服务模式",
+          enabled: settings ? settings.codexAppServiceTierControls : null,
         },
         {
           label: "插件市场入口",
