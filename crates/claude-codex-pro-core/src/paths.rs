@@ -19,6 +19,21 @@ pub fn default_app_state_dir() -> PathBuf {
     state_dir
 }
 
+/// Return the Multica adapter's private state directory without running the
+/// legacy application-state migration.  The adapter owns only its child
+/// files, so merely listing or probing a Multica connection must not rename or
+/// copy any pre-existing CCP state.
+pub fn default_multica_state_dir() -> PathBuf {
+    let state_dir = if let Some(home_dir) =
+        directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+    {
+        home_dir.join(APP_STATE_DIR)
+    } else {
+        PathBuf::from(APP_STATE_DIR)
+    };
+    state_dir.join("multica")
+}
+
 pub fn legacy_app_state_dir() -> PathBuf {
     if let Some(home_dir) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
         return home_dir.join(LEGACY_APP_STATE_DIR);
@@ -101,5 +116,13 @@ mod tests {
         let path = default_diagnostic_log_path();
 
         assert!(path.ends_with(".claude-codex-pro/claude-codex-pro.log"));
+    }
+
+    #[test]
+    fn multica_state_path_is_private_and_does_not_use_legacy_directory() {
+        let path = default_multica_state_dir();
+
+        assert!(path.ends_with(".claude-codex-pro/multica"));
+        assert!(!path.ends_with(LEGACY_APP_STATE_DIR));
     }
 }

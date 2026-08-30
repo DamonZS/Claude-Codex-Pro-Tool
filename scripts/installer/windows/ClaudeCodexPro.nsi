@@ -37,6 +37,7 @@ Section "Install"
 
   File "${ROOT}\dist\windows\app\claude-codex-pro.exe"
   File "${ROOT}\dist\windows\app\claude-codex-pro-mcp.exe"
+  File /r "${ROOT}\dist\windows\app\resources"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
@@ -82,6 +83,7 @@ Section "Uninstall"
   Delete "$INSTDIR\claude-codex-pro.exe"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
   Delete "$INSTDIR\claude-codex-pro-mcp.exe"
+  RMDir /r "$INSTDIR\resources"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

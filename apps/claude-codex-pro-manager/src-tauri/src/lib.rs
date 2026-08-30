@@ -51,10 +51,73 @@ pub fn run() {
             tauri::async_runtime::spawn(async {
                 commands::ensure_claude_desktop_proxy_on_startup().await;
             });
+            tauri::async_runtime::spawn(async {
+                // Prepare the pinned managed Multica runtime first, but keep
+                // the whole flow off the Tauri setup thread.  A failed
+                // download/install is isolated to Multica and must not stop
+                // restoration of user-configured sidecars or the main UI.
+                let managed_result =
+                    claude_codex_pro_core::multica::ensure_managed_runtime_async().await;
+                // The dedicated managed Runtime owns its own supervisor and
+                // is intentionally not part of the generic auto-start sweep.
+                // A failed install remains isolated; manual sidecars still
+                // restore below and the Tauri window is never blocked.
+                // Keep the preparation failure isolated without fabricating a
+                // Tokio JoinError (its constructor is private).  `None` means
+                // preparation did not reach the supervisor; `Some(Err(_))`
+                // means the dedicated start operation itself failed.
+                let managed_supervisor = if managed_result
+                    .as_ref()
+                    .is_ok_and(commands::managed_runtime_install_is_startable)
+                {
+                    tauri::async_runtime::spawn_blocking(
+                        claude_codex_pro_core::multica::start_managed_runtime_supervision_if_enabled,
+                    )
+                    .await
+                    .ok()
+                } else {
+                    None
+                };
+                let result = tauri::async_runtime::spawn_blocking(
+                    claude_codex_pro_core::multica::start_auto_start_sidecars,
+                )
+                .await;
+                let (started, failed) = match result {
+                    Ok(Ok(outcomes)) => outcomes.into_iter().fold(
+                        (0_u64, 0_u64),
+                        |(started, failed), (_, status)| {
+                            // A spawned process is not a successful start until
+                            // the isolated Multica health probe has confirmed it.
+                            if status.status == "healthy" {
+                                (started + 1, failed)
+                            } else {
+                                (started, failed + 1)
+                            }
+                        },
+                    ),
+                    Ok(Err(_)) | Err(_) => (0, 1),
+                };
+                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                    "manager.multica.auto_start",
+                    serde_json::json!({
+                    "managed_prepare": match managed_result {
+                        Ok(status) => status.install_state,
+                        Err(_) => "failed".to_string(),
+                    },
+                        "managed_supervisor": match managed_supervisor {
+                        Some(Ok(status)) => status.status,
+                        Some(Err(_)) | None => "failed".to_string(),
+                    },
+                    "started": started,
+                        "failed": failed,
+                    }),
+                );
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { .. } = event {
+                stop_multica_sidecars_before_exit();
                 window.app_handle().exit(0);
             }
         })
@@ -213,7 +276,27 @@ pub fn run() {
             commands::restore_claude_desktop_provider_official,
             commands::apply_relay_injection,
             commands::apply_pure_api_injection,
-            commands::clear_relay_injection
+            commands::clear_relay_injection,
+            commands::get_multica_managed_runtime,
+            commands::ensure_multica_runtime,
+            commands::cancel_multica_runtime_install,
+            commands::rollback_multica_runtime,
+            commands::login_multica_managed,
+            commands::logout_multica_managed,
+            commands::set_multica_managed_enabled,
+            commands::save_multica_managed_connection,
+            commands::check_multica_managed_runtime,
+            commands::start_multica_managed_runtime,
+            commands::stop_multica_managed_runtime,
+            commands::restart_multica_managed_runtime,
+            commands::list_multica_connections,
+            commands::save_multica_connection,
+            commands::delete_multica_connection,
+            commands::check_multica_connection,
+            commands::get_multica_snapshot,
+            commands::start_multica_sidecar,
+            commands::stop_multica_sidecar,
+            commands::restart_multica_sidecar,
         ])
         .run(tauri::generate_context!());
     if let Err(error) = run_result {
@@ -224,6 +307,49 @@ pub fn run() {
             }),
         );
     }
+    // Keep a final cleanup boundary for exits that do not pass through a
+    // window close event (for example a Tauri runtime error). The operation is
+    // idempotent and only sees sidecars tracked by the core adapter.
+    stop_multica_sidecars_before_exit();
+}
+
+/// Clean up only Multica sidecars owned by this manager process before the
+/// application exits. The core helper validates each child executable and
+/// never searches for or terminates unrelated provider, proxy, Codex, or
+/// Claude processes. Shutdown continues when one record cannot be verified.
+fn stop_multica_sidecars_before_exit() {
+    // Close the core adapter's sidecar admission gate before taking the
+    // cleanup snapshot.  The auto-start worker may still be finishing a
+    // blocking spawn; the gate makes that race end in a killed, untracked
+    // child instead of an orphan process after the manager exits.
+    claude_codex_pro_core::multica::request_shutdown();
+    let outcomes = match claude_codex_pro_core::multica::stop_all_sidecars() {
+        Ok(outcomes) => outcomes,
+        Err(_) => {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "manager.multica.sidecars_exit",
+                serde_json::json!({
+                    "tracked": 0_u64,
+                    "stopped": 0_u64,
+                    "degraded": 1_u64,
+                }),
+            );
+            return;
+        }
+    };
+    let stopped = outcomes
+        .iter()
+        .filter(|(_, status)| status.status == "stopped")
+        .count();
+    let degraded = outcomes.len().saturating_sub(stopped);
+    let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+        "manager.multica.sidecars_exit",
+        serde_json::json!({
+            "tracked": outcomes.len(),
+            "stopped": stopped,
+            "degraded": degraded,
+        }),
+    );
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -236,7 +362,10 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                stop_multica_sidecars_before_exit();
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

@@ -64,6 +64,48 @@ type PreviewMemoryCandidate = {
 
 const now = () => Date.now();
 
+/**
+ * The browser-only bridge has no Multica control plane. Keep this explicit
+ * empty payload so the preview cannot imply a connected server or fabricate
+ * runtime/agent/task state.
+ */
+function previewMulticaEmptyResult() {
+  return { connections: [], statuses: {} };
+}
+
+/**
+ * Managed Runtime is a native-only capability. The browser preview must
+ * expose a deterministic unavailable state instead of pretending that an
+ * installer, daemon, or login session exists.
+ */
+function previewMulticaManagedRuntimeFailure(message = "预览模式未连接托管 Multica Runtime，操作未执行。") {
+  return {
+    status: "failed",
+    message,
+    runtime: {
+      installState: "unavailable",
+      installPhase: null,
+      downloadedBytes: 0,
+      totalBytes: null,
+      progressPercent: null,
+      installedVersion: null,
+      targetTriple: null,
+      assetName: null,
+      assetSource: null,
+      sha256: null,
+      sha256Verified: false,
+      executableName: null,
+      previousVersion: null,
+      lastInstallErrorCode: "preview_native_required",
+      updatedAtMs: null,
+      diagnostic: "托管 Runtime 需要 Tauri 原生环境。",
+    },
+    connection: null,
+    connectionStatus: null,
+    loginStatus: "unconfigured",
+  };
+}
+
 function previewSettings() {
   return {
     codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe",
@@ -614,6 +656,52 @@ export function invokeCommand<T>(command: string, args?: Record<string, unknown>
 
 async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
+  if (command === "list_multica_connections") {
+    return ok("预览模式未配置 Multica 连接。", previewMulticaEmptyResult());
+  }
+  if (command === "get_multica_snapshot") {
+    return {
+      status: "failed",
+      message: "预览模式未连接 Multica 服务，无法读取快照。",
+      ...previewMulticaEmptyResult(),
+      snapshot: null,
+      sidecar: null,
+    };
+  }
+  if (command === "get_multica_managed_runtime") {
+    return previewMulticaManagedRuntimeFailure("预览模式未连接托管 Multica Runtime，无法读取状态。");
+  }
+  if (
+    command === "ensure_multica_runtime"
+    || command === "cancel_multica_runtime_install"
+    || command === "rollback_multica_runtime"
+    || command === "login_multica_managed"
+    || command === "logout_multica_managed"
+    || command === "set_multica_managed_enabled"
+    || command === "save_multica_managed_connection"
+    || command === "check_multica_managed_runtime"
+    || command === "start_multica_managed_runtime"
+    || command === "stop_multica_managed_runtime"
+    || command === "restart_multica_managed_runtime"
+  ) {
+    return previewMulticaManagedRuntimeFailure();
+  }
+  if (
+    command === "save_multica_connection"
+    || command === "delete_multica_connection"
+    || command === "check_multica_connection"
+    || command === "start_multica_sidecar"
+    || command === "stop_multica_sidecar"
+    || command === "restart_multica_sidecar"
+  ) {
+    return {
+      status: "failed",
+      message: "当前是无 Tauri 预览环境，Multica 操作未执行。",
+      ...previewMulticaEmptyResult(),
+      snapshot: null,
+      sidecar: null,
+    };
+  }
   if (command === "launch_claude_codex_pro" || command === "restart_claude_codex_pro") {
     return ok(command === "launch_claude_codex_pro" ? "预览模式已模拟启动/重启 Codex。" : "预览模式已模拟重启 Codex。", {
       preview: true,

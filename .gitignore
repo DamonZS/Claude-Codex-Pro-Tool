@@ -19,6 +19,8 @@ apps/claude-codex-pro-manager/src-tauri/gen/
 docs/superpowers/
 .workbuddy/
 .codegraph/daemon.pid
+# Local codebase-memory runtime lock; the graph database itself is managed outside Git.
+.codegraph/codegraph.lock
 
 *.log
 .DS_Store

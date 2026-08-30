@@ -362,7 +362,7 @@ fn launcher_scopes_live_credentials_around_new_msix_activation_only() {
         .find("#[cfg(windows)]\nasync fn activate_packaged_app_with_provider_environment(")
         .expect("Windows scoped activation helper");
     let helper_end = source[helper_start..]
-        .find("#[cfg(windows)]\nfn activate_packaged_app_blocking(")
+        .find("#[cfg(windows)]\npub(crate) fn activate_packaged_app_blocking(")
         .map(|offset| helper_start + offset)
         .expect("packaged activation implementation after scoped helper");
     let helper = &source[helper_start..helper_end];

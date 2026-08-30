@@ -151,6 +151,7 @@ import {
   MaintenanceScreen,
   OverviewScreen,
   MemoryScreen,
+  MulticaRuntimeScreen,
   SessionManagementScreen,
   SettingsScreen,
   SupplierScreen,
@@ -230,6 +231,16 @@ import type {
   MemoryQueryResult,
   MemorySelfCheckResult,
   MemoryStatusResult,
+  MulticaConnectionConfig,
+  MulticaConnectionsResult,
+  MulticaConnectionStatus,
+  MulticaConnectionStatusResult,
+  MulticaManagedConnectionUpdate,
+  MulticaManagedRuntimePayload,
+  MulticaManagedRuntimeResult,
+  MulticaRuntimeSnapshot,
+  MulticaSidecarStatus,
+  MulticaSnapshotResult,
   OverviewResult,
   PathState,
   PluginCatalogItem,
@@ -302,6 +313,18 @@ export function App() {
   const [codexSessionContextTarget, setCodexSessionContextTarget] = useState<LocalSession | null>(null);
   const [codexSessionContextLoading, setCodexSessionContextLoading] = useState(false);
   const [codexSessionContextError, setCodexSessionContextError] = useState("");
+  const [multicaConnectionsResult, setMulticaConnectionsResult] = useState<MulticaConnectionsResult | null>(null);
+  const [multicaStatuses, setMulticaStatuses] = useState<Record<string, MulticaConnectionStatus> | null>(null);
+  const [multicaStatusResult, setMulticaStatusResult] = useState<MulticaConnectionStatusResult | null>(null);
+  const [multicaSnapshotResult, setMulticaSnapshotResult] = useState<MulticaSnapshotResult | null>(null);
+  const [multicaSnapshot, setMulticaSnapshot] = useState<MulticaRuntimeSnapshot | null>(null);
+  const [multicaSidecars, setMulticaSidecars] = useState<Record<string, MulticaSidecarStatus>>({});
+  const [multicaLoading, setMulticaLoading] = useState(false);
+  const [multicaError, setMulticaError] = useState<string | null>(null);
+  const [multicaManagedRuntimeResult, setMulticaManagedRuntimeResult] = useState<MulticaManagedRuntimeResult | null>(null);
+  const [multicaManagedRuntime, setMulticaManagedRuntime] = useState<MulticaManagedRuntimePayload | null>(null);
+  const [multicaManagedRuntimeLoading, setMulticaManagedRuntimeLoading] = useState(false);
+  const [multicaManagedRuntimeError, setMulticaManagedRuntimeError] = useState<string | null>(null);
   const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
   const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidatesResult | null>(null);
@@ -330,6 +353,9 @@ export function App() {
   // after the user had already navigated away; capturing the token and checking
   // it before the trailing side-effect discards stale route loads.
   const routeLoadEpochRef = useRef(0);
+  // Snapshot requests can outlive a row/route change. Only the latest request
+  // for the currently selected connection may update the visible snapshot.
+  const multicaSnapshotEpochRef = useRef(0);
   const claudeSessionContextEpochRef = useRef(0);
   const codexSessionContextEpochRef = useRef(0);
   const settingsDraftRevisionRef = useRef(0);
@@ -602,6 +628,351 @@ export function App() {
     }
     return result;
   };
+
+  // Multica is deliberately kept outside the supplier/profile state machine.
+  // A failed command must not replace a previously usable connection list or
+  // snapshot; only successful payloads are committed to the screen state.
+  const commitMulticaConnections = (result: MulticaConnectionsResult) => {
+    if (!statusOk(result.status)) return false;
+    setMulticaConnectionsResult(result);
+    if (result.statuses) setMulticaStatuses(result.statuses);
+    setMulticaSidecars((current) => {
+      const ids = new Set(result.connections.map((connection) => connection.connectionId));
+      return Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id)));
+    });
+    setMulticaError(null);
+    return true;
+  };
+
+  const commitMulticaStatus = (result: MulticaConnectionStatusResult) => {
+    if (!statusOk(result.status)) return false;
+    setMulticaStatusResult(result);
+    setMulticaStatuses((current) => result.statuses ? { ...(current ?? {}), ...result.statuses } : current);
+    setMulticaSidecars((current) => {
+      const next = { ...current };
+      if (result.daemon) next[result.connectionId] = result.daemon;
+      for (const [connectionId, connectionStatus] of Object.entries(result.statuses ?? {})) {
+        next[connectionId] = connectionStatus.daemon;
+      }
+      return next;
+    });
+    setMulticaError(null);
+    return true;
+  };
+
+  const commitMulticaSnapshot = (result: MulticaSnapshotResult, requestedConnectionId?: string | null) => {
+    if (!statusOk(result.status)) return false;
+    setMulticaSnapshotResult(result);
+    if (result.connections) {
+      setMulticaConnectionsResult((current) => current ? { ...current, connections: result.connections! } : {
+        status: result.status,
+        message: result.message,
+        connections: result.connections!,
+        statuses: result.statuses ?? {},
+      });
+    }
+    if (result.statuses) setMulticaStatuses(result.statuses);
+    if (result.snapshot) {
+      setMulticaSnapshot(result.snapshot);
+    } else {
+      // A successful command may still omit the snapshot payload (for
+      // example, an adapter/sidecar response that only returns status). Keep
+      // the last snapshot for the same connection and mark it stale instead
+      // of replacing trustworthy history with an empty panel.
+      const canRetainSnapshot = Boolean(multicaSnapshot)
+        && (!requestedConnectionId || multicaSnapshot?.sourceConnectionId === requestedConnectionId);
+      if (canRetainSnapshot) {
+        setMulticaSnapshot((current) => current
+          ? { ...current, stale: true, diagnostic: current.diagnostic || "snapshot_not_returned" }
+          : current);
+      } else {
+        setMulticaError("读取 Multica 快照未返回可用数据。");
+      }
+    }
+    setMulticaSidecars((current) => {
+      const next = { ...current };
+      const snapshotConnectionId = result.snapshot?.sourceConnectionId ?? requestedConnectionId ?? null;
+      if (result.sidecar && snapshotConnectionId) next[snapshotConnectionId] = result.sidecar;
+      for (const [connectionId, connectionStatus] of Object.entries(result.statuses ?? {})) {
+        next[connectionId] = connectionStatus.daemon;
+      }
+      return next;
+    });
+    // Keep the explicit missing-snapshot diagnostic visible. A successful
+    // command may legitimately omit a snapshot (for example after a
+    // sidecar-only response); clearing the error here would make that state
+    // indistinguishable from a usable snapshot.
+    if (result.snapshot || multicaSnapshot) setMulticaError(null);
+    return true;
+  };
+
+  const commitMulticaSidecar = (result: MulticaSnapshotResult, requestedConnectionId: string) => {
+    if (!statusOk(result.status)) return false;
+    if (result.connections) {
+      setMulticaConnectionsResult((current) => current ? { ...current, connections: result.connections! } : {
+        status: result.status,
+        message: result.message,
+        connections: result.connections!,
+        statuses: result.statuses ?? {},
+      });
+    }
+    if (result.statuses) setMulticaStatuses((current) => ({ ...(current ?? {}), ...result.statuses }));
+    setMulticaSidecars((current) => {
+      const next = { ...current };
+      if (result.sidecar) next[requestedConnectionId] = result.sidecar;
+      for (const [connectionId, connectionStatus] of Object.entries(result.statuses ?? {})) {
+        next[connectionId] = connectionStatus.daemon;
+      }
+      return next;
+    });
+    setMulticaError(null);
+    return true;
+  };
+
+  const multicaCommandFailure = (title: string, result: { message?: string; status?: Status } | null, silent: boolean) => {
+    const message = result?.message || `${title}失败，请检查 Multica 服务或日志。`;
+    setMulticaError(message);
+    if (!silent) notifyResult({ title, message, status: result?.status || "failed" });
+  };
+
+  const listMulticaConnections = async (silent = false) => {
+    setMulticaLoading(true);
+    const result = await run(
+      () => call<MulticaConnectionsResult>("list_multica_connections"),
+      "Multica 连接",
+      { trackBusy: !silent, notify: false },
+    );
+    if (result && commitMulticaConnections(result)) {
+      if (!silent) notifyIfNeedsAttention({ title: "Multica 连接", message: result.message, status: result.status });
+    } else {
+      // `run` returns null when IPC rejects. Keep that failure visible even
+      // during a silent route refresh; otherwise the page appears empty with
+      // no explanation and the user cannot distinguish it from no config.
+      multicaCommandFailure("Multica 连接", result, silent);
+    }
+    setMulticaLoading(false);
+    return result;
+  };
+
+  const saveMulticaConnection = async (connection: MulticaConnectionConfig) => {
+    const result = await run(
+      () => call<MulticaConnectionsResult>("save_multica_connection", { connection }),
+      "保存 Multica 连接",
+      { notify: false },
+    );
+    if (result && commitMulticaConnections(result)) {
+      notifyResult({ title: "保存 Multica 连接", message: result.message, status: result.status });
+    } else {
+      multicaCommandFailure("保存 Multica 连接", result, false);
+    }
+    return result;
+  };
+
+  const deleteMulticaConnection = async (connectionId: string) => {
+    const result = await run(
+      () => call<MulticaConnectionsResult>("delete_multica_connection", { connectionId }),
+      "删除 Multica 连接",
+      { notify: false },
+    );
+    if (result && commitMulticaConnections(result)) {
+      if (multicaStatusResult?.connectionId === connectionId) setMulticaStatusResult(null);
+      if (multicaSnapshot?.sourceConnectionId === connectionId) {
+        setMulticaSnapshot(null);
+        setMulticaSnapshotResult(null);
+      }
+      setMulticaSidecars((current) => {
+        const next = { ...current };
+        delete next[connectionId];
+        return next;
+      });
+      notifyResult({ title: "删除 Multica 连接", message: result.message, status: result.status });
+    } else {
+      multicaCommandFailure("删除 Multica 连接", result, false);
+    }
+    return result;
+  };
+
+  const checkMulticaConnection = async (connectionId: string, silent = false) => {
+    const result = await run(
+      () => call<MulticaConnectionStatusResult>("check_multica_connection", { connectionId }),
+      "检查 Multica 连接",
+      { notify: false },
+    );
+    if (result && commitMulticaStatus(result)) {
+      if (!silent) notifyResult({ title: "检查 Multica 连接", message: result.message, status: result.status });
+    } else {
+      multicaCommandFailure("检查 Multica 连接", result, silent);
+    }
+    return result;
+  };
+
+  const getMulticaSnapshot = async (connectionId?: string | null, silent = false) => {
+    const requestEpoch = ++multicaSnapshotEpochRef.current;
+    const requestedConnectionId = connectionId?.trim() || null;
+    const isCurrentRequest = () => multicaSnapshotEpochRef.current === requestEpoch;
+    setMulticaLoading(true);
+    try {
+      const result = await run(
+        () => call<MulticaSnapshotResult>("get_multica_snapshot", { connectionId: requestedConnectionId }),
+        "读取 Multica 快照",
+        { notify: false },
+      );
+      // A slower request must not replace a newer connection's result or
+      // surface a stale error after the latest request has succeeded.
+      if (!isCurrentRequest()) return result;
+      const resultConnectionId = result?.snapshot?.sourceConnectionId ?? requestedConnectionId;
+      if (requestedConnectionId && resultConnectionId && resultConnectionId !== requestedConnectionId) return result;
+      if (result && commitMulticaSnapshot(result, requestedConnectionId)) {
+        if (!silent) notifyResult({ title: "读取 Multica 快照", message: result.message, status: result.status });
+      } else {
+        multicaCommandFailure("读取 Multica 快照", result, silent);
+      }
+      return result;
+    } finally {
+      if (isCurrentRequest()) setMulticaLoading(false);
+    }
+  };
+
+  const runMulticaSidecar = async (command: "start" | "stop" | "restart", connectionId: string, silent = false) => {
+    const commandName = `${command}_multica_sidecar`;
+    const title = `${command === "start" ? "启动" : command === "stop" ? "停止" : "重启"} Multica sidecar`;
+    const result = await run(
+      () => call<MulticaSnapshotResult>(commandName, { connectionId }),
+      title,
+      { notify: false },
+    );
+    if (result && commitMulticaSidecar(result, connectionId)) {
+      if (!silent) notifyResult({ title, message: result.message, status: result.status });
+    } else {
+      multicaCommandFailure(title, result, silent);
+    }
+    return result;
+  };
+
+  const startMulticaSidecar = (connectionId: string, silent = false) => runMulticaSidecar("start", connectionId, silent);
+  const stopMulticaSidecar = (connectionId: string, silent = false) => runMulticaSidecar("stop", connectionId, silent);
+  const restartMulticaSidecar = (connectionId: string, silent = false) => runMulticaSidecar("restart", connectionId, silent);
+
+  // Managed Runtime has its own state machine.  Keeping it separate from the
+  // hand-configured connection state prevents install/login failures from
+  // replacing a usable connection snapshot or touching supplier/relay state.
+  const commitMulticaManagedRuntime = (result: MulticaManagedRuntimeResult) => {
+    if (!statusOk(result.status)) return false;
+    // A polling response may complete after the authoritative ensure command.
+    // Backend install timestamps are monotonic, so never let an older poll
+    // roll the card back from a newer terminal state.
+    const currentUpdatedAt = multicaManagedRuntime?.runtime.updatedAtMs ?? null;
+    const incomingUpdatedAt = result.runtime?.updatedAtMs ?? null;
+    if (currentUpdatedAt != null && incomingUpdatedAt != null && incomingUpdatedAt < currentUpdatedAt) return true;
+    setMulticaManagedRuntimeResult(result);
+    setMulticaManagedRuntime({
+      runtime: result.runtime,
+      connection: result.connection ?? null,
+      connectionStatus: result.connectionStatus ?? null,
+      loginStatus: result.loginStatus || "unknown",
+    });
+    setMulticaManagedRuntimeError(null);
+    return true;
+  };
+
+  const multicaManagedCommandFailure = (
+    title: string,
+    result: { message?: string; status?: Status } | null,
+    silent: boolean,
+  ) => {
+    const message = result?.message || `${title}失败，请检查托管 Multica 状态或日志。`;
+    setMulticaManagedRuntimeError(message);
+    if (!silent) notifyResult({ title, message, status: result?.status || "failed" });
+  };
+
+  const multicaManagedRuntimeRequestRef = useRef(0);
+  /**
+   * Read the managed status.  Progress polling keeps the current request
+   * generation so it can update an in-flight ensure operation without making
+   * that operation's eventual response stale.
+   */
+  const getMulticaManagedRuntime = async (silent = false, preserveRequest = false) => {
+    const requestId = preserveRequest
+      ? multicaManagedRuntimeRequestRef.current
+      : ++multicaManagedRuntimeRequestRef.current;
+    if (!preserveRequest) setMulticaManagedRuntimeLoading(true);
+    try {
+      const result = await run(
+        () => call<MulticaManagedRuntimeResult>("get_multica_managed_runtime"),
+        "托管 Multica Runtime",
+        { trackBusy: !silent, notify: false },
+      );
+      if (requestId !== multicaManagedRuntimeRequestRef.current) return result;
+      if (result && commitMulticaManagedRuntime(result)) {
+        if (!silent) notifyIfNeedsAttention({ title: "托管 Multica Runtime", message: result.message, status: result.status });
+      } else {
+        multicaManagedCommandFailure("托管 Multica Runtime", result, silent);
+      }
+      return result;
+    } finally {
+      if (!preserveRequest && requestId === multicaManagedRuntimeRequestRef.current) setMulticaManagedRuntimeLoading(false);
+    }
+  };
+
+  const runMulticaManagedOperation = async (
+    command: string,
+    title: string,
+    args?: Record<string, unknown>,
+  ) => {
+    const requestId = ++multicaManagedRuntimeRequestRef.current;
+    setMulticaManagedRuntimeLoading(true);
+    try {
+      const result = await run(
+        () => call<MulticaManagedRuntimeResult>(command, args),
+        title,
+        { notify: false },
+      );
+      // A cancellation or newer operation wins over a slower install/login
+      // response.  This also keeps an old failed operation from clearing a
+      // freshly rendered status.
+      if (requestId !== multicaManagedRuntimeRequestRef.current) return result;
+      if (result && commitMulticaManagedRuntime(result)) {
+        notifyResult({ title, message: result.message, status: result.status });
+      } else {
+        multicaManagedCommandFailure(title, result, false);
+      }
+      return result;
+    } finally {
+      if (requestId === multicaManagedRuntimeRequestRef.current) setMulticaManagedRuntimeLoading(false);
+    }
+  };
+
+  const ensureMulticaRuntime = () => runMulticaManagedOperation("ensure_multica_runtime", "准备托管 Multica Runtime");
+  const cancelMulticaRuntimeInstall = () => runMulticaManagedOperation("cancel_multica_runtime_install", "取消托管 Multica 安装");
+  const rollbackMulticaRuntime = () => runMulticaManagedOperation("rollback_multica_runtime", "回滚托管 Multica Runtime");
+  const loginMulticaManaged = () => runMulticaManagedOperation("login_multica_managed", "托管 Multica 登录");
+  const logoutMulticaManaged = () => runMulticaManagedOperation("logout_multica_managed", "托管 Multica 退出登录");
+  const setMulticaManagedEnabled = (enabled: boolean) => runMulticaManagedOperation(
+    "set_multica_managed_enabled",
+    enabled ? "启用托管 Multica" : "停用托管 Multica",
+    { enabled },
+  );
+  const saveMulticaManagedConnection = (update: MulticaManagedConnectionUpdate) => runMulticaManagedOperation(
+    "save_multica_managed_connection",
+    "保存托管 Multica 连接",
+    { update },
+  );
+  const checkMulticaManagedRuntime = () => runMulticaManagedOperation(
+    "check_multica_managed_runtime",
+    "检查托管 Multica Runtime",
+  );
+  const startMulticaManagedRuntime = () => runMulticaManagedOperation(
+    "start_multica_managed_runtime",
+    "启动托管 Multica Runtime",
+  );
+  const stopMulticaManagedRuntime = () => runMulticaManagedOperation(
+    "stop_multica_managed_runtime",
+    "停止托管 Multica Runtime",
+  );
+  const restartMulticaManagedRuntime = () => runMulticaManagedOperation(
+    "restart_multica_managed_runtime",
+    "重启托管 Multica Runtime",
+  );
 
   const loadCodexSessionContext = async (session: LocalSession) => {
     const requestEpoch = ++codexSessionContextEpochRef.current;
@@ -2384,6 +2755,20 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
+    } else if (target === "multica") {
+      const [connections] = await Promise.all([
+        listMulticaConnections(true),
+        getMulticaManagedRuntime(true),
+      ]);
+      if (connections && statusOk(connections.status) && connections.connections.length > 0) {
+        const connectionId = connections.connections[0]?.connectionId;
+        if (connectionId && !isStaleRouteLoad()) {
+          await Promise.all([
+            checkMulticaConnection(connectionId, true),
+            getMulticaSnapshot(connectionId, true),
+          ]);
+        }
+      }
     } else if (target === "maintenance") {
       await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
@@ -2414,6 +2799,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (route !== "multica") multicaSnapshotEpochRef.current += 1;
     void refreshRoute(route);
   }, [route]);
 
@@ -2521,6 +2907,26 @@ export function App() {
       closeCodexSessionContext,
       deleteLocalSession,
       refreshClaudeSessions,
+      listMulticaConnections,
+      saveMulticaConnection,
+      deleteMulticaConnection,
+      checkMulticaConnection,
+      getMulticaSnapshot,
+      startMulticaSidecar,
+      stopMulticaSidecar,
+      restartMulticaSidecar,
+      getMulticaManagedRuntime,
+      ensureMulticaRuntime,
+      cancelMulticaRuntimeInstall,
+      rollbackMulticaRuntime,
+      loginMulticaManaged,
+      logoutMulticaManaged,
+      setMulticaManagedEnabled,
+      saveMulticaManagedConnection,
+      checkMulticaManagedRuntime,
+      startMulticaManagedRuntime,
+      stopMulticaManagedRuntime,
+      restartMulticaManagedRuntime,
       loadClaudeSessionContext,
       loadEarlierClaudeSessionContext,
       closeClaudeSessionContext,
@@ -2647,6 +3053,26 @@ export function App() {
       closeCodexSessionContext: (...args) => actionsRef.current!.closeCodexSessionContext(...args),
       deleteLocalSession: (...args) => actionsRef.current!.deleteLocalSession(...args),
       refreshClaudeSessions: (...args) => actionsRef.current!.refreshClaudeSessions(...args),
+      listMulticaConnections: (...args) => actionsRef.current!.listMulticaConnections(...args),
+      saveMulticaConnection: (...args) => actionsRef.current!.saveMulticaConnection(...args),
+      deleteMulticaConnection: (...args) => actionsRef.current!.deleteMulticaConnection(...args),
+      checkMulticaConnection: (...args) => actionsRef.current!.checkMulticaConnection(...args),
+      getMulticaSnapshot: (...args) => actionsRef.current!.getMulticaSnapshot(...args),
+      startMulticaSidecar: (...args) => actionsRef.current!.startMulticaSidecar(...args),
+      stopMulticaSidecar: (...args) => actionsRef.current!.stopMulticaSidecar(...args),
+      restartMulticaSidecar: (...args) => actionsRef.current!.restartMulticaSidecar(...args),
+      getMulticaManagedRuntime: (...args) => actionsRef.current!.getMulticaManagedRuntime(...args),
+      ensureMulticaRuntime: (...args) => actionsRef.current!.ensureMulticaRuntime(...args),
+      cancelMulticaRuntimeInstall: (...args) => actionsRef.current!.cancelMulticaRuntimeInstall(...args),
+      rollbackMulticaRuntime: (...args) => actionsRef.current!.rollbackMulticaRuntime(...args),
+      loginMulticaManaged: (...args) => actionsRef.current!.loginMulticaManaged(...args),
+      logoutMulticaManaged: (...args) => actionsRef.current!.logoutMulticaManaged(...args),
+      setMulticaManagedEnabled: (...args) => actionsRef.current!.setMulticaManagedEnabled(...args),
+      saveMulticaManagedConnection: (...args) => actionsRef.current!.saveMulticaManagedConnection(...args),
+      checkMulticaManagedRuntime: (...args) => actionsRef.current!.checkMulticaManagedRuntime(...args),
+      startMulticaManagedRuntime: (...args) => actionsRef.current!.startMulticaManagedRuntime(...args),
+      stopMulticaManagedRuntime: (...args) => actionsRef.current!.stopMulticaManagedRuntime(...args),
+      restartMulticaManagedRuntime: (...args) => actionsRef.current!.restartMulticaManagedRuntime(...args),
       loadClaudeSessionContext: (...args) => actionsRef.current!.loadClaudeSessionContext(...args),
       loadEarlierClaudeSessionContext: (...args) => actionsRef.current!.loadEarlierClaudeSessionContext(...args),
       closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
@@ -2770,6 +3196,23 @@ export function App() {
               focusProfileId={supplierFocusProfileId}
               onClaudeDesktopProviderDraftChange={setClaudeDesktopProviderDraft}
               settings={settings}
+            />
+          ) : null}
+          {route === "multica" ? (
+            <MulticaRuntimeScreen
+              actions={actions}
+              connectionsResult={multicaConnectionsResult}
+              statuses={multicaStatuses}
+              statusResult={multicaStatusResult}
+              snapshot={multicaSnapshot}
+              snapshotResult={multicaSnapshotResult}
+              sidecars={multicaSidecars}
+              loading={multicaLoading}
+              error={multicaError}
+              managedRuntime={multicaManagedRuntime}
+              managedRuntimeResult={multicaManagedRuntimeResult}
+              managedRuntimeLoading={multicaManagedRuntimeLoading}
+              managedRuntimeError={multicaManagedRuntimeError}
             />
           ) : null}
           {route === "clients" ? (

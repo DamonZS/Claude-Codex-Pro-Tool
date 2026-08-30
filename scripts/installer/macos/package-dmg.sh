@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
+MULTICA_RESOURCE_DIR="${MULTICA_RESOURCE_DIR:-}"
 DMG="$DIST/claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/claude-codex-pro-manager/src-tauri/icons/icon.png"
 ICON_NAME="claude-codex-pro.icns"
@@ -49,6 +50,14 @@ create_app() {
 
   rm -rf "$app_dir"
   mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+  if [ -n "$MULTICA_RESOURCE_DIR" ]; then
+    if [ ! -d "$MULTICA_RESOURCE_DIR" ]; then
+      echo "error: Multica resource directory not found: $MULTICA_RESOURCE_DIR" >&2
+      return 1
+    fi
+    mkdir -p "$app_dir/Contents/Resources/multica"
+    cp -R "$MULTICA_RESOURCE_DIR/." "$app_dir/Contents/Resources/multica/"
+  fi
   cp "$binary_path" "$app_dir/Contents/MacOS/$executable_name"
   cp "$ICON_ICNS" "$app_dir/Contents/Resources/$ICON_NAME"
   chmod +x "$app_dir/Contents/MacOS/$executable_name"

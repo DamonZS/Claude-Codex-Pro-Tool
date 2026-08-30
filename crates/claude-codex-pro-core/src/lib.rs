@@ -23,6 +23,9 @@ pub mod launcher;
 pub mod memory_assist;
 pub mod model_catalog;
 pub mod models;
+pub mod multica;
+#[cfg(windows)]
+mod multica_managed_job;
 pub mod paths;
 pub mod plugin_hub;
 pub mod ports;

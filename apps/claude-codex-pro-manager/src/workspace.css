@@ -6494,6 +6494,393 @@ html.dark > body > .supplier-model-dropdown-menu,
   }
 }
 
+/* Multica stays visually isolated from supplier/profile controls. */
+.multica-runtime-screen {
+  min-width: 0;
+}
+
+.multica-runtime-layout {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.45fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.multica-connection-list,
+.multica-snapshot-list {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.multica-connection-row-wrap {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 4px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-control-radius);
+  background: var(--workspace-surface);
+}
+
+.multica-connection-row-wrap.active {
+  border-color: var(--workspace-blue);
+  background: var(--workspace-blue-soft);
+}
+
+.multica-connection-row {
+  display: grid;
+  min-width: 0;
+  min-height: 58px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--workspace-text);
+  padding: 9px 8px 9px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multica-connection-row:hover,
+.multica-connection-row:focus-visible {
+  background: color-mix(in srgb, var(--workspace-blue-soft) 58%, transparent);
+  outline: 0;
+}
+
+.multica-connection-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-control-radius);
+  color: var(--workspace-blue);
+}
+
+.multica-connection-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.multica-connection-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.multica-connection-copy strong,
+.multica-connection-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multica-connection-copy strong {
+  color: var(--workspace-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.multica-connection-copy small {
+  color: var(--workspace-text-secondary);
+  font-size: 11px;
+}
+
+.multica-connection-edit {
+  display: grid;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  height: 100%;
+  place-items: center;
+  align-self: center;
+  border: 0;
+  border-left: 1px solid var(--workspace-border);
+  border-radius: 0 var(--workspace-control-radius) var(--workspace-control-radius) 0;
+  background: transparent;
+  color: var(--workspace-text-tertiary);
+  cursor: pointer;
+}
+
+.multica-connection-edit:hover:not(:disabled),
+.multica-connection-edit:focus-visible {
+  background: var(--workspace-surface-muted);
+  color: var(--workspace-text);
+  outline: 0;
+}
+
+.multica-connection-edit:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.multica-status-chip {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--workspace-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--workspace-text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.multica-status-chip.ok,
+.multica-status-chip.healthy {
+  border-color: color-mix(in srgb, var(--workspace-success) 42%, var(--workspace-border));
+  background: var(--workspace-success-soft);
+  color: var(--workspace-success);
+}
+
+.multica-status-chip.warn,
+.multica-status-chip.degraded,
+.multica-status-chip.checking,
+.multica-status-chip.running {
+  border-color: color-mix(in srgb, var(--workspace-warning) 45%, var(--workspace-border));
+  background: var(--workspace-warning-soft);
+  color: #a16207;
+}
+
+.multica-status-chip.failed,
+.multica-status-chip.unreachable,
+.multica-status-chip.unauthorized,
+.multica-status-chip.invalid_response {
+  border-color: color-mix(in srgb, var(--workspace-danger) 42%, var(--workspace-border));
+  background: var(--workspace-danger-soft);
+  color: var(--workspace-danger);
+}
+
+.multica-form-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.multica-checkbox-line {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--workspace-text-secondary);
+  font-size: 12px;
+}
+
+.multica-checkbox-line input {
+  accent-color: var(--workspace-blue);
+}
+
+.multica-sidecar-editor {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border-top: 1px solid var(--workspace-border);
+  padding-top: 14px;
+}
+
+.multica-subsection-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--workspace-text);
+}
+
+.multica-subsection-heading > div:first-child {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.multica-subsection-heading svg {
+  width: 16px;
+  height: 16px;
+  color: var(--workspace-blue);
+}
+
+.multica-muted,
+.multica-diagnostic,
+.multica-error {
+  margin: 0;
+  color: var(--workspace-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.multica-diagnostic {
+  border-left: 3px solid var(--workspace-warning);
+  background: var(--workspace-warning-soft);
+  padding: 8px 10px;
+}
+
+.multica-error {
+  border-left: 3px solid var(--workspace-danger);
+  background: var(--workspace-danger-soft);
+  color: var(--workspace-danger);
+  padding: 8px 10px;
+}
+
+.multica-install-progress {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  margin-top: 14px;
+  border-top: 1px solid var(--workspace-border);
+  padding-top: 14px;
+}
+
+.multica-install-progress-heading,
+.multica-install-progress-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--workspace-text-secondary);
+  font-size: 12px;
+}
+
+.multica-install-progress-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--workspace-text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multica-install-progress-heading > span:last-child {
+  color: var(--workspace-blue);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.multica-install-progress-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--workspace-surface-muted);
+  accent-color: var(--workspace-blue);
+}
+
+.multica-install-progress-bar::-webkit-progress-bar {
+  border-radius: inherit;
+  background: var(--workspace-surface-muted);
+}
+
+.multica-install-progress-bar::-webkit-progress-value {
+  border-radius: inherit;
+  background: var(--workspace-blue);
+}
+
+.multica-install-progress-bar::-moz-progress-bar {
+  border-radius: inherit;
+  background: var(--workspace-blue);
+}
+
+.multica-install-progress-meta {
+  font-size: 11px;
+}
+
+.multica-install-progress-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multica-snapshot-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--workspace-text-secondary);
+  font-size: 11px;
+}
+
+.multica-snapshot-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multica-snapshot-meta strong {
+  font-weight: 700;
+}
+
+.multica-snapshot-meta strong.fresh {
+  color: var(--workspace-success);
+}
+
+.multica-snapshot-meta strong.stale {
+  color: var(--workspace-warning);
+}
+
+.multica-snapshot-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-control-radius);
+  background: var(--workspace-surface);
+  padding: 10px 12px;
+}
+
+.multica-snapshot-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.multica-snapshot-copy strong,
+.multica-snapshot-copy span,
+.multica-snapshot-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multica-snapshot-copy strong {
+  color: var(--workspace-text);
+  font-size: 13px;
+}
+
+.multica-snapshot-copy span,
+.multica-snapshot-copy small {
+  color: var(--workspace-text-secondary);
+  font-size: 11px;
+}
+
+.multica-snapshot-copy small {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+@media (max-width: 1040px) {
+  .multica-runtime-layout,
+  .multica-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (forced-colors: active) {
   .ops-runtime-dot,
   .ops-status-row::before,

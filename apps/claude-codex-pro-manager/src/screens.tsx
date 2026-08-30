@@ -165,6 +165,19 @@ import type {
   MemoryQueryResult,
   MemorySelfCheckResult,
   MemoryStatusResult,
+  MulticaConnectionConfig,
+  MulticaConnectionStatus,
+  MulticaConnectionStatusResult,
+  MulticaConnectionView,
+  MulticaConnectionsResult,
+  MulticaManagedConnectionUpdate,
+  MulticaManagedRuntimePayload,
+  MulticaManagedRuntimeResult,
+  MulticaRuntimeItem,
+  MulticaRuntimeSnapshot,
+  MulticaSidecarConfig,
+  MulticaSidecarStatus,
+  MulticaSnapshotResult,
   OverviewResult,
   PluginCatalogItem,
   PluginHubResult,
@@ -4482,3 +4495,988 @@ export const AboutScreen = memo(function AboutScreen({
     </div>
   );
 });
+
+const MULTICA_STATUS_LABELS: Record<string, string> = {
+  unconfigured: "未配置",
+  not_checked: "未检查",
+  checking: "检查中",
+  healthy: "健康",
+  degraded: "部分可用",
+  unreachable: "无法连接",
+  unauthorized: "未授权",
+  invalid_response: "响应无效",
+  stopped: "已停止",
+  stale: "数据可能已过期",
+  authenticated: "已登录",
+  needs_login: "需要登录",
+  unknown: "未知",
+};
+
+function multicaStatusLabel(value: unknown) {
+  const status = typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "unknown";
+  return MULTICA_STATUS_LABELS[status] ?? status;
+}
+
+function multicaStatusTone(value: unknown) {
+  const status = typeof value === "string" ? value.toLowerCase() : "unknown";
+  if (status === "healthy") return "ok";
+  if (status === "checking") return "running";
+  if (status === "unconfigured" || status === "stopped" || status === "unknown") return "not_checked";
+  return "failed";
+}
+
+function multicaRuntimeInstallLabel(value: unknown) {
+  const state = typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "unknown";
+  const labels: Record<string, string> = {
+    ready: "已就绪",
+    installing: "准备中",
+    unavailable: "不可用",
+    unsupported_platform: "当前平台不受支持",
+    download_failed: "下载失败",
+    verification_failed: "校验失败",
+    cancelled: "已取消",
+    restart_exhausted: "重启次数已耗尽",
+    unknown: "未检查",
+  };
+  return labels[state] ?? state;
+}
+
+const MULTICA_INSTALL_PHASE_LABELS: Record<string, string> = {
+  preparing: "准备安装",
+  checking_bundle: "检查内置资源",
+  downloading_archive: "下载运行时",
+  downloading_checksums: "下载校验清单",
+  verifying: "校验下载内容",
+  extracting: "解压运行时",
+  staging: "准备安装目录",
+  probing: "探测 CLI 能力",
+  activating: "激活版本",
+  complete: "安装完成",
+};
+
+function multicaInstallPhaseLabel(phase: unknown, state: unknown) {
+  const normalized = typeof phase === "string" && phase.trim()
+    ? phase.trim().toLowerCase()
+    : typeof state === "string" && state.trim()
+      ? state.trim().toLowerCase()
+      : "unknown";
+  return MULTICA_INSTALL_PHASE_LABELS[normalized] ?? multicaRuntimeInstallLabel(normalized);
+}
+
+function multicaFormatBytes(value: unknown) {
+  const bytes = typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB"];
+  let scaled = bytes;
+  let unit = -1;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled >= 10 ? scaled.toFixed(1) : scaled.toFixed(2)} ${units[unit]}`;
+}
+
+function multicaRuntimeInstallTone(value: unknown) {
+  const state = typeof value === "string" ? value.trim().toLowerCase() : "unknown";
+  if (state === "ready") return "ok";
+  if (state === "installing") return "checking";
+  if (state === "unknown" || state === "unavailable" || state === "cancelled") return "not_checked";
+  return "failed";
+}
+
+function multicaTimestamp(value: number | null | undefined) {
+  if (!value) return "未检查";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString();
+}
+
+function multicaRedactUrl(value: string) {
+  const text = value.trim();
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    // Cards and diagnostics only need the origin.  Keep a path marker so the
+    // user can distinguish a root endpoint without exposing request details,
+    // query parameters, credentials, or fragments.
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname && parsed.pathname !== "/" ? "/..." : ""}`;
+  } catch {
+    return text
+      .replace(/([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)=)[^&#\s]*/gi, "$1[redacted]")
+      .replace(/(https?:\/\/)([^/\s?#]+)(?:[^\s"'<>]*)?/gi, "$1$2/...");
+  }
+}
+
+function multicaDisplayAddress(value: unknown) {
+  // Keep static status rows compact and redact credentials, paths, queries,
+  // and fragments. The managed editor itself deliberately binds the saved
+  // value directly so it can preserve an explicit empty string byte-for-byte.
+  return typeof value === "string" && value.trim() ? multicaRedactUrl(value) : "地址未配置";
+}
+
+function multicaSafeText(value: unknown, limit = 220) {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const text = value
+    .trim()
+    // Never surface complete request URLs in diagnostics or list details.
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (match) => multicaRedactUrl(match))
+    // Header-style credentials can contain spaces (especially Cookie), so
+    // handle those before the generic key/value matcher.
+    .replace(/(\bcookie\s*[:=]\s*)[^\r\n]*/gi, "$1[redacted]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/((?:["']?)(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)(?:["']?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]*)/gi, "$1[redacted]")
+    .replace(/([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token|authorization)=)[^&#\s]*/gi, "$1[redacted]")
+    // Windows drive paths, UNC paths, and common Unix absolute paths are
+    // local implementation details and are not useful in the UI diagnosis.
+    .replace(/(?:[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|tmp|var|opt|workspace|workspaces|mnt|private|etc|root)(?:\/|$))[^\s"'<>;,]*/gi, "[path]");
+  return text.length <= limit ? text : `${text.slice(0, limit)}...`;
+}
+
+function multicaNewConnectionDraft(): MulticaConnectionConfig {
+  return {
+    connectionId: null,
+    displayName: "",
+    serverUrl: "",
+    apiPrefix: "",
+    workspaceId: null,
+    workspaceSlug: null,
+    tokenEnvVar: undefined,
+    enabled: true,
+    allowInsecureLanHttp: false,
+    sidecar: null,
+  };
+}
+
+function multicaDraftFromView(connection: MulticaConnectionView): MulticaConnectionConfig {
+  return {
+    connectionId: connection.connectionId,
+    displayName: connection.displayName,
+    // Connection views deliberately omit the original URL.  An empty field
+    // means "preserve the saved address" for an existing connection, while a
+    // newly entered value explicitly replaces it on save.
+    serverUrl: "",
+    apiPrefix: connection.apiPrefix ?? "",
+    workspaceId: connection.workspaceId ?? "",
+    workspaceSlug: connection.workspaceSlug ?? "",
+    // The backend intentionally does not return the token environment name.
+    tokenEnvVar: undefined,
+    enabled: connection.enabled,
+    allowInsecureLanHttp: connection.allowInsecureLanHttp,
+    // The backend intentionally returns only a sidecar summary. Omit this
+    // field when a sidecar exists so the save command preserves its verified
+    // executable path, working directory, and arguments. An explicit null is
+    // used only when the user turns the sidecar configuration off.
+    sidecar: connection.sidecarConfigured ? undefined : null,
+  };
+}
+
+export type MulticaRuntimeScreenProps = {
+  actions: AppActions;
+  connections?: MulticaConnectionView[] | null;
+  connectionsResult?: MulticaConnectionsResult | null;
+  statuses?: Record<string, MulticaConnectionStatus> | null;
+  status?: MulticaConnectionStatus | null;
+  statusResult?: MulticaConnectionStatusResult | null;
+  snapshot?: MulticaRuntimeSnapshot | null;
+  snapshotResult?: MulticaSnapshotResult | null;
+  sidecars?: Record<string, MulticaSidecarStatus> | null;
+  loading?: boolean;
+  error?: string | null;
+  managedRuntime?: MulticaManagedRuntimePayload | null;
+  managedRuntimeResult?: MulticaManagedRuntimeResult | null;
+  managedRuntimeLoading?: boolean;
+  managedRuntimeError?: string | null;
+};
+
+/**
+ * Read-only Multica control-plane UI. Task mutation is intentionally absent;
+ * this page only manages isolated connection records and sidecar lifecycle.
+ */
+export function MulticaRuntimeScreen({
+  actions,
+  connections,
+  connectionsResult,
+  statuses,
+  status,
+  statusResult,
+  snapshot,
+  snapshotResult,
+  sidecars,
+  loading = false,
+  error,
+  managedRuntime,
+  managedRuntimeResult,
+  managedRuntimeLoading = false,
+  managedRuntimeError,
+}: MulticaRuntimeScreenProps) {
+  const connectionList = connections ?? connectionsResult?.connections ?? [];
+  const hasConnectionData = connections !== undefined || Boolean(connectionsResult);
+  const connectionLoadFailed = Boolean(connectionsResult && !statusOk(connectionsResult.status)) || Boolean(error && !hasConnectionData);
+  const connectionListLoading = loading && !hasConnectionData;
+  const knownStatuses = statuses ?? connectionsResult?.statuses ?? snapshotResult?.statuses ?? null;
+  const [selectedId, setSelectedId] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<MulticaConnectionConfig>(multicaNewConnectionDraft);
+  const [tokenEnvVarDraft, setTokenEnvVarDraft] = useState("");
+  const [clearToken, setClearToken] = useState(false);
+  const [tab, setTab] = useState<"runtimes" | "agents" | "tasks">("runtimes");
+  const [pending, setPending] = useState<string | null>(null);
+  const [managedPending, setManagedPending] = useState<string | null>(null);
+  const [managedEditing, setManagedEditing] = useState(false);
+  const [managedDraft, setManagedDraft] = useState<MulticaManagedConnectionUpdate>({
+    displayName: "",
+    serverUrl: "",
+    enabled: true,
+  });
+
+  // An empty selectedId normally means "use the first connection", except
+  // while the explicit new-connection editor is open. Keeping that state
+  // distinct prevents an existing token/sidecar from leaking into a new draft.
+  const selected = editingId === ""
+    ? null
+    : selectedId
+      ? connectionList.find((connection) => connection.connectionId === selectedId) ?? null
+      : connectionList[0] ?? null;
+  const selectedStatus = selected && selected.connectionId === status?.connectionId
+    ? status
+    : selected && selected.connectionId === statusResult?.connectionId
+      ? statusResult
+      : selected
+        ? knownStatuses?.[selected.connectionId] ?? null
+        : null;
+  const receivedSnapshot = snapshot ?? snapshotResult?.snapshot ?? null;
+  const currentSnapshot = receivedSnapshot && (!selected || receivedSnapshot.sourceConnectionId === selected.connectionId)
+    ? receivedSnapshot
+    : null;
+  const isEditing = editingId !== null;
+  const isNew = editingId === "";
+  const sidecarEnabled = draft.sidecar !== null
+    && (Boolean(draft.sidecar) || Boolean(selected?.sidecarConfigured));
+
+  useEffect(() => {
+    if (selectedId && connectionList.some((connection) => connection.connectionId === selectedId)) return;
+    setSelectedId(connectionList[0]?.connectionId ?? "");
+  }, [connectionList, selectedId]);
+
+  useEffect(() => {
+    if (editingId !== null) return;
+    if (!selected) {
+      setDraft(multicaNewConnectionDraft());
+      return;
+    }
+    setDraft(multicaDraftFromView(selected));
+    setTokenEnvVarDraft("");
+    setClearToken(false);
+  }, [editingId, selected]);
+
+  const beginNewConnection = () => {
+    setSelectedId("");
+    setEditingId("");
+    setDraft(multicaNewConnectionDraft());
+    setTokenEnvVarDraft("");
+    setClearToken(false);
+  };
+
+  const beginEditConnection = (connection: MulticaConnectionView) => {
+    setSelectedId(connection.connectionId);
+    setEditingId(connection.connectionId);
+    setDraft(multicaDraftFromView(connection));
+    setTokenEnvVarDraft("");
+    setClearToken(false);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setTokenEnvVarDraft("");
+    setClearToken(false);
+    if (selected) setDraft(multicaDraftFromView(selected));
+  };
+
+  const updateDraft = (patch: Partial<MulticaConnectionConfig>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+  };
+
+  const updateSidecar = (patch: Partial<MulticaSidecarConfig>) => {
+    setDraft((current) => ({
+      ...current,
+      sidecar: current.sidecar ? { ...current.sidecar, ...patch } : { executable: "", workingDir: "", args: [], autoStart: false, ...patch },
+    }));
+  };
+
+  const toggleSidecarConfig = (enabled: boolean) => {
+    if (!enabled) {
+      if (!window.confirm("停用该 Multica sidecar？只影响此连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。")) return;
+      updateDraft({ sidecar: null });
+      return;
+    }
+    updateSidecar({});
+  };
+
+  const toggleConnectionEnabled = (enabled: boolean) => {
+    if (!enabled && draft.enabled) {
+      const confirmed = window.confirm(
+        "确认停用该 Multica 连接？只影响此 Multica 连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+      );
+      if (!confirmed) return;
+    }
+    updateDraft({ enabled });
+  };
+
+  const toggleInsecureLanHttp = (enabled: boolean) => {
+    if (enabled && !draft.allowInsecureLanHttp) {
+      const confirmed = window.confirm(
+        "确认允许此 Multica 连接使用非加密局域网 HTTP？仅限已确认的私有局域网地址，传输可能被同一网络中的其他设备读取。不会影响 CCP 供应商、代理、Codex 或 Claude。",
+      );
+      if (!confirmed) return;
+    }
+    updateDraft({ allowInsecureLanHttp: enabled });
+  };
+
+  const saveConnection = async () => {
+    // Existing connections may be saved with an empty URL: the backend keeps
+    // the persisted original address, which was intentionally never sent to
+    // this renderer. A new connection still requires an address.
+    if ((isNew && !draft.serverUrl.trim()) || pending) return;
+    setPending("save");
+    try {
+      const tokenEnvVar = tokenEnvVarDraft.trim();
+      const payload: MulticaConnectionConfig = {
+        ...draft,
+        // Preserve a newly entered URL exactly. For an existing connection an
+        // empty string is a deliberate "keep existing URL" sentinel handled
+        // by the command boundary, not a URL normalization request.
+        tokenEnvVar: tokenEnvVar ? tokenEnvVar : clearToken ? null : undefined,
+        apiPrefix: draft.apiPrefix || null,
+        allowInsecureLanHttp: Boolean(draft.allowInsecureLanHttp),
+      };
+      const result = await actions.saveMulticaConnection(payload);
+      // Keep the editor open after a rejected save so the user can correct
+      // the input and retry; the action already reports the failure.
+      if (!result || !statusOk(result.status)) return;
+      setEditingId(null);
+      setClearToken(false);
+      setTokenEnvVarDraft("");
+      await actions.listMulticaConnections();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const deleteConnection = async (connection: MulticaConnectionView) => {
+    if (pending) return;
+    const daemonStatus = selectedStatus?.daemon.status;
+    if (daemonStatus === "healthy" || daemonStatus === "checking") {
+      actions.showNotice({ title: "无法删除连接", message: "请先停止该 Multica sidecar；删除只影响 Multica 连接。", status: "failed" });
+      return;
+    }
+    if (!window.confirm(`确认删除 Multica 连接“${connection.displayName || connection.connectionId}”？不会影响 CCP 供应商、代理、Codex 或 Claude。`)) return;
+    setPending("delete");
+    try {
+      const result = await actions.deleteMulticaConnection(connection.connectionId);
+      if (!result || !statusOk(result.status)) return;
+      setEditingId(null);
+      setSelectedId("");
+      await actions.listMulticaConnections();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const checkConnection = async () => {
+    if (!selected || pending) return;
+    setPending("check");
+    try {
+      await actions.checkMulticaConnection(selected.connectionId);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const refreshSnapshot = async () => {
+    if (!selected || pending) return;
+    setPending("snapshot");
+    try {
+      await actions.getMulticaSnapshot(selected.connectionId);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const sidecarAction = async (kind: "start" | "stop" | "restart") => {
+    if (!selected || pending) return;
+    const confirmation: Record<typeof kind, string> = {
+      start: "确认启动该 Multica sidecar？只会启动此连接已保存的 sidecar，不会启动或修改 CCP 供应商、代理、Codex 或 Claude。",
+      stop: "确认停止该 Multica sidecar？只影响该 sidecar，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+      restart: "确认重启该 Multica sidecar？只影响该 sidecar，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+    };
+    if (!window.confirm(confirmation[kind])) return;
+    setPending(`sidecar:${kind}`);
+    try {
+      if (kind === "start") await actions.startMulticaSidecar(selected.connectionId);
+      if (kind === "stop") await actions.stopMulticaSidecar(selected.connectionId);
+      if (kind === "restart") await actions.restartMulticaSidecar(selected.connectionId);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const copyStableId = async (id: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard_unavailable");
+      await navigator.clipboard.writeText(id);
+      actions.showNotice({ title: "已复制稳定 ID", message: id, status: "ok" });
+    } catch {
+      actions.showNotice({ title: "复制失败", message: "系统剪贴板不可用，请手动选择稳定 ID。", status: "failed" });
+    }
+  };
+
+  const items: MulticaRuntimeItem[] = tab === "runtimes"
+    ? currentSnapshot?.runtimes ?? []
+    : tab === "agents"
+      ? currentSnapshot?.agents ?? []
+      : currentSnapshot?.tasks ?? [];
+  const snapshotDiagnostic = multicaSafeText(currentSnapshot?.diagnostic || currentSnapshot?.error || error);
+  const serverStatus = selectedStatus?.server;
+  // Daemon status is keyed by connection ID. Never fall back to a global
+  // status because doing so can display another connection's PID/state after
+  // the user switches rows.
+  const daemonStatus = selected
+    ? selectedStatus?.daemon ?? sidecars?.[selected.connectionId] ?? null
+    : null;
+  const sidecarConfigured = draft.sidecar === null
+    ? false
+    : Boolean(selected?.sidecarConfigured || draft.sidecar);
+  const daemonState = typeof daemonStatus?.status === "string" && daemonStatus.status.trim()
+    ? daemonStatus.status.trim().toLowerCase()
+    : sidecarConfigured ? "stopped" : "unconfigured";
+  const daemonRunning = daemonState === "healthy"
+    || daemonState === "checking"
+    || (daemonState === "degraded" && Boolean(daemonStatus?.pid));
+  const snapshotIsStale = Boolean(currentSnapshot?.stale || selectedStatus?.stale);
+  const checkedAtMs = serverStatus?.checkedAtMs ?? daemonStatus?.checkedAtMs;
+
+  const refreshConnections = async () => {
+    if (pending) return;
+    setPending("list");
+    try {
+      await actions.listMulticaConnections();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const managedPayload = managedRuntime ?? (managedRuntimeResult && statusOk(managedRuntimeResult.status)
+    ? {
+      runtime: managedRuntimeResult.runtime,
+      connection: managedRuntimeResult.connection ?? null,
+      connectionStatus: managedRuntimeResult.connectionStatus ?? null,
+      loginStatus: managedRuntimeResult.loginStatus || "unknown",
+    }
+    : null);
+  const managedInstall = managedPayload?.runtime;
+  const managedConnection = managedPayload?.connection ?? null;
+  const managedConnectionStatus = managedPayload?.connectionStatus ?? null;
+  const managedDaemon = managedConnectionStatus?.daemon ?? null;
+  const managedServer = managedConnectionStatus?.server ?? null;
+  const managedInstallState = managedInstall?.installState ?? "unknown";
+  const managedInstalling = managedInstallState.toLowerCase() === "installing";
+  const managedDaemonState = managedDaemon?.status?.toLowerCase() ?? "unconfigured";
+  const managedDaemonRunning = managedDaemonState === "healthy"
+    || managedDaemonState === "checking"
+    || (managedDaemonState === "degraded" && Boolean(managedDaemon?.pid));
+  const managedBusy = managedRuntimeLoading || Boolean(managedPending);
+  const managedCanOperate = Boolean(managedConnection && managedInstallState.toLowerCase() === "ready");
+  const managedError = multicaSafeText(managedRuntimeError || (!statusOk(managedRuntimeResult?.status) ? managedRuntimeResult?.message : ""));
+
+  // Poll only while an ensure request is active. The App action accepts an
+  // internal preserve-generation flag; keep the cast local so the public
+  // action shape remains backwards compatible while status reads cannot make
+  // the in-flight ensure response stale.
+  const managedProgressPollRef = useRef(false);
+  useEffect(() => {
+    if (managedPending !== "ensure") return;
+    let disposed = false;
+    const poll = async () => {
+      if (disposed || managedProgressPollRef.current) return;
+      managedProgressPollRef.current = true;
+      try {
+        const getStatus = actions.getMulticaManagedRuntime as unknown as (
+          silent?: boolean,
+          preserveRequest?: boolean,
+        ) => Promise<MulticaManagedRuntimeResult | null>;
+        await getStatus(true, true);
+      } finally {
+        managedProgressPollRef.current = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 700);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [actions, managedPending]);
+
+  // Keep a user's in-progress edit stable across periodic Runtime refreshes.
+  // When the editor is closed, sync the next persisted managed-only view.
+  useEffect(() => {
+    if (managedEditing) return;
+    setManagedDraft({
+      displayName: managedConnection?.displayName ?? "",
+      serverUrl: managedConnection?.serverUrl ?? "",
+      enabled: managedConnection?.enabled ?? true,
+    });
+  }, [
+    managedConnection?.connectionId,
+    managedConnection?.displayName,
+    managedConnection?.enabled,
+    managedConnection?.serverUrl,
+    managedEditing,
+  ]);
+
+  const runManagedAction = async (
+    action: "refresh" | "ensure" | "cancel" | "rollback" | "login" | "logout" | "enable" | "start" | "stop" | "restart" | "check",
+  ) => {
+    if ((managedPending && !(action === "cancel" && managedPending === "ensure")) || (managedRuntimeLoading && action !== "cancel")) return;
+    const confirmations: Partial<Record<typeof action, string>> = {
+      ensure: "确认准备托管 Multica Runtime？将只下载、校验并安装固定版本的 Multica CLI，不会修改供应商、代理、Codex 或 Claude。",
+      rollback: "确认回滚托管 Multica Runtime？只会切换已验证的托管版本，不会修改供应商、代理、Codex 或 Claude。",
+      stop: "确认停止托管 Multica daemon？只影响内置 Multica Runtime，不会停止或修改供应商、代理、Codex 或 Claude。",
+      restart: "确认重启托管 Multica daemon？只影响内置 Multica Runtime，不会停止或修改供应商、代理、Codex 或 Claude。",
+    };
+    if (confirmations[action] && !window.confirm(confirmations[action]!)) return;
+    setManagedPending(action);
+    try {
+      if (action === "refresh") await actions.getMulticaManagedRuntime();
+      if (action === "ensure") await actions.ensureMulticaRuntime();
+      if (action === "cancel") await actions.cancelMulticaRuntimeInstall();
+      if (action === "rollback") await actions.rollbackMulticaRuntime();
+      if (action === "login") await actions.loginMulticaManaged();
+      if (action === "logout") await actions.logoutMulticaManaged();
+      if (action === "enable") await actions.setMulticaManagedEnabled(!Boolean(managedConnection?.enabled));
+      if (action === "start") await actions.startMulticaManagedRuntime();
+      if (action === "stop") await actions.stopMulticaManagedRuntime();
+      if (action === "restart") await actions.restartMulticaManagedRuntime();
+      if (action === "check") await actions.checkMulticaManagedRuntime();
+    } finally {
+      setManagedPending(null);
+    }
+  };
+
+  const beginManagedConnectionEdit = () => {
+    setManagedDraft({
+      displayName: managedConnection?.displayName ?? "",
+      serverUrl: managedConnection?.serverUrl ?? "",
+      enabled: managedConnection?.enabled ?? true,
+    });
+    setManagedEditing(true);
+  };
+
+  const cancelManagedConnectionEdit = () => {
+    setManagedEditing(false);
+  };
+
+  const saveManagedConnection = async () => {
+    if (managedBusy) return;
+    setManagedPending("save");
+    try {
+      const result = await actions.saveMulticaManagedConnection({
+        displayName: managedDraft.displayName,
+        serverUrl: managedDraft.serverUrl,
+        enabled: managedDraft.enabled,
+      });
+      if (result && statusOk(result.status)) setManagedEditing(false);
+    } finally {
+      setManagedPending(null);
+    }
+  };
+
+  return (
+    <div className="multica-runtime-screen">
+      <div className="ops-page-heading">
+        <div>
+          <h1>Multica Runtime</h1>
+          <p>外部 Multica 控制平面连接、健康检查和只读运行时快照；不影响供应商、代理、Codex、Claude。</p>
+        </div>
+        <div className="action-row">
+          <Button disabled={Boolean(pending)} onClick={() => void refreshConnections()} variant="outline">
+            <RefreshCw className={`h-4 w-4${pending === "list" ? " spin" : ""}`} />
+            {pending === "list" ? "刷新中" : "刷新连接"}
+          </Button>
+          <Button disabled={Boolean(pending)} onClick={beginNewConnection}>
+            <Plus className="h-4 w-4" />
+            新增连接
+          </Button>
+        </div>
+      </div>
+
+      <Panel title="托管 Multica Runtime" detail="内置 CLI、独立 profile 与 daemon 监管。所有操作只影响托管 Runtime，不影响供应商、代理、Codex 或 Claude。">
+        <div className="ops-status-list">
+          <StatusRow label="安装状态" status={multicaRuntimeInstallTone(managedInstallState)} value={multicaRuntimeInstallLabel(managedInstallState)} />
+          <StatusRow label="固定版本" status={managedInstall?.installedVersion ? "ok" : "not_checked"} value={managedInstall?.installedVersion ?? "尚未安装"} />
+          <StatusRow label="目标平台" status={managedInstall?.targetTriple ? "ok" : "not_checked"} value={managedInstall?.targetTriple ?? "未识别"} />
+          <StatusRow label="安装来源" status={managedInstall?.assetSource ? "ok" : "not_checked"} value={managedInstall?.assetSource ?? "未使用资源"} />
+          <StatusRow label="SHA-256 校验" status={managedInstall?.sha256Verified ? "ok" : "not_checked"} value={managedInstall?.sha256Verified ? "已验证" : "尚未验证"} />
+          <StatusRow label="连接" status={managedConnection?.enabled ? "ok" : "unconfigured"} value={managedConnection ? managedConnection.displayName || "（未命名）" : "托管连接未创建"} />
+          <StatusRow label="Server 地址" status={managedConnection?.serverUrl ? "ok" : "not_checked"} value={multicaDisplayAddress(managedConnection?.serverUrl)} />
+          <StatusRow label="Profile" status={managedConnection ? "ok" : "unconfigured"} value={managedConnection?.profile || "ccp-managed（独立）"} />
+          <StatusRow label="Daemon" status={managedDaemon?.status ?? "unconfigured"} value={multicaStatusLabel(managedDaemon?.status ?? "unconfigured")} />
+          <StatusRow label="登录状态" status={managedPayload?.loginStatus === "authenticated" ? "ok" : managedPayload?.loginStatus === "needs_login" ? "unauthorized" : "not_checked"} value={multicaStatusLabel(managedPayload?.loginStatus ?? "unconfigured")} />
+          <StatusRow label="最近检查" status={managedServer?.checkedAtMs || managedDaemon?.checkedAtMs || managedInstall?.updatedAtMs ? "ok" : "not_checked"} value={multicaTimestamp(managedServer?.checkedAtMs ?? managedDaemon?.checkedAtMs ?? managedInstall?.updatedAtMs)} />
+        </div>
+        {managedInstall && (managedInstalling || managedInstall.progressPercent != null || managedInstall.installPhase) ? (() => {
+          const rawPercent = managedInstall.progressPercent;
+          const progressPercent = typeof rawPercent === "number" && Number.isFinite(rawPercent)
+            ? Math.max(0, Math.min(100, Math.round(rawPercent)))
+            : undefined;
+          const downloadedBytes = managedInstall.downloadedBytes ?? 0;
+          const totalBytes = managedInstall.totalBytes;
+          const transfer = totalBytes && totalBytes > 0
+            ? `${multicaFormatBytes(downloadedBytes)} / ${multicaFormatBytes(totalBytes)}`
+            : downloadedBytes > 0 ? multicaFormatBytes(downloadedBytes) : "等待下载数据";
+          return (
+            <div className="multica-install-progress" aria-live="polite">
+              <div className="multica-install-progress-heading">
+                <span>准备进度</span>
+                <strong>{multicaInstallPhaseLabel(managedInstall.installPhase, managedInstallState)}</strong>
+                {progressPercent != null ? <span>{progressPercent}%</span> : <span>进行中</span>}
+              </div>
+              <progress
+                aria-label={`托管 Multica 安装进度：${multicaInstallPhaseLabel(managedInstall.installPhase, managedInstallState)}`}
+                className="multica-install-progress-bar"
+                max={100}
+                value={progressPercent}
+              />
+              <div className="multica-install-progress-meta">
+                <span>{transfer}</span>
+                {managedInstall.installedVersion ? <span>固定版本 {multicaSafeText(managedInstall.installedVersion)}</span> : null}
+              </div>
+            </div>
+          );
+        })() : null}
+        {managedDaemon?.pid ? <p className="multica-muted">托管 daemon PID {managedDaemon.pid} · 启动于 {multicaTimestamp(managedDaemon.startedAtMs)}</p> : null}
+        {managedInstall?.diagnostic || managedInstall?.lastInstallErrorCode || managedServer?.diagnostic || managedDaemon?.diagnostic || managedError ? (
+          <p className="multica-diagnostic" role="status">{multicaSafeText(managedError || managedInstall?.diagnostic || managedInstall?.lastInstallErrorCode || managedServer?.diagnostic || managedDaemon?.diagnostic)}</p>
+        ) : null}
+        {managedEditing ? (
+          <form
+            className="multica-form-grid"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveManagedConnection();
+            }}
+          >
+            <label className="ops-form-field">
+              <span>显示名称</span>
+              <input
+                autoComplete="off"
+                disabled={managedBusy}
+                onChange={(event) => setManagedDraft((current) => ({ ...current, displayName: event.currentTarget.value }))}
+                value={managedDraft.displayName}
+              />
+            </label>
+            <label className="ops-form-field">
+              <span>Server URL</span>
+              <input
+                autoComplete="url"
+                disabled={managedBusy}
+                onChange={(event) => setManagedDraft((current) => ({ ...current, serverUrl: event.currentTarget.value }))}
+                value={managedDraft.serverUrl}
+              />
+            </label>
+            <div className="ops-toggle-line">
+              <span>启用托管 Runtime</span>
+              <ToggleSwitch
+                checked={managedDraft.enabled}
+                disabled={managedBusy}
+                onChange={(enabled) => setManagedDraft((current) => ({ ...current, enabled }))}
+              />
+            </div>
+            <div className="action-row">
+              <Button disabled={managedBusy} type="submit">
+                <Save className="h-4 w-4" />
+                {managedPending === "save" ? "保存中" : "保存连接"}
+              </Button>
+              <Button disabled={managedBusy} onClick={cancelManagedConnectionEdit} type="button" variant="outline">取消</Button>
+            </div>
+          </form>
+        ) : (
+          <div className="action-row">
+            <Button disabled={managedBusy} onClick={beginManagedConnectionEdit} type="button" variant="outline">
+              <Pencil className="h-4 w-4" />
+              编辑连接
+            </Button>
+          </div>
+        )}
+        <div className="action-row">
+          <Button disabled={managedBusy && !managedInstalling} onClick={() => void runManagedAction("ensure")}>
+            <Download className={`h-4 w-4${managedPending === "ensure" ? " spin" : ""}`} />
+            {managedPending === "ensure" ? "准备中" : managedInstallState.toLowerCase() === "ready" ? "重新检查" : "准备/重试下载"}
+          </Button>
+          <Button disabled={!(managedInstalling || managedPending === "ensure") || Boolean(managedPending && managedPending !== "ensure")} onClick={() => void runManagedAction("cancel")} variant="outline">
+            <X className="h-4 w-4" />
+            {managedPending === "cancel" ? "取消中" : "取消准备"}
+          </Button>
+          <Button disabled={managedBusy || !managedInstall?.previousVersion} onClick={() => void runManagedAction("rollback")} variant="outline">
+            <ArchiveRestore className="h-4 w-4" />
+            {managedPending === "rollback" ? "回滚中" : "回滚"}
+          </Button>
+          <Button disabled={managedBusy} onClick={() => void runManagedAction("refresh")} variant="outline">
+            <RefreshCw className={`h-4 w-4${managedPending === "refresh" ? " spin" : ""}`} />
+            {managedPending === "refresh" ? "刷新中" : "刷新状态"}
+          </Button>
+        </div>
+        <div className="action-row">
+          <Button disabled={managedBusy || !managedCanOperate || managedPayload?.loginStatus === "authenticated"} onClick={() => void runManagedAction("login")} variant="outline">
+            <KeyRound className="h-4 w-4" />
+            {managedPending === "login" ? "登录中" : "登录"}
+          </Button>
+          <Button disabled={managedBusy || !managedCanOperate || managedPayload?.loginStatus !== "authenticated"} onClick={() => void runManagedAction("logout")} variant="outline">
+            <KeyRound className="h-4 w-4" />
+            {managedPending === "logout" ? "退出中" : "退出登录"}
+          </Button>
+          <Button disabled={managedBusy || !managedConnection || managedEditing} onClick={() => void runManagedAction("enable")} variant="outline">
+            <Power className="h-4 w-4" />
+            {managedPending === "enable" ? "保存中" : managedConnection?.enabled ? "停用托管 Runtime" : "启用托管 Runtime"}
+          </Button>
+          <Button disabled={managedBusy || !managedCanOperate} onClick={() => void runManagedAction("check")} variant="outline">
+            <Activity className={`h-4 w-4${managedPending === "check" ? " spin" : ""}`} />
+            {managedPending === "check" ? "检查中" : "测试连接"}
+          </Button>
+          <Button disabled={managedBusy || !managedCanOperate || !managedConnection?.enabled || !managedConnection.sidecarConfigured || managedDaemonRunning} onClick={() => void runManagedAction("start")} variant="outline">
+            <Play className="h-4 w-4" />
+            {managedPending === "start" ? "启动中" : "启动"}
+          </Button>
+          <Button disabled={managedBusy || !managedCanOperate || !managedDaemonRunning} onClick={() => void runManagedAction("stop")} variant="outline">
+            <Power className="h-4 w-4" />
+            {managedPending === "stop" ? "停止中" : "停止"}
+          </Button>
+          <Button disabled={managedBusy || !managedCanOperate || !managedConnection?.enabled || !managedConnection.sidecarConfigured} onClick={() => void runManagedAction("restart")} variant="outline">
+            <RefreshCw className="h-4 w-4" />
+            {managedPending === "restart" ? "重启中" : "重启"}
+          </Button>
+        </div>
+      </Panel>
+
+      <div className="multica-runtime-layout">
+        <div className="stack">
+          <Panel title="连接" detail="地址按原值保存，不经过 CCP 供应商或本地代理 URL 改写。">
+            <div className="multica-connection-list">
+              {connectionList.length ? connectionList.map((connection) => {
+                const connectionStatus = knownStatuses?.[connection.connectionId];
+                const isSelected = selected?.connectionId === connection.connectionId;
+                return (
+                  <div
+                    className={`multica-connection-row-wrap${isSelected ? " active" : ""}`}
+                    key={connection.connectionId}
+                  >
+                    <button
+                      aria-pressed={isSelected}
+                      className={`multica-connection-row${isSelected ? " active" : ""}`}
+                      onClick={() => {
+                        setSelectedId(connection.connectionId);
+                        setEditingId(null);
+                      }}
+                      type="button"
+                    >
+                      <span className="multica-connection-mark"><Server aria-hidden="true" /></span>
+                      <span className="multica-connection-copy">
+                        <strong>{connection.displayName || connection.connectionId}</strong>
+                        <small title={multicaDisplayAddress(connection.serverUrlDisplay)}>{multicaDisplayAddress(connection.serverUrlDisplay)}</small>
+                      </span>
+                      <span className={`multica-status-chip ${multicaStatusTone(connectionStatus?.server.status)}`}>
+                        {multicaStatusLabel(connectionStatus?.server.status ?? (connection.enabled ? "unknown" : "unconfigured"))}
+                      </span>
+                    </button>
+                    <button
+                      aria-label={`编辑 ${connection.displayName || connection.connectionId}`}
+                      className="multica-connection-edit"
+                      disabled={Boolean(pending)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        beginEditConnection(connection);
+                      }}
+                      title="编辑连接"
+                      type="button"
+                    >
+                      <Pencil aria-hidden="true" className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              }) : <Empty text={connectionListLoading
+                ? "正在加载 Multica 连接..."
+                : connectionLoadFailed
+                  ? "加载 Multica 连接失败，请点击“刷新连接”重试。"
+                  : "尚未配置 Multica 连接。"} />}
+            </div>
+            {error ? <p className="multica-error" role="alert">{multicaSafeText(error)}</p> : null}
+          </Panel>
+
+          {isEditing ? (
+            <Panel title={isNew ? "新增连接" : "编辑连接"} detail="令牌仅引用受保护的环境变量名，页面不会回填或显示令牌原文。">
+              <div className="multica-form-grid">
+                <label className="ops-form-field">
+                  <span>显示名称</span>
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateDraft({ displayName: event.currentTarget.value })} value={draft.displayName} />
+                </label>
+                <label className="ops-form-field">
+                  <span>{isNew ? "服务地址" : "服务地址（留空保持原值）"}</span>
+                  <input autoComplete="url" disabled={Boolean(pending)} onChange={(event) => updateDraft({ serverUrl: event.currentTarget.value })} placeholder={isNew ? "https://multica.example" : "留空保持已保存地址；输入新地址则替换"} value={draft.serverUrl} />
+                </label>
+                <label className="ops-form-field">
+                  <span>API 前缀</span>
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateDraft({ apiPrefix: event.currentTarget.value })} placeholder="可选，例如 v1" value={draft.apiPrefix ?? ""} />
+                </label>
+                <label className="ops-form-field">
+                  <span>Workspace ID</span>
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateDraft({ workspaceId: event.currentTarget.value })} placeholder="可选" value={draft.workspaceId ?? ""} />
+                </label>
+                <label className="ops-form-field">
+                  <span>Workspace Slug</span>
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateDraft({ workspaceSlug: event.currentTarget.value })} placeholder="可选" value={draft.workspaceSlug ?? ""} />
+                </label>
+                <label className="ops-form-field">
+                  <span>令牌环境变量名</span>
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => { setTokenEnvVarDraft(event.currentTarget.value); setClearToken(false); }} placeholder={selected?.tokenConfigured ? "已配置，输入新变量名覆盖" : "可选，例如 MULTICA_TOKEN"} value={tokenEnvVarDraft} />
+                </label>
+              </div>
+              <label className="multica-checkbox-line">
+                <input
+                  checked={Boolean(draft.allowInsecureLanHttp)}
+                  disabled={Boolean(pending)}
+                  onChange={(event) => toggleInsecureLanHttp(event.currentTarget.checked)}
+                  type="checkbox"
+                />
+                <span>允许已明确确认的局域网 HTTP（非加密）</span>
+              </label>
+              {draft.allowInsecureLanHttp ? (
+                <p className="multica-diagnostic" role="alert">
+                  非加密 HTTP 仅接受本机或私有局域网地址；请求内容可能被同一网络中的设备读取。服务地址不得包含用户名、密码、查询参数或片段。
+                </p>
+              ) : null}
+              {selected?.tokenConfigured ? (
+                <label className="multica-checkbox-line">
+                  <input checked={clearToken} disabled={Boolean(pending)} onChange={(event) => setClearToken(event.currentTarget.checked)} type="checkbox" />
+                  <span>清除已保存令牌引用</span>
+                </label>
+              ) : null}
+              <label className="multica-checkbox-line">
+                <input checked={draft.enabled} disabled={Boolean(pending)} onChange={(event) => toggleConnectionEnabled(event.currentTarget.checked)} type="checkbox" />
+                <span>启用此连接</span>
+              </label>
+
+              <div className="multica-sidecar-editor">
+                <div className="multica-subsection-heading"><div><Power aria-hidden="true" /><strong>独立 sidecar 监管</strong></div><label className="multica-checkbox-line"><input checked={sidecarEnabled} disabled={Boolean(pending)} onChange={(event) => toggleSidecarConfig(event.currentTarget.checked)} type="checkbox" /><span>启用配置</span></label></div>
+                {draft.sidecar ? (
+                  <div className="multica-form-grid">
+                    <label className="ops-form-field">
+                      <span>可执行文件</span>
+                      <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateSidecar({ executable: event.currentTarget.value })} placeholder="选择已验证的 daemon .exe" value={draft.sidecar.executable} />
+                    </label>
+                    <label className="ops-form-field">
+                      <span>工作目录</span>
+                      <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => updateSidecar({ workingDir: event.currentTarget.value })} placeholder="可选" value={draft.sidecar.workingDir ?? ""} />
+                    </label>
+                    <label className="ops-form-field">
+                      <span>启动参数（每行一个 argv）</span>
+                      <textarea
+                        autoComplete="off"
+                        disabled={Boolean(pending)}
+                        onChange={(event) => updateSidecar({ args: event.currentTarget.value ? event.currentTarget.value.split(/\r?\n/) : [] })}
+                        placeholder={"可选，每行一个 argv\n不会按空格、引号或 shell 语法拆分"}
+                        rows={4}
+                        value={(draft.sidecar.args ?? []).join("\n")}
+                      />
+                    </label>
+                    <label className="multica-checkbox-line">
+                      <input checked={Boolean(draft.sidecar.autoStart)} disabled={Boolean(pending)} onChange={(event) => updateSidecar({ autoStart: event.currentTarget.checked })} type="checkbox" />
+                      <span>应用启动时自动恢复（默认关闭）</span>
+                    </label>
+                  </div>
+                ) : selected?.sidecarConfigured && draft.sidecar !== null ? (
+                  <div className="multica-sidecar-summary">
+                    <p className="multica-muted">
+                      已配置 sidecar：{selected.sidecarExecutableName || "可执行文件已保存"}；原始路径和参数不会返回到前端。
+                    </p>
+                    <Button disabled={Boolean(pending)} onClick={() => updateSidecar({})} variant="outline">
+                      <Pencil className="h-4 w-4" />替换 sidecar 配置
+                    </Button>
+                  </div>
+                ) : <p className="multica-muted">未配置 sidecar；不会自动启动任何进程。</p>}
+              </div>
+              <div className="action-row">
+                <Button disabled={Boolean(pending) || (isNew && !draft.serverUrl.trim())} onClick={() => void saveConnection()}>
+                  <Save className="h-4 w-4" />
+                  {pending === "save" ? "保存中" : "保存连接"}
+                </Button>
+                <Button disabled={Boolean(pending)} onClick={cancelEdit} variant="outline">取消</Button>
+                {!isNew && selected ? <Button disabled={Boolean(pending)} onClick={() => void deleteConnection(selected)} variant="outline"><Trash2 className="h-4 w-4" />删除连接</Button> : null}
+              </div>
+            </Panel>
+          ) : null}
+        </div>
+
+        <div className="stack">
+          <Panel title="服务状态" detail={selected ? `连接：${selected.displayName || selected.connectionId}` : "选择或新增 Multica 连接后执行只读检查。"}>
+            {selected ? (
+              <>
+                <div className="ops-status-list">
+                  <StatusRow label="Server" status={serverStatus?.status ?? (selected.enabled ? "not_checked" : "unconfigured")} value={multicaStatusLabel(serverStatus?.status ?? (selected.enabled ? "not_checked" : "unconfigured"))} />
+                  <StatusRow label="Daemon" status={daemonStatus?.status ?? (sidecarConfigured ? "stopped" : "unconfigured")} value={multicaStatusLabel(daemonStatus?.status ?? (sidecarConfigured ? "stopped" : "unconfigured"))} />
+                  <StatusRow label="Server 端点" status={serverStatus?.endpoint ? "ok" : "not_checked"} value={serverStatus?.endpoint ? multicaSafeText(serverStatus.endpoint) : "未检查"} />
+                  <StatusRow label="HTTP 状态" status={serverStatus?.httpStatus ? "ok" : "not_checked"} value={serverStatus?.httpStatus ? String(serverStatus.httpStatus) : "未返回"} />
+                  <StatusRow label="服务版本" status={serverStatus?.version ? "ok" : "not_checked"} value={serverStatus?.version ? multicaSafeText(serverStatus.version) : "未返回"} />
+                  <StatusRow label="最近检查" status={checkedAtMs ? "ok" : "not_checked"} value={multicaTimestamp(checkedAtMs)} />
+                  <StatusRow label="耗时" status={serverStatus?.durationMs !== undefined ? "ok" : "not_checked"} value={serverStatus?.durationMs !== undefined ? `${serverStatus.durationMs} ms` : "未返回"} />
+                  <StatusRow label="令牌" status={selected.tokenConfigured ? "ok" : "not_checked"} value={selected.tokenConfigured ? "已配置（原文不显示）" : "未配置"} />
+                  <StatusRow label="数据新鲜度" status={snapshotIsStale ? "stale" : currentSnapshot ? "ok" : "not_checked"} value={currentSnapshot ? multicaStatusLabel(snapshotIsStale ? "stale" : "healthy") : "尚未获取快照"} />
+                </div>
+                {serverStatus?.diagnostic || daemonStatus?.diagnostic ? <p className="multica-diagnostic">{multicaSafeText(serverStatus?.diagnostic || daemonStatus?.diagnostic)}</p> : null}
+                {daemonStatus?.pid ? <p className="multica-muted">sidecar PID {daemonStatus.pid} · 启动于 {multicaTimestamp(daemonStatus.startedAtMs)}</p> : null}
+                <div className="action-row">
+                  <Button disabled={Boolean(pending)} onClick={() => void checkConnection()}><Activity className={`h-4 w-4${pending === "check" ? " spin" : ""}`} />{pending === "check" ? "检查中" : "测试连接"}</Button>
+                  <Button disabled={Boolean(pending)} onClick={() => void refreshSnapshot()} variant="outline"><RefreshCw className={`h-4 w-4${pending === "snapshot" ? " spin" : ""}`} />{pending === "snapshot" ? "刷新中" : "刷新快照"}</Button>
+                  <Button disabled={Boolean(pending) || !sidecarConfigured || daemonRunning} onClick={() => void sidecarAction("start")} variant="outline"><Play className={`h-4 w-4${pending === "sidecar:start" ? " spin" : ""}`} />{pending === "sidecar:start" ? "启动中" : "启动 sidecar"}</Button>
+                  <Button disabled={Boolean(pending) || !sidecarConfigured || !daemonRunning} onClick={() => void sidecarAction("stop")} variant="outline"><Power className={`h-4 w-4${pending === "sidecar:stop" ? " spin" : ""}`} />{pending === "sidecar:stop" ? "停止中" : "停止 sidecar"}</Button>
+                  <Button disabled={Boolean(pending) || !sidecarConfigured} onClick={() => void sidecarAction("restart")} variant="outline"><RefreshCw className={`h-4 w-4${pending === "sidecar:restart" ? " spin" : ""}`} />{pending === "sidecar:restart" ? "重启中" : "重启 sidecar"}</Button>
+                </div>
+              </>
+            ) : <Empty text="选择一个 Multica 连接后查看健康状态。" />}
+          </Panel>
+
+          <Panel title="运行时快照" detail="只读显示最近一次外部状态；刷新失败时保留旧快照并标记过期。">
+            {currentSnapshot ? (
+              <>
+                <div className="multica-snapshot-meta">
+                  <span>来源：{currentSnapshot.sourceConnectionId || "未知"}</span>
+                  <span>获取于：{multicaTimestamp(currentSnapshot.fetchedAtMs)}</span>
+                  <strong className={currentSnapshot.stale ? "stale" : "fresh"}>{currentSnapshot.stale ? "数据可能已过期" : "最新快照"}</strong>
+                </div>
+                {snapshotDiagnostic ? <p className="multica-diagnostic" role="status">{snapshotDiagnostic}</p> : null}
+                <div className="context-tabs multica-snapshot-tabs" role="tablist" aria-label="Multica 只读快照分类">
+                  {(["runtimes", "agents", "tasks"] as const).map((kind) => {
+                    const count = kind === "runtimes" ? currentSnapshot.runtimes.length : kind === "agents" ? currentSnapshot.agents.length : currentSnapshot.tasks.length;
+                    const label = kind === "runtimes" ? "Runtime" : kind === "agents" ? "Agent" : "Task";
+                    return <button aria-selected={tab === kind} className={tab === kind ? "active" : ""} key={kind} onClick={() => setTab(kind)} role="tab" type="button"><strong>{label}</strong><span>{count}</span></button>;
+                  })}
+                </div>
+                <div className="multica-snapshot-list">
+                  {items.length ? items.map((item) => (
+                    <article className="multica-snapshot-row" key={`${tab}:${item.id}`}>
+                      <div className="multica-snapshot-copy">
+                        <strong>{multicaSafeText(item.title || item.name || item.id) || item.id}</strong>
+                        <span>{multicaStatusLabel(item.status)}{item.runtimeType ? ` · ${multicaSafeText(item.runtimeType)}` : ""}</span>
+                        {item.errorSummary ? <small>{multicaSafeText(item.errorSummary)}</small> : null}
+                        <small>更新于 {multicaTimestamp(item.updatedAtMs)}</small>
+                      </div>
+                      <button aria-label={`复制 ${item.id} 稳定 ID`} className="context-entry-icon-button" onClick={() => void copyStableId(item.id)} title="复制稳定 ID" type="button"><Copy className="h-4 w-4" /></button>
+                    </article>
+                  )) : <Empty text={currentSnapshot.stale ? "没有可显示的最新数据；以上快照已标记过期。" : "该分类暂无数据。"} />}
+                </div>
+              </>
+            ) : <Empty text={selected ? "尚未获取快照；点击“刷新快照”读取外部只读状态。" : "选择连接后读取 Multica Runtime、Agent 和 Task。"} />}
+          </Panel>
+        </div>
+      </div>
+    </div>
+  );
+}

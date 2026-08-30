@@ -1159,6 +1159,199 @@ export type InstallEntrypointsResult = CommandResult<{
   };
 }>;
 
+/**
+ * Multica is an external control plane. These DTOs deliberately contain only
+ * display-safe values; credentials are represented by `tokenConfigured` and
+ * are never returned to the manager UI.
+ */
+export type MulticaHealthState =
+  | "unconfigured"
+  | "checking"
+  | "healthy"
+  | "degraded"
+  | "unreachable"
+  | "unauthorized"
+  | "invalid_response"
+  | "stopped"
+  | "unknown"
+  | string;
+
+export type MulticaSidecarConfig = {
+  executable: string;
+  workingDir?: string | null;
+  args?: string[];
+  autoStart?: boolean;
+};
+
+export type MulticaConnectionConfig = {
+  connectionId?: string | null;
+  displayName: string;
+  /** Keep the user-entered URL byte-for-byte; no CCP proxy normalization. */
+  serverUrl: string;
+  apiPrefix?: string | null;
+  workspaceId?: string | null;
+  workspaceSlug?: string | null;
+  /** Name of a protected environment variable; the token value never crosses IPC. */
+  tokenEnvVar?: string | null;
+  enabled: boolean;
+  /** Explicit acknowledgement for a private-LAN HTTP endpoint. */
+  allowInsecureLanHttp: boolean;
+  sidecar?: MulticaSidecarConfig | null;
+};
+
+export type MulticaSidecarStatus = {
+  status?: MulticaHealthState;
+  pid?: number | null;
+  startedAtMs?: number | null;
+  exitedAtMs?: number | null;
+  exitCode?: number | null;
+  checkedAtMs?: number | null;
+  diagnostic?: string | null;
+};
+
+export type MulticaConnectionView = {
+  connectionId: string;
+  displayName: string;
+  /**
+   * Server address prepared by the backend for display only. The original URL
+   * must never be returned to or reconstructed by the renderer.
+   */
+  serverUrlDisplay: string;
+  apiPrefix?: string | null;
+  enabled: boolean;
+  /** Safe boolean acknowledgement; the original persisted URL is never returned. */
+  allowInsecureLanHttp: boolean;
+  tokenConfigured: boolean;
+  workspaceId?: string | null;
+  workspaceSlug?: string | null;
+  createdAtMs?: number | null;
+  updatedAtMs?: number | null;
+  /** Sidecar details are intentionally reduced to a basename and flags. */
+  sidecarConfigured?: boolean;
+  sidecarExecutableName?: string | null;
+  sidecarAutoStart?: boolean;
+};
+
+export type MulticaHealthStatus = {
+  status: MulticaHealthState;
+  endpoint?: string | null;
+  httpStatus?: number | null;
+  version?: string | null;
+  checkedAtMs?: number | null;
+  durationMs?: number | null;
+  diagnostic?: string | null;
+};
+
+export type MulticaConnectionStatus = {
+  connectionId: string;
+  server: MulticaHealthStatus;
+  daemon: MulticaSidecarStatus & { status: MulticaHealthState };
+  stale?: boolean;
+};
+
+export type MulticaRuntimeItem = {
+  id: string;
+  name?: string | null;
+  title?: string | null;
+  status?: string | null;
+  updatedAtMs?: number | null;
+  runtimeType?: string | null;
+  /** Read-only provider metadata returned by Multica; never a CCP supplier. */
+  provider?: string | null;
+  errorSummary?: string | null;
+};
+
+export type MulticaAgentSnapshot = MulticaRuntimeItem;
+
+export type MulticaTaskSnapshot = MulticaRuntimeItem;
+
+export type MulticaRuntimeSnapshot = {
+  sourceConnectionId: string;
+  fetchedAtMs: number;
+  stale: boolean;
+  runtimes: MulticaRuntimeItem[];
+  agents: MulticaAgentSnapshot[];
+  tasks: MulticaTaskSnapshot[];
+  diagnostic?: string | null;
+  error?: string | null;
+};
+
+export type MulticaConnectionsResult = CommandResult<{
+  connections: MulticaConnectionView[];
+  statuses?: Record<string, MulticaConnectionStatus>;
+}>;
+
+export type MulticaConnectionStatusResult = CommandResult<MulticaConnectionStatus & {
+  statuses?: Record<string, MulticaConnectionStatus>;
+}>;
+
+export type MulticaSnapshotResult = CommandResult<{
+  connections?: MulticaConnectionView[];
+  statuses?: Record<string, MulticaConnectionStatus>;
+  snapshot: MulticaRuntimeSnapshot | null;
+  sidecar?: MulticaSidecarStatus | null;
+}>;
+
+export type MulticaManagedAuthStatus = {
+  status: "authenticated" | "needs_login" | "unconfigured" | "unknown" | string;
+  checkedAtMs?: number | null;
+  diagnostic?: string | null;
+};
+
+/** The only fields editable through the dedicated managed Runtime form. */
+export type MulticaManagedConnectionUpdate = {
+  displayName: string;
+  /** Preserve the user-entered value exactly, including an explicit empty string. */
+  serverUrl: string;
+  enabled: boolean;
+};
+
+/**
+ * Full managed-only view used exclusively by the Runtime card. The raw URL is
+ * intentionally never exposed by normal Multica connection list responses.
+ */
+export type MulticaManagedConnectionView = {
+  connectionId: string;
+  displayName: string;
+  serverUrl: string;
+  enabled: boolean;
+  profile: string;
+  sidecarConfigured: boolean;
+  sidecarAutoStart: boolean;
+};
+
+export type MulticaRuntimeInstallStatus = {
+  installState: string;
+  /** Current installer phase (for example downloading_archive or verifying). */
+  installPhase?: string | null;
+  /** Bytes observed while downloading the current release artifact. */
+  downloadedBytes?: number;
+  /** Content-Length when the release server provided one. */
+  totalBytes?: number | null;
+  /** Percent is omitted while the transfer has no known total size. */
+  progressPercent?: number | null;
+  installedVersion?: string | null;
+  targetTriple?: string | null;
+  assetName?: string | null;
+  assetSource?: string | null;
+  sha256?: string | null;
+  sha256Verified: boolean;
+  executableName?: string | null;
+  previousVersion?: string | null;
+  lastInstallErrorCode?: string | null;
+  updatedAtMs?: number | null;
+  diagnostic?: string | null;
+};
+
+export type MulticaManagedRuntimePayload = {
+  runtime: MulticaRuntimeInstallStatus;
+  connection?: MulticaManagedConnectionView | null;
+  connectionStatus?: MulticaConnectionStatus | null;
+  loginStatus: string;
+};
+
+export type MulticaManagedRuntimeResult = CommandResult<MulticaManagedRuntimePayload>;
+
 export type Route =
   | "overview"
   | "supplier"
@@ -1168,6 +1361,7 @@ export type Route =
   | "tools"
   | "sessions"
   | "memory"
+  | "multica"
   | "maintenance"
   | "settings"
   | "about";

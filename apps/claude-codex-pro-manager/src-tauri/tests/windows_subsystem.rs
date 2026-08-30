@@ -5414,3 +5414,91 @@ fn credential_environment_ui_describes_platform_scope_and_external_source_bounda
     assert!(screens.contains("用户会话环境暂不可访问"));
     assert!(screens.contains("CCP 外部启动环境，需在原设置来源中清理"));
 }
+
+#[test]
+fn multica_runtime_adapter_keeps_its_ipc_boundary_isolated_and_task_views_read_only() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let screens = read_frontend_file("screens.tsx");
+    let command_registration = source_section(&manager_lib, "tauri::generate_handler![", "])");
+    let multica_commands = source_section(
+        &commands,
+        "#[tauri::command]\npub async fn list_multica_connections",
+        "#[tauri::command]\npub async fn list_local_sessions",
+    );
+
+    let managed_registered = [
+        "commands::get_multica_managed_runtime",
+        "commands::ensure_multica_runtime",
+        "commands::cancel_multica_runtime_install",
+        "commands::rollback_multica_runtime",
+        "commands::login_multica_managed",
+        "commands::logout_multica_managed",
+        "commands::set_multica_managed_enabled",
+        "commands::save_multica_managed_connection",
+        "commands::check_multica_managed_runtime",
+        "commands::start_multica_managed_runtime",
+        "commands::stop_multica_managed_runtime",
+        "commands::restart_multica_managed_runtime",
+    ];
+    let manual_registered = [
+        "commands::list_multica_connections",
+        "commands::save_multica_connection",
+        "commands::delete_multica_connection",
+        "commands::check_multica_connection",
+        "commands::get_multica_snapshot",
+        "commands::start_multica_sidecar",
+        "commands::stop_multica_sidecar",
+        "commands::restart_multica_sidecar",
+    ];
+    for command in managed_registered.into_iter().chain(manual_registered) {
+        assert_eq!(
+            command_registration.matches(command).count(),
+            1,
+            "Multica IPC command must be registered exactly once: {command}"
+        );
+    }
+    assert_eq!(
+        command_registration
+            .lines()
+            .filter(|line| line.contains("commands::") && line.contains("multica_"))
+            .count(),
+        20,
+        "only the approved managed and manual Multica IPC commands may be registered"
+    );
+
+    for forbidden in [
+        "switch_relay_profile",
+        "switch_supplier_profile",
+        "save_settings",
+        "config.toml",
+        "auth.json",
+        "launch_claude_codex_pro",
+        "restart_claude_codex_pro",
+        "launch_claude_desktop",
+        "127.0.0.1:57321",
+        "127.0.0.1:57331",
+    ] {
+        assert!(
+            !multica_commands.contains(forbidden),
+            "Multica command boundary must not reach CCP relay, supplier, client, or proxy state: {forbidden}"
+        );
+    }
+
+    assert!(screens.contains("export function MulticaRuntimeScreen"));
+    assert!(screens.contains("只读显示最近一次外部状态"));
+    assert!(screens.contains("不影响供应商、代理、Codex、Claude"));
+    for forbidden in [
+        "create_multica_task",
+        "cancel_multica_task",
+        "retry_multica_task",
+        "update_multica_task",
+        "delete_multica_task",
+    ] {
+        assert!(
+            !screens.contains(forbidden),
+            "Multica Runtime must not expose a Task write operation: {forbidden}"
+        );
+    }
+}

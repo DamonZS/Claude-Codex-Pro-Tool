@@ -182,6 +182,9 @@ jobs:
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
+      - name: Stage Multica runtime
+        run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
+
       - name: Build Windows installer
         shell: pwsh
         run: |
@@ -272,6 +275,10 @@ jobs:
       - name: Build macOS DMG
         run: |
           VERSION="${{ needs.prepare-release.outputs.version }}"
+          node scripts/release/stage-multica-runtime.mjs \
+            --target "${{ matrix.target }}" \
+            --destination "target/multica-runtime/${{ matrix.target }}"
+          MULTICA_RESOURCE_DIR="$PWD/target/multica-runtime/${{ matrix.target }}" \
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
 
       - name: Verify macOS bundle structure

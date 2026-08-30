@@ -29,6 +29,12 @@ use claude_codex_pro_core::memory_assist::{
     migrate_memory_assist_data_dir as migrate_memory_assist_data_dir_core,
 };
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
+use claude_codex_pro_core::multica::{
+    self, MulticaConnectionConfig, MulticaConnectionStatus, MulticaConnectionView,
+    MulticaDaemonStatus, MulticaHealthStatus, MulticaManagedAuthStatus,
+    MulticaManagedConnectionUpdate, MulticaManagedConnectionView, MulticaRuntimeInstallStatus,
+    MulticaRuntimeSnapshot, MulticaSidecarConfig, MulticaStore,
+};
 use claude_codex_pro_core::plugin_hub::{
     self, ClaudeDesktopDevModeOutcome, ClaudeDesktopDevModeStatus, ClaudeDesktopMarketplaceOutcome,
     ClaudeDesktopMarketplaceStatus, ClaudeDesktopOrgPluginOutcome, ClaudeDesktopOrgPluginStatus,
@@ -91,6 +97,89 @@ where
     pub message: String,
     #[serde(flatten)]
     pub payload: T,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaConnectionsPayload {
+    pub connections: Vec<MulticaConnectionView>,
+    pub statuses: BTreeMap<String, MulticaConnectionStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaConnectionStatusPayload {
+    pub connection_id: String,
+    pub server: MulticaHealthStatus,
+    pub daemon: MulticaDaemonStatus,
+    pub statuses: BTreeMap<String, MulticaConnectionStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaSnapshotPayload {
+    pub connections: Vec<MulticaConnectionView>,
+    pub statuses: BTreeMap<String, MulticaConnectionStatus>,
+    pub snapshot: Option<MulticaRuntimeSnapshot>,
+    pub sidecar: Option<MulticaDaemonStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaManagedRuntimePayload {
+    pub runtime: MulticaRuntimeInstallStatus,
+    /// The managed-only view retains the exact saved URL for its dedicated
+    /// editor. Generic connection list responses remain redacted.
+    pub connection: Option<MulticaManagedConnectionView>,
+    pub connection_status: Option<MulticaConnectionStatus>,
+    /// `authenticated`, `needs_login`, `unconfigured`, or `unknown`.
+    /// Authentication is observed through the fixed managed connection only;
+    /// no credential value crosses this command boundary.
+    pub login_status: String,
+}
+
+/// The renderer needs three states for a token reference when editing a
+/// connection: omitted means preserve the existing reference, `null` clears
+/// it, and a string replaces it.  A nested Option retains that distinction
+/// through serde without ever carrying the token value itself.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaConnectionSaveRequest {
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub server_url: String,
+    #[serde(default)]
+    pub api_prefix: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub workspace_slug: Option<String>,
+    #[serde(default)]
+    pub token_env_var: Option<Option<String>>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Explicit acknowledgement for a private-LAN HTTP endpoint. The Core
+    /// layer still verifies that the address is local and never accepts a
+    /// public clear-text URL merely because this flag is set.
+    #[serde(default)]
+    pub allow_insecure_lan_http: bool,
+    #[serde(default)]
+    pub sidecar: Option<Option<MulticaSidecarConfig>>,
+}
+
+/// The dedicated managed form deliberately has no connection ID, profile,
+/// sidecar, token, executable, path, header, or generic connection fields.
+/// Empty display names and URLs are meaningful user values and must cross the
+/// IPC boundary byte-for-byte.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaManagedConnectionSaveRequest {
+    pub display_name: String,
+    pub server_url: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3250,6 +3339,764 @@ fn save_settings_blocking(
             }
         },
     )
+}
+
+fn multica_save_request_to_config(
+    request: MulticaConnectionSaveRequest,
+) -> anyhow::Result<MulticaConnectionConfig> {
+    let connection_id = request.connection_id.unwrap_or_default().trim().to_string();
+    if connection_id == "managed-multica" {
+        anyhow::bail!("managed_connection_reserved");
+    }
+    let existing = if connection_id.is_empty() {
+        None
+    } else {
+        MulticaStore::default()
+            .load_connections()?
+            .into_iter()
+            .find(|connection| connection.connection_id == connection_id)
+    };
+    let token_env_var = match request.token_env_var {
+        // Absent means the editor did not alter the protected reference. It
+        // must survive an edit instead of being interpreted as a clear.
+        None => existing
+            .as_ref()
+            .and_then(|connection| connection.token_env_var.clone()),
+        // Explicit null clears the reference; Some(name) replaces it. The
+        // token value itself never crosses this command boundary.
+        Some(value) => value,
+    };
+    let sidecar = match request.sidecar {
+        // A redacted view intentionally omits local sidecar paths. Keep the
+        // persisted configuration unless the user explicitly sends null.
+        None => existing
+            .as_ref()
+            .and_then(|connection| connection.sidecar.clone()),
+        Some(value) => value,
+    };
+    // The renderer intentionally never receives a persisted Multica URL.  An
+    // empty URL on an existing record therefore means "keep the original",
+    // not "replace it with an empty value". New records still reach Core's
+    // normal URL validation and cannot be saved without an address.
+    let server_url = if request.server_url.trim().is_empty() {
+        existing
+            .as_ref()
+            .map(|connection| connection.server_url.clone())
+            .unwrap_or(request.server_url)
+    } else {
+        request.server_url
+    };
+    Ok(MulticaConnectionConfig {
+        connection_id,
+        display_name: request.display_name,
+        server_url,
+        api_prefix: request.api_prefix,
+        workspace_id: request.workspace_id,
+        workspace_slug: request.workspace_slug,
+        token_env_var,
+        enabled: request.enabled,
+        allow_insecure_lan_http: request.allow_insecure_lan_http,
+        sidecar,
+        created_at_ms: existing
+            .map(|connection| connection.created_at_ms)
+            .unwrap_or_default(),
+        updated_at_ms: 0,
+    })
+}
+
+fn multica_error_message(operation: &str, error: &anyhow::Error) -> String {
+    // Keep arbitrary anyhow chains, URLs, paths and upstream response text out
+    // of the renderer. Only stable, actionable categories cross IPC.
+    let lower = error.to_string().to_ascii_lowercase();
+    let category = if lower.contains("managed_connection_reserved") {
+        "托管 Multica 连接只能在 Runtime 页面管理"
+    } else if lower.contains("未找到") || lower.contains("not found") {
+        "未找到该连接"
+    } else if lower.contains("请先停止") || (lower.contains("sidecar") && lower.contains("running"))
+    {
+        "请先停止该 sidecar"
+    } else if lower.contains("unauthorized") || lower.contains("认证") {
+        "认证失败"
+    } else if lower.contains("timeout") || lower.contains("超时") {
+        "请求超时"
+    } else if lower.contains("unreachable") || lower.contains("network") || lower.contains("连接")
+    {
+        "服务无法连接"
+    } else if lower.contains("invalid") || lower.contains("无效") {
+        "配置或响应无效"
+    } else {
+        "请检查连接配置和本机权限"
+    };
+    format!("{operation}失败：{category}。")
+}
+
+fn multica_safe_connection_id(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= 160 {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(160).collect::<String>() + "..."
+}
+
+fn multica_status_payload(status: MulticaConnectionStatus) -> MulticaConnectionStatusPayload {
+    let mut statuses = BTreeMap::new();
+    statuses.insert(status.connection_id.clone(), status.clone());
+    MulticaConnectionStatusPayload {
+        connection_id: status.connection_id,
+        server: status.server,
+        daemon: status.daemon,
+        statuses,
+    }
+}
+
+fn multica_connections_payload(
+    connections: Vec<MulticaConnectionView>,
+) -> MulticaConnectionsPayload {
+    MulticaConnectionsPayload {
+        connections,
+        statuses: BTreeMap::new(),
+    }
+}
+
+#[tauri::command]
+pub async fn list_multica_connections() -> CommandResult<MulticaConnectionsPayload> {
+    match tauri::async_runtime::spawn_blocking(multica::list_connections).await {
+        Ok(Ok(connections)) => ok(
+            "Multica 连接已加载。",
+            multica_connections_payload(connections),
+        ),
+        Ok(Err(error)) => failed(
+            &multica_error_message("加载 Multica 连接", &error),
+            MulticaConnectionsPayload::default(),
+        ),
+        Err(_) => failed(
+            "加载 Multica 连接的后台任务失败。",
+            MulticaConnectionsPayload::default(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn save_multica_connection(
+    connection: MulticaConnectionSaveRequest,
+) -> CommandResult<MulticaConnectionsPayload> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let config = multica_save_request_to_config(connection)?;
+        // Return only display-safe views after saving; never echo the request
+        // or the protected token reference back to the renderer.
+        multica::save_connection(config)?;
+        multica::list_connections()
+    })
+    .await;
+    match result {
+        Ok(Ok(connections)) => ok(
+            "Multica 连接已保存。",
+            multica_connections_payload(connections),
+        ),
+        Ok(Err(error)) => failed(
+            &multica_error_message("保存 Multica 连接", &error),
+            MulticaConnectionsPayload::default(),
+        ),
+        Err(_) => failed(
+            "保存 Multica 连接的后台任务失败。",
+            MulticaConnectionsPayload::default(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn delete_multica_connection(
+    connection_id: String,
+) -> CommandResult<MulticaConnectionsPayload> {
+    let connection_id = connection_id.trim().to_string();
+    if connection_id == "managed-multica" {
+        return failed(
+            "删除 Multica 连接失败：托管 Multica 连接只能在 Runtime 页面管理。",
+            MulticaConnectionsPayload::default(),
+        );
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let deleted = multica::delete_connection(&connection_id)?;
+        let connections = multica::list_connections()?;
+        Ok::<_, anyhow::Error>((deleted, connections))
+    })
+    .await;
+    match result {
+        Ok(Ok((true, connections))) => ok(
+            "Multica 连接已删除。",
+            multica_connections_payload(connections),
+        ),
+        Ok(Ok((false, connections))) => failed(
+            "删除 Multica 连接失败：未找到该连接。",
+            multica_connections_payload(connections),
+        ),
+        Ok(Err(error)) => failed(
+            &multica_error_message("删除 Multica 连接", &error),
+            MulticaConnectionsPayload::default(),
+        ),
+        Err(_) => failed(
+            "删除 Multica 连接的后台任务失败。",
+            MulticaConnectionsPayload::default(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn check_multica_connection(
+    connection_id: String,
+) -> CommandResult<MulticaConnectionStatusPayload> {
+    let connection_id = connection_id.trim().to_string();
+    if connection_id.is_empty() {
+        return failed(
+            "检查 Multica 连接失败：连接 ID 不能为空。",
+            MulticaConnectionStatusPayload::default(),
+        );
+    }
+    if connection_id == "managed-multica" {
+        return failed(
+            "检查 Multica 连接失败：托管 Multica Runtime 只能在 Runtime 页面管理。",
+            MulticaConnectionStatusPayload::default(),
+        );
+    }
+    match multica::check_connection(&connection_id).await {
+        Ok(status) => ok("Multica 连接检查完成。", multica_status_payload(status)),
+        Err(error) => failed(
+            &multica_error_message("检查 Multica 连接", &error),
+            MulticaConnectionStatusPayload {
+                connection_id: multica_safe_connection_id(&connection_id),
+                ..Default::default()
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn get_multica_snapshot(
+    connection_id: Option<String>,
+) -> CommandResult<MulticaSnapshotPayload> {
+    let requested_connection_id = connection_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    if requested_connection_id.as_deref() == Some("managed-multica") {
+        return failed(
+            "读取 Multica 快照失败：托管 Multica Runtime 只能在 Runtime 页面管理。",
+            MulticaSnapshotPayload::default(),
+        );
+    }
+    let connections = match tauri::async_runtime::spawn_blocking(multica::list_connections).await {
+        Ok(Ok(connections)) => connections,
+        Ok(Err(error)) => {
+            return failed(
+                &multica_error_message("加载 Multica 连接", &error),
+                MulticaSnapshotPayload::default(),
+            );
+        }
+        Err(_) => {
+            return failed(
+                "加载 Multica 连接的后台任务失败。",
+                MulticaSnapshotPayload::default(),
+            );
+        }
+    };
+    let selected_id = requested_connection_id.or_else(|| {
+        connections
+            .first()
+            .map(|connection| connection.connection_id.clone())
+    });
+    let Some(selected_id) = selected_id else {
+        return ok(
+            "尚未配置 Multica 连接。",
+            MulticaSnapshotPayload {
+                connections,
+                ..Default::default()
+            },
+        );
+    };
+
+    let snapshot = match multica::get_snapshot(&selected_id).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return failed(
+                &multica_error_message("刷新 Multica 快照", &error),
+                MulticaSnapshotPayload {
+                    connections,
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let status_id = selected_id.clone();
+    let sidecar = tauri::async_runtime::spawn_blocking(move || {
+        multica::daemon_status_for_connection(&status_id)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let message = if snapshot.stale {
+        "Multica 快照刷新失败，已保留上次数据并标记过期。"
+    } else {
+        "Multica 只读快照已刷新。"
+    };
+    ok(
+        message,
+        MulticaSnapshotPayload {
+            connections,
+            statuses: BTreeMap::new(),
+            snapshot: Some(snapshot),
+            sidecar,
+        },
+    )
+}
+
+async fn run_multica_sidecar_operation(
+    connection_id: String,
+    operation: fn(&str) -> anyhow::Result<MulticaDaemonStatus>,
+    operation_name: &'static str,
+) -> CommandResult<MulticaSnapshotPayload> {
+    let connection_id = connection_id.trim().to_string();
+    if connection_id.is_empty() {
+        return failed(
+            &format!("{operation_name}失败：连接 ID 不能为空。"),
+            MulticaSnapshotPayload::default(),
+        );
+    }
+    if connection_id == "managed-multica" {
+        return failed(
+            &format!("{operation_name}失败：托管 Multica Runtime 只能在 Runtime 页面管理。"),
+            MulticaSnapshotPayload::default(),
+        );
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // Validate membership before invoking stop/restart as well as start;
+        // the core stop primitive intentionally accepts an already-tracked
+        // process ID, so the command must enforce the saved-connection boundary.
+        let connections = multica::list_connections()?;
+        if !connections
+            .iter()
+            .any(|connection| connection.connection_id == connection_id)
+        {
+            return Err(anyhow::anyhow!("未找到 Multica 连接。"));
+        }
+        let sidecar = operation(&connection_id)?;
+        Ok::<_, anyhow::Error>((connections, sidecar))
+    })
+    .await;
+    match result {
+        Ok(Ok((connections, sidecar))) => ok(
+            &format!("{operation_name}已完成。"),
+            MulticaSnapshotPayload {
+                connections,
+                statuses: BTreeMap::new(),
+                snapshot: None,
+                sidecar: Some(sidecar),
+            },
+        ),
+        Ok(Err(error)) => failed(
+            &multica_error_message(operation_name, &error),
+            MulticaSnapshotPayload::default(),
+        ),
+        Err(_) => failed(
+            &format!("{operation_name}后台任务失败。"),
+            MulticaSnapshotPayload::default(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn start_multica_sidecar(connection_id: String) -> CommandResult<MulticaSnapshotPayload> {
+    run_multica_sidecar_operation(
+        connection_id,
+        multica::start_sidecar,
+        "启动 Multica sidecar",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stop_multica_sidecar(connection_id: String) -> CommandResult<MulticaSnapshotPayload> {
+    run_multica_sidecar_operation(connection_id, multica::stop_sidecar, "停止 Multica sidecar")
+        .await
+}
+
+#[tauri::command]
+pub async fn restart_multica_sidecar(
+    connection_id: String,
+) -> CommandResult<MulticaSnapshotPayload> {
+    run_multica_sidecar_operation(
+        connection_id,
+        multica::restart_sidecar,
+        "重启 Multica sidecar",
+    )
+    .await
+}
+
+/// Build the managed-runtime response from the Core-owned state.  The
+/// renderer receives the redacted connection view and a status code only;
+/// persisted URLs, profile paths, executable paths, argv and credentials
+/// remain inside Core.
+async fn collect_multica_managed_runtime_payload(
+    runtime: MulticaRuntimeInstallStatus,
+    auth: Option<MulticaManagedAuthStatus>,
+    check_server: bool,
+) -> anyhow::Result<MulticaManagedRuntimePayload> {
+    let local = tauri::async_runtime::spawn_blocking(move || {
+        let connection = multica::managed_connection_view()?;
+        let auth = match auth {
+            Some(auth) => auth,
+            None => multica::managed_auth_status()?,
+        };
+        let daemon = multica::managed_daemon_status()?;
+        Ok::<_, anyhow::Error>((connection, daemon, auth.status))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("托管 Multica 状态任务失败。"))??;
+
+    let (connection, daemon, login_status) = local;
+    let connection_status = if check_server {
+        // The managed Core API owns the fixed record selection; this command
+        // never forwards a browser-controlled connection ID.
+        Some(multica::check_managed_runtime_connection().await?)
+    } else {
+        Some(MulticaConnectionStatus {
+            connection_id: connection.connection_id.clone(),
+            daemon,
+            ..Default::default()
+        })
+    };
+
+    Ok(MulticaManagedRuntimePayload {
+        runtime,
+        connection: Some(connection),
+        connection_status,
+        login_status,
+    })
+}
+
+pub(crate) fn managed_runtime_install_is_startable(status: &MulticaRuntimeInstallStatus) -> bool {
+    status.install_state == "ready" && status.sha256_verified
+}
+
+fn managed_runtime_install_result(
+    payload: MulticaManagedRuntimePayload,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    if managed_runtime_install_is_startable(&payload.runtime) {
+        ok("托管 Multica Runtime 已准备。", payload)
+    } else {
+        failed(
+            "托管 Multica Runtime 准备未完成，请根据安装状态重试。",
+            payload,
+        )
+    }
+}
+
+fn managed_command_failure(
+    operation: &str,
+    error: &anyhow::Error,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    failed(
+        &multica_error_message(operation, error),
+        MulticaManagedRuntimePayload {
+            login_status: "unknown".to_string(),
+            ..Default::default()
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn get_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    let runtime =
+        match tauri::async_runtime::spawn_blocking(multica::get_managed_runtime_status).await {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => return managed_command_failure("加载托管 Multica Runtime", &error),
+            Err(_) => {
+                return failed(
+                    "加载托管 Multica Runtime 失败：后台任务失败。",
+                    MulticaManagedRuntimePayload {
+                        login_status: "unknown".to_string(),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+    match collect_multica_managed_runtime_payload(runtime, None, true).await {
+        Ok(payload) => ok("托管 Multica Runtime 状态已加载。", payload),
+        Err(error) => managed_command_failure("加载托管 Multica Runtime", &error),
+    }
+}
+
+#[tauri::command]
+pub async fn ensure_multica_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    let runtime = match multica::ensure_managed_runtime_async().await {
+        Ok(runtime) => runtime,
+        Err(error) => return managed_command_failure("准备托管 Multica Runtime", &error),
+    };
+    let startable = managed_runtime_install_is_startable(&runtime);
+    match collect_multica_managed_runtime_payload(runtime, None, startable).await {
+        Ok(payload) => managed_runtime_install_result(payload),
+        Err(error) => managed_command_failure("准备托管 Multica Runtime", &error),
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_multica_runtime_install() -> CommandResult<MulticaManagedRuntimePayload> {
+    let runtime =
+        match tauri::async_runtime::spawn_blocking(multica::cancel_managed_runtime_install).await {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => return managed_command_failure("取消托管 Multica 安装", &error),
+            Err(_) => {
+                return failed(
+                    "取消托管 Multica 安装失败：后台任务失败。",
+                    MulticaManagedRuntimePayload {
+                        login_status: "unknown".to_string(),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+    match collect_multica_managed_runtime_payload(runtime, None, false).await {
+        Ok(payload) => ok("托管 Multica 安装取消请求已处理。", payload),
+        Err(error) => managed_command_failure("取消托管 Multica 安装", &error),
+    }
+}
+
+#[tauri::command]
+pub async fn rollback_multica_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    let runtime =
+        match tauri::async_runtime::spawn_blocking(multica::rollback_managed_runtime).await {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => return managed_command_failure("回滚托管 Multica Runtime", &error),
+            Err(_) => {
+                return failed(
+                    "回滚托管 Multica Runtime 失败：后台任务失败。",
+                    MulticaManagedRuntimePayload {
+                        login_status: "unknown".to_string(),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+    match collect_multica_managed_runtime_payload(runtime, None, false).await {
+        Ok(payload) => ok("托管 Multica Runtime 已回滚。", payload),
+        Err(error) => managed_command_failure("回滚托管 Multica Runtime", &error),
+    }
+}
+
+async fn run_multica_managed_auth_operation(
+    operation: fn() -> anyhow::Result<MulticaManagedAuthStatus>,
+    operation_name: &'static str,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    let auth = match tauri::async_runtime::spawn_blocking(operation).await {
+        Ok(Ok(auth)) => auth,
+        Ok(Err(error)) => return managed_command_failure(operation_name, &error),
+        Err(_) => {
+            return failed(
+                &format!("{operation_name}失败：后台任务失败。"),
+                MulticaManagedRuntimePayload {
+                    login_status: "unknown".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let runtime =
+        match tauri::async_runtime::spawn_blocking(multica::get_managed_runtime_status).await {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => return managed_command_failure(operation_name, &error),
+            Err(_) => {
+                return failed(
+                    &format!("{operation_name}失败：后台任务失败。"),
+                    MulticaManagedRuntimePayload {
+                        login_status: auth.status,
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+    match collect_multica_managed_runtime_payload(runtime, Some(auth), true).await {
+        Ok(payload) => ok(&format!("{operation_name}已完成。"), payload),
+        Err(error) => managed_command_failure(operation_name, &error),
+    }
+}
+
+#[tauri::command]
+pub async fn login_multica_managed() -> CommandResult<MulticaManagedRuntimePayload> {
+    run_multica_managed_auth_operation(multica::login_managed_runtime, "托管 Multica 登录").await
+}
+
+#[tauri::command]
+pub async fn logout_multica_managed() -> CommandResult<MulticaManagedRuntimePayload> {
+    run_multica_managed_auth_operation(multica::logout_managed_runtime, "托管 Multica 退出登录")
+        .await
+}
+
+#[tauri::command]
+pub async fn set_multica_managed_enabled(
+    enabled: bool,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        multica::set_managed_enabled(enabled)?;
+        let connection = multica::managed_connection_view()?;
+        let runtime = multica::get_managed_runtime_status()?;
+        let auth = multica::managed_auth_status()?;
+        Ok::<_, anyhow::Error>((connection, runtime, auth))
+    })
+    .await;
+    let (connection, runtime, auth) = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return managed_command_failure("设置托管 Multica 开关", &error),
+        Err(_) => {
+            return failed(
+                "设置托管 Multica 开关失败：后台任务失败。",
+                MulticaManagedRuntimePayload {
+                    login_status: "unknown".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let mut payload =
+        match collect_multica_managed_runtime_payload(runtime, Some(auth), false).await {
+            Ok(payload) => payload,
+            Err(error) => return managed_command_failure("设置托管 Multica 开关", &error),
+        };
+    payload.connection = Some(connection);
+    ok("托管 Multica 开关已更新。", payload)
+}
+
+/// Save the three user-editable values of the fixed Core-owned managed
+/// connection. This never routes through generic connection CRUD, so generic
+/// URL preservation/validation and sidecar settings cannot alter the form.
+#[tauri::command]
+pub async fn save_multica_managed_connection(
+    update: MulticaManagedConnectionSaveRequest,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let connection = multica::update_managed_connection(MulticaManagedConnectionUpdate {
+            display_name: update.display_name,
+            server_url: update.server_url,
+            enabled: update.enabled,
+        })?;
+        let runtime = multica::get_managed_runtime_status()?;
+        let auth = multica::managed_auth_status()?;
+        Ok::<_, anyhow::Error>((connection, runtime, auth))
+    })
+    .await;
+    let (connection, runtime, auth) = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return managed_command_failure("保存托管 Multica 连接", &error),
+        Err(_) => {
+            return failed(
+                "保存托管 Multica 连接失败：后台任务失败。",
+                MulticaManagedRuntimePayload {
+                    login_status: "unknown".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let mut payload =
+        match collect_multica_managed_runtime_payload(runtime, Some(auth), false).await {
+            Ok(payload) => payload,
+            Err(error) => return managed_command_failure("保存托管 Multica 连接", &error),
+        };
+    payload.connection = Some(connection);
+    ok("托管 Multica 连接已保存。", payload)
+}
+
+/// Execute a daemon lifecycle operation against the one Core-owned managed
+/// connection.  The command deliberately accepts no connection ID, executable
+/// path, or process arguments so the browser cannot redirect a managed action
+/// into a hand-configured connection (or vice versa).
+async fn run_multica_managed_sidecar_operation(
+    operation: fn() -> anyhow::Result<MulticaDaemonStatus>,
+    operation_name: &'static str,
+) -> CommandResult<MulticaManagedRuntimePayload> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let daemon = operation()?;
+        let runtime = multica::get_managed_runtime_status()?;
+        let auth = multica::managed_auth_status()?;
+        Ok::<_, anyhow::Error>((daemon, runtime, auth))
+    })
+    .await;
+    let (daemon, runtime, auth) = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return managed_command_failure(operation_name, &error),
+        Err(_) => {
+            return failed(
+                &format!("{operation_name}失败：后台任务失败。"),
+                MulticaManagedRuntimePayload {
+                    login_status: "unknown".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+    };
+    let mut payload =
+        match collect_multica_managed_runtime_payload(runtime, Some(auth), false).await {
+            Ok(payload) => payload,
+            Err(error) => return managed_command_failure(operation_name, &error),
+        };
+    if let Some(connection_status) = payload.connection_status.as_mut() {
+        connection_status.daemon = daemon;
+    } else if let Some(connection) = payload.connection.as_ref() {
+        payload.connection_status = Some(MulticaConnectionStatus {
+            connection_id: connection.connection_id.clone(),
+            daemon,
+            ..Default::default()
+        });
+    }
+    ok(&format!("{operation_name}已完成。"), payload)
+}
+
+/// Read-only server health check for the Core-owned managed connection.  It
+/// intentionally has no input ID; manual connections remain on
+/// `check_multica_connection`.
+#[tauri::command]
+pub async fn check_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    let runtime =
+        match tauri::async_runtime::spawn_blocking(multica::get_managed_runtime_status).await {
+            Ok(Ok(runtime)) => runtime,
+            Ok(Err(error)) => return managed_command_failure("检查托管 Multica Runtime", &error),
+            Err(_) => {
+                return failed(
+                    "检查托管 Multica Runtime 失败：后台任务失败。",
+                    MulticaManagedRuntimePayload {
+                        login_status: "unknown".to_string(),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+    match collect_multica_managed_runtime_payload(runtime, None, true).await {
+        Ok(payload) => ok("托管 Multica Runtime 检查完成。", payload),
+        Err(error) => managed_command_failure("检查托管 Multica Runtime", &error),
+    }
+}
+
+#[tauri::command]
+pub async fn start_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    run_multica_managed_sidecar_operation(
+        multica::start_managed_runtime,
+        "启动托管 Multica Runtime",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stop_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    run_multica_managed_sidecar_operation(multica::stop_managed_runtime, "停止托管 Multica Runtime")
+        .await
+}
+
+#[tauri::command]
+pub async fn restart_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
+    run_multica_managed_sidecar_operation(
+        multica::restart_managed_runtime,
+        "重启托管 Multica Runtime",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -10669,6 +11516,175 @@ mod tests {
         assert_eq!(serialized["message"], "Codex 已重新启动");
         assert_eq!(serialized["launchStatus"], "running_degraded");
         assert_eq!(serialized["launchMessage"], "waiting for the page bridge");
+    }
+
+    #[test]
+    fn manual_multica_commands_reject_the_reserved_managed_connection_before_io() {
+        let managed_id = "managed-multica".to_string();
+        let check = tauri::async_runtime::block_on(check_multica_connection(managed_id.clone()));
+        let snapshot =
+            tauri::async_runtime::block_on(get_multica_snapshot(Some(managed_id.clone())));
+        let start = tauri::async_runtime::block_on(start_multica_sidecar(managed_id.clone()));
+        let stop = tauri::async_runtime::block_on(stop_multica_sidecar(managed_id.clone()));
+        let restart = tauri::async_runtime::block_on(restart_multica_sidecar(managed_id));
+
+        for result in [
+            (&check.status, &check.message),
+            (&snapshot.status, &snapshot.message),
+            (&start.status, &start.message),
+            (&stop.status, &stop.message),
+            (&restart.status, &restart.message),
+        ] {
+            assert_eq!(result.0, "failed");
+            assert!(result.1.contains("托管 Multica Runtime"));
+        }
+    }
+
+    #[test]
+    fn managed_multica_save_request_only_allows_editable_fields_and_keeps_empty_values() {
+        let request =
+            serde_json::from_value::<MulticaManagedConnectionSaveRequest>(serde_json::json!({
+                "displayName": "",
+                "serverUrl": "",
+                "enabled": false,
+            }))
+            .expect("managed editor accepts explicit empty user values");
+
+        assert_eq!(request.display_name, "");
+        assert_eq!(request.server_url, "");
+        assert!(!request.enabled);
+
+        for unsupported_field in [
+            serde_json::json!({
+                "displayName": "Managed",
+                "serverUrl": "https://multica.example",
+                "enabled": true,
+                "connectionId": "other-connection",
+            }),
+            serde_json::json!({
+                "displayName": "Managed",
+                "serverUrl": "https://multica.example",
+                "enabled": true,
+                "sidecar": { "executable": "arbitrary.exe" },
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<MulticaManagedConnectionSaveRequest>(unsupported_field)
+                    .is_err(),
+                "managed save request must reject generic connection fields"
+            );
+        }
+    }
+
+    #[test]
+    fn managed_multica_status_collection_propagates_core_errors() {
+        let source = include_str!("commands.rs");
+        let managed_commands = source
+            .split_once("async fn collect_multica_managed_runtime_payload")
+            .expect("managed runtime collector must exist")
+            .1
+            .split_once("pub async fn list_local_sessions")
+            .expect("managed command section must end before session commands")
+            .0;
+
+        for swallowed_error in [
+            "managed_connection_view().ok()",
+            "Err(_) => MulticaManagedAuthStatus",
+            "managed_daemon_status().ok()",
+            "check_managed_runtime_connection().await.ok()",
+            "managed_auth_status().unwrap_or_else(|_| MulticaManagedAuthStatus",
+        ] {
+            assert!(
+                !managed_commands.contains(swallowed_error),
+                "managed status aggregation must not erase Core failures: {swallowed_error}"
+            );
+        }
+    }
+
+    #[test]
+    fn managed_runtime_install_start_gate_requires_ready_verified_runtime() {
+        let ready_verified = MulticaRuntimeInstallStatus {
+            install_state: "ready".to_string(),
+            sha256_verified: true,
+            ..Default::default()
+        };
+        assert!(managed_runtime_install_is_startable(&ready_verified));
+
+        let ready_unverified = MulticaRuntimeInstallStatus {
+            sha256_verified: false,
+            ..ready_verified.clone()
+        };
+        assert!(!managed_runtime_install_is_startable(&ready_unverified));
+
+        let failed_verified = MulticaRuntimeInstallStatus {
+            install_state: "download_failed".to_string(),
+            ..ready_verified.clone()
+        };
+        assert!(!managed_runtime_install_is_startable(&failed_verified));
+
+        let ready_with_historical_error = MulticaRuntimeInstallStatus {
+            last_install_error_code: Some("download_failed".to_string()),
+            ..ready_verified
+        };
+        assert!(managed_runtime_install_is_startable(
+            &ready_with_historical_error
+        ));
+    }
+
+    #[test]
+    fn managed_runtime_install_failure_preserves_collected_payload() {
+        let payload = MulticaManagedRuntimePayload {
+            runtime: MulticaRuntimeInstallStatus {
+                install_state: "verification_failed".to_string(),
+                sha256_verified: false,
+                last_install_error_code: Some("sha256_mismatch".to_string()),
+                ..Default::default()
+            },
+            connection: Some(MulticaManagedConnectionView {
+                connection_id: "managed-multica".to_string(),
+                display_name: "Managed".to_string(),
+                server_url: "https://api.multica.ai".to_string(),
+                enabled: true,
+                profile: "ccp-managed".to_string(),
+                sidecar_configured: true,
+                sidecar_auto_start: true,
+            }),
+            connection_status: Some(MulticaConnectionStatus {
+                connection_id: "managed-multica".to_string(),
+                daemon: MulticaDaemonStatus {
+                    status: "stopped".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            login_status: "needs_login".to_string(),
+        };
+
+        let result = managed_runtime_install_result(payload);
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.payload.runtime.install_state, "verification_failed");
+        assert_eq!(
+            result.payload.runtime.last_install_error_code.as_deref(),
+            Some("sha256_mismatch")
+        );
+        assert_eq!(
+            result
+                .payload
+                .connection
+                .as_ref()
+                .map(|item| item.connection_id.as_str()),
+            Some("managed-multica")
+        );
+        assert_eq!(result.payload.login_status, "needs_login");
+        assert_eq!(
+            result
+                .payload
+                .connection_status
+                .as_ref()
+                .map(|status| status.daemon.status.as_str()),
+            Some("stopped")
+        );
     }
 
     #[test]
