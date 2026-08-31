@@ -151,7 +151,6 @@ import {
   MaintenanceScreen,
   OverviewScreen,
   MemoryScreen,
-  MulticaRuntimeScreen,
   SessionManagementScreen,
   SettingsScreen,
   SupplierScreen,
@@ -2755,20 +2754,6 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
-    } else if (target === "multica") {
-      const [connections] = await Promise.all([
-        listMulticaConnections(true),
-        getMulticaManagedRuntime(true),
-      ]);
-      if (connections && statusOk(connections.status) && connections.connections.length > 0) {
-        const connectionId = connections.connections[0]?.connectionId;
-        if (connectionId && !isStaleRouteLoad()) {
-          await Promise.all([
-            checkMulticaConnection(connectionId, true),
-            getMulticaSnapshot(connectionId, true),
-          ]);
-        }
-      }
     } else if (target === "maintenance") {
       await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
@@ -2799,7 +2784,6 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (route !== "multica") multicaSnapshotEpochRef.current += 1;
     void refreshRoute(route);
   }, [route]);
 
@@ -3196,23 +3180,6 @@ export function App() {
               focusProfileId={supplierFocusProfileId}
               onClaudeDesktopProviderDraftChange={setClaudeDesktopProviderDraft}
               settings={settings}
-            />
-          ) : null}
-          {route === "multica" ? (
-            <MulticaRuntimeScreen
-              actions={actions}
-              connectionsResult={multicaConnectionsResult}
-              statuses={multicaStatuses}
-              statusResult={multicaStatusResult}
-              snapshot={multicaSnapshot}
-              snapshotResult={multicaSnapshotResult}
-              sidecars={multicaSidecars}
-              loading={multicaLoading}
-              error={multicaError}
-              managedRuntime={multicaManagedRuntime}
-              managedRuntimeResult={multicaManagedRuntimeResult}
-              managedRuntimeLoading={multicaManagedRuntimeLoading}
-              managedRuntimeError={multicaManagedRuntimeError}
             />
           ) : null}
           {route === "clients" ? (

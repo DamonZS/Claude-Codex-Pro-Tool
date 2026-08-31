@@ -53,6 +53,11 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 - 不静默信任第三方：Ponytail / Codex hooks 需要单独审查和信任。
 - 不伪装能力：无法自动安装或需要人工确认的功能会明确标记为需审查。
 
+## Multica 工作区归属
+
+Codex 内嵌工作区 **Built on Multica**，上游项目为
+[`multica-ai/multica`](https://github.com/multica-ai/multica)。CCP 当前实现是本仓库自有的本地控制面和 Codex 页面 Host 适配层，不复制 Multica Web/UI，不打包或启动 Multica server、daemon、CLI，也不注册第二个 Codex Runtime。上游版本、许可和 NOTICE 记录见 [`docs/multica-attribution.md`](docs/multica-attribution.md)。
+
 ## 下载
 
 从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载最新版：

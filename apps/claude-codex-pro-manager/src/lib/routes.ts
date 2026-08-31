@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   MessageSquare,
   Network,
-  Activity,
   PackageSearch,
   Palette,
   FileText,
@@ -30,7 +29,6 @@ export type RouteItem = {
 export const routes: RouteItem[] = [
   { id: "overview", label: "概览", icon: LayoutDashboard, description: "服务状态、异常与近期操作", keywords: ["首页", "状态", "dashboard"] },
   { id: "supplier", label: "供应商与路由", icon: Network, description: "第三方 API、模型映射、代理与故障转移", keywords: ["provider", "api", "model", "protocol", "模型", "协议", "代理", "中转"] },
-  { id: "multica", label: "Multica Runtime", icon: Activity, description: "外部 Runtime、Agent、Task 状态与 sidecar 监管", keywords: ["multica", "runtime", "agent", "task", "daemon", "sidecar"] },
   { id: "clients", label: "客户端与增强", icon: Boxes, description: "Codex、Claude 与本地增强状态", keywords: ["codex", "claude", "启动", "注入"] },
   { id: "themes", label: "主题中心", icon: Palette, description: "导入、应用与恢复 Codex 主题", keywords: ["theme", "主题", "皮肤", "外观"] },
   { id: "prompts", label: "系统提示词", icon: FileText, description: "管理 Codex 指令模板与生效方式", keywords: ["prompt", "instructions", "提示词", "指令"] },
@@ -98,7 +96,7 @@ export function initialRoute(): Route {
 export function normalizeRoute(value: unknown): unknown {
   if (value === "pluginHub" || value === "context" || value === "scripts") return "tools";
   if (value === "memoryAssist") return "memory";
-  if (value === "logs") return "settings";
+  if (value === "logs" || value === "multica") return "settings";
   if (value === "relay" || value === "models") return "supplier";
   return value;
 }
@@ -107,7 +105,7 @@ export function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "服务健康、当前配置、异常与近期运行状态。",
     supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
-    multica: "连接外部 Multica Runtime，只读查看服务、Agent、Task 与 sidecar 状态。",
+    multica: "本地 Multica 工作区入口与开关已归入设置。",
     clients: "管理 Codex、Claude Desktop、Claude Code 与本地增强。",
     themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     prompts: "管理 Codex 系统提示词、分类与当前生效方式。",

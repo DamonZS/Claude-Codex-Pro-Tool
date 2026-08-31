@@ -1,12 +1,18 @@
-# Multica 托管运行时与自动下载安装
+# Legacy 高级兼容：Multica 托管运行时与下载安装
+
+## 规格状态与优先级
+
+本规格保留用于已有外部 Multica CLI/daemon 用户的 **legacy 高级兼容能力**，不是 Codex 内嵌本地 Multica 工作区的默认架构，也不进入 Manager 主导航。`spec/codex-multica-workspace-integration.md` 对默认启动、页面入口和执行边界拥有更高优先级。
+
+默认 CCP/Codex 启动路径不得创建托管连接、下载或安装 CLI、创建 profile、发起登录、启动或监管 daemon、注册 Codex Runtime，也不得启动或连接 `codex.exe app-server`。本规格后续的安装、登录和监管要求仅在用户明确进入“高级兼容”并单独启用 legacy 托管能力后适用；本地 Multica 工作区的启用/停用开关不得隐式触发这些动作。
 
 ## 背景
 
-Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查的 Multica 运行时通道。当前适配器只接受用户手工填写的 daemon 可执行文件，首次使用需要用户自行寻找和安装 Multica CLI，也没有稳定的默认连接和独立 profile。本任务把 Multica CLI 作为 CCP 的托管运行时：发布包优先携带固定版本资源，资源缺失时从官方 GitHub Release 自动下载、校验并安装；CCP 首次启动后创建独立连接并默认监管本机 daemon。
+部分历史用户需要连接完整 Multica server/CLI/daemon。CCP 为这类用户保留一条可重复、可审查、显式启用的兼容通道：用户进入高级兼容入口并确认后，才可从固定资源或官方 GitHub Release 下载、校验和安装 Multica CLI，并选择是否监管 daemon。
 
 托管运行时只负责 Multica CLI/daemon 的本地生命周期和只读状态连接。Multica server、数据库和远端任务仍属于独立控制平面。托管流程不能通过改写 CCP 供应商或客户端配置来实现代理，也不能把失败的安装、认证或健康检查传导成 CCP 主界面不可用。
 
-本规格新增并覆盖托管运行时行为；`spec/multica-runtime-adapter.md` 中关于外部连接、只读检查、状态快照、配置隔离和手工 sidecar 的要求继续有效。仅当连接类型为托管连接时，下面的默认安装和默认监管规则覆盖旧文档“sidecar 默认关闭”的通用规则；用户创建的手工连接仍按旧文档执行。
+`spec/multica-runtime-adapter.md` 中关于外部连接、只读检查、状态快照、配置隔离和手工 sidecar 的要求继续有效。所有 legacy 托管开关默认关闭；不存在覆盖“sidecar 默认关闭”的自动启动例外。
 
 ## 目标
 
@@ -15,11 +21,11 @@ Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查�
 - 发布构建为受支持平台声明固定 Multica CLI 版本、目标平台、精确资产名称和 SHA-256 摘要。
 - 优先从 CCP 发布包资源目录取得对应平台资源；资源缺失或损坏时，只从该固定版本的官方 GitHub Release 下载对应 allowlist asset。
 - 对下载内容和发布包资源执行 SHA-256 校验、归档安全检查、临时文件安装、原子激活、并发锁和失败回滚。
-- 首次启动自动创建稳定连接 ID `managed-multica`，默认显示名称 `内置 Multica Runtime`，默认 server URL `https://api.multica.ai`，并使用独立 profile `ccp-managed`。
-- 默认开启托管连接、自动启动和监管。运行时未安装、安装失败或未授权时显示真实状态，不伪造健康，不无限下载或重启。
+- 用户显式启用 legacy 托管能力后，才幂等创建稳定连接 ID `managed-multica` 和独立 profile `ccp-managed`；默认 `enabled/auto_start/supervise=false`。
+- legacy 高级兼容入口不出现在 Manager 主导航，不是本地工作区的默认主数据源或运行前置条件。
 - 提供安装状态、版本、来源、校验结果、登录、启动/停止/重启和有限重试的 Tauri/Manager 操作。
 - 托管 CLI 使用独立 profile 目录和进程组；其 URL、认证、日志、端口、生命周期与 CCP 供应商、代理、Codex、Claude 配置隔离。
-- 为版本选择、下载校验、原子安装、回滚、默认连接、profile 隔离、监管和 URL 不改写增加最小精度测试，并在最后一轮执行完整回归验收。
+- 为版本选择、下载校验、原子安装、回滚、显式连接初始化、profile 隔离、监管和 URL 不改写增加最小精度测试，并在最后一轮执行完整回归验收。
 
 ### 本次不包含
 
@@ -33,9 +39,13 @@ Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查�
 
 ## 用户视角描述
 
-用户安装或启动 CCP 后，无需手动寻找 `multica.exe`。CCP 在后台检查当前平台的内置资源；资源不可用时显示固定版本和下载进度，并从官方 Release 获取、校验和安装。准备过程不阻塞主界面，网络失败时显示可重试的明确错误。
+用户正常安装或启动 CCP 时不会检查、下载或安装 `multica.exe`。只有用户进入 legacy 高级兼容入口、开启该能力并确认“准备/安装”后，CCP 才检查内置资源或从固定官方 Release 获取、校验和安装。
 
-首次引导创建“内置 Multica Runtime”连接，使用 profile `ccp-managed`，默认开启自动启动和监管。用户可在 Multica Runtime 页面查看安装来源、版本、校验状态、daemon PID、运行状态、最近检查时间和登录状态。没有 token 时显示“需要登录/未授权”，不会把进程存在当作服务健康。
+legacy 首次引导在用户确认后创建“内置 Multica Runtime”连接，使用 profile `ccp-managed`，自动启动和监管默认关闭。用户可在高级兼容面板查看安装来源、版本、校验状态、daemon PID、运行状态、最近检查时间和登录状态。没有 token 时显示“需要登录/未授权”，不会把进程存在当作服务健康。
+
+高级兼容面板只在用户明确打开时读取托管连接及其 Server、daemon、Runtime、Agent、Task 状态。面板不存在或未启用不得影响本地 Multica 工作区入口、数据或 Codex 原生执行。
+
+普通外部连接是兼容旧适配器的可选高级功能，与托管能力在同一 legacy 高级兼容入口内分区展示。用户明确进入或选择外部连接后，才查看对应外部连接状态；外部连接的新增、选择、编辑、sidecar 和快照状态不得替代或清空本地工作区状态。
 
 用户可以修改 server URL、显示名称、监管开关和登录状态。保存后启动、刷新和重启均使用用户保存的原值；清空字段不会在每次保存或刷新时被偷偷回填或归一化。用户停用托管连接后，CCP 不再启动或重启该 daemon，但不会删除 profile、远端数据或任何供应商配置。
 
@@ -71,25 +81,25 @@ Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查�
 - 安装、升级或显式回滚遇到正在运行的托管 daemon 时，必须先持有安装锁并验证进程归属，再停止该进程树、切换原子指针与 sidecar 固定契约；切换前原本在运行的，切换后才重新启动。外来 PID 或无法核验可执行路径时拒绝切换，不得边运行边替换二进制。
 - 最近一次安装失败写入托管状态目录的 `install-failure.json`，只允许保存稳定错误码和时间戳；不得保存下载 URL、响应、文件路径、token 或原始错误。已有当前版本仍可用时，失败记录不能覆盖 `ready`/校验状态；后续成功安装必须清除旧失败记录。
 
-### 4. 托管连接与 profile 默认值
+### 4. 托管连接与 profile 初始值
 
-- 首次没有 `managed-multica` 记录时，创建：
+- 用户显式启用 legacy 托管能力且没有 `managed-multica` 记录时，才创建：
   - `connection_id`: `managed-multica`
   - `display_name`: `内置 Multica Runtime`
   - `server_url`: `https://api.multica.ai`
   - `profile`: `ccp-managed`
-  - `enabled`: `true`
-  - `auto_start`: `true`
-  - `supervise`: `true`
+  - `enabled`: `false`（必须由用户再次明确开启连接）
+  - `auto_start`: `false`
+  - `supervise`: `false`
 - 上述默认值只在首次创建缺失字段时使用。用户后续修改或清空显示名称、URL、开关时，保存、刷新、安装和重启不得自动回填、归一化、改大小写、补尾斜杠或改成 CCP 代理地址。
 - `ccp-managed` profile 必须位于 Multica 默认 profile 根目录下的独立目录（Windows 为 `%USERPROFILE%\.multica\profiles\ccp-managed\`，其他平台使用对应用户目录），与用户其他 profile 分离。已存在的 profile 配置只读保留，除非用户明确触发对应的登录/配置动作。
 - 托管连接记录和安装元数据存储在 CCP 独立设置命名空间，不能复用供应商/Profile 表或让供应商写入逻辑处理它。
 - 同一 `managed-multica` 记录必须幂等初始化；并发启动不能创建第二个托管连接或覆盖用户已保存的值。
 
-### 5. 自动准备、启动与监管
+### 5. 显式准备、启动与监管
 
-- CCP 启动后异步执行一次托管运行时准备：读取配置 → 检查当前固定版本 → 必要时安装/下载 → 创建或读取 `ccp-managed` profile → 按保存的开关启动 daemon。准备不得阻塞窗口、供应商页面、代理监听或 Codex/Claude 启动。
-- `enabled=true`、`auto_start=true`、`supervise=true` 且运行时和 profile 可用时，CCP 默认启动 `multica --profile ccp-managed daemon start --foreground`（具体参数以固定 CLI 版本能力映射为准），并把进程纳入独立作业对象/进程组。
+- legacy 功能未由用户显式启用时，CCP 启动只读取关闭状态，不执行版本检查、安装、下载、profile 创建、登录或 daemon 启动。准备流程只能由高级兼容面板中的用户动作触发，且不得阻塞窗口、供应商页面、代理监听或 Codex/Claude 启动。
+- 只有 legacy 功能已显式启用、用户又单独保存 `enabled=true`、`auto_start=true`、`supervise=true`，并且运行时和 profile 已由显式准备动作验证可用时，后续启动才可恢复 `multica --profile ccp-managed daemon start --foreground`；本地工作区开关不参与该判断。
 - 托管 daemon 必须显式关闭 Multica 自更新和配置热重载；固定 `v0.4.36` 的启动参数必须严格为 `--profile ccp-managed daemon start --foreground --no-auto-update --no-auto-reload`。两个禁用开关属于 `daemon start` 子命令，不得放到 root flags 中，也不得由 daemon 静默替换当前 allowlist 版本或重新加载非托管配置。
 - 启动前必须校验托管连接保存的 `server_url`。仅在托管子进程环境中先移除继承的 `MULTICA_SERVER_URL`，再注入该连接已保存且通过校验的原值；不得修改父进程、系统环境、普通 sidecar、供应商、Profile 或代理配置。显式保存的空值继续保留，并使需要 URL 的运行操作以可诊断错误失败，不得回退到默认地址。
 - 托管进程必须使用独立日志、临时目录、环境变量命名空间和健康端口；不得使用 CCP Launcher/helper/watchdog，也不得绑定或改写 `57321`、`57331`、`57320`、`9230`。
@@ -102,7 +112,7 @@ Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查�
 
 ### 6. 登录与认证
 
-- Runtime 页面提供固定 profile 的官方 CLI 登录/退出入口。命令由后端按已安装版本能力映射生成，不接受前端任意可执行文件、shell 片段或参数数组。
+- legacy 高级兼容面板可提供固定 profile 的官方 CLI 登录/退出入口；普通设置和本地工作区页面不显示或自动调用该入口。命令由后端按已安装版本能力映射生成，不接受前端任意可执行文件、shell 片段或参数数组。
 - token 使用现有安全存储或受保护的 stdin/IPC/环境引用传递；不得出现在 argv、普通环境快照、崩溃转储、URL、CCP 配置、日志、错误正文或前端状态。
 - 登录成功只更新 `ccp-managed` profile 的认证状态。没有 token 或登录返回未授权时，显示 `unauthorized`/`needs_login`，不把 daemon 进程存在标成健康，也不触发无限重启。
 - 退出登录/清空凭据只删除该 profile 的凭据引用；不得删除其他 Multica profile、供应商 API Key 或 Claude/Codex 认证。
@@ -111,18 +121,24 @@ Claude Codex Pro Tool（CCP）需要在本机提供一条可重复、可审查�
 
 - Server 健康检查保存用户的 `server_url` 原值，使用固定版本声明的只读 health/version 端点；不调用创建任务、刷新租约或改变远端状态的接口。
 - Runtime、Agent、Task 只读快照沿用 `spec/multica-runtime-adapter.md` 的分页、有界数量、`fetched_at`、`stale`、未知状态兼容和脱敏规则。安装状态另含 `install_state`、`installed_version`、`asset_source`、`sha256_verified` 和 `last_install_error_code`。
-- Manager 自动启动监管只接受 `install_state=ready` 且 `sha256_verified=true`；历史 `last_install_error_code` 不得阻止仍然有效的当前版本启动。准备失败的 IPC 必须保留 Runtime、连接、登录和 daemon 脱敏 payload，不能用空失败对象覆盖诊断。
+- 托管状态与托管 Runtime、Agent、Task 快照必须通过固定 `managed-multica` 的专用只读后端路径取得，前端不传 `connection_id`，也不依赖普通连接列表或普通连接选择状态。专用路径可以在后端复用只读快照实现，但不得解除普通连接 IPC 对保留 ID `managed-multica` 的拒绝。
+- 用户打开 legacy 高级兼容面板时读取托管状态和最近可用托管快照；用户点击托管“刷新状态/刷新快照”后重新读取固定托管连接的数据。刷新结果必须携带 `source_connection_id=managed-multica`，不能因当前选中的普通外部连接而改变来源。
+- legacy 自动恢复监管只接受用户已显式开启全部 legacy 生命周期开关、`install_state=ready` 且 `sha256_verified=true`；历史 `last_install_error_code` 不得阻止仍然有效的当前版本启动。准备失败的 IPC 必须保留 Runtime、连接、登录和 daemon 脱敏 payload，不能用空失败对象覆盖诊断。
 - 状态枚举至少包括 `not_installed`、`checking`、`installing`、`ready`、`healthy`、`degraded`、`unreachable`、`unauthorized`、`download_failed`、`verification_failed`、`unsupported_platform`、`crashed`、`restart_exhausted`、`stopped`、`unconfigured`。
 - 刷新失败保留上次成功快照并标记过期；安装或 daemon 不可用时不生成示例任务、虚假版本、虚假计数或“系统已接受”等误导性状态。
 
 ### 8. UI / 交互要求
 
-- 在现有管理工具增加独立的“Multica Runtime”区域，不修改供应商、代理、Codex、Claude 页面布局和行为。
+- Manager 主导航不得增加或保留独立 `Multica Runtime` 页面。普通设置保留“启用 Multica 工作区”开关；该开关与本 legacy 面板的开关严格分离。
+- legacy 托管 UI 只能放在明确标记为“高级兼容/Legacy”的次级入口或可折叠面板中，默认关闭且不自动加载网络或进程状态。
+- 用户打开该面板后，托管区域可展示 Server/daemon 状态以及 Runtime、Agent、Task 只读快照；它不是本地工作区的默认数据源。
 - 托管卡片显示：连接名称、保存的 server URL、profile 名称、安装版本/来源、校验状态、准备进度、daemon 状态/PID、Server 状态、登录状态、最近检查时间和脱敏诊断。
 - 托管卡片提供独立编辑表单，且只能提交 `display_name`、`server_url` 与 `enabled` 给 `save_multica_managed_connection`。显示名称与 server URL 都允许显式保存为空字符串，表单、保存、刷新、安装和重启不得回填、归一化或改写它们；该表单不得调用普通连接 CRUD。
 - 托管连接隐藏“选择任意 executable/工作目录/启动参数”字段；手工连接仍显示旧字段并保持兼容。托管操作按钮包括“准备/重试下载”“登录”“测试连接”“刷新”“启动”“停止”“重启”“回滚”，均有忙碌、成功、失败、禁用和取消状态。
 - 安装、回滚、停止和删除需确认，并明确说明只影响托管运行时/该连接，不影响供应商、代理、Codex/Claude。清空 token 输入表示删除该 profile 的凭据引用，不自动回填旧值。
 - `unconfigured`、`installing`、`unauthorized`、`stale`、`restart_exhausted` 等状态必须同时显示文字和无障碍语义，不能只靠颜色；网络失败时提供可操作的重试入口。
+- 普通外部连接必须标记为“外部连接（可选）”或等价的高级功能，并与托管区域分区。没有普通外部连接时可以显示非阻断提示“未添加外部连接（可选）”，但不得显示“尚未配置 Multica 连接”、要求先选择连接，或隐藏/禁用托管快照；外部连接的“刷新连接”“新增连接”等操作只出现在该可选分区。
+- 托管快照不可用时，在托管区域显示对应的未授权、未启动、不可达、过期或脱敏错误状态，并保留可用的刷新/登录/启动动作；不得退回普通连接空态或生成示例数据。
 
 ### 9. Tauri/Core 接口
 
@@ -140,6 +156,7 @@ Tauri 命令边界至少包括：
 
 ```text
 get_multica_managed_runtime
+get_multica_managed_snapshot
 ensure_multica_runtime
 cancel_multica_runtime_install
 rollback_multica_runtime
@@ -164,6 +181,7 @@ restart_multica_managed_runtime
 - `save_multica_managed_connection` 只接受 `display_name`、`server_url` 和 `enabled`，不接受连接 ID、profile、sidecar、可执行文件、路径、令牌、请求头或普通连接字段；它只更新固定的 `managed-multica` 记录。
 - `check_multica_connection`、`get_multica_snapshot` 和状态查询只读；安装命令只写应用专属安装目录、托管 profile 所需目录和 CCP 独立状态，不写供应商/客户端文件。
 - `check_multica_managed_runtime` 与托管生命周期命令不接受连接 ID；它们只作用于固定的 `managed-multica` 记录。普通 `check_multica_connection`、`get_multica_snapshot`、`start_multica_sidecar`、`stop_multica_sidecar` 和 `restart_multica_sidecar` 必须拒绝该保留 ID。
+- `get_multica_managed_snapshot` 不接受连接 ID，只读取固定 `managed-multica` 的 Runtime、Agent、Task 快照并返回 `source_connection_id=managed-multica`。如选择把快照并入 `get_multica_managed_runtime` 的 payload，也必须保持同一固定来源、只读语义和普通 IPC 拒绝边界。
 - 返回 DTO 只包含版本、平台、来源、状态、时间、耗时、错误码和脱敏摘要；不包含 token、Authorization、Cookie、完整响应正文、完整本机路径或任意原始 argv。
 - 所有异步操作支持取消、幂等和有限超时；重复准备请求复用进行中的任务或取消旧任务，不能并行安装同一版本。
 
@@ -201,7 +219,7 @@ restart_multica_managed_runtime
 
 - 本规格及匹配的 `acceptance/multica-managed-runtime.md`。
 - Core 托管运行时清单、下载、校验、安装、回滚、profile/连接初始化、登录和 daemon 监管实现。
-- Tauri 命令注册、脱敏状态 DTO、Manager Runtime 页面及安装/登录/监管交互。
+- Tauri 命令注册、脱敏状态 DTO、默认隐藏的 Manager legacy 高级兼容面板及显式安装/登录/监管交互；不交付主导航 Runtime 页面。
 - 发布配置和 CI 检查：固定版本/平台资产、校验清单、资源打包、离线缺失资源下载路径和默认 `target/release` 产物。
 - 最小精度定向测试、最后一轮大回归测试和本地 smoke 证据；不交付 Multica server、PostgreSQL、Redis 或其迁移。
 

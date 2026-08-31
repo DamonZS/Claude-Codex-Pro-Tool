@@ -185,6 +185,8 @@ export type BackendSettings = {
   cliWrapperBaseUrl: string;
   cliWrapperApiKey: string;
   cliWrapperApiKeyEnv: string;
+  /** Controls only the embedded local Multica workspace entry. */
+  multicaWorkspaceEnabled: boolean;
 };
 
 export type RelayProfile = {

@@ -53,6 +53,11 @@ Canonical repository:
 - No silent trust: third-party Ponytail or Codex hooks require separate review and explicit trust.
 - No simulated capability: actions that cannot be automated or still require user confirmation are labeled clearly.
 
+## Multica Workspace Attribution
+
+The embedded Codex workspace is **Built on Multica**; the upstream project is
+[`multica-ai/multica`](https://github.com/multica-ai/multica). CCP implements its own local control plane and current-page Codex Host adapter. It does not copy the Multica Web UI, package or start the Multica server/daemon/CLI, or register a second Codex runtime. See [`docs/multica-attribution.md`](docs/multica-attribution.md) for the reviewed revision, license, NOTICE, and integration boundary.
+
 ## Download
 
 Download the latest release from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):

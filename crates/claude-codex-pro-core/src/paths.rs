@@ -34,6 +34,14 @@ pub fn default_multica_state_dir() -> PathBuf {
     state_dir.join("multica")
 }
 
+/// Private CCP-owned record of explicit user review decisions for Codex
+/// Skills.  It is intentionally separate from Codex's own configuration and
+/// from Multica workspace data so reviewing a Skill cannot rewrite either
+/// provider settings or the official Codex state.
+pub fn default_multica_skill_trust_path() -> PathBuf {
+    default_multica_state_dir().join("skill-trust.json")
+}
+
 pub fn legacy_app_state_dir() -> PathBuf {
     if let Some(home_dir) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
         return home_dir.join(LEGACY_APP_STATE_DIR);
@@ -123,6 +131,14 @@ mod tests {
         let path = default_multica_state_dir();
 
         assert!(path.ends_with(".claude-codex-pro/multica"));
+        assert!(!path.ends_with(LEGACY_APP_STATE_DIR));
+    }
+
+    #[test]
+    fn multica_skill_trust_path_is_private_and_under_multica_state() {
+        let path = default_multica_skill_trust_path();
+
+        assert!(path.ends_with(".claude-codex-pro/multica/skill-trust.json"));
         assert!(!path.ends_with(LEGACY_APP_STATE_DIR));
     }
 }

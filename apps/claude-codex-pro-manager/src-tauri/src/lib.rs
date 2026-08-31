@@ -52,32 +52,9 @@ pub fn run() {
                 commands::ensure_claude_desktop_proxy_on_startup().await;
             });
             tauri::async_runtime::spawn(async {
-                // Prepare the pinned managed Multica runtime first, but keep
-                // the whole flow off the Tauri setup thread.  A failed
-                // download/install is isolated to Multica and must not stop
-                // restoration of user-configured sidecars or the main UI.
-                let managed_result =
-                    claude_codex_pro_core::multica::ensure_managed_runtime_async().await;
-                // The dedicated managed Runtime owns its own supervisor and
-                // is intentionally not part of the generic auto-start sweep.
-                // A failed install remains isolated; manual sidecars still
-                // restore below and the Tauri window is never blocked.
-                // Keep the preparation failure isolated without fabricating a
-                // Tokio JoinError (its constructor is private).  `None` means
-                // preparation did not reach the supervisor; `Some(Err(_))`
-                // means the dedicated start operation itself failed.
-                let managed_supervisor = if managed_result
-                    .as_ref()
-                    .is_ok_and(commands::managed_runtime_install_is_startable)
-                {
-                    tauri::async_runtime::spawn_blocking(
-                        claude_codex_pro_core::multica::start_managed_runtime_supervision_if_enabled,
-                    )
-                    .await
-                    .ok()
-                } else {
-                    None
-                };
+                // Restore only user-configured manual sidecars. The core
+                // filter excludes the reserved managed connection, so startup
+                // never downloads, registers, or supervises a Runtime.
                 let result = tauri::async_runtime::spawn_blocking(
                     claude_codex_pro_core::multica::start_auto_start_sidecars,
                 )
@@ -100,15 +77,7 @@ pub fn run() {
                 let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
                     "manager.multica.auto_start",
                     serde_json::json!({
-                    "managed_prepare": match managed_result {
-                        Ok(status) => status.install_state,
-                        Err(_) => "failed".to_string(),
-                    },
-                        "managed_supervisor": match managed_supervisor {
-                        Some(Ok(status)) => status.status,
-                        Some(Err(_)) | None => "failed".to_string(),
-                    },
-                    "started": started,
+                        "started": started,
                         "failed": failed,
                     }),
                 );

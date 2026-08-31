@@ -6,6 +6,7 @@
 //! sidecar processes.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::future::Future;
 use std::io::{Cursor, Read, Write};
@@ -19,8 +20,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, anyhow, bail};
 use flate2::read::GzDecoder;
 use fs2::FileExt;
-use reqwest::header::HeaderValue;
-use reqwest::{Client, StatusCode, Url};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderValue};
+use reqwest::{Client, Method, StatusCode, Url};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -67,6 +69,12 @@ const MANAGED_RUNTIME_CONNECTION_ID: &str = "managed-multica";
 const MANAGED_RUNTIME_DISPLAY_NAME: &str = "内置 Multica Runtime";
 const MANAGED_RUNTIME_SERVER_URL: &str = "https://api.multica.ai";
 const MANAGED_RUNTIME_PROFILE: &str = "ccp-managed";
+const MANAGED_PROFILE_CONFIG_FILE: &str = "config.json";
+const MANAGED_PROFILE_MAX_CONFIG_BYTES: u64 = 64 * 1024;
+const MANAGED_WORKSPACE_MAX_CURSOR_LENGTH: usize = 512;
+const MANAGED_WORKSPACE_MAX_TOKEN_LENGTH: usize = 8 * 1024;
+const MANAGED_WORKSPACE_SKILL_POLL_ATTEMPTS: usize = 60;
+const MANAGED_WORKSPACE_SKILL_POLL_DELAY: Duration = Duration::from_millis(500);
 const MANAGED_CONNECTION_INIT_ERROR_CODE: &str = "managed_connection_init_failed";
 const MANAGED_CONNECTION_RESERVED_ERROR: &str = "managed_connection_reserved";
 const MANAGED_RUNTIME_MAX_ARCHIVE_BYTES: usize = 96 * 1024 * 1024;
@@ -650,6 +658,348 @@ pub struct MulticaManagedConnectionUpdate {
     pub display_name: String,
     pub server_url: String,
     pub enabled: bool,
+}
+
+/// The complete allowlist for the first read-only managed workspace client.
+/// Callers can select a resource, but cannot supply an HTTP method, URL,
+/// header, or path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MulticaWorkspaceReadResource {
+    Me,
+    Issues,
+    Projects,
+    Agents,
+    Runtimes,
+    Skills,
+    Squads,
+    Autopilots,
+}
+
+impl MulticaWorkspaceReadResource {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Me => "/api/me",
+            Self::Issues => "/api/issues",
+            Self::Projects => "/api/projects",
+            Self::Agents => "/api/agents",
+            Self::Runtimes => "/api/runtimes",
+            Self::Skills => "/api/skills",
+            Self::Squads => "/api/squads",
+            Self::Autopilots => "/api/autopilots",
+        }
+    }
+}
+
+fn default_managed_workspace_limit() -> usize {
+    MAX_COLLECTION_ITEMS
+}
+
+/// Renderer-safe paging input. Unknown properties are rejected so this type
+/// cannot become an accidental carrier for arbitrary request configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaWorkspaceListRequest {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default = "default_managed_workspace_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceUser {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceIssue {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub status_name: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub assignee_type: Option<String>,
+    #[serde(default)]
+    pub assignee_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub parent_issue_id: Option<String>,
+    #[serde(default)]
+    pub revision: Option<u64>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceProject {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub issue_count: Option<u64>,
+    #[serde(default)]
+    pub done_count: Option<u64>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceAgent {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub runtime_id: Option<String>,
+    #[serde(default)]
+    pub runtime_mode: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub archived_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceRuntime {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub custom_name: Option<String>,
+    #[serde(default)]
+    pub runtime_mode: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub last_seen_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing)]
+    metadata: Value,
+}
+
+impl MulticaWorkspaceRuntime {
+    pub fn capabilities(&self) -> Vec<String> {
+        self.metadata
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 80
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+            .take(32)
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceSkill {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaRuntimeLocalSkillSummary {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub plugin: Option<String>,
+    #[serde(default)]
+    pub can_disable: bool,
+    #[serde(default)]
+    pub file_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaRuntimeLocalSkillInventory {
+    pub workspace_id: String,
+    pub runtime_id: String,
+    pub supported: bool,
+    pub skills: Vec<MulticaRuntimeLocalSkillSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct ManagedRuntimeLocalSkillRequest {
+    id: String,
+    runtime_id: String,
+    status: String,
+    #[serde(default)]
+    skills: Vec<MulticaRuntimeLocalSkillSummary>,
+    #[serde(default)]
+    supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceSquad {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub leader_id: Option<String>,
+    #[serde(default)]
+    pub member_count: Option<u64>,
+    #[serde(default)]
+    pub archived_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MulticaWorkspaceAutopilot {
+    pub id: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub execution_mode: Option<String>,
+    #[serde(default)]
+    pub assignee_type: Option<String>,
+    #[serde(default)]
+    pub assignee_id: Option<String>,
+    #[serde(default)]
+    pub last_run_at: Option<String>,
+    #[serde(default)]
+    pub next_run_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaWorkspaceMeResponse {
+    pub workspace_id: String,
+    pub user: MulticaWorkspaceUser,
+}
+
+macro_rules! managed_workspace_list_response {
+    ($name:ident, $field:ident, $item:ty) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $name {
+            pub workspace_id: String,
+            pub $field: Vec<$item>,
+            pub total: u64,
+            pub next_cursor: Option<String>,
+        }
+    };
+}
+
+managed_workspace_list_response!(
+    MulticaWorkspaceIssuesResponse,
+    issues,
+    MulticaWorkspaceIssue
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceProjectsResponse,
+    projects,
+    MulticaWorkspaceProject
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceAgentsResponse,
+    agents,
+    MulticaWorkspaceAgent
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceRuntimesResponse,
+    runtimes,
+    MulticaWorkspaceRuntime
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceSkillsResponse,
+    skills,
+    MulticaWorkspaceSkill
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceSquadsResponse,
+    squads,
+    MulticaWorkspaceSquad
+);
+managed_workspace_list_response!(
+    MulticaWorkspaceAutopilotsResponse,
+    autopilots,
+    MulticaWorkspaceAutopilot
+);
+
+/// Credential-bearing workspace client. It intentionally implements neither
+/// `Debug` nor `Serialize`; the authorization header remains Core-private and
+/// is marked sensitive for reqwest/header diagnostics.
+pub struct MulticaManagedWorkspaceClient {
+    client: Client,
+    server_origin: Url,
+    _app_origin: Url,
+    workspace_id: String,
+    authorization: HeaderValue,
 }
 
 /// The persisted portion of managed runtime state.  It deliberately contains
@@ -2815,6 +3165,128 @@ fn managed_profile_directory() -> PathBuf {
 /// local process setup only; it is never serialized in a status DTO.
 pub fn managed_profile_path() -> PathBuf {
     managed_profile_directory()
+}
+
+#[derive(Deserialize)]
+struct ManagedWorkspaceProfileFile {
+    server_url: Option<String>,
+    app_url: Option<String>,
+    workspace_id: Option<String>,
+    token: Option<String>,
+}
+
+struct ManagedWorkspaceCredentials {
+    server_origin: Url,
+    app_origin: Url,
+    workspace_id: String,
+    authorization: HeaderValue,
+}
+
+fn validate_managed_workspace_origin(raw: Option<String>) -> anyhow::Result<Url> {
+    let raw = raw.ok_or_else(|| anyhow!("managed_workspace_profile_invalid"))?;
+    if raw.is_empty() || raw != raw.trim() {
+        bail!("managed_workspace_profile_invalid");
+    }
+    let url = Url::parse(&raw).map_err(|_| anyhow!("managed_workspace_profile_invalid"))?;
+    if url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.host_str().is_none_or(str::is_empty)
+        || url.port_or_known_default().is_some_and(is_forbidden_port)
+    {
+        bail!("managed_workspace_profile_invalid");
+    }
+    match url.scheme().to_ascii_lowercase().as_str() {
+        "https" => {}
+        "http" if is_loopback_host(&url) || is_private_lan_host(&url) => {}
+        _ => bail!("managed_workspace_profile_invalid"),
+    }
+    Ok(url)
+}
+
+fn validate_managed_workspace_id(raw: &str) -> anyhow::Result<String> {
+    if raw.is_empty()
+        || raw != raw.trim()
+        || raw.len() > 160
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        bail!("managed_workspace_id_invalid");
+    }
+    Ok(raw.to_string())
+}
+
+fn load_managed_profile_credentials_from(
+    profile_directory: &Path,
+) -> anyhow::Result<ManagedWorkspaceCredentials> {
+    let path = profile_directory.join(MANAGED_PROFILE_CONFIG_FILE);
+    let file = fs::File::open(&path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => anyhow!("managed_workspace_profile_missing"),
+        _ => anyhow!("managed_workspace_profile_read_failed"),
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| anyhow!("managed_workspace_profile_read_failed"))?;
+    if !metadata.is_file() || metadata.len() > MANAGED_PROFILE_MAX_CONFIG_BYTES {
+        bail!("managed_workspace_profile_invalid");
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .unwrap_or(MANAGED_PROFILE_MAX_CONFIG_BYTES as usize)
+            .min(MANAGED_PROFILE_MAX_CONFIG_BYTES as usize),
+    );
+    file.take(MANAGED_PROFILE_MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| anyhow!("managed_workspace_profile_read_failed"))?;
+    if bytes.len() > MANAGED_PROFILE_MAX_CONFIG_BYTES as usize {
+        bail!("managed_workspace_profile_invalid");
+    }
+    let profile: ManagedWorkspaceProfileFile =
+        serde_json::from_slice(&bytes).map_err(|_| anyhow!("managed_workspace_profile_invalid"))?;
+    let server_origin = validate_managed_workspace_origin(profile.server_url)?;
+    let app_origin = validate_managed_workspace_origin(profile.app_url)?;
+    let workspace_id = validate_managed_workspace_id(
+        profile
+            .workspace_id
+            .as_deref()
+            .ok_or_else(|| anyhow!("managed_workspace_profile_invalid"))?,
+    )?;
+    let token = profile
+        .token
+        .filter(|token| !token.is_empty() && token.len() <= MANAGED_WORKSPACE_MAX_TOKEN_LENGTH)
+        .ok_or_else(|| anyhow!("managed_workspace_profile_invalid"))?;
+    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| anyhow!("managed_workspace_profile_invalid"))?;
+    authorization.set_sensitive(true);
+    Ok(ManagedWorkspaceCredentials {
+        server_origin,
+        app_origin,
+        workspace_id,
+        authorization,
+    })
+}
+
+/// Load the one fixed CCP-managed Multica profile into a read-only client.
+/// The profile path is not caller-selectable and the credential never leaves
+/// this module.
+pub fn managed_workspace_client() -> anyhow::Result<MulticaManagedWorkspaceClient> {
+    managed_workspace_client_from(&managed_profile_directory())
+}
+
+fn managed_workspace_client_from(
+    profile_directory: &Path,
+) -> anyhow::Result<MulticaManagedWorkspaceClient> {
+    let credentials = load_managed_profile_credentials_from(profile_directory)?;
+    Ok(MulticaManagedWorkspaceClient {
+        client: build_client().map_err(|_| anyhow!("managed_workspace_client_unavailable"))?,
+        server_origin: credentials.server_origin,
+        _app_origin: credentials.app_origin,
+        workspace_id: credentials.workspace_id,
+        authorization: credentials.authorization,
+    })
 }
 
 fn managed_sidecar_for_executable(path: PathBuf) -> anyhow::Result<MulticaSidecarConfig> {
@@ -5650,6 +6122,49 @@ fn apply_sidecar_environment(command: &mut Command) {
     }
 }
 
+fn managed_codex_runtime_environment_from(
+    executable: &Path,
+    inherited_path: Option<&OsStr>,
+) -> anyhow::Result<(PathBuf, OsString)> {
+    let executable = fs::canonicalize(executable).context("managed_codex_runtime_unavailable")?;
+    if !executable.is_file() {
+        bail!("managed_codex_runtime_unavailable");
+    }
+    let file_name = executable
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
+    let expected_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    if !file_name.eq_ignore_ascii_case(expected_name) {
+        bail!("managed_codex_runtime_untrusted");
+    }
+    let directory = executable
+        .parent()
+        .ok_or_else(|| anyhow!("managed_codex_runtime_unavailable"))?
+        .to_path_buf();
+    let mut entries = vec![directory.clone()];
+    if let Some(inherited_path) = inherited_path {
+        entries.extend(std::env::split_paths(inherited_path));
+    }
+    let path = std::env::join_paths(entries).context("managed_codex_runtime_path_invalid")?;
+    Ok((executable, path))
+}
+
+/// Bind Multica's managed daemon to Codex Desktop's own app-server. These
+/// overrides are process-local: parent environment, suppliers, proxy routing,
+/// model selection and the user's Codex configuration remain untouched.
+fn apply_managed_codex_runtime_environment(command: &mut Command) -> anyhow::Result<PathBuf> {
+    let executable = crate::app_paths::find_codex_desktop_cli()
+        .ok_or_else(|| anyhow!("managed_codex_runtime_unavailable"))?;
+    let (executable, path) =
+        managed_codex_runtime_environment_from(&executable, std::env::var_os("PATH").as_deref())?;
+    command
+        .env("MULTICA_CODEX_PATH", &executable)
+        .env("MULTICA_CODEX_MULTI_AGENT", "1")
+        .env("PATH", path);
+    Ok(executable)
+}
+
 fn canonical_connection_key(connection: &MulticaConnectionConfig) -> String {
     let parsed = Url::parse(connection.server_url.trim());
     let url_key = parsed
@@ -6533,8 +7048,10 @@ fn start_sidecar_with_scope(
     apply_sidecar_environment(&mut command);
     if is_managed_connection_id(connection_id) {
         // `apply_sidecar_environment` clears inherited variables first. Only
-        // this managed child receives the exact validated connection URL.
+        // this managed child receives the exact validated connection URL and
+        // the verified Codex Desktop app-server binding.
         command.env("MULTICA_SERVER_URL", &config.server_url);
+        apply_managed_codex_runtime_environment(&mut command)?;
     }
     if let Some(working_dir) = sidecar
         .working_dir
@@ -7260,6 +7777,421 @@ fn prepare_get(
     config: &MulticaConnectionConfig,
 ) -> reqwest::RequestBuilder {
     apply_workspace_headers(apply_token(client.get(url), config), config)
+}
+
+#[derive(Deserialize)]
+struct ManagedWorkspaceIssuesPayload {
+    issues: Vec<MulticaWorkspaceIssue>,
+    total: u64,
+    #[serde(default)]
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ManagedWorkspaceProjectsPayload {
+    projects: Vec<MulticaWorkspaceProject>,
+    total: u64,
+    #[serde(default)]
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ManagedWorkspaceAutopilotsPayload {
+    autopilots: Vec<MulticaWorkspaceAutopilot>,
+    total: u64,
+    #[serde(default)]
+    next_cursor: Option<String>,
+}
+
+fn validate_managed_workspace_cursor(cursor: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    if cursor.is_empty()
+        || cursor.len() > MANAGED_WORKSPACE_MAX_CURSOR_LENGTH
+        || cursor.chars().any(char::is_control)
+    {
+        bail!("managed_workspace_cursor_invalid");
+    }
+    Ok(Some(cursor.to_string()))
+}
+
+fn validate_runtime_local_skill(skill: &mut MulticaRuntimeLocalSkillSummary) -> anyhow::Result<()> {
+    let stable_ref = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 240
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@')
+            })
+    };
+    if !stable_ref(&skill.key) || skill.name.trim().is_empty() {
+        bail!("managed_workspace_skill_inventory_invalid");
+    }
+    skill.name = skill.name.trim().chars().take(MAX_TEXT_LENGTH).collect();
+    skill.description = skill.description.take().map(|value| {
+        value
+            .trim()
+            .chars()
+            .take(MAX_PUBLIC_TEXT_INPUT_LENGTH)
+            .collect()
+    });
+    for value in [&mut skill.provider, &mut skill.root, &mut skill.plugin] {
+        if let Some(text) = value.take() {
+            let text = text.trim();
+            if !text.is_empty() && !stable_ref(text) {
+                bail!("managed_workspace_skill_inventory_invalid");
+            }
+            *value = (!text.is_empty()).then(|| text.to_string());
+        }
+    }
+    skill.file_count = skill.file_count.min(10_000);
+    Ok(())
+}
+
+fn managed_workspace_list_result<T>(
+    mut items: Vec<T>,
+    total: Option<u64>,
+    next_cursor: Option<String>,
+    request: &MulticaWorkspaceListRequest,
+    workspace_id: impl Fn(&T) -> &str,
+) -> anyhow::Result<(Vec<T>, u64, Option<String>)> {
+    if items
+        .iter()
+        .any(|item| workspace_id(item) != request.workspace_id)
+    {
+        bail!("managed_workspace_tenant_mismatch");
+    }
+    let observed_total = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    items.truncate(request.limit);
+    let next_cursor = validate_managed_workspace_cursor(next_cursor.as_deref())?;
+    Ok((items, total.unwrap_or(observed_total), next_cursor))
+}
+
+impl MulticaManagedWorkspaceClient {
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    fn validate_workspace(&self, workspace_id: &str) -> anyhow::Result<()> {
+        let workspace_id = validate_managed_workspace_id(workspace_id)?;
+        if workspace_id != self.workspace_id {
+            bail!("managed_workspace_scope_mismatch");
+        }
+        Ok(())
+    }
+
+    fn endpoint(&self, resource: MulticaWorkspaceReadResource) -> anyhow::Result<Url> {
+        let endpoint = self
+            .server_origin
+            .join(resource.path())
+            .map_err(|_| anyhow!("managed_workspace_endpoint_invalid"))?;
+        if endpoint.scheme() != self.server_origin.scheme()
+            || endpoint.host_str() != self.server_origin.host_str()
+            || endpoint.port_or_known_default() != self.server_origin.port_or_known_default()
+        {
+            bail!("managed_workspace_endpoint_invalid");
+        }
+        Ok(endpoint)
+    }
+
+    fn list_endpoint(
+        &self,
+        resource: MulticaWorkspaceReadResource,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<Url> {
+        self.validate_workspace(&request.workspace_id)?;
+        if request.limit == 0 || request.limit > MAX_COLLECTION_ITEMS {
+            bail!("managed_workspace_limit_invalid");
+        }
+        let cursor = validate_managed_workspace_cursor(request.cursor.as_deref())?;
+        let mut endpoint = self.endpoint(resource)?;
+        {
+            let mut query = endpoint.query_pairs_mut();
+            query.append_pair("workspace_id", &self.workspace_id);
+            query.append_pair("limit", &request.limit.to_string());
+            if let Some(cursor) = cursor.as_deref() {
+                query.append_pair("cursor", cursor);
+            }
+        }
+        Ok(endpoint)
+    }
+
+    fn runtime_local_skills_endpoint(
+        &self,
+        runtime_id: &str,
+        request_id: Option<&str>,
+    ) -> anyhow::Result<Url> {
+        let runtime_id = validate_managed_workspace_id(runtime_id)?;
+        let request_id = request_id.map(validate_managed_workspace_id).transpose()?;
+        let path = match request_id {
+            Some(request_id) => {
+                format!("/api/runtimes/{runtime_id}/local-skills/{request_id}")
+            }
+            None => format!("/api/runtimes/{runtime_id}/local-skills"),
+        };
+        let endpoint = self
+            .server_origin
+            .join(&path)
+            .map_err(|_| anyhow!("managed_workspace_endpoint_invalid"))?;
+        if endpoint.scheme() != self.server_origin.scheme()
+            || endpoint.host_str() != self.server_origin.host_str()
+            || endpoint.port_or_known_default() != self.server_origin.port_or_known_default()
+        {
+            bail!("managed_workspace_endpoint_invalid");
+        }
+        Ok(endpoint)
+    }
+
+    async fn request_json<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        url: Url,
+    ) -> anyhow::Result<T> {
+        let response = self
+            .client
+            .request(method, url)
+            .header(ACCEPT, "application/json")
+            .header(AUTHORIZATION, self.authorization.clone())
+            .header("X-Workspace-ID", &self.workspace_id)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_timeout() {
+                    anyhow!("managed_workspace_timeout")
+                } else {
+                    anyhow!("managed_workspace_network_error")
+                }
+            })?;
+        match response.status() {
+            StatusCode::UNAUTHORIZED => bail!("managed_workspace_unauthorized"),
+            StatusCode::FORBIDDEN => bail!("managed_workspace_forbidden"),
+            StatusCode::NOT_FOUND => bail!("managed_workspace_not_found"),
+            status if !status.is_success() => bail!("managed_workspace_http_status"),
+            _ => {}
+        }
+        let bytes = read_response_body_limited(response)
+            .await
+            .map_err(|error| match error {
+                ResponseBodyError::TooLarge => anyhow!("managed_workspace_response_too_large"),
+                ResponseBodyError::ReadFailed => anyhow!("managed_workspace_network_error"),
+            })?;
+        serde_json::from_slice(&bytes).map_err(|_| anyhow!("managed_workspace_invalid_json"))
+    }
+
+    async fn get_json<T: DeserializeOwned>(&self, url: Url) -> anyhow::Result<T> {
+        self.request_json(Method::GET, url).await
+    }
+
+    async fn post_empty_json<T: DeserializeOwned>(&self, url: Url) -> anyhow::Result<T> {
+        self.request_json(Method::POST, url).await
+    }
+
+    pub async fn get_me(&self, workspace_id: &str) -> anyhow::Result<MulticaWorkspaceMeResponse> {
+        self.validate_workspace(workspace_id)?;
+        let user = self
+            .get_json(self.endpoint(MulticaWorkspaceReadResource::Me)?)
+            .await?;
+        Ok(MulticaWorkspaceMeResponse {
+            workspace_id: self.workspace_id.clone(),
+            user,
+        })
+    }
+
+    pub async fn list_issues(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceIssuesResponse> {
+        let payload: ManagedWorkspaceIssuesPayload = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Issues, request)?)
+            .await?;
+        let (issues, total, next_cursor) = managed_workspace_list_result(
+            payload.issues,
+            Some(payload.total),
+            payload.next_cursor,
+            request,
+            |item| &item.workspace_id,
+        )?;
+        Ok(MulticaWorkspaceIssuesResponse {
+            workspace_id: self.workspace_id.clone(),
+            issues,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn list_projects(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceProjectsResponse> {
+        let payload: ManagedWorkspaceProjectsPayload = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Projects, request)?)
+            .await?;
+        let (projects, total, next_cursor) = managed_workspace_list_result(
+            payload.projects,
+            Some(payload.total),
+            payload.next_cursor,
+            request,
+            |item| &item.workspace_id,
+        )?;
+        Ok(MulticaWorkspaceProjectsResponse {
+            workspace_id: self.workspace_id.clone(),
+            projects,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn list_agents(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceAgentsResponse> {
+        let items: Vec<MulticaWorkspaceAgent> = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Agents, request)?)
+            .await?;
+        let (agents, total, next_cursor) =
+            managed_workspace_list_result(items, None, None, request, |item| &item.workspace_id)?;
+        Ok(MulticaWorkspaceAgentsResponse {
+            workspace_id: self.workspace_id.clone(),
+            agents,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn list_runtimes(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceRuntimesResponse> {
+        let items: Vec<MulticaWorkspaceRuntime> = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Runtimes, request)?)
+            .await?;
+        let (runtimes, total, next_cursor) =
+            managed_workspace_list_result(items, None, None, request, |item| &item.workspace_id)?;
+        Ok(MulticaWorkspaceRuntimesResponse {
+            workspace_id: self.workspace_id.clone(),
+            runtimes,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn list_skills(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceSkillsResponse> {
+        let items: Vec<MulticaWorkspaceSkill> = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Skills, request)?)
+            .await?;
+        let (skills, total, next_cursor) =
+            managed_workspace_list_result(items, None, None, request, |item| &item.workspace_id)?;
+        Ok(MulticaWorkspaceSkillsResponse {
+            workspace_id: self.workspace_id.clone(),
+            skills,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn discover_runtime_local_skills(
+        &self,
+        runtime: &MulticaWorkspaceRuntime,
+    ) -> anyhow::Result<MulticaRuntimeLocalSkillInventory> {
+        self.validate_workspace(&runtime.workspace_id)?;
+        if runtime.provider.as_deref() != Some("codex") {
+            bail!("managed_workspace_runtime_provider_mismatch");
+        }
+        if !matches!(
+            runtime.status.as_deref(),
+            Some("online" | "ready" | "idle" | "working")
+        ) {
+            bail!("managed_workspace_runtime_unavailable");
+        }
+
+        let capabilities = runtime.capabilities();
+        if !capabilities.iter().any(|value| value == "skill-bundles-v1")
+            && !capabilities.iter().any(|value| value == "agent-skill-v1")
+        {
+            bail!("managed_workspace_runtime_skills_unsupported");
+        }
+
+        let mut request: ManagedRuntimeLocalSkillRequest = self
+            .post_empty_json(self.runtime_local_skills_endpoint(&runtime.id, None)?)
+            .await?;
+        if request.runtime_id != runtime.id {
+            bail!("managed_workspace_runtime_mismatch");
+        }
+        let request_id = validate_managed_workspace_id(&request.id)?;
+        for attempt in 0..=MANAGED_WORKSPACE_SKILL_POLL_ATTEMPTS {
+            match request.status.as_str() {
+                "completed" => break,
+                "failed" | "timeout" | "conflict" => {
+                    bail!("managed_workspace_skill_inventory_failed")
+                }
+                "pending" | "running" if attempt < MANAGED_WORKSPACE_SKILL_POLL_ATTEMPTS => {
+                    tokio::time::sleep(MANAGED_WORKSPACE_SKILL_POLL_DELAY).await;
+                    request = self
+                        .get_json(
+                            self.runtime_local_skills_endpoint(&runtime.id, Some(&request_id))?,
+                        )
+                        .await?;
+                    if request.runtime_id != runtime.id || request.id != request_id {
+                        bail!("managed_workspace_runtime_mismatch");
+                    }
+                }
+                _ => bail!("managed_workspace_skill_inventory_timeout"),
+            }
+        }
+
+        request.skills.truncate(MAX_COLLECTION_ITEMS);
+        for skill in &mut request.skills {
+            validate_runtime_local_skill(skill)?;
+        }
+        Ok(MulticaRuntimeLocalSkillInventory {
+            workspace_id: self.workspace_id.clone(),
+            runtime_id: runtime.id.clone(),
+            supported: request.supported,
+            skills: request.skills,
+        })
+    }
+
+    pub async fn list_squads(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceSquadsResponse> {
+        let items: Vec<MulticaWorkspaceSquad> = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Squads, request)?)
+            .await?;
+        let (squads, total, next_cursor) =
+            managed_workspace_list_result(items, None, None, request, |item| &item.workspace_id)?;
+        Ok(MulticaWorkspaceSquadsResponse {
+            workspace_id: self.workspace_id.clone(),
+            squads,
+            total,
+            next_cursor,
+        })
+    }
+
+    pub async fn list_autopilots(
+        &self,
+        request: &MulticaWorkspaceListRequest,
+    ) -> anyhow::Result<MulticaWorkspaceAutopilotsResponse> {
+        let payload: ManagedWorkspaceAutopilotsPayload = self
+            .get_json(self.list_endpoint(MulticaWorkspaceReadResource::Autopilots, request)?)
+            .await?;
+        let (autopilots, total, next_cursor) = managed_workspace_list_result(
+            payload.autopilots,
+            Some(payload.total),
+            payload.next_cursor,
+            request,
+            |item| &item.workspace_id,
+        )?;
+        Ok(MulticaWorkspaceAutopilotsResponse {
+            workspace_id: self.workspace_id.clone(),
+            autopilots,
+            total,
+            next_cursor,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -8452,6 +9384,403 @@ mod tests {
             created_at_ms: 0,
             updated_at_ms: 0,
         }
+    }
+
+    fn write_managed_workspace_profile(
+        directory: &Path,
+        server_url: &str,
+        app_url: &str,
+        workspace_id: &str,
+        token: &str,
+    ) {
+        fs::create_dir_all(directory).expect("create managed workspace profile fixture");
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "server_url": server_url,
+            "app_url": app_url,
+            "workspace_id": workspace_id,
+            "token": token,
+            "device_name": "ignored-forward-compatible-field"
+        }))
+        .expect("encode managed workspace profile fixture");
+        fs::write(directory.join(MANAGED_PROFILE_CONFIG_FILE), bytes)
+            .expect("write managed workspace profile fixture");
+    }
+
+    fn workspace_request(workspace_id: &str, limit: usize) -> MulticaWorkspaceListRequest {
+        MulticaWorkspaceListRequest {
+            workspace_id: workspace_id.to_string(),
+            cursor: Some("cursor-one".to_string()),
+            limit,
+        }
+    }
+
+    #[test]
+    fn multica_workspace_profile_credentials_are_bounded_structured_and_private() {
+        let temp = tempfile::tempdir().unwrap();
+        write_managed_workspace_profile(
+            temp.path(),
+            "https://api.multica.example",
+            "https://multica.example",
+            "workspace-a",
+            "fixture-secret-token",
+        );
+
+        let credentials = load_managed_profile_credentials_from(temp.path()).unwrap();
+        assert_eq!(
+            credentials.server_origin.as_str(),
+            "https://api.multica.example/"
+        );
+        assert_eq!(credentials.app_origin.as_str(), "https://multica.example/");
+        assert_eq!(credentials.workspace_id, "workspace-a");
+        assert!(credentials.authorization.is_sensitive());
+
+        let missing = tempfile::tempdir().unwrap();
+        let error = load_managed_profile_credentials_from(missing.path())
+            .err()
+            .expect("missing profile must fail");
+        assert_eq!(error.to_string(), "managed_workspace_profile_missing");
+
+        fs::write(
+            temp.path().join(MANAGED_PROFILE_CONFIG_FILE),
+            vec![b'x'; MANAGED_PROFILE_MAX_CONFIG_BYTES as usize + 1],
+        )
+        .unwrap();
+        let error = load_managed_profile_credentials_from(temp.path())
+            .err()
+            .expect("oversized profile must fail");
+        assert_eq!(error.to_string(), "managed_workspace_profile_invalid");
+
+        fs::write(
+            temp.path().join(MANAGED_PROFILE_CONFIG_FILE),
+            br#"{"server_url":"https://api.example","token":"fixture-secret-token""#,
+        )
+        .unwrap();
+        let error = load_managed_profile_credentials_from(temp.path())
+            .err()
+            .expect("invalid JSON must fail");
+        assert_eq!(error.to_string(), "managed_workspace_profile_invalid");
+        assert!(!error.to_string().contains("fixture-secret-token"));
+    }
+
+    #[test]
+    fn multica_workspace_profile_rejects_unsafe_origins_and_workspace_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let invalid_profiles = [
+            (
+                "https://user:pass@api.example",
+                "https://app.example",
+                "workspace-a",
+            ),
+            (
+                "https://api.example?token=secret",
+                "https://app.example",
+                "workspace-a",
+            ),
+            (
+                "https://api.example/api",
+                "https://app.example",
+                "workspace-a",
+            ),
+            (
+                "https://api.example",
+                "https://app.example/#fragment",
+                "workspace-a",
+            ),
+            (
+                "http://public.example",
+                "https://app.example",
+                "workspace-a",
+            ),
+            (
+                "https://api.example",
+                "https://app.example",
+                "../workspace-b",
+            ),
+        ];
+        for (server_url, app_url, workspace_id) in invalid_profiles {
+            write_managed_workspace_profile(
+                temp.path(),
+                server_url,
+                app_url,
+                workspace_id,
+                "fixture-secret-token",
+            );
+            let error = load_managed_profile_credentials_from(temp.path())
+                .err()
+                .expect("unsafe managed profile must fail");
+            assert!(matches!(
+                error.to_string().as_str(),
+                "managed_workspace_profile_invalid" | "managed_workspace_id_invalid"
+            ));
+            assert!(!error.to_string().contains("secret"));
+            assert!(!error.to_string().contains("https://"));
+        }
+    }
+
+    #[tokio::test]
+    async fn multica_workspace_client_uses_only_fixed_get_routes_and_typed_dtos() {
+        let server = FakeHttpServer::start(vec![
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"id":"user-a","name":"User","email":"user@example.test","token":"must-be-ignored"}"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"issues":[{"id":"issue-a","workspace_id":"workspace-a","title":"Issue","status":"open","description":"private full body"}],"total":1}"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"projects":[{"id":"project-a","workspace_id":"workspace-a","title":"Project","status":"planned"}],"total":1}"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"[{"id":"agent-a","workspace_id":"workspace-a","name":"Agent","status":"idle","instructions":"private prompt","mcp_config":{"token":"private"}}]"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"[{"id":"runtime-a","workspace_id":"workspace-a","name":"Runtime","status":"online","metadata":{"api_key":"private"}}]"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"[{"id":"skill-a","workspace_id":"workspace-a","name":"Skill","description":"Summary","content":"private full skill"}]"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"[{"id":"squad-a","workspace_id":"workspace-a","name":"Squad","leader_id":"agent-a","instructions":"private"}]"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"autopilots":[{"id":"autopilot-a","workspace_id":"workspace-a","title":"Daily","status":"active","assignee_id":"agent-a"}],"total":1}"#,
+            },
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        write_managed_workspace_profile(
+            temp.path(),
+            &server.base_url,
+            &server.base_url,
+            "workspace-a",
+            "fixture-secret-token",
+        );
+        let client = managed_workspace_client_from(temp.path()).unwrap();
+        let request = workspace_request("workspace-a", 25);
+
+        let me = client.get_me("workspace-a").await.unwrap();
+        let issues = client.list_issues(&request).await.unwrap();
+        let projects = client.list_projects(&request).await.unwrap();
+        let agents = client.list_agents(&request).await.unwrap();
+        let runtimes = client.list_runtimes(&request).await.unwrap();
+        let skills = client.list_skills(&request).await.unwrap();
+        let squads = client.list_squads(&request).await.unwrap();
+        let autopilots = client.list_autopilots(&request).await.unwrap();
+
+        assert_eq!(me.user.id, "user-a");
+        assert_eq!(issues.issues[0].id, "issue-a");
+        assert_eq!(projects.projects[0].id, "project-a");
+        assert_eq!(agents.agents[0].id, "agent-a");
+        assert_eq!(runtimes.runtimes[0].id, "runtime-a");
+        assert_eq!(skills.skills[0].id, "skill-a");
+        assert_eq!(squads.squads[0].id, "squad-a");
+        assert_eq!(autopilots.autopilots[0].id, "autopilot-a");
+
+        let renderer_json = serde_json::to_string(&serde_json::json!({
+            "me": me,
+            "issues": issues,
+            "projects": projects,
+            "agents": agents,
+            "runtimes": runtimes,
+            "skills": skills,
+            "squads": squads,
+            "autopilots": autopilots
+        }))
+        .unwrap();
+        for forbidden in [
+            "fixture-secret-token",
+            "private full body",
+            "private prompt",
+            "private full skill",
+            "api_key",
+            "mcp_config",
+        ] {
+            assert!(!renderer_json.contains(forbidden));
+        }
+
+        let requests = server.join();
+        assert_eq!(requests.len(), 8);
+        let expected_paths = [
+            "/api/me",
+            "/api/issues",
+            "/api/projects",
+            "/api/agents",
+            "/api/runtimes",
+            "/api/skills",
+            "/api/squads",
+            "/api/autopilots",
+        ];
+        for (request_text, expected_path) in requests.iter().zip(expected_paths) {
+            let lower = request_text.to_ascii_lowercase();
+            let request_line = request_text.lines().next().unwrap_or_default();
+            assert!(request_line.starts_with(&format!("GET {expected_path}")));
+            assert!(!request_line.contains("fixture-secret-token"));
+            assert!(lower.contains("authorization: bearer fixture-secret-token"));
+            assert!(lower.contains("x-workspace-id: workspace-a"));
+            assert!(!lower.contains("cookie:"));
+        }
+    }
+
+    #[tokio::test]
+    async fn multica_workspace_runtime_skill_inventory_is_fixed_typed_and_path_private() {
+        let server = FakeHttpServer::start(vec![
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"id":"request-a","runtime_id":"runtime-a","status":"pending","supported":true}"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: r#"{"id":"request-a","runtime_id":"runtime-a","status":"completed","supported":true,"skills":[{"key":"codex:review-helper","name":"Review Helper","description":"Review changes","source_path":"C:\\Users\\fixture\\.codex\\skills\\review-helper","provider":"codex","root":"provider","file_count":3}]}"#,
+            },
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        write_managed_workspace_profile(
+            temp.path(),
+            &server.base_url,
+            &server.base_url,
+            "workspace-a",
+            "fixture-secret-token",
+        );
+        let client = managed_workspace_client_from(temp.path()).unwrap();
+        let runtime: MulticaWorkspaceRuntime = serde_json::from_value(serde_json::json!({
+            "id": "runtime-a",
+            "workspace_id": "workspace-a",
+            "provider": "codex",
+            "status": "online",
+            "metadata": {
+                "capabilities": ["skill-bundles-v1", "agent-skill-v1"],
+                "api_key": "must-not-serialize"
+            }
+        }))
+        .unwrap();
+
+        let inventory = client
+            .discover_runtime_local_skills(&runtime)
+            .await
+            .unwrap();
+
+        assert!(inventory.supported);
+        assert_eq!(inventory.runtime_id, "runtime-a");
+        assert_eq!(inventory.skills[0].key, "codex:review-helper");
+        let renderer_json = serde_json::to_string(&inventory).unwrap();
+        assert!(!renderer_json.contains("source_path"));
+        assert!(!renderer_json.contains("C:\\\\Users"));
+        assert!(!renderer_json.contains("fixture-secret-token"));
+        assert!(!renderer_json.contains("must-not-serialize"));
+
+        let requests = server.join();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .starts_with("POST /api/runtimes/runtime-a/local-skills ")
+        );
+        assert!(
+            requests[1]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .starts_with("GET /api/runtimes/runtime-a/local-skills/request-a ")
+        );
+    }
+
+    #[tokio::test]
+    async fn multica_workspace_client_enforces_scope_limit_and_response_tenant() {
+        let server = FakeHttpServer::start(vec![FakeHttpResponse {
+            status: 200,
+            body: r#"[{"id":"agent-b","workspace_id":"workspace-b","name":"Other"}]"#,
+        }]);
+        let temp = tempfile::tempdir().unwrap();
+        write_managed_workspace_profile(
+            temp.path(),
+            &server.base_url,
+            &server.base_url,
+            "workspace-a",
+            "fixture-secret-token",
+        );
+        let client = managed_workspace_client_from(temp.path()).unwrap();
+
+        let error = client
+            .list_agents(&workspace_request("workspace-b", 25))
+            .await
+            .err()
+            .expect("cross-workspace request must fail before I/O");
+        assert_eq!(error.to_string(), "managed_workspace_scope_mismatch");
+        let error = client
+            .list_agents(&workspace_request("workspace-a", 101))
+            .await
+            .err()
+            .expect("limit above 100 must fail before I/O");
+        assert_eq!(error.to_string(), "managed_workspace_limit_invalid");
+        let error = client
+            .list_agents(&workspace_request("workspace-a", 25))
+            .await
+            .err()
+            .expect("foreign response item must fail");
+        assert_eq!(error.to_string(), "managed_workspace_tenant_mismatch");
+        let requests = server.join();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn multica_workspace_client_bounds_and_redacts_http_failures() {
+        let oversized = Box::leak(
+            format!(r#"{{"id":"{}"}}"#, "x".repeat(MAX_RESPONSE_BYTES + 1)).into_boxed_str(),
+        );
+        let server = FakeHttpServer::start(vec![
+            FakeHttpResponse {
+                status: 401,
+                body: r#"{"error":"fixture-secret-token unauthorized"}"#,
+            },
+            FakeHttpResponse {
+                status: 403,
+                body: r#"{"error":"private workspace details"}"#,
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: "not-json-fixture-secret-token",
+            },
+            FakeHttpResponse {
+                status: 200,
+                body: oversized,
+            },
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        write_managed_workspace_profile(
+            temp.path(),
+            &server.base_url,
+            &server.base_url,
+            "workspace-a",
+            "fixture-secret-token",
+        );
+        let client = managed_workspace_client_from(temp.path()).unwrap();
+
+        let expected = [
+            "managed_workspace_unauthorized",
+            "managed_workspace_forbidden",
+            "managed_workspace_invalid_json",
+            "managed_workspace_response_too_large",
+        ];
+        for expected_error in expected {
+            let error = client
+                .get_me("workspace-a")
+                .await
+                .err()
+                .expect("fixture request must fail");
+            assert_eq!(error.to_string(), expected_error);
+            assert!(!error.to_string().contains("fixture-secret-token"));
+            assert!(!error.to_string().contains("private workspace"));
+        }
+        let requests = server.join();
+        assert_eq!(requests.len(), 4);
     }
 
     #[test]
@@ -11067,6 +12396,29 @@ mod tests {
         assert!(!entries.iter().any(|(name, _)| name == "OPENAI_API_KEY"));
         assert!(!entries.iter().any(|(name, _)| name == "MULTICA_TOKEN"));
         assert!(!entries.iter().any(|(_, value)| value.contains("secret")));
+    }
+
+    #[test]
+    fn managed_codex_runtime_environment_pins_desktop_binary_and_path_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+        let executable = temp.path().join("desktop").join(executable_name);
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"codex fixture").unwrap();
+        let inherited_dir = temp.path().join("inherited");
+        fs::create_dir_all(&inherited_dir).unwrap();
+        let inherited = std::env::join_paths([inherited_dir.clone()]).unwrap();
+
+        let (resolved, path) =
+            managed_codex_runtime_environment_from(&executable, Some(&inherited)).unwrap();
+        let entries = std::env::split_paths(&path).collect::<Vec<_>>();
+
+        assert_eq!(resolved, fs::canonicalize(&executable).unwrap());
+        assert_eq!(
+            entries.first().map(|entry| entry.as_path()),
+            resolved.parent()
+        );
+        assert!(entries.iter().any(|entry| entry == &inherited_dir));
     }
 
     #[test]

@@ -1,4 +1,7 @@
 use anyhow::{Context, Result};
+use claude_codex_pro_core::codex_execution::{
+    CodexPageExecutionClient, CodexPageHostTransport, codex_page_execution_service,
+};
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
@@ -671,16 +674,24 @@ impl LauncherDataService {
 
 struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
-    websocket_url: Mutex<Option<String>>,
+    websocket_url: Arc<Mutex<Option<String>>>,
+    codex_execution: Arc<CodexPageExecutionClient>,
+    codex_page_host: CodexPageHostTransport,
     user_scripts: UserScriptManager,
     memory_store: MemoryAssistStore,
 }
 
 impl LauncherRuntimeService {
     fn new(debug_port: u16, user_scripts: UserScriptManager) -> Self {
+        let websocket_url = Arc::new(Mutex::new(None));
+        let (codex_execution, codex_page_host) =
+            codex_page_execution_service(Arc::clone(&websocket_url))
+                .expect("static Codex page host binding must be valid");
         Self {
             debug_port: Mutex::new(debug_port),
-            websocket_url: Mutex::new(None),
+            websocket_url,
+            codex_execution,
+            codex_page_host,
             user_scripts,
             memory_store: MemoryAssistStore::default(),
         }
@@ -691,7 +702,7 @@ impl LauncherRuntimeService {
     }
 
     fn set_websocket_url(&self, websocket_url: &str) {
-        *self.websocket_url.lock().unwrap() = Some(websocket_url.to_string());
+        let _ = self.codex_page_host.set_websocket_url(websocket_url);
     }
 }
 
@@ -825,6 +836,95 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         Ok(claude_codex_pro_core::upstream_worktree::create_response(
             &payload,
         ))
+    }
+
+    async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
+        Ok(serde_json::to_value(
+            claude_codex_pro_core::multica_workspace::workspace_bootstrap_with_codex_runtime(
+                self.codex_execution.clone(),
+            )
+            .await?,
+        )?)
+    }
+
+    async fn multica_workspace_query(
+        &self,
+        query: claude_codex_pro_core::multica_workspace::MulticaWorkspaceQuery,
+    ) -> anyhow::Result<Value> {
+        Ok(serde_json::to_value(
+            claude_codex_pro_core::multica_workspace::workspace_query_with_codex_runtime(
+                query,
+                self.codex_execution.clone(),
+            )
+            .await?,
+        )?)
+    }
+
+    async fn multica_skill_resolve(
+        &self,
+        selection: claude_codex_pro_core::multica_execution::SkillBindingSelection,
+    ) -> anyhow::Result<Value> {
+        claude_codex_pro_core::multica_workspace::resolve_skill_bindings_with_codex_runtime(
+            selection,
+            self.codex_execution.clone(),
+        )
+        .await
+    }
+
+    async fn multica_skill_bind(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaSkillBindingRequest,
+    ) -> anyhow::Result<Value> {
+        claude_codex_pro_core::multica_workspace::upsert_skill_binding_with_codex_runtime(
+            claude_codex_pro_core::multica_workspace::MulticaSkillBindingCommand {
+                scope_kind: request.scope_kind,
+                scope_id: request.scope_id,
+                skill_ref: request.skill_ref,
+                enabled: request.enabled,
+                expected_revision: request.expected_revision,
+            },
+            self.codex_execution.clone(),
+        )
+        .await
+    }
+
+    async fn multica_skill_review(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaSkillReviewRequest,
+    ) -> anyhow::Result<Value> {
+        claude_codex_pro_core::multica_skill_trust::review_local_skill(
+            &request.id,
+            request.trusted,
+            request.manifest_digest.as_deref(),
+        )
+    }
+
+    async fn multica_skill_unbind(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaSkillBindingRemoveRequest,
+    ) -> anyhow::Result<Value> {
+        claude_codex_pro_core::multica_workspace::remove_skill_binding(
+            claude_codex_pro_core::multica_workspace::MulticaSkillBindingRemoveCommand {
+                scope_kind: request.scope_kind,
+                scope_id: request.scope_id,
+                skill_id: request.skill_id,
+                expected_revision: request.expected_revision,
+            },
+        )
+        .await
+    }
+
+    async fn multica_skill_bindings(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaSkillBindingsQueryRequest,
+    ) -> anyhow::Result<Value> {
+        claude_codex_pro_core::multica_workspace::list_skill_bindings(
+            claude_codex_pro_core::multica_workspace::MulticaSkillBindingsQuery {
+                scope_kind: request.scope_kind,
+                scope_id: request.scope_id,
+            },
+        )
+        .await
     }
 
     async fn memory_status(&self) -> anyhow::Result<Value> {

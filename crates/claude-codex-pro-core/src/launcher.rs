@@ -2817,10 +2817,12 @@ async fn try_inject(debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("selected CDP target has no websocket URL"))?;
     let settings = SettingsStore::default().load().unwrap_or_default();
     let script = crate::assets::injection_script_with_settings(helper_port, &settings);
-    let ctx = crate::routes::BridgeContext::core(Arc::new(crate::routes::CoreRuntimeService::new(
-        debug_port,
-        StatusStore::default(),
-    )));
+    let websocket_state = Arc::new(std::sync::Mutex::new(Some(websocket_url.to_string())));
+    let (codex_execution, _) =
+        crate::codex_execution::codex_page_execution_service(websocket_state)?;
+    let runtime = crate::routes::CoreRuntimeService::new(debug_port, StatusStore::default())
+        .with_codex_execution_service(codex_execution);
+    let ctx = crate::routes::BridgeContext::core(Arc::new(runtime));
     crate::bridge::install_bridge(
         websocket_url,
         crate::bridge::BRIDGE_BINDING_NAME,

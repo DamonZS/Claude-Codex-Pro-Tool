@@ -106,6 +106,36 @@ fn manager_startup_restores_claude_desktop_proxy_helper() {
 }
 
 #[test]
+fn manager_startup_restores_only_user_configured_multica_sidecars() {
+    let lib = include_str!("../src/lib.rs");
+    let setup = source_section(lib, ".setup(move |app| {", ".on_window_event");
+
+    assert!(setup.contains("start_auto_start_sidecars"));
+    assert!(!setup.contains("ensure_managed_runtime_async"));
+    assert!(!setup.contains("start_managed_runtime_supervision_if_enabled"));
+    assert!(!setup.contains("managed_runtime_install_is_startable"));
+}
+
+#[test]
+fn manager_navigation_hides_legacy_multica_runtime_page() {
+    let routes = read_frontend_file("lib/routes.ts");
+    let app = read_frontend_file("App.tsx");
+    let screens = read_frontend_file("screens.tsx");
+    let visible_routes = source_section(
+        &routes,
+        "export const routes: RouteItem[] = [",
+        "export const compatibilityRoutes",
+    );
+
+    assert!(!visible_routes.contains("id: \"multica\""));
+    assert!(routes.contains("value === \"logs\" || value === \"multica\""));
+    assert!(!app.contains("route === \"multica\""));
+    assert!(!app.contains("<MulticaRuntimeScreen"));
+    assert!(screens.contains("[\"本地 Multica 工作区\", \"multicaWorkspaceEnabled\"]"));
+    assert!(screens.contains("s?.multicaWorkspaceEnabled !== false"));
+}
+
+#[test]
 fn manager_provider_writes_do_not_persist_codex_credentials() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));

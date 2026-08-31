@@ -4264,6 +4264,7 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["记忆 LLM 摘要", "memoryAssistLlmSummaryEnabled"],
     ["记忆 MCP 共享", "memoryAssistMcpEnabled"],
     ["CLI 包装器", "cliWrapperEnabled"],
+    ["本地 Multica 工作区", "multicaWorkspaceEnabled"],
   ] as const;
   return (
     <div className="stack">
@@ -4296,7 +4297,8 @@ export const SettingsScreen = memo(function SettingsScreen({
         <Panel title="Codex 增强矩阵" detail="可直接开关，点击保存设置后写入配置。">
           <div className="ops-setting-grid">
             {enhancementRows.map(([label, key]) => {
-              const enabled = Boolean(s?.[key]);
+              // Newly introduced settings remain enabled for older responses until explicitly disabled.
+              const enabled = key === "multicaWorkspaceEnabled" ? s?.multicaWorkspaceEnabled !== false : Boolean(s?.[key]);
               return (
                 <div className={`ops-setting-card ${enabled ? "enabled" : ""}`} key={label}>
                   <strong>{label}</strong>

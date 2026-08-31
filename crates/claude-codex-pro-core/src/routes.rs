@@ -1,16 +1,35 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use rusqlite::Connection;
-use serde_json::{Value, json};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 
+use crate::codex_execution::{
+    CodexExecutionHandle, CodexExecutionService, CodexExecutionState, CodexExecutionStatus,
+    CodexThreadRequest,
+};
 use crate::memory_assist::{
     MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryItemRequest,
     MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
+use crate::multica_execution::{
+    SkillBindingScope, SkillBindingSelection, SkillBindings, SkillReference, SkillResolutionAudit,
+};
+use crate::multica_execution_store::{
+    CodexMulticaExecutionBinding, ExecutionReservation, MulticaExecutionBindingState,
+    MulticaExecutionCommandKind, MulticaExecutionCommandState, MulticaExecutionKind,
+    MulticaExecutionStore,
+};
+use crate::multica_skill_trust::review_local_skill;
+use crate::multica_workspace::{
+    LocalMulticaWorkspaceStore, LocalWorkspaceEntityDelete, LocalWorkspaceEntityUpsert,
+    MulticaSkillBindingCommand, MulticaSkillBindingRemoveCommand, MulticaSkillBindingsQuery,
+    MulticaWorkspaceQuery, MulticaWorkspaceResourceKey,
+};
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
 use crate::user_scripts::UserScriptManager;
@@ -123,6 +142,93 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn upstream_worktree_defaults(&self, payload: Value) -> anyhow::Result<Value>;
     async fn upstream_worktree_prepare(&self, payload: Value) -> anyhow::Result<Value>;
     async fn upstream_worktree_create(&self, payload: Value) -> anyhow::Result<Value>;
+    async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_unavailable")
+    }
+    async fn multica_workspace_query(
+        &self,
+        _query: MulticaWorkspaceQuery,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_unavailable")
+    }
+    async fn multica_workspace_upsert(
+        &self,
+        _request: MulticaWorkspaceUpsertRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
+    async fn multica_workspace_delete(
+        &self,
+        _request: MulticaWorkspaceDeleteRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
+    async fn multica_skill_resolve(
+        &self,
+        _selection: SkillBindingSelection,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_resolution_unavailable")
+    }
+    async fn multica_skill_review(
+        &self,
+        _request: MulticaSkillReviewRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_review_unavailable")
+    }
+    async fn multica_skill_bind(
+        &self,
+        _request: MulticaSkillBindingRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_binding_unavailable")
+    }
+    async fn multica_skill_unbind(
+        &self,
+        _request: MulticaSkillBindingRemoveRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_binding_unavailable")
+    }
+    async fn multica_skill_bindings(
+        &self,
+        _request: MulticaSkillBindingsQueryRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_binding_unavailable")
+    }
+    async fn multica_execution_create(
+        &self,
+        _request: MulticaExecutionCreateRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_open(
+        &self,
+        _request: MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_continue(
+        &self,
+        _request: MulticaExecutionContinueRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_cancel(
+        &self,
+        _request: MulticaExecutionCancelRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_status(
+        &self,
+        _request: MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_list(
+        &self,
+        _request: MulticaExecutionListRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
     async fn memory_status(&self) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
@@ -226,6 +332,140 @@ pub async fn handle_bridge_request(
         "/user-scripts/reload" => ctx.runtime.reload_user_scripts().await,
         "/devtools/open" => ctx.runtime.open_devtools().await,
         "/manager/open" => ctx.runtime.open_manager().await,
+        "/multica/workspace/bootstrap" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                parse_empty_multica_payload(&payload)?;
+                ctx.runtime.multica_workspace_bootstrap().await
+            }
+            .await
+        }
+        "/multica/workspace/query" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_workspace_query(parse_multica_workspace_query(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/workspace/upsert" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_workspace_upsert(parse_multica_workspace_upsert(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/workspace/delete" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_workspace_delete(parse_multica_workspace_delete(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/resolve" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_resolve(parse_multica_skill_selection(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/review" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_review(parse_multica_skill_review(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/bind" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_bind(parse_multica_skill_binding(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/unbind" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_unbind(parse_multica_skill_binding_remove(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/bindings" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_bindings(parse_multica_skill_bindings_query(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/create" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_create(parse_multica_execution_create(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/open" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_open(parse_multica_execution_binding(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/continue" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_continue(parse_multica_execution_continue(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/cancel" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_cancel(parse_multica_execution_cancel(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/status" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_status(parse_multica_execution_binding(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/list" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_list(parse_multica_execution_list(&payload)?)
+                    .await
+            }
+            .await
+        }
         "/backend/status" => ctx.runtime.backend_status().await,
         "/backend/repair" => ctx.runtime.repair_backend().await,
         "/claude-desktop/status" => ctx.runtime.claude_desktop_status().await,
@@ -391,6 +631,374 @@ async fn ensure_memory_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
     }
 }
 
+async fn ensure_multica_workspace_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
+    if ctx.settings.get_settings().await?.multica_workspace_enabled {
+        Ok(())
+    } else {
+        anyhow::bail!("multica_workspace_disabled")
+    }
+}
+
+const MAX_MULTICA_BRIDGE_PAYLOAD_BYTES: usize = 32 * 1024;
+
+fn ensure_multica_payload_size(payload: &Value) -> anyhow::Result<()> {
+    let bytes =
+        serde_json::to_vec(payload).map_err(|_| anyhow::anyhow!("multica_payload_invalid"))?;
+    if bytes.len() > MAX_MULTICA_BRIDGE_PAYLOAD_BYTES {
+        anyhow::bail!("multica_payload_too_large");
+    }
+    Ok(())
+}
+
+fn parse_empty_multica_payload(payload: &Value) -> anyhow::Result<()> {
+    ensure_multica_payload_size(payload)?;
+    if payload.as_object().is_some_and(Map::is_empty) {
+        Ok(())
+    } else {
+        anyhow::bail!("multica_payload_invalid")
+    }
+}
+
+fn parse_multica_workspace_query(payload: &Value) -> anyhow::Result<MulticaWorkspaceQuery> {
+    ensure_multica_payload_size(payload)?;
+    let query = serde_json::from_value::<MulticaWorkspaceQuery>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_workspace_query_invalid"))?;
+    query.validate()?;
+    Ok(query)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaWorkspaceUpsertRequest {
+    pub resource: MulticaWorkspaceResourceKey,
+    pub entity: Value,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaWorkspaceDeleteRequest {
+    pub resource: MulticaWorkspaceResourceKey,
+    pub entity_id: String,
+    pub expected_revision: u64,
+}
+
+fn parse_multica_workspace_upsert(
+    payload: &Value,
+) -> anyhow::Result<MulticaWorkspaceUpsertRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request: MulticaWorkspaceUpsertRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_workspace_mutation_invalid"))?;
+    validate_mutable_workspace_resource(request.resource)?;
+    if !request.entity.is_object() {
+        anyhow::bail!("multica_workspace_entity_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_workspace_delete(
+    payload: &Value,
+) -> anyhow::Result<MulticaWorkspaceDeleteRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request: MulticaWorkspaceDeleteRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_workspace_mutation_invalid"))?;
+    validate_mutable_workspace_resource(request.resource)?;
+    validate_multica_execution_id(&request.entity_id)
+        .map_err(|_| anyhow::anyhow!("multica_workspace_entity_invalid"))?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_workspace_revision_invalid");
+    }
+    Ok(request)
+}
+
+fn validate_mutable_workspace_resource(
+    resource: MulticaWorkspaceResourceKey,
+) -> anyhow::Result<()> {
+    if matches!(
+        resource,
+        MulticaWorkspaceResourceKey::Issues
+            | MulticaWorkspaceResourceKey::Projects
+            | MulticaWorkspaceResourceKey::Agents
+            | MulticaWorkspaceResourceKey::Squads
+            | MulticaWorkspaceResourceKey::Autopilots
+    ) {
+        Ok(())
+    } else {
+        anyhow::bail!("multica_workspace_resource_not_mutable")
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionCreateRequest {
+    pub workspace_id: String,
+    pub issue_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub bindings: SkillBindings,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionBindingRequest {
+    pub binding_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionContinueRequest {
+    pub binding_id: String,
+    pub prompt: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub bindings: SkillBindings,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionCancelRequest {
+    pub binding_id: String,
+    pub idempotency_key: String,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionListRequest {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub issue_id: Option<String>,
+    #[serde(default = "default_multica_execution_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_multica_execution_limit() -> usize {
+    50
+}
+
+fn parse_multica_execution_create(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionCreateRequest> {
+    let request: MulticaExecutionCreateRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.workspace_id)?;
+    validate_multica_execution_id(&request.issue_id)?;
+    validate_multica_execution_id(&request.idempotency_key)?;
+    SkillBindingSelection {
+        bindings: request.bindings.clone(),
+    }
+    .validate()?;
+    CodexThreadRequest {
+        workspace_id: request.workspace_id.clone(),
+        issue_id: request.issue_id.clone(),
+        prompt: request.prompt.clone(),
+        cwd: request.cwd.clone(),
+        skill_request: None,
+    }
+    .validate()?;
+    Ok(request)
+}
+
+fn parse_multica_execution_binding(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionBindingRequest> {
+    let request: MulticaExecutionBindingRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    Ok(request)
+}
+
+fn parse_multica_execution_continue(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionContinueRequest> {
+    let request: MulticaExecutionContinueRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    validate_multica_execution_id(&request.idempotency_key)?;
+    SkillBindingSelection {
+        bindings: request.bindings.clone(),
+    }
+    .validate()?;
+    CodexThreadRequest {
+        workspace_id: "local".to_string(),
+        issue_id: "issue".to_string(),
+        prompt: request.prompt.clone(),
+        cwd: request.cwd.clone(),
+        skill_request: None,
+    }
+    .validate()?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_execution_cancel(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionCancelRequest> {
+    let request: MulticaExecutionCancelRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    validate_multica_execution_id(&request.idempotency_key)?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_execution_list(payload: &Value) -> anyhow::Result<MulticaExecutionListRequest> {
+    let request: MulticaExecutionListRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.workspace_id)?;
+    if let Some(issue_id) = request.issue_id.as_deref() {
+        validate_multica_execution_id(issue_id)?;
+    }
+    if request.limit == 0 || request.limit > 100 || request.offset > 100_000 {
+        anyhow::bail!("multica_execution_pagination_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_execution_payload<T>(payload: &Value) -> anyhow::Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    ensure_multica_payload_size(payload)?;
+    serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_execution_payload_invalid"))
+}
+
+fn validate_multica_execution_id(value: &str) -> anyhow::Result<()> {
+    if value.is_empty()
+        || value.len() > 240
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@')
+        })
+    {
+        anyhow::bail!("multica_execution_id_invalid");
+    }
+    Ok(())
+}
+
+fn parse_multica_skill_selection(payload: &Value) -> anyhow::Result<SkillBindingSelection> {
+    ensure_multica_payload_size(payload)?;
+    let selection = serde_json::from_value::<SkillBindingSelection>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_selection_invalid"))?;
+    selection.validate()?;
+    Ok(selection)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaSkillReviewRequest {
+    pub id: String,
+    pub trusted: bool,
+    #[serde(default)]
+    pub manifest_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaSkillBindingRequest {
+    pub scope_kind: SkillBindingScope,
+    pub scope_id: String,
+    pub skill_ref: SkillReference,
+    #[serde(default = "default_skill_binding_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaSkillBindingRemoveRequest {
+    pub scope_kind: SkillBindingScope,
+    pub scope_id: String,
+    pub skill_id: String,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaSkillBindingsQueryRequest {
+    #[serde(default)]
+    pub scope_kind: Option<SkillBindingScope>,
+    #[serde(default)]
+    pub scope_id: Option<String>,
+}
+
+fn default_skill_binding_enabled() -> bool {
+    true
+}
+
+fn parse_multica_skill_review(payload: &Value) -> anyhow::Result<MulticaSkillReviewRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request = serde_json::from_value::<MulticaSkillReviewRequest>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_review_invalid"))?;
+    if request.id.trim().is_empty() || request.id.len() > 240 {
+        anyhow::bail!("multica_skill_review_invalid");
+    }
+    if let Some(digest) = request.manifest_digest.as_deref()
+        && (digest.is_empty() || digest.len() > 128)
+    {
+        anyhow::bail!("multica_skill_review_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_skill_binding(payload: &Value) -> anyhow::Result<MulticaSkillBindingRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request = serde_json::from_value::<MulticaSkillBindingRequest>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_binding_invalid"))?;
+    validate_skill_binding_scope(&request.scope_id)?;
+    if request.skill_ref.id.trim().is_empty() {
+        anyhow::bail!("multica_skill_binding_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_skill_binding_remove(
+    payload: &Value,
+) -> anyhow::Result<MulticaSkillBindingRemoveRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request = serde_json::from_value::<MulticaSkillBindingRemoveRequest>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_binding_invalid"))?;
+    validate_skill_binding_scope(&request.scope_id)?;
+    if request.skill_id.trim().is_empty() {
+        anyhow::bail!("multica_skill_binding_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_skill_bindings_query(
+    payload: &Value,
+) -> anyhow::Result<MulticaSkillBindingsQueryRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request = serde_json::from_value::<MulticaSkillBindingsQueryRequest>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_binding_invalid"))?;
+    if let Some(scope_id) = request.scope_id.as_deref() {
+        validate_skill_binding_scope(scope_id)?;
+    }
+    Ok(request)
+}
+
+fn validate_skill_binding_scope(value: &str) -> anyhow::Result<()> {
+    if value.is_empty()
+        || value.len() > 240
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@')
+        })
+    {
+        anyhow::bail!("multica_skill_binding_invalid");
+    }
+    Ok(())
+}
+
 async fn ensure_memory_candidates_allowed(
     ctx: &BridgeContext,
     payload: &Value,
@@ -463,6 +1071,9 @@ pub struct CoreRuntimeService {
     devtools_opener: Option<DevtoolsOpener>,
     devtools_target_id: Option<String>,
     memory_store: MemoryAssistStore,
+    codex_execution: Option<Arc<dyn CodexExecutionService>>,
+    multica_execution_store: MulticaExecutionStore,
+    multica_workspace_store: LocalMulticaWorkspaceStore,
 }
 
 impl CoreRuntimeService {
@@ -476,6 +1087,9 @@ impl CoreRuntimeService {
             devtools_opener: None,
             devtools_target_id: None,
             memory_store: MemoryAssistStore::default(),
+            codex_execution: None,
+            multica_execution_store: MulticaExecutionStore::default(),
+            multica_workspace_store: LocalMulticaWorkspaceStore::default(),
         }
     }
 
@@ -507,6 +1121,31 @@ impl CoreRuntimeService {
     pub fn with_memory_store(mut self, memory_store: MemoryAssistStore) -> Self {
         self.memory_store = memory_store;
         self
+    }
+
+    /// Attach the current Codex page's native execution adapter used by the
+    /// Multica workspace. The bridge never registers or starts a Codex
+    /// runtime; production callers must provide the already-open page host.
+    pub fn with_codex_execution_service(mut self, service: Arc<dyn CodexExecutionService>) -> Self {
+        self.codex_execution = Some(service);
+        self
+    }
+
+    pub fn with_multica_execution_store(mut self, store: MulticaExecutionStore) -> Self {
+        self.multica_execution_store = store;
+        self
+    }
+
+    pub fn with_multica_workspace_store(mut self, store: LocalMulticaWorkspaceStore) -> Self {
+        self.multica_workspace_store = store;
+        self
+    }
+
+    fn codex_execution_service(&self) -> anyhow::Result<Arc<dyn CodexExecutionService>> {
+        self.codex_execution
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))
     }
 }
 
@@ -703,6 +1342,464 @@ impl BridgeRuntimeService for CoreRuntimeService {
 
     async fn upstream_worktree_create(&self, payload: Value) -> anyhow::Result<Value> {
         Ok(crate::upstream_worktree::create_response(&payload))
+    }
+
+    async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
+        let bootstrap = match self.codex_execution.as_ref() {
+            Some(service) => {
+                crate::multica_workspace::workspace_bootstrap_with_codex_runtime(Arc::clone(
+                    service,
+                ))
+                .await?
+            }
+            None => crate::multica_workspace::workspace_bootstrap().await?,
+        };
+        Ok(serde_json::to_value(bootstrap)?)
+    }
+
+    async fn multica_workspace_query(&self, query: MulticaWorkspaceQuery) -> anyhow::Result<Value> {
+        let collection = match self.codex_execution.as_ref() {
+            Some(service) => {
+                crate::multica_workspace::workspace_query_with_codex_runtime(
+                    query,
+                    Arc::clone(service),
+                )
+                .await?
+            }
+            None if matches!(
+                query.resource,
+                crate::multica_workspace::MulticaWorkspaceResourceKey::Skills
+                    | crate::multica_workspace::MulticaWorkspaceResourceKey::Runtimes
+            ) =>
+            {
+                anyhow::bail!("codex_page_host_unavailable")
+            }
+            None => crate::multica_workspace::workspace_query(query).await?,
+        };
+        Ok(serde_json::to_value(collection)?)
+    }
+
+    async fn multica_workspace_upsert(
+        &self,
+        request: MulticaWorkspaceUpsertRequest,
+    ) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::workspace_bootstrap()
+            .await?
+            .workspace
+            .id;
+        let entity = self.multica_workspace_store.upsert(
+            &workspace_id,
+            LocalWorkspaceEntityUpsert {
+                resource: request.resource,
+                entity: request.entity,
+                expected_revision: request.expected_revision,
+            },
+            unix_now_ms(),
+        )?;
+        Ok(json!({"status": "ok", "entity": entity}))
+    }
+
+    async fn multica_workspace_delete(
+        &self,
+        request: MulticaWorkspaceDeleteRequest,
+    ) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::workspace_bootstrap()
+            .await?
+            .workspace
+            .id;
+        let entity_id = request.entity_id;
+        let deleted = self.multica_workspace_store.delete(
+            &workspace_id,
+            LocalWorkspaceEntityDelete {
+                resource: request.resource,
+                entity_id: entity_id.clone(),
+                expected_revision: request.expected_revision,
+            },
+        )?;
+        Ok(json!({"status": "ok", "deleted": deleted, "entityId": entity_id}))
+    }
+
+    async fn multica_skill_resolve(
+        &self,
+        selection: SkillBindingSelection,
+    ) -> anyhow::Result<Value> {
+        let service = self
+            .codex_execution
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))?;
+        crate::multica_workspace::resolve_skill_bindings_with_codex_runtime(
+            selection,
+            Arc::clone(service),
+        )
+        .await
+    }
+
+    async fn multica_skill_review(
+        &self,
+        request: MulticaSkillReviewRequest,
+    ) -> anyhow::Result<Value> {
+        review_local_skill(
+            &request.id,
+            request.trusted,
+            request.manifest_digest.as_deref(),
+        )
+    }
+
+    async fn multica_skill_bind(
+        &self,
+        request: MulticaSkillBindingRequest,
+    ) -> anyhow::Result<Value> {
+        let command = MulticaSkillBindingCommand {
+            scope_kind: request.scope_kind,
+            scope_id: request.scope_id,
+            skill_ref: request.skill_ref,
+            enabled: request.enabled,
+            expected_revision: request.expected_revision,
+        };
+        let service = self
+            .codex_execution
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))?;
+        crate::multica_workspace::upsert_skill_binding_with_codex_runtime(
+            command,
+            Arc::clone(service),
+        )
+        .await
+    }
+
+    async fn multica_skill_unbind(
+        &self,
+        request: MulticaSkillBindingRemoveRequest,
+    ) -> anyhow::Result<Value> {
+        crate::multica_workspace::remove_skill_binding(MulticaSkillBindingRemoveCommand {
+            scope_kind: request.scope_kind,
+            scope_id: request.scope_id,
+            skill_id: request.skill_id,
+            expected_revision: request.expected_revision,
+        })
+        .await
+    }
+
+    async fn multica_skill_bindings(
+        &self,
+        request: MulticaSkillBindingsQueryRequest,
+    ) -> anyhow::Result<Value> {
+        crate::multica_workspace::list_skill_bindings(MulticaSkillBindingsQuery {
+            scope_kind: request.scope_kind,
+            scope_id: request.scope_id,
+        })
+        .await
+    }
+
+    async fn multica_execution_create(
+        &self,
+        request: MulticaExecutionCreateRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let now_ms = unix_now_ms();
+        let reserved = self
+            .multica_execution_store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: request.workspace_id.clone(),
+                issue_id: request.issue_id.clone(),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: request.idempotency_key.clone(),
+                now_ms,
+            })?;
+        if reserved.replay {
+            if reserved.binding.codex_thread_id.is_some() {
+                let handle = execution_handle_from_binding(
+                    &reserved.binding,
+                    &reserved.binding.idempotency_key,
+                )?;
+                return Ok(execution_handle_response(reserved.binding, handle));
+            }
+            if reserved.binding.state == MulticaExecutionBindingState::Failed {
+                anyhow::bail!(
+                    "{}",
+                    reserved
+                        .binding
+                        .last_error_code
+                        .as_deref()
+                        .unwrap_or("codex_execution_failed")
+                );
+            }
+        }
+        let (skill_request, skill_audit) =
+            match resolve_execution_skills(Arc::clone(&service), request.bindings).await {
+                Ok(value) => value,
+                Err(error) => {
+                    let code = stable_execution_error_code(&error);
+                    let _ = self.multica_execution_store.fail_execution(
+                        &reserved.binding.binding_id,
+                        reserved.binding.revision,
+                        &code,
+                        true,
+                        unix_now_ms(),
+                    );
+                    return Err(error);
+                }
+            };
+        if let Some(audit) = skill_audit.as_ref() {
+            self.multica_execution_store.reserve_attempt_snapshot(
+                &reserved.binding.binding_id,
+                reserved.binding.attempt_no,
+                audit,
+                now_ms,
+            )?;
+        }
+        let native_request = CodexThreadRequest {
+            workspace_id: request.workspace_id,
+            issue_id: request.issue_id,
+            prompt: request.prompt,
+            cwd: request.cwd,
+            skill_request,
+        };
+        let handle = match service
+            .create_thread(native_request, &request.idempotency_key)
+            .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                let code = stable_execution_error_code(&error);
+                let _ = self.multica_execution_store.fail_execution(
+                    &reserved.binding.binding_id,
+                    reserved.binding.revision,
+                    &code,
+                    true,
+                    unix_now_ms(),
+                );
+                return Err(anyhow::anyhow!(code));
+            }
+        };
+        let binding = self.multica_execution_store.commit_execution(
+            &reserved.binding.binding_id,
+            reserved.binding.revision,
+            &handle,
+            unix_now_ms(),
+        )?;
+        Ok(execution_handle_response(binding, handle))
+    }
+
+    async fn multica_execution_open(
+        &self,
+        request: MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&request.binding_id)?;
+        if binding.state == MulticaExecutionBindingState::Orphaned {
+            anyhow::bail!("execution_thread_orphaned");
+        }
+        let thread_id = binding
+            .codex_thread_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
+        let handle = service.open_thread(thread_id).await?;
+        Ok(execution_handle_response(binding, handle))
+    }
+
+    async fn multica_execution_continue(
+        &self,
+        request: MulticaExecutionContinueRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&request.binding_id)?;
+        if binding.revision != request.expected_revision {
+            anyhow::bail!("execution_revision_conflict");
+        }
+        if !matches!(
+            binding.state,
+            MulticaExecutionBindingState::Dispatched
+                | MulticaExecutionBindingState::Running
+                | MulticaExecutionBindingState::Stale
+        ) {
+            anyhow::bail!("execution_not_continuable");
+        }
+        let thread_id = binding
+            .codex_thread_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
+        let command = self.multica_execution_store.reserve_command(
+            &binding.binding_id,
+            MulticaExecutionCommandKind::Continue,
+            &request.idempotency_key,
+            request.expected_revision,
+            unix_now_ms(),
+        )?;
+        if command.replay {
+            match command.command.state {
+                MulticaExecutionCommandState::Committed => {
+                    let mut handle =
+                        execution_handle_from_binding(&binding, &request.idempotency_key)?;
+                    handle.execution_id = command.command.codex_execution_id;
+                    return Ok(execution_handle_response(binding, handle));
+                }
+                MulticaExecutionCommandState::Failed => anyhow::bail!(
+                    "{}",
+                    command
+                        .command
+                        .error_code
+                        .as_deref()
+                        .unwrap_or("codex_execution_failed")
+                ),
+                MulticaExecutionCommandState::Reserved => {}
+            }
+        }
+        let (skill_request, _) =
+            match resolve_execution_skills(Arc::clone(&service), request.bindings).await {
+                Ok(value) => value,
+                Err(error) => {
+                    let code = stable_execution_error_code(&error);
+                    let _ = self.multica_execution_store.fail_command(
+                        &request.idempotency_key,
+                        &code,
+                        unix_now_ms(),
+                    );
+                    return Err(error);
+                }
+            };
+        let native_request = CodexThreadRequest {
+            workspace_id: binding.workspace_id.clone(),
+            issue_id: binding.issue_id.clone(),
+            prompt: request.prompt,
+            cwd: request.cwd,
+            skill_request,
+        };
+        native_request.validate()?;
+        let handle = match service
+            .continue_thread(&thread_id, native_request, &request.idempotency_key)
+            .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                let code = stable_execution_error_code(&error);
+                let _ = self.multica_execution_store.fail_command(
+                    &request.idempotency_key,
+                    &code,
+                    unix_now_ms(),
+                );
+                return Err(anyhow::anyhow!(code));
+            }
+        };
+        let (_, binding) = self.multica_execution_store.commit_continue(
+            &request.idempotency_key,
+            request.expected_revision,
+            &handle,
+            unix_now_ms(),
+        )?;
+        Ok(execution_handle_response(binding, handle))
+    }
+
+    async fn multica_execution_cancel(
+        &self,
+        request: MulticaExecutionCancelRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&request.binding_id)?;
+        let thread_id = binding
+            .codex_thread_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
+        let execution_id = binding
+            .codex_execution_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_id_unavailable"))?;
+        let command = self.multica_execution_store.reserve_command(
+            &binding.binding_id,
+            MulticaExecutionCommandKind::Cancel,
+            &request.idempotency_key,
+            request.expected_revision,
+            unix_now_ms(),
+        )?;
+        if command.replay {
+            match command.command.state {
+                MulticaExecutionCommandState::Committed => {
+                    let status = execution_status_from_binding(&binding)?;
+                    return Ok(execution_status_response(binding, status));
+                }
+                MulticaExecutionCommandState::Failed => anyhow::bail!(
+                    "{}",
+                    command
+                        .command
+                        .error_code
+                        .as_deref()
+                        .unwrap_or("codex_execution_failed")
+                ),
+                MulticaExecutionCommandState::Reserved => {}
+            }
+        }
+        let status = match service.cancel_execution(&thread_id, &execution_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                let code = stable_execution_error_code(&error);
+                let _ = self.multica_execution_store.fail_command(
+                    &request.idempotency_key,
+                    &code,
+                    unix_now_ms(),
+                );
+                return Err(anyhow::anyhow!(code));
+            }
+        };
+        let (_, binding) = self.multica_execution_store.commit_cancel(
+            &request.idempotency_key,
+            request.expected_revision,
+            &status,
+            unix_now_ms(),
+        )?;
+        Ok(execution_status_response(binding, status))
+    }
+
+    async fn multica_execution_status(
+        &self,
+        request: MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&request.binding_id)?;
+        let thread_id = binding
+            .codex_thread_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
+        let execution_id = binding
+            .codex_execution_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("execution_id_unavailable"))?;
+        let status = service.execution_status(thread_id, execution_id).await?;
+        let binding = self.multica_execution_store.record_status(
+            &binding.binding_id,
+            binding.revision,
+            &status,
+            unix_now_ms(),
+        )?;
+        Ok(execution_status_response(binding, status))
+    }
+
+    async fn multica_execution_list(
+        &self,
+        request: MulticaExecutionListRequest,
+    ) -> anyhow::Result<Value> {
+        let (items, total) = self.multica_execution_store.list_executions(
+            &request.workspace_id,
+            request.issue_id.as_deref(),
+            request.limit,
+            request.offset,
+        )?;
+        Ok(json!({
+            "status": "ok",
+            "items": items,
+            "total": total,
+            "limit": request.limit,
+            "offset": request.offset,
+        }))
     }
 
     async fn memory_status(&self) -> anyhow::Result<Value> {
@@ -1086,6 +2183,120 @@ impl BridgeDataService for UnavailableDataService {
             "sort_keys": []
         }))
     }
+}
+
+async fn resolve_execution_skills(
+    service: Arc<dyn CodexExecutionService>,
+    bindings: SkillBindings,
+) -> anyhow::Result<(
+    Option<crate::multica_execution::CodexSkillExecutionRequest>,
+    Option<SkillResolutionAudit>,
+)> {
+    if bindings.task.is_empty() && bindings.agent.is_empty() {
+        return Ok((None, None));
+    }
+    let value = crate::multica_workspace::resolve_skill_bindings_with_codex_runtime(
+        SkillBindingSelection { bindings },
+        service,
+    )
+    .await?;
+    let audit: SkillResolutionAudit = serde_json::from_value(
+        value
+            .get("audit")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("skill_resolution_invalid"))?,
+    )
+    .map_err(|_| anyhow::anyhow!("skill_resolution_invalid"))?;
+    let request = audit.execution_request()?;
+    Ok((Some(request), Some(audit)))
+}
+
+fn execution_handle_from_binding(
+    binding: &CodexMulticaExecutionBinding,
+    idempotency_key: &str,
+) -> anyhow::Result<CodexExecutionHandle> {
+    Ok(CodexExecutionHandle {
+        runtime_id: binding
+            .codex_runtime_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_runtime_id_unavailable"))?,
+        thread_id: binding
+            .codex_thread_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?,
+        execution_id: binding.codex_execution_id.clone(),
+        parent_thread_id: binding.parent_thread_id.clone(),
+        idempotency_key: idempotency_key.to_string(),
+    })
+}
+
+fn execution_status_from_binding(
+    binding: &CodexMulticaExecutionBinding,
+) -> anyhow::Result<CodexExecutionStatus> {
+    let state = match binding.state {
+        MulticaExecutionBindingState::BindingPending => CodexExecutionState::Queued,
+        MulticaExecutionBindingState::Dispatched => CodexExecutionState::Queued,
+        MulticaExecutionBindingState::Running => CodexExecutionState::Running,
+        MulticaExecutionBindingState::Completed => CodexExecutionState::Completed,
+        MulticaExecutionBindingState::Failed => CodexExecutionState::Failed,
+        MulticaExecutionBindingState::Cancelled => CodexExecutionState::Cancelled,
+        MulticaExecutionBindingState::CancelPending => CodexExecutionState::CancelPending,
+        MulticaExecutionBindingState::WaitingLocalDirectory
+        | MulticaExecutionBindingState::Stale
+        | MulticaExecutionBindingState::Orphaned
+        | MulticaExecutionBindingState::Reconciling => CodexExecutionState::Unknown,
+    };
+    Ok(CodexExecutionStatus {
+        runtime_id: binding
+            .codex_runtime_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_runtime_id_unavailable"))?,
+        thread_id: binding
+            .codex_thread_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?,
+        execution_id: binding
+            .codex_execution_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_id_unavailable"))?,
+        state,
+        diagnostic: None,
+    })
+}
+
+fn execution_handle_response(
+    binding: CodexMulticaExecutionBinding,
+    handle: CodexExecutionHandle,
+) -> Value {
+    json!({"status": "ok", "binding": binding, "handle": handle})
+}
+
+fn execution_status_response(
+    binding: CodexMulticaExecutionBinding,
+    execution_status: CodexExecutionStatus,
+) -> Value {
+    json!({"status": "ok", "binding": binding, "executionStatus": execution_status})
+}
+
+fn stable_execution_error_code(error: &anyhow::Error) -> String {
+    let value = error.to_string();
+    if !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        value
+    } else {
+        "codex_execution_failed".to_string()
+    }
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn manager_exe_path() -> PathBuf {

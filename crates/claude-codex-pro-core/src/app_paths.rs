@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const CODEX_PACKAGE_IDENTITIES: &[&str] = &["OpenAI.Codex", "OpenAI.CodexBeta"];
 
@@ -167,6 +168,99 @@ pub fn find_standalone_codex_app_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Locate the Codex CLI shipped with Codex Desktop.
+///
+/// The Windows standalone app keeps versioned runtime payloads below
+/// `%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe` instead of exposing
+/// the CLI on PATH. Multica must use this binary rather than an unrelated npm
+/// shim that happens to be named `codex`.
+pub fn find_codex_desktop_cli() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let mut roots = Vec::new();
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(
+                PathBuf::from(local)
+                    .join("OpenAI")
+                    .join("Codex")
+                    .join("bin"),
+            );
+        }
+        if let Some(app_dir) = resolve_codex_app_dir(None) {
+            roots.push(app_dir.join("resources"));
+            roots.push(app_dir);
+        }
+        return find_codex_desktop_cli_from_roots(&roots);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut candidates = vec![
+            PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
+            PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"),
+        ];
+        if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
+            candidates.push(home.join("Applications/ChatGPT.app/Contents/Resources/codex"));
+            candidates.push(home.join("Applications/Codex.app/Contents/Resources/codex"));
+        }
+        return newest_existing_file(candidates);
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// Resolve a Desktop-owned Codex CLI from trusted installation roots. Direct
+/// files and one version-directory level are supported; canonicalization keeps
+/// junctions or symlinks from escaping the supplied root.
+pub fn find_codex_desktop_cli_from_roots(roots: &[PathBuf]) -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let mut candidates = Vec::new();
+    for root in roots {
+        let Ok(canonical_root) = std::fs::canonicalize(root) else {
+            continue;
+        };
+        let direct = canonical_root.join(executable_name);
+        if direct.is_file() {
+            candidates.push(direct);
+        }
+        let Ok(entries) = std::fs::read_dir(&canonical_root) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let candidate = entry.path().join(executable_name);
+            if !candidate.is_file() {
+                continue;
+            }
+            let Ok(candidate) = std::fs::canonicalize(candidate) else {
+                continue;
+            };
+            if candidate.starts_with(&canonical_root) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    newest_existing_file(candidates)
+}
+
+fn newest_existing_file(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .filter_map(|path| {
+            let path = std::fs::canonicalize(path).ok()?;
+            let metadata = std::fs::metadata(&path).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .max_by(|left, right| left.cmp(right))
+        .map(|(_, path)| path)
 }
 
 pub fn standalone_codex_candidates_from(

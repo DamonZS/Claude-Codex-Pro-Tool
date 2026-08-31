@@ -496,6 +496,240 @@ fn injection_script_keeps_plugin_marketplace_unlock_separate_from_entry_unlock()
 }
 
 #[test]
+fn codex_multica_uses_only_the_current_page_host_request_client() {
+    let script = assets::injection_script(57321);
+    let host = script
+        .split("const codexPageHostAllowedMethods")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("async function codexSettingStorageModule")
+                .next()
+        })
+        .expect("current Codex page host adapter");
+
+    for method in [
+        "skills/list",
+        "thread/start",
+        "thread/read",
+        "thread/fork",
+        "turn/start",
+        "turn/interrupt",
+    ] {
+        assert!(host.contains(&format!("\"{method}\"")));
+    }
+    assert!(host.contains("loadCodexAppModule(\"app-server-manager-signals-\")"));
+    assert!(host.contains("client.sendRequest(normalizedMethod, params)"));
+    assert!(host.contains("window.__claudeCodexProCodexPageHostRequest"));
+    for forbidden in [
+        "register_runtime",
+        "register_managed_codex_runtime",
+        "codex.exe app-server",
+        "child_process",
+        "spawn(",
+    ] {
+        assert!(
+            !host.contains(forbidden),
+            "page host adapter must not create or register a runtime: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn codex_multica_workspace_anchors_after_plugin_before_projects() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("nav[role=\"navigation\"] button.sidebar-item"));
+    assert!(script.contains("aside.app-shell-left-panel button.sidebar-item"));
+    assert!(script.contains("button.h-token-nav-row.w-full"));
+    assert!(script.contains(
+        "pluginAnchorButton: 'nav[role=\"navigation\"] button, aside.app-shell-left-panel button'"
+    ));
+    assert!(
+        script
+            .contains("pluginAnchorRegion: 'nav[role=\"navigation\"], aside.app-shell-left-panel'")
+    );
+    assert!(script.contains("M8.25031 1.46094"));
+    assert!(script.contains("M7.94562 14.0277"));
+    assert!(script.contains("/^(插件|Plugins)"));
+    assert!(
+        script
+            .contains("pluginButton.parentElement.insertBefore(entry, pluginButton.nextSibling);")
+    );
+    assert!(script.contains("entry.previousElementSibling !== pluginButton"));
+    assert!(script.contains("function multicaPluginAnchorMutationNode(node)"));
+    assert!(script.contains("data-ccp-multica-nav=\"true\""));
+}
+
+#[test]
+fn codex_multica_workspace_is_shadow_dom_singleton_with_cleanup() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("window.__claudeCodexProMulticaWorkspaceCleanup?.();"));
+    assert!(
+        script
+            .contains("window.__claudeCodexProMulticaWorkspaceCleanup = cleanupMulticaWorkspace;")
+    );
+    assert!(script.contains("host.attachShadow({ mode: \"open\" })"));
+    assert!(script.contains("host.id = \"ccp-multica-workspace-root\""));
+    assert!(script.contains("entry.dataset.ccpMulticaNav = \"true\""));
+    assert!(script.contains("multicaWorkspaceState.entry?.remove?.();"));
+    assert!(script.contains("multicaWorkspaceState.host?.remove?.();"));
+    assert!(script.contains("multicaWorkspaceRestoreMain();"));
+    assert!(script.contains("#ccp-multica-workspace-root"));
+    assert!(script.contains("[data-ccp-multica-nav=\"true\"]"));
+}
+
+#[test]
+fn codex_multica_workspace_flag_is_default_on_and_cleanup_is_ui_only() {
+    let script = assets::injection_script(57321);
+    let workspace = script
+        .split("// The workspace is deliberately kept in this injection file")
+        .nth(1)
+        .and_then(|rest| rest.split("function labelUnlockedPluginEntry").next())
+        .expect("Multica workspace segment");
+    let ensure = workspace
+        .split("function ensureMulticaWorkspaceRuntime()")
+        .nth(1)
+        .and_then(|rest| rest.split("function cleanupMulticaWorkspace()").next())
+        .expect("Multica workspace ensure function");
+    let cleanup = workspace
+        .split("function cleanupMulticaWorkspace()")
+        .nth(1)
+        .expect("Multica workspace cleanup function");
+
+    assert!(script.contains("multicaWorkspaceEnabled: true"));
+    assert!(script.contains("multicaWorkspaceEnabled: \"multicaWorkspaceEnabled\""));
+    assert!(workspace.contains("function multicaWorkspaceFeatureEnabled()"));
+    assert!(workspace.contains("return true;"));
+    assert!(ensure.contains("if (!multicaWorkspaceFeatureEnabled())"));
+    assert!(
+        ensure
+            .contains("window.__claudeCodexProMulticaWorkspaceCleanup = cleanupMulticaWorkspace;")
+    );
+    assert!(ensure.contains("cleanupMulticaWorkspace();"));
+    assert!(cleanup.contains("clearTimeout(multicaWorkspaceState.anchorTimer)"));
+    assert!(cleanup.contains("multicaWorkspaceCancelQuery();"));
+    assert!(cleanup.contains("multicaWorkspaceCancelBootstrap();"));
+    assert!(cleanup.contains("multicaWorkspaceState.entry?.remove?.();"));
+    assert!(cleanup.contains("multicaWorkspaceState.host?.remove?.();"));
+    assert!(
+        !workspace.contains("setInterval("),
+        "the local workspace must not leave an independent polling loop"
+    );
+
+    for forbidden in [
+        "/multica/runtime/",
+        "/multica/managed/",
+        "/supplier/",
+        "/suppliers/",
+        "/route/",
+        "/proxy/",
+        "helperBase",
+        "start_managed_runtime",
+        "register_runtime",
+    ] {
+        assert!(
+            !workspace.contains(forbidden),
+            "workspace feature flag crossed runtime or supplier/proxy boundary: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn codex_multica_workspace_settings_persist_and_apply_the_ui_only_toggle() {
+    let script = assets::injection_script(57321);
+    let workspace = script
+        .split("// The workspace is deliberately kept in this injection file")
+        .nth(1)
+        .and_then(|rest| rest.split("function labelUnlockedPluginEntry").next())
+        .expect("Multica workspace segment");
+    let settings = workspace
+        .split("function multicaWorkspaceRenderSettings(content)")
+        .nth(1)
+        .and_then(|rest| {
+            rest.split("function multicaWorkspaceRenderContent()")
+                .next()
+        })
+        .expect("Multica workspace settings segment");
+
+    assert!(settings.contains("启用本地 Multica 工作区"));
+    assert!(settings.contains("setBackendSetting(\"multicaWorkspaceEnabled\", nextValue)"));
+    assert!(script.contains("settings?.[key] !== value"));
+    assert!(settings.contains("ensureMulticaWorkspaceRuntime();"));
+    assert!(settings.contains("cleanupMulticaWorkspace();"));
+    assert!(workspace.contains("if (module.key === \"settings\")"));
+    assert!(workspace.contains("multicaWorkspaceRenderSettings(content);"));
+
+    for forbidden in [
+        "/supplier/",
+        "/suppliers/",
+        "/route/",
+        "/proxy/",
+        "/multica/runtime/",
+        "/multica/managed/",
+        "register_managed_codex_runtime",
+        "register_runtime",
+        "codex.exe app-server",
+    ] {
+        assert!(
+            !settings.contains(forbidden),
+            "workspace settings crossed the UI-only boundary: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn codex_multica_workspace_has_fixed_ten_module_order_and_real_queries() {
+    let script = assets::injection_script(57321);
+    let workspace = script
+        .split("// The workspace is deliberately kept in this injection file")
+        .nth(1)
+        .and_then(|rest| rest.split("function labelUnlockedPluginEntry").next())
+        .expect("Multica workspace segment");
+
+    let mut previous = 0;
+    for route in [
+        "my-issues",
+        "issues",
+        "projects",
+        "autopilots",
+        "agents",
+        "squads",
+        "usage",
+        "runtimes",
+        "skills",
+        "settings",
+    ] {
+        let needle = format!("key: \"{route}\"");
+        let position = workspace
+            .find(&needle)
+            .unwrap_or_else(|| panic!("missing {route}"));
+        assert!(position >= previous, "module order changed at {route}");
+        previous = position;
+    }
+    assert!(workspace.contains("multicaWorkspaceRequest(\"/multica/workspace/bootstrap\", {})"));
+    assert!(workspace.contains("multicaWorkspaceRequest(\"/multica/workspace/query\""));
+    assert!(workspace.contains("postJson(\"/multica/skills/review\""));
+    assert!(workspace.contains("postJson(\"/multica/skills/bindings\", {}"));
+    assert!(workspace.contains("postJson(\"/multica/skills/bind\", payload"));
+    assert!(workspace.contains("postJson(\"/multica/skills/unbind\", payload"));
+    assert!(workspace.contains("保存绑定"));
+    assert!(workspace.contains("解绑"));
+    assert!(workspace.contains("审查并信任"));
+    assert!(workspace.contains("撤销信任"));
+    assert!(workspace.contains("postJson(\"/manager/open\", {})"));
+    assert!(workspace.contains("textContent"));
+    assert!(!workspace.contains("innerHTML"));
+    assert!(!workspace.contains("createElement(\"iframe\")"));
+    assert!(!workspace.contains("helperBase"));
+    assert!(!workspace.contains("fetch("));
+    assert!(!workspace.contains("localStorage"));
+    assert!(!workspace.contains("sessionStorage"));
+    assert!(!workspace.contains("history."));
+    assert!(!workspace.contains("location."));
+}
+
+#[test]
 fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
     let script = assets::injection_script(57321);
 

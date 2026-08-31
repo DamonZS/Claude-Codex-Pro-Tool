@@ -18,6 +18,35 @@ fn launcher_runtime_uses_default_launch_debug_port() {
 }
 
 #[test]
+fn launcher_keeps_multica_on_page_host_boundary_without_codex_runtime_registration() {
+    let source = include_str!("../src/lib.rs");
+
+    for forbidden in [
+        "managed_codex_execution_service",
+        "ensure_managed_runtime_async",
+        "start_managed_runtime_supervision_if_enabled",
+        "codex.exe app-server",
+        "register_runtime",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "launcher must not register or start a Codex Runtime: {forbidden}"
+        );
+    }
+
+    let skill_resolve = source
+        .split("async fn multica_skill_resolve")
+        .nth(1)
+        .and_then(|rest| rest.split("async fn multica_skill_bind").next())
+        .expect("launcher Multica skill resolution implementation");
+    assert!(skill_resolve.contains("resolve_skill_bindings_with_codex_runtime"));
+    assert!(source.contains("codex_page_execution_service"));
+    assert!(source.contains("workspace_bootstrap_with_codex_runtime"));
+    assert!(source.contains("workspace_query_with_codex_runtime"));
+    assert!(source.contains("CodexPageHostTransport"));
+}
+
+#[test]
 fn launcher_watchdog_reinjects_with_full_context_and_updates_status() {
     let source = include_str!("../src/lib.rs");
     let watchdog = source

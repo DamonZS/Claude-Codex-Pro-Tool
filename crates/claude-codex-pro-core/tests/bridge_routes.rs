@@ -3,12 +3,17 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
+use claude_codex_pro_core::codex_execution::{
+    CodexPageExecutionClient, CodexPageHostMethod, CodexRuntimeBinding, FakeCodexPageHostTransport,
+};
 use claude_codex_pro_core::launcher::{
     CodexLaunch, LaunchHooks, LaunchOptions, ProcessWaitStrategy, launch_and_inject_with_hooks,
 };
 use claude_codex_pro_core::models::{
     DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef,
 };
+use claude_codex_pro_core::multica_execution_store::MulticaExecutionStore;
+use claude_codex_pro_core::multica_workspace::MulticaWorkspaceQuery;
 use claude_codex_pro_core::routes::{
     BridgeContext, BridgeDataService, BridgeRuntimeService, BridgeSettingsService,
     CoreRuntimeService, handle_bridge_request,
@@ -54,6 +59,30 @@ async fn bridge_routes_cover_all_current_paths() {
         ("/user-scripts/reload", json!({})),
         ("/devtools/open", json!({})),
         ("/manager/open", json!({})),
+        ("/multica/workspace/bootstrap", json!({})),
+        (
+            "/multica/workspace/query",
+            json!({"resource": "skills", "limit": 25, "offset": 0}),
+        ),
+        ("/multica/skills/resolve", json!({"bindings": {}})),
+        (
+            "/multica/skills/review",
+            json!({"id": "skill:review", "trusted": true}),
+        ),
+        (
+            "/multica/skills/bind",
+            json!({
+                "scopeKind": "agent",
+                "scopeId": "agent-a",
+                "skillRef": {"id": "skill:review"},
+                "enabled": true
+            }),
+        ),
+        (
+            "/multica/skills/unbind",
+            json!({"scopeKind": "agent", "scopeId": "agent-a", "skillId": "skill:review"}),
+        ),
+        ("/multica/skills/bindings", json!({})),
         ("/backend/status", json!({})),
         ("/backend/repair", json!({})),
         ("/claude-desktop/status", json!({})),
@@ -151,6 +180,403 @@ async fn bridge_routes_cover_all_current_paths() {
             "{path} should be routed"
         );
     }
+}
+
+#[tokio::test]
+async fn multica_workspace_bridge_rejects_transport_passthrough_before_runtime() {
+    let runtime = Arc::new(FakeRuntime::default());
+    let ctx = BridgeContext::new(
+        Arc::new(FakeSettings::default()),
+        runtime.clone(),
+        Arc::new(FakeData::default()),
+    );
+
+    for payload in [
+        json!({"resource": "skills", "url": "https://evil.example"}),
+        json!({"resource": "issues", "method": "DELETE"}),
+        json!({"resource": "runtimes", "headers": {"Authorization": "Bearer sentinel"}}),
+        json!({"resource": "projects", "token": "sentinel"}),
+        json!({"resource": "unknown"}),
+        json!({"resource": "issues", "limit": 101}),
+    ] {
+        let response =
+            handle_bridge_request(ctx.clone(), "/multica/workspace/query", payload).await;
+        assert_eq!(response["status"], "failed");
+    }
+    for (path, payload) in [
+        (
+            "/multica/skills/bind",
+            json!({"scopeKind": "agent", "scopeId": "agent-a", "skillRef": {"id": ""}}),
+        ),
+        (
+            "/multica/skills/unbind",
+            json!({"scopeKind": "agent", "scopeId": "", "skillId": "skill:a"}),
+        ),
+        (
+            "/multica/skills/bindings",
+            json!({"url": "https://evil.example"}),
+        ),
+    ] {
+        let response = handle_bridge_request(ctx.clone(), path, payload).await;
+        assert_eq!(response["status"], "failed");
+        assert_ne!(response["message"], "Unknown bridge path");
+    }
+    let bootstrap = handle_bridge_request(
+        ctx.clone(),
+        "/multica/workspace/bootstrap",
+        json!({"url": "https://evil.example"}),
+    )
+    .await;
+    let unknown = handle_bridge_request(
+        ctx,
+        "/multica/workspace/mutate",
+        json!({"action": "shell", "command": "whoami"}),
+    )
+    .await;
+
+    assert_eq!(bootstrap["message"], "multica_payload_invalid");
+    assert_eq!(unknown["message"], "Unknown bridge path");
+    assert!(runtime.multica_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn multica_skill_bridge_rejects_renderer_inventory_and_transport_fields() {
+    let runtime = Arc::new(FakeRuntime::default());
+    let ctx = BridgeContext::new(
+        Arc::new(FakeSettings::default()),
+        runtime.clone(),
+        Arc::new(FakeData::default()),
+    );
+    for payload in [
+        json!({"bindings": {}, "inventory": []}),
+        json!({"bindings": {}, "runtimeCapabilities": ["skill-bundles-v1"]}),
+        json!({"bindings": {"task": [{"id": "skill:a"}]}, "url": "https://evil.example"}),
+        json!({"bindings": {"task": [{"id": "skill:a"}]}, "headers": {"Authorization": "Bearer secret"}}),
+    ] {
+        let response = handle_bridge_request(ctx.clone(), "/multica/skills/resolve", payload).await;
+        assert_eq!(response["status"], "failed");
+        assert_ne!(response["message"], "Unknown bridge path");
+    }
+    for payload in [
+        json!({"id": "", "trusted": true}),
+        json!({"id": "skill:a", "trusted": true, "manifestDigest": "not a digest"}),
+        json!({"id": "skill:a", "trusted": true, "url": "https://evil.example"}),
+    ] {
+        let response = handle_bridge_request(ctx.clone(), "/multica/skills/review", payload).await;
+        assert_eq!(response["status"], "failed");
+        assert_ne!(response["message"], "Unknown bridge path");
+    }
+    assert!(runtime.multica_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn multica_workspace_bridge_accepts_only_typed_read_operations() {
+    let runtime = Arc::new(FakeRuntime::default());
+    let ctx = BridgeContext::new(
+        Arc::new(FakeSettings::default()),
+        runtime.clone(),
+        Arc::new(FakeData::default()),
+    );
+
+    let bootstrap =
+        handle_bridge_request(ctx.clone(), "/multica/workspace/bootstrap", json!({})).await;
+    let query = handle_bridge_request(
+        ctx,
+        "/multica/workspace/query",
+        json!({"resource": "skills", "limit": 25, "offset": 0}),
+    )
+    .await;
+
+    assert_eq!(bootstrap["status"], "ok");
+    assert_eq!(query["resource"], "skills");
+    assert_eq!(
+        runtime.multica_calls.lock().unwrap().as_slice(),
+        ["bootstrap", "query:skills:25:0"]
+    );
+}
+
+#[tokio::test]
+async fn core_multica_skills_query_fails_closed_without_codex_page_host() {
+    let ctx = BridgeContext::core(Arc::new(CoreRuntimeService::new(
+        9229,
+        StatusStore::default(),
+    )));
+
+    let response = handle_bridge_request(
+        ctx,
+        "/multica/workspace/query",
+        json!({"resource": "skills", "limit": 25, "offset": 0}),
+    )
+    .await;
+
+    assert_eq!(response["status"], "failed");
+    assert_eq!(response["message"], "codex_page_host_unavailable");
+}
+
+#[tokio::test]
+async fn core_multica_skill_resolve_fails_closed_without_codex_page_host() {
+    let ctx = BridgeContext::core(Arc::new(CoreRuntimeService::new(
+        9229,
+        StatusStore::default(),
+    )));
+
+    let response =
+        handle_bridge_request(ctx, "/multica/skills/resolve", json!({"bindings": {}})).await;
+
+    assert_eq!(response["status"], "failed");
+    assert_eq!(response["message"], "codex_page_host_unavailable");
+}
+
+#[tokio::test]
+async fn multica_execution_bridge_routes_cover_native_lifecycle_and_replay() {
+    let (ctx, transport, _store_dir) = multica_execution_test_context();
+    let create_payload = json!({
+        "workspaceId": "workspace-1",
+        "issueId": "issue-1",
+        "prompt": "first prompt",
+        "cwd": "C:/workspace",
+        "idempotencyKey": "create-1",
+        "bindings": {}
+    });
+
+    let created = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/create",
+        create_payload.clone(),
+    )
+    .await;
+    assert_eq!(created["status"], "ok");
+    assert_eq!(created["handle"]["runtimeId"], "codex-current-page");
+    assert_eq!(created["handle"]["threadId"], "thread-fake-0");
+    assert_eq!(created["handle"]["executionId"], "turn-fake-0");
+    assert_eq!(created["binding"]["revision"], 2);
+    assert_eq!(created["binding"]["state"], "dispatched");
+    let binding_id = created["binding"]["bindingId"]
+        .as_str()
+        .expect("binding id")
+        .to_string();
+    assert_eq!(transport.calls().len(), 3);
+
+    // Replaying the same create is answered from the persisted binding and
+    // must not send another request to the current page host.
+    let replay =
+        handle_bridge_request(ctx.clone(), "/multica/executions/create", create_payload).await;
+    assert_eq!(replay, created);
+    assert_eq!(transport.calls().len(), 3);
+
+    let opened = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/open",
+        json!({"bindingId": binding_id}),
+    )
+    .await;
+    assert_eq!(opened["status"], "ok");
+    assert_eq!(opened["handle"]["threadId"], "thread-fake-0");
+    assert_eq!(opened["handle"]["executionId"], Value::Null);
+
+    let continued = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/continue",
+        json!({
+            "bindingId": binding_id,
+            "prompt": "next prompt",
+            "cwd": "C:/workspace",
+            "idempotencyKey": "continue-1",
+            "bindings": {},
+            "expectedRevision": 2
+        }),
+    )
+    .await;
+    assert_eq!(continued["status"], "ok");
+    assert_eq!(continued["handle"]["threadId"], "thread-fake-0");
+    assert_eq!(continued["handle"]["executionId"], "turn-fake-1");
+    assert_eq!(continued["binding"]["revision"], 3);
+
+    let continue_replay = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/continue",
+        json!({
+            "bindingId": binding_id,
+            "prompt": "different prompt is ignored on replay",
+            "idempotencyKey": "continue-1",
+            "bindings": {},
+            "expectedRevision": 3
+        }),
+    )
+    .await;
+    assert_eq!(continue_replay["status"], "ok");
+    assert_eq!(continue_replay["handle"]["executionId"], "turn-fake-1");
+    assert_eq!(continue_replay["binding"]["revision"], 3);
+
+    let status = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/status",
+        json!({"bindingId": binding_id}),
+    )
+    .await;
+    assert_eq!(status["status"], "ok");
+    assert_eq!(status["executionStatus"]["threadId"], "thread-fake-0");
+    assert_eq!(status["executionStatus"]["executionId"], "turn-fake-1");
+    assert_eq!(status["executionStatus"]["state"], "unknown");
+    assert_eq!(status["binding"]["state"], "stale");
+    assert_eq!(status["binding"]["revision"], 4);
+
+    let cancelled = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/cancel",
+        json!({
+            "bindingId": binding_id,
+            "idempotencyKey": "cancel-1",
+            "expectedRevision": 4
+        }),
+    )
+    .await;
+    assert_eq!(cancelled["status"], "ok");
+    assert_eq!(cancelled["executionStatus"]["state"], "cancel_pending");
+    assert_eq!(cancelled["binding"]["state"], "cancel_pending");
+    assert_eq!(cancelled["binding"]["revision"], 5);
+
+    let cancel_replay = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/cancel",
+        json!({
+            "bindingId": binding_id,
+            "idempotencyKey": "cancel-1",
+            "expectedRevision": 5
+        }),
+    )
+    .await;
+    assert_eq!(cancel_replay, cancelled);
+
+    let listed = handle_bridge_request(
+        ctx,
+        "/multica/executions/list",
+        json!({
+            "workspaceId": "workspace-1",
+            "issueId": "issue-1",
+            "limit": 50,
+            "offset": 0
+        }),
+    )
+    .await;
+    assert_eq!(listed["status"], "ok");
+    assert_eq!(listed["total"], 1);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["bindingId"], binding_id);
+    assert_eq!(listed["items"][0]["state"], "cancel_pending");
+
+    let methods = transport
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec![
+            CodexPageHostMethod::Initialize,
+            CodexPageHostMethod::ThreadStart,
+            CodexPageHostMethod::TurnStart,
+            CodexPageHostMethod::ThreadRead,
+            CodexPageHostMethod::TurnStart,
+            CodexPageHostMethod::ThreadRead,
+            CodexPageHostMethod::TurnInterrupt,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn multica_execution_bridge_create_failure_is_persisted_and_retryable() {
+    let (ctx, transport, _store_dir) = multica_execution_test_context();
+    transport.push_response(
+        CodexPageHostMethod::TurnStart,
+        Err(anyhow::anyhow!("transient page host failure")),
+    );
+    let first = json!({
+        "workspaceId": "workspace-1",
+        "issueId": "issue-2",
+        "prompt": "will fail",
+        "idempotencyKey": "create-failed",
+        "bindings": {}
+    });
+    let failed =
+        handle_bridge_request(ctx.clone(), "/multica/executions/create", first.clone()).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["message"], "codex_execution_failed");
+
+    // The failed idempotency key is stable and does not replay a new page
+    // request. A fresh key creates the next persisted attempt instead.
+    let failed_replay =
+        handle_bridge_request(ctx.clone(), "/multica/executions/create", first).await;
+    assert_eq!(failed_replay["status"], "failed");
+    assert_eq!(failed_replay["message"], "codex_execution_failed");
+    assert_eq!(transport.calls().len(), 3);
+
+    let recovered = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/create",
+        json!({
+            "workspaceId": "workspace-1",
+            "issueId": "issue-2",
+            "prompt": "retry",
+            "idempotencyKey": "create-retry",
+            "bindings": {}
+        }),
+    )
+    .await;
+    assert_eq!(recovered["status"], "ok");
+    assert_eq!(recovered["handle"]["threadId"], "thread-fake-1");
+    // The failed TurnStart response does not consume a fake turn sequence
+    // number, so the recovered request receives the first successful ID.
+    assert_eq!(recovered["handle"]["executionId"], "turn-fake-0");
+    assert_eq!(recovered["binding"]["attemptNo"], 2);
+    assert_eq!(recovered["binding"]["state"], "dispatched");
+
+    let listed = handle_bridge_request(
+        ctx,
+        "/multica/executions/list",
+        json!({"workspaceId": "workspace-1", "issueId": "issue-2"}),
+    )
+    .await;
+    assert_eq!(listed["status"], "ok");
+    assert_eq!(listed["total"], 2);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 2);
+    assert!(
+        listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["state"] == "failed")
+    );
+    assert!(
+        listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["state"] == "dispatched")
+    );
+}
+
+#[tokio::test]
+async fn core_multica_execution_routes_fail_closed_without_codex_page_host() {
+    let settings = Arc::new(FakeSettings::default());
+    let runtime = Arc::new(CoreRuntimeService::new(9229, StatusStore::default()));
+    let ctx = BridgeContext::new(settings, runtime, Arc::new(FakeData::default()));
+
+    let response = handle_bridge_request(
+        ctx,
+        "/multica/executions/create",
+        json!({
+            "workspaceId": "workspace-1",
+            "issueId": "issue-1",
+            "prompt": "no page host",
+            "idempotencyKey": "create-no-host",
+            "bindings": {}
+        }),
+    )
+    .await;
+
+    assert_eq!(response["status"], "failed");
+    assert_eq!(response["message"], "codex_page_host_unavailable");
 }
 
 #[tokio::test]
@@ -1436,6 +1862,34 @@ fn test_context() -> BridgeContext {
     )
 }
 
+fn multica_execution_test_context() -> (BridgeContext, FakeCodexPageHostTransport, tempfile::TempDir)
+{
+    let store_dir = tempfile::tempdir().unwrap();
+    let transport = FakeCodexPageHostTransport::default();
+    let client = CodexPageExecutionClient::new(
+        transport.clone(),
+        CodexRuntimeBinding {
+            runtime_id: "codex-current-page".to_string(),
+            provider: "codex".to_string(),
+            app_server_version: None,
+            declared_capabilities: Vec::new(),
+        },
+    )
+    .unwrap();
+    let runtime =
+        CoreRuntimeService::new(9229, StatusStore::new(store_dir.path().join("status.json")))
+            .with_codex_execution_service(Arc::new(client))
+            .with_multica_execution_store(MulticaExecutionStore::new(
+                store_dir.path().join("multica-execution.json"),
+            ));
+    let context = BridgeContext::new(
+        Arc::new(FakeSettings::default()),
+        Arc::new(runtime),
+        Arc::new(FakeData::default()),
+    );
+    (context, transport, store_dir)
+}
+
 #[derive(Default)]
 struct FakeSettings {
     settings: Mutex<BackendSettings>,
@@ -1525,6 +1979,7 @@ impl BridgeSettingsService for FakeSettings {
 struct FakeRuntime {
     enabled: Mutex<bool>,
     script_enabled: Mutex<bool>,
+    multica_calls: Mutex<Vec<String>>,
 }
 
 impl Default for FakeRuntime {
@@ -1532,6 +1987,7 @@ impl Default for FakeRuntime {
         Self {
             enabled: Mutex::new(true),
             script_enabled: Mutex::new(true),
+            multica_calls: Mutex::new(Vec::new()),
         }
     }
 }
@@ -1569,6 +2025,32 @@ impl BridgeRuntimeService for FakeRuntime {
 
     async fn open_manager(&self) -> anyhow::Result<Value> {
         Ok(json!({"status": "ok", "opened": "manager"}))
+    }
+
+    async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
+        self.multica_calls
+            .lock()
+            .unwrap()
+            .push("bootstrap".to_string());
+        Ok(json!({"status": "ok", "modules": ["skills"]}))
+    }
+
+    async fn multica_workspace_query(&self, query: MulticaWorkspaceQuery) -> anyhow::Result<Value> {
+        self.multica_calls.lock().unwrap().push(format!(
+            "query:{}:{}:{}",
+            serde_json::to_value(query.resource)?
+                .as_str()
+                .unwrap_or_default(),
+            query.limit,
+            query.offset
+        ));
+        Ok(json!({
+            "resource": query.resource,
+            "items": [],
+            "total": 0,
+            "limit": query.limit,
+            "offset": query.offset
+        }))
     }
 
     async fn backend_status(&self) -> anyhow::Result<Value> {

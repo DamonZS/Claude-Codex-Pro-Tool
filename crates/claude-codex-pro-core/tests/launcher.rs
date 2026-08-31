@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use claude_codex_pro_core::app_paths::{
-    build_codex_executable, codex_app_version, find_latest_codex_app_dir,
-    find_latest_codex_app_dir_from_roots, find_macos_codex_app, normalize_codex_app_path,
-    packaged_app_user_model_id, resolve_codex_app_dir_with_saved, standalone_codex_candidates_from,
-    user_data_candidates_from,
+    build_codex_executable, codex_app_version, find_codex_desktop_cli_from_roots,
+    find_latest_codex_app_dir, find_latest_codex_app_dir_from_roots, find_macos_codex_app,
+    normalize_codex_app_path, packaged_app_user_model_id, resolve_codex_app_dir_with_saved,
+    standalone_codex_candidates_from, user_data_candidates_from,
 };
 use claude_codex_pro_core::launcher::{
     CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,
@@ -226,6 +226,19 @@ fn app_paths_build_macos_bundle_executable() {
         build_codex_executable(&app),
         PathBuf::from("/Applications/OpenAI Codex.app/Contents/MacOS/Codex")
     );
+}
+
+#[test]
+fn app_paths_finds_versioned_codex_desktop_cli_inside_trusted_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable_name = if cfg!(windows) { "codex.exe" } else { "codex" };
+    let executable = temp.path().join("desktop-build").join(executable_name);
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+    std::fs::write(&executable, b"desktop codex fixture").unwrap();
+
+    let resolved = find_codex_desktop_cli_from_roots(&[temp.path().to_path_buf()]).unwrap();
+
+    assert_eq!(resolved, std::fs::canonicalize(executable).unwrap());
 }
 
 #[test]
