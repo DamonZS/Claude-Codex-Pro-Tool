@@ -109,6 +109,7 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_service_tier_controls
         || settings.codex_app_image_overlay_enabled
         || settings.codex_goals_enabled
+        || settings.multica_workspace_enabled
         || (settings.memory_assist_enabled && settings.memory_assist_inject_enabled)
 }
 
@@ -2678,8 +2679,7 @@ fn cdp_target_readiness(
     if preexisting_targets.contains(&cdp_target_fingerprint(target)) {
         return CdpTargetReadiness::Preexisting;
     }
-    let haystack = format!("{} {}", target.title, target.url).to_lowercase();
-    if !haystack.contains("codex") {
+    if !crate::cdp::is_codex_page_target(target) {
         return CdpTargetReadiness::NotCodexContext;
     }
     CdpTargetReadiness::Ready
@@ -3584,6 +3584,20 @@ mod tests {
             "Codex",
             "https://codex.local/",
             None,
+        )));
+        assert!(is_codex_cdp_target(&cdp_target(
+            "target-5",
+            "page",
+            "ChatGPT",
+            "app://-/index.html",
+            Some("ws://127.0.0.1:9230/devtools/page/target-5"),
+        )));
+        assert!(!is_codex_cdp_target(&cdp_target(
+            "target-6",
+            "page",
+            "ChatGPT",
+            "app://-/index.html?initialRoute=%2Favatar-overlay",
+            Some("ws://127.0.0.1:9230/devtools/page/target-6"),
         )));
     }
 

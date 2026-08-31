@@ -3605,6 +3605,18 @@ html.dark > body > .supplier-model-dropdown-menu,
   min-width: 0;
 }
 
+.client-capability-control {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.client-capability-control .toggle-switch {
+  flex: 0 0 auto;
+}
+
 .client-capabilities li strong,
 .client-capabilities li small {
   display: block;

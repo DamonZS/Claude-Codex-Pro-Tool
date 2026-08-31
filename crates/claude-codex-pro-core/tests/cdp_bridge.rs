@@ -2,7 +2,8 @@ use base64::Engine;
 use claude_codex_pro_core::assets;
 use claude_codex_pro_core::bridge::{self, BRIDGE_BINDING_NAME};
 use claude_codex_pro_core::cdp::{
-    CdpTarget, list_targets, pick_injectable_codex_page_target, pick_page_target,
+    CdpTarget, is_codex_page_target, list_targets, pick_injectable_codex_page_target,
+    pick_page_target,
 };
 
 use futures_util::{SinkExt, StreamExt};
@@ -542,11 +543,11 @@ fn codex_multica_workspace_anchors_after_plugin_before_projects() {
     assert!(script.contains("aside.app-shell-left-panel button.sidebar-item"));
     assert!(script.contains("button.h-token-nav-row.w-full"));
     assert!(script.contains(
-        "pluginAnchorButton: 'nav[role=\"navigation\"] button, aside.app-shell-left-panel button'"
+        "pluginAnchorButton: 'nav[role=\"navigation\"] button, [role=\"navigation\"] button, aside.app-shell-left-panel button, aside button'"
     ));
     assert!(
         script
-            .contains("pluginAnchorRegion: 'nav[role=\"navigation\"], aside.app-shell-left-panel'")
+            .contains("pluginAnchorRegion: 'nav[role=\"navigation\"], [role=\"navigation\"], aside.app-shell-left-panel, aside'")
     );
     assert!(script.contains("M8.25031 1.46094"));
     assert!(script.contains("M7.94562 14.0277"));
@@ -558,6 +559,14 @@ fn codex_multica_workspace_anchors_after_plugin_before_projects() {
     assert!(script.contains("entry.previousElementSibling !== pluginButton"));
     assert!(script.contains("function multicaPluginAnchorMutationNode(node)"));
     assert!(script.contains("data-ccp-multica-nav=\"true\""));
+    assert!(script.contains("entry.setAttribute(\"aria-label\", \"我的任务\")"));
+    assert!(script.contains("entry.title = \"我的任务\""));
+    assert!(script.contains("label.textContent = \"我的任务\""));
+    assert!(script.contains("label.dataset.ccpMulticaNavLabel = \"true\""));
+    assert!(script.contains("entry.querySelector?.('[data-ccp-multica-nav-label=\"true\"]')"));
+    assert!(script.contains(
+        "const title = multicaWorkspaceEl(\"h1\", \"ccp-multica-title\", \"Multica 工作区\")"
+    ));
 }
 
 #[test]
@@ -780,6 +789,7 @@ fn injection_script_global_enhancement_toggle_does_not_hide_enabled_child_featur
     let script = assets::injection_script(57321);
 
     assert!(script.contains("function hasAnyCodexFrontendEnhancementEnabled(settings)"));
+    assert!(script.contains("\"multicaWorkspaceEnabled\","));
     assert!(script.contains(
         "claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)"
     ));
@@ -1791,6 +1801,33 @@ fn pick_injectable_codex_page_target_requires_websocket() {
         error
             .to_string()
             .contains("No injectable Codex page target found")
+    );
+}
+
+#[test]
+fn packaged_codex_shell_is_recognized_when_title_is_chatgpt() {
+    let main = target(
+        "main",
+        "page",
+        "ChatGPT",
+        "app://-/index.html",
+        Some("ws://main"),
+    );
+    let avatar = target(
+        "avatar",
+        "page",
+        "ChatGPT",
+        "app://-/index.html?initialRoute=%2Favatar-overlay",
+        Some("ws://avatar"),
+    );
+
+    assert!(is_codex_page_target(&main));
+    assert!(!is_codex_page_target(&avatar));
+    assert_eq!(
+        pick_injectable_codex_page_target(&[avatar, main])
+            .unwrap()
+            .id,
+        "main"
     );
 }
 

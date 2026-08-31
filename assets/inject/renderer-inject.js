@@ -209,8 +209,10 @@
     // Codex has shipped both the current `sidebar-item` and the older token
     // navigation class. Keep the semantic label fallback as the final check.
     pluginNavButton: 'nav[role="navigation"] button.sidebar-item, aside.app-shell-left-panel button.sidebar-item, nav[role="navigation"] button.h-token-nav-row.w-full',
-    pluginAnchorButton: 'nav[role="navigation"] button, aside.app-shell-left-panel button',
-    pluginAnchorRegion: 'nav[role="navigation"], aside.app-shell-left-panel',
+    // Keep the search scoped to navigation/aside containers. Recent Codex
+    // builds sometimes omit the navigation role or the app-shell class.
+    pluginAnchorButton: 'nav[role="navigation"] button, [role="navigation"] button, aside.app-shell-left-panel button, aside button',
+    pluginAnchorRegion: 'nav[role="navigation"], [role="navigation"], aside.app-shell-left-panel, aside',
     pluginSvgPath: 'svg path[d^="M8.25031 1.46094"], svg path[d^="M7.94562 14.0277"]',
   };
 
@@ -1453,6 +1455,7 @@
       "memoryAssistEnabled",
       "memoryAssistInjectEnabled",
       "memoryAssistAutoSuggestEnabled",
+      "multicaWorkspaceEnabled",
     ].some((key) => settings[key] === true);
   }
 
@@ -4455,11 +4458,12 @@
   }
 
   function multicaPluginButtonLabelMatches(button) {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
     return [
       button?.textContent,
       button?.getAttribute?.("aria-label"),
       button?.getAttribute?.("title"),
-    ].some((value) => /^(插件|Plugins)(\s+-\s+.*)?$/i.test(String(value || "").trim()));
+    ].map(normalize).some((value) => /^(插件|Plugins)(?:\s*[-|·:]\s*.*)?$/i.test(value));
   }
 
   function multicaPluginButtonLooksLike(button) {
@@ -4880,8 +4884,8 @@
       entry.className = pluginButton.className || "sidebar-item flex w-full";
       entry.dataset.ccpMulticaNav = "true";
       entry.dataset.ccpMulticaNavVersion = multicaWorkspaceVersion;
-      entry.setAttribute("aria-label", "Multica 工作区");
-      entry.title = "Multica 工作区";
+      entry.setAttribute("aria-label", "我的任务");
+      entry.title = "我的任务";
       const icon = document.createElement("span");
       icon.textContent = "M";
       Object.assign(icon.style, {
@@ -4896,7 +4900,8 @@
         lineHeight: "16px",
       });
       const label = document.createElement("span");
-      label.textContent = "Multica 工作区";
+      label.textContent = "我的任务";
+      label.dataset.ccpMulticaNavLabel = "true";
       label.style.minWidth = "0";
       label.style.overflow = "hidden";
       label.style.textOverflow = "ellipsis";
@@ -4907,6 +4912,16 @@
         event.stopPropagation();
         multicaWorkspaceOpen();
       }, true);
+    }
+    // Reused entries can survive a partial reinjection. Keep their accessible
+    // name and visible label in sync with the current navigation contract.
+    entry.setAttribute("aria-label", "我的任务");
+    entry.title = "我的任务";
+    const label = entry.querySelector?.('[data-ccp-multica-nav-label="true"]')
+      || entry.lastElementChild;
+    if (label && label !== entry) {
+      label.textContent = "我的任务";
+      label.dataset.ccpMulticaNavLabel = "true";
     }
     if (entry.parentElement !== pluginButton.parentElement || entry.previousElementSibling !== pluginButton) {
       pluginButton.parentElement.insertBefore(entry, pluginButton.nextSibling);
@@ -6276,8 +6291,7 @@
       return;
     }
     const plugin = pluginEntryButton();
-    const main = multicaWorkspaceNativeMain(plugin);
-    if (!plugin || !main) {
+    if (!plugin) {
       multicaWorkspaceScheduleAnchorRetry();
       return;
     }
@@ -6289,6 +6303,13 @@
     }
     multicaWorkspaceEnsureEntry(plugin);
     multicaWorkspaceEnsureHost();
+    const main = multicaWorkspaceNativeMain(plugin);
+    if (!main) {
+      // Keep the navigation entry visible while Codex mounts its main route.
+      // A later DOM mutation/scan will bind the content surface.
+      multicaWorkspaceScheduleAnchorRetry();
+      return;
+    }
     if (multicaWorkspaceState.opened) {
       multicaWorkspaceBindMain(main);
       main.style.visibility = "hidden";
@@ -6301,7 +6322,7 @@
       multicaWorkspaceState.navHandler = (event) => {
         const target = event.target;
         if (multicaWorkspaceState.entry?.contains?.(target)) return;
-        const nativeButton = target?.closest?.('nav[role="navigation"] button, aside.app-shell-left-panel button');
+        const nativeButton = target?.closest?.('nav[role="navigation"] button, [role="navigation"] button, aside.app-shell-left-panel button, aside button');
         if (nativeButton && !nativeButton?.dataset?.ccpMulticaNav) multicaWorkspaceHide();
       };
       document.addEventListener("click", multicaWorkspaceState.navHandler, true);

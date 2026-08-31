@@ -2679,6 +2679,20 @@ export function App() {
     return result;
   };
 
+  const saveSettingBoolean = async (key: string, value: boolean) => {
+    const draftRevision = beginSettingsDraftRequest();
+    const result = await run(
+      () => call<SettingsResult>("save_setting_boolean", { key, value }),
+      "保存设置",
+    );
+    if (result) {
+      setSettings(result);
+      commitSettingsDraftRequest(draftRevision, result.settings);
+      notifyResult({ title: "保存设置", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
   const refreshRoute = async (target = route, options: { notify?: boolean } = {}) => {
     const shouldNotify = options.notify === true;
     const refreshTitle = `刷新${routeLabel(target)}`;
@@ -2945,6 +2959,7 @@ export function App() {
       applyClaudeDesktopProvider,
       restoreClaudeDesktopProviderOfficial: restoreClaudeDesktopProviderOfficial as unknown as AppActions["restoreClaudeDesktopProviderOfficial"],
       saveSettings,
+      saveSettingBoolean,
       installEntrypoints,
       uninstallEntrypoints,
       repairShortcuts,
@@ -3091,6 +3106,7 @@ export function App() {
       applyClaudeDesktopProvider: (...args) => actionsRef.current!.applyClaudeDesktopProvider(...args),
       restoreClaudeDesktopProviderOfficial: (...args) => actionsRef.current!.restoreClaudeDesktopProviderOfficial(...args),
       saveSettings: (...args) => actionsRef.current!.saveSettings(...args),
+      saveSettingBoolean: (...args) => actionsRef.current!.saveSettingBoolean(...args),
       installEntrypoints: (...args) => actionsRef.current!.installEntrypoints(...args),
       uninstallEntrypoints: (...args) => actionsRef.current!.uninstallEntrypoints(...args),
       repairShortcuts: (...args) => actionsRef.current!.repairShortcuts(...args),

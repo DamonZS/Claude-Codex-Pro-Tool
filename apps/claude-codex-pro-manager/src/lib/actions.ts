@@ -177,6 +177,7 @@ export function createActionsShape() {
     applyClaudeDesktopProvider: async (_request: { name: string; baseUrl: string; apiKey: string; modelList: string }) => {},
     restoreClaudeDesktopProviderOfficial: async () => {},
     saveSettings: async (_settings: BackendSettings) => null as SettingsResult | null,
+    saveSettingBoolean: async (_key: string, _value: boolean) => null as SettingsResult | null,
     installEntrypoints: async () => {},
     uninstallEntrypoints: async () => {},
     repairShortcuts: async () => {},

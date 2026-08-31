@@ -60,10 +60,12 @@ export function ActionButton({ icon: Icon, label, onClick }: { icon: LucideIcon;
 }
 
 export function ToggleSwitch({
+  ariaLabel,
   checked,
   disabled,
   onChange,
 }: {
+  ariaLabel?: string;
   checked: boolean;
   disabled?: boolean;
   onChange: (value: boolean) => void;
@@ -71,6 +73,7 @@ export function ToggleSwitch({
   return (
     <button
       aria-pressed={checked}
+      aria-label={ariaLabel}
       className={`toggle-switch ${checked ? "checked" : ""}`}
       disabled={disabled}
       onClick={() => onChange(!checked)}

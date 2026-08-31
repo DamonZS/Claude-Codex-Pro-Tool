@@ -27,6 +27,7 @@ import type {
   OverviewResult,
   WatcherResult,
 } from "@/types";
+import { ToggleSwitch } from "@/components/ui/ops";
 
 type ClientId = "codex" | "claude-desktop" | "claude-code";
 type StateTone = "ok" | "attention" | "danger" | "muted";
@@ -41,7 +42,16 @@ type Capability = {
   detail: string;
   enabled: boolean | null;
   label: string;
+  settingKey?: EnhancementSettingKey;
 };
+
+type EnhancementSettingKey =
+  | "claudeAppChineseOverlayEnabled"
+  | "cliWrapperEnabled"
+  | "codexAppPluginMarketplaceUnlock"
+  | "codexAppServiceTierControls"
+  | "enhancementsEnabled"
+  | "multicaWorkspaceEnabled";
 
 type ClientRecord = {
   capabilities: Capability[];
@@ -99,10 +109,19 @@ function StateCell({ label, value }: { label: string; value: StateValue }) {
   );
 }
 
-function CapabilityState({ capability }: { capability: Capability }) {
+function CapabilityState({
+  capability,
+  onToggle,
+  pendingSetting,
+}: {
+  capability: Capability;
+  onToggle?: (key: EnhancementSettingKey, enabled: boolean) => void;
+  pendingSetting?: EnhancementSettingKey | null;
+}) {
   const enabled = capability.enabled === true;
   const unknown = capability.enabled === null;
   const Icon = enabled ? CheckCircle2 : unknown ? CircleDot : CircleOff;
+  const toggleable = Boolean(capability.settingKey && onToggle);
   return (
     <li>
       <span className={`client-capability-icon ${enabled ? "enabled" : unknown ? "unknown" : "disabled"}`}>
@@ -112,8 +131,18 @@ function CapabilityState({ capability }: { capability: Capability }) {
         <strong>{capability.label}</strong>
         <small>{capability.detail}</small>
       </span>
-      <span className={`client-capability-label ${enabled ? "enabled" : unknown ? "unknown" : "disabled"}`}>
-        {enabled ? "已启用" : unknown ? "未检测" : "未启用"}
+      <span className="client-capability-control">
+        <span className={`client-capability-label ${enabled ? "enabled" : unknown ? "unknown" : "disabled"}`}>
+          {enabled ? "已启用" : unknown ? "未检测" : "未启用"}
+        </span>
+        {toggleable && capability.settingKey ? (
+          <ToggleSwitch
+            ariaLabel={`${capability.label}${enabled ? "：停用" : "：启用"}`}
+            checked={enabled}
+            disabled={unknown || pendingSetting != null}
+            onChange={(value) => onToggle?.(capability.settingKey!, value)}
+          />
+        ) : null}
       </span>
     </li>
   );
@@ -221,16 +250,19 @@ function buildClientRecords({
           label: "应用增强总开关",
           detail: "控制 Codex 本地窗口增强能力",
           enabled: codexEnhancementsEnabled,
+          settingKey: "enhancementsEnabled",
         },
         {
           label: "服务层级控制",
           detail: "按当前模型选择 Standard 或 Fast 服务模式",
           enabled: settings ? settings.codexAppServiceTierControls : null,
+          settingKey: "codexAppServiceTierControls",
         },
         {
           label: "插件市场入口",
           detail: "显示并维护 Codex 插件市场入口",
           enabled: settings?.codexAppPluginMarketplaceUnlock ?? null,
+          settingKey: "codexAppPluginMarketplaceUnlock",
         },
         {
           label: "会话操作增强",
@@ -241,6 +273,12 @@ function buildClientRecords({
               || settings.codexAppProjectMove
               || settings.codexAppConversationTimeline
             : null,
+        },
+        {
+          label: "我的任务",
+          detail: "控制 Codex 左侧导航中的本地 Multica 工作区入口",
+          enabled: settings ? settings.multicaWorkspaceEnabled !== false : null,
+          settingKey: "multicaWorkspaceEnabled",
         },
       ],
       details: [
@@ -311,6 +349,7 @@ function buildClientRecords({
           label: "中文覆盖层",
           detail: "仅表示本地界面增强开关，不涉及账号状态",
           enabled: settings?.claudeAppChineseOverlayEnabled ?? null,
+          settingKey: "claudeAppChineseOverlayEnabled",
         },
       ],
       details: [
@@ -352,6 +391,7 @@ function buildClientRecords({
           label: "CLI 包装入口",
           detail: "为 Claude Code 应用本地供应商与协议配置",
           enabled: cliWrapperEnabled,
+          settingKey: "cliWrapperEnabled",
         },
         {
           label: "Watcher 配置监测",
@@ -408,6 +448,16 @@ export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
   }, [selectedId, visibleClients]);
 
   const selected = visibleClients.find((client) => client.id === selectedId) ?? visibleClients[0];
+  const [pendingSetting, setPendingSetting] = useState<EnhancementSettingKey | null>(null);
+  const toggleSetting = async (key: EnhancementSettingKey, enabled: boolean) => {
+    if (!settings || pendingSetting) return;
+    setPendingSetting(key);
+    try {
+      await actions.saveSettingBoolean(key, enabled);
+    } finally {
+      setPendingSetting(null);
+    }
+  };
   const noStateLoaded = !overview && !claudeDesktop && !settings && !watcher;
   const failedSources = [
     overview && statusFailed(overview.status) ? "Codex" : null,
@@ -494,7 +544,12 @@ export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
                 </header>
                 <ul>
                   {selected.capabilities.map((capability) => (
-                    <CapabilityState capability={capability} key={capability.label} />
+                    <CapabilityState
+                      capability={capability}
+                      key={capability.label}
+                      onToggle={toggleSetting}
+                      pendingSetting={pendingSetting}
+                    />
                   ))}
                 </ul>
               </section>

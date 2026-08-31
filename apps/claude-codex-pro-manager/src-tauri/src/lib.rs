@@ -116,6 +116,7 @@ pub fn run() {
             commands::restart_claude_codex_pro,
             commands::load_settings,
             commands::save_settings,
+            commands::save_setting_boolean,
             commands::list_local_sessions,
             commands::load_codex_session_context,
             commands::list_claude_sessions,

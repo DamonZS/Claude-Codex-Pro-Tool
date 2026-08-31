@@ -101,6 +101,26 @@ pub fn is_codex_page_target(target: &CdpTarget) -> bool {
     if target.target_type != "page" {
         return false;
     }
+
+    // Packaged Codex currently exposes its renderer as ChatGPT at
+    // `app://-/index.html`, so the title alone is not a reliable identity
+    // signal. The avatar overlay is a separate auxiliary page and must not
+    // receive the renderer injection.
+    if target.url.to_ascii_lowercase().contains("avatar-overlay") {
+        return false;
+    }
+
     let haystack = format!("{} {}", target.title, target.url).to_lowercase();
-    haystack.contains("codex")
+    haystack.contains("codex") || is_packaged_codex_shell_url(&target.url)
+}
+
+fn is_packaged_codex_shell_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    let shell = lower
+        .split(|character| character == '?' || character == '#')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/');
+
+    shell == "app://-/index.html" && !lower.contains("avatar-overlay")
 }

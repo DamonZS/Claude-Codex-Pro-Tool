@@ -1568,6 +1568,10 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "正在读取本机客户端与增强状态",
         "状态读取失败，页面保留已取得的数据",
         "当前 Agent 范围没有可显示的客户端",
+        "我的任务",
+        "multicaWorkspaceEnabled",
+        "actions.saveSettingBoolean",
+        "<ToggleSwitch",
     ] {
         assert!(
             clients_screen.contains(client_contract),
@@ -3145,7 +3149,10 @@ fn supplier_editor_generates_config_from_editable_supplier_id() {
     );
     assert!(supplier_config_helper.contains("`model_provider = ${tomlString(providerId)}`"));
     assert!(supplier_config_helper.contains("`[model_providers.${providerId}]`"));
-    assert!(supplier_config_helper.contains("`name = ${tomlString(providerId)}`"));
+    assert!(
+        supplier_config_helper
+            .contains("`name = ${tomlString(profile.name.trim() || providerId)}`")
+    );
     assert!(!supplier_config_helper.contains("model_provider = \"custom\""));
     assert!(!supplier_config_helper.contains("[model_providers.custom]"));
 }
@@ -3339,15 +3346,18 @@ fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
         .nth(1)
         .and_then(|rest| rest.split("const supplierOrderFromIds").next())
         .expect("supplier route toggle source");
-    assert!(route_toggle.contains("actions.clearRelayMode"));
+    assert!(
+        route_toggle
+            .contains("actions.switchSupplierProfile(\"codex\", activeProfileId, nextSettings)")
+    );
     assert!(route_toggle.contains("actions.restoreClaudeDesktopProviderOfficial"));
     assert!(route_toggle.contains("运行中的代理配置已撤销"));
     assert_eq!(
         route_toggle
             .matches("saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles })")
             .count(),
-        3,
-        "Codex and Claude Desktop active-route shutdown must persist routeEnabled=false before returning"
+        1,
+        "Claude Desktop active-route shutdown must persist routeEnabled=false before returning"
     );
     let codex_shutdown = route_toggle
         .split("if (isDisablingActiveRoute && supplierRouteGroup === \"codex\")")
@@ -3357,16 +3367,13 @@ fn supplier_route_shutdown_and_feedback_use_real_operation_results() {
                 .next()
         })
         .expect("Codex active-route shutdown source");
-    let clear_index = codex_shutdown
-        .find("actions.clearRelayMode")
-        .expect("Codex route shutdown clears runtime config");
-    let save_index = codex_shutdown
-        .find("saveSupplierSettings({ ...appSettings, relayProfiles: nextProfiles })")
-        .expect("Codex route shutdown persists disabled profiles");
+    let switch_index = codex_shutdown
+        .find("actions.switchSupplierProfile(\"codex\", activeProfileId, nextSettings)")
+        .expect("Codex route shutdown switches away from the disabled active profile");
     let notice_index = codex_shutdown
         .find("已关闭 Codex 供应商路由")
         .expect("Codex route shutdown reports completion");
-    assert!(clear_index < save_index && save_index < notice_index);
+    assert!(switch_index < notice_index);
 
     let supplier_import = screens
         .split("const importFromCcswitch = async")
@@ -3584,9 +3591,11 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(supplier_screen.contains(
         "const nextActiveRelayId = !aggregateDraft && originalId && currentActiveId === originalId"
     ));
-    assert!(supplier_screen.contains(
-        "const nextForTarget = (_targetApp: SupplierTargetApp, currentId: string) => currentId === profile.id ? \"\" : currentId;"
-    ));
+    assert!(
+        supplier_screen.contains(
+            "const nextForTarget = (targetApp: SupplierTargetApp, currentId: string) => {"
+        )
+    );
     assert!(
         supplier_screen
             .contains("title: shouldApplySupplier ? \"供应商保存并应用\" : \"供应商保存\"")

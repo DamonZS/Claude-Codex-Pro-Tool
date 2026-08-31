@@ -3302,6 +3302,64 @@ pub async fn save_settings(settings: BackendSettings) -> CommandResult<SettingsP
         })
 }
 
+const BOOLEAN_CAPABILITY_SETTINGS: &[&str] = &[
+    "enhancementsEnabled",
+    "codexAppPluginEntryUnlock",
+    "codexAppPluginMarketplaceUnlock",
+    "codexAppForcePluginInstall",
+    "codexAppSessionDelete",
+    "codexAppMarkdownExport",
+    "codexAppProjectMove",
+    "codexAppConversationTimeline",
+    "codexAppConversationView",
+    "codexAppThreadScrollRestore",
+    "codexAppZedRemoteOpen",
+    "codexAppUpstreamWorktreeCreate",
+    "codexAppNativeMenuPlacement",
+    "claudeAppChineseOverlayEnabled",
+    "codexAppServiceTierControls",
+    "memoryAssistEnabled",
+    "memoryAssistInjectEnabled",
+    "memoryAssistAutoSuggestEnabled",
+    "cliWrapperEnabled",
+    "multicaWorkspaceEnabled",
+];
+
+#[tauri::command]
+pub async fn save_setting_boolean(key: String, value: bool) -> CommandResult<SettingsPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !BOOLEAN_CAPABILITY_SETTINGS.contains(&key.as_str()) {
+            return failed(
+                &format!("不允许更新设置字段：{key}"),
+                fallback_settings_payload(),
+            );
+        }
+        match SettingsStore::default().update_boolean_preserving_profiles(&key, value) {
+            Ok(settings) => ok(
+                "设置已保存。",
+                SettingsPayload {
+                    settings,
+                    settings_path: claude_codex_pro_core::paths::default_settings_path()
+                        .to_string_lossy()
+                        .to_string(),
+                    user_scripts: user_script_inventory(),
+                },
+            ),
+            Err(error) => failed(
+                &format!("保存设置失败：{error}"),
+                fallback_settings_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("保存设置任务失败：{join_error}"),
+            fallback_settings_payload(),
+        )
+    })
+}
+
 fn save_settings_blocking(
     settings: BackendSettings,
     sequence: u64,

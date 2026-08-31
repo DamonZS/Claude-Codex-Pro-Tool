@@ -138,6 +138,7 @@ function previewSettings() {
     codexAppImageOverlayPath: "",
     codexAppImageOverlayOpacity: 70,
     codexGoalsEnabled: true,
+    multicaWorkspaceEnabled: true,
     memoryAssistEnabled: true,
     memoryAssistInjectEnabled: true,
     memoryAssistAutoSuggestEnabled: true,
@@ -176,9 +177,26 @@ function previewSettings() {
   };
 }
 
-function previewSettingsResult(message = "预览模式设置。", settings = previewSettings()) {
+type PreviewSettings = ReturnType<typeof previewSettings>;
+
+let previewSettingsState: PreviewSettings = previewSettings();
+
+function clonePreviewSettings(settings: PreviewSettings): PreviewSettings {
+  return JSON.parse(JSON.stringify(settings)) as PreviewSettings;
+}
+
+function currentPreviewSettings(): PreviewSettings {
+  return clonePreviewSettings(previewSettingsState);
+}
+
+function replacePreviewSettings(settings: PreviewSettings): PreviewSettings {
+  previewSettingsState = clonePreviewSettings(settings);
+  return currentPreviewSettings();
+}
+
+function previewSettingsResult(message = "预览模式设置。", settings = currentPreviewSettings()) {
   return ok(message, {
-    settings,
+    settings: clonePreviewSettings(settings),
     settings_path: "~\\.claude-codex-pro\\settings.json",
     user_scripts: { enabled: true, scripts: previewUserScripts() },
   });
@@ -532,7 +550,7 @@ function previewScriptMarket(message = "预览模式脚本市场。") {
   });
 }
 
-function previewContextEntries(settings = previewSettings()) {
+function previewContextEntries(settings = currentPreviewSettings()) {
   const entries = {
     mcpServers: [
       {
@@ -1388,8 +1406,29 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "load_settings") {
     return previewSettingsResult();
   }
+  if (command === "save_setting_boolean") {
+    const key = typeof _args?.key === "string" ? _args.key : "";
+    const value = _args?.value;
+    if (!key || typeof value !== "boolean") {
+      return {
+        status: "failed",
+        message: "预览模式设置更新请求无效。",
+        settings: currentPreviewSettings(),
+        settings_path: "~\\.claude-codex-pro\\settings.json",
+        user_scripts: { enabled: true, scripts: previewUserScripts() },
+      };
+    }
+    const next = currentPreviewSettings();
+    (next as unknown as Record<string, unknown>)[key] = value;
+    replacePreviewSettings(next);
+    return previewSettingsResult("预览模式已模拟保存设置。");
+  }
   if (command === "save_settings") {
-    return previewSettingsResult("预览模式已模拟保存设置。", (_args?.settings as ReturnType<typeof previewSettings> | undefined) ?? previewSettings());
+    const settings = _args?.settings;
+    if (settings && typeof settings === "object") {
+      replacePreviewSettings(settings as PreviewSettings);
+    }
+    return previewSettingsResult("预览模式已模拟保存设置。");
   }
   if (command === "list_context_entries" || command === "upsert_context_entry" || command === "delete_context_entry") {
     const request = _args?.request as { settings?: ReturnType<typeof previewSettings> } | undefined;
@@ -1484,11 +1523,16 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "reset_settings") {
+    replacePreviewSettings(previewSettings());
     return previewSettingsResult("预览模式已模拟重置设置。");
   }
   if (command === "reset_image_overlay_settings") {
-    const settings = { ...previewSettings(), codexAppImageOverlayEnabled: false, codexAppImageOverlayPath: "", codexAppImageOverlayOpacity: 70 };
-    return previewSettingsResult("预览模式已模拟重置图片覆盖。", settings);
+    const settings = currentPreviewSettings();
+    settings.codexAppImageOverlayEnabled = false;
+    settings.codexAppImageOverlayPath = "";
+    settings.codexAppImageOverlayOpacity = 70;
+    replacePreviewSettings(settings);
+    return previewSettingsResult("预览模式已模拟重置图片覆盖。");
   }
   if (command === "sync_providers_now") {
     return ok("预览模式已模拟历史会话修复。", {

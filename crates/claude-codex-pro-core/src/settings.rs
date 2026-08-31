@@ -1060,6 +1060,29 @@ impl SettingsStore {
         Ok(settings)
     }
 
+    /// Update one boolean setting without normalizing relay profiles.
+    ///
+    /// Capability toggles must not rewrite supplier or proxy endpoints as a
+    /// side effect of changing an unrelated flag.
+    pub fn update_boolean_preserving_profiles(
+        &self,
+        key: &str,
+        value: bool,
+    ) -> anyhow::Result<BackendSettings> {
+        let _write_guard = lock_settings_writes()?;
+        let _file_lock = SettingsFileLock::acquire(&self.path)?;
+        let mut raw = self.load_raw_object()?;
+        raw.insert(key.to_string(), Value::Bool(value));
+        // Validate the complete candidate before replacing settings.json. A
+        // malformed legacy field must never be persisted as a side effect of
+        // changing an unrelated capability toggle.
+        let settings = serde_json::from_value::<BackendSettings>(Value::Object(raw.clone()))
+            .with_context(|| format!("failed to decode updated setting {key}"))?;
+        let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
+        direct_write(&self.path, &bytes)?;
+        Ok(settings)
+    }
+
     fn load_raw_object(&self) -> anyhow::Result<Map<String, Value>> {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
@@ -3367,6 +3390,61 @@ experimental_bearer_token = "sk-existing"
             serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
                 .unwrap();
         assert_eq!(saved["multicaWorkspaceEnabled"], json!(true));
+    }
+
+    #[test]
+    fn settings_store_boolean_update_preserves_relay_profile_urls() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let mut raw = serde_json::to_value(BackendSettings::default()).unwrap();
+        raw["relayProfiles"][0]["baseUrl"] = json!("http://127.0.0.1:57321/v1");
+        raw["relayProfiles"][0]["upstreamBaseUrl"] = json!("https://supplier.example/v1");
+        std::fs::write(&path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+        let store = SettingsStore::new(path.clone());
+
+        let updated = store
+            .update_boolean_preserving_profiles("multicaWorkspaceEnabled", false)
+            .unwrap();
+        assert!(!updated.multica_workspace_enabled);
+
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            saved["relayProfiles"][0]["baseUrl"],
+            "http://127.0.0.1:57321/v1"
+        );
+        assert_eq!(
+            saved["relayProfiles"][0]["upstreamBaseUrl"],
+            "https://supplier.example/v1"
+        );
+        assert_eq!(saved["multicaWorkspaceEnabled"], false);
+    }
+
+    #[test]
+    fn settings_store_boolean_update_rejects_invalid_existing_settings_without_overwriting() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let original = serde_json::to_vec_pretty(&json!({
+            "cliWrapperEnabled": "not-a-boolean",
+            "relayProfiles": [{
+                "id": "supplier",
+                "name": "保留名称",
+                "baseUrl": "https://supplier.example/v1"
+            }]
+        }))
+        .unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let store = SettingsStore::new(path.clone());
+
+        let error = store
+            .update_boolean_preserving_profiles("multicaWorkspaceEnabled", true)
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode updated setting")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
     #[test]
