@@ -1119,6 +1119,9 @@ fn local_entity_collection(
         let state = store.load(&workspace.id)?;
         project_issue_collaboration(&mut all_items, &state);
     }
+    if resource == MulticaWorkspaceResourceKey::Autopilots {
+        project_autopilot_contract(&mut all_items);
+    }
     if resource == MulticaWorkspaceResourceKey::MyTasks {
         let user_id = local_user_id(workspace);
         all_items.retain(|entity| {
@@ -1142,6 +1145,67 @@ fn local_entity_collection(
         value.diagnostic = Some(LOCAL_CONTROL_PLANE_EMPTY.to_string());
     }
     Ok(value)
+}
+
+/// Normalize embedded automation detail into the list-endpoint fields used by
+/// Multica. This is strictly derived from persisted trigger/run rows; when an
+/// older local entity has no detail arrays, optional fields remain absent.
+fn project_autopilot_contract(autopilots: &mut [Value]) {
+    for autopilot in autopilots {
+        let Some(object) = autopilot.as_object_mut() else {
+            continue;
+        };
+        if !object.contains_key("subscribers") {
+            object.insert("subscribers".to_string(), Value::Array(Vec::new()));
+        }
+        if let Some(triggers) = object.get("triggers").and_then(Value::as_array).cloned() {
+            let mut kinds = BTreeSet::new();
+            let mut next_run: Option<&str> = None;
+            for trigger in &triggers {
+                if trigger.get("enabled").and_then(Value::as_bool) == Some(true) {
+                    if let Some(kind) = trigger.get("kind").and_then(Value::as_str) {
+                        kinds.insert(kind.to_string());
+                    }
+                    if let Some(value) = trigger
+                        .get("next_run_at")
+                        .or_else(|| trigger.get("nextRunAt"))
+                        .and_then(Value::as_str)
+                    {
+                        if next_run.is_none_or(|current| value < current) {
+                            next_run = Some(value);
+                        }
+                    }
+                }
+            }
+            object.insert(
+                "trigger_kinds".to_string(),
+                Value::Array(kinds.into_iter().map(Value::String).collect()),
+            );
+            if let Some(value) = next_run {
+                object.insert("next_run_at".to_string(), Value::String(value.to_string()));
+            }
+        }
+        if let Some(runs) = object.get("runs").and_then(Value::as_array).cloned() {
+            let latest = runs
+                .iter()
+                .filter_map(|run| {
+                    let timestamp = run
+                        .get("triggered_at")
+                        .or_else(|| run.get("created_at"))
+                        .or_else(|| run.get("triggeredAt"))
+                        .and_then(Value::as_str)?;
+                    let status = run.get("status").and_then(Value::as_str)?;
+                    Some((timestamp, status))
+                })
+                .max_by(|left, right| left.0.cmp(right.0));
+            if let Some((_, status)) = latest {
+                object.insert(
+                    "last_run_status".to_string(),
+                    Value::String(status.to_string()),
+                );
+            }
+        }
+    }
 }
 
 /// Project the local collaboration resources onto Issue reads in the same
@@ -2612,5 +2676,29 @@ mod tests {
         assert_eq!(timeline[0]["type"], "comment");
         assert_eq!(timeline[1]["type"], "activity");
         assert_eq!(issues[0]["revision"], 1);
+    }
+
+    #[test]
+    fn autopilot_projection_derives_list_summary_from_detail_rows() {
+        let mut autopilots = vec![json!({
+            "id": "ap-1",
+            "triggers": [
+                {"kind":"webhook","enabled":true},
+                {"kind":"schedule","enabled":true,"next_run_at":"2026-02-02T00:00:00Z"},
+                {"kind":"schedule","enabled":false,"next_run_at":"2026-01-01T00:00:00Z"}
+            ],
+            "runs": [
+                {"status":"completed","triggered_at":"2026-01-01T00:00:00Z"},
+                {"status":"failed","triggered_at":"2026-01-03T00:00:00Z"}
+            ]
+        })];
+        project_autopilot_contract(&mut autopilots);
+        assert_eq!(
+            autopilots[0]["trigger_kinds"],
+            json!(["schedule", "webhook"])
+        );
+        assert_eq!(autopilots[0]["next_run_at"], "2026-02-02T00:00:00Z");
+        assert_eq!(autopilots[0]["last_run_status"], "failed");
+        assert_eq!(autopilots[0]["subscribers"], json!([]));
     }
 }
