@@ -1978,6 +1978,7 @@ fn runtime_evaluate_params_sets_expected_flags() {
 
     assert_eq!(params["expression"], "1 + 1");
     assert_eq!(params["awaitPromise"], false);
+    assert_eq!(params["returnByValue"], true);
     assert_eq!(params["allowUnsafeEvalBlockedByCSP"], true);
 }
 
@@ -1987,6 +1988,7 @@ fn runtime_evaluate_params_can_await_promise_for_bridge_health_checks() {
 
     assert_eq!(params["expression"], "Promise.resolve(true)");
     assert_eq!(params["awaitPromise"], true);
+    assert_eq!(params["returnByValue"], true);
     assert_eq!(params["allowUnsafeEvalBlockedByCSP"], true);
 }
 

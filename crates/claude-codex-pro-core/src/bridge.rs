@@ -177,6 +177,10 @@ pub fn runtime_evaluate_params_with_await_promise(script: &str, await_promise: b
     json!({
         "expression": script,
         "awaitPromise": await_promise,
+        // Page-host requests return JSON objects (initialize, skills/list,
+        // thread/*). Without this flag CDP returns only a RemoteObject
+        // descriptor and callers cannot read `/result/result/value`.
+        "returnByValue": true,
         "allowUnsafeEvalBlockedByCSP": true,
     })
 }
