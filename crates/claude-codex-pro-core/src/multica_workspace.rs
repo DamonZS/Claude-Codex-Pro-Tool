@@ -2057,6 +2057,13 @@ fn validate_entity_contract(
                     .get("kind")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let trigger_id = trigger
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if trigger_id.trim().is_empty() || validate_local_entity_id(trigger_id).is_err() {
+                    bail!("multica_workspace_autopilot_trigger_invalid");
+                }
                 if !matches!(kind, "schedule" | "webhook" | "api") {
                     bail!("multica_workspace_autopilot_trigger_invalid");
                 }
@@ -2070,6 +2077,28 @@ fn validate_entity_contract(
                         .is_none()
                 {
                     bail!("multica_workspace_autopilot_trigger_invalid");
+                }
+            }
+        }
+        if let Some(collaborators) = object.get("collaborators") {
+            for collaborator in collaborators.as_array().expect("validated array") {
+                let Some(collaborator) = collaborator.as_object() else {
+                    bail!("multica_workspace_autopilot_collaborator_invalid");
+                };
+                let user_id = collaborator
+                    .get("user_id")
+                    .or_else(|| collaborator.get("userId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let role = collaborator
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("collaborator");
+                if user_id.trim().is_empty()
+                    || validate_local_entity_id(user_id).is_err()
+                    || !matches!(role, "collaborator" | "owner")
+                {
+                    bail!("multica_workspace_autopilot_collaborator_invalid");
                 }
             }
         }
@@ -2630,6 +2659,45 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "multica_workspace_resource_read_only"
+        );
+    }
+
+    #[test]
+    fn autopilot_trigger_and_collaborator_shapes_are_validated() {
+        let valid = json!({
+            "id":"autopilot-1", "workspace_id":"local-test", "revision":1,
+            "triggers":[{"id":"trigger-1","kind":"api","enabled":true}],
+            "collaborators":[{"user_id":"user-1","role":"collaborator"}]
+        });
+        validate_local_entity(
+            &valid,
+            "local-test",
+            MulticaWorkspaceResourceKey::Autopilots,
+        )
+        .unwrap();
+        let bad_trigger = json!({
+            "id":"autopilot-1", "workspace_id":"local-test", "revision":1,
+            "triggers":[{"id":"","kind":"api","enabled":true}]
+        });
+        assert!(
+            validate_local_entity(
+                &bad_trigger,
+                "local-test",
+                MulticaWorkspaceResourceKey::Autopilots
+            )
+            .is_err()
+        );
+        let bad_collaborator = json!({
+            "id":"autopilot-1", "workspace_id":"local-test", "revision":1,
+            "collaborators":[{"user_id":"user-1","role":"admin"}]
+        });
+        assert!(
+            validate_local_entity(
+                &bad_collaborator,
+                "local-test",
+                MulticaWorkspaceResourceKey::Autopilots
+            )
+            .is_err()
         );
     }
 
