@@ -1723,8 +1723,29 @@
     return hasScopeGetter || hasScopeNode || hasQueryClient;
   }
 
+  function codexPageHostReactRootFiber() {
+    const configuredRoot = window.__codexRoot?._internalRoot?.current;
+    if (configuredRoot) return configuredRoot;
+    // Codex does not expose a stable global React root in newer builds. The
+    // renderer still owns the root container, whose private React key is the
+    // authoritative mounted tree. Discover it without touching React stores.
+    const candidates = [document.documentElement, document.body, ...Array.from(document.querySelectorAll?.('*') || []).slice(0, 5000)];
+    for (const element of candidates) {
+      if (!element || typeof element !== "object") continue;
+      const keys = Object.keys(element);
+      for (const key of keys) {
+        if (key.startsWith("__reactContainer$") || key.startsWith("__reactRootContainer$")) {
+          const value = element[key];
+          const fiber = value?.current || value?._internalRoot?.current;
+          if (fiber && typeof fiber === "object") return fiber;
+        }
+      }
+    }
+    return null;
+  }
+
   function codexPageHostAppScopeFromReactRoot() {
-    const rootFiber = window.__codexRoot?._internalRoot?.current;
+    const rootFiber = codexPageHostReactRootFiber();
     if (!rootFiber || typeof rootFiber !== "object") return null;
     const queue = [rootFiber];
     const seen = new Set();
@@ -1824,7 +1845,7 @@
           sendClaudeCodexProDiagnostic("codex_page_host_probe_failed", {
             primaryError: primaryError?.message || String(primaryError || ""),
             fallbackError: fallbackError?.message || String(fallbackError || ""),
-            hasRoot: !!window.__codexRoot,
+            hasRoot: !!codexPageHostReactRootFiber(),
             generation: claudeCodexProCodexPageHostGeneration,
           });
           const error = new Error("codex_page_host_unavailable");
@@ -6387,19 +6408,24 @@
     const agentGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
     agentGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", "智能体"));
     const agents = multicaWorkspaceState.collections.get("agents")?.items || [];
+    // Only project agents that have a persisted Codex thread mapping.  A
+    // local Agent definition alone is not evidence that the current Codex
+    // Host can execute it, so unbound definitions must stay out of this
+    // native inventory surface.
     const boundAgentIds = new Set(multicaWorkspaceState.executions
+      .filter((binding) => String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim())
       .map((binding) => multicaWorkspaceObjectValue(binding, "agentId", "agent_id"))
       .filter(Boolean));
-    if (agents.length === 0) {
+    const boundAgents = agents.filter((agent) => boundAgentIds.has(multicaWorkspaceObjectValue(agent, "id")));
+    if (boundAgents.length === 0) {
       const supported = multicaWorkspaceState.bootstrap?.runtime?.multiAgentSupported === true;
-      agentGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", supported ? "暂无本地智能体" : "当前页面未提供可核实的原生智能体绑定"));
+      agentGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", supported ? "暂无已绑定的本地智能体" : "当前页面未提供可核实的原生智能体绑定"));
     } else {
       const list = multicaWorkspaceEl("div", "ccp-multica-native-agent-list");
-      agents.slice(0, 100).forEach((agent) => {
+      boundAgents.slice(0, 100).forEach((agent) => {
         const label = String(multicaWorkspaceObjectValue(agent, "name", "title") || multicaWorkspaceObjectValue(agent, "id") || "未命名智能体");
-        const mapped = boundAgentIds.has(multicaWorkspaceObjectValue(agent, "id"));
-        const item = multicaWorkspaceEl("span", "ccp-multica-native-agent", `${label} · ${mapped ? "已绑定原生执行" : "未绑定"}`);
-        item.title = mapped ? "该智能体已有 Codex 原生执行映射" : "该智能体尚未创建 Codex 原生执行映射";
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-agent", `${label} · 已绑定原生执行`);
+        item.title = "该智能体已有 Codex 原生执行映射";
         list.appendChild(item);
       });
       agentGroup.appendChild(list);

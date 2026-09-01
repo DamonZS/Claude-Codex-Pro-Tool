@@ -528,6 +528,9 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     // exposes it, then recover the page-owned client from the modern app root.
     assert!(host.contains("loadCodexAppModule(\"app-server-manager-signals-\")"));
     assert!(host.contains("loadCodexAppModule(\"app-initial-\")"));
+    assert!(host.contains("function codexPageHostReactRootFiber()"));
+    assert!(host.contains("__reactContainer$"));
+    assert!(host.contains("value?.current || value?._internalRoot?.current"));
     assert!(host.contains("window.__codexRoot?._internalRoot?.current"));
     assert!(host.contains("state?.appScope"));
     assert!(host.contains("function codexPageHostAppScopeValid(appScope)"));
@@ -874,7 +877,7 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(inventory.contains("data-app-action-sidebar-thread-id"));
     assert!(inventory.contains(".slice(0, 100)"));
     assert!(inventory.contains("row.click()"));
-    assert!(inventory.contains("暂无本地智能体"));
+    assert!(inventory.contains("暂无已绑定的本地智能体"));
     assert!(inventory.contains("已绑定原生执行"));
     let refresh = source_between(
         workspace,
@@ -1032,6 +1035,27 @@ fn codex_multica_inventory_only_skills_use_camel_case_runtime_dto_fields() {
     );
     assert!(skill_gate.contains("runtime?.skillsSupported ?? runtime?.skills_supported"));
     assert!(skill_gate.contains("inventorySupported === true && executionSupported !== true"));
+}
+
+#[test]
+fn codex_multica_native_agent_inventory_requires_codex_thread_binding() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let inventory = source_between(
+        workspace,
+        "function multicaWorkspaceRenderNativeInventory(parent)",
+        "function multicaWorkspaceRenderIssueBoard",
+    );
+
+    assert!(inventory.contains("codexThreadId"));
+    assert!(inventory.contains("codex_thread_id"));
+    assert!(inventory.contains("const boundAgents = agents.filter"));
+    assert!(inventory.contains("boundAgents.length === 0"));
+    assert!(!inventory.contains("未绑定"));
 }
 
 #[test]
