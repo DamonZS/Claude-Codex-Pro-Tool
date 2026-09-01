@@ -6370,15 +6370,23 @@
       const status = String(multicaWorkspaceObjectValue(item, "status") || "active").toLowerCase();
       const paused = status === "paused";
       const archived = status === "archived";
+      const canWrite = multicaWorkspaceObjectValue(item, "can_write", "canWrite");
+      const canManageAccess = multicaWorkspaceObjectValue(item, "can_manage_access", "canManageAccess");
+      const writeAllowed = canWrite === undefined || canWrite === null || canWrite === true;
+      const accessAllowed = canManageAccess === undefined || canManageAccess === null || canManageAccess === true;
       if (!archived) {
-        add(paused ? "启用" : "暂停", () => void multicaWorkspacePatchEntity(module, item, { status: paused ? "active" : "paused" }, paused ? "已启用" : "已暂停"));
-        add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
-        add("新增触发器", () => void multicaWorkspaceCreateAutopilotTrigger(module, item));
-        if (Array.isArray(item.triggers) && item.triggers.length) {
-          add("编辑触发器", () => void multicaWorkspaceUpdateAutopilotTrigger(module, item));
-          add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
+        if (writeAllowed) {
+          add(paused ? "启用" : "暂停", () => void multicaWorkspacePatchEntity(module, item, { status: paused ? "active" : "paused" }, paused ? "已启用" : "已暂停"));
+          add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
+          add("新增触发器", () => void multicaWorkspaceCreateAutopilotTrigger(module, item));
+          if (Array.isArray(item.triggers) && item.triggers.length) {
+            add("编辑触发器", () => void multicaWorkspaceUpdateAutopilotTrigger(module, item));
+            add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
+          }
         }
-        add("管理协作者", () => void multicaWorkspaceToggleAutopilotCollaborator(module, item));
+        if (accessAllowed) {
+          add("管理协作者", () => void multicaWorkspaceToggleAutopilotCollaborator(module, item));
+        }
       }
     }
     add("编辑", () => multicaWorkspaceOpenEditor(module, item));
