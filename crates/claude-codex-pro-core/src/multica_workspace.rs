@@ -1862,6 +1862,26 @@ fn validate_entity_contract(
             }
         }
     }
+    for key in ["label_ids", "labelIds"] {
+        if let Some(value) = object.get(key) {
+            let Some(items) = value.as_array() else {
+                bail!("multica_workspace_label_ids_invalid");
+            };
+            if items.len() > 128 {
+                bail!("multica_workspace_label_ids_invalid");
+            }
+            for item in items {
+                let Some(id) = item.as_str() else {
+                    bail!("multica_workspace_label_ids_invalid");
+                };
+                if id.trim().is_empty() || id.len() > 240 {
+                    bail!("multica_workspace_label_ids_invalid");
+                }
+                validate_local_entity_id(id)
+                    .map_err(|_| anyhow!("multica_workspace_label_ids_invalid"))?;
+            }
+        }
+    }
     if resource == MulticaWorkspaceResourceKey::ProjectResources {
         let project_id = object
             .get("project_id")
@@ -2565,6 +2585,28 @@ mod tests {
             MulticaWorkspaceResourceKey::ProjectResources,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn label_id_relations_are_bounded_and_string_typed() {
+        let valid = json!({
+            "id": "issue-1", "workspace_id": "local-test", "revision": 1,
+            "label_ids": ["label-1", "label-2"]
+        });
+        validate_local_entity(&valid, "local-test", MulticaWorkspaceResourceKey::Issues).unwrap();
+
+        for value in [
+            json!({"id":"issue-1","workspace_id":"local-test","revision":1,"label_ids":"label-1"}),
+            json!({"id":"issue-1","workspace_id":"local-test","revision":1,"label_ids":[1]}),
+            json!({"id":"issue-1","workspace_id":"local-test","revision":1,"label_ids":["bad id"]}),
+        ] {
+            assert_eq!(
+                validate_local_entity(&value, "local-test", MulticaWorkspaceResourceKey::Issues)
+                    .unwrap_err()
+                    .to_string(),
+                "multica_workspace_label_ids_invalid"
+            );
+        }
     }
 
     #[test]
