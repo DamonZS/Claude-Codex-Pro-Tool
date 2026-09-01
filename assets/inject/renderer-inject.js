@@ -6659,16 +6659,17 @@
     section.appendChild(sessionGroup);
     const toolCalls = multicaWorkspaceState.bootstrap?.collections?.codex_native_tool_calls?.items || [];
     const toolGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
-    toolGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生工具调用（${toolCalls.length}）`));
+    toolGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生工具/智能体事件（${toolCalls.length}）`));
     if (toolCalls.length === 0) {
-      toolGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前本机状态库没有可读取的动态工具调用"));
+      toolGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前本机历史库没有可读取的工具或智能体事件"));
     } else {
       const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
       toolCalls.slice(0, 100).forEach((call) => {
         const name = String(call.name || "未命名工具").trim();
         const threadId = String(call.thread_id || "").trim();
-        const item = multicaWorkspaceEl("span", "ccp-multica-native-session", `${name}${threadId ? ` · ${threadId}` : ""}`);
-        item.title = "来自 Codex 本机状态库的只读动态工具调用记录";
+        const type = String(call.item_type || "tool").trim();
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-session", `${name} · ${type}${threadId ? ` · ${threadId}` : ""}`);
+        item.title = "来自 Codex thread_history 的只读原生事件摘要";
         list.appendChild(item);
       });
       toolGroup.appendChild(list);
