@@ -735,6 +735,8 @@ pub struct MulticaWorkspaceIssue {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
+    pub pause_reason: Option<String>,
+    #[serde(default)]
     pub status_name: Option<String>,
     #[serde(default)]
     pub priority: Option<String>,

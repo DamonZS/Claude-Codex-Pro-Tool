@@ -5533,7 +5533,8 @@
       { key: "assignee_id", label: "执行者 ID" },
       { key: "execution_mode", label: "执行模式", type: "select", options: [["create_issue", "创建任务"], ["run_only", "仅运行"]] },
       { key: "issue_title_template", label: "任务标题模板" },
-      { key: "enabled", label: "状态", type: "select", valueType: "boolean", options: [["true", "启用"], ["false", "停用"]] },
+      { key: "status", label: "状态", type: "select", options: [["active", "启用"], ["paused", "暂停"], ["archived", "归档"]] },
+      { key: "pause_reason", label: "暂停原因" },
       { key: "subscribers", label: "订阅者（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "triggers", label: "触发器（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
