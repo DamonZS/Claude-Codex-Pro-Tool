@@ -5420,6 +5420,8 @@
       { key: "author_type", label: "作者类型", type: "select", options: [["member", "成员"], ["agent", "智能体"], ["system", "系统"]] },
       { key: "author_id", label: "作者 ID" },
       { key: "resolved_at", label: "解析时间" },
+      { key: "resolved_by_type", label: "解析者类型" },
+      { key: "resolved_by_id", label: "解析者 ID" },
       { key: "source_task_id", label: "来源任务 ID" },
     ];
     if (resource === "labels") return [

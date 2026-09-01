@@ -1730,6 +1730,16 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         .iter()
         .filter_map(|issue| issue.get("id").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
+    let comments_by_id = state
+        .comments
+        .iter()
+        .filter_map(|comment| {
+            comment
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id, comment))
+        })
+        .collect::<BTreeMap<_, _>>();
     for comment in &state.comments {
         let issue_id = comment
             .get("issue_id")
@@ -1738,6 +1748,30 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
             .ok_or_else(|| anyhow!("multica_workspace_comment_invalid"))?;
         if !issue_ids.contains(issue_id) {
             bail!("multica_workspace_comment_issue_missing");
+        }
+        if let Some(parent_id) = comment
+            .get("parent_id")
+            .or_else(|| comment.get("parentId"))
+            .and_then(Value::as_str)
+        {
+            if parent_id
+                == comment
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            {
+                bail!("multica_workspace_comment_parent_invalid");
+            }
+            let parent = comments_by_id
+                .get(parent_id)
+                .ok_or_else(|| anyhow!("multica_workspace_comment_parent_missing"))?;
+            let parent_issue = parent
+                .get("issue_id")
+                .or_else(|| parent.get("issueId"))
+                .and_then(Value::as_str);
+            if parent_issue != Some(issue_id) {
+                bail!("multica_workspace_comment_parent_issue_mismatch");
+            }
         }
     }
     Ok(())
@@ -2700,5 +2734,33 @@ mod tests {
         assert_eq!(autopilots[0]["next_run_at"], "2026-02-02T00:00:00Z");
         assert_eq!(autopilots[0]["last_run_status"], "failed");
         assert_eq!(autopilots[0]["subscribers"], json!([]));
+    }
+
+    #[test]
+    fn comment_parent_must_exist_on_same_issue() {
+        let mut state = LocalMulticaWorkspaceState::empty("local-test");
+        state
+            .issues
+            .push(json!({"id":"issue-a","workspace_id":"local-test","revision":1,"title":"A"}));
+        state
+            .issues
+            .push(json!({"id":"issue-b","workspace_id":"local-test","revision":1,"title":"B"}));
+        state.comments.push(json!({"id":"comment-a","workspace_id":"local-test","revision":1,"issue_id":"issue-a","content":"root","parent_id":"missing"}));
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_comment_parent_missing"
+        );
+        state.comments[0]["parent_id"] = Value::String("comment-b".into());
+        state.comments.push(
+            json!({"id":"comment-b","workspace_id":"local-test","revision":1,"issue_id":"issue-b","content":"other"}),
+        );
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_comment_parent_issue_mismatch"
+        );
     }
 }
