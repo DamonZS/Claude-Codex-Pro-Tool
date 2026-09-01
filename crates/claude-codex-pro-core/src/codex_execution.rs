@@ -563,7 +563,14 @@ impl CodexPageExecutionClient {
                     }
                 }),
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "codex_runtime_capabilities_failed",
+                    json!({ "method": "initialize", "error": error.to_string() }),
+                );
+                error
+            })?;
         let capabilities = parse_capabilities(&self.binding, &response)?;
         self.ensure_generation(generation)?;
         self.set_capabilities(generation, capabilities.clone());
