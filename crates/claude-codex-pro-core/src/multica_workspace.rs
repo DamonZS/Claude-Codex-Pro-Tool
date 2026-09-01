@@ -1169,6 +1169,7 @@ fn local_entity_collection(
     }
     if resource == MulticaWorkspaceResourceKey::Autopilots {
         project_autopilot_contract(&mut all_items);
+        project_autopilot_permissions(&mut all_items, workspace);
     }
     if resource == MulticaWorkspaceResourceKey::MyTasks {
         let user_id = local_user_id(workspace);
@@ -1252,6 +1253,45 @@ fn project_autopilot_contract(autopilots: &mut [Value]) {
                     Value::String(status.to_string()),
                 );
             }
+        }
+    }
+}
+
+/// Project the caller-scoped permission fields used by Multica's autopilot
+/// list/detail responses.  Local state has no workspace membership service, so
+/// permissions are only emitted when creator/collaborator evidence is present;
+/// unknown membership remains unknown instead of being treated as writable.
+fn project_autopilot_permissions(autopilots: &mut [Value], workspace: &MulticaWorkspaceIdentity) {
+    let user_id = local_user_id(workspace);
+    for autopilot in autopilots {
+        let Some(object) = autopilot.as_object_mut() else {
+            continue;
+        };
+        let creator_id = object
+            .get("created_by_id")
+            .or_else(|| object.get("createdById"))
+            .and_then(Value::as_str);
+        let creator_known = creator_id.is_some();
+        let creator = creator_id == Some(user_id.as_str());
+        let collaborator = object
+            .get("collaborators")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries.iter().any(|entry| {
+                    let id = entry
+                        .get("user_id")
+                        .or_else(|| entry.get("userId"))
+                        .and_then(Value::as_str);
+                    id == Some(user_id.as_str())
+                })
+            })
+            .unwrap_or(false);
+        if creator_known {
+            object.insert(
+                "can_write".to_string(),
+                Value::Bool(creator || collaborator),
+            );
+            object.insert("can_manage_access".to_string(), Value::Bool(creator));
         }
     }
 }
@@ -2980,6 +3020,27 @@ mod tests {
         assert_eq!(autopilots[0]["next_run_at"], "2026-02-02T00:00:00Z");
         assert_eq!(autopilots[0]["last_run_status"], "failed");
         assert_eq!(autopilots[0]["subscribers"], json!([]));
+    }
+
+    #[test]
+    fn autopilot_projection_emits_caller_scoped_permissions_only_with_evidence() {
+        let workspace = MulticaWorkspaceIdentity {
+            id: "local-test".to_string(),
+            slug: "local-test".to_string(),
+            name: "Local".to_string(),
+        };
+        let user_id = local_user_id(&workspace);
+        let mut autopilots = vec![
+            json!({"id":"creator","created_by_id":user_id}),
+            json!({"id":"collaborator","created_by_id":"other","collaborators":[{"user_id":user_id}]}),
+            json!({"id":"unknown"}),
+        ];
+        project_autopilot_permissions(&mut autopilots, &workspace);
+        assert_eq!(autopilots[0]["can_write"], true);
+        assert_eq!(autopilots[0]["can_manage_access"], true);
+        assert_eq!(autopilots[1]["can_write"], true);
+        assert_eq!(autopilots[1]["can_manage_access"], false);
+        assert!(autopilots[2].get("can_write").is_none());
     }
 
     #[test]
