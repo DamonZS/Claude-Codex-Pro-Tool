@@ -101,6 +101,8 @@ fn multica_workspace_unavailable_entry_remains_retryable_and_is_not_empty_board(
     );
 
     assert!(entry.contains("multicaWorkspaceOpen();"));
+    assert!(entry.contains("entry.__ccpMulticaClickHandler"));
+    assert!(entry.contains("entry.removeEventListener(\"click\", entry.__ccpMulticaClickHandler, true)"));
     assert!(availability.contains("entry.dataset.ccpMulticaAvailability = \"unavailable\""));
     assert!(availability.contains("entry.setAttribute(\"data-state\", \"unavailable\")"));
     assert!(availability.contains("entry.setAttribute(\"aria-description\", `${detail}；点击重试`)"));

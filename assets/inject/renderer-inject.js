@@ -5087,12 +5087,19 @@
       label.style.whiteSpace = "nowrap";
       entry.append(icon, label);
       multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
-      entry.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        multicaWorkspaceOpen();
-      }, true);
     }
+    // React and reinjection can preserve the DOM node across generations.
+    // Always bind the current generation's handler so an unavailable entry
+    // remains retryable instead of retaining a stale closure.
+    if (entry.__ccpMulticaClickHandler) {
+      entry.removeEventListener("click", entry.__ccpMulticaClickHandler, true);
+    }
+    entry.__ccpMulticaClickHandler = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void multicaWorkspaceOpen();
+    };
+    entry.addEventListener("click", entry.__ccpMulticaClickHandler, true);
     // Reused entries can survive a partial reinjection. Keep their accessible
     // name and visible label in sync with the current navigation contract.
     entry.setAttribute("aria-label", "我的任务");
