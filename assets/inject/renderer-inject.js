@@ -6287,8 +6287,10 @@
     section.appendChild(multicaWorkspaceEl("h3", "ccp-multica-native-inventory-title", "Codex 原生会话与智能体"));
     const projectGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
     const projects = nativeProjectTargets();
-    projectGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生项目（${projects.length}）`));
-    if (projects.length === 0) {
+    const nativeProjectSnapshot = multicaWorkspaceState.bootstrap?.collections?.codex_native_projects?.items || [];
+    const projectCount = Math.max(projects.length, nativeProjectSnapshot.length);
+    projectGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生项目（${projectCount}）`));
+    if (projects.length === 0 && nativeProjectSnapshot.length === 0) {
       projectGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前页面没有可读取的原生项目"));
     } else {
       const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
@@ -6306,6 +6308,14 @@
         });
         list.appendChild(button);
       });
+      if (projects.length === 0) {
+        nativeProjectSnapshot.slice(0, 100).forEach((project) => {
+          const path = String(project.path || "").trim();
+          const item = multicaWorkspaceEl("span", "ccp-multica-native-session", displayProjectName(path));
+          item.title = `来自 Codex 本机状态库的只读项目快照：${path}`;
+          list.appendChild(item);
+        });
+      }
       projectGroup.appendChild(list);
     }
     section.appendChild(projectGroup);
