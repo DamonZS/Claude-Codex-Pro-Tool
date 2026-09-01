@@ -1224,6 +1224,42 @@ fn project_issue_collaboration(issues: &mut [Value], state: &LocalMulticaWorkspa
                     == Some(issue_id)
             })
             .collect();
+        // Upstream Multica exposes a unified issue timeline. Keep the local
+        // collections canonical, but project a read-only merged view so the
+        // task surface can render comments and activities in one stream.
+        let mut timeline = Vec::with_capacity(comments.len() + activities.len());
+        for comment in &comments {
+            let mut entry = comment.clone();
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("type".to_string(), Value::String("comment".to_string()));
+            }
+            timeline.push(entry);
+        }
+        for activity in &activities {
+            let mut entry = (*activity).clone();
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("type".to_string(), Value::String("activity".to_string()));
+            }
+            timeline.push(entry);
+        }
+        timeline.sort_by(|left, right| {
+            let left_time = left
+                .get("created_at")
+                .or_else(|| left.get("createdAt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let right_time = right
+                .get("created_at")
+                .or_else(|| right.get("createdAt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            left_time.cmp(right_time).then_with(|| {
+                left.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .cmp(right.get("id").and_then(Value::as_str).unwrap_or_default())
+            })
+        });
         let latest = comments
             .iter()
             .chain(activities.iter().copied())
@@ -1238,6 +1274,7 @@ fn project_issue_collaboration(issues: &mut [Value], state: &LocalMulticaWorkspa
         issue["reactions"] = Value::Array(reactions);
         issue["comment_count"] = Value::from(comments.len() as u64);
         issue["activity_count"] = Value::from(activities.len() as u64);
+        issue["timeline"] = Value::Array(timeline);
         if let Some(latest) = latest {
             issue["last_activity_at"] = Value::String(latest);
         }
@@ -2570,6 +2607,10 @@ mod tests {
         assert_eq!(issues[0]["labels"].as_array().map(Vec::len), Some(2));
         assert_eq!(issues[0]["reactions"].as_array().map(Vec::len), Some(2));
         assert_eq!(issues[0]["last_activity_at"], "2026-01-04T00:00:00Z");
+        let timeline = issues[0]["timeline"].as_array().expect("timeline");
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0]["type"], "comment");
+        assert_eq!(timeline[1]["type"], "activity");
         assert_eq!(issues[0]["revision"], 1);
     }
 }
