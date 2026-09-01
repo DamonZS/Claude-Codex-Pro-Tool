@@ -1059,6 +1059,36 @@ fn codex_multica_native_agent_inventory_requires_codex_thread_binding() {
 }
 
 #[test]
+fn codex_multica_autopilot_toggle_uses_upstream_status_field() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let item = source_between(
+        workspace,
+        "function multicaWorkspaceAppendEntityItem(parent, item, module)",
+        "function multicaWorkspaceIssueStatus",
+    );
+
+    assert!(item.contains("resource === \"autopilots\""));
+    assert!(item.contains("{ status: paused ? \"active\" : \"paused\" }"));
+    assert!(item.contains("status === \"archived\""));
+    assert!(!item.contains("resource === \"agents\" || resource === \"autopilots\""));
+}
+
+#[test]
+fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
+    let item = assets::injection_script(57321);
+    assert!(item.contains("multicaWorkspaceTriggerAutopilot"));
+    assert!(item.contains("reason_code: \"codex_host_execution_unavailable\""));
+    assert!(item.contains("status: \"unsupported\""));
+    assert!(item.contains("立即触发"));
+    assert!(item.contains("运行历史"));
+}
+
+#[test]
 fn codex_multica_agent_assignment_dispatches_native_subagent() {
     let script = assets::injection_script(57321);
     let workspace = source_between(

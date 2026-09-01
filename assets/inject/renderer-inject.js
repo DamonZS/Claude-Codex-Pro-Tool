@@ -5502,7 +5502,7 @@
       { key: "name", label: "智能体名称", required: true, wide: true },
       { key: "description", label: "职责", type: "textarea", wide: true },
       { key: "instructions", label: "执行指令", type: "textarea", wide: true },
-      { key: "enabled", label: "状态", type: "select", valueType: "boolean", options: [["true", "启用"], ["false", "停用"]] },
+      { key: "status", label: "状态", type: "select", options: [["active", "启用"], ["paused", "暂停"], ["archived", "归档"]] },
       { key: "runtime_id", label: "运行时 ID" },
       { key: "runtime_mode", label: "运行模式", type: "select", options: [["local", "本地"], ["cloud", "云端"]] },
       { key: "provider", label: "运行时提供方" },
@@ -5550,7 +5550,7 @@
     if (resource === "project_resources") return { ...common, project_id: "", resource_type: "github_repo", resource_ref: {}, label: "", position: 0 };
     if (resource === "agents") return { ...common, name: "", description: "", instructions: "", enabled: true, runtime_id: "", runtime_mode: "local", visibility: "workspace", permission_mode: "private", invocation_targets: [], max_concurrent_tasks: 1, model: "", thinking_level: "", service_tier: "" };
     if (resource === "squads") return { ...common, name: "", description: "", instructions: "", leader_id: "", memberAgentIds: [] };
-    return { ...common, title: "", description: "", trigger_kind: "schedule", schedule: "", assignee_type: "agent", assignee_id: "", execution_mode: "create_issue", enabled: true };
+    return { ...common, title: "", description: "", trigger_kind: "schedule", schedule: "", assignee_type: "agent", assignee_id: "", execution_mode: "create_issue", status: "active", triggers: [], runs: [] };
   }
 
   function multicaWorkspaceNormalizeEditableEntity(resource, values) {
@@ -5792,6 +5792,28 @@
       multicaWorkspaceState.mutationBusy = false;
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
     }
+  }
+
+  async function multicaWorkspaceTriggerAutopilot(module, item) {
+    const resource = multicaWorkspaceWritableResource(module);
+    if (resource !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
+    const autopilotId = multicaWorkspaceEntityId(item);
+    const run = {
+      id: multicaWorkspaceNewId("autopilot-run"),
+      autopilot_id: autopilotId,
+      source: "manual",
+      status: "unsupported",
+      triggered_at: new Date().toISOString(),
+      reason_code: "codex_host_execution_unavailable",
+      failure_reason: "当前页面未提供可核实的 Codex 执行能力",
+    };
+    const runs = Array.isArray(item.runs) ? item.runs.slice() : [];
+    runs.unshift(run);
+    await multicaWorkspacePatchEntity(module, item, {
+      runs: runs.slice(0, 100),
+      last_run_status: run.status,
+      last_run_at: run.triggered_at,
+    }, "已记录触发请求（当前 Host 不支持执行）");
   }
 
   function multicaWorkspaceIssuePrompt(item) {
@@ -6112,9 +6134,17 @@
       if (!active) add("执行", () => multicaWorkspaceOpenExecutionDraft("create", item), "primary");
       const archived = String(multicaWorkspaceObjectValue(item, "status") || "") === "archived";
       add(archived ? "恢复" : "归档", () => void multicaWorkspacePatchEntity(module, item, { status: archived ? "todo" : "archived" }, archived ? "已恢复" : "已归档"));
-    } else if (resource === "agents" || resource === "autopilots") {
+    } else if (resource === "agents") {
       const enabled = multicaWorkspaceObjectValue(item, "enabled") !== false;
       add(enabled ? "停用" : "启用", () => void multicaWorkspacePatchEntity(module, item, { enabled: !enabled }, enabled ? "已停用" : "已启用"));
+    } else if (resource === "autopilots") {
+      const status = String(multicaWorkspaceObjectValue(item, "status") || "active").toLowerCase();
+      const paused = status === "paused";
+      const archived = status === "archived";
+      if (!archived) {
+        add(paused ? "启用" : "暂停", () => void multicaWorkspacePatchEntity(module, item, { status: paused ? "active" : "paused" }, paused ? "已启用" : "已暂停"));
+        add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
+      }
     }
     add("编辑", () => multicaWorkspaceOpenEditor(module, item));
     add("删除", () => void multicaWorkspaceDeleteEntity(module, item), "danger");
@@ -6126,7 +6156,7 @@
       : resource === "projects" ? ["status", "priority", "lead_type", "lead_id", "revision"]
         : resource === "agents" ? ["enabled", "runtime_mode", "provider", "concurrency_limit", "revision"]
           : resource === "squads" ? ["leader_id", "leaderAgentId", "revision"]
-            : ["enabled", "trigger_kind", "triggerKind", "execution_mode", "assignee_type", "assignee_id", "revision"];
+            : ["status", "trigger_kind", "triggerKind", "execution_mode", "assignee_type", "assignee_id", "last_run_status", "last_run_at", "next_run_at", "revision"];
     keys.forEach((key) => {
       const value = multicaWorkspaceObjectValue(item, key, key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`));
       if (value === undefined || value === null || value === "") return;
@@ -6135,6 +6165,10 @@
       fields.appendChild(field);
     });
     if (fields.childNodes.length) article.appendChild(fields);
+    if (resource === "autopilots" && Array.isArray(item.runs) && item.runs.length) {
+      const history = multicaWorkspaceEl("div", "ccp-multica-inline-message", `运行历史：${item.runs.slice(0, 5).map((run) => `${run.status || "unknown"} @ ${run.triggered_at || ""}`).join("；")}`);
+      article.appendChild(history);
+    }
     if (resource === "issues") multicaWorkspaceAppendExecutionAttempts(article, item);
     parent.appendChild(article);
   }
