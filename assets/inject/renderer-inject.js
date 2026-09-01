@@ -1828,6 +1828,12 @@
           codexPageHostInitializeResponse = selected.initializeResponse;
           return selected;
         } catch (fallbackError) {
+          sendClaudeCodexProDiagnostic("codex_page_host_probe_failed", {
+            primaryError: primaryError?.message || String(primaryError || ""),
+            fallbackError: fallbackError?.message || String(fallbackError || ""),
+            hasRoot: !!window.__codexRoot,
+            generation: claudeCodexProCodexPageHostGeneration,
+          });
           const error = new Error("codex_page_host_unavailable");
           error.primaryError = primaryError;
           error.fallbackError = fallbackError;
