@@ -5423,7 +5423,7 @@
       project_resources: ["id", "project_id", "projectId", "workspace_id", "resource_type", "resourceType", "resource_ref", "resourceRef", "label", "position"],
       agents: ["id", "name", "description", "instructions", "enabled", "status", "runtime_id", "runtime_mode", "provider", "visibility", "permission_mode", "invocation_targets", "max_concurrent_tasks", "concurrency_limit", "concurrencyLimit", "model", "thinking_level", "service_tier", "skills", "label_ids", "labelIds", "disabled_runtime_skills", "runtime_bound", "conversation_starters"],
       squads: ["id", "name", "description", "instructions", "avatar_url", "leader_id", "leaderAgentId", "memberAgentIds", "members", "member_preview", "activity"],
-      autopilots: ["id", "title", "name", "description", "project_id", "assignee_type", "assignee_id", "trigger_kind", "triggerKind", "execution_mode", "issue_title_template", "schedule", "enabled", "status", "subscribers", "triggers", "runs", "last_run_status", "next_run_at"],
+      autopilots: ["id", "title", "name", "description", "project_id", "assignee_type", "assignee_id", "trigger_kind", "triggerKind", "execution_mode", "issue_title_template", "schedule", "enabled", "status", "subscribers", "collaborators", "triggers", "runs", "last_run_status", "next_run_at"],
     })[resource] || ["id"]);
     for (const [key, value] of Object.entries(item)) {
       if (!allowed.has(key) || !multicaWorkspaceSafeKey(key)) continue;
@@ -5538,6 +5538,7 @@
       { key: "status", label: "状态", type: "select", options: [["active", "启用"], ["paused", "暂停"], ["archived", "归档"]] },
       { key: "pause_reason", label: "暂停原因" },
       { key: "subscribers", label: "订阅者（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
+      { key: "collaborators", label: "协作者（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "triggers", label: "触发器（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
   }
@@ -5553,7 +5554,7 @@
     if (resource === "project_resources") return { ...common, project_id: "", resource_type: "github_repo", resource_ref: {}, label: "", position: 0 };
     if (resource === "agents") return { ...common, name: "", description: "", instructions: "", enabled: true, runtime_id: "", runtime_mode: "local", visibility: "workspace", permission_mode: "private", invocation_targets: [], max_concurrent_tasks: 1, model: "", thinking_level: "", service_tier: "" };
     if (resource === "squads") return { ...common, name: "", description: "", instructions: "", leader_id: "", memberAgentIds: [] };
-    return { ...common, title: "", description: "", trigger_kind: "schedule", schedule: "", assignee_type: "agent", assignee_id: "", execution_mode: "create_issue", status: "active", triggers: [], runs: [] };
+    return { ...common, title: "", description: "", trigger_kind: "schedule", schedule: "", assignee_type: "agent", assignee_id: "", execution_mode: "create_issue", status: "active", collaborators: [], triggers: [], runs: [] };
   }
 
   function multicaWorkspaceNormalizeEditableEntity(resource, values) {
@@ -5961,6 +5962,16 @@
     await multicaWorkspacePatchEntity(module, item, { triggers: next }, "已删除自动化触发器");
   }
 
+  async function multicaWorkspaceToggleAutopilotCollaborator(module, item) {
+    if (multicaWorkspaceWritableResource(module) !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
+    const userId = String(window.prompt?.("输入协作者 user_id（再次输入可移除）", "") || "").trim();
+    if (!userId || userId.length > 240 || /[\u0000\s]/.test(userId)) return;
+    const collaborators = Array.isArray(item.collaborators) ? item.collaborators.slice() : [];
+    const index = collaborators.findIndex((entry) => String(entry?.user_id || entry?.userId || entry || "") === userId);
+    if (index >= 0) collaborators.splice(index, 1); else collaborators.push({ user_id: userId, role: "collaborator" });
+    await multicaWorkspacePatchEntity(module, item, { collaborators }, index >= 0 ? "已移除协作者" : "已添加协作者");
+  }
+
   function multicaWorkspaceIssuePrompt(item) {
     const title = String(multicaWorkspaceObjectValue(item, "title", "name") || "").trim();
     const description = String(multicaWorkspaceObjectValue(item, "description") || "").trim();
@@ -6322,6 +6333,7 @@
         add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
         add("新增触发器", () => void multicaWorkspaceCreateAutopilotTrigger(module, item));
         if (Array.isArray(item.triggers) && item.triggers.length) add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
+        add("管理协作者", () => void multicaWorkspaceToggleAutopilotCollaborator(module, item));
       }
     }
     add("编辑", () => multicaWorkspaceOpenEditor(module, item));

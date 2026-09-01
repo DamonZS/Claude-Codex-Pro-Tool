@@ -1854,6 +1854,7 @@ fn validate_entity_contract(
         "subscribers",
         "triggers",
         "runs",
+        "collaborators",
         "invocation_targets",
     ];
     for key in bounded_arrays {
