@@ -115,6 +115,8 @@ pub struct CodexMulticaExecutionBinding {
     pub binding_id: String,
     pub workspace_id: String,
     pub issue_id: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub multica_run_id: String,
     #[serde(default)]
     pub codex_runtime_id: Option<String>,
@@ -164,6 +166,7 @@ pub struct CodexMulticaExecutionCommand {
 pub struct ExecutionReservation {
     pub workspace_id: String,
     pub issue_id: String,
+    pub agent_id: Option<String>,
     pub execution_kind: MulticaExecutionKind,
     pub parent_thread_id: Option<String>,
     pub parent_attempt_id: Option<String>,
@@ -454,6 +457,7 @@ impl MulticaExecutionStore {
         {
             if existing.workspace_id == input.workspace_id
                 && existing.issue_id == input.issue_id
+                && existing.agent_id == input.agent_id
                 && existing.execution_kind == input.execution_kind
                 && existing.parent_thread_id == input.parent_thread_id
                 && existing.parent_attempt_id == input.parent_attempt_id
@@ -495,6 +499,7 @@ impl MulticaExecutionStore {
             binding_id,
             workspace_id: input.workspace_id,
             issue_id: input.issue_id,
+            agent_id: input.agent_id,
             codex_runtime_id: None,
             codex_thread_id: None,
             codex_execution_id: None,
@@ -1065,6 +1070,9 @@ fn validate_execution_reservation(input: &ExecutionReservation) -> anyhow::Resul
     if let Some(parent) = input.parent_attempt_id.as_deref() {
         validate_id(parent, "parent_attempt_id")?;
     }
+    if let Some(agent) = input.agent_id.as_deref() {
+        validate_id(agent, "agent_id")?;
+    }
     if input.execution_kind == MulticaExecutionKind::Subagent && input.parent_thread_id.is_none() {
         bail!("parent_thread_id_required");
     }
@@ -1075,6 +1083,9 @@ fn validate_execution_binding(binding: &CodexMulticaExecutionBinding) -> anyhow:
     validate_id(&binding.binding_id, "binding_id")?;
     validate_id(&binding.workspace_id, "workspace_id")?;
     validate_id(&binding.issue_id, "issue_id")?;
+    if let Some(agent) = binding.agent_id.as_deref() {
+        validate_id(agent, "agent_id")?;
+    }
     validate_id(&binding.multica_run_id, "multica_run_id")?;
     validate_id(&binding.idempotency_key, "idempotency_key")?;
     if binding.attempt_no == 0 || binding.revision == 0 {
@@ -1473,6 +1484,7 @@ mod tests {
         let reservation = ExecutionReservation {
             workspace_id: "workspace-a".to_string(),
             issue_id: "issue-a".to_string(),
+            agent_id: None,
             execution_kind: MulticaExecutionKind::Thread,
             parent_thread_id: None,
             parent_attempt_id: None,
@@ -1535,6 +1547,7 @@ mod tests {
                 ..ExecutionReservation {
                     workspace_id: "workspace-a".to_string(),
                     issue_id: "issue-a".to_string(),
+                    agent_id: None,
                     execution_kind: MulticaExecutionKind::Thread,
                     parent_thread_id: Some("thread-a".to_string()),
                     parent_attempt_id: Some(first.binding.binding_id.clone()),
@@ -1558,6 +1571,7 @@ mod tests {
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".to_string(),
                 issue_id: "issue-a".to_string(),
+                agent_id: None,
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
                 parent_attempt_id: None,

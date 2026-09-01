@@ -540,15 +540,13 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("module.FRt(appScope, hostId)"));
     assert!(host.contains("client.sendRequest(\"skills/list\", {})"));
     assert!(host.contains("skills.error"));
-    assert!(host.contains("\"agent-skill-v1\""));
-    assert!(host.contains("\"subagent-v1\""));
-    assert!(host.contains("\"thread-start\""));
-    assert!(host.contains("pageHostProbe: { skillsList: true, nativeTaskHost: true }"));
+    assert!(host.contains("capabilities: []"));
+    assert!(host.contains("pageHostProbe: { skillsList: true, nativeTaskHost: false }"));
     assert!(host.contains("codexPageHostInitializeResponse = selected.initializeResponse"));
     assert!(host.contains("normalizedMethod === \"initialize\" && selected.initializeResponse"));
     assert!(host.contains("client.sendRequest(normalizedMethod, params)"));
     assert!(host.contains("window.__claudeCodexProCodexPageHostRequest"));
-    assert!(host.contains("timeoutMs = 15000"));
+    assert!(host.contains("return await client.sendRequest(normalizedMethod, params);"));
     assert!(!host.contains("multicaWorkspaceLoadCurrentRoute(true, 2000"));
     let cleanup = source_between(
         host,
@@ -850,6 +848,7 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         "function multicaWorkspaceAppendSkillItem",
     );
     assert!(board.contains("multicaWorkspaceAppendModuleMenu(heading)"));
+    assert!(board.contains("multicaWorkspaceRenderNativeInventory(page)"));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
     assert!(board.contains("lane.dataset.multicaBoardStatus = column.key"));
     let dependency_loader = source_between(
@@ -867,6 +866,16 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         )
     );
     assert!(!dependency_loader.contains("Promise.all"));
+    let inventory = source_between(
+        workspace,
+        "function multicaWorkspaceNativeSessionRows()",
+        "function multicaWorkspaceRenderIssueBoard",
+    );
+    assert!(inventory.contains("data-app-action-sidebar-thread-id"));
+    assert!(inventory.contains(".slice(0, 100)"));
+    assert!(inventory.contains("row.click()"));
+    assert!(inventory.contains("暂无本地智能体"));
+    assert!(inventory.contains("已绑定原生执行"));
     let refresh = source_between(
         workspace,
         "function multicaWorkspaceRefreshBoardSource",
@@ -890,6 +899,23 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(workspace.contains("解绑"));
     assert!(workspace.contains("审查并信任"));
     assert!(workspace.contains("撤销信任"));
+    assert!(workspace.contains("assignee_type"));
+    assert!(workspace.contains("parent_issue_id"));
+    assert!(workspace.contains("lead_type"));
+    assert!(workspace.contains("execution_mode"));
+    assert!(workspace.contains("concurrency_limit"));
+    assert!(workspace.contains("permission_mode"));
+    assert!(workspace.contains("invocation_targets"));
+    assert!(workspace.contains("max_concurrent_tasks"));
+    assert!(workspace.contains("thinking_level"));
+    assert!(workspace.contains("service_tier"));
+    assert!(workspace.contains("流程元数据（JSON）"));
+    assert!(workspace.contains("自定义属性（JSON）"));
+    assert!(workspace.contains("labels"));
+    assert!(workspace.contains("reactions"));
+    assert!(workspace.contains("last_activity_at"));
+    assert!(workspace.contains("必须是有效 JSON"));
+    assert!(workspace.contains("multicaWorkspaceNormalizeEditableEntity"));
     assert!(workspace.contains("postJson(\"/manager/open\", {})"));
     assert!(workspace.contains("textContent"));
     assert!(!workspace.contains("innerHTML"));
@@ -932,7 +958,10 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
     let takeover = open
         .find("multicaWorkspaceState.opened = true;")
         .expect("board takeover assignment");
-    assert!(preflight < takeover, "native main must stay visible during preflight");
+    assert!(
+        preflight < takeover,
+        "native main must stay visible during preflight"
+    );
     assert!(open.contains("!multicaWorkspaceState.opening"));
     assert!(open.contains("本地任务暂不可用，请点击重试"));
 
@@ -976,7 +1005,9 @@ fn codex_multica_unavailable_entry_is_visible_and_retryable() {
     assert!(availability.contains("badge.textContent = \"未连接\""));
     assert!(availability.contains("badge.style.display = \"inline-flex\""));
     assert!(availability.contains("点击重试"));
-    assert!(availability.contains("entry.setAttribute(\"aria-label\", \"我的任务，未连接，点击重试\")"));
+    assert!(
+        availability.contains("entry.setAttribute(\"aria-label\", \"我的任务，未连接，点击重试\")")
+    );
     assert!(availability.contains("badge.style.display = \"none\""));
     assert!(entry.contains("multicaWorkspaceOpen();"));
 }
@@ -995,9 +1026,35 @@ fn codex_multica_inventory_only_skills_use_camel_case_runtime_dto_fields() {
         "function multicaWorkspaceSkillExecutionSupported",
     );
 
-    assert!(skill_gate.contains("runtime?.skillsInventorySupported ?? runtime?.skills_inventory_supported"));
+    assert!(
+        skill_gate
+            .contains("runtime?.skillsInventorySupported ?? runtime?.skills_inventory_supported")
+    );
     assert!(skill_gate.contains("runtime?.skillsSupported ?? runtime?.skills_supported"));
     assert!(skill_gate.contains("inventorySupported === true && executionSupported !== true"));
+}
+
+#[test]
+fn codex_multica_agent_assignment_dispatches_native_subagent() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let action = source_between(
+        workspace,
+        "async function multicaWorkspaceRunExecutionAction",
+        "function multicaWorkspaceAppendExecutionAttempts",
+    );
+    assert!(action.contains("assigneeKind === \"agent\""));
+    assert!(action.contains(
+        "multicaWorkspaceObjectValue(issue, \"assignee_type\", \"assigneeKind\", \"assignee_kind\")"
+    ));
+    assert!(action.contains("multicaWorkspaceObjectValue(issue, \"assignee_id\", \"assigneeId\")"));
+    assert!(action.contains("payload.executionKind = \"subagent\""));
+    assert!(action.contains("payload.agentId = assigneeId"));
+    assert!(action.contains("payload.parentThreadId = parentThreadId"));
 }
 
 #[test]

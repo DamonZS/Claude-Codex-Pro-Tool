@@ -59,7 +59,9 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
     );
 
     assert!(open.contains("multicaWorkspaceState.opened = true;"));
-    assert!(open.contains("const ready = await multicaWorkspaceLoadCurrentRoute(true, 2000, openSequence);"));
+    assert!(open.contains(
+        "const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);"
+    ));
     assert!(!open.contains("await multicaWorkspaceLoadBootstrap"));
     assert!(!open.contains("await multicaWorkspaceQuery"));
     assert!(open.contains("readyMain.style.visibility = \"hidden\""));
@@ -67,8 +69,20 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
     assert!(loader.contains("await multicaWorkspaceLoadBootstrap(force, timeoutMs)"));
     assert!(loader.contains("return multicaWorkspaceQuery(module, force, timeoutMs);"));
     assert!(!query.contains("multicaWorkspaceFailOpen"));
-    assert!(query.contains("multicaWorkspaceSetEntryAvailability(\"启动器未连接，请通过 CCP 启动 Codex\")"));
-    assert!(bootstrap.contains("if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();"));
+    assert!(
+        query.contains(
+            "multicaWorkspaceSetEntryAvailability(\"启动器未连接，请通过 CCP 启动 Codex\")"
+        )
+    );
+    assert!(query.contains(
+        "multicaWorkspaceBridgeUnavailable(error) && !multicaWorkspaceState.workspaceId"
+    ));
+    assert!(
+        bootstrap.contains("if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();")
+    );
+    assert!(bootstrap.contains(
+        "multicaWorkspaceBridgeUnavailable(error) && !multicaWorkspaceState.workspaceId"
+    ));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
     assert!(!board.contains("content.appendChild(page);\n      return;"));
 
@@ -80,6 +94,29 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
     assert!(hide.contains("multicaWorkspaceState.host.style.display = \"none\""));
     assert!(fail_open.contains("if (multicaWorkspaceState.opened)"));
     assert!(fail_open.contains("multicaWorkspaceRenderContent();"));
+}
+
+#[test]
+fn multica_workspace_background_refresh_uses_foreground_timeout_budget() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let background = source_between(
+        workspace,
+        "async function multicaWorkspaceBackgroundSync()",
+        "function multicaWorkspaceStartBackgroundSync",
+    );
+
+    assert!(workspace.contains("const multicaWorkspaceBackgroundTimeoutMs = 15000;"));
+    assert!(background.contains(
+        "await multicaWorkspaceLoadBootstrap(true, multicaWorkspaceBackgroundTimeoutMs)"
+    ));
+    assert!(background.contains(
+        "await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, multicaWorkspaceBackgroundTimeoutMs)"
+    ));
 }
 
 #[test]
@@ -103,10 +140,15 @@ fn multica_workspace_unavailable_entry_remains_retryable_and_is_not_empty_board(
 
     assert!(entry.contains("multicaWorkspaceOpen();"));
     assert!(entry.contains("entry.__ccpMulticaClickHandler"));
-    assert!(entry.contains("entry.removeEventListener(\"click\", entry.__ccpMulticaClickHandler, true)"));
+    assert!(
+        entry
+            .contains("entry.removeEventListener(\"click\", entry.__ccpMulticaClickHandler, true)")
+    );
     assert!(availability.contains("entry.dataset.ccpMulticaAvailability = \"unavailable\""));
     assert!(availability.contains("entry.setAttribute(\"data-state\", \"unavailable\")"));
-    assert!(availability.contains("entry.setAttribute(\"aria-description\", `${detail}；点击重试`)"));
+    assert!(
+        availability.contains("entry.setAttribute(\"aria-description\", `${detail}；点击重试`)")
+    );
     assert!(availability.contains("entry.title = `我的任务（未连接，点击重试：${detail}）`"));
     assert!(!availability.contains("无任务"));
 }

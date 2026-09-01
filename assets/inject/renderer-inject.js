@@ -1777,19 +1777,12 @@
         provider: "codex",
         protocolVersion: "current-page",
         serverInfo: { provider: "codex" },
-        // This client is created by the mounted Codex page and is the same
-        // transport used by native task/turn actions.  The allow-list above
-        // is the authoritative surface for this page-owned bridge.
-        capabilities: [
-          "agent-skill-v1",
-          "subagent-v1",
-          "thread-start",
-          "thread-read",
-          "thread-fork",
-          "turn-start",
-          "turn-interrupt",
-        ],
-        pageHostProbe: { skillsList: true, nativeTaskHost: true },
+        // `skills/list` proves inventory only.  Do not infer subagent or task
+        // execution support from a page-owned client that has no live
+        // initialize capability response; the Rust adapter will keep those
+        // operations unsupported until the primary host reports them.
+        capabilities: [],
+        pageHostProbe: { skillsList: true, nativeTaskHost: false },
       },
     };
   }
@@ -4618,7 +4611,13 @@
   const multicaWorkspaceModules = Object.freeze([
     { key: "my-issues", resource: "my_tasks", label: "我的任务" },
     { key: "issues", resource: "issues", label: "任务" },
+    { key: "comments", resource: "comments", label: "评论" },
+    { key: "labels", resource: "labels", label: "标签" },
+    { key: "subscribers", resource: "subscribers", label: "订阅者" },
+    { key: "reactions", resource: "reactions", label: "反应" },
+    { key: "activities", resource: "activities", label: "活动" },
     { key: "projects", resource: "projects", label: "项目" },
+    { key: "project-resources", resource: "project_resources", label: "项目资源" },
     { key: "autopilots", resource: "autopilots", label: "自动化" },
     { key: "agents", resource: "agents", label: "智能体" },
     { key: "squads", resource: "squads", label: "小队" },
@@ -4643,6 +4642,10 @@
     { key: "agents", label: "我的智能体和小队" },
   ]);
   const multicaWorkspaceBackgroundIntervalMs = 5000;
+  // Background refreshes must use the same bounded budget as the foreground
+  // preflight. A shorter timeout made normal CDP/IPC jitter look like a lost
+  // connection and overwrote a previously healthy entry state.
+  const multicaWorkspaceBackgroundTimeoutMs = 15000;
   const multicaWorkspaceState = {
     entry: null,
     host: null,
@@ -4862,6 +4865,13 @@
       .ccp-multica-board-heading { display: flex; align-items: center; gap: 9px; min-height: 50px; padding: 8px 14px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
       .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: 0; white-space: nowrap; }
       .ccp-multica-board-toolbar { padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-native-inventory { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-native-inventory-title { grid-column: 1 / -1; margin: 0; font-size: 13px; }
+      .ccp-multica-native-inventory-label { margin: 0 0 6px; font-size: 12px; opacity: .72; }
+      .ccp-multica-native-session-list, .ccp-multica-native-agent-list { display: flex; flex-wrap: wrap; gap: 6px; }
+      .ccp-multica-native-session, .ccp-multica-native-agent { max-width: 260px; padding: 4px 8px; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 6px; background: transparent; color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ccp-multica-native-session { cursor: pointer; text-align: left; }
+      .ccp-multica-native-session[aria-current="page"] { border-color: #56b9a6; }
       .ccp-multica-working-count { color: color-mix(in srgb, currentColor 66%, transparent); white-space: nowrap; }
       .ccp-multica-board-scroll { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
       .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, 280px); gap: 12px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 12px; }
@@ -5315,7 +5325,7 @@
       parent.appendChild(article);
       return;
     }
-    const preferred = ["status", "state", "version", "priority", "trust_state", "inventory_source", "workspace_slug"];
+    const preferred = ["status", "status_category", "status_name", "version", "priority", "labels", "reactions", "last_activity_at", "trust_state", "inventory_source", "workspace_slug"];
     const keys = preferred.concat(Object.keys(item)).filter((key, index, all) => all.indexOf(key) === index)
       .filter((key) => multicaWorkspaceSafeKey(key) && !["title", "name", "display_name", "displayName", "slug", "id", "key"].includes(key))
       .slice(0, 8);
@@ -5331,7 +5341,7 @@
     parent.appendChild(article);
   }
 
-  const multicaWorkspaceWritableResources = new Set(["issues", "projects", "agents", "squads", "autopilots"]);
+  const multicaWorkspaceWritableResources = new Set(["issues", "comments", "labels", "subscribers", "reactions", "projects", "project_resources", "agents", "squads", "autopilots"]);
   const multicaWorkspaceTerminalExecutionStates = new Set(["completed", "failed", "cancelled"]);
 
   function multicaWorkspaceWritableResource(module) {
@@ -5356,7 +5366,7 @@
   }
 
   function multicaWorkspaceNewId(resource) {
-    const prefix = ({ issues: "issue", projects: "project", agents: "agent", squads: "squad", autopilots: "autopilot" })[resource] || "item";
+    const prefix = ({ issues: "issue", comments: "comment", labels: "label", subscribers: "subscriber", reactions: "reaction", projects: "project", project_resources: "resource", agents: "agent", squads: "squad", autopilots: "autopilot" })[resource] || "item";
     const random = globalThis.crypto?.randomUUID?.().replaceAll("-", "").slice(0, 12)
       || Math.random().toString(36).slice(2, 14);
     return `${prefix}-${Date.now().toString(36)}-${random}`;
@@ -5372,11 +5382,20 @@
     const entity = {};
     if (!item || typeof item !== "object" || Array.isArray(item)) return entity;
     const allowed = new Set(({
-      issues: ["id", "title", "description", "status", "priority", "projectId", "parentIssueId", "assigneeKind", "assigneeId", "creatorId"],
-      projects: ["id", "name", "description", "status"],
-      agents: ["id", "name", "description", "enabled", "concurrencyLimit"],
-      squads: ["id", "name", "description", "leaderAgentId", "memberAgentIds"],
-      autopilots: ["id", "name", "triggerKind", "schedule", "enabled"],
+      // Keep both wire names from Multica and the legacy local aliases. The
+      // embedded store is deliberately schema-tolerant, while the editor must
+      // preserve fields returned by newer upstream servers.
+      issues: ["id", "title", "description", "status", "status_category", "status_name", "priority", "project_id", "projectId", "parent_issue_id", "parentIssueId", "assignee_type", "assigneeKind", "assignee_id", "assigneeId", "creator_type", "creator_id", "creatorId", "position", "stage", "start_date", "due_date", "metadata", "properties"],
+      comments: ["id", "issue_id", "issueId", "author_type", "author_id", "content", "type", "parent_id", "parentId", "reactions", "attachments", "resolved_at", "resolved_by_type", "resolved_by_id", "source_task_id"],
+      labels: ["id", "workspace_id", "resource_type", "resourceType", "name", "description", "color", "usage_count"],
+      subscribers: ["id", "issue_id", "user_type", "user_id", "reason"],
+      reactions: ["id", "comment_id", "actor_type", "actor_id", "emoji", "created_at"],
+      activities: ["id", "issue_id", "actor_type", "actor_id", "action", "details", "created_at"],
+      projects: ["id", "title", "name", "description", "icon", "status", "priority", "lead_type", "lead_id", "start_date", "due_date", "resources", "members", "progress"],
+      project_resources: ["id", "project_id", "projectId", "workspace_id", "resource_type", "resourceType", "resource_ref", "resourceRef", "label", "position"],
+      agents: ["id", "name", "description", "instructions", "enabled", "status", "runtime_id", "runtime_mode", "provider", "visibility", "permission_mode", "invocation_targets", "max_concurrent_tasks", "concurrency_limit", "concurrencyLimit", "model", "thinking_level", "service_tier", "skills", "disabled_runtime_skills", "runtime_bound", "conversation_starters"],
+      squads: ["id", "name", "description", "instructions", "avatar_url", "leader_id", "leaderAgentId", "memberAgentIds", "members", "member_preview", "activity"],
+      autopilots: ["id", "title", "name", "description", "project_id", "assignee_type", "assignee_id", "trigger_kind", "triggerKind", "execution_mode", "issue_title_template", "schedule", "enabled", "status", "subscribers", "triggers", "runs", "last_run_status", "next_run_at"],
     })[resource] || ["id"]);
     for (const [key, value] of Object.entries(item)) {
       if (!allowed.has(key) || !multicaWorkspaceSafeKey(key)) continue;
@@ -5386,61 +5405,165 @@
   }
 
   function multicaWorkspaceFieldDefinitions(resource) {
+    if (resource === "comments") return [
+      { key: "issue_id", label: "任务 ID", required: true },
+      { key: "content", label: "评论内容", type: "textarea", wide: true, required: true },
+      { key: "type", label: "类型", type: "select", options: [["comment", "评论"], ["status_change", "状态变更"], ["progress_update", "进度更新"]] },
+      { key: "parent_id", label: "父评论 ID" },
+      { key: "author_type", label: "作者类型", type: "select", options: [["member", "成员"], ["agent", "智能体"], ["system", "系统"]] },
+      { key: "author_id", label: "作者 ID" },
+      { key: "resolved_at", label: "解析时间" },
+      { key: "source_task_id", label: "来源任务 ID" },
+    ];
+    if (resource === "labels") return [
+      { key: "name", label: "标签名称", required: true },
+      { key: "resource_type", label: "资源类型", type: "select", options: [["issue", "任务"], ["agent", "智能体"], ["skill", "Skill"]] },
+      { key: "description", label: "描述", type: "textarea", wide: true },
+      { key: "color", label: "颜色（#RRGGBB）" },
+    ];
+    if (resource === "subscribers") return [
+      { key: "issue_id", label: "任务 ID", required: true },
+      { key: "user_type", label: "用户类型", type: "select", options: [["member", "成员"], ["agent", "智能体"]] },
+      { key: "user_id", label: "用户 ID", required: true },
+      { key: "reason", label: "订阅原因" },
+    ];
+    if (resource === "reactions") return [
+      { key: "comment_id", label: "评论 ID", required: true },
+      { key: "actor_type", label: "操作者类型" },
+      { key: "actor_id", label: "操作者 ID", required: true },
+      { key: "emoji", label: "表情", required: true },
+    ];
+    if (resource === "activities") return [];
     if (resource === "issues") return [
       { key: "title", label: "标题", required: true, wide: true },
       { key: "description", label: "描述", type: "textarea", wide: true },
       { key: "status", label: "状态", type: "select", options: [["backlog", "待规划"], ["todo", "待办"], ["in_progress", "进行中"], ["in_review", "审核中"], ["done", "已完成"], ["blocked", "已阻塞"], ["cancelled", "已取消"]] },
-      { key: "priority", label: "优先级", type: "select", options: [["low", "低"], ["medium", "中"], ["high", "高"], ["urgent", "紧急"]] },
-      { key: "projectId", label: "项目 ID" },
-      { key: "parentIssueId", label: "父任务 ID" },
-      { key: "assigneeKind", label: "执行者类型", type: "select", optional: true, options: [["agent", "智能体"], ["squad", "小队"], ["member", "成员"]] },
-      { key: "assigneeId", label: "执行者 ID" },
+      { key: "priority", label: "优先级", type: "select", options: [["none", "无"], ["low", "低"], ["medium", "中"], ["high", "高"], ["urgent", "紧急"]] },
+      { key: "project_id", label: "项目 ID" },
+      { key: "parent_issue_id", label: "父任务 ID" },
+      { key: "assignee_type", label: "执行者类型", type: "select", optional: true, options: [["agent", "智能体"], ["squad", "小队"], ["member", "成员"]] },
+      { key: "assignee_id", label: "执行者 ID" },
+      { key: "start_date", label: "开始日期（YYYY-MM-DD）" },
+      { key: "due_date", label: "截止日期（YYYY-MM-DD）" },
+      { key: "resources", label: "项目资源（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
+      { key: "members", label: "项目成员（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
+      { key: "progress", label: "项目进度（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
+      { key: "metadata", label: "流程元数据（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
+      { key: "properties", label: "自定义属性（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
     ];
     if (resource === "projects") return [
-      { key: "name", label: "项目名称", required: true, wide: true },
+      { key: "title", label: "项目名称", required: true, wide: true },
       { key: "description", label: "描述", type: "textarea", wide: true },
-      { key: "status", label: "状态", type: "select", options: [["active", "进行中"], ["paused", "已暂停"], ["archived", "已归档"]] },
+      { key: "status", label: "状态", type: "select", options: [["planned", "计划中"], ["in_progress", "进行中"], ["paused", "已暂停"], ["completed", "已完成"], ["cancelled", "已取消"]] },
+      { key: "priority", label: "优先级", type: "select", options: [["none", "无"], ["low", "低"], ["medium", "中"], ["high", "高"], ["urgent", "紧急"]] },
+      { key: "lead_type", label: "负责人类型", type: "select", optional: true, options: [["member", "成员"], ["agent", "智能体"]] },
+      { key: "lead_id", label: "负责人 ID" },
+      { key: "start_date", label: "开始日期（YYYY-MM-DD）" },
+      { key: "due_date", label: "截止日期（YYYY-MM-DD）" },
+    ];
+    if (resource === "project_resources") return [
+      { key: "project_id", label: "项目 ID", required: true },
+      { key: "resource_type", label: "资源类型", type: "select", required: true, options: [["github_repo", "GitHub 仓库"], ["local_directory", "本地目录"]] },
+      { key: "resource_ref", label: "资源引用（JSON）", type: "textarea", wide: true, required: true, valueType: "json", jsonEmpty: {} },
+      { key: "label", label: "显示名称" },
+      { key: "position", label: "排序", type: "number" },
     ];
     if (resource === "agents") return [
       { key: "name", label: "智能体名称", required: true, wide: true },
       { key: "description", label: "职责", type: "textarea", wide: true },
+      { key: "instructions", label: "执行指令", type: "textarea", wide: true },
       { key: "enabled", label: "状态", type: "select", valueType: "boolean", options: [["true", "启用"], ["false", "停用"]] },
-      { key: "concurrencyLimit", label: "并发上限", type: "number" },
+      { key: "runtime_id", label: "运行时 ID" },
+      { key: "runtime_mode", label: "运行模式", type: "select", options: [["local", "本地"], ["cloud", "云端"]] },
+      { key: "provider", label: "运行时提供方" },
+      { key: "visibility", label: "可见性", type: "select", options: [["workspace", "工作区"], ["private", "私有"]] },
+      { key: "permission_mode", label: "调用权限", type: "select", options: [["private", "仅所有者"], ["public_to", "按授权目标"]] },
+      { key: "invocation_targets", label: "授权目标（JSON）", type: "textarea", wide: true, valueType: "json" },
+      { key: "max_concurrent_tasks", label: "并发任务上限", type: "number" },
+      { key: "model", label: "模型" },
+      { key: "thinking_level", label: "思考级别" },
+      { key: "service_tier", label: "服务层级" },
+      { key: "disabled_runtime_skills", label: "禁用运行时 Skills（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
+      { key: "conversation_starters", label: "对话起始项（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
     if (resource === "squads") return [
       { key: "name", label: "小队名称", required: true, wide: true },
       { key: "description", label: "分工说明", type: "textarea", wide: true },
-      { key: "leaderAgentId", label: "负责人智能体 ID" },
+      { key: "instructions", label: "小队指令", type: "textarea", wide: true },
+      { key: "leader_id", label: "负责人智能体 ID" },
       { key: "memberAgentIds", label: "成员智能体 ID（逗号分隔）", valueType: "list", wide: true },
+      { key: "members", label: "成员与分工（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
     return [
-      { key: "name", label: "自动化名称", required: true, wide: true },
-      { key: "triggerKind", label: "触发方式", type: "select", options: [["schedule", "定时"], ["webhook", "Webhook"], ["api", "API"], ["manual", "手动"]] },
+      { key: "title", label: "自动化名称", required: true, wide: true },
+      { key: "description", label: "描述", type: "textarea", wide: true },
+      { key: "trigger_kind", label: "触发方式", type: "select", options: [["schedule", "定时"], ["webhook", "Webhook"], ["api", "API"]] },
       { key: "schedule", label: "调度表达式" },
+      { key: "assignee_type", label: "执行者类型", type: "select", options: [["agent", "智能体"], ["squad", "小队"]] },
+      { key: "assignee_id", label: "执行者 ID" },
+      { key: "execution_mode", label: "执行模式", type: "select", options: [["create_issue", "创建任务"], ["run_only", "仅运行"]] },
+      { key: "issue_title_template", label: "任务标题模板" },
       { key: "enabled", label: "状态", type: "select", valueType: "boolean", options: [["true", "启用"], ["false", "停用"]] },
+      { key: "subscribers", label: "订阅者（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
+      { key: "triggers", label: "触发器（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
   }
 
   function multicaWorkspaceDefaultEntity(resource) {
     const common = { id: multicaWorkspaceNewId(resource) };
-    if (resource === "issues") return { ...common, title: "", description: "", status: "todo", priority: "medium" };
-    if (resource === "projects") return { ...common, name: "", description: "", status: "active" };
-    if (resource === "agents") return { ...common, name: "", description: "", enabled: true, concurrencyLimit: 1 };
-    if (resource === "squads") return { ...common, name: "", description: "", leaderAgentId: "", memberAgentIds: [] };
-    return { ...common, name: "", triggerKind: "manual", schedule: "", enabled: true };
+    if (resource === "issues") return { ...common, title: "", description: "", status: "todo", priority: "medium", assignee_type: "", assignee_id: "", metadata: {}, properties: {} };
+    if (resource === "comments") return { ...common, issue_id: "", content: "", type: "comment", parent_id: null, author_type: "member", author_id: "" };
+    if (resource === "labels") return { ...common, name: "", resource_type: "issue", description: "", color: "#6B7280" };
+    if (resource === "subscribers") return { ...common, issue_id: "", user_type: "member", user_id: "", reason: "manual" };
+    if (resource === "reactions") return { ...common, comment_id: "", actor_type: "member", actor_id: "", emoji: "👍" };
+    if (resource === "projects") return { ...common, title: "", description: "", status: "planned", priority: "none", lead_type: "", lead_id: "" };
+    if (resource === "project_resources") return { ...common, project_id: "", resource_type: "github_repo", resource_ref: {}, label: "", position: 0 };
+    if (resource === "agents") return { ...common, name: "", description: "", instructions: "", enabled: true, runtime_id: "", runtime_mode: "local", visibility: "workspace", permission_mode: "private", invocation_targets: [], max_concurrent_tasks: 1, model: "", thinking_level: "", service_tier: "" };
+    if (resource === "squads") return { ...common, name: "", description: "", instructions: "", leader_id: "", memberAgentIds: [] };
+    return { ...common, title: "", description: "", trigger_kind: "schedule", schedule: "", assignee_type: "agent", assignee_id: "", execution_mode: "create_issue", enabled: true };
+  }
+
+  function multicaWorkspaceNormalizeEditableEntity(resource, values) {
+    const normalized = { ...(values || {}) };
+    const copy = (canonical, legacy) => {
+      if ((normalized[canonical] === undefined || normalized[canonical] === null || normalized[canonical] === "") && normalized[legacy] !== undefined) {
+        normalized[canonical] = normalized[legacy];
+      }
+      delete normalized[legacy];
+    };
+    if (resource === "issues") {
+      copy("project_id", "projectId");
+      copy("parent_issue_id", "parentIssueId");
+      copy("assignee_type", "assigneeKind");
+      copy("assignee_id", "assigneeId");
+      copy("creator_id", "creatorId");
+    } else if (resource === "projects") {
+      copy("title", "name");
+    } else if (resource === "agents") {
+      copy("concurrency_limit", "concurrencyLimit");
+    } else if (resource === "squads") {
+      copy("leader_id", "leaderAgentId");
+    } else if (resource === "autopilots") {
+      copy("title", "name");
+      copy("trigger_kind", "triggerKind");
+    }
+    return normalized;
   }
 
   function multicaWorkspaceOpenEditor(module, item = null, defaults = {}) {
     const resource = multicaWorkspaceWritableResource(module);
     if (!resource || multicaWorkspaceState.mutationBusy) return;
-    const values = item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults };
+    const values = multicaWorkspaceNormalizeEditableEntity(
+      resource,
+      item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults },
+    );
     if (!item && resource === "issues") {
       const localUserId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
       if (localUserId) {
-        values.creatorId = localUserId;
+        values.creator_id = localUserId;
         if (module.key === "my-issues") {
-          values.assigneeKind = "member";
-          values.assigneeId = localUserId;
+          values.assignee_type = "member";
+          values.assignee_id = localUserId;
         }
       }
     }
@@ -5466,8 +5589,16 @@
     let control;
     if (field.type === "textarea") {
       control = multicaWorkspaceEl("textarea", "ccp-multica-textarea");
-      control.value = rawValue == null ? "" : String(rawValue);
-      control.addEventListener("input", () => onChange(control.value));
+      const displayValue = field.valueType === "json" && rawValue != null && typeof rawValue !== "string"
+        ? JSON.stringify(rawValue, null, 2)
+        : rawValue;
+      control.value = displayValue == null ? "" : String(displayValue);
+      control.addEventListener("input", () => {
+        if (field.valueType === "json") {
+          try { onChange(control.value.trim() ? JSON.parse(control.value) : (field.jsonEmpty ?? [])); }
+          catch { onChange(control.value); }
+        } else onChange(control.value);
+      });
     } else if (field.type === "select") {
       control = multicaWorkspaceEl("select", "ccp-multica-select");
       if (field.optional) {
@@ -5555,9 +5686,17 @@
   async function multicaWorkspaceSaveEditor(module) {
     const editor = multicaWorkspaceState.editor;
     if (!editor || multicaWorkspaceState.mutationBusy) return;
-    const requiredKey = editor.resource === "issues" ? "title" : "name";
+    const requiredKey = (editor.resource === "issues" || editor.resource === "projects" || editor.resource === "autopilots") ? "title" : (editor.resource === "project_resources" ? "project_id" : (editor.resource === "comments" ? "issue_id" : "name"));
     if (!String(editor.values[requiredKey] || "").trim()) {
-      editor.message = requiredKey === "title" ? "请输入标题" : "请输入名称";
+      editor.message = requiredKey === "title" ? "请输入标题" : (requiredKey === "project_id" ? "请输入项目 ID" : (requiredKey === "issue_id" ? "请输入任务 ID" : "请输入名称"));
+      multicaWorkspaceRenderContent();
+      return;
+    }
+    const invalidJsonField = multicaWorkspaceFieldDefinitions(editor.resource).find((field) =>
+      field.valueType === "json" && typeof editor.values[field.key] === "string"
+    );
+    if (invalidJsonField) {
+      editor.message = `${invalidJsonField.label}必须是有效 JSON`;
       multicaWorkspaceRenderContent();
       return;
     }
@@ -5806,12 +5945,22 @@
     let payload;
     if (action === "create") {
       path = "/multica/executions/create";
+      const assigneeKind = String(multicaWorkspaceObjectValue(issue, "assignee_type", "assigneeKind", "assignee_kind") || "").toLowerCase();
+      const assigneeId = String(multicaWorkspaceObjectValue(issue, "assignee_id", "assigneeId") || "").trim();
+      const parentThreadId = multicaWorkspaceCurrentNativeThreadId();
       payload = {
         workspaceId: multicaWorkspaceState.workspaceId,
         issueId,
         prompt: extras.prompt,
         idempotencyKey: extras.idempotencyKey,
       };
+      // Match Multica's native assignment flow: an agent-owned issue is
+      // dispatched as a child of the currently open Codex conversation.
+      if (assigneeKind === "agent" && assigneeId) {
+        payload.executionKind = "subagent";
+        payload.agentId = assigneeId;
+        payload.parentThreadId = parentThreadId || undefined;
+      }
     } else if (action === "continue") {
       path = "/multica/executions/continue";
       payload = {
@@ -5880,6 +6029,10 @@
         multicaWorkspaceEl("span", "ccp-multica-badge", `Attempt ${attemptNo}`),
         multicaWorkspaceEl("span", "ccp-multica-badge", state),
       );
+      const agentId = multicaWorkspaceObjectValue(binding, "agentId", "agent_id");
+      const parentThreadId = multicaWorkspaceObjectValue(binding, "parentThreadId", "parent_thread_id");
+      if (agentId) summary.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", `Agent ${agentId}`));
+      if (parentThreadId) summary.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", `父会话 ${parentThreadId}`));
       const errorCode = multicaWorkspaceObjectValue(binding, "lastErrorCode", "last_error_code");
       if (errorCode) summary.appendChild(multicaWorkspaceEl("span", "ccp-multica-stale", String(errorCode)));
       row.appendChild(summary);
@@ -5939,8 +6092,11 @@
     article.appendChild(heading);
     const fields = multicaWorkspaceEl("div", "ccp-multica-fields");
     const keys = resource === "issues"
-      ? ["status", "priority", "projectId", "assigneeKind", "assigneeId", "revision"]
-      : resource === "projects" ? ["status", "revision"] : ["enabled", "triggerKind", "leaderAgentId", "revision"];
+      ? ["status", "priority", "project_id", "projectId", "assignee_type", "assigneeKind", "assignee_id", "assigneeId", "revision"]
+      : resource === "projects" ? ["status", "priority", "lead_type", "lead_id", "revision"]
+        : resource === "agents" ? ["enabled", "runtime_mode", "provider", "concurrency_limit", "revision"]
+          : resource === "squads" ? ["leader_id", "leaderAgentId", "revision"]
+            : ["enabled", "trigger_kind", "triggerKind", "execution_mode", "assignee_type", "assignee_id", "revision"];
     keys.forEach((key) => {
       const value = multicaWorkspaceObjectValue(item, key, key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`));
       if (value === undefined || value === null || value === "") return;
@@ -5979,7 +6135,7 @@
         });
       }
       items = items.filter((item) => {
-        const kind = String(multicaWorkspaceObjectValue(item, "assigneeKind", "assignee_kind") || "").toLowerCase();
+        const kind = String(multicaWorkspaceObjectValue(item, "assignee_type", "assigneeKind", "assignee_kind") || "").toLowerCase();
         const id = String(multicaWorkspaceObjectValue(item, "assigneeId", "assignee_id") || "");
         return (kind === "agent" || kind === "squad") && localAssignees.has(id);
       });
@@ -6120,6 +6276,91 @@
     parent.appendChild(article);
   }
 
+  function multicaWorkspaceNativeSessionRows() {
+    return Array.from(document.querySelectorAll?.("[data-app-action-sidebar-thread-id]") || [])
+      .filter((row) => String(row.getAttribute?.("data-app-action-sidebar-thread-id") || "").trim())
+      .slice(0, 100);
+  }
+
+  function multicaWorkspaceRenderNativeInventory(parent) {
+    const section = multicaWorkspaceEl("section", "ccp-multica-native-inventory");
+    section.appendChild(multicaWorkspaceEl("h3", "ccp-multica-native-inventory-title", "Codex 原生会话与智能体"));
+    const projectGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+    const projects = nativeProjectTargets();
+    projectGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生项目（${projects.length}）`));
+    if (projects.length === 0) {
+      projectGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前页面没有可读取的原生项目"));
+    } else {
+      const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+      projects.forEach((project) => {
+        const button = multicaWorkspaceEl("button", "ccp-multica-native-session", normalizeProjectLabel(project.label) || displayProjectName(project.path));
+        button.type = "button";
+        button.title = `打开原生项目 ${project.path}`;
+        button.addEventListener("click", () => {
+          if (!project.row?.isConnected) {
+            button.disabled = true;
+            button.title = "原生项目已不可用，请刷新页面";
+            return;
+          }
+          project.row.click();
+        });
+        list.appendChild(button);
+      });
+      projectGroup.appendChild(list);
+    }
+    section.appendChild(projectGroup);
+    const sessions = multicaWorkspaceNativeSessionRows();
+    const sessionGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+    sessionGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生会话（${sessions.length}）`));
+    if (sessions.length === 0) {
+      sessionGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前页面没有可读取的原生会话"));
+    } else {
+      const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+      sessions.forEach((row) => {
+        const threadId = String(row.getAttribute("data-app-action-sidebar-thread-id") || "").trim();
+        const label = String(row.getAttribute("aria-label") || row.textContent || threadId).replace(/\s+/g, " ").trim().slice(0, 160) || threadId;
+        const button = multicaWorkspaceEl("button", "ccp-multica-native-session", label);
+        button.type = "button";
+        button.title = `打开原生会话 ${threadId}`;
+        button.dataset.threadId = threadId;
+        button.setAttribute("aria-current", row.matches?.('[aria-current="page"], [data-app-action-sidebar-thread-active="true"]') ? "page" : "false");
+        button.addEventListener("click", () => {
+          if (!row.isConnected) {
+            button.disabled = true;
+            button.title = "原生会话已不可用，请刷新页面";
+            return;
+          }
+          row.click();
+        });
+        list.appendChild(button);
+      });
+      sessionGroup.appendChild(list);
+    }
+    section.appendChild(sessionGroup);
+    const agentGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+    agentGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", "智能体"));
+    const agents = multicaWorkspaceState.collections.get("agents")?.items || [];
+    const boundAgentIds = new Set(multicaWorkspaceState.executions
+      .map((binding) => multicaWorkspaceObjectValue(binding, "agentId", "agent_id"))
+      .filter(Boolean));
+    if (agents.length === 0) {
+      const supported = multicaWorkspaceState.bootstrap?.runtime?.multiAgentSupported === true;
+      agentGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", supported ? "暂无本地智能体" : "当前页面未提供可核实的原生智能体绑定"));
+    } else {
+      const list = multicaWorkspaceEl("div", "ccp-multica-native-agent-list");
+      agents.slice(0, 100).forEach((agent) => {
+        const label = String(multicaWorkspaceObjectValue(agent, "name", "title") || multicaWorkspaceObjectValue(agent, "id") || "未命名智能体");
+        const mapped = boundAgentIds.has(multicaWorkspaceObjectValue(agent, "id"));
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-agent", `${label} · ${mapped ? "已绑定原生执行" : "未绑定"}`);
+        item.title = mapped ? "该智能体已有 Codex 原生执行映射" : "该智能体尚未创建 Codex 原生执行映射";
+        list.appendChild(item);
+      });
+      agentGroup.appendChild(list);
+    }
+    section.appendChild(agentGroup);
+    parent.appendChild(section);
+  }
+
   function multicaWorkspaceRenderIssueBoard(content, module) {
     const source = multicaWorkspaceIssueSource();
     const filterDependencies = multicaWorkspaceState.issueFilter === "agents"
@@ -6204,6 +6445,7 @@
     refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
     toolbar.appendChild(refresh);
     page.appendChild(toolbar);
+    multicaWorkspaceRenderNativeInventory(page);
     if (multicaWorkspaceState.mutationNotice?.message) {
       const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
       notice.setAttribute("role", "status");
@@ -6899,7 +7141,7 @@
       }
       multicaWorkspaceState.bootstrapError = multicaWorkspaceErrorMessage(error);
       multicaWorkspaceSetStatus(multicaWorkspaceState.bootstrapError, "error");
-      if (multicaWorkspaceBridgeUnavailable(error)) {
+      if (multicaWorkspaceBridgeUnavailable(error) && !multicaWorkspaceState.workspaceId) {
         multicaWorkspaceSetEntryAvailability("启动器未连接，请通过 CCP 启动 Codex");
       }
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
@@ -6963,7 +7205,7 @@
         multicaWorkspaceState.collections.set(module.key, { ...previous, stale: true });
       }
       multicaWorkspaceSetStatus(multicaWorkspaceErrorMessage(error), "error");
-      if (multicaWorkspaceBridgeUnavailable(error)) {
+      if (multicaWorkspaceBridgeUnavailable(error) && !multicaWorkspaceState.workspaceId) {
         multicaWorkspaceSetEntryAvailability("启动器未连接，请通过 CCP 启动 Codex");
       }
       return false;
@@ -7076,12 +7318,12 @@
     multicaWorkspaceState.backgroundBusy = true;
     try {
       if (!multicaWorkspaceState.workspaceId && !multicaWorkspaceState.bootstrapLoading) {
-        await multicaWorkspaceLoadBootstrap(true, 2000);
+        await multicaWorkspaceLoadBootstrap(true, multicaWorkspaceBackgroundTimeoutMs);
       }
       if (!multicaWorkspaceState.workspaceId || multicaWorkspaceState.queryRequest) return;
       for (const route of ["issues", "my-issues"]) {
         if (multicaWorkspaceState.queryRequest) return;
-        await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, 2000);
+        await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, multicaWorkspaceBackgroundTimeoutMs);
       }
       if (!multicaWorkspaceState.executionsLoading) await multicaWorkspaceLoadExecutions(true);
     } finally {

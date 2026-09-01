@@ -43,7 +43,13 @@ const MAX_LOCAL_WORKSPACE_STORE_BYTES: usize = 8 * 1024 * 1024;
 pub enum MulticaWorkspaceResourceKey {
     MyTasks,
     Issues,
+    Comments,
+    Labels,
+    Subscribers,
+    Reactions,
+    Activities,
     Projects,
+    ProjectResources,
     Autopilots,
     Agents,
     Squads,
@@ -54,10 +60,16 @@ pub enum MulticaWorkspaceResourceKey {
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 16] = [
         Self::MyTasks,
         Self::Issues,
+        Self::Comments,
+        Self::Labels,
+        Self::Subscribers,
+        Self::Reactions,
+        Self::Activities,
         Self::Projects,
+        Self::ProjectResources,
         Self::Autopilots,
         Self::Agents,
         Self::Squads,
@@ -71,7 +83,13 @@ impl MulticaWorkspaceResourceKey {
         match self {
             Self::MyTasks => "my_tasks",
             Self::Issues => "issues",
+            Self::Comments => "comments",
+            Self::Labels => "labels",
+            Self::Subscribers => "subscribers",
+            Self::Reactions => "reactions",
+            Self::Activities => "activities",
             Self::Projects => "projects",
+            Self::ProjectResources => "project_resources",
             Self::Autopilots => "autopilots",
             Self::Agents => "agents",
             Self::Squads => "squads",
@@ -205,7 +223,19 @@ pub struct LocalMulticaWorkspaceState {
     #[serde(default)]
     pub issues: Vec<Value>,
     #[serde(default)]
+    pub comments: Vec<Value>,
+    #[serde(default)]
+    pub labels: Vec<Value>,
+    #[serde(default)]
+    pub subscribers: Vec<Value>,
+    #[serde(default)]
+    pub reactions: Vec<Value>,
+    #[serde(default)]
+    pub activities: Vec<Value>,
+    #[serde(default)]
     pub projects: Vec<Value>,
+    #[serde(default)]
+    pub project_resources: Vec<Value>,
     #[serde(default)]
     pub agents: Vec<Value>,
     #[serde(default)]
@@ -220,7 +250,13 @@ impl LocalMulticaWorkspaceState {
             version: LOCAL_WORKSPACE_STORE_VERSION,
             workspace_id: workspace_id.to_string(),
             issues: Vec::new(),
+            comments: Vec::new(),
+            labels: Vec::new(),
+            subscribers: Vec::new(),
+            reactions: Vec::new(),
+            activities: Vec::new(),
             projects: Vec::new(),
+            project_resources: Vec::new(),
             agents: Vec::new(),
             squads: Vec::new(),
             autopilots: Vec::new(),
@@ -232,7 +268,13 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Issues | MulticaWorkspaceResourceKey::MyTasks => {
                 Ok(&self.issues)
             }
+            MulticaWorkspaceResourceKey::Comments => Ok(&self.comments),
+            MulticaWorkspaceResourceKey::Labels => Ok(&self.labels),
+            MulticaWorkspaceResourceKey::Subscribers => Ok(&self.subscribers),
+            MulticaWorkspaceResourceKey::Reactions => Ok(&self.reactions),
+            MulticaWorkspaceResourceKey::Activities => Ok(&self.activities),
             MulticaWorkspaceResourceKey::Projects => Ok(&self.projects),
+            MulticaWorkspaceResourceKey::ProjectResources => Ok(&self.project_resources),
             MulticaWorkspaceResourceKey::Agents => Ok(&self.agents),
             MulticaWorkspaceResourceKey::Squads => Ok(&self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&self.autopilots),
@@ -246,7 +288,13 @@ impl LocalMulticaWorkspaceState {
     ) -> anyhow::Result<&mut Vec<Value>> {
         match resource {
             MulticaWorkspaceResourceKey::Issues => Ok(&mut self.issues),
+            MulticaWorkspaceResourceKey::Comments => Ok(&mut self.comments),
+            MulticaWorkspaceResourceKey::Labels => Ok(&mut self.labels),
+            MulticaWorkspaceResourceKey::Subscribers => Ok(&mut self.subscribers),
+            MulticaWorkspaceResourceKey::Reactions => Ok(&mut self.reactions),
+            MulticaWorkspaceResourceKey::Activities => Ok(&mut self.activities),
             MulticaWorkspaceResourceKey::Projects => Ok(&mut self.projects),
+            MulticaWorkspaceResourceKey::ProjectResources => Ok(&mut self.project_resources),
             MulticaWorkspaceResourceKey::Agents => Ok(&mut self.agents),
             MulticaWorkspaceResourceKey::Squads => Ok(&mut self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&mut self.autopilots),
@@ -353,7 +401,7 @@ impl LocalMulticaWorkspaceStore {
             entity.insert("created_at_ms".to_string(), created_at_ms);
         }
         let value = Value::Object(entity);
-        validate_local_entity(&value, workspace_id)?;
+        validate_local_entity(&value, workspace_id, command.resource)?;
         if let Some(index) = existing_index {
             entities[index] = value.clone();
         } else {
@@ -808,7 +856,13 @@ fn query_local_collection(
         )),
         MulticaWorkspaceResourceKey::MyTasks
         | MulticaWorkspaceResourceKey::Issues
+        | MulticaWorkspaceResourceKey::Comments
+        | MulticaWorkspaceResourceKey::Labels
+        | MulticaWorkspaceResourceKey::Subscribers
+        | MulticaWorkspaceResourceKey::Reactions
+        | MulticaWorkspaceResourceKey::Activities
         | MulticaWorkspaceResourceKey::Projects
+        | MulticaWorkspaceResourceKey::ProjectResources
         | MulticaWorkspaceResourceKey::Autopilots
         | MulticaWorkspaceResourceKey::Agents
         | MulticaWorkspaceResourceKey::Squads => local_entity_collection(
@@ -883,6 +937,64 @@ fn statistics_collection(
             .or_default() += 1;
     }
     let attempt_total = execution_state.attempt_skill_snapshots.len();
+    let bindings = execution_state
+        .execution_bindings
+        .iter()
+        .filter(|binding| binding.workspace_id == workspace.id)
+        .collect::<Vec<_>>();
+    let mut execution_statuses = BTreeMap::<String, u64>::new();
+    let mut failure_codes = BTreeMap::<String, u64>::new();
+    let mut duration_total_ms = 0u64;
+    let mut duration_count = 0u64;
+    let mut retryable_failures = 0u64;
+    for binding in &bindings {
+        let status = serde_json::to_value(binding.state)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_string());
+        *execution_statuses.entry(status).or_default() += 1;
+        if binding.state == crate::multica_execution_store::MulticaExecutionBindingState::Failed {
+            if let Some(code) = binding.last_error_code.as_deref() {
+                *failure_codes.entry(code.to_string()).or_default() += 1;
+            }
+            if binding.retryable {
+                retryable_failures += 1;
+            }
+        }
+        if let Some(completed_at_ms) = binding.completed_at_ms {
+            if completed_at_ms >= binding.created_at_ms {
+                duration_total_ms = duration_total_ms
+                    .saturating_add(completed_at_ms.saturating_sub(binding.created_at_ms));
+                duration_count += 1;
+            }
+        }
+    }
+    let execution_total = bindings.len() as u64;
+    let terminal_total = bindings
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.state,
+                crate::multica_execution_store::MulticaExecutionBindingState::Completed
+                    | crate::multica_execution_store::MulticaExecutionBindingState::Failed
+                    | crate::multica_execution_store::MulticaExecutionBindingState::Cancelled
+            )
+        })
+        .count() as u64;
+    let successful_total = bindings
+        .iter()
+        .filter(|binding| {
+            binding.state == crate::multica_execution_store::MulticaExecutionBindingState::Completed
+        })
+        .count() as u64;
+    let issue_statuses = workspace_state
+        .issues
+        .iter()
+        .filter_map(|issue| issue.get("status").and_then(Value::as_str))
+        .fold(BTreeMap::<String, u64>::new(), |mut counts, status| {
+            *counts.entry(status.to_string()).or_default() += 1;
+            counts
+        });
     let mut value = collection(
         workspace,
         MulticaWorkspaceResourceKey::Statistics,
@@ -897,6 +1009,15 @@ fn statistics_collection(
             "agent_total": workspace_state.agents.len(),
             "squad_total": workspace_state.squads.len(),
             "autopilot_total": workspace_state.autopilots.len(),
+            "execution_total": execution_total,
+            "execution_terminal_total": terminal_total,
+            "execution_successful_total": successful_total,
+            "execution_success_rate": if terminal_total == 0 { Value::Null } else { json!(successful_total as f64 / terminal_total as f64) },
+            "execution_statuses": execution_statuses,
+            "failure_codes": failure_codes,
+            "retryable_failures": retryable_failures,
+            "average_execution_duration_ms": if duration_count == 0 { Value::Null } else { json!(duration_total_ms / duration_count) },
+            "issue_statuses": issue_statuses,
         })],
         1,
         1,
@@ -909,6 +1030,7 @@ fn statistics_collection(
         && workspace_state.agents.is_empty()
         && workspace_state.squads.is_empty()
         && workspace_state.autopilots.is_empty()
+        && bindings.is_empty()
     {
         value.diagnostic = Some(LOCAL_CONTROL_PLANE_EMPTY.to_string());
     }
@@ -1120,19 +1242,28 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         bail!("multica_workspace_store_invalid");
     }
     validate_local_workspace_id(&state.workspace_id)?;
-    for entities in [
-        &state.issues,
-        &state.projects,
-        &state.agents,
-        &state.squads,
-        &state.autopilots,
+    for (resource, entities) in [
+        (MulticaWorkspaceResourceKey::Issues, &state.issues),
+        (MulticaWorkspaceResourceKey::Comments, &state.comments),
+        (MulticaWorkspaceResourceKey::Labels, &state.labels),
+        (MulticaWorkspaceResourceKey::Subscribers, &state.subscribers),
+        (MulticaWorkspaceResourceKey::Reactions, &state.reactions),
+        (MulticaWorkspaceResourceKey::Activities, &state.activities),
+        (MulticaWorkspaceResourceKey::Projects, &state.projects),
+        (
+            MulticaWorkspaceResourceKey::ProjectResources,
+            &state.project_resources,
+        ),
+        (MulticaWorkspaceResourceKey::Agents, &state.agents),
+        (MulticaWorkspaceResourceKey::Squads, &state.squads),
+        (MulticaWorkspaceResourceKey::Autopilots, &state.autopilots),
     ] {
         if entities.len() > MAX_LOCAL_ENTITIES_PER_RESOURCE {
             bail!("multica_workspace_collection_too_large");
         }
         let mut ids = BTreeSet::new();
         for entity in entities {
-            validate_local_entity(entity, &state.workspace_id)?;
+            validate_local_entity(entity, &state.workspace_id, resource)?;
             let id = entity
                 .get("id")
                 .and_then(Value::as_str)
@@ -1140,6 +1271,36 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
             if !ids.insert(id.to_ascii_lowercase()) {
                 bail!("multica_workspace_entity_conflict");
             }
+        }
+    }
+    let project_ids = state
+        .projects
+        .iter()
+        .filter_map(|project| project.get("id").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    for resource in &state.project_resources {
+        let project_id = resource
+            .get("project_id")
+            .or_else(|| resource.get("projectId"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("multica_workspace_project_resource_invalid"))?;
+        if !project_ids.contains(project_id) {
+            bail!("multica_workspace_project_resource_project_missing");
+        }
+    }
+    let issue_ids = state
+        .issues
+        .iter()
+        .filter_map(|issue| issue.get("id").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    for comment in &state.comments {
+        let issue_id = comment
+            .get("issue_id")
+            .or_else(|| comment.get("issueId"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("multica_workspace_comment_invalid"))?;
+        if !issue_ids.contains(issue_id) {
+            bail!("multica_workspace_comment_issue_missing");
         }
     }
     Ok(())
@@ -1164,7 +1325,17 @@ fn validate_local_entity_id(value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_local_entity(entity: &Value, workspace_id: &str) -> anyhow::Result<()> {
+fn is_hex_color(value: &str) -> bool {
+    value.len() == 7
+        && value.as_bytes().first() == Some(&b'#')
+        && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+}
+
+fn validate_local_entity(
+    entity: &Value,
+    workspace_id: &str,
+    resource: MulticaWorkspaceResourceKey,
+) -> anyhow::Result<()> {
     let encoded =
         serde_json::to_vec(entity).map_err(|_| anyhow!("multica_workspace_entity_invalid"))?;
     if encoded.len() > MAX_LOCAL_ENTITY_BYTES {
@@ -1189,7 +1360,237 @@ fn validate_local_entity(entity: &Value, workspace_id: &str) -> anyhow::Result<(
     if contains_sensitive_workspace_field(entity) {
         bail!("multica_workspace_sensitive_field_rejected");
     }
+    validate_entity_contract(object, resource)?;
     Ok(())
+}
+
+fn validate_entity_contract(
+    object: &serde_json::Map<String, Value>,
+    resource: MulticaWorkspaceResourceKey,
+) -> anyhow::Result<()> {
+    let bounded_arrays = [
+        "resources",
+        "members",
+        "memberAgentIds",
+        "member_agent_ids",
+        "skills",
+        "disabled_runtime_skills",
+        "conversation_starters",
+        "subscribers",
+        "triggers",
+        "invocation_targets",
+    ];
+    for key in bounded_arrays {
+        if let Some(value) = object.get(key) {
+            let Some(items) = value.as_array() else {
+                bail!("multica_workspace_entity_invalid");
+            };
+            if items.len() > 256 {
+                bail!("multica_workspace_entity_too_large");
+            }
+        }
+    }
+    if resource == MulticaWorkspaceResourceKey::ProjectResources {
+        let project_id = object
+            .get("project_id")
+            .or_else(|| object.get("projectId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("multica_workspace_project_resource_invalid"))?;
+        validate_local_entity_id(project_id)
+            .map_err(|_| anyhow!("multica_workspace_project_resource_invalid"))?;
+        let resource_type = object
+            .get("resource_type")
+            .or_else(|| object.get("resourceType"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let reference = object
+            .get("resource_ref")
+            .or_else(|| object.get("resourceRef"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("multica_workspace_project_resource_invalid"))?;
+        match resource_type {
+            "github_repo" => {
+                let url = reference
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !is_supported_git_url(url) {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+            }
+            "local_directory" => {
+                let path = reference
+                    .get("local_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let daemon_id = reference
+                    .get("daemon_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if path.trim().is_empty()
+                    || path.len() > 1024
+                    || daemon_id.trim().is_empty()
+                    || daemon_id.len() > 240
+                {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+                if let Some(mode) = reference.get("execution_mode").and_then(Value::as_str)
+                    && !matches!(mode, "in_place" | "worktree")
+                {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+            }
+            _ => bail!("multica_workspace_project_resource_invalid"),
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Comments {
+        let issue_id = object
+            .get("issue_id")
+            .or_else(|| object.get("issueId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("multica_workspace_comment_invalid"))?;
+        validate_local_entity_id(issue_id)
+            .map_err(|_| anyhow!("multica_workspace_comment_invalid"))?;
+        let content = object
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("multica_workspace_comment_invalid"))?;
+        if content.trim().is_empty() || content.contains('\0') || content.chars().count() > 64_000 {
+            bail!("multica_workspace_comment_invalid");
+        }
+        let comment_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("comment");
+        if !matches!(
+            comment_type,
+            "comment" | "status_change" | "progress_update"
+        ) {
+            bail!("multica_workspace_comment_type_invalid");
+        }
+        if let Some(parent) = object.get("parent_id").or_else(|| object.get("parentId"))
+            && !parent.is_null()
+            && parent.as_str().is_none()
+        {
+            bail!("multica_workspace_comment_invalid");
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Labels {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if name.trim().is_empty() || name.chars().count() > 128 {
+            bail!("multica_workspace_label_invalid");
+        }
+        let kind = object
+            .get("resource_type")
+            .or_else(|| object.get("resourceType"))
+            .and_then(Value::as_str)
+            .unwrap_or("issue");
+        if !matches!(kind, "issue" | "agent" | "skill") {
+            bail!("multica_workspace_label_invalid");
+        }
+        if let Some(color) = object.get("color").and_then(Value::as_str)
+            && !is_hex_color(color)
+        {
+            bail!("multica_workspace_label_color_invalid");
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Subscribers {
+        for key in ["issue_id", "user_id"] {
+            if object.get(key).and_then(Value::as_str).is_none() {
+                bail!("multica_workspace_subscriber_invalid");
+            }
+        }
+        let user_type = object
+            .get("user_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(user_type, "member" | "agent") {
+            bail!("multica_workspace_subscriber_invalid");
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Reactions {
+        for key in ["comment_id", "actor_id"] {
+            if object.get(key).and_then(Value::as_str).is_none() {
+                bail!("multica_workspace_reaction_invalid");
+            }
+        }
+        let emoji = object
+            .get("emoji")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if emoji.trim().is_empty() || emoji.chars().count() > 32 {
+            bail!("multica_workspace_reaction_invalid");
+        }
+        return Ok(());
+    }
+    if resource != MulticaWorkspaceResourceKey::Projects {
+        return Ok(());
+    }
+    let Some(resources) = object.get("resources") else {
+        return Ok(());
+    };
+    for resource in resources.as_array().expect("validated array") {
+        let Some(resource) = resource.as_object() else {
+            bail!("multica_workspace_project_resource_invalid");
+        };
+        let resource_type = resource
+            .get("resource_type")
+            .or_else(|| resource.get("resourceType"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let reference = resource
+            .get("resource_ref")
+            .or_else(|| resource.get("resourceRef"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("multica_workspace_project_resource_invalid"))?;
+        match resource_type {
+            "github_repo" => {
+                let url = reference
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !is_supported_git_url(url) {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+            }
+            "local_directory" => {
+                if reference
+                    .get("local_path")
+                    .and_then(Value::as_str)
+                    .is_none_or(|path| path.trim().is_empty() || path.len() > 1024)
+                    || reference
+                        .get("daemon_id")
+                        .and_then(Value::as_str)
+                        .is_none_or(|id| id.trim().is_empty() || id.len() > 240)
+                {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+                if let Some(mode) = reference.get("execution_mode").and_then(Value::as_str)
+                    && !matches!(mode, "in_place" | "worktree")
+                {
+                    bail!("multica_workspace_project_resource_invalid");
+                }
+            }
+            _ => bail!("multica_workspace_project_resource_invalid"),
+        }
+    }
+    Ok(())
+}
+
+fn is_supported_git_url(url: &str) -> bool {
+    let value = url.trim();
+    (value.starts_with("https://") || value.starts_with("http://") || value.starts_with("ssh://"))
+        && value.len() <= 2048
+        && !value.chars().any(char::is_whitespace)
 }
 
 fn contains_sensitive_workspace_field(value: &Value) -> bool {
@@ -1402,7 +1803,13 @@ mod tests {
             vec![
                 "my_tasks",
                 "issues",
+                "comments",
+                "labels",
+                "subscribers",
+                "reactions",
+                "activities",
                 "projects",
+                "project_resources",
                 "autopilots",
                 "agents",
                 "squads",
@@ -1555,6 +1962,69 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn project_resource_contract_matches_upstream_shapes() {
+        let valid = json!({
+            "id": "project-1",
+            "workspace_id": "local-test",
+            "revision": 1,
+            "resources": [{
+                "id": "resource-1",
+                "resource_type": "github_repo",
+                "resource_ref": {"url": "https://github.com/multica-ai/multica", "ref": "main"}
+            }, {
+                "id": "resource-2",
+                "resource_type": "local_directory",
+                "resource_ref": {"local_path": "D:/work", "daemon_id": "daemon-1", "execution_mode": "worktree"}
+            }]
+        });
+        validate_local_entity(&valid, "local-test", MulticaWorkspaceResourceKey::Projects).unwrap();
+
+        let invalid_type = json!({
+            "id": "project-1", "workspace_id": "local-test", "revision": 1,
+            "resources": [{"resource_type": "s3_bucket", "resource_ref": {}}]
+        });
+        assert!(
+            validate_local_entity(
+                &invalid_type,
+                "local-test",
+                MulticaWorkspaceResourceKey::Projects
+            )
+            .is_err()
+        );
+
+        let invalid_mode = json!({
+            "id": "project-1", "workspace_id": "local-test", "revision": 1,
+            "resources": [{"resource_type": "local_directory", "resource_ref": {
+                "local_path": "D:/work", "daemon_id": "daemon-1", "execution_mode": "parallel"
+            }}]
+        });
+        assert!(
+            validate_local_entity(
+                &invalid_mode,
+                "local-test",
+                MulticaWorkspaceResourceKey::Projects
+            )
+            .is_err()
+        );
+
+        let standalone = json!({
+            "id": "resource-1",
+            "workspace_id": "local-test",
+            "revision": 1,
+            "project_id": "project-1",
+            "resource_type": "github_repo",
+            "resource_ref": {"url": "ssh://git@github.com/multica-ai/multica.git", "ref": "main"},
+            "label": "Upstream"
+        });
+        validate_local_entity(
+            &standalone,
+            "local-test",
+            MulticaWorkspaceResourceKey::ProjectResources,
+        )
+        .unwrap();
     }
 
     #[test]

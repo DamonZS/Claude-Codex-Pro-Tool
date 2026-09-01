@@ -718,7 +718,11 @@ fn validate_mutable_workspace_resource(
     if matches!(
         resource,
         MulticaWorkspaceResourceKey::Issues
+            | MulticaWorkspaceResourceKey::Comments
+            | MulticaWorkspaceResourceKey::Labels
+            | MulticaWorkspaceResourceKey::Subscribers
             | MulticaWorkspaceResourceKey::Projects
+            | MulticaWorkspaceResourceKey::ProjectResources
             | MulticaWorkspaceResourceKey::Agents
             | MulticaWorkspaceResourceKey::Squads
             | MulticaWorkspaceResourceKey::Autopilots
@@ -738,6 +742,12 @@ pub struct MulticaExecutionCreateRequest {
     #[serde(default)]
     pub cwd: Option<String>,
     pub idempotency_key: String,
+    #[serde(default)]
+    pub execution_kind: Option<MulticaExecutionKind>,
+    #[serde(default)]
+    pub parent_thread_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
     #[serde(default)]
     pub bindings: SkillBindings,
 }
@@ -792,6 +802,17 @@ fn parse_multica_execution_create(
     validate_multica_execution_id(&request.workspace_id)?;
     validate_multica_execution_id(&request.issue_id)?;
     validate_multica_execution_id(&request.idempotency_key)?;
+    if let Some(parent) = request.parent_thread_id.as_deref() {
+        validate_multica_execution_id(parent)?;
+    }
+    if let Some(agent) = request.agent_id.as_deref() {
+        validate_multica_execution_id(agent)?;
+    }
+    if request.execution_kind == Some(MulticaExecutionKind::Subagent)
+        && (request.parent_thread_id.is_none() || request.agent_id.is_none())
+    {
+        anyhow::bail!("subagent_parent_or_agent_required");
+    }
     SkillBindingSelection {
         bindings: request.bindings.clone(),
     }
@@ -1502,8 +1523,11 @@ impl BridgeRuntimeService for CoreRuntimeService {
             .reserve_execution(ExecutionReservation {
                 workspace_id: request.workspace_id.clone(),
                 issue_id: request.issue_id.clone(),
-                execution_kind: MulticaExecutionKind::Thread,
-                parent_thread_id: None,
+                execution_kind: request
+                    .execution_kind
+                    .unwrap_or(MulticaExecutionKind::Thread),
+                agent_id: request.agent_id.clone(),
+                parent_thread_id: request.parent_thread_id.clone(),
                 parent_attempt_id: None,
                 idempotency_key: request.idempotency_key.clone(),
                 now_ms,
@@ -1557,10 +1581,19 @@ impl BridgeRuntimeService for CoreRuntimeService {
             cwd: request.cwd,
             skill_request,
         };
-        let handle = match service
-            .create_thread(native_request, &request.idempotency_key)
-            .await
-        {
+        let handle = match if reserved.binding.execution_kind == MulticaExecutionKind::Subagent {
+            service
+                .create_subagent(
+                    reserved.binding.parent_thread_id.as_deref().unwrap(),
+                    native_request,
+                    &request.idempotency_key,
+                )
+                .await
+        } else {
+            service
+                .create_thread(native_request, &request.idempotency_key)
+                .await
+        } {
             Ok(handle) => handle,
             Err(error) => {
                 let code = stable_execution_error_code(&error);
