@@ -6844,6 +6844,22 @@
     toolbar.appendChild(refresh);
     page.appendChild(toolbar);
     multicaWorkspaceRenderNativeInventory(page);
+    const queueItems = multicaWorkspaceState.bootstrap?.collections?.agent_task_queue?.items || [];
+    if (queueItems.length > 0) {
+      const queueSection = multicaWorkspaceEl("section", "ccp-multica-native-inventory-group");
+      queueSection.appendChild(multicaWorkspaceEl("h3", "ccp-multica-native-inventory-label", "Codex 任务队列"));
+      const queueList = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+      queueItems.slice(0, 50).forEach((task) => {
+        const status = String(task.status || "unknown");
+        const attempt = String(task.attempt || "1");
+        const failure = String(task.failure_reason || "").trim();
+        const row = multicaWorkspaceEl("div", "ccp-multica-native-session", `${status} · 第 ${attempt} 次尝试${failure ? ` · ${failure}` : ""}`);
+        row.title = `队列项 ${String(task.id || "")}，来源：${String(task.source || "")}`;
+        queueList.appendChild(row);
+      });
+      queueSection.appendChild(queueList);
+      page.appendChild(queueSection);
+    }
     if (multicaWorkspaceState.mutationNotice?.message) {
       const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
       notice.setAttribute("role", "status");
