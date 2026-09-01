@@ -7497,7 +7497,7 @@
     const request = multicaWorkspaceRequest("/multica/workspace/bootstrap", {}, timeoutMs);
     multicaWorkspaceState.bootstrapRequest = request;
     try {
-      const result = await request.promise;
+      let result = await request.promise;
       if (sequence !== multicaWorkspaceState.bootstrapSeq ||
           window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
       if (!result || result.status === "failed") {
@@ -7586,6 +7586,19 @@
         throw multicaWorkspaceErrorFromResult(result, "workspace query failed");
       }
       if (!Array.isArray(result.items)) throw new Error("workspace collection invalid");
+      if (module.key === "autopilots") {
+        const itemsWithRuns = await Promise.all(result.items.map(async (item) => {
+          const autopilotId = multicaWorkspaceEntityId(item);
+          if (!autopilotId) return item;
+          try {
+            const runsResult = await multicaWorkspaceCall("/multica/autopilots/runs", { autopilotId });
+            return { ...item, runs: Array.isArray(runsResult.runs) ? runsResult.runs : [] };
+          } catch (_) {
+            return { ...item, runs: [] };
+          }
+        }));
+        result = { ...result, items: itemsWithRuns };
+      }
       const responseWorkspaceId = String(result.workspaceId || result.workspace?.id || "").trim();
       if (multicaWorkspaceState.workspaceId && responseWorkspaceId &&
           responseWorkspaceId !== multicaWorkspaceState.workspaceId) {
