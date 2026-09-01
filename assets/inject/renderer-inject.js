@@ -5827,6 +5827,45 @@
     }
   }
 
+  async function multicaWorkspaceUnsubscribeIssueSubtree(item) {
+    const rootId = multicaWorkspaceEntityId(item);
+    const userId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+    if (!rootId || !userId || multicaWorkspaceState.mutationBusy) return;
+    const issues = multicaWorkspaceState.collections.get("issues")?.items || [];
+    const children = new Map();
+    issues.forEach((issue) => {
+      const parent = String(multicaWorkspaceObjectValue(issue, "parent_issue_id", "parentIssueId") || "").trim();
+      const id = multicaWorkspaceEntityId(issue);
+      if (!id || !parent) return;
+      const list = children.get(parent) || [];
+      list.push(id);
+      children.set(parent, list);
+    });
+    const ids = [rootId];
+    for (let index = 0; index < ids.length; index += 1) ids.push(...(children.get(ids[index]) || []));
+    const subscribers = multicaWorkspaceState.collections.get("subscribers")?.items || [];
+    const matches = subscribers.filter((entry) => ids.includes(String(multicaWorkspaceObjectValue(entry, "issue_id", "issueId") || ""))
+      && String(multicaWorkspaceObjectValue(entry, "user_id", "userId") || "") === userId);
+    if (!matches.length) return;
+    multicaWorkspaceState.mutationBusy = true;
+    try {
+      for (const subscriber of matches) {
+        await multicaWorkspaceCall("/multica/workspace/delete", {
+          resource: "subscribers",
+          entityId: multicaWorkspaceEntityId(subscriber),
+          expectedRevision: multicaWorkspaceEntityRevision(subscriber),
+        });
+      }
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: "已取消任务树订阅" };
+      await multicaWorkspaceRefreshMutationResource({ key: "subscribers", resource: "subscribers" }, "subscribers");
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+    } finally {
+      multicaWorkspaceState.mutationBusy = false;
+      if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+    }
+  }
+
   async function multicaWorkspaceToggleReaction(targetType, item, emoji = "👍") {
     const targetId = multicaWorkspaceEntityId(item);
     const userId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
@@ -6221,6 +6260,7 @@
           && String(multicaWorkspaceObjectValue(entry, "user_id", "userId") || "") === localUserId,
         );
         add(subscribed ? "取消订阅" : "订阅", () => void multicaWorkspaceToggleIssueSubscription(module, item));
+        if (subscribed) add("取消树订阅", () => void multicaWorkspaceUnsubscribeIssueSubtree(item));
       }
       if (localUserId) add("👍", () => void multicaWorkspaceToggleReaction("issue", item));
       add("标签", () => void multicaWorkspaceToggleLabel(module, item));
