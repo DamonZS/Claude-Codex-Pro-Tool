@@ -58,6 +58,7 @@ pub enum MulticaWorkspaceResourceKey {
     Runtimes,
     Skills,
     Settings,
+    CodexNativeEvents,
 }
 
 impl MulticaWorkspaceResourceKey {
@@ -98,6 +99,7 @@ impl MulticaWorkspaceResourceKey {
             Self::Runtimes => "runtimes",
             Self::Skills => "skills",
             Self::Settings => "settings",
+            Self::CodexNativeEvents => "codex_native_events",
         }
     }
 }
@@ -931,6 +933,9 @@ pub async fn workspace_query(
     query: MulticaWorkspaceQuery,
 ) -> anyhow::Result<MulticaWorkspaceCollection> {
     query.validate()?;
+    if query.resource == MulticaWorkspaceResourceKey::CodexNativeEvents {
+        return native_events_collection(query);
+    }
     let workspace = local_workspace_identity();
     query_local_collection(
         &workspace,
@@ -950,6 +955,9 @@ pub async fn workspace_query_with_codex_runtime(
     query.validate()?;
     let workspace = local_workspace_identity();
     let enabled = local_workspace_enabled()?;
+    if query.resource == MulticaWorkspaceResourceKey::CodexNativeEvents {
+        return native_events_collection(query);
+    }
     if !enabled {
         return query_local_collection(
             &workspace,
@@ -972,6 +980,32 @@ pub async fn workspace_query_with_codex_runtime(
         enabled,
         query,
     )
+}
+
+fn native_events_collection(
+    query: MulticaWorkspaceQuery,
+) -> anyhow::Result<MulticaWorkspaceCollection> {
+    let workspace = local_workspace_identity();
+    let items = codex_native_inventory()
+        .into_iter()
+        .find(|(key, _)| *key == "codex_native_events")
+        .map(|(_, items)| items)
+        .unwrap_or_default();
+    let total = items.len() as u64;
+    let start = usize::try_from(query.offset)
+        .unwrap_or(usize::MAX)
+        .min(items.len());
+    let end = start
+        .saturating_add(usize::from(query.limit))
+        .min(items.len());
+    Ok(collection(
+        &workspace,
+        MulticaWorkspaceResourceKey::CodexNativeEvents,
+        items[start..end].to_vec(),
+        total,
+        query.limit,
+        query.offset,
+    ))
 }
 
 async fn query_host_collection(
@@ -1249,6 +1283,14 @@ fn query_local_collection(
             query.limit,
             query.offset,
             CODEX_PAGE_HOST_UNAVAILABLE,
+        )),
+        MulticaWorkspaceResourceKey::CodexNativeEvents => Ok(collection(
+            workspace,
+            query.resource,
+            Vec::new(),
+            0,
+            query.limit,
+            query.offset,
         )),
         MulticaWorkspaceResourceKey::MyTasks
         | MulticaWorkspaceResourceKey::Issues

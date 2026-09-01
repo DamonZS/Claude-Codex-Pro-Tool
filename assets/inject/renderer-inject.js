@@ -6683,6 +6683,25 @@
       toolGroup.appendChild(list);
     }
     section.appendChild(toolGroup);
+    const nativeEvents = multicaWorkspaceState.bootstrap?.collections?.codex_native_events?.items || [];
+    const eventGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+    eventGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生事件时间线（${nativeEvents.length}）`));
+    if (nativeEvents.length === 0) {
+      eventGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前本机历史库没有可读取的原生事件"));
+    } else {
+      const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+      nativeEvents.slice(0, 100).forEach((event) => {
+        const type = String(event.item_type || "event").trim();
+        const summary = String(event.summary || "").replace(/\s+/g, " ").trim();
+        const threadId = String(event.thread_id || "").trim();
+        const label = `${type}${summary ? ` · ${summary}` : ""}${threadId ? ` · ${threadId}` : ""}`.slice(0, 220);
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-session", label);
+        item.title = "来自 Codex thread_history 的只读原生事件；不可作为可调度任务直接执行";
+        list.appendChild(item);
+      });
+      eventGroup.appendChild(list);
+    }
+    section.appendChild(eventGroup);
     const nativeSkills = multicaWorkspaceState.bootstrap?.collections?.codex_native_skills?.items || [];
     const skillGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
     skillGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生 Skills（${nativeSkills.length}）`));

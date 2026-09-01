@@ -27,6 +27,8 @@ const MAX_EXECUTION_COMMANDS: usize = 8192;
 const MAX_ID_LENGTH: usize = 240;
 const MAX_SOURCE_LENGTH: usize = 96;
 const MAX_ERROR_LENGTH: usize = 96;
+const MAX_MESSAGE_SUMMARY_LENGTH: usize = 512;
+const MAX_TASK_MESSAGES: usize = 16_384;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -144,6 +146,28 @@ pub struct CodexMulticaExecutionBinding {
     pub updated_at_ms: u64,
     #[serde(default)]
     pub completed_at_ms: Option<u64>,
+    #[serde(default)]
+    pub lease_token: Option<String>,
+    #[serde(default)]
+    pub lease_expires_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_heartbeat_at_ms: Option<u64>,
+}
+
+/// Bounded task transcript metadata. Full Codex message bodies remain in the
+/// native history store; this index mirrors only the ordering/audit surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexMulticaTaskMessage {
+    pub message_id: String,
+    pub binding_id: String,
+    pub seq: u32,
+    pub message_type: String,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    pub created_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +222,8 @@ pub struct MulticaExecutionState {
     pub execution_bindings: Vec<CodexMulticaExecutionBinding>,
     #[serde(default)]
     pub execution_commands: Vec<CodexMulticaExecutionCommand>,
+    #[serde(default)]
+    pub task_messages: Vec<CodexMulticaTaskMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -517,6 +543,9 @@ impl MulticaExecutionStore {
             created_at_ms: input.now_ms,
             updated_at_ms: input.now_ms,
             completed_at_ms: None,
+            lease_token: None,
+            lease_expires_at_ms: None,
+            last_heartbeat_at_ms: None,
         };
         state.execution_commands.push(CodexMulticaExecutionCommand {
             command_id: binding.idempotency_key.clone(),
@@ -913,6 +942,175 @@ impl MulticaExecutionStore {
         save_state_locked(&self.path, &state)?;
         Ok(result)
     }
+
+    /// Atomically claim or take over an execution lease. This mirrors the
+    /// upstream ClaimAgentTask predicate while remaining local and explicit.
+    pub fn claim_execution_lease(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        validate_id(binding_id, "binding_id")?;
+        validate_id(lease_token, "lease_token")?;
+        if lease_duration_ms == 0 || lease_duration_ms > 86_400_000 {
+            bail!("execution_lease_duration_invalid");
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.state.is_terminal() {
+            bail!("execution_lease_terminal");
+        }
+        if binding.revision != expected_revision {
+            bail!("execution_revision_conflict");
+        }
+        if binding
+            .lease_expires_at_ms
+            .is_some_and(|expires| expires > now_ms)
+            && binding.lease_token.as_deref() != Some(lease_token)
+        {
+            bail!("execution_lease_conflict");
+        }
+        binding.lease_token = Some(lease_token.to_string());
+        binding.lease_expires_at_ms = Some(now_ms.saturating_add(lease_duration_ms));
+        binding.last_heartbeat_at_ms = Some(now_ms);
+        binding.revision = binding.revision.saturating_add(1);
+        binding.updated_at_ms = now_ms;
+        let result = binding.clone();
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
+    }
+
+    pub fn renew_execution_lease(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        now_ms: u64,
+        lease_duration_ms: u64,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        validate_id(binding_id, "binding_id")?;
+        validate_id(lease_token, "lease_token")?;
+        if lease_duration_ms == 0 || lease_duration_ms > 86_400_000 {
+            bail!("execution_lease_duration_invalid");
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != expected_revision {
+            bail!("execution_revision_conflict");
+        }
+        if binding.state.is_terminal() || binding.lease_token.as_deref() != Some(lease_token) {
+            bail!("execution_lease_conflict");
+        }
+        if binding
+            .lease_expires_at_ms
+            .is_some_and(|expires| expires <= now_ms)
+        {
+            bail!("execution_lease_expired");
+        }
+        binding.lease_expires_at_ms = Some(now_ms.saturating_add(lease_duration_ms));
+        binding.last_heartbeat_at_ms = Some(now_ms);
+        binding.revision = binding.revision.saturating_add(1);
+        binding.updated_at_ms = now_ms;
+        let result = binding.clone();
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
+    }
+
+    pub fn release_execution_lease(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        now_ms: u64,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        validate_id(binding_id, "binding_id")?;
+        validate_id(lease_token, "lease_token")?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != expected_revision {
+            bail!("execution_revision_conflict");
+        }
+        if binding.lease_token.as_deref() != Some(lease_token) {
+            bail!("execution_lease_conflict");
+        }
+        binding.lease_token = None;
+        binding.lease_expires_at_ms = None;
+        binding.last_heartbeat_at_ms = Some(now_ms);
+        binding.revision = binding.revision.saturating_add(1);
+        binding.updated_at_ms = now_ms;
+        let result = binding.clone();
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
+    }
+
+    pub fn append_task_message(
+        &self,
+        message: CodexMulticaTaskMessage,
+    ) -> anyhow::Result<CodexMulticaTaskMessage> {
+        validate_task_message(&message)?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        if !state
+            .execution_bindings
+            .iter()
+            .any(|b| b.binding_id == message.binding_id)
+        {
+            bail!("execution_binding_unknown");
+        }
+        if let Some(existing) = state
+            .task_messages
+            .iter()
+            .find(|m| m.binding_id == message.binding_id && m.seq == message.seq)
+        {
+            if existing == &message {
+                return Ok(existing.clone());
+            }
+            bail!("task_message_conflict");
+        }
+        if state.task_messages.len() >= MAX_TASK_MESSAGES {
+            bail!("task_messages_too_large");
+        }
+        state.task_messages.push(message.clone());
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(message)
+    }
+
+    pub fn list_task_messages(
+        &self,
+        binding_id: &str,
+    ) -> anyhow::Result<Vec<CodexMulticaTaskMessage>> {
+        validate_id(binding_id, "binding_id")?;
+        let mut messages = self
+            .load()?
+            .task_messages
+            .into_iter()
+            .filter(|m| m.binding_id == binding_id)
+            .collect::<Vec<_>>();
+        messages.sort_by_key(|m| m.seq);
+        Ok(messages)
+    }
 }
 
 fn load_state(path: &Path) -> anyhow::Result<MulticaExecutionState> {
@@ -1047,6 +1245,15 @@ fn validate_state(state: &MulticaExecutionState) -> anyhow::Result<()> {
             bail!("execution_thread_conflict");
         }
     }
+    let mut message_keys = BTreeSet::new();
+    for message in &state.task_messages {
+        validate_task_message(message)?;
+        if !execution_ids.contains(&message.binding_id.to_ascii_lowercase())
+            || !message_keys.insert((message.binding_id.to_ascii_lowercase(), message.seq))
+        {
+            bail!("task_message_conflict");
+        }
+    }
     let mut command_ids = BTreeSet::new();
     for command in &state.execution_commands {
         validate_execution_command(command)?;
@@ -1105,6 +1312,30 @@ fn validate_execution_binding(binding: &CodexMulticaExecutionBinding) -> anyhow:
     }
     if let Some(error) = binding.last_error_code.as_deref() {
         validate_error_code(error)?;
+    }
+    if let Some(token) = binding.lease_token.as_deref() {
+        validate_id(token, "lease_token")?;
+        if binding.lease_expires_at_ms.is_none() {
+            bail!("execution_lease_invalid");
+        }
+    } else if binding.lease_expires_at_ms.is_some() {
+        bail!("execution_lease_invalid");
+    }
+    Ok(())
+}
+
+fn validate_task_message(message: &CodexMulticaTaskMessage) -> anyhow::Result<()> {
+    validate_id(&message.message_id, "message_id")?;
+    validate_id(&message.binding_id, "binding_id")?;
+    if message.seq == 0 {
+        bail!("task_message_seq_invalid");
+    }
+    validate_text(&message.message_type, MAX_SOURCE_LENGTH, "message_type")?;
+    if let Some(tool) = message.tool.as_deref() {
+        validate_text(tool, MAX_SOURCE_LENGTH, "message_tool")?;
+    }
+    if let Some(summary) = message.summary.as_deref() {
+        validate_text(summary, MAX_MESSAGE_SUMMARY_LENGTH, "message_summary")?;
     }
     Ok(())
 }
@@ -1623,6 +1854,84 @@ mod tests {
         assert_eq!(
             store.get_command("continue-a").unwrap().state,
             MulticaExecutionCommandState::Committed
+        );
+    }
+
+    #[test]
+    fn execution_lease_is_token_guarded_and_takeover_after_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reserved = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: "issue-a".into(),
+                agent_id: None,
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "lease-a".into(),
+                now_ms: 1,
+            })
+            .unwrap();
+        let claimed = store
+            .claim_execution_lease(&reserved.binding.binding_id, 1, "token-a", 2, 100)
+            .unwrap();
+        assert_eq!(claimed.lease_token.as_deref(), Some("token-a"));
+        let err = store
+            .claim_execution_lease(&claimed.binding_id, claimed.revision, "token-b", 50, 100)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "execution_lease_conflict");
+        let renewed = store
+            .renew_execution_lease(&claimed.binding_id, claimed.revision, "token-a", 50, 100)
+            .unwrap();
+        let taken = store
+            .claim_execution_lease(&renewed.binding_id, renewed.revision, "token-b", 200, 100)
+            .unwrap();
+        assert_eq!(taken.lease_token.as_deref(), Some("token-b"));
+        assert!(
+            store
+                .release_execution_lease(&taken.binding_id, taken.revision, "token-b", 201)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn task_messages_are_ordered_idempotent_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reserved = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: "issue-a".into(),
+                agent_id: None,
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "msg-a".into(),
+                now_ms: 1,
+            })
+            .unwrap();
+        let make = |seq: u32, summary: &str| CodexMulticaTaskMessage {
+            message_id: format!("message-{seq}"),
+            binding_id: reserved.binding.binding_id.clone(),
+            seq,
+            message_type: "assistant".into(),
+            tool: None,
+            summary: Some(summary.into()),
+            created_at_ms: seq as u64,
+        };
+        let second = make(2, "second");
+        store.append_task_message(second.clone()).unwrap();
+        store.append_task_message(make(1, "first")).unwrap();
+        assert_eq!(store.append_task_message(second.clone()).unwrap(), second);
+        let conflict = store.append_task_message(make(2, "changed")).unwrap_err();
+        assert_eq!(conflict.to_string(), "task_message_conflict");
+        let messages = store
+            .list_task_messages(&reserved.binding.binding_id)
+            .unwrap();
+        assert_eq!(
+            messages.iter().map(|m| m.seq).collect::<Vec<_>>(),
+            vec![1, 2]
         );
     }
 }
