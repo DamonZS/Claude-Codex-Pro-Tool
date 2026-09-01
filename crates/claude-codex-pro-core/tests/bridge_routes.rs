@@ -83,6 +83,26 @@ async fn bridge_routes_cover_all_current_paths() {
             json!({"scopeKind": "agent", "scopeId": "agent-a", "skillId": "skill:review"}),
         ),
         ("/multica/skills/bindings", json!({})),
+        (
+            "/multica/executions/lease/claim",
+            json!({"bindingId":"binding-a","expectedRevision":1,"leaseToken":"token-a","leaseDurationMs":1000}),
+        ),
+        (
+            "/multica/executions/lease/renew",
+            json!({"bindingId":"binding-a","expectedRevision":1,"leaseToken":"token-a","leaseDurationMs":1000}),
+        ),
+        (
+            "/multica/executions/lease/release",
+            json!({"bindingId":"binding-a","expectedRevision":1,"leaseToken":"token-a"}),
+        ),
+        (
+            "/multica/executions/messages",
+            json!({"message":{"messageId":"message-a","bindingId":"binding-a","seq":1,"messageType":"assistant","createdAtMs":1}}),
+        ),
+        (
+            "/multica/executions/messages/list",
+            json!({"bindingId":"binding-a"}),
+        ),
         ("/backend/status", json!({})),
         ("/backend/repair", json!({})),
         ("/claude-desktop/status", json!({})),

@@ -20,9 +20,9 @@ use crate::multica_execution::{
     SkillBindingScope, SkillBindingSelection, SkillBindings, SkillReference, SkillResolutionAudit,
 };
 use crate::multica_execution_store::{
-    CodexMulticaExecutionBinding, ExecutionReservation, MulticaExecutionBindingState,
-    MulticaExecutionCommandKind, MulticaExecutionCommandState, MulticaExecutionKind,
-    MulticaExecutionStore,
+    CodexMulticaExecutionBinding, CodexMulticaTaskMessage, ExecutionReservation,
+    MulticaExecutionBindingState, MulticaExecutionCommandKind, MulticaExecutionCommandState,
+    MulticaExecutionKind, MulticaExecutionStore,
 };
 use crate::multica_skill_trust::review_local_skill;
 use crate::multica_workspace::{
@@ -228,6 +228,36 @@ pub trait BridgeRuntimeService: Send + Sync {
         _request: MulticaExecutionListRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn multica_execution_lease_claim(
+        &self,
+        _request: MulticaExecutionLeaseClaimRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_lease_unavailable")
+    }
+    async fn multica_execution_lease_renew(
+        &self,
+        _request: MulticaExecutionLeaseRenewRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_lease_unavailable")
+    }
+    async fn multica_execution_lease_release(
+        &self,
+        _request: MulticaExecutionLeaseReleaseRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_lease_unavailable")
+    }
+    async fn multica_execution_message_append(
+        &self,
+        _request: MulticaExecutionMessageAppendRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_message_unavailable")
+    }
+    async fn multica_execution_message_list(
+        &self,
+        _request: MulticaExecutionMessageListRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_message_unavailable")
     }
     async fn memory_status(&self) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
@@ -462,6 +492,55 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_execution_list(parse_multica_execution_list(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/lease/claim" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_lease_claim(parse_multica_execution_lease_claim(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/lease/renew" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_lease_renew(parse_multica_execution_lease_claim(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/lease/release" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_lease_release(parse_multica_execution_lease_release(
+                        &payload,
+                    )?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/messages" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_message_append(parse_multica_execution_message_append(
+                        &payload,
+                    )?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/messages/list" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_message_list(parse_multica_execution_message_list(&payload)?)
                     .await
             }
             .await
@@ -791,6 +870,37 @@ pub struct MulticaExecutionListRequest {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionLeaseClaimRequest {
+    pub binding_id: String,
+    pub expected_revision: u64,
+    pub lease_token: String,
+    pub lease_duration_ms: u64,
+}
+
+pub type MulticaExecutionLeaseRenewRequest = MulticaExecutionLeaseClaimRequest;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionLeaseReleaseRequest {
+    pub binding_id: String,
+    pub expected_revision: u64,
+    pub lease_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionMessageAppendRequest {
+    pub message: CodexMulticaTaskMessage,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionMessageListRequest {
+    pub binding_id: String,
+}
+
 fn default_multica_execution_limit() -> usize {
     50
 }
@@ -881,6 +991,47 @@ fn parse_multica_execution_list(payload: &Value) -> anyhow::Result<MulticaExecut
     if request.limit == 0 || request.limit > 100 || request.offset > 100_000 {
         anyhow::bail!("multica_execution_pagination_invalid");
     }
+    Ok(request)
+}
+
+fn parse_multica_execution_lease_claim(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionLeaseClaimRequest> {
+    let request: MulticaExecutionLeaseClaimRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    validate_multica_execution_id(&request.lease_token)?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_execution_lease_release(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionLeaseReleaseRequest> {
+    let request: MulticaExecutionLeaseReleaseRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    validate_multica_execution_id(&request.lease_token)?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_execution_message_append(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionMessageAppendRequest> {
+    let request: MulticaExecutionMessageAppendRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.message.binding_id)?;
+    validate_multica_execution_id(&request.message.message_id)?;
+    Ok(request)
+}
+
+fn parse_multica_execution_message_list(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionMessageListRequest> {
+    let request: MulticaExecutionMessageListRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
     Ok(request)
 }
 
@@ -1833,6 +1984,67 @@ impl BridgeRuntimeService for CoreRuntimeService {
             "limit": request.limit,
             "offset": request.offset,
         }))
+    }
+
+    async fn multica_execution_lease_claim(
+        &self,
+        request: MulticaExecutionLeaseClaimRequest,
+    ) -> anyhow::Result<Value> {
+        let binding = self.multica_execution_store.claim_execution_lease(
+            &request.binding_id,
+            request.expected_revision,
+            &request.lease_token,
+            unix_now_ms(),
+            request.lease_duration_ms,
+        )?;
+        Ok(json!({"status":"ok", "binding": binding}))
+    }
+
+    async fn multica_execution_lease_renew(
+        &self,
+        request: MulticaExecutionLeaseRenewRequest,
+    ) -> anyhow::Result<Value> {
+        let binding = self.multica_execution_store.renew_execution_lease(
+            &request.binding_id,
+            request.expected_revision,
+            &request.lease_token,
+            unix_now_ms(),
+            request.lease_duration_ms,
+        )?;
+        Ok(json!({"status":"ok", "binding": binding}))
+    }
+
+    async fn multica_execution_lease_release(
+        &self,
+        request: MulticaExecutionLeaseReleaseRequest,
+    ) -> anyhow::Result<Value> {
+        let binding = self.multica_execution_store.release_execution_lease(
+            &request.binding_id,
+            request.expected_revision,
+            &request.lease_token,
+            unix_now_ms(),
+        )?;
+        Ok(json!({"status":"ok", "binding": binding}))
+    }
+
+    async fn multica_execution_message_append(
+        &self,
+        request: MulticaExecutionMessageAppendRequest,
+    ) -> anyhow::Result<Value> {
+        let message = self
+            .multica_execution_store
+            .append_task_message(request.message)?;
+        Ok(json!({"status":"ok", "message": message}))
+    }
+
+    async fn multica_execution_message_list(
+        &self,
+        request: MulticaExecutionMessageListRequest,
+    ) -> anyhow::Result<Value> {
+        let messages = self
+            .multica_execution_store
+            .list_task_messages(&request.binding_id)?;
+        Ok(json!({"status":"ok", "items": messages}))
     }
 
     async fn memory_status(&self) -> anyhow::Result<Value> {
