@@ -5962,6 +5962,26 @@
     await multicaWorkspacePatchEntity(module, item, { triggers: next }, "已删除自动化触发器");
   }
 
+  async function multicaWorkspaceUpdateAutopilotTrigger(module, item) {
+    if (multicaWorkspaceWritableResource(module) !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
+    const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
+    if (!triggers.length) return;
+    const triggerId = String(window.prompt?.("输入要编辑的 trigger_id", String(triggers[0].id || "")) || "").trim();
+    const index = triggers.findIndex((trigger) => String(trigger?.id || "") === triggerId);
+    if (index < 0) return;
+    const current = triggers[index];
+    const enabled = String(window.prompt?.("enabled：true / false", String(current.enabled !== false)) || "").trim().toLowerCase();
+    if (!["true", "false"].includes(enabled)) return;
+    const next = { ...current, enabled: enabled === "true" };
+    if (next.kind === "schedule") {
+      const cron = String(window.prompt?.("cron_expression", String(current.cron_expression || "")) || "").trim();
+      if (!cron) return;
+      next.cron_expression = cron;
+    }
+    triggers[index] = next;
+    await multicaWorkspacePatchEntity(module, item, { triggers }, "已更新自动化触发器");
+  }
+
   async function multicaWorkspaceToggleAutopilotCollaborator(module, item) {
     if (multicaWorkspaceWritableResource(module) !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
     const userId = String(window.prompt?.("输入协作者 user_id（再次输入可移除）", "") || "").trim();
@@ -6332,7 +6352,10 @@
         add(paused ? "启用" : "暂停", () => void multicaWorkspacePatchEntity(module, item, { status: paused ? "active" : "paused" }, paused ? "已启用" : "已暂停"));
         add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
         add("新增触发器", () => void multicaWorkspaceCreateAutopilotTrigger(module, item));
-        if (Array.isArray(item.triggers) && item.triggers.length) add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
+        if (Array.isArray(item.triggers) && item.triggers.length) {
+          add("编辑触发器", () => void multicaWorkspaceUpdateAutopilotTrigger(module, item));
+          add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
+        }
         add("管理协作者", () => void multicaWorkspaceToggleAutopilotCollaborator(module, item));
       }
     }
