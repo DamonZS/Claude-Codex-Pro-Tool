@@ -1098,6 +1098,14 @@ fn codex_multica_comments_expose_resolve_and_unresolve_actions() {
 }
 
 #[test]
+fn codex_multica_issue_cards_expose_subscription_toggle() {
+    let script = assets::injection_script(57321);
+    assert!(script.contains("multicaWorkspaceToggleIssueSubscription"));
+    assert!(script.contains("取消订阅"));
+    assert!(script.contains("订阅"));
+}
+
+#[test]
 fn codex_multica_agent_assignment_dispatches_native_subagent() {
     let script = assets::injection_script(57321);
     let workspace = source_between(

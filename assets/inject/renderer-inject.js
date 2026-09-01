@@ -5795,6 +5795,30 @@
     }
   }
 
+  async function multicaWorkspaceToggleIssueSubscription(module, item) {
+    const issueId = multicaWorkspaceEntityId(item);
+    const userId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+    if (!issueId || !userId || multicaWorkspaceState.mutationBusy) return;
+    const collection = multicaWorkspaceState.collections.get("subscribers");
+    const current = (collection?.items || []).find((entry) =>
+      String(multicaWorkspaceObjectValue(entry, "issue_id", "issueId") || "") === issueId
+      && String(multicaWorkspaceObjectValue(entry, "user_id", "userId") || "") === userId,
+    );
+    if (current) {
+      await multicaWorkspaceDeleteEntity({ key: "subscribers", resource: "subscribers" }, current);
+    } else {
+      const entity = { id: multicaWorkspaceNewId("subscriber"), issue_id: issueId, user_type: "member", user_id: userId, reason: "manual" };
+      multicaWorkspaceState.mutationBusy = true;
+      try {
+        await multicaWorkspaceCall("/multica/workspace/upsert", { resource: "subscribers", entity, expectedRevision: 0 });
+        await multicaWorkspaceRefreshMutationResource({ key: "subscribers", resource: "subscribers" }, "subscribers");
+      } finally {
+        multicaWorkspaceState.mutationBusy = false;
+        if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+      }
+    }
+  }
+
   async function multicaWorkspaceTriggerAutopilot(module, item) {
     const resource = multicaWorkspaceWritableResource(module);
     if (resource !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
@@ -6135,6 +6159,14 @@
       if (!active) add("执行", () => multicaWorkspaceOpenExecutionDraft("create", item), "primary");
       const archived = String(multicaWorkspaceObjectValue(item, "status") || "") === "archived";
       add(archived ? "恢复" : "归档", () => void multicaWorkspacePatchEntity(module, item, { status: archived ? "todo" : "archived" }, archived ? "已恢复" : "已归档"));
+      const localUserId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+      if (localUserId) {
+        const subscribed = (multicaWorkspaceState.collections.get("subscribers")?.items || []).some((entry) =>
+          String(multicaWorkspaceObjectValue(entry, "issue_id", "issueId") || "") === multicaWorkspaceEntityId(item)
+          && String(multicaWorkspaceObjectValue(entry, "user_id", "userId") || "") === localUserId,
+        );
+        add(subscribed ? "取消订阅" : "订阅", () => void multicaWorkspaceToggleIssueSubscription(module, item));
+      }
     } else if (resource === "comments") {
       const resolvedAt = multicaWorkspaceObjectValue(item, "resolved_at", "resolvedAt");
       if (resolvedAt) {
