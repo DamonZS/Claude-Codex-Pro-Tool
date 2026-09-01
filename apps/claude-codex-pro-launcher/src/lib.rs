@@ -10,7 +10,9 @@ use claude_codex_pro_core::memory_assist::{
     MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
 };
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
-use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
+use claude_codex_pro_core::routes::{
+    BridgeContext, BridgeDataService, BridgeRuntimeService, CoreRuntimeService,
+};
 use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
@@ -677,6 +679,7 @@ struct LauncherRuntimeService {
     websocket_url: Arc<Mutex<Option<String>>>,
     codex_execution: Arc<CodexPageExecutionClient>,
     codex_page_host: CodexPageHostTransport,
+    multica_runtime: CoreRuntimeService,
     user_scripts: UserScriptManager,
     memory_store: MemoryAssistStore,
 }
@@ -687,11 +690,14 @@ impl LauncherRuntimeService {
         let (codex_execution, codex_page_host) =
             codex_page_execution_service(Arc::clone(&websocket_url))
                 .expect("static Codex page host binding must be valid");
+        let multica_runtime = CoreRuntimeService::new(debug_port, StatusStore::default())
+            .with_codex_execution_service(codex_execution.clone());
         Self {
             debug_port: Mutex::new(debug_port),
             websocket_url,
             codex_execution,
             codex_page_host,
+            multica_runtime,
             user_scripts,
             memory_store: MemoryAssistStore::default(),
         }
@@ -860,6 +866,20 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         )?)
     }
 
+    async fn multica_workspace_upsert(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaWorkspaceUpsertRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_workspace_upsert(&self.multica_runtime, request).await
+    }
+
+    async fn multica_workspace_delete(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaWorkspaceDeleteRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_workspace_delete(&self.multica_runtime, request).await
+    }
+
     async fn multica_skill_resolve(
         &self,
         selection: claude_codex_pro_core::multica_execution::SkillBindingSelection,
@@ -925,6 +945,48 @@ impl BridgeRuntimeService for LauncherRuntimeService {
             },
         )
         .await
+    }
+
+    async fn multica_execution_create(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionCreateRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_create(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_open(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_open(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_continue(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionContinueRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_continue(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_cancel(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionCancelRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_cancel(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_status(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionBindingRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_status(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_list(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionListRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_list(&self.multica_runtime, request).await
     }
 
     async fn memory_status(&self) -> anyhow::Result<Value> {

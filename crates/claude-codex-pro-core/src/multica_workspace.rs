@@ -142,6 +142,8 @@ pub struct MulticaCodexRuntimeSummary {
     pub status: Option<String>,
     pub capabilities: Vec<String>,
     pub skills_supported: bool,
+    #[serde(default)]
+    pub skills_inventory_supported: bool,
     pub skill_protocol: Option<String>,
     pub multi_agent_supported: bool,
 }
@@ -577,7 +579,7 @@ async fn query_codex_skills(
             ));
         }
     };
-    if !capabilities.skills_supported {
+    if !capabilities.skills_inventory_supported {
         return Ok(unavailable_collection(
             workspace,
             MulticaWorkspaceResourceKey::Skills,
@@ -601,7 +603,14 @@ async fn query_codex_skills(
     let trust = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
     let all_items = skills
         .iter()
-        .map(|skill| runtime_codex_skill_item(skill, &capabilities.runtime_id, &trust))
+        .map(|skill| {
+            runtime_codex_skill_item(
+                skill,
+                &capabilities.runtime_id,
+                &trust,
+                capabilities.skills_supported,
+            )
+        })
         .collect::<Vec<_>>();
     let items = paginate(&all_items, limit, offset);
     Ok(collection(
@@ -950,6 +959,7 @@ fn runtime_collection(
             "status": runtime.status,
             "capabilities": runtime.capabilities,
             "skills_supported": runtime.skills_supported,
+            "skills_inventory_supported": runtime.skills_inventory_supported,
             "skill_protocol": runtime.skill_protocol,
             "multi_agent_supported": runtime.multi_agent_supported,
             "registered": false,
@@ -979,6 +989,7 @@ fn runtime_summary_from_capabilities(
         status: Some("available".to_string()),
         capabilities: capabilities.capabilities.clone(),
         skills_supported: capabilities.skills_supported,
+        skills_inventory_supported: capabilities.skills_inventory_supported,
         skill_protocol: capabilities.skill_protocol.clone(),
         multi_agent_supported: capabilities.subagents_supported,
     }
@@ -992,6 +1003,7 @@ fn unavailable_runtime_summary(diagnostic: &str) -> MulticaCodexRuntimeSummary {
         status: Some(diagnostic.to_string()),
         capabilities: Vec::new(),
         skills_supported: false,
+        skills_inventory_supported: false,
         skill_protocol: None,
         multi_agent_supported: false,
     }
@@ -1001,6 +1013,7 @@ fn runtime_codex_skill_item(
     skill: &CodexSkill,
     runtime_id: &str,
     trust: &crate::multica_skill_trust::LocalSkillTrustSnapshot,
+    execution_supported: bool,
 ) -> Value {
     let local = trust.get(&skill.id);
     let digest_matches = skill
@@ -1008,7 +1021,8 @@ fn runtime_codex_skill_item(
         .as_deref()
         .zip(local.and_then(|entry| entry.manifest_digest.as_deref()))
         .is_some_and(|(runtime_digest, local_digest)| runtime_digest == local_digest);
-    let dispatch_allowed = skill.enabled
+    let dispatch_allowed = execution_supported
+        && skill.enabled
         && digest_matches
         && local.is_some_and(LocalSkillTrustEntry::dispatch_allowed);
     json!({
@@ -1019,7 +1033,8 @@ fn runtime_codex_skill_item(
         "provider": "codex",
         "inventory_source": "codex_page_host",
         "installed": skill.enabled,
-        "compatible": skill.enabled && skill.manifest_digest.is_some(),
+        "compatible": execution_supported && skill.enabled && skill.manifest_digest.is_some(),
+        "execution_supported": execution_supported,
         "trust_state": local.map(|entry| entry.trust_state.as_str()).unwrap_or(TRUST_STATE_REVIEW_REQUIRED),
         "dispatch_allowed": dispatch_allowed,
         "trust_source": local.map(|entry| entry.source_kind.as_str()).unwrap_or("none"),
@@ -1604,12 +1619,14 @@ mod tests {
             server_version: None,
             capabilities: vec!["agent-skill-v1".to_string(), "thread-fork".to_string()],
             skills_supported: true,
+            skills_inventory_supported: true,
             skill_protocol: Some("agent-skill-v1".to_string()),
             subagents_supported: true,
         };
         let summary = runtime_summary_from_capabilities(&capabilities);
         assert!(summary.available);
         assert!(summary.skills_supported);
+        assert!(summary.skills_inventory_supported);
         assert!(summary.multi_agent_supported);
         assert_eq!(summary.runtime_id.as_deref(), Some("page-host-a"));
     }
@@ -1644,11 +1661,37 @@ mod tests {
             &skill,
             "page-host-a",
             &crate::multica_skill_trust::LocalSkillTrustSnapshot::default(),
+            true,
         );
         let encoded = serde_json::to_string(&item).unwrap();
         assert!(!encoded.contains("C:\\\\Users"));
         assert!(!encoded.contains("\"scope\""));
         assert!(encoded.contains("\"inventory_source\":\"codex_page_host\""));
+        assert!(encoded.contains("\"execution_supported\":true"));
+    }
+
+    #[test]
+    fn inventory_only_skill_projection_is_not_dispatchable() {
+        let skill = CodexSkill {
+            id: "skill:review".to_string(),
+            name: "Review".to_string(),
+            summary: None,
+            scope: None,
+            enabled: true,
+            manifest_digest: Some(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            ),
+        };
+        let item = runtime_codex_skill_item(
+            &skill,
+            "page-host-a",
+            &crate::multica_skill_trust::LocalSkillTrustSnapshot::default(),
+            false,
+        );
+        assert_eq!(item["execution_supported"], false);
+        assert_eq!(item["compatible"], false);
+        assert_eq!(item["dispatch_allowed"], false);
     }
 
     #[tokio::test]

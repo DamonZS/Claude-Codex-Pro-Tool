@@ -1680,6 +1680,7 @@
   ]);
   let codexPageHostClientPromise = null;
   let codexPageHostClient = null;
+  let codexPageHostInitializeResponse = null;
 
   function codexPageHostStillCurrent() {
     return window.__claudeCodexProCodexPageHostGeneration === claudeCodexProCodexPageHostGeneration;
@@ -1710,11 +1711,86 @@
     return !provider || String(provider).toLowerCase() === "codex";
   }
 
+  function codexPageHostAppScopeValid(appScope) {
+    if (!appScope || typeof appScope !== "object") return false;
+    const hasScopeGetter = typeof appScope.get === "function";
+    const hasScopeNode = typeof appScope.node === "function" ||
+      (!!appScope.node && typeof appScope.node === "object");
+    const hasQueryClient = !!appScope.queryClient && typeof appScope.queryClient === "object";
+    return hasScopeGetter && hasScopeNode && hasQueryClient;
+  }
+
+  function codexPageHostAppScopeFromReactRoot() {
+    const rootFiber = window.__codexRoot?._internalRoot?.current;
+    if (!rootFiber || typeof rootFiber !== "object") return null;
+    const queue = [rootFiber];
+    const seen = new Set();
+    let cursor = 0;
+    while (cursor < queue.length && seen.size < 20000) {
+      const fiber = queue[cursor++];
+      if (!fiber || typeof fiber !== "object" || seen.has(fiber)) continue;
+      seen.add(fiber);
+      for (let hook = fiber.memoizedState, count = 0;
+        hook && typeof hook === "object" && count < 256;
+        hook = hook.next, count += 1) {
+        const state = hook.memoizedState;
+        if (codexPageHostAppScopeValid(state?.appScope)) return state.appScope;
+      }
+      const props = fiber.memoizedProps;
+      if (codexPageHostAppScopeValid(props?.appScope)) return props.appScope;
+      if (fiber.child) queue.push(fiber.child);
+      if (fiber.sibling) queue.push(fiber.sibling);
+    }
+    return null;
+  }
+
+  function codexPageHostIdFromActiveThread() {
+    const rows = Array.from(document.querySelectorAll?.("[data-app-action-sidebar-thread-id]") || []);
+    const activeRow = rows.find((row) => row.matches?.('[data-app-action-sidebar-thread-active="true"], [aria-current="page"]') ||
+      row.querySelector?.('[data-app-action-sidebar-thread-active="true"], [aria-current="page"]'));
+    return String(activeRow?.getAttribute?.("data-app-action-sidebar-thread-host-id") || "").trim();
+  }
+
+  async function codexPageHostClientFromAppInitial() {
+    const module = await loadCodexAppModule("app-initial-");
+    const appScope = codexPageHostAppScopeFromReactRoot();
+    if (!appScope) throw new Error("codex_page_host_app_scope_unavailable");
+    if (typeof module?.FRt !== "function") throw new Error("codex_page_host_factory_unavailable");
+    const hostId = codexPageHostIdFromActiveThread() ||
+      String(appScope.currentHostId || appScope.hostId || "local");
+    const client = await Promise.resolve(module.FRt(appScope, hostId));
+    if (!client || typeof client.sendRequest !== "function") {
+      throw new Error("codex_page_host_client_unavailable");
+    }
+    // The page-owned client is already initialized. Probe a read-only method
+    // instead of sending a second initialize request, which Codex rejects.
+    const skills = await client.sendRequest("skills/list", {});
+    if (!skills || typeof skills !== "object" || !Array.isArray(skills.data)) {
+      throw new Error("codex_page_host_probe_failed");
+    }
+    return {
+      client,
+      initializeResponse: {
+        provider: "codex",
+        protocolVersion: "current-page",
+        serverInfo: { provider: "codex" },
+        // `skills/list` proves only inventory access.  It must not be
+        // presented as an execution-capable Skill protocol.
+        capabilities: [],
+        pageHostProbe: { skillsList: true },
+      },
+    };
+  }
+
   async function currentCodexPageHostClient(initializeParams) {
-    if (codexPageHostClient) return { client: codexPageHostClient, initializeResponse: null };
+    if (codexPageHostClient) {
+      return { client: codexPageHostClient, initializeResponse: codexPageHostInitializeResponse };
+    }
     if (!codexPageHostClientPromise) {
-      codexPageHostClientPromise = loadCodexAppModule("app-server-manager-signals-")
-        .then(async (module) => {
+      codexPageHostClientPromise = Promise.resolve().then(async () => {
+        let primaryError = null;
+        try {
+          const module = await loadCodexAppModule("app-server-manager-signals-");
           const candidates = codexPageHostCandidates(module);
           let lastError = null;
           for (const candidate of candidates) {
@@ -1723,17 +1799,32 @@
               const response = await candidate.sendRequest("initialize", initializeParams);
               if (!codexPageHostInitializeResponseValid(response)) continue;
               codexPageHostClient = candidate;
+              codexPageHostInitializeResponse = response;
               return { client: candidate, initializeResponse: response };
             } catch (error) {
               lastError = error;
             }
           }
-          throw lastError || new Error("codex_page_host_unavailable");
-        })
-        .catch((error) => {
-          codexPageHostClientPromise = null;
+          primaryError = lastError || new Error("codex_page_host_unavailable");
+        } catch (error) {
+          primaryError = error;
+        }
+        try {
+          const selected = await codexPageHostClientFromAppInitial();
+          if (!codexPageHostStillCurrent()) throw new Error("codex_page_host_generation_stale");
+          codexPageHostClient = selected.client;
+          codexPageHostInitializeResponse = selected.initializeResponse;
+          return selected;
+        } catch (fallbackError) {
+          const error = new Error("codex_page_host_unavailable");
+          error.primaryError = primaryError;
+          error.fallbackError = fallbackError;
           throw error;
-        });
+        }
+      }).catch((error) => {
+        codexPageHostClientPromise = null;
+        throw error;
+      });
     }
     return await codexPageHostClientPromise;
   }
@@ -1762,6 +1853,7 @@
   function cleanupCodexPageHostRequest() {
     codexPageHostClient = null;
     codexPageHostClientPromise = null;
+    codexPageHostInitializeResponse = null;
     if (window.__claudeCodexProCodexPageHostRequest === codexPageHostRequest) {
       try { delete window.__claudeCodexProCodexPageHostRequest; } catch (_) {
         window.__claudeCodexProCodexPageHostRequest = null;
@@ -4517,6 +4609,22 @@
     { key: "skills", resource: "skills", label: "Skills" },
     { key: "settings", resource: "settings", label: "设置" },
   ]);
+  const multicaWorkspaceBoardColumns = Object.freeze([
+    { key: "backlog", label: "待规划", tone: "neutral" },
+    { key: "todo", label: "待办", tone: "neutral" },
+    { key: "in_progress", label: "进行中", tone: "warning" },
+    { key: "in_review", label: "审核中", tone: "success" },
+    { key: "done", label: "已完成", tone: "info" },
+    { key: "blocked", label: "已阻塞", tone: "danger" },
+    { key: "cancelled", label: "已取消", tone: "muted" },
+  ]);
+  const multicaWorkspaceIssueFilters = Object.freeze([
+    { key: "all", label: "全部" },
+    { key: "assigned", label: "已分配" },
+    { key: "created", label: "我创建的" },
+    { key: "agents", label: "我的智能体和小队" },
+  ]);
+  const multicaWorkspaceBackgroundIntervalMs = 5000;
   const multicaWorkspaceState = {
     entry: null,
     host: null,
@@ -4530,7 +4638,18 @@
     anchorAttempts: 0,
     anchorDiagnosticSent: false,
     opened: false,
+    opening: false,
+    openSeq: 0,
+    entryAvailabilityMessage: "",
     route: "my-issues",
+    issueFilter: "assigned",
+    boardCompact: false,
+    moduleMenuOpen: false,
+    draggedIssue: null,
+    nativeThreadActivation: false,
+    backgroundTimer: null,
+    backgroundStarted: false,
+    backgroundBusy: false,
     workspaceId: "",
     bootstrap: null,
     bootstrapLoading: false,
@@ -4541,6 +4660,11 @@
     bootstrapRequest: null,
     activeRequests: new Set(),
     loading: new Set(),
+    issueFilterDependencies: {
+      loading: false,
+      error: "",
+      sequence: 0,
+    },
     collections: new Map(),
     errors: new Map(),
     editor: null,
@@ -4562,7 +4686,7 @@
     skillBindingDraft: null,
     settingsSave: null,
   };
-  const multicaWorkspaceVersion = "1";
+  const multicaWorkspaceVersion = "2";
 
   function multicaWorkspaceEl(tag, className, text) {
     const element = document.createElement(tag);
@@ -4693,30 +4817,60 @@
         background: var(--ccp-multica-bg, #181b1a); color: var(--ccp-multica-fg, #f2f5f3);
         font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
-      .ccp-multica-header { flex: 0 0 auto; min-height: 50px; display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent); }
-      .ccp-multica-heading { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 10px; }
-      .ccp-multica-title { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: 0; white-space: nowrap; }
-      .ccp-multica-workspace-name { min-width: 0; color: color-mix(in srgb, currentColor 62%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ccp-multica-status { display: inline-flex; align-items: center; gap: 6px; color: color-mix(in srgb, currentColor 68%, transparent); white-space: nowrap; }
-      .ccp-multica-status[data-state="ok"] { color: #63c49b; }
-      .ccp-multica-status[data-state="warning"] { color: #d7aa59; }
-      .ccp-multica-status[data-state="error"] { color: #e17d83; }
-      .ccp-multica-actions { display: inline-flex; align-items: center; gap: 6px; }
       .ccp-multica-button { min-height: 30px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: 4px 10px; background: color-mix(in srgb, currentColor 7%, transparent); color: inherit; font: inherit; cursor: pointer; }
       .ccp-multica-button:hover, .ccp-multica-button:focus-visible { background: color-mix(in srgb, #4fb995 20%, transparent); outline: none; }
       .ccp-multica-button:disabled { cursor: wait; opacity: .55; }
       .ccp-multica-button[data-variant="primary"] { border-color: color-mix(in srgb, #4fb995 70%, transparent); background: color-mix(in srgb, #4fb995 22%, transparent); }
       .ccp-multica-button[data-variant="danger"] { border-color: color-mix(in srgb, #e17d83 58%, transparent); color: #e17d83; }
-      .ccp-multica-button:focus-visible, .ccp-multica-tab:focus-visible { box-shadow: 0 0 0 2px #4fb995; }
-      .ccp-multica-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(138px, 190px) minmax(0, 1fr); }
-      .ccp-multica-nav { min-height: 0; overflow: auto; padding: 10px 8px; border-right: 1px solid color-mix(in srgb, currentColor 16%, transparent); }
-      .ccp-multica-tab { display: flex; align-items: center; width: 100%; min-height: 32px; margin: 2px 0; border: 0; border-radius: 5px; padding: 6px 9px; background: transparent; color: color-mix(in srgb, currentColor 70%, transparent); font: inherit; text-align: left; cursor: pointer; }
-      .ccp-multica-tab:hover { background: color-mix(in srgb, currentColor 9%, transparent); color: inherit; }
-      .ccp-multica-tab[aria-selected="true"] { background: color-mix(in srgb, #4fb995 18%, transparent); color: inherit; }
-      .ccp-multica-content { min-width: 0; min-height: 0; overflow: auto; padding: 16px 18px 24px; }
+      .ccp-multica-button:focus-visible, .ccp-multica-module-item:focus-visible, .ccp-multica-filter:focus-visible, .ccp-multica-icon-button:focus-visible, .ccp-multica-card:focus-visible { box-shadow: 0 0 0 2px #4fb995; outline: none; }
+      .ccp-multica-content { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; padding: 16px 18px 24px; }
+      .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; }
       .ccp-multica-content-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
       .ccp-multica-content-title { min-width: 0; flex: 1; margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; }
       .ccp-multica-count { color: color-mix(in srgb, currentColor 58%, transparent); white-space: nowrap; }
+      .ccp-multica-toolbar { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+      .ccp-multica-toolbar-group { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+      .ccp-multica-toolbar-spacer { min-width: 10px; flex: 1 1 auto; }
+      .ccp-multica-filter, .ccp-multica-icon-button { box-sizing: border-box; min-height: 30px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 6px; padding: 4px 9px; background: color-mix(in srgb, currentColor 5%, transparent); color: color-mix(in srgb, currentColor 70%, transparent); font: inherit; cursor: pointer; white-space: nowrap; }
+      .ccp-multica-filter:hover, .ccp-multica-icon-button:hover { background: color-mix(in srgb, currentColor 9%, transparent); color: inherit; }
+      .ccp-multica-filter[aria-pressed="true"], .ccp-multica-icon-button[aria-pressed="true"] { border-color: color-mix(in srgb, #4fb995 55%, transparent); background: color-mix(in srgb, #4fb995 16%, transparent); color: inherit; }
+      .ccp-multica-icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; padding-inline: 8px; }
+      .ccp-multica-module-menu { position: relative; }
+      .ccp-multica-module-popover { position: absolute; z-index: 8; top: calc(100% + 6px); right: 0; width: min(220px, calc(100vw - 36px)); max-height: min(420px, calc(100vh - 150px)); overflow: auto; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 7px; padding: 6px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-module-item { display: flex; align-items: center; width: 100%; min-height: 34px; border: 0; border-radius: 5px; padding: 6px 9px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+      .ccp-multica-module-item:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
+      .ccp-multica-module-item[aria-current="page"] { background: color-mix(in srgb, #4fb995 17%, transparent); }
+      .ccp-multica-board-page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+      .ccp-multica-board-heading { display: flex; align-items: center; gap: 9px; min-height: 50px; padding: 8px 14px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
+      .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: 0; white-space: nowrap; }
+      .ccp-multica-board-toolbar { padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-working-count { color: color-mix(in srgb, currentColor 66%, transparent); white-space: nowrap; }
+      .ccp-multica-board-scroll { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
+      .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, 280px); gap: 12px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 12px; }
+      .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 280px; min-width: 280px; min-height: 0; border: 1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 4%, transparent); overflow: hidden; }
+      .ccp-multica-board-column[data-tone="warning"] { background: color-mix(in srgb, #b78923 8%, var(--ccp-multica-bg, #181b1a)); }
+      .ccp-multica-board-column[data-tone="success"] { background: color-mix(in srgb, #2f9a68 7%, var(--ccp-multica-bg, #181b1a)); }
+      .ccp-multica-board-column[data-tone="info"] { background: color-mix(in srgb, #2f79a8 8%, var(--ccp-multica-bg, #181b1a)); }
+      .ccp-multica-board-column[data-tone="danger"] { background: color-mix(in srgb, #a24a5a 8%, var(--ccp-multica-bg, #181b1a)); }
+      .ccp-multica-board-column[data-tone="muted"] { background: color-mix(in srgb, currentColor 3%, var(--ccp-multica-bg, #181b1a)); }
+      .ccp-multica-column-header { display: flex; align-items: center; gap: 7px; min-height: 42px; padding: 7px 10px; }
+      .ccp-multica-column-dot { width: 8px; height: 8px; flex: 0 0 8px; border: 1px solid currentColor; border-radius: 50%; color: color-mix(in srgb, currentColor 64%, transparent); }
+      .ccp-multica-column-title { min-width: 0; flex: 1; margin: 0; font-size: 13px; font-weight: 620; letter-spacing: 0; }
+      .ccp-multica-column-count { color: color-mix(in srgb, currentColor 58%, transparent); }
+      .ccp-multica-column-actions { display: inline-flex; align-items: center; gap: 2px; }
+      .ccp-multica-column-actions .ccp-multica-icon-button { min-width: 26px; min-height: 26px; border-color: transparent; padding: 2px 5px; background: transparent; }
+      .ccp-multica-column-list { min-height: 0; flex: 1; overflow-y: auto; padding: 4px 8px 10px; }
+      .ccp-multica-column-empty { display: flex; align-items: center; justify-content: center; min-height: 120px; color: color-mix(in srgb, currentColor 54%, transparent); }
+      .ccp-multica-card { box-sizing: border-box; display: grid; gap: 8px; width: 100%; min-width: 0; margin-bottom: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; padding: 10px; background: color-mix(in srgb, currentColor 6%, var(--ccp-multica-bg, #181b1a)); color: inherit; }
+      .ccp-multica-card[draggable="true"] { cursor: grab; }
+      .ccp-multica-card[data-dragging="true"] { opacity: .48; }
+      .ccp-multica-card-id { color: color-mix(in srgb, currentColor 58%, transparent); font-size: 11px; overflow-wrap: anywhere; }
+      .ccp-multica-card-title { margin: 0; font-size: 13px; font-weight: 620; letter-spacing: 0; overflow-wrap: anywhere; }
+      .ccp-multica-card-summary { display: -webkit-box; overflow: hidden; color: color-mix(in srgb, currentColor 64%, transparent); -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+      .ccp-multica-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; color: color-mix(in srgb, currentColor 58%, transparent); font-size: 11px; }
+      .ccp-multica-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+      .ccp-multica-card-actions .ccp-multica-button { min-height: 26px; padding: 2px 7px; font-size: 12px; }
+      .ccp-multica-board-page[data-compact="true"] .ccp-multica-card-summary { display: none; }
       .ccp-multica-state { padding: 30px 8px; color: color-mix(in srgb, currentColor 66%, transparent); text-align: center; }
       .ccp-multica-state strong { display: block; margin-bottom: 8px; color: inherit; font-weight: 600; }
       .ccp-multica-list { display: grid; gap: 0; }
@@ -4738,6 +4892,7 @@
       .ccp-multica-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
       .ccp-multica-inline-message { min-width: 0; color: color-mix(in srgb, currentColor 65%, transparent); overflow-wrap: anywhere; }
       .ccp-multica-inline-message[data-state="error"] { color: #e17d83; }
+      .ccp-multica-inline-message[data-state="warning"] { color: #d7aa59; }
       .ccp-multica-executions { display: grid; gap: 7px; margin-top: 10px; padding-left: 12px; border-left: 2px solid color-mix(in srgb, #4fb995 36%, transparent); }
       .ccp-multica-execution { display: grid; gap: 6px; }
       .ccp-multica-execution-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: color-mix(in srgb, currentColor 68%, transparent); }
@@ -4764,11 +4919,10 @@
       .ccp-multica-toggle[data-enabled="true"] { border-color: color-mix(in srgb, #4fb995 65%, transparent); background: color-mix(in srgb, #4fb995 22%, transparent); }
       .ccp-multica-toggle:disabled { cursor: wait; opacity: .62; }
       @media (max-width: 620px) {
-        .ccp-multica-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-        .ccp-multica-nav { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent); padding: 6px; }
-        .ccp-multica-tab { width: auto; flex: 0 0 auto; white-space: nowrap; }
         .ccp-multica-content { padding: 14px 12px 20px; }
-        .ccp-multica-workspace-name { display: none; }
+        .ccp-multica-content[data-route="my-issues"] { padding: 0; }
+        .ccp-multica-board-heading { align-items: flex-start; flex-direction: column; }
+        .ccp-multica-toolbar-spacer { display: none; }
         .ccp-multica-setting-row { align-items: flex-start; }
         .ccp-multica-form-grid { grid-template-columns: 1fr; }
         .ccp-multica-item-heading { align-items: stretch; flex-direction: column; }
@@ -4779,71 +4933,72 @@
     shadow.appendChild(style);
     const shell = multicaWorkspaceEl("section", "ccp-multica-shell");
     shell.setAttribute("role", "region");
-    shell.setAttribute("aria-label", "Multica 工作区");
-    const header = multicaWorkspaceEl("header", "ccp-multica-header");
-    const heading = multicaWorkspaceEl("div", "ccp-multica-heading");
-    const title = multicaWorkspaceEl("h1", "ccp-multica-title", "Multica 工作区");
-    const workspaceName = multicaWorkspaceEl("span", "ccp-multica-workspace-name", "");
-    heading.append(title, workspaceName);
-    const status = multicaWorkspaceEl("span", "ccp-multica-status", "准备中");
-    status.setAttribute("role", "status");
-    const actions = multicaWorkspaceEl("div", "ccp-multica-actions");
-    const refresh = multicaWorkspaceEl("button", "ccp-multica-button", "刷新");
-    refresh.type = "button";
-    refresh.setAttribute("aria-label", "刷新 Multica 工作区");
-    const close = multicaWorkspaceEl("button", "ccp-multica-button", "关闭");
-    close.type = "button";
-    close.setAttribute("aria-label", "关闭 Multica 工作区");
-    actions.append(refresh, close);
-    header.append(heading, status, actions);
-    const layout = multicaWorkspaceEl("div", "ccp-multica-layout");
-    const nav = multicaWorkspaceEl("nav", "ccp-multica-nav");
-    nav.setAttribute("aria-label", "Multica 模块");
-    nav.setAttribute("role", "tablist");
-    multicaWorkspaceModules.forEach((module) => {
-      const tab = multicaWorkspaceEl("button", "ccp-multica-tab", module.label);
-      tab.type = "button";
-      tab.dataset.multicaRoute = module.key;
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-selected", module.key === multicaWorkspaceState.route ? "true" : "false");
-      tab.setAttribute("aria-controls", "ccp-multica-content");
-      nav.appendChild(tab);
-    });
+    shell.setAttribute("aria-label", "我的任务");
     const content = multicaWorkspaceEl("main", "ccp-multica-content");
     content.id = "ccp-multica-content";
-    layout.append(nav, content);
-    shell.append(header, layout);
+    shell.appendChild(content);
     shadow.appendChild(shell);
-    refresh.addEventListener("click", () => {
-      void multicaWorkspaceLoadBootstrap(true);
-      const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
-      if (module.key === "settings") multicaWorkspaceRenderContent();
-      else void multicaWorkspaceQuery(module, true);
+    shell.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !multicaWorkspaceState.moduleMenuOpen) return;
+      multicaWorkspaceState.moduleMenuOpen = false;
+      multicaWorkspaceRenderContent();
     });
-    close.addEventListener("click", () => multicaWorkspaceHide());
-    nav.addEventListener("click", (event) => {
-      const tab = event.target?.closest?.("[data-multica-route]");
-      if (!tab) return;
-      const route = tab.dataset.multicaRoute;
-      if (!moduleForMulticaWorkspace(route)) return;
-      multicaWorkspaceState.route = route;
-      multicaWorkspaceState.querySeq += 1;
-      multicaWorkspaceCancelQuery();
-      multicaWorkspaceState.loading.clear();
-      multicaWorkspaceState.editor = null;
-      multicaWorkspaceState.executionDraft = null;
-      multicaWorkspaceRenderTabs();
-      const module = moduleForMulticaWorkspace(route);
-      if (module.key === "settings") multicaWorkspaceRenderContent();
-      else void multicaWorkspaceQuery(module, false);
+    shell.addEventListener("click", (event) => {
+      if (!multicaWorkspaceState.moduleMenuOpen || event.target?.closest?.(".ccp-multica-module-menu")) return;
+      multicaWorkspaceState.moduleMenuOpen = false;
+      multicaWorkspaceRenderContent();
     });
     multicaWorkspaceState.shadow = shadow;
-    multicaWorkspaceState.root = { shell, header, title, workspaceName, status, refresh, close, nav, content };
+    multicaWorkspaceState.root = { shell, content };
     return shadow;
   }
 
   function moduleForMulticaWorkspace(route) {
     return multicaWorkspaceModules.find((module) => module.key === route) || multicaWorkspaceModules[0];
+  }
+
+  function multicaWorkspaceSelectRoute(route) {
+    const module = multicaWorkspaceModules.find((candidate) => candidate.key === route);
+    if (!module) return;
+    multicaWorkspaceState.route = module.key;
+    multicaWorkspaceState.moduleMenuOpen = false;
+    multicaWorkspaceState.querySeq += 1;
+    multicaWorkspaceCancelQuery();
+    multicaWorkspaceState.loading.clear();
+    multicaWorkspaceState.editor = null;
+    multicaWorkspaceState.executionDraft = null;
+    multicaWorkspaceRenderContent();
+    if (module.key !== "settings") void multicaWorkspaceQuery(module, false);
+  }
+
+  function multicaWorkspaceAppendModuleMenu(parent) {
+    const wrapper = multicaWorkspaceEl("div", "ccp-multica-module-menu");
+    const trigger = multicaWorkspaceEl("button", "ccp-multica-icon-button", "≡");
+    trigger.type = "button";
+    trigger.title = "工作区模块";
+    trigger.setAttribute("aria-label", "工作区模块");
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-expanded", String(multicaWorkspaceState.moduleMenuOpen));
+    trigger.addEventListener("click", () => {
+      multicaWorkspaceState.moduleMenuOpen = !multicaWorkspaceState.moduleMenuOpen;
+      multicaWorkspaceRenderContent();
+    });
+    wrapper.appendChild(trigger);
+    if (multicaWorkspaceState.moduleMenuOpen) {
+      const menu = multicaWorkspaceEl("div", "ccp-multica-module-popover");
+      menu.setAttribute("role", "menu");
+      multicaWorkspaceModules.forEach((module) => {
+        const item = multicaWorkspaceEl("button", "ccp-multica-module-item", module.label);
+        item.type = "button";
+        item.dataset.multicaRoute = module.key;
+        item.setAttribute("role", "menuitem");
+        if (module.key === multicaWorkspaceState.route) item.setAttribute("aria-current", "page");
+        item.addEventListener("click", () => multicaWorkspaceSelectRoute(module.key));
+        menu.appendChild(item);
+      });
+      wrapper.appendChild(menu);
+    }
+    parent.appendChild(wrapper);
   }
 
   function multicaWorkspaceEnsureHost() {
@@ -4866,9 +5021,33 @@
     if (!multicaWorkspaceInstallShadow(host)) return null;
     document.body.appendChild(host);
     multicaWorkspaceState.host = host;
-    multicaWorkspaceRenderTabs();
     multicaWorkspaceRenderContent();
     return host;
+  }
+
+  function multicaWorkspaceEnsureEntryAvailabilityBadge(entry) {
+    let badge = entry.querySelector?.('[data-ccp-multica-nav-availability="true"]');
+    if (badge || !document.createElement) return badge || null;
+    badge = document.createElement("span");
+    badge.dataset.ccpMulticaNavAvailability = "true";
+    badge.setAttribute("aria-hidden", "true");
+    Object.assign(badge.style, {
+      display: "none",
+      alignItems: "center",
+      flex: "0 0 auto",
+      minHeight: "18px",
+      marginLeft: "auto",
+      padding: "0 5px",
+      borderRadius: "4px",
+      background: "rgba(225, 125, 131, .18)",
+      color: "#e17d83",
+      fontSize: "10px",
+      fontWeight: "600",
+      lineHeight: "18px",
+      whiteSpace: "nowrap",
+    });
+    entry.appendChild(badge);
+    return badge;
   }
 
   function multicaWorkspaceEnsureEntry(pluginButton) {
@@ -4907,6 +5086,7 @@
       label.style.textOverflow = "ellipsis";
       label.style.whiteSpace = "nowrap";
       entry.append(icon, label);
+      multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
       entry.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -4923,21 +5103,75 @@
       label.textContent = "我的任务";
       label.dataset.ccpMulticaNavLabel = "true";
     }
+    multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
     if (entry.parentElement !== pluginButton.parentElement || entry.previousElementSibling !== pluginButton) {
       pluginButton.parentElement.insertBefore(entry, pluginButton.nextSibling);
     }
     entry.setAttribute("aria-current", multicaWorkspaceState.opened ? "page" : "false");
     entry.setAttribute("data-state", multicaWorkspaceState.opened ? "active" : "inactive");
     multicaWorkspaceState.entry = entry;
+    multicaWorkspaceSetEntryAvailability(multicaWorkspaceState.entryAvailabilityMessage);
     return entry;
   }
 
   function multicaWorkspaceSetStatus(text, state) {
-    const status = multicaWorkspaceState.root?.status;
-    if (!status) return;
-    status.textContent = text;
-    if (state) status.dataset.state = state;
-    else status.removeAttribute("data-state");
+    const host = multicaWorkspaceState.host;
+    if (!host) return;
+    host.dataset.ccpMulticaStatus = state || "";
+    host.dataset.ccpMulticaStatusText = String(text || "").slice(0, 160);
+  }
+
+  function multicaWorkspaceSetEntryAvailability(message = "") {
+    const entry = multicaWorkspaceState.entry;
+    const detail = String(message || "").trim();
+    multicaWorkspaceState.entryAvailabilityMessage = detail;
+    if (!entry) return;
+    const badge = multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
+    if (detail) {
+      entry.dataset.ccpMulticaAvailability = "unavailable";
+      entry.setAttribute("data-state", "unavailable");
+      entry.setAttribute("aria-label", "我的任务，未连接，点击重试");
+      entry.setAttribute("aria-description", `${detail}；点击重试`);
+      entry.title = `我的任务（未连接，点击重试：${detail}）`;
+      if (badge) {
+        badge.textContent = "未连接";
+        badge.style.display = "inline-flex";
+      }
+      return;
+    }
+    delete entry.dataset.ccpMulticaAvailability;
+    entry.setAttribute("aria-label", "我的任务");
+    entry.removeAttribute("aria-description");
+    entry.setAttribute("data-state", multicaWorkspaceState.opened ? "active" : "inactive");
+    entry.title = "我的任务";
+    if (badge) {
+      badge.textContent = "";
+      badge.style.display = "none";
+    }
+  }
+
+  function multicaWorkspaceBridgeUnavailable(error) {
+    if (error?.timeout === true) return true;
+    const detail = `${error?.code || ""} ${error?.message || error || ""}`;
+    return /bridge|桥接|启动器|后端检查超时|工作区请求超时|未连接|network|unreachable|connection/i.test(detail);
+  }
+
+  function multicaWorkspaceFailOpen(message = "") {
+    const detail = String(message || "启动器未连接，请通过 CCP 启动 Codex").trim();
+    // A failed preflight must leave Codex's native surface usable. If the
+    // board is already open, keep it visible and only expose the recoverable
+    // bridge status; never hide a working local board because a later poll
+    // or host probe failed.
+    if (multicaWorkspaceState.opened) {
+      multicaWorkspaceState.opening = false;
+      multicaWorkspaceSetStatus(detail, "error");
+      multicaWorkspaceSetEntryAvailability(detail);
+      multicaWorkspaceRenderContent();
+      return;
+    }
+    multicaWorkspaceHide();
+    multicaWorkspaceSetStatus(detail, "error");
+    multicaWorkspaceSetEntryAvailability(detail);
   }
 
   function multicaWorkspaceFeatureEnabled() {
@@ -4966,6 +5200,8 @@
       error.status = result.status;
       error.code = result.code;
       error.httpStatus = result.httpStatus ?? result.http_status ?? result.statusCode;
+      error.timeout = result.timeout === true;
+      error.cancelled = result.cancelled === true;
     }
     return error;
   }
@@ -5009,14 +5245,6 @@
     const request = multicaWorkspaceState.bootstrapRequest;
     multicaWorkspaceState.bootstrapRequest = null;
     request?.cancel?.();
-  }
-
-  function multicaWorkspaceRenderTabs() {
-    const nav = multicaWorkspaceState.root?.nav;
-    if (!nav) return;
-    nav.querySelectorAll("[data-multica-route]").forEach((tab) => {
-      tab.setAttribute("aria-selected", tab.dataset.multicaRoute === multicaWorkspaceState.route ? "true" : "false");
-    });
   }
 
   function multicaWorkspaceSafeKey(key) {
@@ -5108,7 +5336,7 @@
     const entity = {};
     if (!item || typeof item !== "object" || Array.isArray(item)) return entity;
     const allowed = new Set(({
-      issues: ["id", "title", "description", "status", "priority", "projectId", "parentIssueId", "assigneeKind", "assigneeId"],
+      issues: ["id", "title", "description", "status", "priority", "projectId", "parentIssueId", "assigneeKind", "assigneeId", "creatorId"],
       projects: ["id", "name", "description", "status"],
       agents: ["id", "name", "description", "enabled", "concurrencyLimit"],
       squads: ["id", "name", "description", "leaderAgentId", "memberAgentIds"],
@@ -5125,7 +5353,7 @@
     if (resource === "issues") return [
       { key: "title", label: "标题", required: true, wide: true },
       { key: "description", label: "描述", type: "textarea", wide: true },
-      { key: "status", label: "状态", type: "select", options: [["todo", "待处理"], ["in_progress", "进行中"], ["in_review", "待审核"], ["done", "已完成"], ["blocked", "阻塞"], ["archived", "已归档"]] },
+      { key: "status", label: "状态", type: "select", options: [["backlog", "待规划"], ["todo", "待办"], ["in_progress", "进行中"], ["in_review", "审核中"], ["done", "已完成"], ["blocked", "已阻塞"], ["cancelled", "已取消"]] },
       { key: "priority", label: "优先级", type: "select", options: [["low", "低"], ["medium", "中"], ["high", "高"], ["urgent", "紧急"]] },
       { key: "projectId", label: "项目 ID" },
       { key: "parentIssueId", label: "父任务 ID" },
@@ -5166,10 +5394,20 @@
     return { ...common, name: "", triggerKind: "manual", schedule: "", enabled: true };
   }
 
-  function multicaWorkspaceOpenEditor(module, item = null) {
+  function multicaWorkspaceOpenEditor(module, item = null, defaults = {}) {
     const resource = multicaWorkspaceWritableResource(module);
     if (!resource || multicaWorkspaceState.mutationBusy) return;
-    const values = item ? multicaWorkspaceEditableEntity(item, resource) : multicaWorkspaceDefaultEntity(resource);
+    const values = item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults };
+    if (!item && resource === "issues") {
+      const localUserId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+      if (localUserId) {
+        values.creatorId = localUserId;
+        if (module.key === "my-issues") {
+          values.assigneeKind = "member";
+          values.assigneeId = localUserId;
+        }
+      }
+    }
     multicaWorkspaceState.editor = {
       resource,
       entityId: multicaWorkspaceEntityId(values) || multicaWorkspaceNewId(resource),
@@ -5268,6 +5506,16 @@
     content.appendChild(form);
   }
 
+  async function multicaWorkspaceRefreshMutationResource(module, resource) {
+    if (resource !== "issues") {
+      await multicaWorkspaceQuery(module, true);
+      return;
+    }
+    for (const route of ["issues", "my-issues"]) {
+      await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true);
+    }
+  }
+
   async function multicaWorkspaceSaveEditor(module) {
     const editor = multicaWorkspaceState.editor;
     if (!editor || multicaWorkspaceState.mutationBusy) return;
@@ -5292,7 +5540,7 @@
       });
       multicaWorkspaceState.editor = null;
       multicaWorkspaceState.mutationNotice = { state: "ok", message: "已保存" };
-      await multicaWorkspaceQuery(module, true);
+      await multicaWorkspaceRefreshMutationResource(module, editor.resource);
     } catch (error) {
       editor.message = multicaWorkspaceErrorMessage(error);
       multicaWorkspaceState.mutationNotice = { state: "error", message: editor.message };
@@ -5315,7 +5563,7 @@
       await multicaWorkspaceCall("/multica/workspace/delete", { resource, entityId, expectedRevision });
       multicaWorkspaceState.mutationNotice = { state: "ok", message: "已删除" };
       if (multicaWorkspaceState.editor?.entityId === entityId) multicaWorkspaceState.editor = null;
-      await multicaWorkspaceQuery(module, true);
+      await multicaWorkspaceRefreshMutationResource(module, resource);
     } catch (error) {
       multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
     } finally {
@@ -5332,7 +5580,7 @@
     try {
       await multicaWorkspaceCall("/multica/workspace/upsert", { resource, entity, expectedRevision: multicaWorkspaceEntityRevision(item) });
       multicaWorkspaceState.mutationNotice = { state: "ok", message: successMessage };
-      await multicaWorkspaceQuery(module, true);
+      await multicaWorkspaceRefreshMutationResource(module, resource);
     } catch (error) {
       multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
     } finally {
@@ -5463,6 +5711,56 @@
     }
   }
 
+  function multicaWorkspaceThreadIdMatches(value, threadId) {
+    const candidate = String(value || "").trim();
+    const expected = String(threadId || "").trim();
+    return !!candidate && !!expected && (candidate === expected || candidate.endsWith(`:${expected}`));
+  }
+
+  function multicaWorkspaceNativeThreadRow(threadId) {
+    return Array.from(document.querySelectorAll?.("[data-app-action-sidebar-thread-id]") || [])
+      .find((row) => multicaWorkspaceThreadIdMatches(row.getAttribute("data-app-action-sidebar-thread-id"), threadId)) || null;
+  }
+
+  function multicaWorkspaceNativeThreadIsActive(row) {
+    if (!row?.isConnected) return false;
+    const active = row.matches?.('[data-app-action-sidebar-thread-active="true"], [aria-current="page"]')
+      || row.querySelector?.('[data-app-action-sidebar-thread-active="true"], [aria-current="page"]');
+    return !!active;
+  }
+
+  function multicaWorkspaceCurrentNativeThreadId() {
+    const active = Array.from(document.querySelectorAll?.("[data-app-action-sidebar-thread-id]") || [])
+      .find(multicaWorkspaceNativeThreadIsActive);
+    return active?.getAttribute?.("data-app-action-sidebar-thread-id") || "";
+  }
+
+  async function multicaWorkspaceActivateNativeThread(threadId) {
+    const row = multicaWorkspaceNativeThreadRow(threadId);
+    if (!row) throw new Error("未在 Codex 侧栏找到该对话");
+    const clickTarget = row.matches?.('button, a[href], [role="button"], [role="link"]')
+      ? row
+      : row.closest?.('button, a[href], [role="button"], [role="link"]') || row;
+    multicaWorkspaceState.nativeThreadActivation = true;
+    try {
+      clickTarget.click?.();
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        const current = multicaWorkspaceNativeThreadRow(threadId) || row;
+        const activeThreadId = multicaWorkspaceCurrentNativeThreadId();
+        if (multicaWorkspaceNativeThreadIsActive(current) &&
+            multicaWorkspaceThreadIdMatches(activeThreadId, threadId)) {
+          multicaWorkspaceHide();
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+      throw new Error("Codex 未激活目标对话");
+    } finally {
+      multicaWorkspaceState.nativeThreadActivation = false;
+    }
+  }
+
   async function multicaWorkspaceRunExecutionAction(action, issue, binding, extras = {}) {
     const issueId = multicaWorkspaceEntityId(issue);
     const bindingId = multicaWorkspaceExecutionBindingId(binding);
@@ -5504,6 +5802,19 @@
       const result = await multicaWorkspaceCall(path, payload, action === "create" || action === "continue" ? 30000 : 15000);
       if (result.binding) multicaWorkspaceMergeExecution(result.binding);
       if (action === "create" || action === "continue") multicaWorkspaceState.executionDraft = null;
+      if (action === "open") {
+        const threadId = String(multicaWorkspaceObjectValue(
+          result.handle,
+          "threadId",
+          "thread_id",
+        ) || multicaWorkspaceObjectValue(
+          result.binding || binding,
+          "codexThreadId",
+          "codex_thread_id",
+        ) || "").trim();
+        if (!threadId) throw new Error("执行记录缺少 Codex 对话 ID");
+        await multicaWorkspaceActivateNativeThread(threadId);
+      }
       multicaWorkspaceState.executionNotice = { state: "ok", message: ({ create: "已派发", continue: "已继续执行", cancel: "取消请求已提交", status: "状态已更新", open: "已打开原对话" })[action] };
       if (action !== "open") await multicaWorkspaceLoadExecutions(true);
     } catch (error) {
@@ -5606,19 +5917,400 @@
     parent.appendChild(article);
   }
 
+  function multicaWorkspaceIssueStatus(item) {
+    const raw = String(multicaWorkspaceObjectValue(item, "status", "state") || "backlog").toLowerCase();
+    if (raw === "archived") return "cancelled";
+    return multicaWorkspaceBoardColumns.some((column) => column.key === raw) ? raw : "backlog";
+  }
+
+  function multicaWorkspaceIssueSource() {
+    const filter = multicaWorkspaceState.issueFilter;
+    const sourceKey = filter === "assigned" ? "my-issues" : "issues";
+    const collection = multicaWorkspaceState.collections.get(sourceKey);
+    const error = multicaWorkspaceState.errors.get(sourceKey);
+    let items = Array.isArray(collection?.items) ? collection.items : [];
+    const localUserId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+    if (filter === "created") {
+      items = items.filter((item) => String(multicaWorkspaceObjectValue(item, "creatorId", "creator_id", "createdBy", "created_by") || "") === localUserId);
+    } else if (filter === "agents") {
+      const localAssignees = new Set();
+      for (const key of ["agents", "squads"]) {
+        const values = multicaWorkspaceState.collections.get(key)?.items;
+        if (!Array.isArray(values)) continue;
+        values.forEach((item) => {
+          const id = multicaWorkspaceEntityId(item);
+          if (id) localAssignees.add(id);
+        });
+      }
+      items = items.filter((item) => {
+        const kind = String(multicaWorkspaceObjectValue(item, "assigneeKind", "assignee_kind") || "").toLowerCase();
+        const id = String(multicaWorkspaceObjectValue(item, "assigneeId", "assignee_id") || "");
+        return (kind === "agent" || kind === "squad") && localAssignees.has(id);
+      });
+    }
+    return { sourceKey, collection, error, items };
+  }
+
+  function multicaWorkspaceFormatUpdatedAt(item) {
+    const value = Number(multicaWorkspaceObjectValue(item, "updatedAtMs", "updated_at_ms", "updatedAt", "updated_at"));
+    if (!Number.isFinite(value) || value <= 0) return "";
+    const date = new Date(value < 100000000000 ? value * 1000 : value);
+    if (!Number.isFinite(date.getTime())) return "";
+    try {
+      return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    } catch (_) {
+      return date.toISOString().slice(0, 16).replace("T", " ");
+    }
+  }
+
+  async function multicaWorkspaceLoadAgentFilterDependencies(force = true) {
+    const dependencies = multicaWorkspaceState.issueFilterDependencies;
+    const sequence = ++dependencies.sequence;
+    dependencies.loading = true;
+    dependencies.error = "";
+    if (multicaWorkspaceState.opened && multicaWorkspaceState.route === "my-issues") {
+      multicaWorkspaceRenderContent();
+    }
+
+    const failures = [];
+    // multicaWorkspaceQuery owns one cancellation slot. These reads must remain
+    // serial so every directory snapshot is settled before the issue filter runs.
+    for (const dependency of [
+      { key: "agents", label: "智能体" },
+      { key: "squads", label: "小队" },
+      { key: "issues", label: "任务" },
+    ]) {
+      if (sequence !== dependencies.sequence ||
+          multicaWorkspaceState.issueFilter !== "agents" ||
+          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) {
+        return;
+      }
+      await multicaWorkspaceQuery(moduleForMulticaWorkspace(dependency.key), force);
+      const error = multicaWorkspaceState.errors.get(dependency.key);
+      if (error) failures.push(`${dependency.label}：${multicaWorkspaceErrorMessage(error)}`);
+    }
+
+    if (sequence !== dependencies.sequence ||
+        multicaWorkspaceState.issueFilter !== "agents" ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) {
+      return;
+    }
+    dependencies.loading = false;
+    dependencies.error = failures.length ? failures.join("；") : "";
+    if (multicaWorkspaceState.opened && multicaWorkspaceState.route === "my-issues") {
+      multicaWorkspaceRenderContent();
+    }
+  }
+
+  function multicaWorkspaceRefreshBoardSource(force = true) {
+    if (multicaWorkspaceState.issueFilter === "agents") {
+      void multicaWorkspaceLoadAgentFilterDependencies(force);
+      return;
+    }
+    const dependencies = multicaWorkspaceState.issueFilterDependencies;
+    dependencies.sequence += 1;
+    dependencies.loading = false;
+    dependencies.error = "";
+    const source = multicaWorkspaceIssueSource();
+    const module = moduleForMulticaWorkspace(source.sourceKey);
+    void multicaWorkspaceQuery(module, force);
+  }
+
+  function multicaWorkspaceAppendBoardCard(parent, issue, module) {
+    const issueId = multicaWorkspaceEntityId(issue);
+    const article = multicaWorkspaceEl("article", "ccp-multica-card");
+    article.tabIndex = 0;
+    article.dataset.multicaIssueId = issueId;
+    article.dataset.multicaIssueStatus = multicaWorkspaceIssueStatus(issue);
+    article.draggable = !multicaWorkspaceState.mutationBusy;
+    article.addEventListener("dragstart", (event) => {
+      if (!article.draggable || !issueId) {
+        event.preventDefault();
+        return;
+      }
+      multicaWorkspaceState.draggedIssue = issue;
+      article.dataset.dragging = "true";
+      event.dataTransfer?.setData("text/plain", issueId);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    article.addEventListener("dragend", () => {
+      multicaWorkspaceState.draggedIssue = null;
+      delete article.dataset.dragging;
+    });
+    article.appendChild(multicaWorkspaceEl("div", "ccp-multica-card-id", issueId || "未编号"));
+    article.appendChild(multicaWorkspaceEl("h3", "ccp-multica-card-title", multicaWorkspaceItemTitle(issue)));
+    const summary = String(multicaWorkspaceObjectValue(issue, "description", "summary") || "").trim();
+    if (summary) article.appendChild(multicaWorkspaceEl("div", "ccp-multica-card-summary", summary.slice(0, 280)));
+    const meta = multicaWorkspaceEl("div", "ccp-multica-card-meta");
+    const assignee = String(multicaWorkspaceObjectValue(issue, "assigneeId", "assignee_id") || "未分配");
+    meta.appendChild(multicaWorkspaceEl("span", "", assignee));
+    const updatedAt = multicaWorkspaceFormatUpdatedAt(issue);
+    if (updatedAt) meta.appendChild(multicaWorkspaceEl("span", "", updatedAt));
+    const attempts = multicaWorkspaceExecutionsForIssue(issueId);
+    const latest = attempts[0] || null;
+    if (latest) meta.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", multicaWorkspaceExecutionState(latest)));
+    article.appendChild(meta);
+    const actions = multicaWorkspaceEl("div", "ccp-multica-card-actions");
+    const addAction = (label, handler, options = {}) => {
+      const button = multicaWorkspaceEl("button", "ccp-multica-button", label);
+      button.type = "button";
+      button.disabled = !!options.disabled || multicaWorkspaceState.mutationBusy;
+      if (options.variant) button.dataset.variant = options.variant;
+      if (options.title) button.title = options.title;
+      button.addEventListener("click", handler);
+      actions.appendChild(button);
+    };
+    const active = attempts.find((binding) => !multicaWorkspaceTerminalExecutionStates.has(multicaWorkspaceExecutionState(binding)));
+    const pageHostAvailable = multicaWorkspaceState.bootstrap?.runtime?.available !== false;
+    const pageHostUnavailableTitle = "当前 Codex 页面执行能力不可用；本地任务仍可查看、编辑和流转";
+    if (!active) addAction("执行", () => multicaWorkspaceOpenExecutionDraft("create", issue), {
+      variant: "primary",
+      disabled: !pageHostAvailable,
+      title: pageHostAvailable ? "创建一次 Codex 执行" : pageHostUnavailableTitle,
+    });
+    if (latest && multicaWorkspaceObjectValue(latest, "codexThreadId", "codex_thread_id")) {
+      addAction("打开对话", () => void multicaWorkspaceRunExecutionAction("open", issue, latest), {
+        disabled: !pageHostAvailable,
+        title: pageHostAvailable ? "打开已绑定的 Codex 对话" : pageHostUnavailableTitle,
+      });
+    }
+    addAction("编辑", () => multicaWorkspaceOpenEditor(module, issue));
+    const cancelled = multicaWorkspaceIssueStatus(issue) === "cancelled";
+    addAction(cancelled ? "恢复" : "取消", () => void multicaWorkspacePatchEntity(module, issue, { status: cancelled ? "todo" : "cancelled" }, cancelled ? "已恢复" : "已取消"));
+    article.appendChild(actions);
+    if (multicaWorkspaceState.executionDraft?.issueId === issueId) {
+      multicaWorkspaceRenderExecutionDraft(article, issue);
+    }
+    parent.appendChild(article);
+  }
+
+  function multicaWorkspaceRenderIssueBoard(content, module) {
+    const source = multicaWorkspaceIssueSource();
+    const filterDependencies = multicaWorkspaceState.issueFilter === "agents"
+      ? multicaWorkspaceState.issueFilterDependencies
+      : null;
+    const page = multicaWorkspaceEl("section", "ccp-multica-board-page");
+    page.dataset.compact = String(multicaWorkspaceState.boardCompact);
+    const heading = multicaWorkspaceEl("div", "ccp-multica-board-heading");
+    heading.appendChild(multicaWorkspaceEl("h2", "ccp-multica-board-title", "我的任务"));
+    const headingSpacer = multicaWorkspaceEl("span", "ccp-multica-toolbar-spacer");
+    heading.appendChild(headingSpacer);
+    if (source.collection && Number.isFinite(Number(source.collection.total))) {
+      heading.appendChild(multicaWorkspaceEl("span", "ccp-multica-count", `${source.items.length} 条`));
+    }
+    multicaWorkspaceAppendModuleMenu(heading);
+    page.appendChild(heading);
+    if (multicaWorkspaceState.bootstrapLoading && !multicaWorkspaceState.workspaceId) {
+      page.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "正在连接本地任务…"));
+    }
+    if (multicaWorkspaceState.bootstrapError && !multicaWorkspaceState.workspaceId) {
+      const state = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.bootstrapError);
+      state.dataset.state = "error";
+      const retry = multicaWorkspaceEl("button", "ccp-multica-button", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => void multicaWorkspaceLoadCurrentRoute(true));
+      state.appendChild(document.createTextNode(" "));
+      state.appendChild(retry);
+      page.appendChild(state);
+    }
+    if (source.error && !source.collection) {
+      const state = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceErrorMessage(source.error));
+      state.dataset.state = "error";
+      const retry = multicaWorkspaceEl("button", "ccp-multica-button", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => void multicaWorkspaceQuery(moduleForMulticaWorkspace(source.sourceKey), true));
+      state.appendChild(document.createTextNode(" "));
+      state.appendChild(retry);
+      page.appendChild(state);
+    }
+    if (multicaWorkspaceState.loading.has(source.sourceKey) && !source.collection) {
+      page.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "正在读取任务…"));
+    }
+    const toolbar = multicaWorkspaceEl("div", "ccp-multica-toolbar ccp-multica-board-toolbar");
+    const filters = multicaWorkspaceEl("div", "ccp-multica-toolbar-group");
+    filters.setAttribute("role", "group");
+    filters.setAttribute("aria-label", "任务筛选");
+    multicaWorkspaceIssueFilters.forEach((filter) => {
+      const button = multicaWorkspaceEl("button", "ccp-multica-filter", filter.label);
+      button.type = "button";
+      button.dataset.multicaIssueFilter = filter.key;
+      button.setAttribute("aria-pressed", String(multicaWorkspaceState.issueFilter === filter.key));
+      button.addEventListener("click", () => {
+        if (multicaWorkspaceState.issueFilter === filter.key) return;
+        multicaWorkspaceState.issueFilter = filter.key;
+        multicaWorkspaceRenderContent();
+        multicaWorkspaceRefreshBoardSource(false);
+      });
+      filters.appendChild(button);
+    });
+    toolbar.appendChild(filters);
+    toolbar.appendChild(multicaWorkspaceEl("span", "ccp-multica-toolbar-spacer"));
+    const working = multicaWorkspaceState.executions.filter((binding) => !multicaWorkspaceTerminalExecutionStates.has(multicaWorkspaceExecutionState(binding))).length;
+    toolbar.appendChild(multicaWorkspaceEl("span", "ccp-multica-working-count", `${working} 个智能体工作中`));
+    const display = multicaWorkspaceEl("button", "ccp-multica-filter", "显示");
+    display.type = "button";
+    display.title = "切换卡片摘要";
+    display.setAttribute("aria-pressed", String(multicaWorkspaceState.boardCompact));
+    display.addEventListener("click", () => {
+      multicaWorkspaceState.boardCompact = !multicaWorkspaceState.boardCompact;
+      multicaWorkspaceRenderContent();
+    });
+    toolbar.appendChild(display);
+    const boardMode = multicaWorkspaceEl("button", "ccp-multica-filter", "看板");
+    boardMode.type = "button";
+    boardMode.setAttribute("aria-pressed", "true");
+    boardMode.addEventListener("click", () => {});
+    toolbar.appendChild(boardMode);
+    const refresh = multicaWorkspaceEl("button", "ccp-multica-icon-button", "↻");
+    refresh.type = "button";
+    refresh.title = "刷新任务";
+    refresh.setAttribute("aria-label", "刷新任务");
+    refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
+    toolbar.appendChild(refresh);
+    page.appendChild(toolbar);
+    if (multicaWorkspaceState.mutationNotice?.message) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
+      notice.setAttribute("role", "status");
+      if (multicaWorkspaceState.mutationNotice.state === "error") notice.dataset.state = "error";
+      page.appendChild(notice);
+    }
+    if (multicaWorkspaceState.executionNotice?.message) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.executionNotice.message);
+      notice.setAttribute("role", "status");
+      if (multicaWorkspaceState.executionNotice.state === "error") notice.dataset.state = "error";
+      page.appendChild(notice);
+    }
+    if (multicaWorkspaceState.executionsError) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", `执行记录：${multicaWorkspaceState.executionsError}`);
+      notice.dataset.state = "error";
+      page.appendChild(notice);
+    }
+    if (multicaWorkspaceState.bootstrap?.runtime?.available === false) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前 Codex 执行能力不可用，本地任务仍可查看和编辑");
+      notice.dataset.state = "warning";
+      page.appendChild(notice);
+    }
+    if (filterDependencies?.loading) {
+      page.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "正在读取智能体和小队…"));
+    } else if (filterDependencies?.error) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", `读取智能体和小队失败：${filterDependencies.error}`);
+      notice.dataset.state = "error";
+      const retry = multicaWorkspaceEl("button", "ccp-multica-button", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
+      notice.appendChild(document.createTextNode(" "));
+      notice.appendChild(retry);
+      page.appendChild(notice);
+    }
+    if (source.collection?.stale) {
+      page.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message ccp-multica-stale", "数据待同步"));
+    }
+    const assignedFilterEmpty = multicaWorkspaceState.issueFilter === "assigned" &&
+      !source.error && source.collection && Array.isArray(source.collection.items) && source.items.length === 0;
+    if (assignedFilterEmpty) {
+      const empty = multicaWorkspaceEl(
+        "div",
+        "ccp-multica-inline-message ccp-multica-assigned-empty",
+        "当前没有分配给本地用户的任务，可切换“全部”查看任务。",
+      );
+      empty.dataset.multicaAssignedEmpty = "true";
+      const viewAll = multicaWorkspaceEl("button", "ccp-multica-button", "查看全部任务");
+      viewAll.type = "button";
+      viewAll.title = "切换到全部任务";
+      viewAll.addEventListener("click", () => {
+        multicaWorkspaceState.issueFilter = "all";
+        multicaWorkspaceRenderContent();
+        multicaWorkspaceRefreshBoardSource(false);
+      });
+      empty.appendChild(document.createTextNode(" "));
+      empty.appendChild(viewAll);
+      page.appendChild(empty);
+    }
+    multicaWorkspaceRenderEditor(page, module);
+    const scroll = multicaWorkspaceEl("div", "ccp-multica-board-scroll");
+    const board = multicaWorkspaceEl("div", "ccp-multica-board");
+    board.dataset.multicaBoard = "true";
+    multicaWorkspaceBoardColumns.forEach((column) => {
+      const columnItems = source.items.filter((item) => multicaWorkspaceIssueStatus(item) === column.key);
+      const lane = multicaWorkspaceEl("section", "ccp-multica-board-column");
+      lane.dataset.multicaBoardStatus = column.key;
+      lane.dataset.tone = column.tone;
+      lane.addEventListener("dragover", (event) => {
+        if (!multicaWorkspaceState.draggedIssue) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      });
+      lane.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const dragged = multicaWorkspaceState.draggedIssue;
+        multicaWorkspaceState.draggedIssue = null;
+        if (!dragged || multicaWorkspaceIssueStatus(dragged) === column.key) return;
+        void multicaWorkspacePatchEntity(module, dragged, { status: column.key }, `已移至${column.label}`);
+      });
+      const laneHeader = multicaWorkspaceEl("div", "ccp-multica-column-header");
+      laneHeader.appendChild(multicaWorkspaceEl("span", "ccp-multica-column-dot"));
+      laneHeader.appendChild(multicaWorkspaceEl("h3", "ccp-multica-column-title", column.label));
+      laneHeader.appendChild(multicaWorkspaceEl("span", "ccp-multica-column-count", String(columnItems.length)));
+      const laneActions = multicaWorkspaceEl("div", "ccp-multica-column-actions");
+      const more = multicaWorkspaceEl("button", "ccp-multica-icon-button", "…");
+      more.type = "button";
+      more.title = `刷新${column.label}`;
+      more.setAttribute("aria-label", `刷新${column.label}`);
+      more.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
+      const create = multicaWorkspaceEl("button", "ccp-multica-icon-button", "+");
+      create.type = "button";
+      create.title = `新建${column.label}任务`;
+      create.setAttribute("aria-label", `新建${column.label}任务`);
+      create.addEventListener("click", () => multicaWorkspaceOpenEditor(module, null, { status: column.key }));
+      laneActions.append(more, create);
+      laneHeader.appendChild(laneActions);
+      lane.appendChild(laneHeader);
+      const list = multicaWorkspaceEl("div", "ccp-multica-column-list");
+      if (!columnItems.length) {
+        const emptyMessage = filterDependencies?.loading
+          ? "正在读取智能体和小队…"
+          : filterDependencies?.error
+            ? "智能体和小队目录读取失败"
+            : "无任务";
+        list.appendChild(multicaWorkspaceEl("div", "ccp-multica-column-empty", emptyMessage));
+      }
+      else columnItems.forEach((item) => multicaWorkspaceAppendBoardCard(list, item, module));
+      lane.appendChild(list);
+      board.appendChild(lane);
+    });
+    scroll.appendChild(board);
+    page.appendChild(scroll);
+    content.appendChild(page);
+  }
+
+  function multicaWorkspaceSkillsInventoryReadOnly() {
+    const runtime = multicaWorkspaceState.bootstrap?.runtime;
+    const inventorySupported = runtime?.skillsInventorySupported ?? runtime?.skills_inventory_supported;
+    const executionSupported = runtime?.skillsSupported ?? runtime?.skills_supported;
+    return inventorySupported === true && executionSupported !== true;
+  }
+
+  function multicaWorkspaceSkillExecutionSupported(item) {
+    if (item?.execution_supported === false) return false;
+    return !multicaWorkspaceSkillsInventoryReadOnly();
+  }
+
   function multicaWorkspaceAppendSkillItem(parent, item) {
     const article = multicaWorkspaceEl("article", "ccp-multica-item ccp-multica-skill-item");
     const id = typeof item?.id === "string" ? item.id : "";
+    const executionSupported = multicaWorkspaceSkillExecutionSupported(item);
     const title = multicaWorkspaceEl("h3", "ccp-multica-item-title", multicaWorkspaceItemTitle(item));
     const bindings = multicaWorkspaceBindingsForSkill(id);
     const action = multicaWorkspaceEl(
       "button",
       "ccp-multica-button",
-      multicaWorkspaceState.selectedSkillIds.has(id) ? "已选择" : "选择",
+      executionSupported ? (multicaWorkspaceState.selectedSkillIds.has(id) ? "已选择" : "选择") : "仅查看",
     );
     action.type = "button";
-    action.disabled = !id;
-    action.title = item?.dispatch_allowed === true
+    action.disabled = !id || !executionSupported;
+    action.title = !executionSupported
+      ? "当前 Codex 页面只提供只读 Skill 清单，不能选择或派发"
+      : item?.dispatch_allowed === true
       ? "选择本次任务 Skill"
       : "可选择后进行解析；派发前仍需通过安装、信任和兼容性检查";
     action.addEventListener("click", () => {
@@ -5627,7 +6319,7 @@
       else multicaWorkspaceState.selectedSkillIds.add(id);
       multicaWorkspaceRenderContent();
     });
-    const trusted = item?.trust_state === "trusted" && item?.dispatch_allowed === true;
+    const trusted = item?.trust_state === "trusted";
     const review = multicaWorkspaceEl(
       "button",
       "ccp-multica-button",
@@ -5644,8 +6336,10 @@
     });
     const bind = multicaWorkspaceEl("button", "ccp-multica-button", "绑定");
     bind.type = "button";
-    bind.disabled = !id || item?.dispatch_allowed !== true;
-    bind.title = bind.disabled ? "请先安装并信任此 Skill" : "绑定到任务或智能体";
+    bind.disabled = !id || !executionSupported || item?.dispatch_allowed !== true;
+    bind.title = !executionSupported
+      ? "当前 Codex 页面只提供只读 Skill 清单，不能绑定或派发"
+      : bind.disabled ? "请先安装并信任此 Skill" : "绑定到任务或智能体";
     bind.addEventListener("click", () => {
       if (!bind.disabled) multicaWorkspaceStartSkillBinding(id);
     });
@@ -5660,6 +6354,7 @@
       ["安装", item?.installed === true ? "已安装" : "未安装"],
       ["信任", item?.trust_state || "待审查"],
       ["兼容", item?.compatible === false ? "不兼容" : "待验证"],
+      ["执行", executionSupported ? "可执行" : "仅只读清单，不可执行"],
       ["最近加载", item?.runtime_loaded || "无记录"],
     ].forEach(([key, value]) => {
       const text = multicaWorkspaceValue(value);
@@ -5793,6 +6488,15 @@
     const draft = multicaWorkspaceState.skillBindingDraft;
     const id = typeof item?.id === "string" ? item.id : "";
     if (!draft || draft.skillId !== id) return;
+    if (!multicaWorkspaceSkillExecutionSupported(item) || item?.dispatch_allowed !== true) {
+      multicaWorkspaceState.skillBindingDraft = {
+        ...draft,
+        status: "failed",
+        message: "当前 Codex 页面只提供只读 Skill 清单，不能绑定或派发",
+      };
+      multicaWorkspaceRenderContent();
+      return;
+    }
     const scopeId = String(draft.scopeId || "").trim();
     if (!scopeId) {
       multicaWorkspaceState.skillBindingDraft = { ...draft, status: "failed", message: "请输入绑定目标 ID" };
@@ -5870,6 +6574,14 @@
   }
 
   async function multicaWorkspaceResolveSelectedSkills() {
+    if (multicaWorkspaceSkillsInventoryReadOnly()) {
+      multicaWorkspaceState.skillResolution = {
+        status: "failed",
+        message: "当前 Codex 页面只提供只读 Skill 清单，不能解析或派发",
+      };
+      multicaWorkspaceRenderContent();
+      return;
+    }
     const refs = Array.from(multicaWorkspaceState.selectedSkillIds).map((id) => ({ id }));
     if (!refs.length) {
       multicaWorkspaceState.skillResolution = { status: "failed", message: "请先选择至少一个已审查 Skill" };
@@ -5956,6 +6668,11 @@
       ? null
       : multicaWorkspaceState.collections.get(module.key);
     multicaWorkspaceClear(content);
+    content.dataset.route = module.key;
+    if (module.key === "my-issues") {
+      multicaWorkspaceRenderIssueBoard(content, module);
+      return;
+    }
     const header = multicaWorkspaceEl("div", "ccp-multica-content-header");
     header.appendChild(multicaWorkspaceEl("h2", "ccp-multica-content-title", module.label));
     if (module.key !== "settings" && collection && Number.isFinite(Number(collection.total))) {
@@ -5965,6 +6682,8 @@
     if (module.key === "skills") {
       const resolve = multicaWorkspaceEl("button", "ccp-multica-button", "解析选择");
       resolve.type = "button";
+      resolve.disabled = multicaWorkspaceSkillsInventoryReadOnly();
+      resolve.title = resolve.disabled ? "当前 Codex 页面只提供只读 Skill 清单，不能解析或派发" : "解析已选择的 Skill";
       resolve.addEventListener("click", () => void multicaWorkspaceResolveSelectedSkills());
       header.appendChild(resolve);
     }
@@ -5992,6 +6711,7 @@
       });
       header.appendChild(refresh);
     }
+    multicaWorkspaceAppendModuleMenu(header);
     content.appendChild(header);
     if (module.key === "settings") {
       multicaWorkspaceRenderSettings(content);
@@ -6018,6 +6738,10 @@
     if (module.key === "skills" && multicaWorkspaceState.skillBindingsError) {
       const bindingNotice = multicaWorkspaceEl("div", "ccp-multica-state ccp-multica-stale", `绑定状态：${multicaWorkspaceState.skillBindingsError}`);
       content.appendChild(bindingNotice);
+    }
+    if (module.key === "skills" && multicaWorkspaceSkillsInventoryReadOnly()) {
+      const notice = multicaWorkspaceEl("div", "ccp-multica-state ccp-multica-stale", "当前 Codex 页面只提供只读 Skill 清单，不能解析、绑定或派发 Skill");
+      content.appendChild(notice);
     }
     if (multicaWorkspaceState.loading.has(module.key) && !collection) {
       content.appendChild(multicaWorkspaceEl("div", "ccp-multica-state", "正在读取…"));
@@ -6056,7 +6780,9 @@
       state.textContent = resolution.status === "loading"
         ? "正在解析 Skill 清单…"
         : resolution.status === "ok"
-          ? "Skill 清单已解析，派发前仍需当前 Codex 页面返回实际加载结果"
+          ? multicaWorkspaceSkillsInventoryReadOnly()
+            ? "Skill 清单仅供查看，当前 Codex 页面不提供 Skill 执行能力"
+            : "Skill 清单已解析，派发前仍需当前 Codex 页面返回实际加载结果"
           : String(resolution.message || "Skill 解析被阻止");
       content.appendChild(state);
     }
@@ -6073,19 +6799,23 @@
     content.appendChild(list);
   }
 
-  async function multicaWorkspaceLoadBootstrap(force = false) {
-    if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
-    if (multicaWorkspaceState.bootstrapLoading && !force) return;
+  async function multicaWorkspaceLoadBootstrap(force = false, timeoutMs = 15000) {
+    if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
+    if (multicaWorkspaceState.bootstrapLoading && !force) {
+      return !!multicaWorkspaceState.bootstrap && !multicaWorkspaceState.bootstrapError;
+    }
     if (force) multicaWorkspaceCancelBootstrap();
     const sequence = ++multicaWorkspaceState.bootstrapSeq;
     multicaWorkspaceState.bootstrapLoading = true;
+    multicaWorkspaceState.bootstrapError = "";
     multicaWorkspaceSetStatus("连接中", "warning");
-    const request = multicaWorkspaceRequest("/multica/workspace/bootstrap", {});
+    if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+    const request = multicaWorkspaceRequest("/multica/workspace/bootstrap", {}, timeoutMs);
     multicaWorkspaceState.bootstrapRequest = request;
     try {
       const result = await request.promise;
       if (sequence !== multicaWorkspaceState.bootstrapSeq ||
-          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
       if (!result || result.status === "failed") {
         throw multicaWorkspaceErrorFromResult(result, "bootstrap failed");
       }
@@ -6105,8 +6835,6 @@
       multicaWorkspaceState.workspaceId = nextWorkspaceId;
       multicaWorkspaceState.bootstrap = result;
       multicaWorkspaceState.bootstrapError = "";
-      const name = result.workspace?.name || result.workspace?.slug || "";
-      if (multicaWorkspaceState.root?.workspaceName) multicaWorkspaceState.root.workspaceName.textContent = name;
       const collections = result.collections && typeof result.collections === "object" ? result.collections : {};
       multicaWorkspaceModules.forEach((module) => {
         const collection = collections[module.resource] || collections[module.key];
@@ -6122,8 +6850,9 @@
       multicaWorkspaceSetStatus(pageReady ? "本地工作区就绪" : "当前 Codex 页面能力不可用", pageReady ? "ok" : "warning");
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
       if (nextWorkspaceId) void multicaWorkspaceLoadExecutions(true);
+      return true;
     } catch (error) {
-      if (sequence !== multicaWorkspaceState.bootstrapSeq) return;
+      if (sequence !== multicaWorkspaceState.bootstrapSeq) return false;
       if (multicaWorkspacePermissionError(error)) {
         multicaWorkspaceState.workspaceId = "";
         multicaWorkspaceState.collections.clear();
@@ -6134,6 +6863,11 @@
       }
       multicaWorkspaceState.bootstrapError = multicaWorkspaceErrorMessage(error);
       multicaWorkspaceSetStatus(multicaWorkspaceState.bootstrapError, "error");
+      if (multicaWorkspaceBridgeUnavailable(error)) {
+        multicaWorkspaceSetEntryAvailability("启动器未连接，请通过 CCP 启动 Codex");
+      }
+      if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+      return false;
     } finally {
       if (sequence === multicaWorkspaceState.bootstrapSeq) {
         multicaWorkspaceState.bootstrapLoading = false;
@@ -6142,26 +6876,28 @@
     }
   }
 
-  async function multicaWorkspaceQuery(module, force = false) {
-    if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
-    if (!module) return;
+  async function multicaWorkspaceQuery(module, force = false, timeoutMs = 15000) {
+    if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
+    if (!module) return false;
     if (module.key === "settings") {
-      if (module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
-      return;
+      if (multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
+      return true;
     }
-    if (multicaWorkspaceState.loading.has(module.key) && !force) return;
+    if (multicaWorkspaceState.loading.has(module.key) && !force) {
+      return multicaWorkspaceState.collections.has(module.key);
+    }
     if (force) multicaWorkspaceCancelQuery();
     const sequence = ++multicaWorkspaceState.querySeq;
     multicaWorkspaceState.loading.clear();
     multicaWorkspaceState.loading.add(module.key);
     multicaWorkspaceState.errors.delete(module.key);
-    if (module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
-    const request = multicaWorkspaceRequest("/multica/workspace/query", { resource: module.resource, limit: 50, offset: 0 });
+    if (multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
+    const request = multicaWorkspaceRequest("/multica/workspace/query", { resource: module.resource, limit: 50, offset: 0 }, timeoutMs);
     multicaWorkspaceState.queryRequest = request;
     try {
       const result = await request.promise;
       if (sequence !== multicaWorkspaceState.querySeq ||
-          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
       if (!result || result.status === "failed") {
         throw multicaWorkspaceErrorFromResult(result, "workspace query failed");
       }
@@ -6177,8 +6913,10 @@
       });
       if (module.key === "skills") await multicaWorkspaceLoadSkillBindings();
       if (module.key === "issues" || module.key === "my-issues") void multicaWorkspaceLoadExecutions(true);
+      multicaWorkspaceSetEntryAvailability("");
+      return true;
     } catch (error) {
-      if (sequence !== multicaWorkspaceState.querySeq) return;
+      if (sequence !== multicaWorkspaceState.querySeq) return false;
       multicaWorkspaceState.errors.set(module.key, error);
       const previous = multicaWorkspaceState.collections.get(module.key);
       if (multicaWorkspacePermissionError(error) ||
@@ -6189,54 +6927,99 @@
         multicaWorkspaceState.collections.set(module.key, { ...previous, stale: true });
       }
       multicaWorkspaceSetStatus(multicaWorkspaceErrorMessage(error), "error");
+      if (multicaWorkspaceBridgeUnavailable(error)) {
+        multicaWorkspaceSetEntryAvailability("启动器未连接，请通过 CCP 启动 Codex");
+      }
+      return false;
     } finally {
       if (sequence === multicaWorkspaceState.querySeq) {
         multicaWorkspaceState.loading.delete(module.key);
         if (multicaWorkspaceState.queryRequest === request) multicaWorkspaceState.queryRequest = null;
-        if (module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
+        if (multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
       }
     }
   }
 
-  function multicaWorkspaceOpen() {
+  async function multicaWorkspaceLoadCurrentRoute(force = true, timeoutMs = 2000, openSequence = multicaWorkspaceState.openSeq) {
+    const bootstrapReady = await multicaWorkspaceLoadBootstrap(force, timeoutMs);
+    if (openSequence !== multicaWorkspaceState.openSeq ||
+        (!multicaWorkspaceState.opened && !multicaWorkspaceState.opening) ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
+    if (!bootstrapReady) return false;
+    const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
+    if (module.key === "settings") return true;
+    return multicaWorkspaceQuery(module, force, timeoutMs);
+  }
+
+  async function multicaWorkspaceOpen() {
     if (!multicaWorkspaceFeatureEnabled()) {
       cleanupMulticaWorkspace();
+      return;
+    }
+    if (multicaWorkspaceState.opened || multicaWorkspaceState.opening) {
+      if (multicaWorkspaceState.opened) void multicaWorkspaceLoadCurrentRoute(true, 2000);
       return;
     }
     const plugin = pluginEntryButton();
     const main = multicaWorkspaceNativeMain(plugin);
     const host = multicaWorkspaceEnsureHost();
     if (!plugin || !main || !host) {
-      multicaWorkspaceSetStatus("等待 Codex 内容区", "warning");
+      const detail = "等待 Codex 内容区";
+      multicaWorkspaceSetStatus(detail, "warning");
+      multicaWorkspaceSetEntryAvailability(detail);
       return;
     }
+    const openSequence = ++multicaWorkspaceState.openSeq;
+    multicaWorkspaceState.opening = true;
     multicaWorkspaceEnsureEntry(plugin);
-    multicaWorkspaceBindMain(main);
+    multicaWorkspaceSetEntryAvailability("");
+    multicaWorkspaceSetStatus("连接中", "warning");
+    const currentPlugin = pluginEntryButton();
+    const currentMain = main.isConnected ? main : multicaWorkspaceNativeMain(currentPlugin);
+    if (!currentMain || !host.isConnected || !multicaWorkspaceBindMain(currentMain)) {
+      multicaWorkspaceFailOpen("等待 Codex 内容区");
+      return;
+    }
+    // Keep Codex's native main visible while the local control plane proves
+    // both bootstrap and the first my-issues collection. Only then take over
+    // the surface; a bridge timeout must never replace usable Codex content
+    // with a dead workspace view.
+    const ready = await multicaWorkspaceLoadCurrentRoute(true, 2000, openSequence);
+    if (openSequence !== multicaWorkspaceState.openSeq ||
+        !multicaWorkspaceState.opening ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+    if (!ready) {
+      const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
+      const routeError = multicaWorkspaceState.errors.get(module.key);
+      multicaWorkspaceFailOpen(
+        multicaWorkspaceState.bootstrapError ||
+          (routeError ? multicaWorkspaceErrorMessage(routeError) : "本地任务暂不可用，请点击重试"),
+      );
+      return;
+    }
+    const readyPlugin = pluginEntryButton();
+    const readyMain = currentMain.isConnected ? currentMain : multicaWorkspaceNativeMain(readyPlugin);
+    if (!readyMain || !host.isConnected || !multicaWorkspaceBindMain(readyMain)) {
+      multicaWorkspaceFailOpen("等待 Codex 内容区");
+      return;
+    }
     multicaWorkspaceState.opened = true;
-    main.style.visibility = "hidden";
-    main.style.pointerEvents = "none";
-    main.setAttribute?.("inert", "");
-    main.setAttribute?.("aria-hidden", "true");
-    host.style.display = "block";
+    multicaWorkspaceState.opening = false;
+    readyMain.style.visibility = "hidden";
+    readyMain.style.pointerEvents = "none";
+    readyMain.setAttribute?.("inert", "");
+    readyMain.setAttribute?.("aria-hidden", "true");
     multicaWorkspaceUpdateGeometry();
-    multicaWorkspaceRenderTabs();
     multicaWorkspaceRenderContent();
-    void multicaWorkspaceLoadBootstrap();
-    const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
-    if (module.key !== "settings") void multicaWorkspaceQuery(module, false);
-    multicaWorkspaceEnsureEntry(plugin);
+    multicaWorkspaceEnsureEntry(readyPlugin || currentPlugin || plugin);
+    multicaWorkspaceStartBackgroundSync();
   }
 
   function multicaWorkspaceHide() {
+    multicaWorkspaceState.openSeq += 1;
+    multicaWorkspaceState.opening = false;
     multicaWorkspaceState.opened = false;
-    multicaWorkspaceState.querySeq += 1;
-    multicaWorkspaceState.loading.clear();
-    multicaWorkspaceCancelQuery();
-    multicaWorkspaceCancelBootstrap();
-    multicaWorkspaceState.activeRequests.forEach((request) => request?.cancel?.());
-    multicaWorkspaceState.activeRequests.clear();
-    multicaWorkspaceState.executionSeq += 1;
-    multicaWorkspaceState.executionsLoading = false;
+    multicaWorkspaceState.moduleMenuOpen = false;
     multicaWorkspaceRestoreMain();
     if (multicaWorkspaceState.mainResizeObserver) {
       try { multicaWorkspaceState.mainResizeObserver.disconnect(); } catch (_) {}
@@ -6249,6 +7032,44 @@
       multicaWorkspaceState.entry.setAttribute("aria-current", "false");
       multicaWorkspaceState.entry.setAttribute("data-state", "inactive");
     }
+    multicaWorkspaceSetEntryAvailability("");
+  }
+
+  async function multicaWorkspaceBackgroundSync() {
+    if (multicaWorkspaceState.backgroundBusy || !multicaWorkspaceFeatureEnabled()) return;
+    multicaWorkspaceState.backgroundBusy = true;
+    try {
+      if (!multicaWorkspaceState.workspaceId && !multicaWorkspaceState.bootstrapLoading) {
+        await multicaWorkspaceLoadBootstrap(true, 2000);
+      }
+      if (!multicaWorkspaceState.workspaceId || multicaWorkspaceState.queryRequest) return;
+      for (const route of ["issues", "my-issues"]) {
+        if (multicaWorkspaceState.queryRequest) return;
+        await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, 2000);
+      }
+      if (!multicaWorkspaceState.executionsLoading) await multicaWorkspaceLoadExecutions(true);
+    } finally {
+      multicaWorkspaceState.backgroundBusy = false;
+    }
+  }
+
+  function multicaWorkspaceStartBackgroundSync() {
+    if (multicaWorkspaceState.backgroundStarted) return;
+    multicaWorkspaceState.backgroundStarted = true;
+    const tick = async () => {
+      multicaWorkspaceState.backgroundTimer = null;
+      await multicaWorkspaceBackgroundSync();
+      if (!multicaWorkspaceState.backgroundStarted ||
+          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+      multicaWorkspaceState.backgroundTimer = setTimeout(tick, multicaWorkspaceBackgroundIntervalMs);
+    };
+    multicaWorkspaceState.backgroundTimer = setTimeout(tick, 0);
+  }
+
+  function multicaWorkspaceStopBackgroundSync() {
+    multicaWorkspaceState.backgroundStarted = false;
+    if (multicaWorkspaceState.backgroundTimer) clearTimeout(multicaWorkspaceState.backgroundTimer);
+    multicaWorkspaceState.backgroundTimer = null;
   }
 
   function multicaWorkspaceScheduleAnchorRetry() {
@@ -6303,6 +7124,7 @@
     }
     multicaWorkspaceEnsureEntry(plugin);
     multicaWorkspaceEnsureHost();
+    multicaWorkspaceStartBackgroundSync();
     const main = multicaWorkspaceNativeMain(plugin);
     if (!main) {
       // Keep the navigation entry visible while Codex mounts its main route.
@@ -6322,8 +7144,20 @@
       multicaWorkspaceState.navHandler = (event) => {
         const target = event.target;
         if (multicaWorkspaceState.entry?.contains?.(target)) return;
-        const nativeButton = target?.closest?.('nav[role="navigation"] button, [role="navigation"] button, aside.app-shell-left-panel button, aside button');
-        if (nativeButton && !nativeButton?.dataset?.ccpMulticaNav) multicaWorkspaceHide();
+        if (multicaWorkspaceState.nativeThreadActivation) return;
+        const nativeNavigation = target?.closest?.([
+          "[data-app-action-sidebar-thread-id]",
+          "[data-app-action-sidebar-project-row]",
+          'nav a[href]',
+          'aside a[href]',
+          'nav [role="link"]',
+          'aside [role="link"]',
+          'nav [role="button"]',
+          'aside [role="button"]',
+          "nav button",
+          "aside button",
+        ].join(", "));
+        if (nativeNavigation && !nativeNavigation?.dataset?.ccpMulticaNav) multicaWorkspaceHide();
       };
       document.addEventListener("click", multicaWorkspaceState.navHandler, true);
     }
@@ -6332,6 +7166,7 @@
   function cleanupMulticaWorkspace() {
     if (multicaWorkspaceState.anchorTimer) clearTimeout(multicaWorkspaceState.anchorTimer);
     multicaWorkspaceState.anchorTimer = null;
+    multicaWorkspaceStopBackgroundSync();
     multicaWorkspaceState.querySeq += 1;
     multicaWorkspaceState.bootstrapSeq += 1;
     multicaWorkspaceCancelQuery();
@@ -6364,6 +7199,9 @@
     multicaWorkspaceState.root = null;
     multicaWorkspaceState.main = null;
     multicaWorkspaceState.mainSnapshot = null;
+    codexPageHostClientPromise = null;
+    codexPageHostClient = null;
+    codexPageHostInitializeResponse = null;
     if (window.__claudeCodexProMulticaWorkspaceCleanup === cleanupMulticaWorkspace) {
       window.__claudeCodexProMulticaWorkspaceCleanup = null;
     }

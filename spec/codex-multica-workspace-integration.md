@@ -27,21 +27,22 @@ Multica 与 Codex 的职责必须保持清晰：本地 Multica 只负责工作�
 
 ### 本次包含
 
-- 在 Codex App 左侧原生“插件”入口下方、原生“项目”入口上方插入一个单实例的 `Multica 工作区` 入口。
-- 在 Codex 主内容区展示 CCP 自有、本地打包、非 iframe 的 Multica 工作区页面壳。
+- 在 Codex App 左侧原生“插件”入口下方、原生“项目”入口上方插入一个单实例的 `我的任务` 入口，点击后默认进入 `my-issues`。
+- 在 Codex 主内容区直接展示 CCP 自有、本地打包、非 iframe 的全宽任务看板；不再叠加 `Multica 工作区 / Local Multica Workspace` 顶部壳、永久模块侧栏或“关闭”按钮。
 - 首批完整提供十个模块：`我的任务`、`任务`、`项目`、`自动化`、`智能体`、`小队`、`统计`、`运行时`、`Skills`、`设置`。
+- 十个模块通过看板工具栏中的紧凑模块菜单和上下文动作进入，保留稳定路由和完整能力，但不以第二套永久导航挤占主内容宽度。
 - 支持 Issue 的创建、读取、编辑、归档/取消、筛选、分配、项目归属、父子关系和看板状态流转。
 - 支持把 Issue 分配给智能体、小队或成员，并将可执行分配映射为 Codex 原生 task/thread/subagent。
 - 支持从 Multica 任务打开已有 Codex 对话、继续执行、查看执行状态和创建新的重试 attempt。
 - 支持 Multica 项目、自动化、智能体、小队、统计、运行时和 Skills 的核心工作流；Skills 是一等执行能力，不是只读目录或装饰性标签。
 - 使用稳定映射、revision/CAS、幂等键、事件游标和对账机制保证 Multica 状态与 Codex 执行状态可恢复、可审计。
-- 默认启用工作区入口并初始化本地 Multica 控制面；控制面未就绪时提供明确降级状态且不阻塞 Codex。
+- 默认启用“我的任务”入口并初始化本地 Multica 控制面；新版 Codex 页面 Host 不可用时仍加载本地任务数据和看板，只把必须依赖原生 thread/subagent/Skills 的动作标为不可用或排队。
 - 在设置中保留可持久化的“启用 Multica 工作区”开关；新安装默认开启，升级保留用户上次选择。
 - Manager 只保留本地工作区开关、诊断和明确标记的 legacy 高级兼容入口，不在主导航保留独立 `Multica Runtime` 页面，也不复制日常任务工作区；本地工作区不依赖 Manager、外部 server 或独立 daemon 才能执行。
 
 ### 成功结果
 
-用户无需离开 Codex，即可建立一个 Issue，将其分配给当前 Codex 页面提供的原生 task/thread/subagent 执行者，选择本次执行需要的受信任 Codex Skills，并看到 CCP 只创建一个原生执行对象、把最终 Skill 清单交给当前页面的 Codex host。在看板中可以观察状态变化、核对页面原生能力实际加载的 Skills、点击后回到同一 Codex thread，并在失败或终态后创建保留执行与 Skill 审计链的新 attempt。整个流程不会注册新的 runtime，不会改写 Codex 模型、CCP 供应商、代理地址或 Codex/Claude 配置。
+用户点击 Codex 左侧“我的任务”后直接看到全宽七列真实看板，无需理解或关闭额外的 Multica 页面壳。用户可以建立一个 Issue，将其分配给当前 Codex 页面提供的原生 task/thread/subagent 执行者，选择本次执行需要的受信任 Codex Skills，并看到 CCP 只创建一个原生执行对象、把最终 Skill 清单交给当前页面的 Codex host。在看板中可以观察状态变化、核对页面原生能力实际加载的 Skills，并通过真实激活 Codex 原生对话行回到同一 thread；切换到任意原生项目或对话时只隐藏看板，后台任务、事件同步和对账继续运行。整个流程不会注册新的 runtime，不会改写 Codex 模型、CCP 供应商、代理地址或 Codex/Claude 配置。
 
 ## 非目标
 
@@ -96,11 +97,12 @@ CCP 只负责：
 
 ### 1. 首次进入
 
-1. CCP 启动并注入 Codex 后，在原生“插件”按钮下方、原生“项目”按钮上方显示 `Multica 工作区`。
+1. CCP 启动并注入 Codex 后，在原生“插件”按钮下方、原生“项目”按钮上方显示 `我的任务`。
 2. 工作区开关在新安装时默认为启用，并以独立布尔设置持久化；升级和重启必须保留用户已保存的值。启用时仅初始化本地控制面，不下载 Multica CLI，不登录或启动 daemon，不注册或启动新的 Codex runtime，也不另起完整 Multica 服务。
-3. 控制面就绪时直接打开用户上次使用的 workspace 和模块。
+3. 点击入口后默认直接打开当前 workspace 的 `my-issues` 七列看板；其他模块通过看板工具栏中的紧凑模块菜单或上下文动作进入，不显示永久模块侧栏。
 4. 本地数据或可选同步端点不可用时显示脱敏诊断和重试；不要求用户先安装、登录或启动独立 daemon。
-5. 控制面异常不得遮挡 Codex 原生导航，也不得阻止用户返回普通 Codex 对话。
+5. 当前 Codex 页面 Host 能力缺失、改版或探测失败时，本地任务看板仍须加载并允许不依赖 Host 的查询、筛选和业务状态操作；仅执行、继续、Skills 实际加载等 Host 动作显示明确降级。任何故障不得遮挡 Codex 原生导航或阻止用户返回普通 Codex 对话。
+6. 本地 bridge 未安装、Launcher 未启动、binding 缺失、请求超时或本地传输失败时，点击“我的任务”不得隐藏或冻结原生主内容，也不得把失败渲染成“无任务”。入口必须显示可恢复的不可用状态并提供直接重试；只有 bootstrap 与当前页面的首个 `my-issues` 查询均已获得有效本地响应后，才允许接管主内容显示看板。
 
 ### 2. 创建和分配任务
 
@@ -113,14 +115,19 @@ CCP 只负责：
 ### 3. 打开和继续
 
 1. 有绑定 thread 的 Issue 显示“打开对话”和“继续执行”。
-2. “打开对话”聚焦同一个 Codex 原生 thread，不创建副本。
+2. “打开对话”必须按稳定 `codex_thread_id` 定位所属项目下的 Codex 原生对话行，必要时先展开对应项目，再触发该原生行自身的激活行为，并以原生 active row/当前 thread 状态确认成功；不能只隐藏看板、只改 URL/history、直接改 React store 或伪造已打开结果。
 3. “继续执行”向同一个非终态 thread 发送经过用户确认的后续任务上下文，并记录 Multica 审计事件。
 4. thread 已终态、不可继续或用户选择重跑时，新建 `attempt_no + 1`，保留 `parent_thread_id` 和旧 attempt，不覆盖历史映射。
-5. 找不到已绑定 thread 时标记 `orphaned`，提供对账、重新绑定或创建新 attempt，禁止静默新建。
+5. 原生对话行真实激活后立即隐藏工作区视图并显示该对话，后台执行、事件同步和对账保持运行；找不到或无法激活已绑定 row 时保留看板并显示明确错误，标记 `orphaned` 或提供对账，禁止静默新建。
 
 ### 4. 看板流转
 
+- `my-issues` 首屏使用全宽真实看板，不渲染列表占位或静态示例。顶部只保留看板自身标题与工具栏，不显示 `Multica 工作区 / Local Multica Workspace` 顶栏、全局状态条、“刷新/关闭”外壳或永久模块侧栏。
+- 看板工具栏至少包含 `全部`、`已分配`、`我创建的`、`我的智能体和小队`，默认选中 `已分配`；右侧显示真实的工作中智能体数量、筛选、显示方式、看板模式和紧凑模块菜单。
 - Issue 状态类别至少支持：`backlog`、`todo`、`in_progress`、`in_review`、`done`、`blocked`、`cancelled`。
+- 七列视觉顺序固定为 `待规划`、`待办`、`进行中`、`审核中`、`已完成`、`已阻塞`、`已取消`；每列显示状态图标、真实数量、更多/新增动作和 `无任务` 空态。
+- 卡片展示真实编号、标题、摘要、负责人或执行者、更新时间和独立执行状态；hover/focus 预览不得改变列尺寸或推动看板重排。
+- 列使用稳定宽度和全高布局；可用宽度不足以容纳七列时在看板内容区横向滚动，不压缩成不可读窄列，也不让页面本身出现第二条横向滚动。
 - 拖拽使用 `expected_revision` 更新；服务端 revision 已变化时拒绝覆盖，刷新卡片并提示冲突。
 - `done` 不能仅由“请求已派发”推导；自动进入 `done` 必须来自 Codex 已确认完成事件和 Multica 成功提交。
 - `blocked`、`cancelled` 和人工 `in_review` 保留操作者、时间和原因。
@@ -128,7 +135,7 @@ CCP 只负责：
 
 ## 信息架构与功能矩阵
 
-工作区内部使用稳定路由键，不接管 Codex 自身 URL 路由。首批模块顺序固定如下：
+工作区内部使用稳定路由键，不接管 Codex 自身 URL 路由。`我的任务` 是唯一常驻 Codex 入口并默认进入 `my-issues`；其余模块通过看板工具栏中的单个紧凑模块菜单或业务上下文动作进入，禁止再渲染永久竖向模块栏。首批模块在紧凑菜单中的顺序固定如下：
 
 | 顺序 | 模块 | 路由键 | 最低可用能力 |
 | --- | --- | --- | --- |
@@ -150,10 +157,10 @@ CCP 只负责：
 ### 左侧入口
 
 - 注入端优先复用已有 `pluginEntryButton()` 和 `selectors.pluginNavButton` 定位原生插件入口，文案匹配 `插件|Plugins` 仅作降级锚点。
-- 使用插件按钮父节点的 `insertBefore(multicaEntry, pluginEntry.nextSibling)`，确保 DOM 顺序和视觉顺序均为“插件 → Multica 工作区 → 项目”（在存在项目入口的原生导航中）。
+- 使用插件按钮父节点的 `insertBefore(multicaEntry, pluginEntry.nextSibling)`，确保 DOM 顺序和视觉顺序均为“插件 → 我的任务 → 项目”（在存在项目入口的原生导航中）。
 - 入口使用稳定标识，例如 `data-ccp-multica-nav` 和注入版本号；重复扫描、窗口切换、React 重绘和重新注入后全页最多存在一个有效入口。
 - 插件锚点暂不可用时执行有界重试；达到上限后记录诊断并等待下一次明确导航变化，不得插入到不相关区域或无限轮询。
-- 点击任意 Codex 原生导航项时隐藏工作区页面壳并恢复原生内容，不修改原生节点文本、事件或路由。
+- 点击任意 Codex 原生导航项、原生项目行、项目内对话行或“新对话”时，只隐藏工作区视图并恢复原生内容；必须让原生点击事件继续完成，不能 `preventDefault`、`stopPropagation`、修改原生节点文本/路由或调用完整 cleanup。视图隐藏不得停止已运行/排队任务、本地控制面、后台事件同步、租约、对账或自动化。
 - 入口具备可见 focus、键盘激活、选中状态和可读无障碍名称，尺寸与 Codex 原生导航一致。
 
 ### 工作区页面壳
@@ -161,11 +168,13 @@ CCP 只负责：
 - 页面壳由 CCP 本地资源渲染，可采用独立 React bundle，但 host 挂载、卸载和导航协调仍由 `renderer-inject.js` 负责。
 - 所有脚本、样式和图标随 CCP 构建打包，不从 CDN 或 Multica Web 动态加载前端代码。
 - 页面壳挂载在 CCP 自有根节点，可使用 Shadow DOM 或等效样式隔离；样式不得污染 Codex 原生输入框、菜单、标题栏、插件页和会话内容。
-- 页面壳占用 Codex 主内容区域，保留原生左侧导航和 Windows/macOS 窗口控件，不使用模态框承载日常工作流。
+- 页面壳占用 Codex 原生侧栏之外的完整主内容区域，保留原生左侧导航和 Windows/macOS 窗口控件，不使用模态框承载日常工作流。
+- 页面壳不得渲染额外的产品顶栏、workspace 名称/status 横条、全局刷新/关闭按钮或永久模块侧栏；`my-issues` 直接从“我的任务”看板标题、筛选工具栏和七列内容开始。
+- 十模块切换使用一个可键盘操作、有 tooltip 和选中反馈的紧凑图标菜单；关闭菜单不会关闭工作区，选择模块只切换 CCP 自有路由。
 - 不创建 iframe，不嵌入外部 WebView，不把完整 Multica HTML 注入为不受控字符串。
 - 窗口缩放、侧栏折叠和全屏变化时重新测量可用区域；固定工具栏、看板列和表单使用稳定响应式约束，不发生文字或控件重叠。
 - 工作区内部路由存入 CCP 自有状态；不得改写 Codex URL、history、原生 React store 或项目选择状态。
-- 关闭/卸载时移除 CCP 事件监听器、观察器和临时 DOM，不删除或重建 Codex 原生内容。
+- 原生导航造成的视图隐藏只切换可见性并恢复原生 main，不卸载后台编排或移除持久事件/对账状态；只有用户将持久化“我的任务”增强开关设为关闭时才执行完整 cleanup，移除入口、页面 host、UI 监听器和临时 DOM。完整 cleanup 也不得删除或重建 Codex 原生内容及已持久化任务数据。
 
 ## 数据模型
 
@@ -303,9 +312,10 @@ subscribe_events(cursor)
 - 必须基于当前页面已验证的 Codex 原生 task/thread/subagent、`agent-skill-v1`、`skill-bundles-v1` 接口或事件，不以 DOM 文案点击作为唯一执行通道。
 - 禁止调用 `register_managed_codex_runtime` 或任何等价注册 API；禁止建立独立 `CodexAppServerTransport`、JSON-RPC app-server 通道，禁止由 Multica daemon/worker 启动或托管 `codex.exe app-server`。
 - CCP 不直接通过 shell、隐藏终端、CLI、HTTP 代理或第二个窗口派发任务；当前页面 host 不可用时返回 `unsupported`，不得降级到第二执行器，也不得伪造成功事件。
+- 页面 Host 的能力探测结果只约束原生执行动作，不是本地工作区 bootstrap 或 `my-issues` 查询的前置条件。Host 缺失、改版或暂时失败时仍返回本地 workspace/Issue 数据并渲染七列看板；依赖 Host 的按钮显示不可用、排队或重试状态。
 - 创建请求只包含用户确认的 Issue 上下文、workspace/project 引用、已安装且受信任的 Skill 引用和执行策略，不携带 Multica/CCP 凭据。
 - 派发前必须解析每个 Skill 引用并生成稳定清单；当前页面原生 API 返回的实际加载 Skill 集必须写入 attempt 审计。缺失、未受信任、重复冲突或页面能力不支持的 Skill 会阻止派发，不得静默忽略或自动安装。
-- `open_thread` 只聚焦现有 thread；`continue_thread` 必须复用同一 ID，除非状态机明确创建新 attempt。
+- `open_thread` 必须定位并真实激活匹配 `codex_thread_id` 的 Codex 原生侧栏 row，以原生 active row 和当前 thread 状态作为成功条件；不得用修改 URL/history/React store 或仅隐藏工作区来代替。激活成功后只隐藏工作区视图，后台任务与对账继续；`continue_thread` 必须复用同一 ID，除非状态机明确创建新 attempt。
 - 任何原生请求返回“已接受”只表示派发成功，不表示任务完成。
 
 ## 智能体与小队执行
@@ -409,14 +419,17 @@ subscribe_events(cursor)
 - 对“Multica 已预留、Codex 未创建”“Codex 已创建、映射未提交”“Codex 已完成、Multica 未回写”三类部分失败分别提供补偿流程。
 - 对账先查询本地映射和 Codex 原生状态，再决定绑定、重试或标记 orphaned；不能只根据时间自动重建 thread。
 - 应用退出、注入重载或 Codex 页面刷新不丢失未完成 command；恢复后同一 `command_id/idempotency_key` 只能得到一个执行对象。
+- 用户从“我的任务”切换到原生项目、对话、新对话或插件只改变可见视图，不改变 run/attempt 状态，不取消 command、租约、事件同步、对账或自动化；再次打开“我的任务”时按当前游标恢复视图。
 - 离线快照仅可读并标记 `stale`；离线时不盲目排队不可见写操作。用户重试必须复用原 command ID 或明确创建新命令。
 
 ## 默认启用与 Manager 边界
 
 - 使用独立持久化布尔设置 `multica_workspace_enabled`（最终字段名可遵循现有设置命名，但语义不得改变）。新安装缺少该字段时默认 `true`；升级、重启、刷新和重新注入均保留用户已保存的 `true/false`，不得以“默认开启”为由回填覆盖。
-- 开关只控制 Codex 左侧入口、工作区页面壳、本地事件轮询/对账和新任务派发。关闭时移除入口并卸载页面壳，取消或暂停本地轮询与尚未派发的调度；不删除 workspace、Issue、映射、Skills 绑定或既有 Codex thread。
+- 持久化开关控制整项“我的任务”增强，包括 Codex 左侧入口、页面 host、本地事件轮询/对账和新任务派发。只有用户明确把该开关设为 `false` 才执行完整 cleanup：移除入口和页面 host，取消或暂停本地轮询与尚未派发的调度；不删除 workspace、Issue、映射、Skills 绑定或既有 Codex thread。
+- 点击 Codex 原生导航或由工作区内部“打开对话”跳回原生 thread 属于临时视图隐藏，不改变持久化开关，也不得调用完整 cleanup、停止后台控制面、取消已排队/执行任务、停止事件同步/对账/自动化或释放任务租约。允许暂停纯展示用的前台请求，但后台权威状态必须继续推进。
 - 开关不控制供应商、代理、Codex/Claude 启停、模型选择、完整 Multica server、CLI 下载、登录、daemon、`codex.exe app-server` 或任何 Runtime 注册。开启和关闭都不得调用这些生命周期或配置写入路径。
-- Codex 启动不得同步等待 Multica 同步、登录或远端服务；也不得因开关默认为 `true` 自动下载/安装 Multica CLI、创建托管 profile、登录、启动 daemon 或注册 Runtime。入口先可见，页面壳异步展示本地准备、同步或故障状态。
+- Codex 启动不得同步等待 Multica 同步、登录、页面 Host 或远端服务；也不得因开关默认为 `true` 自动下载/安装 Multica CLI、创建托管 profile、登录、启动 daemon 或注册 Runtime。入口先可见，本地 `my-issues` 看板独立加载；页面 Host 故障只在依赖原生执行的控件附近显示降级，不得用全页错误或顶部状态壳替代本地任务看板。
+- bridge 不可达与页面 Host 不可达是不同故障：前者表示本地控制面无法响应，必须 fail-open 回到原生 Codex，并在入口提供重试；后者不应阻断已可用本地控制面中的看板查询。两类故障均不得影响供应商、代理、模型选择、原生输入或普通导航。
 - Manager 主导航不保留独立 `Multica Runtime` 页面。Manager 的普通设置区域必须保留“启用 Multica 工作区”开关和只读诊断；历史外部连接、下载安装、登录和 daemon 监管只可作为默认关闭、用户显式进入的 `legacy/高级兼容` 能力存在，且不是本地工作区的执行前置条件。
 - Codex 工作区负责：日常 workspace、Issue、项目、自动化、智能体、小队、统计、能力只读视图、Skills 和普通设置。
 - Codex 工作区设置与 Manager 必须读写同一个持久化开关来源；不得维护两份互相覆盖的值。其他高级配置动作可调用现有 `/manager/open` 打开 Manager。
@@ -446,7 +459,7 @@ Multica 上游当前使用包含附加条件的 `Multica License`，并非可忽
 
 - 点击入口后 200ms 内显示本地页面壳或骨架，不等待网络后才反馈。
 - 列表默认分页且单次不超过 100 项；看板按项目/过滤器有界加载，禁止无界拉取完整历史。
-- 同一 workspace 的轮询和刷新去重；页面隐藏时降低或停止轮询，恢复时按游标追赶。
+- 同一 workspace 的轮询和刷新去重；视图隐藏时可降低或停止纯 UI 展示刷新，但后台任务执行、事件同步、租约、对账和自动化保持运行，恢复视图时按持久游标补齐展示。
 - 慢请求可取消，超时后保留最后成功快照并标记过期；不得冻结 Codex 输入和原生导航。
 - 页面壳任何未捕获错误由错误边界隔离，失败时只卸载工作区 UI，不导致 Codex renderer 崩溃。
 - 尊重 `prefers-reduced-motion`；状态、优先级和错误不能只用颜色表达。

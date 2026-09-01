@@ -77,14 +77,17 @@
 - 两种开关状态下都不得下载/安装 Multica CLI、创建托管 profile、登录、启动/监管 daemon、注册 Codex runtime 或启动 `codex.exe app-server`。
 - Codex 原生界面先正常可用，本地控制面准备异步进行。
 - 本地数据不可用时显示真实错误/重试状态；可选同步未登录时显示 `needs_login`；控制面 ready 时加载工作区。
+- 当前 Codex 页面 Host 能力不可用、选择器改版或探测失败时，入口和本地 `my-issues` 查询不受阻断，全宽七列看板仍显示真实本地数据；只有依赖原生 thread/subagent/Skills 的动作显示 `unsupported`、排队或重试。
 
-验证方式与证据：使用干净设置、保存为关闭、保存为开启三类 fixture，分别执行启动、重启、刷新和重新注入；记录持久化值、入口/页面壳节点数、轮询与派发调用计数、UI 截图和 Codex 输入可交互证据。进程/网络/文件写入 spy 必须证明默认路径零 CLI 下载、零 profile 创建、零登录、零 daemon、零 runtime 注册和零新增 Codex app-server 进程。
+验证方式与证据：使用干净设置、保存为关闭、保存为开启和页面 Host 不可用四类 fixture，分别执行启动、重启、刷新和重新注入；记录持久化值、入口/页面壳节点数、`my-issues` 查询、轮询与派发调用计数、七列 UI 截图和 Codex 输入可交互证据。Host 不可用 fixture 必须证明本地查询成功、七列存在、原生执行调用为零；进程/网络/文件写入 spy 必须证明默认路径零 CLI 下载、零 profile 创建、零登录、零 daemon、零 runtime 注册和零新增 Codex app-server 进程。
 
 #### AC-04：本地控制面故障只降级工作区
 
-通过标准：本地控制面初始化失败或可选同步健康检查失败时，工作区显示脱敏错误和恢复动作；Codex 对话、CCP 代理、供应商和 Claude 启动仍可用，且不尝试下载 legacy 资源、启动 daemon 或启动 Codex app-server。
+通过标准：本地控制面初始化失败或可选同步健康检查失败时，工作区显示脱敏错误和恢复动作；页面 Host 单独失败时不能显示全页失败或用顶部状态壳遮住本地任务，仍须展示本地七列看板并只降级执行控件。Codex 对话、CCP 代理、供应商和 Claude 启动仍可用，且不尝试下载 legacy 资源、启动 daemon 或启动 Codex app-server。
 
-验证方式与证据：注入控制面/同步失败后运行最窄生命周期测试，并在真实 Codex 中证明原生导航和输入未被阻塞、进程树无新增 Codex 执行器。
+bridge 未安装、Launcher 未启动、binding 缺失、本地传输错误或超时时，点击“我的任务”后原生 `main` 必须在整个失败路径保持可见、可交互，workspace host 不得取得指针事件；入口必须变为明确错误状态并具有重试操作。失败态不得显示为七列“无任务”。只有 bootstrap 与首个 `my-issues` 查询均返回有效本地数据后，才允许隐藏原生 `main` 并显示看板；该首轮预检超时上限为 2 秒。
+
+验证方式与证据：分别注入 bridge 缺失、本地控制面失败、同步失败和页面 Host 失败；运行最窄生命周期测试，并在真实 Codex 中证明 bridge 缺失时原生导航和输入未被阻塞、入口可重试，Host 失败时 `my-issues` 请求成功且七列和卡片仍可见，进程树无新增 Codex 执行器。
 
 ### 3. Codex 左侧入口
 
@@ -93,14 +96,14 @@
 通过标准：
 
 - 入口使用原生插件按钮作为锚点。
-- `Multica 工作区` 与插件同属一个导航父节点。
-- DOM 顺序和视觉顺序均为插件在前、Multica 在中、项目在后。
+- `我的任务` 与插件同属一个导航父节点，入口可见文案、title 和无障碍名称均为“我的任务”。
+- DOM 顺序和视觉顺序均为插件在前、我的任务在中、项目在后。
 - 中英文 Codex 文案均可定位。
 
 验证方式与证据：
 
 - 注入契约测试覆盖 `pluginEntryButton()`、`selectors.pluginNavButton`、`插件|Plugins` fallback、`insertBefore(..., pluginEntry.nextSibling)` 和唯一入口约束。
-- 实时 CDP 返回插件、Multica 和项目三个节点的共同父节点、bounding box 和 DOM order。
+- 实时 CDP 返回插件、我的任务和项目三个节点的共同父节点、bounding box 和 DOM order。
 - Windows 截图清楚显示入口位于插件下方、项目上方且无重叠。
 
 #### AC-06：重注入保持单实例
@@ -128,15 +131,22 @@
 
 验证方式与证据：CDP DOM 查询、Network 记录和资源来源清单；记录所有业务请求均为本地 binding 调用。许可归属页上用户主动打开上游仓库的链接不视为核心流程依赖。
 
-#### AC-09：页面壳不接管 Codex 原生状态
+#### AC-09：直接看板、原生导航隐藏与后台生命周期隔离
 
-通过标准：工作区只占主内容区域，保留原生侧栏和窗口控件；点击任意原生导航项可恢复 Codex 内容；打开/关闭不会修改 Codex URL、history、原生 React store 或项目选择。
+通过标准：
 
-验证方式与证据：实时记录打开前、打开中、关闭后的 URL/history、原生导航选择、输入草稿和 DOM 节点身份，证明原生内容未被删除重建。
+- 工作区只占原生侧栏之外的完整主内容区域，保留原生侧栏和窗口控件；首屏直接从“我的任务”标题、筛选工具栏和七列看板开始。
+- 页面内不存在 `Multica 工作区 / Local Multica Workspace` 顶部壳、workspace/status 横条、全局“刷新/关闭”按钮和永久模块侧栏；用户不需要手动关闭才能返回 Codex。
+- 点击原生项目、项目内对话、新对话、插件或其他原生导航目标时，只隐藏工作区视图、恢复原生 main 并允许原生事件继续完成；不得 `preventDefault`、`stopPropagation`、直接改 URL/history/React store 或调用完整 cleanup。
+- 原生目标可以是非 `button` 行或行内任意子元素；点击后目标原生 row 必须成为 active，目标对话正文可见，工作区 host 在至少 500ms 后仍不可见，不得被 observer 重新盖回。
+- 视图隐藏前后，持久化增强开关仍为 `true`，既有 run/attempt、任务租约、事件同步、对账和自动化继续运行；只允许暂停纯展示用前台请求。
+- 只有用户把持久化“我的任务”增强开关改为 `false` 才执行完整 cleanup，移除入口、页面 host、UI 监听器并停止新派发/后台轮询。
+
+验证方式与证据：Playwright/CDP 先打开“我的任务”，断言 Shadow DOM 中 `.ccp-multica-header`、`.ccp-multica-nav` 和 `[aria-label="关闭 Multica 工作区"]` 均不存在，且可见文本不含 `Local Multica Workspace`。再分别点击原生项目 row、`[data-app-action-sidebar-thread-id]` 的嵌套子元素、新对话和插件；记录 host 可见性、原生 main 的 `visibility/pointer-events/inert/aria-hidden`、active thread ID、正文节点、原生事件计数和 500ms 稳定状态。另以运行中 attempt fixture 记录隐藏前后事件游标和状态继续推进、cleanup 调用为零；最后关闭持久化开关，证明 cleanup 恰好调用一次且入口/host 消失。
 
 #### AC-10：十个模块均为真实页面
 
-通过标准：按以下顺序提供并可进入：
+通过标准：不渲染永久竖向模块导航；通过看板工具栏中单个带 tooltip、键盘 focus 和选中反馈的紧凑模块菜单，按以下顺序提供并可进入：
 
 1. `我的任务` / `my-issues`
 2. `任务` / `issues`
@@ -151,14 +161,14 @@
 
 每个模块至少能读取真实数据，并具备加载、空、错误、过期和无权限状态，不允许只有外链、静态说明或假数据占位。
 
-验证方式与证据：Playwright 逐项点击，断言稳定路由键、标题、真实查询操作和五类状态 fixture；输出一组模块截图和 bridge 调用摘要。
+验证方式与证据：Playwright 断言永久模块侧栏不存在，打开紧凑模块菜单后逐项点击，断言稳定路由键、标题、真实查询操作和五类状态 fixture；输出菜单、各模块截图和 bridge 调用摘要。关闭菜单不得隐藏工作区或触发 cleanup。
 
 #### AC-11：响应式、键盘与样式隔离
 
 通过标准：
 
 - 常用桌面和窄窗口下无文字/控件重叠、横向溢出或标题栏遮挡。
-- 入口、内部导航、对话框、表单和看板可以键盘访问，focus 清晰。
+- 入口、紧凑模块菜单、筛选、对话框、表单、看板列、卡片和 hover/focus 预览可以键盘访问，focus 清晰。
 - 状态不只靠颜色表达，并尊重 reduced motion。
 - 工作区样式不改变 Codex 输入框、模型菜单、插件页、主题或窗口控制按钮。
 
@@ -182,12 +192,16 @@
 
 通过标准：
 
-- 看板支持 `backlog/todo/in_progress/in_review/done/blocked/cancelled`。
+- `my-issues` 使用真实数据渲染全宽看板，不是列表、静态示例或空白占位；顶部只包含看板自身“我的任务”标题和工具栏。
+- 工具栏包含 `全部`、`已分配`、`我创建的`、`我的智能体和小队`，默认选中 `已分配`；右侧工作中智能体数量来自真实状态，并提供筛选、显示方式、看板模式和紧凑模块菜单。
+- 看板按 `backlog/todo/in_progress/in_review/done/blocked/cancelled` 固定映射为 `待规划/待办/进行中/审核中/已完成/已阻塞/已取消` 七列，顺序不可变化或缺列。
+- 每列显示状态图标、真实数量、更多/新增动作和 `无任务` 空态；卡片展示真实编号、标题、摘要、负责人或执行者、更新时间和独立执行状态。
+- 卡片 hover/focus 预览不改变列尺寸或推动布局；列宽和高度稳定，宽度不足时只在看板内容区横向滚动，不把列压缩成不可读宽度，不出现页面级第二条横向滚动。
 - 成功拖拽更新一次 revision。
 - 409/revision 冲突时撤销乐观移动、刷新卡片并提示冲突，不覆盖对方更新。
 - 单纯拖拽不创建 Codex thread。
 
-验证方式与证据：拖拽成功、权限失败、409 和断线四个 Playwright/contract 用例；记录 thread 创建 fake 的调用次数始终为零。
+验证方式与证据：Playwright 在常用桌面和窄窗口分别断言七个稳定 status key、中文标题顺序、列计数、卡片字段、空态、筛选结果、局部横向滚动和无外层壳/侧栏；保存首屏、横向滚动到阻塞/取消列和卡片 hover/focus 三张截图。另运行拖拽成功、权限失败、409 和断线四个 contract 用例，记录 thread 创建 fake 的调用次数始终为零。
 
 #### AC-15：业务状态与执行状态分离
 
@@ -211,9 +225,14 @@
 
 #### AC-17：打开复用同一 thread
 
-通过标准：连续点击“打开对话”三次均聚焦同一个 `codex_thread_id`，不创建新 thread、不发送额外 prompt、不改 attempt。
+通过标准：
 
-验证方式与证据：原生导航事件、当前 thread ID、create 调用计数和 UI 截图。
+- 连续点击“打开对话”三次均按同一 `codex_thread_id` 定位所属项目下的 Codex 原生对话 row，必要时先展开项目，并触发该 row 自身的原生激活行为。
+- 成功必须以目标 row 的原生 active 状态和当前 thread ID 同时确认；不得只隐藏看板、直接改 URL/history/React store 或伪造成功。
+- 激活成功后工作区视图自动隐藏，目标原生对话正文可见；不创建新 thread、不发送额外 prompt、不改 attempt，也不调用完整 cleanup，后台执行/事件/对账继续。
+- 找不到或无法激活原生 row 时保留看板并显示明确错误，不得隐藏后宣称成功或静默创建新 thread。
+
+验证方式与证据：真实 Codex 中展开含目标 thread 的项目，点击工作区“打开对话”，记录目标 row 激活事件、`data-app-action-sidebar-thread-active`（或当前版本等价权威状态）、当前 thread ID、正文可见性、host 隐藏、cleanup/create/prompt 调用计数和后台事件游标；另用 row 缺失 fixture 证明看板保留且返回稳定错误。
 
 #### AC-18：继续执行复用同一非终态 thread
 
@@ -369,7 +388,7 @@
 
 #### AC-39：页面壳即时反馈且不冻结 Codex
 
-通过标准：点击入口后 200ms 内出现本地壳/骨架；慢请求可取消并转为 stale/错误态；加载 100 项上限列表、切换模块和隐藏页面时 Codex 输入及原生导航保持可交互。
+通过标准：点击入口后 200ms 内出现本地“我的任务”看板骨架，不先显示额外产品顶栏或永久模块侧栏；慢请求可取消并转为 stale/错误态；页面 Host 不可用不阻断本地数据查询和七列渲染。加载 100 项上限列表、切换模块和隐藏页面时 Codex 输入及原生导航保持可交互，视图隐藏不停止后台任务、事件同步和对账。
 
 验证方式与证据：Playwright timing、请求取消、长列表和主线程响应记录。
 
@@ -381,9 +400,9 @@
 
 #### AC-41：关闭与回滚不删数据
 
-通过标准：用户关闭持久化工作区开关后入口消失、页面壳卸载、轮询和新派发停止；关闭状态跨 Manager/Codex 切换、重启和升级读取保持一致。既有 Multica Issue、映射、Skills 绑定和 Codex thread 保留且可从原生 Codex 访问。重新启用后从持久游标恢复，不重复执行，也不触发 legacy 下载/登录/daemon/runtime 生命周期。
+通过标准：用户关闭持久化“我的任务”增强开关后才执行完整 cleanup：入口消失、页面 host 卸载、UI 监听器释放、后台轮询和新派发停止；普通原生导航和工作区内部“打开对话”不得触发该 cleanup。关闭状态跨 Manager/Codex 切换、重启和升级读取保持一致。既有 Multica Issue、映射、Skills 绑定和 Codex thread 保留且可从原生 Codex 访问。重新启用后从持久游标恢复，不重复执行，也不触发 legacy 下载/登录/daemon/runtime 生命周期。
 
-验证方式与证据：关闭/重启/启用回放、数据计数、thread ID 和执行调用计数。
+验证方式与证据：先执行原生项目/对话/新对话切换和内部“打开对话”，断言 cleanup 调用始终为零且后台游标继续推进；再关闭持久化开关，断言 cleanup 恰好一次。随后完成关闭/重启/启用回放，并记录入口/host/监听器、数据计数、thread ID 和执行调用计数。
 
 #### AC-42：许可和归属门禁
 
@@ -417,7 +436,7 @@ cargo test -p claude-codex-pro-core --test bridge_routes multica_workspace -- --
 npm --prefix apps/claude-codex-pro-manager run check
 ```
 
-另运行专用 Playwright/CDP 用例验证入口位置、重注入、十模块路由、无 iframe、无外部页面依赖和样式隔离。此阶段不做 release 全构建。
+另运行专用 Playwright/CDP 用例验证入口位置、重注入、无顶部壳/永久模块侧栏/关闭按钮、紧凑模块菜单、原生导航只隐藏视图、Host 失败仍显示本地七列看板、十模块路由、无 iframe、无外部页面依赖和样式隔离。此阶段不做 release 全构建。
 
 ### 阶段 2：CRUD 与看板
 
@@ -426,7 +445,7 @@ cargo test -p claude-codex-pro-core multica_issue -- --nocapture
 npm --prefix apps/claude-codex-pro-manager run check
 ```
 
-仅验证 Issue/项目 CRUD、revision、拖拽、权限和 optimistic rollback。
+仅验证七列真实看板、筛选、卡片/预览、局部横向滚动、Issue/项目 CRUD、revision、拖拽、权限和 optimistic rollback。
 
 ### 阶段 3：Codex 原生执行
 
@@ -436,7 +455,7 @@ cargo test -p claude-codex-pro-core multica_execution_binding -- --nocapture
 cargo test -p claude-codex-pro-core --test bridge_routes multica_execution -- --nocapture
 ```
 
-再运行一次真实 Codex 单任务和一次小队/subagent 定向验收；不提前跑 workspace 全量回归。
+再运行一次真实 Codex 单任务、一次“打开对话”真实激活原生 row 和一次小队/subagent 定向验收；不提前跑 workspace 全量回归。
 
 ### 阶段 4：自动化及恢复
 
@@ -465,7 +484,7 @@ cargo build --release
 2. 确认默认 `target/release` 下最新 CCP 可执行文件存在并记录时间/摘要。
 3. 使用该构建启动 CCP 和 Codex，重新注入最新脚本。
 4. 完成 AC-03 至 AC-42 的真实 UI、原生 thread、配置隔离和进程验收。
-5. 至少保存：入口/插件位置、十模块、看板、单 thread 映射、打开/继续、attempt lineage、小队父子关系、断线恢复和隔离回归截图/日志。
+5. 至少保存：入口/插件位置、无外层壳的七列看板、紧凑模块菜单与十模块、Host 失败仍显示本地任务、原生导航隐藏视图且后台继续、单 thread 映射、原生 row 激活、打开/继续、attempt lineage、小队父子关系、断线恢复和隔离回归截图/日志。
 
 ## 必需证据汇总
 
@@ -487,12 +506,17 @@ cargo build --release
 出现以下任一情况即不通过：
 
 - 入口不在原生插件下方、项目上方，或重注入后出现重复入口/重复请求。
+- 入口仍显示为 `Multica 工作区`，或主内容仍存在 `Multica 工作区 / Local Multica Workspace` 顶部壳、workspace/status 横条、全局刷新/关闭按钮或永久模块侧栏。
+- `my-issues` 不是全宽七列真实看板，缺少任一固定状态列，使用列表/假数据占位，或窄窗口把列压缩到不可读而未提供看板内横向滚动。
 - 任一必需模块只是外链、iframe、静态占位或假数据。
 - 工作区依赖 Multica Web/CDN/外部浏览器才能完成核心流程。
 - 分配或执行没有创建 Codex 原生 task/thread，或使用了非页面原生入口、任何 Codex app-server/CLI/非 Codex Desktop 二进制、npm/Claude/其他 Provider/第二模型执行器。
 - 重复请求创建多个 run、thread 或 subagent。
 - “已派发”“HTTP 2xx”或缓存状态被显示为 completed/done。
 - 打开/继续错误地创建新 thread，终态重跑覆盖旧 attempt。
+- 点击原生项目/对话后工作区仍遮挡内容、必须再点“关闭”，原生 row 未真实激活，或实现通过阻断点击、直接改 URL/history/React store 伪造跳转。
+- 普通原生导航或内部“打开对话”调用完整 cleanup、停止后台任务/事件/对账/自动化；或关闭持久化增强开关后未执行完整 cleanup。
+- 页面 Host 能力失败导致本地 `my-issues` 查询不执行、七列看板被全页错误/顶部状态壳替代，或为了恢复而启动第二执行器。
 - 409、断线、部分提交或事件 gap 导致状态丢失、重复执行或不可审计。
 - renderer 可透传任意 URL/header/命令/路径，跨 workspace 读写，或不可信内容触发执行。
 - token、API Key、Authorization、完整 prompt 或会话正文进入 DOM、日志、URL、截图或测试产物。

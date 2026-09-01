@@ -109,6 +109,10 @@ pub struct CodexRuntimeCapabilities {
     pub server_version: Option<String>,
     pub capabilities: Vec<String>,
     pub skills_supported: bool,
+    /// The current page can enumerate its Skills, even when it does not
+    /// advertise a protocol that permits dispatching them in native turns.
+    #[serde(default)]
+    pub skills_inventory_supported: bool,
     pub skill_protocol: Option<String>,
     pub subagents_supported: bool,
 }
@@ -740,7 +744,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
     async fn list_skills(&self) -> anyhow::Result<Vec<CodexSkill>> {
         let generation = self.sync_generation()?;
         let capabilities = self.capabilities_for_generation(generation).await?;
-        if !capabilities.skills_supported {
+        if !capabilities.skills_inventory_supported {
             bail!("unsupported");
         }
         Ok(self
@@ -1151,6 +1155,11 @@ fn parse_capabilities(
     } else {
         None
     };
+    let skills_inventory_supported = skill_protocol.is_some()
+        || response
+            .pointer("/pageHostProbe/skillsList")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     Ok(CodexRuntimeCapabilities {
         runtime_id: binding.runtime_id.clone(),
         provider,
@@ -1164,6 +1173,7 @@ fn parse_capabilities(
             .and_then(Value::as_str)
             .map(str::to_string),
         skills_supported: skill_protocol.is_some(),
+        skills_inventory_supported,
         skill_protocol,
         subagents_supported: capabilities.iter().any(|value| {
             matches!(
@@ -1506,6 +1516,7 @@ mod tests {
         let caps = client.capabilities().await.unwrap();
         assert_eq!(caps.provider, "codex");
         assert!(caps.skills_supported);
+        assert!(caps.skills_inventory_supported);
         assert!(caps.subagents_supported);
 
         let created = client
@@ -1752,6 +1763,7 @@ mod tests {
         transport.bump_generation();
         let refreshed = client.capabilities().await.unwrap();
         assert!(!refreshed.skills_supported);
+        assert!(!refreshed.skills_inventory_supported);
         assert!(!refreshed.subagents_supported);
         assert_eq!(
             transport
@@ -1775,7 +1787,82 @@ mod tests {
         let client = CodexPageExecutionClient::new(transport, runtime).unwrap();
         let capabilities = client.capabilities().await.unwrap();
         assert!(!capabilities.skills_supported);
+        assert!(!capabilities.skills_inventory_supported);
         assert_eq!(capabilities.skill_protocol, None);
+    }
+
+    #[tokio::test]
+    async fn inventory_only_skills_are_read_only_and_cannot_dispatch() {
+        let transport = FakeCodexPageHostTransport::default();
+        transport.push_response(
+            CodexPageHostMethod::Initialize,
+            Ok(json!({
+                "provider": "codex",
+                "capabilities": [],
+                "pageHostProbe": { "skillsList": true }
+            })),
+        );
+        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        transport.push_response(
+            CodexPageHostMethod::SkillsList,
+            Ok(json!({"data": [{"skills": [{
+                "id": "codex:review-helper",
+                "name": "review-helper",
+                "path": "C:/codex/skills/review-helper/SKILL.md",
+                "enabled": true,
+                "manifestDigest": digest
+            }]}]})),
+        );
+        let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
+
+        let capabilities = client.capabilities().await.unwrap();
+        assert!(capabilities.skills_inventory_supported);
+        assert!(!capabilities.skills_supported);
+        assert_eq!(capabilities.skill_protocol, None);
+        assert_eq!(
+            client.list_skills().await.unwrap()[0].id,
+            "codex:review-helper"
+        );
+
+        let skill_request = CodexSkillExecutionRequest {
+            protocol: "agent-skill-v1".to_string(),
+            skill_refs: vec![SkillReference {
+                id: "codex:review-helper".to_string(),
+                manifest_digest: Some(digest.to_string()),
+            }],
+            manifest_digest: digest.to_string(),
+        };
+        assert_eq!(
+            client
+                .resolve_skills(skill_request.clone())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "runtime_skills_unsupported"
+        );
+        let mut thread = request("inventory-only");
+        thread.skill_request = Some(skill_request);
+        assert_eq!(
+            client
+                .create_thread(thread, "inventory-only")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "runtime_skills_unsupported"
+        );
+
+        let methods = transport
+            .calls()
+            .into_iter()
+            .map(|call| call.method)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            vec![
+                CodexPageHostMethod::Initialize,
+                CodexPageHostMethod::SkillsList,
+            ]
+        );
     }
 
     #[tokio::test]

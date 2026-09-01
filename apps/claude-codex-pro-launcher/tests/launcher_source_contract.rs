@@ -44,6 +44,16 @@ fn launcher_keeps_multica_on_page_host_boundary_without_codex_runtime_registrati
     assert!(source.contains("workspace_bootstrap_with_codex_runtime"));
     assert!(source.contains("workspace_query_with_codex_runtime"));
     assert!(source.contains("CodexPageHostTransport"));
+    assert!(source.contains("BridgeRuntimeService::multica_workspace_upsert"));
+    assert!(source.contains("BridgeRuntimeService::multica_workspace_delete"));
+    for operation in ["create", "open", "continue", "cancel", "status", "list"] {
+        assert!(
+            source.contains(&format!(
+                "BridgeRuntimeService::multica_execution_{operation}"
+            )),
+            "launcher must expose Multica execution operation: {operation}"
+        );
+    }
 }
 
 #[test]
