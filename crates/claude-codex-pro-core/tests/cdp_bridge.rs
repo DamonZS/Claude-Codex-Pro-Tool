@@ -1089,6 +1089,8 @@ fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
     assert!(item.contains("multicaWorkspaceDeleteAutopilotTrigger"));
     assert!(item.contains("multicaWorkspaceUpdateAutopilotTrigger"));
     assert!(item.contains("编辑触发器"));
+    assert!(item.contains("timezone"));
+    assert!(item.contains("label（可选）"));
     assert!(item.contains("multicaWorkspaceToggleAutopilotCollaborator"));
     assert!(item.contains("管理协作者"));
     assert!(item.contains("运行历史"));

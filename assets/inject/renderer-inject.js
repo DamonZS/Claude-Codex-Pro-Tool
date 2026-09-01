@@ -5944,7 +5944,11 @@
       id: multicaWorkspaceNewId("autopilot-trigger"),
       kind,
       enabled: true,
-      ...(kind === "schedule" ? { cron_expression: String(window.prompt?.("cron_expression", "0 * * * *") || "").trim() } : {}),
+      ...(kind === "schedule" ? {
+        cron_expression: String(window.prompt?.("cron_expression", "0 * * * *") || "").trim(),
+        timezone: String(window.prompt?.("timezone", "UTC") || "UTC").trim() || "UTC",
+      } : {}),
+      label: String(window.prompt?.("label（可选）", "") || "").trim(),
     };
     const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
     triggers.push(trigger);
@@ -5977,7 +5981,12 @@
       const cron = String(window.prompt?.("cron_expression", String(current.cron_expression || "")) || "").trim();
       if (!cron) return;
       next.cron_expression = cron;
+      const timezone = String(window.prompt?.("timezone", String(current.timezone || "UTC")) || "").trim();
+      if (!timezone) return;
+      next.timezone = timezone;
     }
+    const label = String(window.prompt?.("label（留空清除）", String(current.label || "")) || "").trim();
+    if (label) next.label = label; else delete next.label;
     triggers[index] = next;
     await multicaWorkspacePatchEntity(module, item, { triggers }, "已更新自动化触发器");
   }
