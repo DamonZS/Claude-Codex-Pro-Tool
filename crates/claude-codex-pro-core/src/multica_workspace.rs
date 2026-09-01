@@ -293,7 +293,11 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Labels => Ok(&mut self.labels),
             MulticaWorkspaceResourceKey::Subscribers => Ok(&mut self.subscribers),
             MulticaWorkspaceResourceKey::Reactions => Ok(&mut self.reactions),
-            MulticaWorkspaceResourceKey::Activities => Ok(&mut self.activities),
+            // Activities are derived/audit records. They are queryable but
+            // must never be fabricated through the generic mutation path.
+            MulticaWorkspaceResourceKey::Activities => {
+                bail!("multica_workspace_resource_read_only")
+            }
             MulticaWorkspaceResourceKey::Projects => Ok(&mut self.projects),
             MulticaWorkspaceResourceKey::ProjectResources => Ok(&mut self.project_resources),
             MulticaWorkspaceResourceKey::Agents => Ok(&mut self.agents),
@@ -2607,6 +2611,25 @@ mod tests {
                 "multica_workspace_label_ids_invalid"
             );
         }
+    }
+
+    #[test]
+    fn activities_are_read_only_for_generic_store_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let result = store.upsert(
+            "local-test",
+            LocalWorkspaceEntityUpsert {
+                resource: MulticaWorkspaceResourceKey::Activities,
+                entity: json!({"id":"activity-1"}),
+                expected_revision: Some(0),
+            },
+            1,
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "multica_workspace_resource_read_only"
+        );
     }
 
     #[test]
