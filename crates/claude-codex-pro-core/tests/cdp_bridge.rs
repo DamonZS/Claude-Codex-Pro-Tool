@@ -1089,6 +1089,15 @@ fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
 }
 
 #[test]
+fn codex_multica_comments_expose_resolve_and_unresolve_actions() {
+    let script = assets::injection_script(57321);
+    assert!(script.contains("标记已解决"));
+    assert!(script.contains("取消解决"));
+    assert!(script.contains("resolved_at: null"));
+    assert!(script.contains("resolved_by_type: \"member\""));
+}
+
+#[test]
 fn codex_multica_agent_assignment_dispatches_native_subagent() {
     let script = assets::injection_script(57321);
     let workspace = source_between(

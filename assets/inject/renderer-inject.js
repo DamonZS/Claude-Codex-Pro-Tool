@@ -6135,6 +6135,22 @@
       if (!active) add("执行", () => multicaWorkspaceOpenExecutionDraft("create", item), "primary");
       const archived = String(multicaWorkspaceObjectValue(item, "status") || "") === "archived";
       add(archived ? "恢复" : "归档", () => void multicaWorkspacePatchEntity(module, item, { status: archived ? "todo" : "archived" }, archived ? "已恢复" : "已归档"));
+    } else if (resource === "comments") {
+      const resolvedAt = multicaWorkspaceObjectValue(item, "resolved_at", "resolvedAt");
+      if (resolvedAt) {
+        add("取消解决", () => void multicaWorkspacePatchEntity(module, item, {
+          resolved_at: null,
+          resolved_by_type: null,
+          resolved_by_id: null,
+        }, "已取消解决"));
+      } else {
+        const userId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+        add("标记已解决", () => void multicaWorkspacePatchEntity(module, item, {
+          resolved_at: new Date().toISOString(),
+          resolved_by_type: "member",
+          resolved_by_id: userId || null,
+        }, "已标记为已解决"));
+      }
     } else if (resource === "agents") {
       const enabled = multicaWorkspaceObjectValue(item, "enabled") !== false;
       add(enabled ? "停用" : "启用", () => void multicaWorkspacePatchEntity(module, item, { enabled: !enabled }, enabled ? "已停用" : "已启用"));
