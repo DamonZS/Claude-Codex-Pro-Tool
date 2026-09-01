@@ -1849,6 +1849,7 @@ fn validate_entity_contract(
         "conversation_starters",
         "subscribers",
         "triggers",
+        "runs",
         "invocation_targets",
     ];
     for key in bounded_arrays {
@@ -2001,6 +2002,73 @@ fn validate_entity_contract(
             .unwrap_or_default();
         if emoji.trim().is_empty() || emoji.chars().count() > 32 {
             bail!("multica_workspace_reaction_invalid");
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Autopilots {
+        let status = object
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("active");
+        if !matches!(status, "active" | "paused" | "archived") {
+            bail!("multica_workspace_autopilot_status_invalid");
+        }
+        if let Some(mode) = object.get("execution_mode").and_then(Value::as_str)
+            && !matches!(mode, "create_issue" | "run_only")
+        {
+            bail!("multica_workspace_autopilot_execution_mode_invalid");
+        }
+        if let Some(kind) = object.get("assignee_type").and_then(Value::as_str)
+            && !matches!(kind, "agent" | "squad")
+        {
+            bail!("multica_workspace_autopilot_assignee_type_invalid");
+        }
+        if let Some(triggers) = object.get("triggers") {
+            for trigger in triggers.as_array().expect("validated array") {
+                let Some(trigger) = trigger.as_object() else {
+                    bail!("multica_workspace_autopilot_trigger_invalid");
+                };
+                let kind = trigger
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !matches!(kind, "schedule" | "webhook" | "api") {
+                    bail!("multica_workspace_autopilot_trigger_invalid");
+                }
+                if trigger.get("enabled").and_then(Value::as_bool).is_none() {
+                    bail!("multica_workspace_autopilot_trigger_invalid");
+                }
+                if kind == "schedule"
+                    && trigger
+                        .get("cron_expression")
+                        .and_then(Value::as_str)
+                        .is_none()
+                {
+                    bail!("multica_workspace_autopilot_trigger_invalid");
+                }
+            }
+        }
+        if let Some(runs) = object.get("runs") {
+            for run in runs.as_array().expect("validated array") {
+                let Some(run) = run.as_object() else {
+                    bail!("multica_workspace_autopilot_run_invalid");
+                };
+                let status = run
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !matches!(
+                    status,
+                    "issue_created"
+                        | "running"
+                        | "completed"
+                        | "failed"
+                        | "skipped"
+                        | "unsupported"
+                ) {
+                    bail!("multica_workspace_autopilot_run_invalid");
+                }
+            }
         }
         return Ok(());
     }
@@ -2734,6 +2802,26 @@ mod tests {
         assert_eq!(autopilots[0]["next_run_at"], "2026-02-02T00:00:00Z");
         assert_eq!(autopilots[0]["last_run_status"], "failed");
         assert_eq!(autopilots[0]["subscribers"], json!([]));
+    }
+
+    #[test]
+    fn autopilot_contract_rejects_unknown_trigger_and_run_status() {
+        let workspace = "local-test";
+        let mut state = LocalMulticaWorkspaceState::empty(workspace);
+        state.autopilots.push(json!({
+            "id":"ap-1", "workspace_id":workspace, "revision":1,
+            "triggers":[{"kind":"timer","enabled":true}], "runs":[]
+        }));
+        let error = validate_local_workspace_state(&state).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "multica_workspace_autopilot_trigger_invalid"
+        );
+
+        state.autopilots[0]["triggers"] = json!([]);
+        state.autopilots[0]["runs"] = json!([{"status":"done"}]);
+        let error = validate_local_workspace_state(&state).unwrap_err();
+        assert_eq!(error.to_string(), "multica_workspace_autopilot_run_invalid");
     }
 
     #[test]
