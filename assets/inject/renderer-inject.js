@@ -1765,7 +1765,7 @@
     // The page-owned client is already initialized. Probe a read-only method
     // instead of sending a second initialize request, which Codex rejects.
     const skills = await client.sendRequest("skills/list", {});
-    if (!skills || typeof skills !== "object" || !Array.isArray(skills.data)) {
+    if (!skills || typeof skills !== "object" || Array.isArray(skills) || skills.error) {
       throw new Error("codex_page_host_probe_failed");
     }
     return {

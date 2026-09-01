@@ -538,7 +538,7 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("data-app-action-sidebar-thread-host-id"));
     assert!(host.contains("module.FRt(appScope, hostId)"));
     assert!(host.contains("client.sendRequest(\"skills/list\", {})"));
-    assert!(host.contains("Array.isArray(skills.data)"));
+    assert!(host.contains("skills.error"));
     assert!(host.contains("\"agent-skill-v1\""));
     assert!(host.contains("\"subagent-v1\""));
     assert!(host.contains("\"thread-start\""));
