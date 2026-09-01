@@ -845,12 +845,27 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     }
 
     async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
-        Ok(serde_json::to_value(
-            claude_codex_pro_core::multica_workspace::workspace_bootstrap_with_codex_runtime(
-                self.codex_execution.clone(),
-            )
-            .await?,
-        )?)
+        // The local task board must remain usable while the current Codex
+        // renderer is reloading or its page-host API is unavailable.  The
+        // bootstrap already contains the read-only SQLite projection, so
+        // fall back to it instead of turning a transient Host outage into a
+        // disconnected/blank workspace.
+        match claude_codex_pro_core::multica_workspace::workspace_bootstrap_with_codex_runtime(
+            self.codex_execution.clone(),
+        )
+        .await
+        {
+            Ok(snapshot) => Ok(serde_json::to_value(snapshot)?),
+            Err(error) => {
+                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                    "multica.workspace_bootstrap_host_fallback",
+                    json!({ "error": error.to_string() }),
+                );
+                Ok(serde_json::to_value(
+                    claude_codex_pro_core::multica_workspace::workspace_bootstrap().await?,
+                )?)
+            }
+        }
     }
 
     async fn multica_workspace_query(
