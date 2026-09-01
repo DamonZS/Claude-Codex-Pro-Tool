@@ -1774,10 +1774,19 @@
         provider: "codex",
         protocolVersion: "current-page",
         serverInfo: { provider: "codex" },
-        // `skills/list` proves only inventory access.  It must not be
-        // presented as an execution-capable Skill protocol.
-        capabilities: [],
-        pageHostProbe: { skillsList: true },
+        // This client is created by the mounted Codex page and is the same
+        // transport used by native task/turn actions.  The allow-list above
+        // is the authoritative surface for this page-owned bridge.
+        capabilities: [
+          "agent-skill-v1",
+          "subagent-v1",
+          "thread-start",
+          "thread-read",
+          "thread-fork",
+          "turn-start",
+          "turn-interrupt",
+        ],
+        pageHostProbe: { skillsList: true, nativeTaskHost: true },
       },
     };
   }

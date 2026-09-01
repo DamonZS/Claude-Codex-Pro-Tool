@@ -539,12 +539,10 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("module.FRt(appScope, hostId)"));
     assert!(host.contains("client.sendRequest(\"skills/list\", {})"));
     assert!(host.contains("Array.isArray(skills.data)"));
-    assert!(host.contains("capabilities: []"));
-    assert!(host.contains("pageHostProbe: { skillsList: true }"));
-    assert!(
-        !host.contains("capabilities: [\"agent-skill-v1\"]"),
-        "the app-initial fallback only proves a read-only Skill inventory"
-    );
+    assert!(host.contains("\"agent-skill-v1\""));
+    assert!(host.contains("\"subagent-v1\""));
+    assert!(host.contains("\"thread-start\""));
+    assert!(host.contains("pageHostProbe: { skillsList: true, nativeTaskHost: true }"));
     assert!(host.contains("codexPageHostInitializeResponse = selected.initializeResponse"));
     assert!(host.contains("normalizedMethod === \"initialize\" && selected.initializeResponse"));
     assert!(host.contains("client.sendRequest(normalizedMethod, params)"));
