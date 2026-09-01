@@ -58,11 +58,12 @@ pub enum MulticaWorkspaceResourceKey {
     Runtimes,
     Skills,
     Settings,
+    AgentTaskQueue,
     CodexNativeEvents,
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::MyTasks,
         Self::Issues,
         Self::Comments,
@@ -79,6 +80,7 @@ impl MulticaWorkspaceResourceKey {
         Self::Runtimes,
         Self::Skills,
         Self::Settings,
+        Self::AgentTaskQueue,
     ];
 
     fn key(self) -> &'static str {
@@ -99,6 +101,7 @@ impl MulticaWorkspaceResourceKey {
             Self::Runtimes => "runtimes",
             Self::Skills => "skills",
             Self::Settings => "settings",
+            Self::AgentTaskQueue => "agent_task_queue",
             Self::CodexNativeEvents => "codex_native_events",
         }
     }
@@ -1269,6 +1272,9 @@ fn query_local_collection(
     }
     match query.resource {
         MulticaWorkspaceResourceKey::Settings => Ok(settings_collection(workspace, enabled)),
+        MulticaWorkspaceResourceKey::AgentTaskQueue => {
+            agent_task_queue_collection(workspace, execution_store, query.limit, query.offset)
+        }
         MulticaWorkspaceResourceKey::Statistics => {
             statistics_collection(workspace, execution_store, workspace_store)
         }
@@ -1311,6 +1317,61 @@ fn query_local_collection(
             query.offset,
         ),
     }
+}
+
+/// Project the local execution ledger into the upstream `agent_task_queue`
+/// contract. This is deliberately read-only: dispatch, retry workers and
+/// runtime heartbeats remain Codex/Multica server responsibilities.
+fn agent_task_queue_collection(
+    workspace: &MulticaWorkspaceIdentity,
+    store: &MulticaExecutionStore,
+    limit: u16,
+    offset: u32,
+) -> anyhow::Result<MulticaWorkspaceCollection> {
+    let (bindings, total) = store.list_executions(&workspace.id, None, 100, 0)?;
+    let items = bindings
+        .into_iter()
+        .map(|binding| {
+            let status = match binding.state {
+                crate::multica_execution_store::MulticaExecutionBindingState::BindingPending => "queued",
+                crate::multica_execution_store::MulticaExecutionBindingState::Dispatched => "dispatched",
+                crate::multica_execution_store::MulticaExecutionBindingState::WaitingLocalDirectory => "waiting_local_directory",
+                crate::multica_execution_store::MulticaExecutionBindingState::Running => "running",
+                crate::multica_execution_store::MulticaExecutionBindingState::Completed => "completed",
+                crate::multica_execution_store::MulticaExecutionBindingState::Failed => "failed",
+                crate::multica_execution_store::MulticaExecutionBindingState::Cancelled
+                | crate::multica_execution_store::MulticaExecutionBindingState::CancelPending => "cancelled",
+                crate::multica_execution_store::MulticaExecutionBindingState::Stale
+                | crate::multica_execution_store::MulticaExecutionBindingState::Orphaned
+                | crate::multica_execution_store::MulticaExecutionBindingState::Reconciling => "failed",
+            };
+            json!({
+                "id": binding.binding_id,
+                "agent_id": binding.agent_id,
+                "issue_id": binding.issue_id,
+                "status": status,
+                "attempt": binding.attempt_no,
+                "max_attempts": 1,
+                "parent_task_id": binding.parent_attempt_id,
+                "failure_reason": binding.last_error_code,
+                "last_heartbeat_at_ms": binding.last_heartbeat_at_ms,
+                "created_at_ms": binding.created_at_ms,
+                "updated_at_ms": binding.updated_at_ms,
+                "completed_at_ms": binding.completed_at_ms,
+                "source": "codex_execution_binding_projection",
+                "execution_binding_id": binding.binding_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    let items = paginate(&items, limit, offset);
+    Ok(collection(
+        workspace,
+        MulticaWorkspaceResourceKey::AgentTaskQueue,
+        items,
+        total as u64,
+        limit,
+        offset,
+    ))
 }
 
 fn local_entity_collection(
@@ -2642,6 +2703,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn workspace_query_rejects_unbounded_pagination() {
@@ -2663,6 +2725,24 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn agent_task_queue_projection_is_empty_without_bindings() {
+        let dir = tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let workspace = MulticaWorkspaceIdentity {
+            id: "local-test".to_string(),
+            slug: "local-test".to_string(),
+            name: "Local".to_string(),
+        };
+        let collection = agent_task_queue_collection(&workspace, &store, 50, 0).unwrap();
+        assert_eq!(
+            collection.resource,
+            MulticaWorkspaceResourceKey::AgentTaskQueue
+        );
+        assert!(collection.items.is_empty());
+        assert_eq!(collection.total, 0);
     }
 
     #[test]
@@ -2690,6 +2770,7 @@ mod tests {
                 "runtimes",
                 "skills",
                 "settings",
+                "agent_task_queue",
             ]
         );
     }

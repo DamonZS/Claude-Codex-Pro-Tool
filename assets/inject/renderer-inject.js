@@ -6818,6 +6818,10 @@
     toolbar.appendChild(multicaWorkspaceEl("span", "ccp-multica-toolbar-spacer"));
     const working = multicaWorkspaceState.executions.filter((binding) => !multicaWorkspaceTerminalExecutionStates.has(multicaWorkspaceExecutionState(binding))).length;
     toolbar.appendChild(multicaWorkspaceEl("span", "ccp-multica-working-count", `${working} 个智能体工作中`));
+    const queue = multicaWorkspaceState.bootstrap?.collections?.agent_task_queue;
+    if (queue && Number.isFinite(Number(queue.total))) {
+      toolbar.appendChild(multicaWorkspaceEl("span", "ccp-multica-working-count", `队列 ${queue.total} 条`));
+    }
     const display = multicaWorkspaceEl("button", "ccp-multica-filter", "显示");
     display.type = "button";
     display.title = "切换卡片摘要";
