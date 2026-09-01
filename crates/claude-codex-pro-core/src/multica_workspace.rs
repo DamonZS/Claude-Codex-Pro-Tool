@@ -556,21 +556,91 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 2] {
             continue;
         };
         if sqlite_has_table(&db, "threads") {
+            let columns = sqlite_columns_safe(&db, "threads");
+            let title = if columns.iter().any(|c| c == "title") {
+                "title"
+            } else {
+                "''"
+            };
+            let cwd = if columns.iter().any(|c| c == "cwd") {
+                "cwd"
+            } else {
+                "''"
+            };
+            let updated = if columns.iter().any(|c| c == "updated_at_ms") {
+                "updated_at_ms"
+            } else {
+                "0"
+            };
+            let sql = format!(
+                "SELECT id, {title}, {cwd}, {updated} FROM threads ORDER BY COALESCE({updated}, 0) DESC LIMIT 100"
+            );
             let _ = db
-                .prepare("SELECT id, title, cwd, updated_at_ms FROM threads ORDER BY COALESCE(updated_at_ms, 0) DESC LIMIT 100")
+                .prepare(&sql)
                 .and_then(|mut stmt| {
                     let rows = stmt.query_map([], |row| {
-                        Ok(json!({
-                            "id": row.get::<_, String>(0)?,
-                            "title": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                            "cwd": row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                            "updated_at_ms": row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
-                            "source": "codex_native"
-                        }))
+                        let id: String = row.get(0)?;
+                        let title = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+                        let cwd = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                        let updated = row.get::<_, Option<i64>>(3)?.unwrap_or_default();
+                        Ok((id, title, cwd, updated))
                     })?;
-                    threads.extend(rows.flatten());
+                    for item in rows.flatten() {
+                        let (id, title, cwd, updated) = item;
+                        threads.push(json!({"id": id, "title": title, "cwd": cwd, "updated_at_ms": updated, "source": "codex_native"}));
+                    }
                     Ok(())
                 });
+            if sqlite_has_table(&db, "thread_spawn_edges") {
+                let cols = sqlite_columns_safe(&db, "thread_spawn_edges");
+                let child = if cols.iter().any(|c| c == "child_thread_id") {
+                    "child_thread_id"
+                } else {
+                    "child_id"
+                };
+                let parent = if cols.iter().any(|c| c == "parent_thread_id") {
+                    "parent_thread_id"
+                } else {
+                    "parent_id"
+                };
+                if cols.iter().any(|c| c == child) && cols.iter().any(|c| c == parent) {
+                    if let Ok(mut stmt) =
+                        db.prepare(&format!("SELECT {child}, {parent} FROM thread_spawn_edges"))
+                    {
+                        if let Ok(rows) = stmt.query_map([], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                        }) {
+                            for pair in rows.flatten() {
+                                if let Some(thread) = threads.iter_mut().find(|v| {
+                                    v.get("id").and_then(Value::as_str) == Some(pair.0.as_str())
+                                }) {
+                                    thread["parent_thread_id"] = Value::String(pair.1);
+                                    thread["is_subagent"] = Value::Bool(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if sqlite_has_table(&db, "thread_dynamic_tools") {
+                let cols = sqlite_columns_safe(&db, "thread_dynamic_tools");
+                let thread_col = if cols.iter().any(|c| c == "thread_id") {
+                    "thread_id"
+                } else {
+                    "threadId"
+                };
+                if cols.iter().any(|c| c == thread_col) {
+                    if let Ok(mut stmt) = db.prepare(&format!("SELECT {thread_col}, COUNT(*) FROM thread_dynamic_tools GROUP BY {thread_col}")) {
+                        if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))) {
+                            for pair in rows.flatten() {
+                                if let Some(thread) = threads.iter_mut().find(|v| v.get("id").and_then(Value::as_str) == Some(pair.0.as_str())) {
+                                    thread["dynamic_tool_call_count"] = Value::from(pair.1);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         if sqlite_has_table(&db, "project_roots") {
             let _ = db
@@ -611,6 +681,15 @@ fn sqlite_has_table(db: &Connection, table: &str) -> bool {
         |_| Ok(()),
     )
     .is_ok()
+}
+
+fn sqlite_columns_safe(db: &Connection, table: &str) -> Vec<String> {
+    let Ok(mut stmt) = db.prepare(&format!("PRAGMA table_info({table})")) else {
+        return Vec::new();
+    };
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
 }
 
 /// Query CCP-owned local state only. No managed profile, server, daemon, or
