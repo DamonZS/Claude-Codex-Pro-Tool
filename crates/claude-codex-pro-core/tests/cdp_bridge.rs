@@ -1106,6 +1106,16 @@ fn codex_multica_issue_cards_expose_subscription_toggle() {
 }
 
 #[test]
+fn codex_multica_issue_and_comment_cards_expose_reaction_toggle() {
+    let script = assets::injection_script(57321);
+    assert!(script.contains("multicaWorkspaceToggleReaction"));
+    assert!(script.contains("multicaWorkspaceToggleLabel"));
+    assert!(script.contains("label_ids"));
+    assert!(script.contains("targetType === \"issue\" ? \"issue_id\" : \"comment_id\""));
+    assert!(script.contains("actor_type: \"member\""));
+}
+
+#[test]
 fn codex_multica_agent_assignment_dispatches_native_subagent() {
     let script = assets::injection_script(57321);
     let workspace = source_between(

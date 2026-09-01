@@ -5413,7 +5413,7 @@
       // Keep both wire names from Multica and the legacy local aliases. The
       // embedded store is deliberately schema-tolerant, while the editor must
       // preserve fields returned by newer upstream servers.
-      issues: ["id", "title", "description", "status", "status_category", "status_name", "priority", "project_id", "projectId", "parent_issue_id", "parentIssueId", "assignee_type", "assigneeKind", "assignee_id", "assigneeId", "creator_type", "creator_id", "creatorId", "position", "stage", "start_date", "due_date", "metadata", "properties"],
+      issues: ["id", "title", "description", "status", "status_category", "status_name", "priority", "project_id", "projectId", "parent_issue_id", "parentIssueId", "assignee_type", "assigneeKind", "assignee_id", "assigneeId", "creator_type", "creator_id", "creatorId", "position", "stage", "start_date", "due_date", "label_ids", "labelIds", "metadata", "properties"],
       comments: ["id", "issue_id", "issueId", "author_type", "author_id", "content", "type", "parent_id", "parentId", "reactions", "attachments", "resolved_at", "resolved_by_type", "resolved_by_id", "source_task_id"],
       labels: ["id", "workspace_id", "resource_type", "resourceType", "name", "description", "color", "usage_count"],
       subscribers: ["id", "issue_id", "user_type", "user_id", "reason"],
@@ -5421,7 +5421,7 @@
       activities: ["id", "issue_id", "actor_type", "actor_id", "action", "details", "created_at"],
       projects: ["id", "title", "name", "description", "icon", "status", "priority", "lead_type", "lead_id", "start_date", "due_date", "resources", "members", "progress"],
       project_resources: ["id", "project_id", "projectId", "workspace_id", "resource_type", "resourceType", "resource_ref", "resourceRef", "label", "position"],
-      agents: ["id", "name", "description", "instructions", "enabled", "status", "runtime_id", "runtime_mode", "provider", "visibility", "permission_mode", "invocation_targets", "max_concurrent_tasks", "concurrency_limit", "concurrencyLimit", "model", "thinking_level", "service_tier", "skills", "disabled_runtime_skills", "runtime_bound", "conversation_starters"],
+      agents: ["id", "name", "description", "instructions", "enabled", "status", "runtime_id", "runtime_mode", "provider", "visibility", "permission_mode", "invocation_targets", "max_concurrent_tasks", "concurrency_limit", "concurrencyLimit", "model", "thinking_level", "service_tier", "skills", "label_ids", "labelIds", "disabled_runtime_skills", "runtime_bound", "conversation_starters"],
       squads: ["id", "name", "description", "instructions", "avatar_url", "leader_id", "leaderAgentId", "memberAgentIds", "members", "member_preview", "activity"],
       autopilots: ["id", "title", "name", "description", "project_id", "assignee_type", "assignee_id", "trigger_kind", "triggerKind", "execution_mode", "issue_title_template", "schedule", "enabled", "status", "subscribers", "triggers", "runs", "last_run_status", "next_run_at"],
     })[resource] || ["id"]);
@@ -5475,6 +5475,7 @@
       { key: "assignee_id", label: "执行者 ID" },
       { key: "start_date", label: "开始日期（YYYY-MM-DD）" },
       { key: "due_date", label: "截止日期（YYYY-MM-DD）" },
+      { key: "label_ids", label: "标签 ID（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "resources", label: "项目资源（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "members", label: "项目成员（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "progress", label: "项目进度（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
@@ -5513,6 +5514,7 @@
       { key: "model", label: "模型" },
       { key: "thinking_level", label: "思考级别" },
       { key: "service_tier", label: "服务层级" },
+      { key: "label_ids", label: "标签 ID（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "disabled_runtime_skills", label: "禁用运行时 Skills（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
       { key: "conversation_starters", label: "对话起始项（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: [] },
     ];
@@ -5805,18 +5807,71 @@
       && String(multicaWorkspaceObjectValue(entry, "user_id", "userId") || "") === userId,
     );
     if (current) {
-      await multicaWorkspaceDeleteEntity({ key: "subscribers", resource: "subscribers" }, current);
+      try {
+        await multicaWorkspaceDeleteEntity({ key: "subscribers", resource: "subscribers" }, current);
+      } catch (error) {
+        multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+      }
     } else {
       const entity = { id: multicaWorkspaceNewId("subscriber"), issue_id: issueId, user_type: "member", user_id: userId, reason: "manual" };
       multicaWorkspaceState.mutationBusy = true;
       try {
         await multicaWorkspaceCall("/multica/workspace/upsert", { resource: "subscribers", entity, expectedRevision: 0 });
         await multicaWorkspaceRefreshMutationResource({ key: "subscribers", resource: "subscribers" }, "subscribers");
+      } catch (error) {
+        multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
       } finally {
         multicaWorkspaceState.mutationBusy = false;
         if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
       }
     }
+  }
+
+  async function multicaWorkspaceToggleReaction(targetType, item, emoji = "👍") {
+    const targetId = multicaWorkspaceEntityId(item);
+    const userId = String(multicaWorkspaceState.bootstrap?.user?.id || "").trim();
+    if (!targetId || !userId || multicaWorkspaceState.mutationBusy) return;
+    const collection = multicaWorkspaceState.collections.get("reactions");
+    const current = (collection?.items || []).find((entry) =>
+      String(multicaWorkspaceObjectValue(entry, targetType === "issue" ? "issue_id" : "comment_id") || "") === targetId
+      && String(multicaWorkspaceObjectValue(entry, "actor_id") || "") === userId
+      && String(multicaWorkspaceObjectValue(entry, "emoji") || "") === emoji,
+    );
+    const module = { key: "reactions", resource: "reactions" };
+    if (current) {
+      try {
+        await multicaWorkspaceDeleteEntity(module, current);
+      } catch (error) {
+        multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+      }
+      return;
+    }
+    multicaWorkspaceState.mutationBusy = true;
+    try {
+      await multicaWorkspaceCall("/multica/workspace/upsert", {
+        resource: "reactions",
+        entity: { id: multicaWorkspaceNewId("reaction"), [`${targetType}_id`]: targetId, actor_type: "member", actor_id: userId, emoji },
+        expectedRevision: 0,
+      });
+      await multicaWorkspaceRefreshMutationResource(module, "reactions");
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+    } finally {
+      multicaWorkspaceState.mutationBusy = false;
+      if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+    }
+  }
+
+  async function multicaWorkspaceToggleLabel(module, item) {
+    const resource = multicaWorkspaceWritableResource(module);
+    if (!(resource === "issues" || resource === "agents") || multicaWorkspaceState.mutationBusy) return;
+    const labelId = String(window.prompt?.("输入要切换的 label_id", "") || "").trim();
+    if (!labelId) return;
+    const current = multicaWorkspaceObjectValue(item, "label_ids", "labelIds");
+    const labelIds = Array.isArray(current) ? current.map((value) => String(value)).filter(Boolean) : [];
+    const index = labelIds.indexOf(labelId);
+    if (index >= 0) labelIds.splice(index, 1); else labelIds.push(labelId);
+    await multicaWorkspacePatchEntity(module, item, { label_ids: labelIds }, index >= 0 ? "已移除标签" : "已添加标签");
   }
 
   async function multicaWorkspaceTriggerAutopilot(module, item) {
@@ -6167,6 +6222,8 @@
         );
         add(subscribed ? "取消订阅" : "订阅", () => void multicaWorkspaceToggleIssueSubscription(module, item));
       }
+      if (localUserId) add("👍", () => void multicaWorkspaceToggleReaction("issue", item));
+      add("标签", () => void multicaWorkspaceToggleLabel(module, item));
     } else if (resource === "comments") {
       const resolvedAt = multicaWorkspaceObjectValue(item, "resolved_at", "resolvedAt");
       if (resolvedAt) {
@@ -6183,9 +6240,13 @@
           resolved_by_id: userId || null,
         }, "已标记为已解决"));
       }
+      if (String(multicaWorkspaceState.bootstrap?.user?.id || "").trim()) {
+        add("👍", () => void multicaWorkspaceToggleReaction("comment", item));
+      }
     } else if (resource === "agents") {
       const enabled = multicaWorkspaceObjectValue(item, "enabled") !== false;
       add(enabled ? "停用" : "启用", () => void multicaWorkspacePatchEntity(module, item, { enabled: !enabled }, enabled ? "已停用" : "已启用"));
+      add("标签", () => void multicaWorkspaceToggleLabel(module, item));
     } else if (resource === "autopilots") {
       const status = String(multicaWorkspaceObjectValue(item, "status") || "active").toLowerCase();
       const paused = status === "paused";
