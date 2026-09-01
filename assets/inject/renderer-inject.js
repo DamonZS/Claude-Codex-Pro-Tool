@@ -6967,7 +6967,7 @@
     }
   }
 
-  async function multicaWorkspaceLoadCurrentRoute(force = true, timeoutMs = 2000, openSequence = multicaWorkspaceState.openSeq) {
+  async function multicaWorkspaceLoadCurrentRoute(force = true, timeoutMs = 15000, openSequence = multicaWorkspaceState.openSeq) {
     const bootstrapReady = await multicaWorkspaceLoadBootstrap(force, timeoutMs);
     if (openSequence !== multicaWorkspaceState.openSeq ||
         (!multicaWorkspaceState.opened && !multicaWorkspaceState.opening) ||
@@ -6984,7 +6984,7 @@
       return;
     }
     if (multicaWorkspaceState.opened || multicaWorkspaceState.opening) {
-      if (multicaWorkspaceState.opened) void multicaWorkspaceLoadCurrentRoute(true, 2000);
+      if (multicaWorkspaceState.opened) void multicaWorkspaceLoadCurrentRoute(true, 15000);
       return;
     }
     const plugin = pluginEntryButton();
@@ -7011,7 +7011,7 @@
     // both bootstrap and the first my-issues collection. Only then take over
     // the surface; a bridge timeout must never replace usable Codex content
     // with a dead workspace view.
-    const ready = await multicaWorkspaceLoadCurrentRoute(true, 2000, openSequence);
+    const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);
     if (openSequence !== multicaWorkspaceState.openSeq ||
         !multicaWorkspaceState.opening ||
         window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;

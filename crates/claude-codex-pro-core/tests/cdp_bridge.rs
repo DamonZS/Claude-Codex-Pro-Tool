@@ -547,6 +547,8 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("normalizedMethod === \"initialize\" && selected.initializeResponse"));
     assert!(host.contains("client.sendRequest(normalizedMethod, params)"));
     assert!(host.contains("window.__claudeCodexProCodexPageHostRequest"));
+    assert!(host.contains("timeoutMs = 15000"));
+    assert!(!host.contains("multicaWorkspaceLoadCurrentRoute(true, 2000"));
     let cleanup = source_between(
         host,
         "function cleanupCodexPageHostRequest()",
@@ -924,7 +926,7 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
     );
 
     let preflight = open
-        .find("const ready = await multicaWorkspaceLoadCurrentRoute(true, 2000, openSequence);")
+        .find("const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);")
         .expect("open preflight must await bootstrap and my-issues");
     let takeover = open
         .find("multicaWorkspaceState.opened = true;")
