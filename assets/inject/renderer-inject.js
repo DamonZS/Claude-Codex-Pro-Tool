@@ -5949,6 +5949,7 @@
         timezone: String(window.prompt?.("timezone", "UTC") || "UTC").trim() || "UTC",
       } : {}),
       label: String(window.prompt?.("label（可选）", "") || "").trim(),
+      ...(kind === "webhook" ? { event_filters: {} } : {}),
     };
     const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
     triggers.push(trigger);
@@ -5987,6 +5988,14 @@
     }
     const label = String(window.prompt?.("label（留空清除）", String(current.label || "")) || "").trim();
     if (label) next.label = label; else delete next.label;
+    if (next.kind === "webhook") {
+      const rawFilters = String(window.prompt?.("event_filters（JSON，留空清除）", current.event_filters ? JSON.stringify(current.event_filters) : "") || "").trim();
+      if (rawFilters) {
+        try { next.event_filters = JSON.parse(rawFilters); } catch (_) { return; }
+      } else {
+        delete next.event_filters;
+      }
+    }
     triggers[index] = next;
     await multicaWorkspacePatchEntity(module, item, { triggers }, "已更新自动化触发器");
   }
