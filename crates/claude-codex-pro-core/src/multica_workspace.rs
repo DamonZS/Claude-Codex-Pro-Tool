@@ -547,9 +547,10 @@ async fn local_workspace_bootstrap(
     })
 }
 
-fn codex_native_inventory() -> [(&'static str, Vec<Value>); 2] {
+fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
     let mut threads = Vec::new();
     let mut projects = Vec::new();
+    let mut tool_calls = Vec::new();
     let home = crate::codex_sqlite::default_codex_home_dir();
     for path in crate::codex_sqlite::codex_session_db_paths_from_home(&home) {
         let Ok(db) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
@@ -639,6 +640,29 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 2] {
                             }
                         }
                     }
+                    let name_col = ["name", "tool_name", "toolName", "slug"]
+                        .into_iter()
+                        .find(|c| cols.iter().any(|x| x == c));
+                    if let Some(name_col) = name_col {
+                        let id_col = ["id", "call_id", "callId"]
+                            .into_iter()
+                            .find(|c| cols.iter().any(|x| x == c))
+                            .unwrap_or(thread_col);
+                        if let Ok(mut stmt) = db.prepare(&format!(
+                            "SELECT {thread_col}, {name_col}, {id_col} FROM thread_dynamic_tools LIMIT 500"
+                        )) {
+                            if let Ok(rows) = stmt.query_map([], |row| {
+                                Ok(json!({
+                                    "id": row.get::<_, String>(2).unwrap_or_default(),
+                                    "thread_id": row.get::<_, String>(0).unwrap_or_default(),
+                                    "name": row.get::<_, String>(1).unwrap_or_default(),
+                                    "source": "codex_native"
+                                }))
+                            }) {
+                                tool_calls.extend(rows.flatten());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -668,9 +692,11 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 2] {
     });
     projects.dedup_by(|a, b| a.get("path") == b.get("path"));
     projects.truncate(100);
+    tool_calls.truncate(500);
     [
         ("codex_native_threads", threads),
         ("codex_native_projects", projects),
+        ("codex_native_tool_calls", tool_calls),
     ]
 }
 
