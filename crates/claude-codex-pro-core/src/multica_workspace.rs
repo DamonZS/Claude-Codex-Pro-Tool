@@ -551,7 +551,7 @@ async fn local_workspace_bootstrap(
     })
 }
 
-fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
+fn codex_native_inventory() -> [(&'static str, Vec<Value>); 5] {
     let mut threads = Vec::new();
     let mut projects = Vec::new();
     let mut project_paths = Vec::new();
@@ -744,6 +744,9 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
             thread["project_id"] = Value::String(format!("codex-project:{project_path}"));
         }
     }
+    let native_agents = codex_native_agents_from_threads(&threads);
+    let native_skills = codex_native_skills(&home);
+
     threads.sort_by(|a, b| {
         b.get("updated_at_ms")
             .and_then(Value::as_i64)
@@ -762,7 +765,90 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
         ("codex_native_threads", threads),
         ("codex_native_projects", projects),
         ("codex_native_tool_calls", tool_calls),
+        ("codex_native_agents", native_agents),
+        ("codex_native_skills", native_skills),
     ]
+}
+
+fn codex_native_agents_from_threads(threads: &[Value]) -> Vec<Value> {
+    threads
+        .iter()
+        .filter(|thread| thread.get("is_subagent").and_then(Value::as_bool) == Some(true))
+        .map(|thread| {
+            let mut agent = json!({
+                "id": thread.get("id").cloned().unwrap_or(Value::Null),
+                "source": "codex_native",
+                "kind": "subagent",
+            });
+            for key in [
+                "title",
+                "cwd",
+                "updated_at_ms",
+                "parent_thread_id",
+                "project_id",
+                "project_path",
+            ] {
+                if let Some(value) = thread.get(key) {
+                    agent[key] = value.clone();
+                }
+            }
+            agent
+        })
+        .take(100)
+        .collect()
+}
+
+/// Read only bounded metadata from the user's real Codex skill directories.
+/// Skill instructions themselves never enter the workspace projection.
+fn codex_native_skills(home: &Path) -> Vec<Value> {
+    let root = home.join("skills");
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut skills = Vec::new();
+    for entry in entries.flatten() {
+        if skills.len() >= 100 || !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let path = entry.path();
+        let id = entry.file_name().to_string_lossy().trim().to_string();
+        if id.is_empty() || id.starts_with('.') {
+            continue;
+        }
+        let manifest = path.join("SKILL.md");
+        let Ok(content) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        let mut title = id.clone();
+        let mut description = String::new();
+        for line in content.lines().take(40) {
+            let trimmed = line.trim();
+            if let Some(value) = trimmed.strip_prefix("# ") {
+                if !value.trim().is_empty() {
+                    title = value.trim().to_string();
+                }
+            } else if let Some(value) = trimmed.strip_prefix("description:") {
+                description = value.trim().trim_matches(['"', '\'']).to_string();
+            }
+            if title != id && !description.is_empty() {
+                break;
+            }
+        }
+        skills.push(json!({
+            "id": format!("codex-skill:{id}"),
+            "name": id,
+            "title": title,
+            "description": description,
+            "source": "codex_native",
+            "read_only": true,
+        }));
+    }
+    skills.sort_by(|a, b| {
+        a.get("name")
+            .and_then(Value::as_str)
+            .cmp(&b.get("name").and_then(Value::as_str))
+    });
+    skills
 }
 
 fn normalize_project_path(path: &str) -> String {
@@ -2925,6 +3011,52 @@ mod tests {
         assert!(!encoded.contains("\"scope\""));
         assert!(encoded.contains("\"inventory_source\":\"codex_page_host\""));
         assert!(encoded.contains("\"execution_supported\":true"));
+    }
+
+    #[test]
+    fn codex_native_skills_projects_manifest_metadata_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("skills").join("review");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Review Changes\ndescription: \"Inspect a diff\"\n\nSECRET_BODY=must_not_project\n",
+        )
+        .unwrap();
+        let skills = codex_native_skills(dir.path());
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0]["name"], "review");
+        assert_eq!(skills[0]["title"], "Review Changes");
+        assert_eq!(skills[0]["description"], "Inspect a diff");
+        let encoded = serde_json::to_string(&skills[0]).unwrap();
+        assert!(!encoded.contains("SECRET_BODY"));
+        assert!(!encoded.contains("path"));
+    }
+
+    #[test]
+    fn codex_native_agents_only_project_real_subagents() {
+        let threads = vec![
+            json!({
+                "id": "child-1",
+                "title": "Child task",
+                "cwd": "C:\\work",
+                "updated_at_ms": 20,
+                "parent_thread_id": "parent-1",
+                "is_subagent": true,
+            }),
+            json!({
+                "id": "normal-1",
+                "title": "Regular task",
+                "is_subagent": false,
+            }),
+            json!({"id": "unknown-1", "title": "No marker"}),
+        ];
+        let agents = codex_native_agents_from_threads(&threads);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0]["id"], "child-1");
+        assert_eq!(agents[0]["kind"], "subagent");
+        assert_eq!(agents[0]["parent_thread_id"], "parent-1");
+        assert_eq!(agents[0]["source"], "codex_native");
     }
 
     #[test]

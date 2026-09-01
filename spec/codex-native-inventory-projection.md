@@ -27,4 +27,8 @@
   `project_roots.path` 和线程 `cwd` 时，按规范化后的绝对路径执行大小写不敏感的
   精确/子目录匹配，并将最长匹配项目写入线程的只读 `project_id`、`project_path`；
   无匹配时保留线程但不伪造项目归属。
+- 当本机 Codex 状态库提供线程父子关系时，将子线程投影为只读原生子智能体；
+  不创建 Multica Agent、不推断执行绑定。
+- 从 `~/.codex/skills/<name>/SKILL.md` 读取只读名称、标题和描述元数据，作为
+  原生 Skills 清单；不得把 Skill 正文、凭据或运行路径写入可编辑实体。
 - 本地实体编辑器必须以 Multica 上游 wire 字段为主（Issue、Project、Agent、Squad、Autopilot），并兼容既有本地 camelCase 别名；保存时不得丢弃上游已返回的安全业务字段。

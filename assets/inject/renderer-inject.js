@@ -6683,8 +6683,26 @@
       toolGroup.appendChild(list);
     }
     section.appendChild(toolGroup);
+    const nativeSkills = multicaWorkspaceState.bootstrap?.collections?.codex_native_skills?.items || [];
+    const skillGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+    skillGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生 Skills（${nativeSkills.length}）`));
+    if (nativeSkills.length === 0) {
+      skillGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前本机没有可读取的 Codex Skill 清单"));
+    } else {
+      const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+      nativeSkills.slice(0, 100).forEach((skill) => {
+        const name = String(skill.title || skill.name || "未命名 Skill").trim();
+        const id = String(skill.name || "").trim();
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-session", id ? `${name} · ${id}` : name);
+        item.title = String(skill.description || "来自 ~/.codex/skills 的只读元数据");
+        list.appendChild(item);
+      });
+      skillGroup.appendChild(list);
+    }
+    section.appendChild(skillGroup);
     const agentGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
-    agentGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", "智能体"));
+    const nativeAgents = multicaWorkspaceState.bootstrap?.collections?.codex_native_agents?.items || [];
+    agentGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生智能体（${nativeAgents.length}）`));
     const agents = multicaWorkspaceState.collections.get("agents")?.items || [];
     // Only project agents that have a persisted Codex thread mapping.  A
     // local Agent definition alone is not evidence that the current Codex
@@ -6695,11 +6713,17 @@
       .map((binding) => multicaWorkspaceObjectValue(binding, "agentId", "agent_id"))
       .filter(Boolean));
     const boundAgents = agents.filter((agent) => boundAgentIds.has(multicaWorkspaceObjectValue(agent, "id")));
-    if (boundAgents.length === 0) {
+    if (boundAgents.length === 0 && nativeAgents.length === 0) {
       const supported = multicaWorkspaceState.bootstrap?.runtime?.multiAgentSupported === true;
       agentGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", supported ? "暂无已绑定的本地智能体" : "当前页面未提供可核实的原生智能体绑定"));
     } else {
       const list = multicaWorkspaceEl("div", "ccp-multica-native-agent-list");
+      nativeAgents.slice(0, 100).forEach((agent) => {
+        const label = String(agent.title || agent.id || "未命名智能体").trim();
+        const item = multicaWorkspaceEl("span", "ccp-multica-native-agent", `${label} · Codex 原生子智能体`);
+        item.title = "来自 Codex 原生线程父子关系的只读智能体投影";
+        list.appendChild(item);
+      });
       boundAgents.slice(0, 100).forEach((agent) => {
         const label = String(multicaWorkspaceObjectValue(agent, "name", "title") || multicaWorkspaceObjectValue(agent, "id") || "未命名智能体");
         const item = multicaWorkspaceEl("span", "ccp-multica-native-agent", `${label} · 已绑定原生执行`);
