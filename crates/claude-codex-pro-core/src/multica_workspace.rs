@@ -2312,11 +2312,16 @@ fn validate_entity_contract(
                     .unwrap_or_default();
                 if !matches!(
                     status,
-                    "issue_created"
+                    "queued"
+                        | "binding_pending"
+                        | "waiting_local_directory"
+                        | "dispatched"
+                        | "issue_created"
                         | "running"
                         | "completed"
                         | "failed"
                         | "skipped"
+                        | "cancelled"
                         | "unsupported"
                 ) {
                     bail!("multica_workspace_autopilot_run_invalid");
@@ -3224,6 +3229,24 @@ mod tests {
         state.autopilots[0]["runs"] = json!([{"status":"done"}]);
         let error = validate_local_workspace_state(&state).unwrap_err();
         assert_eq!(error.to_string(), "multica_workspace_autopilot_run_invalid");
+
+        for status in [
+            "queued",
+            "binding_pending",
+            "waiting_local_directory",
+            "dispatched",
+            "issue_created",
+            "running",
+            "completed",
+            "failed",
+            "skipped",
+            "cancelled",
+            "unsupported",
+        ] {
+            state.autopilots[0]["runs"] = json!([{"status": status}]);
+            validate_local_workspace_state(&state)
+                .unwrap_or_else(|error| panic!("status {status} rejected: {error}"));
+        }
     }
 
     #[test]
