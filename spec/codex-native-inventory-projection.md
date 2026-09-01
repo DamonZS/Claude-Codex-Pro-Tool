@@ -31,4 +31,6 @@
   不创建 Multica Agent、不推断执行绑定。
 - 从 `~/.codex/skills/<name>/SKILL.md` 读取只读名称、标题和描述元数据，作为
   原生 Skills 清单；不得把 Skill 正文、凭据或运行路径写入可编辑实体。
+- 从 `thread_history_1.sqlite/thread_items` 投影 `codex_native_events`，字段限于线程、事件 ID、类型、序号、时间和最多 160 字符摘要，供任务审计与对账使用。
+- 原生事件索引不得包含完整消息正文、工具参数、命令输出或凭据；读取始终使用 SQLite 只读连接并限制最多 1000 条。
 - 本地实体编辑器必须以 Multica 上游 wire 字段为主（Issue、Project、Agent、Squad、Autopilot），并兼容既有本地 camelCase 别名；保存时不得丢弃上游已返回的安全业务字段。

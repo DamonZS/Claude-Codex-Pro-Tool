@@ -551,11 +551,12 @@ async fn local_workspace_bootstrap(
     })
 }
 
-fn codex_native_inventory() -> [(&'static str, Vec<Value>); 5] {
+fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
     let mut threads = Vec::new();
     let mut projects = Vec::new();
     let mut project_paths = Vec::new();
     let mut tool_calls = Vec::new();
+    let mut native_events = Vec::new();
     let home = crate::codex_sqlite::default_codex_home_dir();
     for path in crate::codex_sqlite::codex_session_db_paths_from_home(&home) {
         let Ok(db) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
@@ -696,24 +697,54 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 5] {
     if let Ok(db) = Connection::open_with_flags(&history_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         && sqlite_has_table(&db, "thread_items")
     {
-        if let Ok(mut stmt) = db.prepare(
-            "SELECT thread_id, item_id, item_type, item_json FROM thread_items ORDER BY created_at_ms DESC LIMIT 1000",
-        ) {
+        let columns = sqlite_columns_safe(&db, "thread_items");
+        let created = if columns.iter().any(|c| c == "created_at_ms") {
+            "created_at_ms"
+        } else {
+            "0"
+        };
+        let sequence = if columns.iter().any(|c| c == "seq") {
+            "seq"
+        } else {
+            "0"
+        };
+        if let Ok(mut stmt) = db.prepare(&format!(
+            "SELECT thread_id, item_id, item_type, item_json, {created}, {sequence} FROM thread_items ORDER BY {created} DESC LIMIT 1000"
+        )) {
             if let Ok(rows) = stmt.query_map([], |row| {
                 let thread_id: String = row.get(0)?;
                 let item_id: String = row.get(1)?;
                 let item_type: String = row.get(2)?;
                 let item_json: String = row.get(3)?;
-                Ok((thread_id, item_id, item_type, item_json))
+                let created_at_ms = row.get::<_, Option<i64>>(4)?.unwrap_or_default();
+                let sequence = row.get::<_, Option<i64>>(5)?.unwrap_or_default();
+                Ok((thread_id, item_id, item_type, item_json, created_at_ms, sequence))
             }) {
-                for (thread_id, item_id, item_type, item_json) in rows.flatten() {
+                for (thread_id, item_id, item_type, item_json, created_at_ms, sequence) in rows.flatten() {
+                    let parsed = serde_json::from_str::<Value>(&item_json).ok();
+                    let summary = parsed.as_ref().and_then(|value| {
+                        ["text", "status", "role", "name", "tool_name", "toolName"]
+                            .into_iter()
+                            .find_map(|key| value.get(key).and_then(Value::as_str))
+                    }).map(|value| value.chars().take(160).collect::<String>());
+                    let mut event = json!({
+                        "id": item_id,
+                        "thread_id": thread_id,
+                        "item_type": item_type,
+                        "created_at_ms": created_at_ms,
+                        "sequence": sequence,
+                        "source": "codex_native"
+                    });
+                    if let Some(summary) = summary {
+                        event["summary"] = Value::String(summary);
+                    }
+                    native_events.push(event);
                     if !matches!(
                         item_type.as_str(),
                         "subAgentActivity" | "mcpToolCall" | "dynamicToolCall"
                     ) {
                         continue;
                     }
-                    let parsed = serde_json::from_str::<Value>(&item_json).ok();
                     let name = parsed.as_ref().and_then(|value| {
                         ["name", "tool_name", "toolName", "command"]
                             .into_iter()
@@ -761,12 +792,14 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 5] {
     projects.dedup_by(|a, b| a.get("path") == b.get("path"));
     projects.truncate(100);
     tool_calls.truncate(500);
+    native_events.truncate(1000);
     [
         ("codex_native_threads", threads),
         ("codex_native_projects", projects),
         ("codex_native_tool_calls", tool_calls),
         ("codex_native_agents", native_agents),
         ("codex_native_skills", native_skills),
+        ("codex_native_events", native_events),
     ]
 }
 
