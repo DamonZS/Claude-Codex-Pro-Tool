@@ -1085,6 +1085,8 @@ fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
     assert!(item.contains("reason_code: \"codex_host_execution_unavailable\""));
     assert!(item.contains("status: \"unsupported\""));
     assert!(item.contains("立即触发"));
+    assert!(item.contains("multicaWorkspaceCreateAutopilotTrigger"));
+    assert!(item.contains("multicaWorkspaceDeleteAutopilotTrigger"));
     assert!(item.contains("运行历史"));
 }
 

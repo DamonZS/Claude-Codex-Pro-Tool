@@ -5935,6 +5935,32 @@
     }, "已记录触发请求（当前 Host 不支持执行）");
   }
 
+  async function multicaWorkspaceCreateAutopilotTrigger(module, item) {
+    if (multicaWorkspaceWritableResource(module) !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
+    const kind = String(window.prompt?.("触发器类型：schedule / webhook / api", "schedule") || "").trim().toLowerCase();
+    if (!["schedule", "webhook", "api"].includes(kind)) return;
+    const trigger = {
+      id: multicaWorkspaceNewId("autopilot-trigger"),
+      kind,
+      enabled: true,
+      ...(kind === "schedule" ? { cron_expression: String(window.prompt?.("cron_expression", "0 * * * *") || "").trim() } : {}),
+    };
+    const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
+    triggers.push(trigger);
+    await multicaWorkspacePatchEntity(module, item, { triggers }, "已创建自动化触发器");
+  }
+
+  async function multicaWorkspaceDeleteAutopilotTrigger(module, item) {
+    if (multicaWorkspaceWritableResource(module) !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
+    const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
+    if (!triggers.length) return;
+    const triggerId = String(window.prompt?.("输入要删除的 trigger_id", String(triggers[0].id || "")) || "").trim();
+    if (!triggerId) return;
+    const next = triggers.filter((trigger) => String(trigger?.id || "") !== triggerId);
+    if (next.length === triggers.length) return;
+    await multicaWorkspacePatchEntity(module, item, { triggers: next }, "已删除自动化触发器");
+  }
+
   function multicaWorkspaceIssuePrompt(item) {
     const title = String(multicaWorkspaceObjectValue(item, "title", "name") || "").trim();
     const description = String(multicaWorkspaceObjectValue(item, "description") || "").trim();
@@ -6294,6 +6320,8 @@
       if (!archived) {
         add(paused ? "启用" : "暂停", () => void multicaWorkspacePatchEntity(module, item, { status: paused ? "active" : "paused" }, paused ? "已启用" : "已暂停"));
         add("立即触发", () => void multicaWorkspaceTriggerAutopilot(module, item), "primary");
+        add("新增触发器", () => void multicaWorkspaceCreateAutopilotTrigger(module, item));
+        if (Array.isArray(item.triggers) && item.triggers.length) add("删除触发器", () => void multicaWorkspaceDeleteAutopilotTrigger(module, item));
       }
     }
     add("编辑", () => multicaWorkspaceOpenEditor(module, item));
