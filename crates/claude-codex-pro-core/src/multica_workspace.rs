@@ -1156,11 +1156,26 @@ fn project_issue_collaboration(issues: &mut [Value], state: &LocalMulticaWorkspa
             .labels
             .iter()
             .filter(|label| {
-                label
+                let direct_issue = label
                     .get("issue_id")
                     .or_else(|| label.get("issueId"))
                     .and_then(Value::as_str)
-                    == Some(issue_id)
+                    == Some(issue_id);
+                let linked_issue = label
+                    .get("issue_ids")
+                    .or_else(|| label.get("issueIds"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(issue_id)));
+                let issue_label_id = issue
+                    .get("label_ids")
+                    .or_else(|| issue.get("labelIds"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|ids| {
+                        label.get("id").and_then(Value::as_str).is_some_and(|id| {
+                            ids.iter().any(|candidate| candidate.as_str() == Some(id))
+                        })
+                    });
+                direct_issue || linked_issue || issue_label_id
             })
             .cloned()
             .collect();
@@ -1184,11 +1199,17 @@ fn project_issue_collaboration(issues: &mut [Value], state: &LocalMulticaWorkspa
             .reactions
             .iter()
             .filter(|reaction| {
-                reaction
+                let direct_issue = reaction
+                    .get("issue_id")
+                    .or_else(|| reaction.get("issueId"))
+                    .and_then(Value::as_str)
+                    == Some(issue_id);
+                let comment_reaction = reaction
                     .get("comment_id")
                     .or_else(|| reaction.get("commentId"))
                     .and_then(Value::as_str)
-                    .is_some_and(|comment_id| comment_ids.contains(comment_id))
+                    .is_some_and(|comment_id| comment_ids.contains(comment_id));
+                direct_issue || comment_reaction
             })
             .cloned()
             .collect();
@@ -1833,10 +1854,11 @@ fn validate_entity_contract(
         return Ok(());
     }
     if resource == MulticaWorkspaceResourceKey::Reactions {
-        for key in ["comment_id", "actor_id"] {
-            if object.get(key).and_then(Value::as_str).is_none() {
-                bail!("multica_workspace_reaction_invalid");
-            }
+        if object.get("actor_id").and_then(Value::as_str).is_none()
+            || (object.get("comment_id").and_then(Value::as_str).is_none()
+                && object.get("issue_id").and_then(Value::as_str).is_none())
+        {
+            bail!("multica_workspace_reaction_invalid");
         }
         let emoji = object
             .get("emoji")
@@ -2518,7 +2540,9 @@ mod tests {
 
     #[test]
     fn issue_projection_merges_only_matching_collaboration_entities() {
-        let mut issues = vec![json!({"id":"issue-a","workspace_id":"local-test","revision":1})];
+        let mut issues = vec![
+            json!({"id":"issue-a","workspace_id":"local-test","revision":1,"label_ids":["label-b"]}),
+        ];
         let mut state = LocalMulticaWorkspaceState::empty("local-test");
         state.comments.push(json!({"id":"comment-a","issue_id":"issue-a","created_at":"2026-01-02T00:00:00Z","content":"ok"}));
         state.comments.push(
@@ -2533,14 +2557,18 @@ mod tests {
         state
             .reactions
             .push(json!({"id":"reaction-b","comment_id":"comment-b","emoji":"-1"}));
+        state.reactions.push(
+            json!({"id":"reaction-issue","issue_id":"issue-a","actor_id":"actor","emoji":"heart"}),
+        );
         state
             .labels
             .push(json!({"id":"label-a","issue_id":"issue-a","name":"bug"}));
+        state.labels.push(json!({"id":"label-b","name":"feature"}));
         project_issue_collaboration(&mut issues, &state);
         assert_eq!(issues[0]["comment_count"], 1);
         assert_eq!(issues[0]["activity_count"], 1);
-        assert_eq!(issues[0]["labels"].as_array().map(Vec::len), Some(1));
-        assert_eq!(issues[0]["reactions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(issues[0]["labels"].as_array().map(Vec::len), Some(2));
+        assert_eq!(issues[0]["reactions"].as_array().map(Vec::len), Some(2));
         assert_eq!(issues[0]["last_activity_at"], "2026-01-04T00:00:00Z");
         assert_eq!(issues[0]["revision"], 1);
     }
