@@ -6309,10 +6309,12 @@
       projectGroup.appendChild(list);
     }
     section.appendChild(projectGroup);
+    const nativeThreads = multicaWorkspaceState.bootstrap?.collections?.codex_native_threads?.items || [];
     const sessions = multicaWorkspaceNativeSessionRows();
     const sessionGroup = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
-    sessionGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生会话（${sessions.length}）`));
-    if (sessions.length === 0) {
+    const sessionCount = Math.max(sessions.length, nativeThreads.length);
+    sessionGroup.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `原生会话（${sessionCount}）`));
+    if (sessions.length === 0 && nativeThreads.length === 0) {
       sessionGroup.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "当前页面没有可读取的原生会话"));
     } else {
       const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
@@ -6334,6 +6336,15 @@
         });
         list.appendChild(button);
       });
+      if (sessions.length === 0) {
+        nativeThreads.slice(0, 100).forEach((thread) => {
+          const id = String(thread.id || "").trim();
+          const title = String(thread.title || id).replace(/\s+/g, " ").trim().slice(0, 160) || id;
+          const item = multicaWorkspaceEl("span", "ccp-multica-native-session", `${title} · ${id}`);
+          item.title = "来自 Codex 本机状态库的只读快照；当前页面没有可点击的原生行";
+          list.appendChild(item);
+        });
+      }
       sessionGroup.appendChild(list);
     }
     section.appendChild(sessionGroup);

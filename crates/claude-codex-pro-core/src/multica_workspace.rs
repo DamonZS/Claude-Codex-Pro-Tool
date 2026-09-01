@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail};
 use fs2::FileExt;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -500,6 +501,23 @@ async fn local_workspace_bootstrap(
         });
         collections.insert(resource.key().to_string(), value);
     }
+    // Native Codex state is a separate, read-only projection.  It is not
+    // folded into editable Multica entities because the SQLite schema and
+    // lifecycle are owned by Codex itself.
+    for (key, items) in codex_native_inventory() {
+        let total = items.len() as u64;
+        collections.insert(
+            key.to_string(),
+            collection(
+                &workspace,
+                MulticaWorkspaceResourceKey::Projects,
+                items,
+                total,
+                100,
+                0,
+            ),
+        );
+    }
 
     let runtime_summary = match (enabled, runtime.as_ref()) {
         (false, _) => unavailable_runtime_summary(MULTICA_WORKSPACE_DISABLED),
@@ -527,6 +545,72 @@ async fn local_workspace_bootstrap(
             .collect(),
         collections,
     })
+}
+
+fn codex_native_inventory() -> [(&'static str, Vec<Value>); 2] {
+    let mut threads = Vec::new();
+    let mut projects = Vec::new();
+    let home = crate::codex_sqlite::default_codex_home_dir();
+    for path in crate::codex_sqlite::codex_session_db_paths_from_home(&home) {
+        let Ok(db) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+            continue;
+        };
+        if sqlite_has_table(&db, "threads") {
+            let _ = db
+                .prepare("SELECT id, title, cwd, updated_at_ms FROM threads ORDER BY COALESCE(updated_at_ms, 0) DESC LIMIT 100")
+                .and_then(|mut stmt| {
+                    let rows = stmt.query_map([], |row| {
+                        Ok(json!({
+                            "id": row.get::<_, String>(0)?,
+                            "title": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                            "cwd": row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            "updated_at_ms": row.get::<_, Option<i64>>(3)?.unwrap_or_default(),
+                            "source": "codex_native"
+                        }))
+                    })?;
+                    threads.extend(rows.flatten());
+                    Ok(())
+                });
+        }
+        if sqlite_has_table(&db, "project_roots") {
+            let _ = db
+                .prepare("SELECT path FROM project_roots WHERE COALESCE(path, '') <> '' LIMIT 100")
+                .and_then(|mut stmt| {
+                    let rows = stmt.query_map([], |row| {
+                        let path: String = row.get(0)?;
+                        Ok(json!({"id": format!("codex-project:{}", path), "path": path, "source": "codex_native"}))
+                    })?;
+                    projects.extend(rows.flatten());
+                    Ok(())
+                });
+        }
+    }
+    threads.sort_by(|a, b| {
+        b.get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .cmp(&a.get("updated_at_ms").and_then(Value::as_i64))
+    });
+    threads.truncate(100);
+    projects.sort_by(|a, b| {
+        a.get("path")
+            .and_then(Value::as_str)
+            .cmp(&b.get("path").and_then(Value::as_str))
+    });
+    projects.dedup_by(|a, b| a.get("path") == b.get("path"));
+    projects.truncate(100);
+    [
+        ("codex_native_threads", threads),
+        ("codex_native_projects", projects),
+    ]
+}
+
+fn sqlite_has_table(db: &Connection, table: &str) -> bool {
+    db.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 /// Query CCP-owned local state only. No managed profile, server, daemon, or

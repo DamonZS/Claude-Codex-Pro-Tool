@@ -25,7 +25,7 @@
 | Agent -> runtime 执行映射 | `multica_execution_store.rs` 的 attempt/binding/幂等记录 | Codex 页面 host 返回的真实句柄 |
 | Codex 执行 | `codex_execution.rs` 的 allowlist typed adapter | 当前 Codex renderer 的 page host |
 | Skill 清单与加载 | `skills/list` + trust/digest 校验 | Codex page host + 本地信任快照 |
-| 原生项目/会话显示 | `renderer-inject.js` 读取当前 DOM 的稳定原生数据属性并触发行点击 | 当前 Codex 页面 |
+| 原生项目/会话显示 | `renderer-inject.js` 读取当前 DOM 的稳定原生数据属性并触发行点击；bootstrap 同时投影本机 SQLite 的 `threads` 与 `project_roots` 只读快照 | 当前 Codex 页面 + `~/.codex` SQLite |
 | daemon/CLI/runtime 注册 | 不接入默认路径 | 不适用；禁止启动第二套 runtime |
 
 ## 明确限制
