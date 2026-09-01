@@ -1235,6 +1235,35 @@ fn project_autopilot_contract(autopilots: &mut [Value]) {
             }
         }
         if let Some(runs) = object.get("runs").and_then(Value::as_array).cloned() {
+            // Match Multica's list endpoint: expose run metadata but never
+            // echo webhook envelopes or result bodies in the autopilot list.
+            let summary_runs = runs
+                .iter()
+                .filter_map(|run| {
+                    let source = run.as_object()?;
+                    let mut summary = serde_json::Map::new();
+                    for key in [
+                        "id",
+                        "autopilot_id",
+                        "trigger_id",
+                        "source",
+                        "status",
+                        "issue_id",
+                        "task_id",
+                        "triggered_at",
+                        "completed_at",
+                        "failure_reason",
+                        "reason_code",
+                        "created_at",
+                    ] {
+                        if let Some(value) = source.get(key) {
+                            summary.insert(key.to_string(), value.clone());
+                        }
+                    }
+                    Some(Value::Object(summary))
+                })
+                .collect::<Vec<_>>();
+            object.insert("runs".to_string(), Value::Array(summary_runs));
             let latest = runs
                 .iter()
                 .filter_map(|run| {
@@ -3008,7 +3037,7 @@ mod tests {
                 {"kind":"schedule","enabled":false,"next_run_at":"2026-01-01T00:00:00Z"}
             ],
             "runs": [
-                {"status":"completed","triggered_at":"2026-01-01T00:00:00Z"},
+                {"status":"completed","triggered_at":"2026-01-01T00:00:00Z","trigger_payload":{"secret":"redact"},"result":{"body":"private"}},
                 {"status":"failed","triggered_at":"2026-01-03T00:00:00Z"}
             ]
         })];
@@ -3020,6 +3049,8 @@ mod tests {
         assert_eq!(autopilots[0]["next_run_at"], "2026-02-02T00:00:00Z");
         assert_eq!(autopilots[0]["last_run_status"], "failed");
         assert_eq!(autopilots[0]["subscribers"], json!([]));
+        assert!(autopilots[0]["runs"][0].get("trigger_payload").is_none());
+        assert!(autopilots[0]["runs"][0].get("result").is_none());
     }
 
     #[test]
