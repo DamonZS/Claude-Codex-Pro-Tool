@@ -1100,6 +1100,19 @@ fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
 }
 
 #[test]
+fn codex_multica_inventory_projects_native_history_events() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/multica_workspace.rs"
+    ))
+    .expect("workspace source");
+    assert!(source.contains("thread_history_1.sqlite"));
+    assert!(source.contains("subAgentActivity"));
+    assert!(source.contains("mcpToolCall"));
+    assert!(source.contains("item_type"));
+}
+
+#[test]
 fn codex_multica_comments_expose_resolve_and_unresolve_actions() {
     let script = assets::injection_script(57321);
     assert!(script.contains("标记已解决"));

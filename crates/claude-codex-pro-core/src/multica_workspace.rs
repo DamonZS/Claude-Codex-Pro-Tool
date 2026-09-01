@@ -689,6 +689,50 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
                 });
         }
     }
+    // Native execution events live in the read-only history projection, not
+    // in state_5.sqlite. Project only bounded metadata so arguments and
+    // message bodies are never copied into the Multica control plane.
+    let history_path = home.join("thread_history_1.sqlite");
+    if let Ok(db) = Connection::open_with_flags(&history_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        && sqlite_has_table(&db, "thread_items")
+    {
+        if let Ok(mut stmt) = db.prepare(
+            "SELECT thread_id, item_id, item_type, item_json FROM thread_items ORDER BY created_at_ms DESC LIMIT 1000",
+        ) {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let thread_id: String = row.get(0)?;
+                let item_id: String = row.get(1)?;
+                let item_type: String = row.get(2)?;
+                let item_json: String = row.get(3)?;
+                Ok((thread_id, item_id, item_type, item_json))
+            }) {
+                for (thread_id, item_id, item_type, item_json) in rows.flatten() {
+                    if !matches!(
+                        item_type.as_str(),
+                        "subAgentActivity" | "mcpToolCall" | "dynamicToolCall"
+                    ) {
+                        continue;
+                    }
+                    let parsed = serde_json::from_str::<Value>(&item_json).ok();
+                    let name = parsed.as_ref().and_then(|value| {
+                        ["name", "tool_name", "toolName", "command"]
+                            .into_iter()
+                            .find_map(|key| value.get(key).and_then(Value::as_str))
+                    });
+                    let mut entry = json!({
+                        "id": item_id,
+                        "thread_id": thread_id,
+                        "item_type": item_type,
+                        "source": "codex_native",
+                    });
+                    if let Some(name) = name {
+                        entry["name"] = Value::String(name.to_string());
+                    }
+                    tool_calls.push(entry);
+                }
+            }
+        }
+    }
     // `threads.project_id` is not present or reliable in every Codex schema. Resolve
     // the owning project from the read-only project root paths and the thread cwd.
     for thread in &mut threads {
