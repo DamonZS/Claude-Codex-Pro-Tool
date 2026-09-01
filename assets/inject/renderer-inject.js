@@ -1717,7 +1717,10 @@
     const hasScopeNode = typeof appScope.node === "function" ||
       (!!appScope.node && typeof appScope.node === "object");
     const hasQueryClient = !!appScope.queryClient && typeof appScope.queryClient === "object";
-    return hasScopeGetter && hasScopeNode && hasQueryClient;
+    // Codex changed the React scope shape across releases.  FRt only needs
+    // one live scope handle; requiring all legacy fields made the native Host
+    // appear unavailable even though the page-owned client was present.
+    return hasScopeGetter || hasScopeNode || hasQueryClient;
   }
 
   function codexPageHostAppScopeFromReactRoot() {

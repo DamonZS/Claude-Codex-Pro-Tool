@@ -533,6 +533,7 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("function codexPageHostAppScopeValid(appScope)"));
     assert!(host.contains("typeof appScope.get === \"function\""));
     assert!(host.contains("appScope.queryClient"));
+    assert!(host.contains("return hasScopeGetter || hasScopeNode || hasQueryClient;"));
     assert!(host.contains("module?.FRt"));
     assert!(host.contains("function codexPageHostIdFromActiveThread()"));
     assert!(host.contains("data-app-action-sidebar-thread-host-id"));
