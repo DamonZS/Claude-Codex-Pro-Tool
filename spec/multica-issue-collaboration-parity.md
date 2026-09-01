@@ -26,3 +26,10 @@
 - renderer Issue 编辑器 JSON 字段和校验。
 - 安全只读摘要字段。
 - CDP 契约测试与对应验收文档。
+
+## 本地关联投影补充
+
+查询 `issues` 或 `my_tasks` 时，必须把本地独立集合中的真实 `labels`、`reactions`、
+`comments` 和 `activities` 按 `issue_id`/`comment_id` 关联到 Issue 只读响应，提供
+上游 Issue 类型中的 `labels`、`reactions`、`last_activity_at` 以及稳定计数字段。
+这些字段只能派生于已保存实体，不得写回存储或从不存在的远端数据推断。

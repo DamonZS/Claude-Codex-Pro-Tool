@@ -1112,6 +1112,13 @@ fn local_entity_collection(
     offset: u32,
 ) -> anyhow::Result<MulticaWorkspaceCollection> {
     let mut all_items = store.list(&workspace.id, resource)?;
+    if matches!(
+        resource,
+        MulticaWorkspaceResourceKey::Issues | MulticaWorkspaceResourceKey::MyTasks
+    ) {
+        let state = store.load(&workspace.id)?;
+        project_issue_collaboration(&mut all_items, &state);
+    }
     if resource == MulticaWorkspaceResourceKey::MyTasks {
         let user_id = local_user_id(workspace);
         all_items.retain(|entity| {
@@ -1135,6 +1142,85 @@ fn local_entity_collection(
         value.diagnostic = Some(LOCAL_CONTROL_PLANE_EMPTY.to_string());
     }
     Ok(value)
+}
+
+/// Project the local collaboration resources onto Issue reads in the same
+/// shape as the upstream Issue DTO. This is derived at query time so the
+/// canonical entities and their revisions remain untouched.
+fn project_issue_collaboration(issues: &mut [Value], state: &LocalMulticaWorkspaceState) {
+    for issue in issues {
+        let Some(issue_id) = issue.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let labels: Vec<Value> = state
+            .labels
+            .iter()
+            .filter(|label| {
+                label
+                    .get("issue_id")
+                    .or_else(|| label.get("issueId"))
+                    .and_then(Value::as_str)
+                    == Some(issue_id)
+            })
+            .cloned()
+            .collect();
+        let comments: Vec<Value> = state
+            .comments
+            .iter()
+            .filter(|comment| {
+                comment
+                    .get("issue_id")
+                    .or_else(|| comment.get("issueId"))
+                    .and_then(Value::as_str)
+                    == Some(issue_id)
+            })
+            .cloned()
+            .collect();
+        let comment_ids = comments
+            .iter()
+            .filter_map(|comment| comment.get("id").and_then(Value::as_str))
+            .collect::<BTreeSet<_>>();
+        let reactions: Vec<Value> = state
+            .reactions
+            .iter()
+            .filter(|reaction| {
+                reaction
+                    .get("comment_id")
+                    .or_else(|| reaction.get("commentId"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|comment_id| comment_ids.contains(comment_id))
+            })
+            .cloned()
+            .collect();
+        let activities: Vec<&Value> = state
+            .activities
+            .iter()
+            .filter(|activity| {
+                activity
+                    .get("issue_id")
+                    .or_else(|| activity.get("issueId"))
+                    .and_then(Value::as_str)
+                    == Some(issue_id)
+            })
+            .collect();
+        let latest = comments
+            .iter()
+            .chain(activities.iter().copied())
+            .filter_map(|item| {
+                item.get("created_at")
+                    .or_else(|| item.get("createdAt"))
+                    .and_then(Value::as_str)
+            })
+            .max()
+            .map(str::to_string);
+        issue["labels"] = Value::Array(labels);
+        issue["reactions"] = Value::Array(reactions);
+        issue["comment_count"] = Value::from(comments.len() as u64);
+        issue["activity_count"] = Value::from(activities.len() as u64);
+        if let Some(latest) = latest {
+            issue["last_activity_at"] = Value::String(latest);
+        }
+    }
 }
 
 fn statistics_collection(
@@ -2428,5 +2514,34 @@ mod tests {
             longest_project_path_match(r"C:\Work\Repository", &roots),
             None
         );
+    }
+
+    #[test]
+    fn issue_projection_merges_only_matching_collaboration_entities() {
+        let mut issues = vec![json!({"id":"issue-a","workspace_id":"local-test","revision":1})];
+        let mut state = LocalMulticaWorkspaceState::empty("local-test");
+        state.comments.push(json!({"id":"comment-a","issue_id":"issue-a","created_at":"2026-01-02T00:00:00Z","content":"ok"}));
+        state.comments.push(
+            json!({"id":"comment-b","issue_id":"issue-other","created_at":"2026-01-03T00:00:00Z"}),
+        );
+        state.activities.push(
+            json!({"id":"activity-a","issue_id":"issue-a","created_at":"2026-01-04T00:00:00Z"}),
+        );
+        state
+            .reactions
+            .push(json!({"id":"reaction-a","comment_id":"comment-a","emoji":"+1"}));
+        state
+            .reactions
+            .push(json!({"id":"reaction-b","comment_id":"comment-b","emoji":"-1"}));
+        state
+            .labels
+            .push(json!({"id":"label-a","issue_id":"issue-a","name":"bug"}));
+        project_issue_collaboration(&mut issues, &state);
+        assert_eq!(issues[0]["comment_count"], 1);
+        assert_eq!(issues[0]["activity_count"], 1);
+        assert_eq!(issues[0]["labels"].as_array().map(Vec::len), Some(1));
+        assert_eq!(issues[0]["reactions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(issues[0]["last_activity_at"], "2026-01-04T00:00:00Z");
+        assert_eq!(issues[0]["revision"], 1);
     }
 }

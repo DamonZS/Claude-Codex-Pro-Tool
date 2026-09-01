@@ -8,6 +8,7 @@
 2. 输入非法 JSON 时保存被阻止，并显示明确错误；不会向 bridge 发起 upsert。
 3. 上游 Issue 的状态分类、标签、反应和最近活动时间可作为文本摘要显示；正文/source context 不被当作 HTML 执行。
 4. 现有 snake_case 与 camelCase 分配字段兼容性回归不退化。
+5. 查询 Issue 时，标签、反应、评论和活动只显示对应本地集合的真实关联；`last_activity_at` 取关联评论/活动的最新时间，无关联时不生成值，且不改变实体 revision。
 
 ## 验证方式
 
@@ -17,6 +18,8 @@ npm --prefix apps/claude-codex-pro-manager run check
 cargo fmt --check
 git diff --check
 ```
+
+并使用临时本地工作区插入 Issue、评论、活动、标签和反应，查询 `my_tasks` 断言关联结果和最新活动时间。
 
 ## 非范围
 
