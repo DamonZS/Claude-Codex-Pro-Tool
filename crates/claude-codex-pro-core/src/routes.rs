@@ -20,9 +20,9 @@ use crate::multica_execution::{
     SkillBindingScope, SkillBindingSelection, SkillBindings, SkillReference, SkillResolutionAudit,
 };
 use crate::multica_execution_store::{
-    CodexMulticaExecutionBinding, CodexMulticaTaskMessage, ExecutionReservation,
-    MulticaExecutionBindingState, MulticaExecutionCommandKind, MulticaExecutionCommandState,
-    MulticaExecutionKind, MulticaExecutionStore, QueueTransition,
+    AutopilotRunTransition, CodexMulticaExecutionBinding, CodexMulticaTaskMessage,
+    ExecutionReservation, MulticaExecutionBindingState, MulticaExecutionCommandKind,
+    MulticaExecutionCommandState, MulticaExecutionKind, MulticaExecutionStore, QueueTransition,
 };
 use crate::multica_skill_trust::review_local_skill;
 use crate::multica_workspace::{
@@ -280,6 +280,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn multica_autopilot_trigger(
         &self,
         _request: MulticaAutopilotTriggerRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_autopilot_unavailable")
+    }
+    async fn multica_autopilot_transition(
+        &self,
+        _request: MulticaAutopilotTransitionRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_autopilot_unavailable")
     }
@@ -598,6 +604,14 @@ pub async fn handle_bridge_request(
             async {
                 ctx.runtime
                     .multica_autopilot_trigger(parse_multica_autopilot_trigger(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/autopilots/transition" => {
+            async {
+                ctx.runtime
+                    .multica_autopilot_transition(parse_multica_autopilot_transition(&payload)?)
                     .await
             }
             .await
@@ -990,6 +1004,22 @@ pub struct MulticaAutopilotTriggerRequest {
     #[serde(default = "default_manual_source")]
     pub source: String,
 }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaAutopilotTransitionRequest {
+    pub autopilot_id: String,
+    pub run_id: String,
+    pub expected_revision: u64,
+    pub status: String,
+    #[serde(default)]
+    pub issue_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+}
 fn default_manual_source() -> String {
     "manual".into()
 }
@@ -1002,6 +1032,11 @@ fn parse_multica_autopilot_run(payload: &Value) -> anyhow::Result<MulticaAutopil
 fn parse_multica_autopilot_trigger(
     payload: &Value,
 ) -> anyhow::Result<MulticaAutopilotTriggerRequest> {
+    Ok(serde_json::from_value(payload.clone())?)
+}
+fn parse_multica_autopilot_transition(
+    payload: &Value,
+) -> anyhow::Result<MulticaAutopilotTransitionRequest> {
     Ok(serde_json::from_value(payload.clone())?)
 }
 
@@ -2156,6 +2191,26 @@ impl BridgeRuntimeService for CoreRuntimeService {
             unix_now_ms(),
         )?;
         Ok(json!({"status":"ok", "run": run, "execution":"pending"}))
+    }
+
+    async fn multica_autopilot_transition(
+        &self,
+        request: MulticaAutopilotTransitionRequest,
+    ) -> anyhow::Result<Value> {
+        let run =
+            self.multica_execution_store
+                .transition_autopilot_run(AutopilotRunTransition {
+                    autopilot_id: request.autopilot_id,
+                    run_id: request.run_id,
+                    expected_revision: request.expected_revision,
+                    next_status: request.status,
+                    issue_id: request.issue_id,
+                    task_id: request.task_id,
+                    failure_reason: request.failure_reason,
+                    reason_code: request.reason_code,
+                    now_ms: unix_now_ms(),
+                })?;
+        Ok(json!({"status":"ok", "run": run}))
     }
 
     async fn multica_execution_lease_renew(

@@ -52,6 +52,21 @@ pub struct CodexMulticaAutopilotRun {
     #[serde(default)]
     pub reason_code: Option<String>,
     pub created_at_ms: u64,
+    #[serde(default)]
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutopilotRunTransition {
+    pub autopilot_id: String,
+    pub run_id: String,
+    pub expected_revision: u64,
+    pub next_status: String,
+    pub issue_id: Option<String>,
+    pub task_id: Option<String>,
+    pub failure_reason: Option<String>,
+    pub reason_code: Option<String>,
+    pub now_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,10 +423,55 @@ impl MulticaExecutionStore {
             failure_reason: None,
             reason_code: None,
             created_at_ms: now_ms,
+            revision: 1,
         };
         state.autopilot_runs.push(run.clone());
         save_state_locked(&self.path, &state)?;
         Ok(run)
+    }
+
+    pub fn transition_autopilot_run(
+        &self,
+        input: AutopilotRunTransition,
+    ) -> anyhow::Result<CodexMulticaAutopilotRun> {
+        validate_id(&input.autopilot_id, "autopilot_id")?;
+        validate_id(&input.run_id, "run_id")?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let run = state
+            .autopilot_runs
+            .iter_mut()
+            .find(|run| run.id == input.run_id && run.autopilot_id == input.autopilot_id)
+            .ok_or_else(|| anyhow!("autopilot_run_not_found"))?;
+        if run.revision != input.expected_revision {
+            bail!("autopilot_run_revision_conflict");
+        }
+        let allowed = matches!(
+            (run.status.as_str(), input.next_status.as_str()),
+            ("pending", "issue_created" | "skipped" | "failed")
+                | ("issue_created", "running" | "failed")
+                | ("running", "completed" | "failed")
+        );
+        if !allowed {
+            bail!("autopilot_run_transition_invalid");
+        }
+        run.status = input.next_status;
+        if input.issue_id.is_some() {
+            run.issue_id = input.issue_id;
+        }
+        if input.task_id.is_some() {
+            run.task_id = input.task_id;
+        }
+        run.failure_reason = input.failure_reason;
+        run.reason_code = input.reason_code;
+        if matches!(run.status.as_str(), "completed" | "failed" | "skipped") {
+            run.completed_at_ms = Some(input.now_ms);
+        }
+        run.revision = run.revision.saturating_add(1);
+        run.created_at_ms = run.created_at_ms.min(input.now_ms);
+        let result = run.clone();
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
     }
 
     pub fn upsert_binding(
@@ -2197,7 +2257,10 @@ mod tests {
             .trigger_autopilot_run("auto-1".into(), None, "manual".into(), 10)
             .unwrap();
         assert_eq!(run.status, "pending");
-        assert_eq!(store.list_autopilot_runs("auto-1").unwrap(), vec![run.clone()]);
+        assert_eq!(
+            store.list_autopilot_runs("auto-1").unwrap(),
+            vec![run.clone()]
+        );
         assert_eq!(store.get_autopilot_run(&run.id).unwrap(), run);
         assert_eq!(
             store
