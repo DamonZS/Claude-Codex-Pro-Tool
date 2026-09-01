@@ -5325,7 +5325,7 @@
       parent.appendChild(article);
       return;
     }
-    const preferred = ["status", "status_category", "status_name", "version", "priority", "labels", "reactions", "last_activity_at", "trust_state", "inventory_source", "workspace_slug"];
+    const preferred = ["status", "status_category", "status_name", "version", "priority", "labels", "reactions", "comment_count", "activity_count", "last_activity_at", "trigger_kinds", "next_run_at", "last_run_status", "subscribers", "timeline", "trust_state", "inventory_source", "workspace_slug"];
     const keys = preferred.concat(Object.keys(item)).filter((key, index, all) => all.indexOf(key) === index)
       .filter((key) => multicaWorkspaceSafeKey(key) && !["title", "name", "display_name", "displayName", "slug", "id", "key"].includes(key))
       .slice(0, 8);
@@ -5334,7 +5334,14 @@
       const value = multicaWorkspaceValue(item[key]);
       if (!value) return;
       const field = multicaWorkspaceEl("span", "ccp-multica-field");
-      field.append(multicaWorkspaceEl("span", "ccp-multica-field-key", `${key}:`), document.createTextNode(value));
+      const labels = {
+        status: "状态", status_category: "状态分类", status_name: "状态名称", version: "版本",
+        priority: "优先级", labels: "标签", reactions: "反应", comment_count: "评论数",
+        activity_count: "活动数", last_activity_at: "最近活动", trigger_kinds: "触发方式",
+        next_run_at: "下次运行", last_run_status: "最近运行", subscribers: "订阅者",
+        timeline: "时间线", trust_state: "信任状态", inventory_source: "清单来源", workspace_slug: "工作区"
+      };
+      field.append(multicaWorkspaceEl("span", "ccp-multica-field-key", `${labels[key] || key}:`), document.createTextNode(value));
       fields.appendChild(field);
     });
     if (fields.childNodes.length) article.appendChild(fields);
