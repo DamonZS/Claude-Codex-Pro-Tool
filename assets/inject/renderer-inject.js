@@ -5949,7 +5949,7 @@
         timezone: String(window.prompt?.("timezone", "UTC") || "UTC").trim() || "UTC",
       } : {}),
       label: String(window.prompt?.("label（可选）", "") || "").trim(),
-      ...(kind === "webhook" ? { event_filters: {} } : {}),
+      ...(kind === "webhook" ? { event_filters: [] } : {}),
     };
     const triggers = Array.isArray(item.triggers) ? item.triggers.slice() : [];
     triggers.push(trigger);
@@ -5991,7 +5991,11 @@
     if (next.kind === "webhook") {
       const rawFilters = String(window.prompt?.("event_filters（JSON，留空清除）", current.event_filters ? JSON.stringify(current.event_filters) : "") || "").trim();
       if (rawFilters) {
-        try { next.event_filters = JSON.parse(rawFilters); } catch (_) { return; }
+        try {
+          const parsed = JSON.parse(rawFilters);
+          if (!Array.isArray(parsed) || parsed.some((entry) => !entry || typeof entry !== "object" || typeof entry.event !== "string" || !entry.event.trim() || (entry.actions !== undefined && (!Array.isArray(entry.actions) || entry.actions.some((action) => typeof action !== "string" || !action.trim()))))) return;
+          next.event_filters = parsed;
+        } catch (_) { return; }
       } else {
         delete next.event_filters;
       }
