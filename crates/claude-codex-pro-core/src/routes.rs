@@ -2313,6 +2313,13 @@ fn execution_status_response(
 
 fn stable_execution_error_code(error: &anyhow::Error) -> String {
     let value = error.to_string();
+    if value.contains("function_call_output requires call_id on HTTP requests")
+        || value.contains(
+            "continuation via previous_response_id is only supported on Responses WebSocket v2",
+        )
+    {
+        return "codex_host_transport_call_id_required".to_string();
+    }
     if !value.is_empty()
         && value.len() <= 96
         && value
@@ -2479,4 +2486,20 @@ fn empty_user_script_inventory() -> Value {
         "enabled": true,
         "scripts": []
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_execution_error_code;
+
+    #[test]
+    fn known_codex_host_call_id_transport_error_gets_stable_code() {
+        let error = anyhow::anyhow!(
+            "function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2"
+        );
+        assert_eq!(
+            stable_execution_error_code(&error),
+            "codex_host_transport_call_id_required"
+        );
+    }
 }
