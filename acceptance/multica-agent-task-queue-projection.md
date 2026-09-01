@@ -6,6 +6,7 @@
 - `MulticaWorkspaceResourceKey::AgentTaskQueue` 序列化为 `agent_task_queue` 并出现在 bootstrap modules/collections。
 - 每个投影项含 `id/status/attempt/max_attempts/parent_task_id/failure_reason/last_heartbeat_at_ms/source`。
 - 无 execution binding 时返回空 collection，不伪造数据。
+- 非法状态跳转、revision 不匹配或 lease token 不匹配必须失败；终态释放 lease。
 - Rust 格式检查与 core 测试通过。
 
 ## 验证方式

@@ -22,7 +22,7 @@ use crate::multica_execution::{
 use crate::multica_execution_store::{
     CodexMulticaExecutionBinding, CodexMulticaTaskMessage, ExecutionReservation,
     MulticaExecutionBindingState, MulticaExecutionCommandKind, MulticaExecutionCommandState,
-    MulticaExecutionKind, MulticaExecutionStore,
+    MulticaExecutionKind, MulticaExecutionStore, QueueTransition,
 };
 use crate::multica_skill_trust::review_local_skill;
 use crate::multica_workspace::{
@@ -258,6 +258,12 @@ pub trait BridgeRuntimeService: Send + Sync {
         _request: MulticaExecutionMessageListRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_execution_message_unavailable")
+    }
+    async fn multica_task_queue_transition(
+        &self,
+        _request: MulticaTaskQueueTransitionRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
     }
     async fn memory_status(&self) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
@@ -541,6 +547,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_execution_message_list(parse_multica_execution_message_list(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/tasks/queue/transition" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_task_queue_transition(parse_multica_task_queue_transition(&payload)?)
                     .await
             }
             .await
@@ -899,6 +914,36 @@ pub struct MulticaExecutionMessageAppendRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaExecutionMessageListRequest {
     pub binding_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaTaskQueueTransitionRequest {
+    pub binding_id: String,
+    pub expected_revision: u64,
+    #[serde(default)]
+    pub lease_token: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+}
+
+fn parse_multica_task_queue_transition(
+    payload: &Value,
+) -> anyhow::Result<MulticaTaskQueueTransitionRequest> {
+    let request: MulticaTaskQueueTransitionRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    let _ = MulticaExecutionBindingState::from_queue_status(&request.status)?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
+    if let Some(token) = request.lease_token.as_deref() {
+        validate_multica_execution_id(token)?;
+    }
+    if let Some(reason) = request.failure_reason.as_deref() {
+        validate_multica_execution_id(reason)?;
+    }
+    Ok(request)
 }
 
 fn default_multica_execution_limit() -> usize {
@@ -2045,6 +2090,24 @@ impl BridgeRuntimeService for CoreRuntimeService {
             .multica_execution_store
             .list_task_messages(&request.binding_id)?;
         Ok(json!({"status":"ok", "items": messages}))
+    }
+
+    async fn multica_task_queue_transition(
+        &self,
+        request: MulticaTaskQueueTransitionRequest,
+    ) -> anyhow::Result<Value> {
+        let next_state = MulticaExecutionBindingState::from_queue_status(&request.status)?;
+        let binding = self
+            .multica_execution_store
+            .transition_queue(QueueTransition {
+                binding_id: request.binding_id,
+                expected_revision: request.expected_revision,
+                lease_token: request.lease_token,
+                next_state,
+                failure_reason: request.failure_reason,
+                now_ms: unix_now_ms(),
+            })?;
+        Ok(json!({"status":"ok", "binding": binding}))
     }
 
     async fn memory_status(&self) -> anyhow::Result<Value> {

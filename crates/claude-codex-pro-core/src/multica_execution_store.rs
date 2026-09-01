@@ -81,6 +81,43 @@ pub enum MulticaExecutionBindingState {
 }
 
 impl MulticaExecutionBindingState {
+    /// Upstream queue states accepted by the local control-plane transition
+    /// endpoint. `waiting_local_directory` is retained as CCP's documented
+    /// preparation state and is not collapsed into `running`.
+    pub fn from_queue_status(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "queued" => Ok(Self::BindingPending),
+            "dispatched" => Ok(Self::Dispatched),
+            "waiting_local_directory" => Ok(Self::WaitingLocalDirectory),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => bail!("agent_task_queue_status_invalid"),
+        }
+    }
+
+    fn queue_transition_allowed(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::BindingPending, Self::Dispatched | Self::Cancelled)
+                | (
+                    Self::Dispatched,
+                    Self::WaitingLocalDirectory | Self::Running | Self::Failed | Self::Cancelled
+                )
+                | (
+                    Self::WaitingLocalDirectory,
+                    Self::Running | Self::Failed | Self::Cancelled
+                )
+                | (
+                    Self::Running,
+                    Self::Completed | Self::Failed | Self::Cancelled
+                )
+        )
+    }
+}
+
+impl MulticaExecutionBindingState {
     fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
@@ -208,6 +245,16 @@ pub struct ExecutionReservationResult {
 pub struct ExecutionCommandReservationResult {
     pub command: CodexMulticaExecutionCommand,
     pub replay: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueTransition {
+    pub binding_id: String,
+    pub expected_revision: u64,
+    pub lease_token: Option<String>,
+    pub next_state: MulticaExecutionBindingState,
+    pub failure_reason: Option<String>,
+    pub now_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -937,6 +984,60 @@ impl MulticaExecutionStore {
         if binding.state.is_terminal() {
             binding.completed_at_ms = Some(now_ms);
         }
+        let result = binding.clone();
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
+    }
+
+    /// Apply one upstream-style queue transition with revision and lease CAS.
+    /// This is intentionally local and explicit; it never claims a remote
+    /// runtime or starts work by itself.
+    pub fn transition_queue(
+        &self,
+        input: QueueTransition,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        validate_id(&input.binding_id, "binding_id")?;
+        if let Some(reason) = input.failure_reason.as_deref() {
+            validate_error_code(reason)?;
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == input.binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != input.expected_revision {
+            bail!("execution_revision_conflict");
+        }
+        if !binding.state.queue_transition_allowed(input.next_state) {
+            if binding.state == input.next_state {
+                return Ok(binding.clone());
+            }
+            bail!("agent_task_queue_transition_invalid");
+        }
+        if !matches!(
+            input.next_state,
+            MulticaExecutionBindingState::BindingPending
+        ) && binding.lease_token.is_some()
+            && binding.lease_token != input.lease_token
+        {
+            bail!("execution_lease_conflict");
+        }
+        binding.state = input.next_state;
+        binding.last_error_code = input.failure_reason;
+        binding.last_heartbeat_at_ms = Some(input.now_ms);
+        binding.updated_at_ms = input.now_ms;
+        if binding.state == MulticaExecutionBindingState::Dispatched {
+            binding.retryable = false;
+        }
+        if binding.state.is_terminal() {
+            binding.completed_at_ms = Some(input.now_ms);
+            binding.lease_expires_at_ms = None;
+            binding.lease_token = None;
+        }
+        binding.revision = binding.revision.saturating_add(1);
         let result = binding.clone();
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
@@ -1855,6 +1956,78 @@ mod tests {
             store.get_command("continue-a").unwrap().state,
             MulticaExecutionCommandState::Committed
         );
+    }
+
+    #[test]
+    fn queue_transition_enforces_upstream_lifecycle_and_lease_cas() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reserved = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: "issue-a".into(),
+                agent_id: None,
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "queue-a".into(),
+                now_ms: 1,
+            })
+            .unwrap();
+        let dispatched = store
+            .transition_queue(QueueTransition {
+                binding_id: reserved.binding.binding_id.clone(),
+                expected_revision: 1,
+                lease_token: None,
+                next_state: MulticaExecutionBindingState::Dispatched,
+                failure_reason: None,
+                now_ms: 2,
+            })
+            .unwrap();
+        assert_eq!(dispatched.revision, 2);
+        let invalid = store
+            .transition_queue(QueueTransition {
+                binding_id: dispatched.binding_id.clone(),
+                expected_revision: dispatched.revision,
+                lease_token: None,
+                next_state: MulticaExecutionBindingState::Completed,
+                failure_reason: None,
+                now_ms: 3,
+            })
+            .unwrap_err();
+        assert_eq!(invalid.to_string(), "agent_task_queue_transition_invalid");
+        let claimed = store
+            .claim_execution_lease(
+                &dispatched.binding_id,
+                dispatched.revision,
+                "lease-a",
+                4,
+                100,
+            )
+            .unwrap();
+        let running = store
+            .transition_queue(QueueTransition {
+                binding_id: claimed.binding_id.clone(),
+                expected_revision: claimed.revision,
+                lease_token: Some("lease-a".into()),
+                next_state: MulticaExecutionBindingState::Running,
+                failure_reason: None,
+                now_ms: 5,
+            })
+            .unwrap();
+        assert_eq!(running.state, MulticaExecutionBindingState::Running);
+        let completed = store
+            .transition_queue(QueueTransition {
+                binding_id: running.binding_id,
+                expected_revision: running.revision,
+                lease_token: Some("lease-a".into()),
+                next_state: MulticaExecutionBindingState::Completed,
+                failure_reason: None,
+                now_ms: 6,
+            })
+            .unwrap();
+        assert_eq!(completed.state, MulticaExecutionBindingState::Completed);
+        assert!(completed.lease_token.is_none());
     }
 
     #[test]
