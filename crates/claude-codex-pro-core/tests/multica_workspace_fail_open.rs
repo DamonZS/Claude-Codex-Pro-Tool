@@ -73,7 +73,8 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
     assert!(!board.contains("content.appendChild(page);\n      return;"));
 
     assert!(request.contains("setTimeout(() => resolve({ status: \"failed\", message: \"工作区请求超时\", timeout: true }), timeoutMs)"));
-    assert!(fail_open.contains("multicaWorkspaceHide();"));
+    assert!(fail_open.contains("multicaWorkspaceState.opened = true;"));
+    assert!(fail_open.contains("multicaWorkspaceRenderContent();"));
     assert!(fail_open.contains("multicaWorkspaceSetEntryAvailability(detail);"));
     assert!(hide.contains("multicaWorkspaceRestoreMain();"));
     assert!(hide.contains("multicaWorkspaceState.host.style.display = \"none\""));

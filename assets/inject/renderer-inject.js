@@ -5176,9 +5176,20 @@
       multicaWorkspaceRenderContent();
       return;
     }
-    multicaWorkspaceHide();
+    // Keep the entry usable even when the local bridge is temporarily down.
+    // Show the local shell with its retry state instead of hiding it and
+    // leaving Codex on a blank native surface.
+    multicaWorkspaceState.opened = true;
+    multicaWorkspaceState.opening = false;
+    multicaWorkspaceRestoreMain();
+    if (multicaWorkspaceState.host) {
+      multicaWorkspaceState.host.style.display = "block";
+      multicaWorkspaceState.host.style.visibility = "visible";
+      multicaWorkspaceState.host.style.pointerEvents = "auto";
+    }
     multicaWorkspaceSetStatus(detail, "error");
     multicaWorkspaceSetEntryAvailability(detail);
+    multicaWorkspaceRenderContent();
   }
 
   function multicaWorkspaceFeatureEnabled() {
