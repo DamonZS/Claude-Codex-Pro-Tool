@@ -23,4 +23,8 @@
 - 点击会话使用其原生 DOM 行的现有激活行为；找不到行时显示不可用状态。
 - 智能体投影仅使用已查询的本地 `agents` 集合和执行绑定中的稳定 agent ID；凭据、提示词和路径不得进入 DOM。
 - 页面每次刷新看板时重新读取投影，最多读取 100 条会话。
+- 原生项目与线程关联不得只依赖可选的 `threads.project_id`：当 SQLite 提供
+  `project_roots.path` 和线程 `cwd` 时，按规范化后的绝对路径执行大小写不敏感的
+  精确/子目录匹配，并将最长匹配项目写入线程的只读 `project_id`、`project_path`；
+  无匹配时保留线程但不伪造项目归属。
 - 本地实体编辑器必须以 Multica 上游 wire 字段为主（Issue、Project、Agent、Squad、Autopilot），并兼容既有本地 camelCase 别名；保存时不得丢弃上游已返回的安全业务字段。

@@ -550,6 +550,7 @@ async fn local_workspace_bootstrap(
 fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
     let mut threads = Vec::new();
     let mut projects = Vec::new();
+    let mut project_paths = Vec::new();
     let mut tool_calls = Vec::new();
     let home = crate::codex_sqlite::default_codex_home_dir();
     for path in crate::codex_sqlite::codex_session_db_paths_from_home(&home) {
@@ -674,9 +675,25 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
                         let path: String = row.get(0)?;
                         Ok(json!({"id": format!("codex-project:{}", path), "path": path, "source": "codex_native"}))
                     })?;
-                    projects.extend(rows.flatten());
+                    for project in rows.flatten() {
+                        if let Some(path) = project.get("path").and_then(Value::as_str) {
+                            project_paths.push(path.to_string());
+                        }
+                        projects.push(project);
+                    }
                     Ok(())
                 });
+        }
+    }
+    // `threads.project_id` is not present or reliable in every Codex schema. Resolve
+    // the owning project from the read-only project root paths and the thread cwd.
+    for thread in &mut threads {
+        let Some(cwd) = thread.get("cwd").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(project_path) = longest_project_path_match(cwd, &project_paths) {
+            thread["project_path"] = Value::String(project_path.clone());
+            thread["project_id"] = Value::String(format!("codex-project:{project_path}"));
         }
     }
     threads.sort_by(|a, b| {
@@ -698,6 +715,29 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 3] {
         ("codex_native_projects", projects),
         ("codex_native_tool_calls", tool_calls),
     ]
+}
+
+fn normalize_project_path(path: &str) -> String {
+    path.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
+fn longest_project_path_match(cwd: &str, project_paths: &[String]) -> Option<String> {
+    let cwd = normalize_project_path(cwd);
+    project_paths
+        .iter()
+        .filter_map(|path| {
+            let normalized = normalize_project_path(path);
+            if normalized.is_empty()
+                || !(cwd == normalized || cwd.starts_with(&(normalized.clone() + "\\")))
+            {
+                return None;
+            }
+            Some((normalized.len(), path))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, path)| path.clone())
 }
 
 fn sqlite_has_table(db: &Connection, table: &str) -> bool {
@@ -2361,5 +2401,32 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.to_string(), CODEX_PAGE_HOST_UNAVAILABLE);
+    }
+
+    #[test]
+    fn project_path_match_is_case_and_separator_insensitive() {
+        let roots = vec![r"C:\Work\Repo".to_string()];
+        assert_eq!(
+            longest_project_path_match("c:/work/repo/src", &roots),
+            Some(r"C:\Work\Repo".to_string())
+        );
+    }
+
+    #[test]
+    fn project_path_match_prefers_the_longest_nested_root() {
+        let roots = vec![r"C:\Work".to_string(), r"C:\Work\Repo".to_string()];
+        assert_eq!(
+            longest_project_path_match(r"C:\Work\Repo\src", &roots),
+            Some(r"C:\Work\Repo".to_string())
+        );
+    }
+
+    #[test]
+    fn project_path_match_rejects_prefix_without_directory_boundary() {
+        let roots = vec![r"C:\Work\Repo".to_string()];
+        assert_eq!(
+            longest_project_path_match(r"C:\Work\Repository", &roots),
+            None
+        );
     }
 }
