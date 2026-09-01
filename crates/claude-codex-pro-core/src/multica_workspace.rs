@@ -2277,6 +2277,39 @@ fn validate_entity_contract(
         }
         return Ok(());
     }
+    if resource == MulticaWorkspaceResourceKey::Agents {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if name.trim().is_empty() || name.chars().count() > 128 {
+            bail!("multica_workspace_agent_invalid");
+        }
+        if let Some(runtime_bound) = object.get("runtime_bound") {
+            if !runtime_bound.is_boolean() {
+                bail!("multica_workspace_agent_invalid");
+            }
+            if runtime_bound.as_bool() == Some(true)
+                && object.get("runtime_id").and_then(Value::as_str).is_none()
+            {
+                bail!("multica_workspace_agent_runtime_invalid");
+            }
+        }
+        if let Some(mode) = object.get("runtime_mode").and_then(Value::as_str)
+            && !matches!(mode, "local" | "remote" | "managed")
+        {
+            bail!("multica_workspace_agent_runtime_invalid");
+        }
+        if let Some(permission) = object.get("permission_mode").and_then(Value::as_str)
+            && !matches!(
+                permission,
+                "default" | "accept_edits" | "full_access" | "plan"
+            )
+        {
+            bail!("multica_workspace_agent_permission_invalid");
+        }
+        return Ok(());
+    }
     if resource == MulticaWorkspaceResourceKey::Comments {
         let issue_id = object
             .get("issue_id")
@@ -3431,5 +3464,45 @@ mod tests {
                 .to_string(),
             "multica_workspace_comment_parent_issue_mismatch"
         );
+    }
+
+    #[test]
+    fn agent_contract_requires_runtime_and_known_modes() {
+        let workspace = "local-test";
+        let mut state = LocalMulticaWorkspaceState::empty(workspace);
+        state.agents.push(json!({
+            "id": "agent-1",
+            "workspace_id": workspace,
+            "revision": 1,
+            "name": "Builder",
+            "runtime_bound": true
+        }));
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_agent_runtime_invalid"
+        );
+
+        state.agents[0]["runtime_id"] = json!("runtime-1");
+        state.agents[0]["runtime_mode"] = json!("sandbox");
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_agent_runtime_invalid"
+        );
+
+        state.agents[0]["runtime_mode"] = json!("local");
+        state.agents[0]["permission_mode"] = json!("unsafe");
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_agent_permission_invalid"
+        );
+
+        state.agents[0]["permission_mode"] = json!("plan");
+        validate_local_workspace_state(&state).expect("valid agent contract");
     }
 }
