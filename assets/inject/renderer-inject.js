@@ -5918,22 +5918,14 @@
     const resource = multicaWorkspaceWritableResource(module);
     if (resource !== "autopilots" || multicaWorkspaceState.mutationBusy) return;
     const autopilotId = multicaWorkspaceEntityId(item);
-    const run = {
-      id: multicaWorkspaceNewId("autopilot-run"),
-      autopilot_id: autopilotId,
-      source: "manual",
-      status: "unsupported",
-      triggered_at: new Date().toISOString(),
-      reason_code: "codex_host_execution_unavailable",
-      failure_reason: "当前页面未提供可核实的 Codex 执行能力",
-    };
-    const runs = Array.isArray(item.runs) ? item.runs.slice() : [];
-    runs.unshift(run);
-    await multicaWorkspacePatchEntity(module, item, {
-      runs: runs.slice(0, 100),
-      last_run_status: run.status,
-      last_run_at: run.triggered_at,
-    }, "已记录触发请求（当前 Host 不支持执行）");
+    try {
+      await multicaWorkspaceCall("/multica/autopilots/trigger", { autopilotId, source: "manual" });
+      await multicaWorkspaceRefreshMutationResource(module, resource);
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: "已创建待执行的 Autopilot 运行记录" };
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+    }
+    if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
   }
 
   async function multicaWorkspaceCreateAutopilotTrigger(module, item) {

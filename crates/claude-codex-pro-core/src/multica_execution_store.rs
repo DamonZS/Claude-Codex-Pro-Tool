@@ -29,6 +29,30 @@ const MAX_SOURCE_LENGTH: usize = 96;
 const MAX_ERROR_LENGTH: usize = 96;
 const MAX_MESSAGE_SUMMARY_LENGTH: usize = 512;
 const MAX_TASK_MESSAGES: usize = 16_384;
+const MAX_AUTOPILOT_RUNS: usize = 4096;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CodexMulticaAutopilotRun {
+    pub id: String,
+    pub autopilot_id: String,
+    #[serde(default)]
+    pub trigger_id: Option<String>,
+    pub source: String,
+    pub status: String,
+    #[serde(default)]
+    pub issue_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub triggered_at_ms: u64,
+    #[serde(default)]
+    pub completed_at_ms: Option<u64>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+    pub created_at_ms: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -271,6 +295,8 @@ pub struct MulticaExecutionState {
     pub execution_commands: Vec<CodexMulticaExecutionCommand>,
     #[serde(default)]
     pub task_messages: Vec<CodexMulticaTaskMessage>,
+    #[serde(default)]
+    pub autopilot_runs: Vec<CodexMulticaAutopilotRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,6 +357,61 @@ impl MulticaExecutionStore {
                     && scope_id.is_none_or(|id| binding.scope_id == id)
             })
             .collect())
+    }
+
+    pub fn list_autopilot_runs(
+        &self,
+        autopilot_id: &str,
+    ) -> anyhow::Result<Vec<CodexMulticaAutopilotRun>> {
+        validate_id(autopilot_id, "autopilot_id")?;
+        let mut runs = self.load()?.autopilot_runs;
+        runs.retain(|run| run.autopilot_id == autopilot_id);
+        runs.sort_by_key(|run| std::cmp::Reverse(run.created_at_ms));
+        Ok(runs)
+    }
+
+    pub fn get_autopilot_run(&self, run_id: &str) -> anyhow::Result<CodexMulticaAutopilotRun> {
+        validate_id(run_id, "run_id")?;
+        self.load()?
+            .autopilot_runs
+            .into_iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| anyhow!("autopilot_run_not_found"))
+    }
+
+    pub fn trigger_autopilot_run(
+        &self,
+        autopilot_id: String,
+        trigger_id: Option<String>,
+        source: String,
+        now_ms: u64,
+    ) -> anyhow::Result<CodexMulticaAutopilotRun> {
+        validate_id(&autopilot_id, "autopilot_id")?;
+        if !matches!(source.as_str(), "manual" | "schedule" | "webhook" | "api") {
+            bail!("autopilot_run_source_invalid");
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        if state.autopilot_runs.len() >= MAX_AUTOPILOT_RUNS {
+            bail!("autopilot_runs_too_large");
+        }
+        let run = CodexMulticaAutopilotRun {
+            id: format!("autopilot-run-{now_ms}-{}", state.autopilot_runs.len()),
+            autopilot_id,
+            trigger_id,
+            source,
+            status: "pending".into(),
+            issue_id: None,
+            task_id: None,
+            triggered_at_ms: now_ms,
+            completed_at_ms: None,
+            failure_reason: None,
+            reason_code: None,
+            created_at_ms: now_ms,
+        };
+        state.autopilot_runs.push(run.clone());
+        save_state_locked(&self.path, &state)?;
+        Ok(run)
     }
 
     pub fn upsert_binding(
@@ -2105,6 +2186,25 @@ mod tests {
         assert_eq!(
             messages.iter().map(|m| m.seq).collect::<Vec<_>>(),
             vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn autopilot_run_is_persisted_and_source_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let run = store
+            .trigger_autopilot_run("auto-1".into(), None, "manual".into(), 10)
+            .unwrap();
+        assert_eq!(run.status, "pending");
+        assert_eq!(store.list_autopilot_runs("auto-1").unwrap(), vec![run.clone()]);
+        assert_eq!(store.get_autopilot_run(&run.id).unwrap(), run);
+        assert_eq!(
+            store
+                .trigger_autopilot_run("auto-1".into(), None, "bogus".into(), 11)
+                .unwrap_err()
+                .to_string(),
+            "autopilot_run_source_invalid"
         );
     }
 }

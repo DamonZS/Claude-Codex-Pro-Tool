@@ -265,6 +265,24 @@ pub trait BridgeRuntimeService: Send + Sync {
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_execution_unavailable")
     }
+    async fn multica_autopilot_runs(
+        &self,
+        _request: MulticaAutopilotRunsRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_autopilot_unavailable")
+    }
+    async fn multica_autopilot_run(
+        &self,
+        _request: MulticaAutopilotRunRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_autopilot_unavailable")
+    }
+    async fn multica_autopilot_trigger(
+        &self,
+        _request: MulticaAutopilotTriggerRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_autopilot_unavailable")
+    }
     async fn memory_status(&self) -> anyhow::Result<Value> {
         Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
     }
@@ -556,6 +574,30 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_task_queue_transition(parse_multica_task_queue_transition(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/autopilots/runs" => {
+            async {
+                ctx.runtime
+                    .multica_autopilot_runs(parse_multica_autopilot_runs(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/autopilots/run" => {
+            async {
+                ctx.runtime
+                    .multica_autopilot_run(parse_multica_autopilot_run(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/autopilots/trigger" => {
+            async {
+                ctx.runtime
+                    .multica_autopilot_trigger(parse_multica_autopilot_trigger(&payload)?)
                     .await
             }
             .await
@@ -926,6 +968,41 @@ pub struct MulticaTaskQueueTransitionRequest {
     pub status: String,
     #[serde(default)]
     pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaAutopilotRunsRequest {
+    pub autopilot_id: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaAutopilotRunRequest {
+    pub autopilot_id: String,
+    pub run_id: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaAutopilotTriggerRequest {
+    pub autopilot_id: String,
+    #[serde(default)]
+    pub trigger_id: Option<String>,
+    #[serde(default = "default_manual_source")]
+    pub source: String,
+}
+fn default_manual_source() -> String {
+    "manual".into()
+}
+fn parse_multica_autopilot_runs(payload: &Value) -> anyhow::Result<MulticaAutopilotRunsRequest> {
+    Ok(serde_json::from_value(payload.clone())?)
+}
+fn parse_multica_autopilot_run(payload: &Value) -> anyhow::Result<MulticaAutopilotRunRequest> {
+    Ok(serde_json::from_value(payload.clone())?)
+}
+fn parse_multica_autopilot_trigger(
+    payload: &Value,
+) -> anyhow::Result<MulticaAutopilotTriggerRequest> {
+    Ok(serde_json::from_value(payload.clone())?)
 }
 
 fn parse_multica_task_queue_transition(
@@ -2043,6 +2120,42 @@ impl BridgeRuntimeService for CoreRuntimeService {
             request.lease_duration_ms,
         )?;
         Ok(json!({"status":"ok", "binding": binding}))
+    }
+
+    async fn multica_autopilot_runs(
+        &self,
+        request: MulticaAutopilotRunsRequest,
+    ) -> anyhow::Result<Value> {
+        let items = self
+            .multica_execution_store
+            .list_autopilot_runs(&request.autopilot_id)?;
+        Ok(json!({"status":"ok", "runs": items, "total": items.len()}))
+    }
+
+    async fn multica_autopilot_run(
+        &self,
+        request: MulticaAutopilotRunRequest,
+    ) -> anyhow::Result<Value> {
+        let run = self
+            .multica_execution_store
+            .get_autopilot_run(&request.run_id)?;
+        if run.autopilot_id != request.autopilot_id {
+            anyhow::bail!("autopilot_run_not_found");
+        }
+        Ok(json!({"status":"ok", "run": run}))
+    }
+
+    async fn multica_autopilot_trigger(
+        &self,
+        request: MulticaAutopilotTriggerRequest,
+    ) -> anyhow::Result<Value> {
+        let run = self.multica_execution_store.trigger_autopilot_run(
+            request.autopilot_id,
+            request.trigger_id,
+            request.source,
+            unix_now_ms(),
+        )?;
+        Ok(json!({"status":"ok", "run": run, "execution":"pending"}))
     }
 
     async fn multica_execution_lease_renew(

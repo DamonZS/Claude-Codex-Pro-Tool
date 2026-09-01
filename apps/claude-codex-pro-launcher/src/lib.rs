@@ -1004,6 +1004,25 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         BridgeRuntimeService::multica_execution_list(&self.multica_runtime, request).await
     }
 
+    async fn multica_autopilot_runs(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaAutopilotRunsRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_autopilot_runs(&self.multica_runtime, request).await
+    }
+    async fn multica_autopilot_run(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaAutopilotRunRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_autopilot_run(&self.multica_runtime, request).await
+    }
+    async fn multica_autopilot_trigger(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaAutopilotTriggerRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_autopilot_trigger(&self.multica_runtime, request).await
+    }
+
     async fn memory_status(&self) -> anyhow::Result<Value> {
         let mut value = serde_json::to_value(self.memory_store.status()?)?;
         value["status"] = json!("ok");
