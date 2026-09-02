@@ -68,7 +68,7 @@ pub enum MulticaWorkspaceResourceKey {
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::MyTasks,
         Self::Issues,
         Self::Comments,
@@ -86,7 +86,9 @@ impl MulticaWorkspaceResourceKey {
         Self::Skills,
         Self::Settings,
         Self::AgentTaskQueue,
+        Self::IssueViews,
         Self::IssueStatuses,
+        Self::CodexNativeEvents,
     ];
 
     fn key(self) -> &'static str {
@@ -3990,7 +3992,9 @@ mod tests {
                 "skills",
                 "settings",
                 "agent_task_queue",
+                "issue_views",
                 "issue_statuses",
+                "codex_native_events",
             ]
         );
     }
