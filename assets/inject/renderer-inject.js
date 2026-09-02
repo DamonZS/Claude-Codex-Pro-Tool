@@ -7635,9 +7635,30 @@
     if (!content) return;
     const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
     const error = multicaWorkspaceState.errors.get(module.key);
-    const collection = multicaWorkspacePermissionError(error)
+    let collection = multicaWorkspacePermissionError(error)
       ? null
       : multicaWorkspaceState.collections.get(module.key);
+    // The native Codex Skill inventory is a read-only projection.  Keep it
+    // visible on the dedicated Skills route when the editable Multica
+    // collection is empty or unavailable, without mixing it into writable
+    // records or claiming execution support.
+    if (module.key === "skills" && (!collection || !Array.isArray(collection.items) || collection.items.length === 0)) {
+      const nativeSkills = multicaWorkspaceState.bootstrap?.collections?.codex_native_skills;
+      if (nativeSkills && Array.isArray(nativeSkills.items) && nativeSkills.items.length > 0) {
+        collection = {
+          ...nativeSkills,
+          items: nativeSkills.items.map((item) => ({
+            ...item,
+            execution_supported: false,
+            dispatch_allowed: false,
+            read_only: true,
+            inventory_source: item.inventory_source || "codex_native_read_only",
+          })),
+          stale: true,
+          source: "codex_native_read_only",
+        };
+      }
+    }
     multicaWorkspaceClear(content);
     content.dataset.route = module.key;
     if (module.key === "my-issues") {
