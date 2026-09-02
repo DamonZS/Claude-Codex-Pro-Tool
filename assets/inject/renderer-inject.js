@@ -5053,11 +5053,11 @@
     const shadow = host.attachShadow({ mode: "open" });
     const style = multicaWorkspaceEl("style");
     style.textContent = `
-      :host { color-scheme: light dark; }
+      :host { color-scheme: dark; }
       .ccp-multica-shell {
         box-sizing: border-box; width: 100%; height: 100%; min-width: 280px;
         display: flex; flex-direction: column; overflow: hidden;
-        background: var(--ccp-multica-bg, #181b1a); color: var(--ccp-multica-fg, #f2f5f3);
+        background: var(--ccp-multica-bg, #171918); color: var(--ccp-multica-fg, #f2f5f3);
         font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
       .ccp-multica-button { min-height: 30px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: 4px 10px; background: color-mix(in srgb, currentColor 7%, transparent); color: inherit; font: inherit; cursor: pointer; }
@@ -5067,7 +5067,7 @@
       .ccp-multica-button[data-variant="danger"] { border-color: color-mix(in srgb, #e17d83 58%, transparent); color: #e17d83; }
       .ccp-multica-button:focus-visible, .ccp-multica-module-item:focus-visible, .ccp-multica-filter:focus-visible, .ccp-multica-icon-button:focus-visible, .ccp-multica-card:focus-visible { box-shadow: 0 0 0 2px #4fb995; outline: none; }
       .ccp-multica-content { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; padding: 16px 18px 24px; }
-      .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; }
+      .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; background: #171918; color: #f2f5f3; }
       .ccp-multica-content-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
       .ccp-multica-content-title { min-width: 0; flex: 1; margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; }
       .ccp-multica-count { color: color-mix(in srgb, currentColor 58%, transparent); white-space: nowrap; }
@@ -5084,9 +5084,9 @@
       .ccp-multica-module-item:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
       .ccp-multica-module-item[aria-current="page"] { background: color-mix(in srgb, #4fb995 17%, transparent); }
       .ccp-multica-board-page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-      .ccp-multica-board-heading { display: flex; align-items: center; gap: 9px; min-height: 50px; padding: 8px 14px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
-      .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: 0; white-space: nowrap; }
-      .ccp-multica-board-toolbar { padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-board-heading { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 8px 18px 4px; border-bottom: 0; }
+      .ccp-multica-board-title { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+      .ccp-multica-board-toolbar { padding: 4px 18px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
       .ccp-multica-native-inventory { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
       .ccp-multica-native-inventory-title { grid-column: 1 / -1; margin: 0; font-size: 13px; }
       .ccp-multica-native-inventory-label { margin: 0 0 6px; font-size: 12px; opacity: .72; }
@@ -5096,14 +5096,14 @@
       .ccp-multica-native-session[aria-current="page"] { border-color: #56b9a6; }
       .ccp-multica-working-count { color: color-mix(in srgb, currentColor 66%, transparent); white-space: nowrap; }
       .ccp-multica-board-scroll { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
-      .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, 280px); gap: 12px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 12px; }
-      .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 280px; min-width: 280px; min-height: 0; border: 1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 4%, transparent); overflow: hidden; }
+      .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, minmax(250px, 1fr)); gap: 10px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 10px 18px 18px; }
+      .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 250px; min-width: 250px; min-height: 0; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: rgba(255,255,255,.035); overflow: hidden; }
       .ccp-multica-board-column[data-tone="warning"] { background: color-mix(in srgb, #b78923 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="success"] { background: color-mix(in srgb, #2f9a68 7%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="info"] { background: color-mix(in srgb, #2f79a8 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="danger"] { background: color-mix(in srgb, #a24a5a 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="muted"] { background: color-mix(in srgb, currentColor 3%, var(--ccp-multica-bg, #181b1a)); }
-      .ccp-multica-column-header { display: flex; align-items: center; gap: 7px; min-height: 42px; padding: 7px 10px; }
+      .ccp-multica-column-header { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
       .ccp-multica-column-dot { width: 8px; height: 8px; flex: 0 0 8px; border: 1px solid currentColor; border-radius: 50%; color: color-mix(in srgb, currentColor 64%, transparent); }
       .ccp-multica-column-title { min-width: 0; flex: 1; margin: 0; font-size: 13px; font-weight: 620; letter-spacing: 0; }
       .ccp-multica-column-count { color: color-mix(in srgb, currentColor 58%, transparent); }
@@ -5111,8 +5111,9 @@
       .ccp-multica-column-actions .ccp-multica-icon-button { min-width: 26px; min-height: 26px; border-color: transparent; padding: 2px 5px; background: transparent; }
       .ccp-multica-column-list { min-height: 0; flex: 1; overflow-y: auto; padding: 4px 8px 10px; }
       .ccp-multica-column-empty { display: flex; align-items: center; justify-content: center; min-height: 120px; color: color-mix(in srgb, currentColor 54%, transparent); }
-      .ccp-multica-card { box-sizing: border-box; display: grid; gap: 8px; width: 100%; min-width: 0; margin-bottom: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; padding: 10px; background: color-mix(in srgb, currentColor 6%, var(--ccp-multica-bg, #181b1a)); color: inherit; }
+      .ccp-multica-card { box-sizing: border-box; display: grid; gap: 7px; width: 100%; min-width: 0; margin-bottom: 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; padding: 10px; background: #202422; color: inherit; }
       .ccp-multica-card[draggable="true"] { cursor: grab; }
+      .ccp-multica-card[data-has-session="true"] { cursor: pointer; }
       .ccp-multica-card[data-dragging="true"] { opacity: .48; }
       .ccp-multica-card-id { color: color-mix(in srgb, currentColor 58%, transparent); font-size: 11px; overflow-wrap: anywhere; }
       .ccp-multica-card-title { margin: 0; font-size: 13px; font-weight: 620; letter-spacing: 0; overflow-wrap: anywhere; }
@@ -7071,6 +7072,19 @@
     const latest = attempts[0] || null;
     if (latest) meta.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", multicaWorkspaceExecutionState(latest)));
     article.appendChild(meta);
+    const boundThreadId = latest && multicaWorkspaceObjectValue(latest, "codexThreadId", "codex_thread_id");
+    if (boundThreadId) {
+      article.dataset.hasSession = "true";
+      article.title = "点击打开绑定的 Codex 会话";
+      const openBoundSession = (event) => {
+        if (event.target?.closest?.("button, input, select, textarea, a")) return;
+        if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        void multicaWorkspaceRunExecutionAction("open", issue, latest);
+      };
+      article.addEventListener("click", openBoundSession);
+      article.addEventListener("keydown", openBoundSession);
+    }
     const actions = multicaWorkspaceEl("div", "ccp-multica-card-actions");
     const addAction = (label, handler, options = {}) => {
       const button = multicaWorkspaceEl("button", "ccp-multica-button", label);
@@ -7466,7 +7480,9 @@
     refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
     toolbar.appendChild(refresh);
     page.appendChild(toolbar);
-    multicaWorkspaceRenderNativeActivity(page);
+    // The upstream My Issues surface contains only its header controls and
+    // board. Native tool/skill events belong to their own activity surfaces;
+    // rendering them here created a non-native duplicate list above the board.
     if (multicaWorkspaceState.mutationNotice?.message) {
       const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
       notice.setAttribute("role", "status");
@@ -8113,6 +8129,9 @@
     }
     multicaWorkspaceClear(content);
     content.dataset.route = module.key;
+    if (multicaWorkspaceState.root?.shell) {
+      multicaWorkspaceState.root.shell.dataset.route = module.key;
+    }
     if (module.key === "my-issues") {
       multicaWorkspaceRenderIssueBoard(content, module);
       return;
