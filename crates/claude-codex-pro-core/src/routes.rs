@@ -2754,6 +2754,26 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 &format!("auto-{}", binding.binding_id),
             )
             .await;
+        if let Err(error) = &dispatch {
+            let diagnostic = stable_execution_error_code(error);
+            let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
+            if diagnostic != "codex_page_host_unavailable" {
+                let _ =
+                    self.multica_execution_store
+                        .transition_autopilot_run(AutopilotRunTransition {
+                            autopilot_id: run.autopilot_id.clone(),
+                            run_id: run.id.clone(),
+                            expected_revision: current.revision,
+                            next_status: "failed".into(),
+                            issue_id: current.issue_id.clone(),
+                            task_id: current.task_id.clone(),
+                            failure_reason: Some(diagnostic.clone()),
+                            reason_code: Some(diagnostic.clone()),
+                            now_ms: unix_now_ms(),
+                        });
+                anyhow::bail!("{diagnostic}");
+            }
+        }
         if dispatch.is_ok() {
             let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
             if current.status == "issue_created" {

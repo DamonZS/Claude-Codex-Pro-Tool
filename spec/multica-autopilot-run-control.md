@@ -14,6 +14,7 @@
 - `create_issue` 自动化创建带 `origin_type=autopilot`、`origin_id` 的 Issue，并通过 Agent assignment 幂等键生成执行绑定。
 - `run_only` 自动化直接生成执行绑定；Codex host 不可用时保持 `queued`/`pending`，返回稳定诊断码。
 - `run_only` 不得向工作区 `issues` 集合写入占位 Issue；执行上下文从工作流运行记录和工作流实体恢复后直接进入原生 Codex 调度。
+- 下游非连接类错误必须把运行记录推进到 `failed`，写入 `failure_reason` 与稳定 `reason_code`；仅 Codex host 暂不可用可保持排队状态。
 - 重复 trigger 使用稳定幂等键，不得重复创建 Issue 或执行绑定。
 - 不保存 webhook payload、凭据或完整任务正文。
 
