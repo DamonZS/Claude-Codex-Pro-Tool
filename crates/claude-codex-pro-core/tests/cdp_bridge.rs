@@ -1432,6 +1432,18 @@ fn injection_script_memory_session_uses_conversation_root_not_sidebar_titles() {
 }
 
 #[test]
+fn injection_script_hides_codex_internal_transport_messages_from_conversation() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("codexInternalMessageLeakMarkers"));
+    assert!(script.contains("由 ChatGPT 从另一项任务发送"));
+    assert!(script.contains("function_call_output requires call_id"));
+    assert!(script.contains("data-ccp-internal-message-hidden"));
+    assert!(script.contains("codexHideInternalMessageLeaks();"));
+    assert!(script.contains("style.setProperty(\"display\", \"none\", \"important\")"));
+}
+
+#[test]
 fn injection_script_unlocks_nested_disabled_plugin_install_buttons() {
     let script = assets::injection_script(57321);
 

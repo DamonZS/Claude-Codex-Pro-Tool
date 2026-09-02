@@ -13490,6 +13490,56 @@
       || document.querySelector("main");
   }
 
+  // Codex desktop can render agent-to-agent transport envelopes as ordinary
+  // conversation turns. Hide only those known internal frames at the DOM
+  // boundary; persisted thread data and normal user/assistant messages remain untouched.
+  const codexInternalMessageLeakMarkers = [
+    "由 ChatGPT 从另一项任务发送",
+    "function_call_output requires call_id",
+    "continuation via previous_response_id is only supported on Responses WebSocket v2",
+  ];
+
+  function codexInternalMessageLeakText(node) {
+    return String(node?.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function codexInternalMessageLeakTarget(node) {
+    if (!node?.closest) return null;
+    if (codexInternalMessageLeakText(node).includes(codexInternalMessageLeakMarkers[0])) {
+      return node.closest('[data-testid="conversation-turn"]')
+        || node.closest('[data-message-author-role="assistant"]')
+        || node;
+    }
+    let current = node;
+    for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
+      const text = codexInternalMessageLeakText(current);
+      if (text.length <= 420 && codexInternalMessageLeakMarkers.slice(1).some((marker) => text.includes(marker))) {
+        return current;
+      }
+    }
+    return null;
+  }
+
+  function codexHideInternalMessageLeaks(root = codexMemoryConversationRoot()) {
+    if (!root?.querySelectorAll) return 0;
+    const nodes = root.querySelectorAll([
+      '[data-testid="conversation-turn"]',
+      '[data-message-author-role="assistant"]',
+      'main .prose',
+      '[role="alert"]',
+    ].join(", "));
+    const hidden = new Set();
+    nodes.forEach((node) => {
+      if (isExtensionUiNode(node)) return;
+      const target = codexInternalMessageLeakTarget(node);
+      if (!target || hidden.has(target)) return;
+      hidden.add(target);
+      target.setAttribute("data-ccp-internal-message-hidden", "true");
+      target.style.setProperty("display", "none", "important");
+    });
+    return hidden.size;
+  }
+
   function codexMemoryNodeIsInsideConversation(node) {
     if (!node || isExtensionUiNode(node)) return false;
     if (node.closest?.('[data-app-action-sidebar-thread-id], [data-app-action-sidebar-section-heading], nav, aside, header, [role="navigation"], [aria-label*="sidebar" i], [aria-label*="侧边" i]')) return false;
@@ -14207,6 +14257,7 @@
   }
 
   function scheduleScan(mutations) {
+    codexHideInternalMessageLeaks();
     scheduleZedRemoteMenuRefresh(mutations);
     if (multicaWorkspaceAnchorChanged(mutations)) {
       multicaWorkspaceState.anchorAttempts = 0;
@@ -14222,6 +14273,7 @@
   void loadCodexServiceTierState();
   installUpstreamBranchDropdownAdapter();
   installUpstreamWorktreeNativeAdapter();
+  codexHideInternalMessageLeaks();
   scan();
   window.__codexProjectMoveApplyProjection = applyProjectMoveProjection;
   window.__codexProjectMoveReadProjection = readProjectMoveProjection;
