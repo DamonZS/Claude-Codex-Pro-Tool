@@ -710,6 +710,44 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 9] {
                 }))) { native_automations.extend(rows.flatten()); }
             }
         }
+        if sqlite_has_table(&db, "automation_runs") {
+            let columns = sqlite_columns_safe(&db, "automation_runs");
+            let optional = |name: &str, fallback: &str| -> String {
+                if columns.iter().any(|column| column == name) {
+                    name.to_string()
+                } else {
+                    fallback.to_string()
+                }
+            };
+            let sql = format!(
+                "SELECT {}, {}, {}, {}, {}, {} FROM automation_runs ORDER BY {} DESC LIMIT 500",
+                optional("id", "CAST(rowid AS TEXT)"),
+                optional("automation_id", "NULL"),
+                optional("status", "''"),
+                optional("started_at", "NULL"),
+                optional("finished_at", "NULL"),
+                optional("error", "NULL"),
+                optional("started_at", "rowid")
+            );
+            if let Ok(mut stmt) = db.prepare(&sql) {
+                if let Ok(rows) = stmt.query_map([], |row| Ok(json!({
+                    "id": row.get::<_, String>(0).unwrap_or_default(),
+                    "automation_id": row.get::<_, Option<String>>(1).unwrap_or(None),
+                    "status": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default(),
+                    "started_at": row.get::<_, Option<i64>>(3).unwrap_or(None),
+                    "finished_at": row.get::<_, Option<i64>>(4).unwrap_or(None),
+                    "error": row.get::<_, Option<String>>(5).unwrap_or(None).map(|v| v.chars().take(240).collect::<String>()),
+                    "source": "codex_native"
+                }))) {
+                    for run in rows.flatten() {
+                        let automation_id = run.get("automation_id").and_then(Value::as_str).unwrap_or_default();
+                        if let Some(automation) = native_automations.iter_mut().find(|item| item.get("id").and_then(Value::as_str) == Some(automation_id)) {
+                            automation.as_object_mut().expect("automation projection is object").entry("runs").or_insert_with(|| json!([])).as_array_mut().expect("runs projection is array").push(run);
+                        }
+                    }
+                }
+            }
+        }
         if sqlite_has_table(&db, "local_thread_catalog") {
             let columns = sqlite_columns_safe(&db, "local_thread_catalog");
             let optional = |name: &str, fallback: &str| -> String {
@@ -731,6 +769,7 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 9] {
             if let Ok(mut stmt) = db.prepare(&sql) {
                 if let Ok(rows) = stmt.query_map([], |row| Ok(json!({
                     "host_id": row.get::<_, String>(0).unwrap_or_default(),
+                    "id": row.get::<_, String>(1).unwrap_or_default(),
                     "thread_id": row.get::<_, String>(1).unwrap_or_default(),
                     "title": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default(),
                     "cwd": row.get::<_, Option<String>>(3).unwrap_or(None).unwrap_or_default(),
@@ -1091,6 +1130,11 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 9] {
     native_inbox.truncate(500);
     native_automations.truncate(200);
     native_chat_sessions.truncate(500);
+    let mut seen_chat_sessions = std::collections::HashSet::new();
+    native_chat_sessions.retain(|item| {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        !id.is_empty() && seen_chat_sessions.insert(id.to_string())
+    });
     [
         ("codex_native_threads", threads),
         ("codex_native_projects", projects),
@@ -4805,6 +4849,12 @@ mod tests {
                 .expect("native collection is registered");
             for item in items {
                 assert_eq!(item["source"], "codex_native");
+                if key == "codex_native_chat_sessions" {
+                    assert_eq!(item["id"], item["thread_id"]);
+                }
+                if key == "codex_native_automations" {
+                    assert!(item.get("runs").is_none() || item["runs"].is_array());
+                }
             }
         }
 

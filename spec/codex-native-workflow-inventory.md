@@ -6,7 +6,7 @@
 
 ## 目标
 
-- 从 Codex 本机只读数据库投影收件箱、自动化运行配置/结果和本地会话目录。
+- 从 Codex 本机只读数据库投影收件箱、自动化运行配置/结果和本地会话目录；本环境没有云端服务，所有数据必须来自本机真实状态。
 - 在工作流页面显示这些原生状态，并明确其只读与本机来源。
 - 保持上游云端 API 的语义边界：不把本地任务、活动或执行记录伪装成云端 Inbox、Usage 或 Chat Session。
 
@@ -14,6 +14,8 @@
 
 - 读取 `codex-dev.db` 的 `inbox_items`、`automations`、`automation_runs`、`local_thread_catalog` 表；表或列不存在时返回空集合，不得导致整个 Bootstrap 失败。
 - 所有投影项包含 `source: "codex_native"`，正文仅保留受限摘要，不复制完整消息或密钥。
+- 自动化项按 `automation_id` 关联最多 500 条 `automation_runs` 摘要；没有对应自动化项的运行记录不伪造自动化实体。
+- 会话目录项同时提供 `id` 与 `thread_id`，两者必须相等；跨 `local_thread_catalog` 与 `threads` 来源按真实 thread ID 去重。
 - 支持 Bootstrap 与分页 Query 的一致资源键：`codex_native_inbox`、`codex_native_automations`、`codex_native_chat_sessions`。
 - 前端在“我的任务”中展示数量、状态和来源；空态与不可用态可见。
 
