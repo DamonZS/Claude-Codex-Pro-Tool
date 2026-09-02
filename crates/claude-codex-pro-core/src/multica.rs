@@ -66,7 +66,7 @@ const MANAGED_RUNTIME_RELEASE_TAG: &str = "v0.4.36";
 const MANAGED_RUNTIME_REPOSITORY_OWNER: &str = "multica-ai";
 const MANAGED_RUNTIME_REPOSITORY_NAME: &str = "multica";
 const MANAGED_RUNTIME_CONNECTION_ID: &str = "managed-multica";
-const MANAGED_RUNTIME_DISPLAY_NAME: &str = "内置 Multica Runtime";
+const MANAGED_RUNTIME_DISPLAY_NAME: &str = "内置工作流运行时";
 const MANAGED_RUNTIME_SERVER_URL: &str = "https://api.multica.ai";
 const MANAGED_RUNTIME_PROFILE: &str = "ccp-managed";
 const MANAGED_PROFILE_CONFIG_FILE: &str = "config.json";
@@ -9789,7 +9789,7 @@ mod tests {
     fn managed_asset_allowlist_and_defaults_are_pinned() {
         let defaults = managed_connection_defaults();
         assert_eq!(defaults.connection_id, "managed-multica");
-        assert_eq!(defaults.display_name, "内置 Multica Runtime");
+        assert_eq!(defaults.display_name, "内置工作流运行时");
         assert_eq!(defaults.server_url, "https://api.multica.ai");
         assert_eq!(defaults.profile, "ccp-managed");
         assert!(defaults.enabled && defaults.auto_start && defaults.supervise);
