@@ -103,8 +103,19 @@ pub struct CodexContextEntries {
 }
 
 pub fn default_codex_home_dir() -> PathBuf {
-    directories::BaseDirs::new()
-        .map(|dirs| dirs.home_dir().join(".codex"))
+    // Codex itself gives CODEX_HOME precedence over the platform home.  The
+    // manager and launcher must resolve the same directory or a provider
+    // switch would appear successful while an independently started Codex
+    // process reads a different config.toml/auth.json pair.
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(PathBuf::from)
+                .map(|home| home.join(".codex"))
+        })
+        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".codex")))
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
@@ -2876,6 +2887,23 @@ fn account_label_from_jwt(token: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    #[test]
+    fn default_codex_home_prefers_codex_home_like_codex_runtime() {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let previous = std::env::var_os("CODEX_HOME");
+        let expected = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("CODEX_HOME", expected.path());
+        }
+        assert_eq!(default_codex_home_dir(), expected.path());
+        match previous {
+            Some(value) => unsafe { std::env::set_var("CODEX_HOME", value) },
+            None => unsafe { std::env::remove_var("CODEX_HOME") },
+        }
+    }
 
     #[test]
     fn codex_provider_auth_key_reads_key_from_home_auth_json() {
