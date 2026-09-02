@@ -4686,6 +4686,7 @@
     route: "my-issues",
     issueFilter: "assigned",
     boardCompact: false,
+    issueViewMode: "board",
     moduleMenuOpen: false,
     draggedIssue: null,
     nativeThreadActivation: false,
@@ -6823,11 +6824,22 @@
       multicaWorkspaceRenderContent();
     });
     toolbar.appendChild(display);
-    const boardMode = multicaWorkspaceEl("button", "ccp-multica-filter", "看板");
-    boardMode.type = "button";
-    boardMode.setAttribute("aria-pressed", "true");
-    boardMode.addEventListener("click", () => {});
-    toolbar.appendChild(boardMode);
+    [
+      ["board", "看板"],
+      ["list", "列表"],
+      ["table", "表格"],
+      ["swimlane", "泳道"],
+    ].forEach(([mode, label]) => {
+      const modeButton = multicaWorkspaceEl("button", "ccp-multica-filter", label);
+      modeButton.type = "button";
+      modeButton.setAttribute("aria-pressed", String(multicaWorkspaceState.issueViewMode === mode));
+      modeButton.addEventListener("click", () => {
+        if (multicaWorkspaceState.issueViewMode === mode) return;
+        multicaWorkspaceState.issueViewMode = mode;
+        multicaWorkspaceRenderContent();
+      });
+      toolbar.appendChild(modeButton);
+    });
     const refresh = multicaWorkspaceEl("button", "ccp-multica-icon-button", "↻");
     refresh.type = "button";
     refresh.title = "刷新任务";
@@ -6912,6 +6924,60 @@
     }
     multicaWorkspaceRenderEditor(page, module);
     const scroll = multicaWorkspaceEl("div", "ccp-multica-board-scroll");
+    if (multicaWorkspaceState.issueViewMode === "list" || multicaWorkspaceState.issueViewMode === "table") {
+      const list = multicaWorkspaceEl("div", `ccp-multica-issue-${multicaWorkspaceState.issueViewMode}`);
+      if (!source.items.length) list.appendChild(multicaWorkspaceEl("div", "ccp-multica-column-empty", "无任务"));
+      source.items.forEach((issue) => {
+        const id = multicaWorkspaceEntityId(issue);
+        const status = multicaWorkspaceBoardColumns.find((column) => column.key === multicaWorkspaceIssueStatus(issue))?.label || multicaWorkspaceIssueStatus(issue);
+        const priority = String(multicaWorkspaceObjectValue(issue, "priority") || "-");
+        const assignee = String(multicaWorkspaceObjectValue(issue, "assigneeId", "assignee_id") || "未分配");
+        const project = String(multicaWorkspaceObjectValue(issue, "projectId", "project_id") || "-");
+        if (multicaWorkspaceState.issueViewMode === "table") {
+          const row = multicaWorkspaceEl("div", "ccp-multica-table-row");
+          [multicaWorkspaceItemTitle(issue), status, priority, assignee, project, multicaWorkspaceFormatUpdatedAt(issue) || "-"].forEach((value) => row.appendChild(multicaWorkspaceEl("span", "ccp-multica-table-cell", value)));
+          row.title = id;
+          row.addEventListener("dblclick", () => multicaWorkspaceOpenEditor(module, issue));
+          list.appendChild(row);
+        } else {
+          const row = multicaWorkspaceEl("div", "ccp-multica-issue-list-row");
+          row.appendChild(multicaWorkspaceEl("strong", "ccp-multica-issue-list-title", multicaWorkspaceItemTitle(issue)));
+          row.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", status));
+          row.appendChild(multicaWorkspaceEl("span", "ccp-multica-field", `${priority} · ${assignee} · ${project}`));
+          const edit = multicaWorkspaceEl("button", "ccp-multica-button", "编辑");
+          edit.type = "button";
+          edit.addEventListener("click", () => multicaWorkspaceOpenEditor(module, issue));
+          row.appendChild(edit);
+          list.appendChild(row);
+        }
+      });
+      if (multicaWorkspaceState.issueViewMode === "table" && source.items.length) {
+        const header = multicaWorkspaceEl("div", "ccp-multica-table-row ccp-multica-table-header");
+        ["标题", "状态", "优先级", "负责人", "项目", "更新时间"].forEach((value) => header.appendChild(multicaWorkspaceEl("span", "ccp-multica-table-cell", value)));
+        list.insertBefore(header, list.firstChild);
+      }
+      scroll.appendChild(list);
+      page.appendChild(scroll);
+      content.appendChild(page);
+      return;
+    }
+    if (multicaWorkspaceState.issueViewMode === "swimlane") {
+      const swimlane = multicaWorkspaceEl("div", "ccp-multica-swimlane");
+      multicaWorkspaceBoardColumns.forEach((column) => {
+        const lane = multicaWorkspaceEl("section", "ccp-multica-swimlane-lane");
+        const items = source.items.filter((item) => multicaWorkspaceIssueStatus(item) === column.key);
+        lane.appendChild(multicaWorkspaceEl("h3", "ccp-multica-column-title", `${column.label} (${items.length})`));
+        const list = multicaWorkspaceEl("div", "ccp-multica-column-list");
+        items.forEach((item) => multicaWorkspaceAppendBoardCard(list, item, module));
+        if (!items.length) list.appendChild(multicaWorkspaceEl("div", "ccp-multica-column-empty", "无任务"));
+        lane.appendChild(list);
+        swimlane.appendChild(lane);
+      });
+      scroll.appendChild(swimlane);
+      page.appendChild(scroll);
+      content.appendChild(page);
+      return;
+    }
     const board = multicaWorkspaceEl("div", "ccp-multica-board");
     board.dataset.multicaBoard = "true";
     multicaWorkspaceBoardColumns.forEach((column) => {
