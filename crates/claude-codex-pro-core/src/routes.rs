@@ -1174,7 +1174,7 @@ fn parse_multica_execution_create(
     .validate()?;
     CodexThreadRequest {
         workspace_id: request.workspace_id.clone(),
-        issue_id: request.issue_id.clone(),
+        issue_id: Some(request.issue_id.clone()),
         prompt: request.prompt.clone(),
         cwd: request.cwd.clone(),
         skill_request: None,
@@ -1215,7 +1215,7 @@ fn parse_multica_execution_continue(
     .validate()?;
     CodexThreadRequest {
         workspace_id: "local".to_string(),
-        issue_id: "issue".to_string(),
+        issue_id: Some("issue".to_string()),
         prompt: request.prompt.clone(),
         cwd: request.cwd.clone(),
         skill_request: None,
@@ -1876,7 +1876,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
                     self.multica_execution_store
                         .reserve_execution(ExecutionReservation {
                             workspace_id: workspace_id.clone(),
-                            issue_id: issue_id.to_string(),
+                            issue_id: Some(issue_id.to_string()),
                             agent_id: Some(agent_id.to_string()),
                             execution_kind: MulticaExecutionKind::Thread,
                             parent_thread_id: None,
@@ -2068,7 +2068,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
             .multica_execution_store
             .reserve_execution(ExecutionReservation {
                 workspace_id: request.workspace_id.clone(),
-                issue_id: request.issue_id.clone(),
+                issue_id: Some(request.issue_id.clone()),
                 execution_kind: request
                     .execution_kind
                     .unwrap_or(MulticaExecutionKind::Thread),
@@ -2122,7 +2122,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
         }
         let native_request = CodexThreadRequest {
             workspace_id: request.workspace_id,
-            issue_id: request.issue_id,
+            issue_id: Some(request.issue_id),
             prompt: request.prompt,
             cwd: request.cwd,
             skill_request,
@@ -2220,8 +2220,10 @@ impl BridgeRuntimeService for CoreRuntimeService {
             let issues = self
                 .multica_workspace_store
                 .list(&claimed.workspace_id, MulticaWorkspaceResourceKey::Issues)?;
-            let issue = issues.into_iter().find(|issue| {
-                issue.get("id").and_then(Value::as_str) == Some(claimed.issue_id.as_str())
+            let issue = claimed.issue_id.as_deref().and_then(|issue_id| {
+                issues
+                    .into_iter()
+                    .find(|issue| issue.get("id").and_then(Value::as_str) == Some(issue_id))
             });
             let issue = if let Some(issue) = issue {
                 if issue.get("assignee_type").and_then(Value::as_str) != Some("agent")
@@ -2234,11 +2236,13 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 // Upstream run_only tasks have no persisted Issue. Recover the
                 // task context from the linked autopilot run instead of
                 // inventing an Issue in the workspace collection.
-                let run_id = claimed
-                    .issue_id
-                    .strip_prefix("autopilot-issue-")
-                    .ok_or_else(|| anyhow::anyhow!("execution_issue_unavailable"))?;
-                let run = self.multica_execution_store.get_autopilot_run(run_id)?;
+                // `run_only` has no Issue by design. Resolve the owning run
+                // through its persisted task binding; never invent an Issue
+                // identifier merely to satisfy the dispatch path.
+                let run = self
+                    .multica_execution_store
+                    .get_autopilot_run_by_task_id(&claimed.binding_id)
+                    .map_err(|_| anyhow::anyhow!("execution_autopilot_unavailable"))?;
                 let autopilots = self.multica_workspace_store.list(
                     &claimed.workspace_id,
                     MulticaWorkspaceResourceKey::Autopilots,
@@ -2250,7 +2254,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
                     })
                     .ok_or_else(|| anyhow::anyhow!("execution_autopilot_unavailable"))?;
                 json!({
-                    "id": claimed.issue_id,
+                    "id": run.id,
                     "title": autopilot.get("title").or_else(|| autopilot.get("name")),
                     "description": autopilot.get("description"),
                     "assignee_type": "agent",
@@ -2694,7 +2698,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 self.multica_execution_store
                     .reserve_execution(ExecutionReservation {
                         workspace_id: workspace_id.clone(),
-                        issue_id: id.to_string(),
+                        issue_id: Some(id.to_string()),
                         agent_id: Some(agent_id.to_string()),
                         execution_kind: MulticaExecutionKind::Thread,
                         parent_thread_id: None,
@@ -2722,7 +2726,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 self.multica_execution_store
                     .reserve_execution(ExecutionReservation {
                         workspace_id: workspace_id.clone(),
-                        issue_id: issue_id.clone(),
+                        issue_id: None,
                         agent_id: Some(agent_id.to_string()),
                         execution_kind: MulticaExecutionKind::Thread,
                         parent_thread_id: None,
@@ -3820,7 +3824,7 @@ mod tests {
         store
             .reserve_execution(ExecutionReservation {
                 workspace_id: workspace_id.to_string(),
-                issue_id: "issue-a".to_string(),
+                issue_id: Some("issue-a".to_string()),
                 agent_id: Some("agent-a".to_string()),
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -3961,7 +3965,7 @@ mod tests {
         let queued = executions
             .reserve_execution(ExecutionReservation {
                 workspace_id: workspace_id.clone(),
-                issue_id: "issue-a".to_string(),
+                issue_id: Some("issue-a".to_string()),
                 agent_id: Some("agent-a".to_string()),
                 execution_kind: MulticaExecutionKind::Subagent,
                 parent_thread_id: Some("parent-native-thread".to_string()),

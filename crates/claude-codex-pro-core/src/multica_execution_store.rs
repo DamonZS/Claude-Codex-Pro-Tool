@@ -192,7 +192,11 @@ pub enum MulticaExecutionCommandState {
 pub struct CodexMulticaExecutionBinding {
     pub binding_id: String,
     pub workspace_id: String,
-    pub issue_id: String,
+    /// `None` is the canonical representation for upstream `run_only` tasks.
+    /// Older persisted bindings may still contain a synthetic value and remain
+    /// readable through the normal serde migration path.
+    #[serde(default)]
+    pub issue_id: Option<String>,
     #[serde(default)]
     pub agent_id: Option<String>,
     pub multica_run_id: String,
@@ -271,7 +275,7 @@ pub struct CodexMulticaExecutionCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionReservation {
     pub workspace_id: String,
-    pub issue_id: String,
+    pub issue_id: Option<String>,
     pub agent_id: Option<String>,
     pub execution_kind: MulticaExecutionKind,
     pub parent_thread_id: Option<String>,
@@ -407,6 +411,21 @@ impl MulticaExecutionStore {
             .autopilot_runs
             .into_iter()
             .find(|run| run.id == run_id)
+            .ok_or_else(|| anyhow!("autopilot_run_not_found"))
+    }
+
+    /// Resolve the run that owns a task/binding. This mirrors the upstream
+    /// `autopilot_run_id` link used by `agent_task_queue` and avoids deriving
+    /// a fake Issue identifier for `run_only` executions.
+    pub fn get_autopilot_run_by_task_id(
+        &self,
+        task_id: &str,
+    ) -> anyhow::Result<CodexMulticaAutopilotRun> {
+        validate_id(task_id, "task_id")?;
+        self.load()?
+            .autopilot_runs
+            .into_iter()
+            .find(|run| run.task_id.as_deref() == Some(task_id))
             .ok_or_else(|| anyhow!("autopilot_run_not_found"))
     }
 
@@ -779,12 +798,14 @@ impl MulticaExecutionStore {
         if state.execution_commands.len() >= MAX_EXECUTION_COMMANDS {
             bail!("execution_commands_too_large");
         }
-        if state.execution_bindings.iter().any(|binding| {
-            binding.workspace_id == input.workspace_id
-                && binding.issue_id == input.issue_id
-                && binding.agent_id == input.agent_id
-                && !binding.state.is_terminal()
-        }) {
+        if input.issue_id.is_some()
+            && state.execution_bindings.iter().any(|binding| {
+                binding.workspace_id == input.workspace_id
+                    && binding.issue_id == input.issue_id
+                    && binding.agent_id == input.agent_id
+                    && !binding.state.is_terminal()
+            })
+        {
             bail!("execution_active_attempt_conflict");
         }
         let attempt_no = state
@@ -981,7 +1002,7 @@ impl MulticaExecutionStore {
             .into_iter()
             .filter(|binding| {
                 binding.workspace_id == workspace_id
-                    && issue_id.is_none_or(|issue_id| binding.issue_id == issue_id)
+                    && issue_id.is_none_or(|issue_id| binding.issue_id.as_deref() == Some(issue_id))
             })
             .collect::<Vec<_>>();
         all.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
@@ -1006,7 +1027,7 @@ impl MulticaExecutionStore {
         let mut cancelled = 0;
         for binding in &mut state.execution_bindings {
             if binding.workspace_id != workspace_id
-                || binding.issue_id != issue_id
+                || binding.issue_id.as_deref() != Some(issue_id)
                 || binding.state.is_terminal()
                 || keep_agent_id.is_some_and(|id| binding.agent_id.as_deref() == Some(id))
             {
@@ -1604,7 +1625,13 @@ fn validate_state(state: &MulticaExecutionState) -> anyhow::Result<()> {
             || !idempotency_keys.insert(binding.idempotency_key.to_ascii_lowercase())
             || !attempts.insert((
                 binding.workspace_id.to_ascii_lowercase(),
-                binding.issue_id.to_ascii_lowercase(),
+                binding
+                    .issue_id
+                    .as_deref()
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_else(|| {
+                        format!("binding:{}", binding.binding_id.to_ascii_lowercase())
+                    }),
                 binding.attempt_no,
             ))
         {
@@ -1640,7 +1667,9 @@ fn validate_state(state: &MulticaExecutionState) -> anyhow::Result<()> {
 
 fn validate_execution_reservation(input: &ExecutionReservation) -> anyhow::Result<()> {
     validate_id(&input.workspace_id, "workspace_id")?;
-    validate_id(&input.issue_id, "issue_id")?;
+    if let Some(issue_id) = input.issue_id.as_deref() {
+        validate_id(issue_id, "issue_id")?;
+    }
     validate_id(&input.idempotency_key, "idempotency_key")?;
     if let Some(parent) = input.parent_thread_id.as_deref() {
         validate_id(parent, "parent_thread_id")?;
@@ -1660,7 +1689,9 @@ fn validate_execution_reservation(input: &ExecutionReservation) -> anyhow::Resul
 fn validate_execution_binding(binding: &CodexMulticaExecutionBinding) -> anyhow::Result<()> {
     validate_id(&binding.binding_id, "binding_id")?;
     validate_id(&binding.workspace_id, "workspace_id")?;
-    validate_id(&binding.issue_id, "issue_id")?;
+    if let Some(issue_id) = binding.issue_id.as_deref() {
+        validate_id(issue_id, "issue_id")?;
+    }
     if let Some(agent) = binding.agent_id.as_deref() {
         validate_id(agent, "agent_id")?;
     }
@@ -2160,7 +2191,7 @@ mod tests {
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let reservation = ExecutionReservation {
             workspace_id: "workspace-a".to_string(),
-            issue_id: "issue-a".to_string(),
+            issue_id: Some("issue-a".to_string()),
             agent_id: None,
             execution_kind: MulticaExecutionKind::Thread,
             parent_thread_id: None,
@@ -2223,7 +2254,7 @@ mod tests {
                 now_ms: 5,
                 ..ExecutionReservation {
                     workspace_id: "workspace-a".to_string(),
-                    issue_id: "issue-a".to_string(),
+                    issue_id: Some("issue-a".to_string()),
                     agent_id: None,
                     execution_kind: MulticaExecutionKind::Thread,
                     parent_thread_id: Some("thread-a".to_string()),
@@ -2241,13 +2272,34 @@ mod tests {
     }
 
     #[test]
+    fn run_only_reservation_persists_null_issue_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let result = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: None,
+                agent_id: Some("agent-a".into()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "autopilot-run:run-only-a".into(),
+                now_ms: 1,
+            })
+            .unwrap();
+        assert_eq!(result.binding.issue_id, None);
+        let encoded = std::fs::read_to_string(store.path()).unwrap();
+        assert!(encoded.contains("\"issueId\": null"));
+    }
+
+    #[test]
     fn execution_commands_are_idempotent_and_do_not_store_command_bodies() {
         let dir = tempfile::tempdir().unwrap();
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let reserved = store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".to_string(),
-                issue_id: "issue-a".to_string(),
+                issue_id: Some("issue-a".to_string()),
                 agent_id: None,
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -2310,7 +2362,7 @@ mod tests {
         let reserved = store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
-                issue_id: "issue-a".into(),
+                issue_id: Some("issue-a".into()),
                 agent_id: None,
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -2382,7 +2434,7 @@ mod tests {
         store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
-                issue_id: "issue-a".into(),
+                issue_id: Some("issue-a".into()),
                 agent_id: Some("agent-a".into()),
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -2394,7 +2446,7 @@ mod tests {
         store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
-                issue_id: "issue-a".into(),
+                issue_id: Some("issue-a".into()),
                 agent_id: Some("agent-b".into()),
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -2425,7 +2477,7 @@ mod tests {
         let reserved = store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
-                issue_id: "issue-a".into(),
+                issue_id: Some("issue-a".into()),
                 agent_id: None,
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,
@@ -2463,7 +2515,7 @@ mod tests {
         let reserved = store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
-                issue_id: "issue-a".into(),
+                issue_id: Some("issue-a".into()),
                 agent_id: None,
                 execution_kind: MulticaExecutionKind::Thread,
                 parent_thread_id: None,

@@ -158,7 +158,10 @@ fn native_skill_input(skill: &NativeCodexSkill) -> Value {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexThreadRequest {
     pub workspace_id: String,
-    pub issue_id: String,
+    /// Optional because upstream `run_only` task queue entries are not backed
+    /// by an Issue (`issue_id = NULL`).
+    #[serde(default)]
+    pub issue_id: Option<String>,
     pub prompt: String,
     #[serde(default)]
     pub cwd: Option<String>,
@@ -172,7 +175,9 @@ pub struct CodexThreadRequest {
 impl CodexThreadRequest {
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_id(&self.workspace_id, "workspace_id")?;
-        validate_id(&self.issue_id, "issue_id")?;
+        if let Some(issue_id) = self.issue_id.as_deref() {
+            validate_id(issue_id, "issue_id")?;
+        }
         validate_text(&self.prompt, MAX_PROMPT_LENGTH, "prompt")?;
         if let Some(cwd) = self.cwd.as_deref() {
             validate_path(cwd)?;
@@ -1536,7 +1541,7 @@ mod tests {
     fn request(prompt: &str) -> CodexThreadRequest {
         CodexThreadRequest {
             workspace_id: "workspace-1".to_string(),
-            issue_id: "issue-1".to_string(),
+            issue_id: Some("issue-1".to_string()),
             prompt: prompt.to_string(),
             cwd: None,
             skill_request: None,
