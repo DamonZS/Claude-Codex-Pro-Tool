@@ -2308,6 +2308,50 @@ fn validate_entity_contract(
         {
             bail!("multica_workspace_agent_permission_invalid");
         }
+        if let Some(value) = object.get("max_concurrent_tasks") {
+            let Some(value) = value.as_u64() else {
+                bail!("multica_workspace_agent_concurrency_invalid");
+            };
+            if !(1..=50).contains(&value) {
+                bail!("multica_workspace_agent_concurrency_invalid");
+            }
+        }
+        for key in ["model", "thinking_level", "service_tier"] {
+            if let Some(value) = object.get(key) {
+                let Some(value) = value.as_str() else {
+                    bail!("multica_workspace_agent_runtime_invalid");
+                };
+                if value.len() > 128 || value.contains('\0') {
+                    bail!("multica_workspace_agent_runtime_invalid");
+                }
+            }
+        }
+        for key in ["custom_env", "mcp_config"] {
+            if let Some(value) = object.get(key) {
+                if !value.is_object() {
+                    bail!("multica_workspace_agent_config_invalid");
+                }
+                let encoded = serde_json::to_vec(value)
+                    .map_err(|_| anyhow!("multica_workspace_agent_config_invalid"))?;
+                if encoded.len() > 64 * 1024 {
+                    bail!("multica_workspace_agent_config_invalid");
+                }
+            }
+        }
+        if let Some(value) = object.get("custom_args") {
+            let Some(args) = value.as_array() else {
+                bail!("multica_workspace_agent_config_invalid");
+            };
+            if args.len() > 128
+                || args.iter().any(|arg| {
+                    arg.as_str()
+                        .map(|value| value.len() > 1024 || value.contains('\0'))
+                        != Some(false)
+                })
+            {
+                bail!("multica_workspace_agent_config_invalid");
+            }
+        }
         return Ok(());
     }
     if resource == MulticaWorkspaceResourceKey::Comments {
@@ -3504,5 +3548,21 @@ mod tests {
 
         state.agents[0]["permission_mode"] = json!("plan");
         validate_local_workspace_state(&state).expect("valid agent contract");
+
+        state.agents[0]["max_concurrent_tasks"] = json!(51);
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_agent_concurrency_invalid"
+        );
+        state.agents[0]["max_concurrent_tasks"] = json!(6);
+        state.agents[0]["custom_args"] = json!(["--profile", 7]);
+        assert_eq!(
+            validate_local_workspace_state(&state)
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_agent_config_invalid"
+        );
     }
 }
