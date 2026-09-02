@@ -7384,23 +7384,6 @@
     refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
     toolbar.appendChild(refresh);
     page.appendChild(toolbar);
-    multicaWorkspaceRenderNativeInventory(page);
-    const queueItems = multicaWorkspaceState.bootstrap?.collections?.agent_task_queue?.items || [];
-    if (queueItems.length > 0) {
-      const queueSection = multicaWorkspaceEl("section", "ccp-multica-native-inventory-group");
-      queueSection.appendChild(multicaWorkspaceEl("h3", "ccp-multica-native-inventory-label", "Codex 任务队列"));
-      const queueList = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
-      queueItems.slice(0, 50).forEach((task) => {
-        const status = String(task.status || "unknown");
-        const attempt = String(task.attempt || "1");
-        const failure = String(task.failure_reason || "").trim();
-        const row = multicaWorkspaceEl("div", "ccp-multica-native-session", `${status} · 第 ${attempt} 次尝试${failure ? ` · ${failure}` : ""}`);
-        row.title = `队列项 ${String(task.id || "")}，来源：${String(task.source || "")}`;
-        queueList.appendChild(row);
-      });
-      queueSection.appendChild(queueList);
-      page.appendChild(queueSection);
-    }
     if (multicaWorkspaceState.mutationNotice?.message) {
       const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
       notice.setAttribute("role", "status");
@@ -8377,39 +8360,31 @@
       multicaWorkspaceFailOpen("等待 Codex 内容区");
       return;
     }
-    // Keep Codex's native main visible while the local control plane proves
-    // both bootstrap and the first my-issues collection. Only then take over
-    // the surface; a bridge timeout must never replace usable Codex content
-    // with a dead workspace view.
-    const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);
-    if (openSequence !== multicaWorkspaceState.openSeq ||
-        !multicaWorkspaceState.opening ||
-        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
-    if (!ready) {
-      const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
-      const routeError = multicaWorkspaceState.errors.get(module.key);
-      multicaWorkspaceFailOpen(
-        multicaWorkspaceState.bootstrapError ||
-          (routeError ? multicaWorkspaceErrorMessage(routeError) : "本地任务暂不可用，请点击重试"),
-      );
-      return;
-    }
-    const readyPlugin = pluginEntryButton();
-    const readyMain = currentMain.isConnected ? currentMain : multicaWorkspaceNativeMain(readyPlugin);
-    if (!readyMain || !host.isConnected || !multicaWorkspaceBindMain(readyMain)) {
-      multicaWorkspaceFailOpen("等待 Codex 内容区");
-      return;
-    }
+    // Take over immediately with a real loading state. Bootstrap and the first
+    // collection query continue in the background so a slow local bridge never
+    // blocks entry for tens of seconds. Errors remain visible with retry.
     multicaWorkspaceState.opened = true;
     multicaWorkspaceState.opening = false;
-    readyMain.style.visibility = "hidden";
-    readyMain.style.pointerEvents = "none";
-    readyMain.setAttribute?.("inert", "");
-    readyMain.setAttribute?.("aria-hidden", "true");
+    currentMain.style.visibility = "hidden";
+    currentMain.style.pointerEvents = "none";
+    currentMain.setAttribute?.("inert", "");
+    currentMain.setAttribute?.("aria-hidden", "true");
     multicaWorkspaceUpdateGeometry();
     multicaWorkspaceRenderContent();
-    multicaWorkspaceEnsureEntry(readyPlugin || currentPlugin || plugin);
+    multicaWorkspaceEnsureEntry(currentPlugin || plugin);
     multicaWorkspaceStartBackgroundSync();
+    void multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence).then((ready) => {
+      if (openSequence !== multicaWorkspaceState.openSeq ||
+          !multicaWorkspaceState.opened ||
+          window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+      if (!ready) {
+        const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
+        const routeError = multicaWorkspaceState.errors.get(module.key);
+        multicaWorkspaceState.bootstrapError = multicaWorkspaceState.bootstrapError ||
+          (routeError ? multicaWorkspaceErrorMessage(routeError) : "本地任务暂不可用，请点击重试");
+        multicaWorkspaceRenderContent();
+      }
+    });
   }
 
   function multicaWorkspaceHide() {

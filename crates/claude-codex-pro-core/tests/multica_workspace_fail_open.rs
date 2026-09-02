@@ -60,11 +60,12 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
 
     assert!(open.contains("multicaWorkspaceState.opened = true;"));
     assert!(open.contains(
-        "const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);"
+        "void multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence)"
     ));
     assert!(!open.contains("await multicaWorkspaceLoadBootstrap"));
     assert!(!open.contains("await multicaWorkspaceQuery"));
-    assert!(open.contains("readyMain.style.visibility = \"hidden\""));
+    assert!(open.contains("currentMain.style.visibility = \"hidden\""));
+    assert!(open.contains("multicaWorkspaceState.opened = true;"));
 
     assert!(loader.contains("await multicaWorkspaceLoadBootstrap(force, timeoutMs)"));
     assert!(loader.contains("return multicaWorkspaceQuery(module, force, timeoutMs);"));

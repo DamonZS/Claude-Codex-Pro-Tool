@@ -870,7 +870,8 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         "function multicaWorkspaceAppendSkillItem",
     );
     assert!(board.contains("multicaWorkspaceAppendModuleMenu(heading)"));
-    assert!(board.contains("multicaWorkspaceRenderNativeInventory(page)"));
+    assert!(!board.contains("multicaWorkspaceRenderNativeInventory(page)"));
+    assert!(!board.contains("Codex 任务队列"));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
     assert!(board.contains("lane.dataset.multicaBoardStatus = column.key"));
     let dependency_loader = source_between(
@@ -981,17 +982,14 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
         "function multicaWorkspaceAppendSkillItem",
     );
 
-    let preflight = open
-        .find("const ready = await multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence);")
-        .expect("open preflight must await bootstrap and my-issues");
+    let background_load = open
+        .find("void multicaWorkspaceLoadCurrentRoute(true, 15000, openSequence)")
+        .expect("board data load must continue asynchronously");
     let takeover = open
         .find("multicaWorkspaceState.opened = true;")
         .expect("board takeover assignment");
-    assert!(
-        preflight < takeover,
-        "native main must stay visible during preflight"
-    );
-    assert!(open.contains("!multicaWorkspaceState.opening"));
+    assert!(takeover < background_load, "board takeover must not wait for data");
+    assert!(open.contains("multicaWorkspaceState.opening = false;"));
     assert!(open.contains("本地任务暂不可用，请点击重试"));
 
     let opened_branch = fail_open

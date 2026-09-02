@@ -516,7 +516,14 @@ cargo build --release
 - 打开/继续错误地创建新 thread，终态重跑覆盖旧 attempt。
 - 点击原生项目/对话后工作区仍遮挡内容、必须再点“关闭”，原生 row 未真实激活，或实现通过阻断点击、直接改 URL/history/React store 伪造跳转。
 - 普通原生导航或内部“打开对话”调用完整 cleanup、停止后台任务/事件/对账/自动化；或关闭持久化增强开关后未执行完整 cleanup。
-- 页面 Host 能力失败导致本地 `my-issues` 查询不执行、七列看板被全页错误/顶部状态壳替代，或为了恢复而启动第二执行器。
+- 页面 Host 能力失败导致本地 `my-issues` 查询不执行、七列看板被全页错误/顶部状态壳替代，或为了恢复而启动第二执行器；请求尚未完成时禁止显示伪造任务。
+
+### 打开性能与看板边界补充验收
+
+- 点击入口后无需等待本地请求返回即可看到看板标题、工具栏和加载状态；实现中不得在接管前 `await` bootstrap/首个查询。
+- 请求完成后看板显示真实任务；请求失败时看板保留并显示错误与重试按钮。
+- 看板源码不调用原生库存全量渲染函数，也不渲染“Codex 任务队列”明细；项目、会话、Skill、智能体等仍可在各自模块读取。
+- 验证方式：`cargo test -p claude-codex-pro-core --test cdp_bridge -- --nocapture`、`cargo test -p claude-codex-pro-core --test multica_workspace_fail_open -- --nocapture`、`node --check assets/inject/renderer-inject.js`，并在 Release 应用中点击入口确认首屏及时出现。
 - 409、断线、部分提交或事件 gap 导致状态丢失、重复执行或不可审计。
 - renderer 可透传任意 URL/header/命令/路径，跨 workspace 读写，或不可信内容触发执行。
 - token、API Key、Authorization、完整 prompt 或会话正文进入 DOM、日志、URL、截图或测试产物。
