@@ -7254,6 +7254,41 @@
     parent.appendChild(section);
   }
 
+  function multicaWorkspaceRenderNativeActivity(parent) {
+    const details = document.createElement("details");
+    details.className = "ccp-multica-native-activity";
+    const summary = document.createElement("summary");
+    summary.textContent = "当前活动";
+    details.appendChild(summary);
+    const executions = Array.isArray(multicaWorkspaceState.executions)
+      ? multicaWorkspaceState.executions.filter((item) => /^(queued|running|starting|retrying)$/i.test(String(item?.status || "")))
+      : [];
+    const toolCalls = multicaWorkspaceState.bootstrap?.collections?.codex_native_tool_calls?.items || [];
+    const skills = multicaWorkspaceState.bootstrap?.collections?.codex_native_skills?.items || [];
+    const loadedSkills = skills.filter((item) => String(item?.runtime_loaded || item?.loaded_at || "").trim());
+    const counts = multicaWorkspaceEl("div", "ccp-multica-native-activity-counts",
+      `进行中会话/智能体 ${executions.length} · 最近工具调用 ${Math.min(toolCalls.length, 8)} · 已加载 Skill ${loadedSkills.length}`);
+    details.appendChild(counts);
+    const items = [
+      ...executions.slice(0, 8).map((item) => `执行中 · ${String(item?.issueId || item?.issue_id || item?.id || "未命名任务")}`),
+      ...toolCalls.slice(0, 8).map((item) => `工具 · ${String(item?.name || item?.item_type || "未命名调用")}`),
+      ...loadedSkills.slice(0, 8).map((item) => `Skill · ${String(item?.title || item?.name || "未命名 Skill")}`),
+    ];
+    const list = multicaWorkspaceEl("div", "ccp-multica-native-activity-list");
+    if (items.length === 0) {
+      list.appendChild(multicaWorkspaceEl("span", "ccp-multica-inline-message", "当前没有可核实的进行中会话、智能体调用或已加载 Skill"));
+    } else {
+      items.slice(0, 16).forEach((label) => {
+        const card = multicaWorkspaceEl("article", "ccp-multica-item ccp-multica-native-activity-card");
+        card.appendChild(multicaWorkspaceEl("h4", "ccp-multica-item-title", label));
+        card.appendChild(multicaWorkspaceEl("span", "ccp-multica-field", "来源：Codex 本机活动投影"));
+        list.appendChild(card);
+      });
+    }
+    details.appendChild(list);
+    parent.appendChild(details);
+  }
+
   function multicaWorkspaceRenderIssueBoard(content, module) {
     const source = multicaWorkspaceIssueSource();
     const filterDependencies = multicaWorkspaceState.issueFilter === "agents"
@@ -7384,6 +7419,7 @@
     refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
     toolbar.appendChild(refresh);
     page.appendChild(toolbar);
+    multicaWorkspaceRenderNativeActivity(page);
     if (multicaWorkspaceState.mutationNotice?.message) {
       const notice = multicaWorkspaceEl("div", "ccp-multica-inline-message", multicaWorkspaceState.mutationNotice.message);
       notice.setAttribute("role", "status");
