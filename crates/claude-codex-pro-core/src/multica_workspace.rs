@@ -745,12 +745,57 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
             }
         }
         if sqlite_has_table(&db, "project_roots") {
-            let _ = db
-                .prepare("SELECT path FROM project_roots WHERE COALESCE(path, '') <> '' LIMIT 100")
-                .and_then(|mut stmt| {
+            let root_columns = sqlite_columns_safe(&db, "project_roots");
+            let project_columns = sqlite_columns_safe(&db, "projects");
+            let joined = root_columns.iter().any(|column| column == "project_id")
+                && project_columns.iter().any(|column| column == "id");
+            if sqlite_has_table(&db, "projects") && joined {
+                let name = if project_columns.iter().any(|column| column == "name") {
+                    "p.name"
+                } else {
+                    "''"
+                };
+                let position = if project_columns.iter().any(|column| column == "position") {
+                    "p.position"
+                } else {
+                    "0"
+                };
+                let created = if project_columns
+                    .iter()
+                    .any(|column| column == "created_at_ms")
+                {
+                    "p.created_at_ms"
+                } else {
+                    "0"
+                };
+                let updated = if project_columns
+                    .iter()
+                    .any(|column| column == "updated_at_ms")
+                {
+                    "p.updated_at_ms"
+                } else {
+                    "0"
+                };
+                let sql = format!(
+                    "SELECT p.id, {name}, {position}, {created}, {updated}, r.path FROM projects p JOIN project_roots r ON r.project_id = p.id WHERE COALESCE(r.path, '') <> '' LIMIT 100"
+                );
+                let _ = db.prepare(&sql).and_then(|mut stmt| {
                     let rows = stmt.query_map([], |row| {
-                        let path: String = row.get(0)?;
-                        Ok(json!({"id": format!("codex-project:{}", path), "path": path, "source": "codex_native"}))
+                        let id: String = row.get(0)?;
+                        let name = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+                        let position = row.get::<_, Option<i64>>(2)?.unwrap_or_default();
+                        let created = row.get::<_, Option<i64>>(3)?.unwrap_or_default();
+                        let updated = row.get::<_, Option<i64>>(4)?.unwrap_or_default();
+                        let path: String = row.get(5)?;
+                        Ok(json!({
+                            "id": id,
+                            "name": name,
+                            "path": path,
+                            "position": position,
+                            "created_at_ms": created,
+                            "updated_at_ms": updated,
+                            "source": "codex_native"
+                        }))
                     })?;
                     for project in rows.flatten() {
                         if let Some(path) = project.get("path").and_then(Value::as_str) {
@@ -760,6 +805,24 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
                     }
                     Ok(())
                 });
+            }
+            if projects.is_empty() {
+                let _ = db
+                    .prepare("SELECT path FROM project_roots WHERE COALESCE(path, '') <> '' LIMIT 100")
+                    .and_then(|mut stmt| {
+                        let rows = stmt.query_map([], |row| {
+                            let path: String = row.get(0)?;
+                            Ok(json!({"id": format!("codex-project:{}", path), "path": path, "source": "codex_native"}))
+                        })?;
+                        for project in rows.flatten() {
+                            if let Some(path) = project.get("path").and_then(Value::as_str) {
+                                project_paths.push(path.to_string());
+                            }
+                            projects.push(project);
+                        }
+                        Ok(())
+                    });
+            }
         }
     }
     // Native execution events live in the read-only history projection, not
