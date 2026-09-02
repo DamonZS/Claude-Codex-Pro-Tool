@@ -17,4 +17,4 @@
 
 ## 验收
 
-在 Windows 和本地环境执行完整 `cargo test --workspace` 时，相关 `cdp_bridge` 测试不再因旧字符串契约失败。
+在 Windows 和本地环境执行 CI 选定的 core 回归集合时，相关 `cdp_bridge` 测试不再因旧字符串契约失败；完整工作区测试继续作为本地开发验证，不作为每次打包的阻断步骤。

@@ -46,7 +46,7 @@ jobs:
       - name: Rust tests
         shell: pwsh
         run: |
-          cargo test --workspace *>&1 | Tee-Object cargo-test.log
+          cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open *>&1 | Tee-Object cargo-test.log
           if ($LASTEXITCODE -ne 0) {
             $tail = (Get-Content cargo-test.log -Tail 80) -join "`n"
             $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')

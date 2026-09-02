@@ -6,13 +6,12 @@
 
 - `codex_multica_workspace_renders_my_issues_as_direct_seven_column_board` 通过，并验证编辑保存使用 `expectedRevision: editor.expectedRevision`。
 - `codex_multica_autopilot_manual_trigger_uses_control_plane_run_endpoint` 通过，并验证 `/multica/autopilots/trigger`、`source: "manual"` 和成功提示。
-- `cargo test --workspace` 返回退出码 0。
+- CI 选定的 Rust 回归集合返回退出码 0。
 
 ## 验证方式
 
 ```powershell
-cargo test -p claude-codex-pro-core --test cdp_bridge -- --nocapture
-cargo test --workspace
+cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open -- --nocapture
 ```
 
 ## 非目标

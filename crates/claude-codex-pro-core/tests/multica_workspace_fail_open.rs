@@ -84,7 +84,11 @@ fn multica_workspace_bridge_failure_keeps_local_board_open_and_retryable() {
         "multicaWorkspaceBridgeUnavailable(error) && !multicaWorkspaceState.workspaceId"
     ));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
-    assert!(!board.contains("content.appendChild(page);\n      return;"));
+    assert!(board.contains("content.appendChild(page);"));
+    assert!(board.contains(
+        "issueViewMode === \"list\" || multicaWorkspaceState.issueViewMode === \"table\""
+    ));
+    assert!(board.contains("issueViewMode === \"swimlane\""));
 
     assert!(request.contains("setTimeout(() => resolve({ status: \"failed\", message: \"工作区请求超时\", timeout: true }), timeoutMs)"));
     assert!(fail_open.contains("multicaWorkspaceState.opened = true;"));
