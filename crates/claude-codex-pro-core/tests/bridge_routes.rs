@@ -84,6 +84,10 @@ async fn bridge_routes_cover_all_current_paths() {
         ),
         ("/multica/skills/bindings", json!({})),
         (
+            "/multica/skills/bindings/replace",
+            json!({"scopeKind": "agent", "scopeId": "agent-a", "skills": []}),
+        ),
+        (
             "/multica/executions/lease/claim",
             json!({"bindingId":"binding-a","expectedRevision":1,"leaseToken":"token-a","leaseDurationMs":1000}),
         ),
@@ -235,6 +239,10 @@ async fn multica_workspace_bridge_rejects_transport_passthrough_before_runtime()
         (
             "/multica/skills/bindings",
             json!({"url": "https://evil.example"}),
+        ),
+        (
+            "/multica/skills/bindings/replace",
+            json!({"scopeKind": "agent", "scopeId": "agent-a", "skills": [], "url": "https://evil.example"}),
         ),
     ] {
         let response = handle_bridge_request(ctx.clone(), path, payload).await;

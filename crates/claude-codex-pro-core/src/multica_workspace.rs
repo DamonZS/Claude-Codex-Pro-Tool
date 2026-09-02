@@ -22,7 +22,9 @@ use crate::multica_execution::{
     SkillBindingScope, SkillBindingSelection, SkillInventoryEntry, SkillReference,
     SkillResolutionRequest, resolve_skill_bindings as resolve_skill_bindings_policy,
 };
-use crate::multica_execution_store::{MulticaExecutionStore, SkillBindingUpsert};
+use crate::multica_execution_store::{
+    MulticaExecutionStore, SkillBindingReplaceAll, SkillBindingUpsert,
+};
 use crate::multica_skill_trust::{
     LocalSkillTrustEntry, TRUST_STATE_REVIEW_REQUIRED, read_local_skill_trust_snapshot,
 };
@@ -208,6 +210,14 @@ pub struct MulticaSkillBindingRemoveCommand {
 pub struct MulticaSkillBindingsQuery {
     pub scope_kind: Option<SkillBindingScope>,
     pub scope_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MulticaSkillBindingsReplaceAllCommand {
+    pub scope_kind: SkillBindingScope,
+    pub scope_id: String,
+    pub skills: Vec<SkillReference>,
+    pub expected_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1283,6 +1293,110 @@ pub async fn list_skill_bindings(query: MulticaSkillBindingsQuery) -> anyhow::Re
         query.scope_id.as_deref(),
     )?;
     Ok(json!({"status": "ok", "workspaceId": workspace_id, "bindings": bindings}))
+}
+
+pub async fn replace_skill_bindings(
+    command: MulticaSkillBindingsReplaceAllCommand,
+) -> anyhow::Result<Value> {
+    validate_binding_scope_id(&command.scope_id)?;
+    if command.skills.len() > 512 {
+        bail!("skill_bindings_too_large");
+    }
+    let workspace_id = local_workspace_id();
+    let trust_snapshot = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
+    let mut seen = std::collections::BTreeSet::new();
+    let mut inputs = Vec::with_capacity(command.skills.len());
+    let expected_revision = command.expected_revision;
+    for reference in command.skills {
+        if !seen.insert(reference.id.clone()) {
+            bail!("skill_binding_duplicate");
+        }
+        let trust = trust_snapshot
+            .get(&reference.id)
+            .ok_or_else(|| anyhow!("skill_unknown"))?;
+        if !trust.dispatch_allowed() {
+            bail!("skill_not_trusted");
+        }
+        let manifest_digest = trust
+            .manifest_digest
+            .clone()
+            .ok_or_else(|| anyhow!("skill_manifest_unavailable"))?;
+        if reference
+            .manifest_digest
+            .as_deref()
+            .is_some_and(|expected| expected != manifest_digest)
+        {
+            bail!("skill_manifest_conflict");
+        }
+        let source_kind = trust.source_kind.clone();
+        let trust_state = trust.trust_state.clone();
+        let skill_id = reference.id;
+        let skill_ref = SkillReference {
+            id: skill_id.clone(),
+            manifest_digest: Some(manifest_digest),
+        };
+        inputs.push(SkillBindingUpsert {
+            binding_id: binding_id(
+                &workspace_id,
+                command.scope_kind,
+                &command.scope_id,
+                &skill_ref.id,
+            ),
+            workspace_id: workspace_id.clone(),
+            scope_kind: command.scope_kind,
+            scope_id: command.scope_id.clone(),
+            skill_ref,
+            source_kind,
+            trust_state,
+            enabled: true,
+            expected_revision: None,
+            now_ms: now_ms(),
+        });
+    }
+    let bindings = MulticaExecutionStore::default().replace_bindings(SkillBindingReplaceAll {
+        workspace_id: workspace_id.clone(),
+        scope_kind: command.scope_kind,
+        scope_id: command.scope_id,
+        bindings: inputs,
+        expected_revision,
+        now_ms: now_ms(),
+    })?;
+    let revision = bindings
+        .iter()
+        .map(|binding| binding.revision)
+        .max()
+        .unwrap_or(0);
+    Ok(
+        json!({"status": "ok", "workspaceId": workspace_id, "bindings": bindings, "revision": revision}),
+    )
+}
+
+pub async fn replace_skill_bindings_with_codex_runtime(
+    command: MulticaSkillBindingsReplaceAllCommand,
+    runtime: Arc<dyn CodexExecutionService>,
+) -> anyhow::Result<Value> {
+    let capabilities = runtime.capabilities().await?;
+    if !capabilities.skills_supported {
+        bail!("runtime_skills_unsupported");
+    }
+    let skills = runtime.list_skills().await?;
+    for reference in &command.skills {
+        let skill = skills
+            .iter()
+            .find(|skill| skill.id == reference.id)
+            .ok_or_else(|| anyhow!("skill_unknown"))?;
+        if !skill.enabled {
+            bail!("skill_not_installed");
+        }
+        if reference
+            .manifest_digest
+            .as_deref()
+            .is_some_and(|expected| skill.manifest_digest.as_deref() != Some(expected))
+        {
+            bail!("skill_manifest_conflict");
+        }
+    }
+    replace_skill_bindings(command).await
 }
 
 fn query_local_collection(

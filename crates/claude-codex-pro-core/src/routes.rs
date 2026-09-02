@@ -193,6 +193,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_skill_binding_unavailable")
     }
+    async fn multica_skill_bindings_replace(
+        &self,
+        _request: MulticaSkillBindingsReplaceAllRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_skill_binding_unavailable")
+    }
     async fn multica_execution_create(
         &self,
         _request: MulticaExecutionCreateRequest,
@@ -482,6 +488,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_skill_bindings(parse_multica_skill_bindings_query(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/skills/bindings/replace" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_skill_bindings_replace(parse_multica_skill_bindings_replace(&payload)?)
                     .await
             }
             .await
@@ -1308,6 +1323,17 @@ pub struct MulticaSkillBindingsQueryRequest {
     pub scope_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaSkillBindingsReplaceAllRequest {
+    pub scope_kind: SkillBindingScope,
+    pub scope_id: String,
+    #[serde(default)]
+    pub skills: Vec<SkillReference>,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+}
+
 fn default_skill_binding_enabled() -> bool {
     true
 }
@@ -1359,6 +1385,29 @@ fn parse_multica_skill_bindings_query(
         .map_err(|_| anyhow::anyhow!("multica_skill_binding_invalid"))?;
     if let Some(scope_id) = request.scope_id.as_deref() {
         validate_skill_binding_scope(scope_id)?;
+    }
+    Ok(request)
+}
+
+fn parse_multica_skill_bindings_replace(
+    payload: &Value,
+) -> anyhow::Result<MulticaSkillBindingsReplaceAllRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request = serde_json::from_value::<MulticaSkillBindingsReplaceAllRequest>(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_skill_binding_invalid"))?;
+    validate_skill_binding_scope(&request.scope_id)?;
+    if request.skills.len() > 512 {
+        anyhow::bail!("skill_bindings_too_large");
+    }
+    for skill in &request.skills {
+        if skill.id.trim().is_empty() || skill.id.len() > 240 {
+            anyhow::bail!("multica_skill_binding_invalid");
+        }
+        if let Some(digest) = skill.manifest_digest.as_deref()
+            && (digest.is_empty() || digest.len() > 128)
+        {
+            anyhow::bail!("multica_skill_binding_invalid");
+        }
     }
     Ok(request)
 }
@@ -1928,6 +1977,26 @@ impl BridgeRuntimeService for CoreRuntimeService {
             scope_kind: request.scope_kind,
             scope_id: request.scope_id,
         })
+        .await
+    }
+
+    async fn multica_skill_bindings_replace(
+        &self,
+        request: MulticaSkillBindingsReplaceAllRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self
+            .codex_execution
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))?;
+        crate::multica_workspace::replace_skill_bindings_with_codex_runtime(
+            crate::multica_workspace::MulticaSkillBindingsReplaceAllCommand {
+                scope_kind: request.scope_kind,
+                scope_id: request.scope_id,
+                skills: request.skills,
+                expected_revision: request.expected_revision,
+            },
+            Arc::clone(service),
+        )
         .await
     }
 

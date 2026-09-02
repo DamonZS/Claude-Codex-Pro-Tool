@@ -7462,6 +7462,7 @@
   const multicaWorkspaceSkillRouteContracts = Object.freeze([
     'postJson("/multica/skills/review"',
     'postJson("/multica/skills/bindings", {}',
+    'postJson("/multica/skills/bindings/replace"',
     'postJson("/multica/skills/bind", payload',
     'postJson("/multica/skills/unbind", payload',
   ]);
@@ -7472,6 +7473,20 @@
       const reference = multicaWorkspaceBindingValue(binding, "skillRef", "skill_ref");
       return reference && reference.id === id;
     });
+  }
+
+  function multicaWorkspaceBindingsForScope(scopeKind, scopeId) {
+    return multicaWorkspaceState.skillBindings.filter((binding) =>
+      multicaWorkspaceBindingValue(binding, "scopeKind", "scope_kind") === scopeKind &&
+      multicaWorkspaceBindingValue(binding, "scopeId", "scope_id") === scopeId,
+    );
+  }
+
+  function multicaWorkspaceScopeRevision(bindings) {
+    return bindings.reduce((revision, binding) => {
+      const value = multicaWorkspaceBindingValue(binding, "revision", "revision");
+      return Number.isSafeInteger(value) ? Math.max(revision, value) : revision;
+    }, 0);
   }
 
   function multicaWorkspaceScopeLabel(scopeKind) {
@@ -7529,24 +7544,41 @@
       multicaWorkspaceRenderContent();
       return;
     }
-    const current = multicaWorkspaceBindingsForSkill(id).find((binding) =>
+      const current = multicaWorkspaceBindingsForSkill(id).find((binding) =>
       multicaWorkspaceBindingValue(binding, "scopeKind", "scope_kind") === draft.scopeKind &&
       multicaWorkspaceBindingValue(binding, "scopeId", "scope_id") === scopeId,
     );
     multicaWorkspaceState.skillBindingDraft = { ...draft, status: "loading", message: "" };
     multicaWorkspaceRenderContent();
     try {
-      const payload = {
-        scopeKind: draft.scopeKind,
-        scopeId,
-        skillRef: { id },
-        enabled: true,
-      };
       const digest = item?.manifest_digest ?? item?.manifestDigest;
-      if (typeof digest === "string" && digest) payload.skillRef.manifestDigest = digest;
-      const revision = multicaWorkspaceBindingValue(current, "revision", "revision");
-      if (Number.isSafeInteger(revision)) payload.expectedRevision = revision;
-      await multicaWorkspaceCall("/multica/skills/bind", payload);
+      if (draft.scopeKind === "agent") {
+        const scopeBindings = multicaWorkspaceBindingsForScope(draft.scopeKind, scopeId);
+        const skills = scopeBindings
+          .filter((binding) => multicaWorkspaceBindingValue(binding, "skillRef", "skill_ref")?.id !== id)
+          .map((binding) => multicaWorkspaceBindingValue(binding, "skillRef", "skill_ref"))
+          .filter(Boolean);
+        const skillRef = { id };
+        if (typeof digest === "string" && digest) skillRef.manifestDigest = digest;
+        skills.push(skillRef);
+        await multicaWorkspaceCall("/multica/skills/bindings/replace", {
+          scopeKind: draft.scopeKind,
+          scopeId,
+          skills,
+          expectedRevision: multicaWorkspaceScopeRevision(scopeBindings),
+        });
+      } else {
+        const payload = {
+          scopeKind: draft.scopeKind,
+          scopeId,
+          skillRef: { id },
+          enabled: true,
+        };
+        if (typeof digest === "string" && digest) payload.skillRef.manifestDigest = digest;
+        const revision = multicaWorkspaceBindingValue(current, "revision", "revision");
+        if (Number.isSafeInteger(revision)) payload.expectedRevision = revision;
+        await multicaWorkspaceCall("/multica/skills/bind", payload);
+      }
       multicaWorkspaceState.skillBindingDraft = null;
       await multicaWorkspaceLoadSkillBindings();
     } catch (error) {
@@ -7565,10 +7597,24 @@
     const scopeId = multicaWorkspaceBindingValue(binding, "scopeId", "scope_id");
     if (!reference?.id || !scopeKind || !scopeId) return;
     try {
-      const payload = { scopeKind, scopeId, skillId: reference.id };
-      const revision = multicaWorkspaceBindingValue(binding, "revision", "revision");
-      if (Number.isSafeInteger(revision)) payload.expectedRevision = revision;
-      await multicaWorkspaceCall("/multica/skills/unbind", payload);
+      if (scopeKind === "agent") {
+        const scopeBindings = multicaWorkspaceBindingsForScope(scopeKind, scopeId);
+        const skills = scopeBindings
+          .filter((entry) => multicaWorkspaceBindingValue(entry, "skillRef", "skill_ref")?.id !== reference.id)
+          .map((entry) => multicaWorkspaceBindingValue(entry, "skillRef", "skill_ref"))
+          .filter(Boolean);
+        await multicaWorkspaceCall("/multica/skills/bindings/replace", {
+          scopeKind,
+          scopeId,
+          skills,
+          expectedRevision: multicaWorkspaceScopeRevision(scopeBindings),
+        });
+      } else {
+        const payload = { scopeKind, scopeId, skillId: reference.id };
+        const revision = multicaWorkspaceBindingValue(binding, "revision", "revision");
+        if (Number.isSafeInteger(revision)) payload.expectedRevision = revision;
+        await multicaWorkspaceCall("/multica/skills/unbind", payload);
+      }
       await multicaWorkspaceLoadSkillBindings();
     } catch (error) {
       multicaWorkspaceState.skillBindingsError = multicaWorkspaceErrorMessage(error);

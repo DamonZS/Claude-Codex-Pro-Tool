@@ -339,6 +339,16 @@ pub struct SkillBindingUpsert {
     pub now_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillBindingReplaceAll {
+    pub workspace_id: String,
+    pub scope_kind: SkillBindingScope,
+    pub scope_id: String,
+    pub bindings: Vec<SkillBindingUpsert>,
+    pub expected_revision: Option<u64>,
+    pub now_ms: u64,
+}
+
 impl Default for MulticaExecutionStore {
     fn default() -> Self {
         Self::new(crate::paths::default_multica_state_dir().join("execution.json"))
@@ -565,6 +575,78 @@ impl MulticaExecutionStore {
         state.skill_bindings.remove(index);
         save_state_locked(&self.path, &state)?;
         Ok(true)
+    }
+
+    /// Atomically replace every binding in one scope. This mirrors Multica's
+    /// replace-all Agent/Skill junction update while keeping the local trust
+    /// and manifest checks in the caller.
+    pub fn replace_bindings(
+        &self,
+        input: SkillBindingReplaceAll,
+    ) -> anyhow::Result<Vec<CodexMulticaSkillBinding>> {
+        validate_id(&input.workspace_id, "workspace_id")?;
+        validate_id(&input.scope_id, "scope_id")?;
+        if input.bindings.len() > MAX_BINDINGS {
+            bail!("skill_bindings_too_large");
+        }
+        let mut seen = BTreeSet::new();
+        for binding in &input.bindings {
+            validate_binding_input(binding)?;
+            if binding.workspace_id != input.workspace_id
+                || binding.scope_kind != input.scope_kind
+                || binding.scope_id != input.scope_id
+            {
+                bail!("skill_binding_scope_mismatch");
+            }
+            if !seen.insert(binding.skill_ref.id.clone()) {
+                bail!("skill_binding_duplicate");
+            }
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let current_revision = state
+            .skill_bindings
+            .iter()
+            .filter(|binding| {
+                binding.workspace_id == input.workspace_id
+                    && binding.scope_kind == input.scope_kind
+                    && binding.scope_id == input.scope_id
+            })
+            .map(|binding| binding.revision)
+            .max()
+            .unwrap_or(0);
+        if input
+            .expected_revision
+            .is_some_and(|revision| revision != current_revision)
+        {
+            bail!("skill_binding_revision_conflict");
+        }
+        state.skill_bindings.retain(|binding| {
+            !(binding.workspace_id == input.workspace_id
+                && binding.scope_kind == input.scope_kind
+                && binding.scope_id == input.scope_id)
+        });
+        let mut result = Vec::with_capacity(input.bindings.len());
+        for binding in input.bindings {
+            let value = CodexMulticaSkillBinding {
+                binding_id: binding.binding_id,
+                workspace_id: binding.workspace_id,
+                scope_kind: binding.scope_kind,
+                scope_id: binding.scope_id,
+                skill_ref: binding.skill_ref,
+                source_kind: binding.source_kind,
+                trust_state: binding.trust_state,
+                enabled: binding.enabled,
+                revision: 1,
+                created_at_ms: input.now_ms,
+                updated_at_ms: input.now_ms,
+            };
+            state.skill_bindings.push(value.clone());
+            result.push(value);
+        }
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
     }
 
     pub fn reserve_attempt_snapshot(
@@ -1962,6 +2044,77 @@ mod tests {
             .unwrap();
         assert_eq!(updated.revision, 2);
         assert!(!updated.enabled);
+    }
+
+    #[test]
+    fn replace_bindings_is_atomic_supports_clear_and_scope_cas() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let make = |id: &str| SkillBindingUpsert {
+            binding_id: format!("binding-{id}"),
+            workspace_id: "workspace-a".to_string(),
+            scope_kind: SkillBindingScope::Agent,
+            scope_id: "agent-a".to_string(),
+            skill_ref: reference(id),
+            source_kind: "explicit_review".to_string(),
+            trust_state: "trusted".to_string(),
+            enabled: true,
+            expected_revision: None,
+            now_ms: 1,
+        };
+        let first = store
+            .replace_bindings(SkillBindingReplaceAll {
+                workspace_id: "workspace-a".to_string(),
+                scope_kind: SkillBindingScope::Agent,
+                scope_id: "agent-a".to_string(),
+                bindings: vec![make("skill:a"), make("skill:b")],
+                expected_revision: Some(0),
+                now_ms: 1,
+            })
+            .unwrap();
+        assert_eq!(first.len(), 2);
+        let cleared = store
+            .replace_bindings(SkillBindingReplaceAll {
+                workspace_id: "workspace-a".to_string(),
+                scope_kind: SkillBindingScope::Agent,
+                scope_id: "agent-a".to_string(),
+                bindings: vec![],
+                expected_revision: Some(1),
+                now_ms: 2,
+            })
+            .unwrap();
+        assert!(cleared.is_empty());
+        assert!(
+            store
+                .list_bindings(
+                    "workspace-a",
+                    Some(SkillBindingScope::Agent),
+                    Some("agent-a")
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let error = store
+            .replace_bindings(SkillBindingReplaceAll {
+                workspace_id: "workspace-a".to_string(),
+                scope_kind: SkillBindingScope::Agent,
+                scope_id: "agent-a".to_string(),
+                bindings: vec![make("skill:a"), make("skill:a")],
+                expected_revision: Some(0),
+                now_ms: 3,
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "skill_binding_duplicate");
+        assert!(
+            store
+                .list_bindings(
+                    "workspace-a",
+                    Some(SkillBindingScope::Agent),
+                    Some("agent-a")
+                )
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
