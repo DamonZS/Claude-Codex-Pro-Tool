@@ -13519,8 +13519,18 @@
   // boundary; persisted thread data and normal user/assistant messages remain untouched.
   const codexInternalMessageLeakMarkers = [
     "由 ChatGPT 从另一项任务发送",
+    "internal_chat_message_metadata_passthrough",
     "function_call_output requires call_id",
     "continuation via previous_response_id is only supported on Responses WebSocket v2",
+  ];
+
+  const codexInternalMessageLeakSelectors = [
+    '[data-message-type="agent_message"]',
+    '[data-message-kind="agent_message"]',
+    '[data-type="agent_message"]',
+    '[data-internal-message="true"]',
+    '[data-internal-chat-message="true"]',
+    '[data-chat-message-metadata*="internal_chat_message_metadata_passthrough"]',
   ];
 
   function codexInternalMessageLeakText(node) {
@@ -13530,6 +13540,12 @@
   function codexInternalMessageLeakTarget(node) {
     const element = node?.nodeType === 1 ? node : node?.parentElement;
     if (!element?.closest) return null;
+    if (codexInternalMessageLeakSelectors.some((selector) => element.matches?.(selector) || element.closest(selector))) {
+      return element.closest('[data-testid="conversation-turn"]')
+        || element.closest('[data-message-author-role]')
+        || element.closest('[data-message-content]')
+        || element;
+    }
     if (codexInternalMessageLeakText(element).includes(codexInternalMessageLeakMarkers[0])) {
       return element.closest('[data-testid="conversation-turn"]')
         || element.closest('[data-message-author-role="assistant"]')
@@ -13558,6 +13574,7 @@
     const candidates = new Set(root.querySelectorAll([
       '[data-testid="conversation-turn"]',
       '[data-message-author-role]',
+      ...codexInternalMessageLeakSelectors,
       'main .prose',
       '[data-message-content]',
       '[data-testid="message-content"]',
