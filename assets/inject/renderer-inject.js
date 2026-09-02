@@ -6711,7 +6711,7 @@
       fields.appendChild(field);
     });
     if (fields.childNodes.length) article.appendChild(fields);
-    article.title = "来自 Codex 原生线程父子关系的只读投影，不可作为 Multica Agent 编辑或派发";
+    article.title = "来自 Codex 原生线程父子关系的只读投影，不可作为工作流智能体编辑或派发";
     parent.appendChild(article);
   }
 
@@ -6743,7 +6743,7 @@
       });
       article.appendChild(open);
     }
-    article.title = "来自 Codex 本机状态库的只读项目投影，不可作为 Multica 项目编辑或删除";
+    article.title = "来自 Codex 本机状态库的只读项目投影，不可作为工作流项目编辑或删除";
     parent.appendChild(article);
   }
 
@@ -7813,7 +7813,7 @@
     const row = multicaWorkspaceEl("div", "ccp-multica-setting-row");
     const copy = multicaWorkspaceEl("div", "ccp-multica-setting-copy");
     copy.append(
-      multicaWorkspaceEl("h3", "ccp-multica-setting-title", "启用本地 Multica 工作区"),
+      multicaWorkspaceEl("h3", "ccp-multica-setting-title", "启用本地工作流"),
       multicaWorkspaceEl("div", "ccp-multica-setting-description", "控制 Codex 左侧入口和本地工作区页面，不影响供应商、代理、模型或 Codex/Claude 配置。"),
     );
     const toggle = multicaWorkspaceEl("button", "ccp-multica-toggle", saving ? "保存中…" : enabled ? "开启" : "关闭");
@@ -7822,7 +7822,7 @@
     toggle.dataset.enabled = String(enabled);
     toggle.setAttribute("role", "switch");
     toggle.setAttribute("aria-checked", String(enabled));
-    toggle.setAttribute("aria-label", "启用本地 Multica 工作区");
+    toggle.setAttribute("aria-label", "启用本地工作流");
     toggle.addEventListener("click", () => void multicaWorkspaceSetEnabled(!enabled));
     row.append(copy, toggle);
     content.appendChild(row);

@@ -4263,7 +4263,7 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["记忆 LLM 摘要", "memoryAssistLlmSummaryEnabled"],
     ["记忆 MCP 共享", "memoryAssistMcpEnabled"],
     ["CLI 包装器", "cliWrapperEnabled"],
-    ["本地 Multica 工作区", "multicaWorkspaceEnabled"],
+    ["本地工作流", "multicaWorkspaceEnabled"],
   ] as const;
   return (
     <div className="stack">
@@ -4803,7 +4803,7 @@ export function MulticaRuntimeScreen({
 
   const toggleSidecarConfig = (enabled: boolean) => {
     if (!enabled) {
-      if (!window.confirm("停用该 Multica sidecar？只影响此连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。")) return;
+      if (!window.confirm("停用该工作流旁路服务？只影响此连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。")) return;
       updateDraft({ sidecar: null });
       return;
     }
@@ -4813,7 +4813,7 @@ export function MulticaRuntimeScreen({
   const toggleConnectionEnabled = (enabled: boolean) => {
     if (!enabled && draft.enabled) {
       const confirmed = window.confirm(
-        "确认停用该 Multica 连接？只影响此 Multica 连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+        "确认停用该工作流连接？只影响此工作流连接，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
       );
       if (!confirmed) return;
     }
@@ -4823,7 +4823,7 @@ export function MulticaRuntimeScreen({
   const toggleInsecureLanHttp = (enabled: boolean) => {
     if (enabled && !draft.allowInsecureLanHttp) {
       const confirmed = window.confirm(
-        "确认允许此 Multica 连接使用非加密局域网 HTTP？仅限已确认的私有局域网地址，传输可能被同一网络中的其他设备读取。不会影响 CCP 供应商、代理、Codex 或 Claude。",
+        "确认允许此工作流连接使用非加密局域网 HTTP？仅限已确认的私有局域网地址，传输可能被同一网络中的其他设备读取。不会影响 CCP 供应商、代理、Codex 或 Claude。",
       );
       if (!confirmed) return;
     }
@@ -4864,10 +4864,10 @@ export function MulticaRuntimeScreen({
     if (pending) return;
     const daemonStatus = selectedStatus?.daemon.status;
     if (daemonStatus === "healthy" || daemonStatus === "checking") {
-      actions.showNotice({ title: "无法删除连接", message: "请先停止该 Multica sidecar；删除只影响 Multica 连接。", status: "failed" });
+      actions.showNotice({ title: "无法删除连接", message: "请先停止该工作流旁路服务；删除只影响工作流连接。", status: "failed" });
       return;
     }
-    if (!window.confirm(`确认删除 Multica 连接“${connection.displayName || connection.connectionId}”？不会影响 CCP 供应商、代理、Codex 或 Claude。`)) return;
+    if (!window.confirm(`确认删除工作流连接“${connection.displayName || connection.connectionId}”？不会影响 CCP 供应商、代理、Codex 或 Claude。`)) return;
     setPending("delete");
     try {
       const result = await actions.deleteMulticaConnection(connection.connectionId);
@@ -4903,9 +4903,9 @@ export function MulticaRuntimeScreen({
   const sidecarAction = async (kind: "start" | "stop" | "restart") => {
     if (!selected || pending) return;
     const confirmation: Record<typeof kind, string> = {
-      start: "确认启动该 Multica sidecar？只会启动此连接已保存的 sidecar，不会启动或修改 CCP 供应商、代理、Codex 或 Claude。",
-      stop: "确认停止该 Multica sidecar？只影响该 sidecar，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
-      restart: "确认重启该 Multica sidecar？只影响该 sidecar，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+      start: "确认启动该工作流旁路服务？只会启动此连接已保存的旁路服务，不会启动或修改 CCP 供应商、代理、Codex 或 Claude。",
+      stop: "确认停止该工作流旁路服务？只影响该旁路服务，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
+      restart: "确认重启该工作流旁路服务？只影响该旁路服务，不会停止或修改 CCP 供应商、代理、Codex 或 Claude。",
     };
     if (!window.confirm(confirmation[kind])) return;
     setPending(`sidecar:${kind}`);
@@ -5037,10 +5037,10 @@ export function MulticaRuntimeScreen({
   ) => {
     if ((managedPending && !(action === "cancel" && managedPending === "ensure")) || (managedRuntimeLoading && action !== "cancel")) return;
     const confirmations: Partial<Record<typeof action, string>> = {
-      ensure: "确认准备托管 Multica Runtime？将只下载、校验并安装固定版本的 Multica CLI，不会修改供应商、代理、Codex 或 Claude。",
-      rollback: "确认回滚托管 Multica Runtime？只会切换已验证的托管版本，不会修改供应商、代理、Codex 或 Claude。",
-      stop: "确认停止托管 Multica daemon？只影响内置 Multica Runtime，不会停止或修改供应商、代理、Codex 或 Claude。",
-      restart: "确认重启托管 Multica daemon？只影响内置 Multica Runtime，不会停止或修改供应商、代理、Codex 或 Claude。",
+      ensure: "确认准备托管工作流运行时？将只下载、校验并安装固定版本的工作流 CLI，不会修改供应商、代理、Codex 或 Claude。",
+      rollback: "确认回滚托管工作流运行时？只会切换已验证的托管版本，不会修改供应商、代理、Codex 或 Claude。",
+      stop: "确认停止托管工作流守护进程？只影响内置工作流运行时，不会停止或修改供应商、代理、Codex 或 Claude。",
+      restart: "确认重启托管工作流守护进程？只影响内置工作流运行时，不会停止或修改供应商、代理、Codex 或 Claude。",
     };
     if (confirmations[action] && !window.confirm(confirmations[action]!)) return;
     setManagedPending(action);
@@ -5093,8 +5093,8 @@ export function MulticaRuntimeScreen({
     <div className="multica-runtime-screen">
       <div className="ops-page-heading">
         <div>
-          <h1>Multica Runtime</h1>
-          <p>外部 Multica 控制平面连接、健康检查和只读运行时快照；不影响供应商、代理、Codex、Claude。</p>
+          <h1>工作流运行时</h1>
+          <p>外部工作流控制平面连接、健康检查和只读运行时快照；不影响供应商、代理、Codex、Claude。</p>
         </div>
         <div className="action-row">
           <Button disabled={Boolean(pending)} onClick={() => void refreshConnections()} variant="outline">
@@ -5108,7 +5108,7 @@ export function MulticaRuntimeScreen({
         </div>
       </div>
 
-      <Panel title="托管 Multica Runtime" detail="内置 CLI、独立 profile 与 daemon 监管。所有操作只影响托管 Runtime，不影响供应商、代理、Codex 或 Claude。">
+      <Panel title="托管工作流运行时" detail="内置 CLI、独立 profile 与守护进程监管。所有操作只影响托管运行时，不影响供应商、代理、Codex 或 Claude。">
         <div className="ops-status-list">
           <StatusRow label="安装状态" status={multicaRuntimeInstallTone(managedInstallState)} value={multicaRuntimeInstallLabel(managedInstallState)} />
           <StatusRow label="固定版本" status={managedInstall?.installedVersion ? "ok" : "not_checked"} value={managedInstall?.installedVersion ?? "尚未安装"} />
@@ -5302,10 +5302,10 @@ export function MulticaRuntimeScreen({
                   </div>
                 );
               }) : <Empty text={connectionListLoading
-                ? "正在加载 Multica 连接..."
+                ? "正在加载工作流连接..."
                 : connectionLoadFailed
-                  ? "加载 Multica 连接失败，请点击“刷新连接”重试。"
-                  : "尚未配置 Multica 连接。"} />}
+                  ? "加载工作流连接失败，请点击“刷新连接”重试。"
+                  : "尚未配置工作流连接。"} />}
             </div>
             {error ? <p className="multica-error" role="alert">{multicaSafeText(error)}</p> : null}
           </Panel>
@@ -5415,7 +5415,7 @@ export function MulticaRuntimeScreen({
         </div>
 
         <div className="stack">
-          <Panel title="服务状态" detail={selected ? `连接：${selected.displayName || selected.connectionId}` : "选择或新增 Multica 连接后执行只读检查。"}>
+          <Panel title="服务状态" detail={selected ? `连接：${selected.displayName || selected.connectionId}` : "选择或新增工作流连接后执行只读检查。"}>
             {selected ? (
               <>
                 <div className="ops-status-list">
@@ -5439,7 +5439,7 @@ export function MulticaRuntimeScreen({
                   <Button disabled={Boolean(pending) || !sidecarConfigured} onClick={() => void sidecarAction("restart")} variant="outline"><RefreshCw className={`h-4 w-4${pending === "sidecar:restart" ? " spin" : ""}`} />{pending === "sidecar:restart" ? "重启中" : "重启 sidecar"}</Button>
                 </div>
               </>
-            ) : <Empty text="选择一个 Multica 连接后查看健康状态。" />}
+            ) : <Empty text="选择一个工作流连接后查看健康状态。" />}
           </Panel>
 
           <Panel title="运行时快照" detail="只读显示最近一次外部状态；刷新失败时保留旧快照并标记过期。">
@@ -5451,7 +5451,7 @@ export function MulticaRuntimeScreen({
                   <strong className={currentSnapshot.stale ? "stale" : "fresh"}>{currentSnapshot.stale ? "数据可能已过期" : "最新快照"}</strong>
                 </div>
                 {snapshotDiagnostic ? <p className="multica-diagnostic" role="status">{snapshotDiagnostic}</p> : null}
-                <div className="context-tabs multica-snapshot-tabs" role="tablist" aria-label="Multica 只读快照分类">
+                <div className="context-tabs multica-snapshot-tabs" role="tablist" aria-label="工作流只读快照分类">
                   {(["runtimes", "agents", "tasks"] as const).map((kind) => {
                     const count = kind === "runtimes" ? currentSnapshot.runtimes.length : kind === "agents" ? currentSnapshot.agents.length : currentSnapshot.tasks.length;
                     const label = kind === "runtimes" ? "Runtime" : kind === "agents" ? "Agent" : "Task";
@@ -5472,7 +5472,7 @@ export function MulticaRuntimeScreen({
                   )) : <Empty text={currentSnapshot.stale ? "没有可显示的最新数据；以上快照已标记过期。" : "该分类暂无数据。"} />}
                 </div>
               </>
-            ) : <Empty text={selected ? "尚未获取快照；点击“刷新快照”读取外部只读状态。" : "选择连接后读取 Multica Runtime、Agent 和 Task。"} />}
+            ) : <Empty text={selected ? "尚未获取快照；点击“刷新快照”读取外部只读状态。" : "选择连接后读取工作流运行时、Agent 和 Task。"} />}
           </Panel>
         </div>
       </div>

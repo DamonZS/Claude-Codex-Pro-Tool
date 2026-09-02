@@ -685,7 +685,7 @@ export function App() {
           ? { ...current, stale: true, diagnostic: current.diagnostic || "snapshot_not_returned" }
           : current);
       } else {
-        setMulticaError("读取 Multica 快照未返回可用数据。");
+        setMulticaError("读取Multica快照未返回可用数据。");
       }
     }
     setMulticaSidecars((current) => {
@@ -729,7 +729,7 @@ export function App() {
   };
 
   const multicaCommandFailure = (title: string, result: { message?: string; status?: Status } | null, silent: boolean) => {
-    const message = result?.message || `${title}失败，请检查 Multica 服务或日志。`;
+    const message = result?.message || `${title}失败，请检查Multica服务或日志。`;
     setMulticaError(message);
     if (!silent) notifyResult({ title, message, status: result?.status || "failed" });
   };
@@ -738,16 +738,16 @@ export function App() {
     setMulticaLoading(true);
     const result = await run(
       () => call<MulticaConnectionsResult>("list_multica_connections"),
-      "Multica 连接",
+      "Multica连接",
       { trackBusy: !silent, notify: false },
     );
     if (result && commitMulticaConnections(result)) {
-      if (!silent) notifyIfNeedsAttention({ title: "Multica 连接", message: result.message, status: result.status });
+      if (!silent) notifyIfNeedsAttention({ title: "Multica连接", message: result.message, status: result.status });
     } else {
       // `run` returns null when IPC rejects. Keep that failure visible even
       // during a silent route refresh; otherwise the page appears empty with
       // no explanation and the user cannot distinguish it from no config.
-      multicaCommandFailure("Multica 连接", result, silent);
+      multicaCommandFailure("Multica连接", result, silent);
     }
     setMulticaLoading(false);
     return result;

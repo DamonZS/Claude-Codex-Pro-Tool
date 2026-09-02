@@ -276,7 +276,7 @@ function buildClientRecords({
         },
         {
           label: "我的任务",
-          detail: "控制 Codex 左侧导航中的本地 Multica 工作区入口",
+          detail: "控制 Codex 左侧导航中的本地工作流入口",
           enabled: settings ? settings.multicaWorkspaceEnabled !== false : null,
           settingKey: "multicaWorkspaceEnabled",
         },

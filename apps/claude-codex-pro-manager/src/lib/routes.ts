@@ -105,7 +105,7 @@ export function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "服务健康、当前配置、异常与近期运行状态。",
     supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
-    multica: "本地 Multica 工作区入口与开关已归入设置。",
+    multica: "本地工作流入口与开关已归入设置。",
     clients: "管理 Codex、Claude Desktop、Claude Code 与本地增强。",
     themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     prompts: "管理 Codex 系统提示词、分类与当前生效方式。",
