@@ -464,8 +464,10 @@ impl MulticaExecutionStore {
         }
         let allowed = matches!(
             (run.status.as_str(), input.next_status.as_str()),
-            ("pending", "issue_created" | "skipped" | "failed")
-                | ("issue_created", "running" | "failed")
+            (
+                "pending",
+                "issue_created" | "running" | "skipped" | "failed"
+            ) | ("issue_created", "running" | "failed")
                 | ("running", "completed" | "failed")
         );
         if !allowed {

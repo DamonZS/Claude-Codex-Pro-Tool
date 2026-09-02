@@ -2220,17 +2220,45 @@ impl BridgeRuntimeService for CoreRuntimeService {
             let issues = self
                 .multica_workspace_store
                 .list(&claimed.workspace_id, MulticaWorkspaceResourceKey::Issues)?;
-            let issue = issues
-                .into_iter()
-                .find(|issue| {
-                    issue.get("id").and_then(Value::as_str) == Some(claimed.issue_id.as_str())
+            let issue = issues.into_iter().find(|issue| {
+                issue.get("id").and_then(Value::as_str) == Some(claimed.issue_id.as_str())
+            });
+            let issue = if let Some(issue) = issue {
+                if issue.get("assignee_type").and_then(Value::as_str) != Some("agent")
+                    || issue.get("assignee_id").and_then(Value::as_str) != Some(agent_id)
+                {
+                    anyhow::bail!("execution_assignment_changed");
+                }
+                issue
+            } else {
+                // Upstream run_only tasks have no persisted Issue. Recover the
+                // task context from the linked autopilot run instead of
+                // inventing an Issue in the workspace collection.
+                let run_id = claimed
+                    .issue_id
+                    .strip_prefix("autopilot-issue-")
+                    .ok_or_else(|| anyhow::anyhow!("execution_issue_unavailable"))?;
+                let run = self.multica_execution_store.get_autopilot_run(run_id)?;
+                let autopilots = self.multica_workspace_store.list(
+                    &claimed.workspace_id,
+                    MulticaWorkspaceResourceKey::Autopilots,
+                )?;
+                let autopilot = autopilots
+                    .into_iter()
+                    .find(|item| {
+                        item.get("id").and_then(Value::as_str) == Some(run.autopilot_id.as_str())
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("execution_autopilot_unavailable"))?;
+                json!({
+                    "id": claimed.issue_id,
+                    "title": autopilot.get("title").or_else(|| autopilot.get("name")),
+                    "description": autopilot.get("description"),
+                    "assignee_type": "agent",
+                    "assignee_id": agent_id,
+                    "origin_type": "autopilot",
+                    "origin_id": run.autopilot_id
                 })
-                .ok_or_else(|| anyhow::anyhow!("execution_issue_unavailable"))?;
-            if issue.get("assignee_type").and_then(Value::as_str) != Some("agent")
-                || issue.get("assignee_id").and_then(Value::as_str) != Some(agent_id)
-            {
-                anyhow::bail!("execution_assignment_changed");
-            }
+            };
             let agents = self
                 .multica_workspace_store
                 .list(&claimed.workspace_id, MulticaWorkspaceResourceKey::Agents)?;
@@ -2708,8 +2736,8 @@ impl BridgeRuntimeService for CoreRuntimeService {
                         autopilot_id: run.autopilot_id.clone(),
                         run_id: run.id.clone(),
                         expected_revision: run.revision,
-                        next_status: "issue_created".into(),
-                        issue_id: Some(issue_id),
+                        next_status: "running".into(),
+                        issue_id: None,
                         task_id: Some(reserved.binding.binding_id.clone()),
                         failure_reason: None,
                         reason_code: None,
