@@ -721,6 +721,22 @@ fn codex_multica_workspace_hide_preserves_background_work_until_full_cleanup() {
     assert!(workspace.contains("multicaWorkspaceBackgroundIntervalMs"));
     assert!(workspace.contains("multicaWorkspaceState.backgroundTimer ="));
 
+    // Native Codex does not expose a stable event subscription on every
+    // page-host version. The board must therefore poll only active bindings
+    // through the authoritative execution-status route and retain the last
+    // known state on transient failures.
+    let sync = source_between(
+        workspace,
+        "async function multicaWorkspaceSyncExecutionStatuses",
+        "function multicaWorkspaceOpenExecutionDraft",
+    );
+    assert!(sync.contains("multicaWorkspaceExecutionPollIntervalMs"));
+    assert!(sync.contains("!multicaWorkspaceTerminalExecutionStates.has(state)"));
+    assert!(sync.contains("/multica/executions/status"));
+    assert!(sync.contains("multicaWorkspaceMergeExecution(result.binding)"));
+    assert!(sync.contains("next tick retries"));
+    assert!(!sync.contains("state = \"failed\""));
+
     for forbidden in [
         "/multica/runtime/",
         "/multica/managed/",

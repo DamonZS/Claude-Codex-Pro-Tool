@@ -2384,6 +2384,13 @@ fn statistics_collection(
         workspace,
         MulticaWorkspaceResourceKey::Statistics,
         vec![json!({
+            "source": "local_control_plane",
+            "limitations": [
+                "token_usage_unavailable",
+                "provider_model_breakdown_unavailable",
+                "time_series_unavailable",
+                "project_filter_unavailable",
+            ],
             "skill_binding_total": binding_total,
             "enabled_skill_bindings": enabled_bindings,
             "attempt_total": attempt_total,
@@ -4053,6 +4060,38 @@ mod tests {
             runtimes.diagnostic.as_deref(),
             Some(CODEX_PAGE_HOST_UNAVAILABLE)
         );
+    }
+
+    #[test]
+    fn statistics_declares_local_control_plane_source_and_usage_limits() {
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let execution_store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let workspace_store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let statistics = query_local_collection(
+            &workspace,
+            &execution_store,
+            &workspace_store,
+            true,
+            MulticaWorkspaceQuery {
+                resource: MulticaWorkspaceResourceKey::Statistics,
+                limit: 1,
+                offset: 0,
+            },
+        )
+        .unwrap();
+        let item = statistics.items.first().expect("statistics item");
+        assert_eq!(item["source"], "local_control_plane");
+        let limitations = item["limitations"].as_array().unwrap();
+        for expected in [
+            "token_usage_unavailable",
+            "provider_model_breakdown_unavailable",
+            "time_series_unavailable",
+            "project_filter_unavailable",
+        ] {
+            assert!(limitations.iter().any(|value| value == expected));
+        }
+        assert!(item.get("execution_total").is_some());
     }
 
     #[test]
