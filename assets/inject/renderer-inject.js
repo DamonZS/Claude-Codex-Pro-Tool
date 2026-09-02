@@ -6613,6 +6613,38 @@
     parent.appendChild(article);
   }
 
+  function multicaWorkspaceAppendNativeProjectItem(parent, item) {
+    const article = multicaWorkspaceEl("article", "ccp-multica-item ccp-multica-native-project-item");
+    const path = String(item?.path || "").trim();
+    const title = String(item?.name || item?.title || (path ? displayProjectName(path) : "未命名原生项目")).trim();
+    const heading = multicaWorkspaceEl("div", "ccp-multica-item-heading");
+    heading.appendChild(multicaWorkspaceEl("h3", "ccp-multica-item-title", title));
+    heading.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", "Codex 原生项目 · 只读"));
+    article.appendChild(heading);
+    const fields = multicaWorkspaceEl("div", "ccp-multica-fields");
+    [["项目路径", path], ["来源", "Codex project_roots / thread.cwd"]].forEach(([key, value]) => {
+      if (!value) return;
+      const field = multicaWorkspaceEl("span", "ccp-multica-field");
+      field.append(multicaWorkspaceEl("span", "ccp-multica-field-key", `${key}:`), document.createTextNode(value));
+      fields.appendChild(field);
+    });
+    if (fields.childNodes.length) article.appendChild(fields);
+    const target = nativeProjectTargets().find((entry) =>
+      String(entry.path || "").trim().toLowerCase() === path.toLowerCase());
+    if (target?.row) {
+      const open = multicaWorkspaceEl("button", "ccp-multica-button", "打开原生项目");
+      open.type = "button";
+      open.title = `打开原生项目 ${path}`;
+      open.addEventListener("click", () => {
+        if (target.row.isConnected) target.row.click();
+        else open.disabled = true;
+      });
+      article.appendChild(open);
+    }
+    article.title = "来自 Codex 本机状态库的只读项目投影，不可作为 Multica 项目编辑或删除";
+    parent.appendChild(article);
+  }
+
   function multicaWorkspaceIssueStatus(item) {
     const raw = String(multicaWorkspaceObjectValue(item, "status", "state") || "backlog").toLowerCase();
     if (raw === "archived") return "cancelled";
@@ -7693,6 +7725,19 @@
         };
       }
     }
+    let nativeProjectReadOnly = false;
+    if (module.key === "projects" && (!collection || !Array.isArray(collection.items) || collection.items.length === 0)) {
+      const nativeProjects = multicaWorkspaceState.bootstrap?.collections?.codex_native_projects;
+      if (nativeProjects && Array.isArray(nativeProjects.items) && nativeProjects.items.length > 0) {
+        collection = {
+          ...nativeProjects,
+          items: nativeProjects.items.map((item) => ({ ...item, read_only: true })),
+          stale: true,
+          source: "codex_native_read_only",
+        };
+        nativeProjectReadOnly = true;
+      }
+    }
     multicaWorkspaceClear(content);
     content.dataset.route = module.key;
     if (module.key === "my-issues") {
@@ -7714,7 +7759,7 @@
       header.appendChild(resolve);
     }
     const writableResource = multicaWorkspaceWritableResource(module);
-    if (writableResource) {
+    if (writableResource && !nativeProjectReadOnly) {
       const create = multicaWorkspaceEl("button", "ccp-multica-button", "新建");
       create.type = "button";
       create.dataset.variant = "primary";
@@ -7760,7 +7805,7 @@
       notice.dataset.state = "error";
       content.appendChild(notice);
     }
-    multicaWorkspaceRenderEditor(content, module);
+    if (!nativeProjectReadOnly) multicaWorkspaceRenderEditor(content, module);
     if (module.key === "skills" && multicaWorkspaceState.skillBindingsError) {
       const bindingNotice = multicaWorkspaceEl("div", "ccp-multica-state ccp-multica-stale", `绑定状态：${multicaWorkspaceState.skillBindingsError}`);
       content.appendChild(bindingNotice);
@@ -7798,6 +7843,7 @@
     collection.items.forEach((item) => {
       if (module.key === "skills") multicaWorkspaceAppendSkillItem(list, item);
       else if (module.key === "agents" && collection.source === "codex_native_read_only") multicaWorkspaceAppendNativeAgentItem(list, item);
+      else if (module.key === "projects" && collection.source === "codex_native_read_only") multicaWorkspaceAppendNativeProjectItem(list, item);
       else if (writableResource) multicaWorkspaceAppendEntityItem(list, item, module);
       else multicaWorkspaceAppendItem(list, item);
     });

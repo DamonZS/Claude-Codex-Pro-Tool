@@ -5,7 +5,8 @@
 ## 通过标准
 
 1. “我的任务”在 Issue 看板之外显示“Codex 原生会话”区域；存在原生会话行时显示真实标题和 thread ID，不存在时显示明确空态。
-2. 会话条目来源仅为 `[data-app-action-sidebar-thread-id]`，点击调用原生行行为，不修改 URL、React store 或 Multica 数据。
+2. 本地项目集合为空而 Codex 状态库存在 `project_roots` 或线程 `cwd` 项目时，“项目”路由显示只读原生项目条目；条目不显示 Multica 写操作，存在对应原生行时可打开。
+3. 会话条目来源仅为 `[data-app-action-sidebar-thread-id]`，点击调用原生行行为，不修改 URL、React store 或 Multica 数据。
 3. 智能体区域显示本地已定义且有执行绑定/能力证据的条目，并在有真实线程父子
    关系时显示只读原生子智能体；无证据时不生成假智能体。
 4. Skills 区域显示来自 `~/.codex/skills` 的真实只读元数据；不渲染 Skill 正文、
