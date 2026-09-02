@@ -7149,6 +7149,30 @@
       agentGroup.appendChild(list);
     }
     section.appendChild(agentGroup);
+    const nativeWorkflowGroups = [
+      ["codex_native_inbox", "原生收件箱", "title", "description"],
+      ["codex_native_automations", "原生自动化", "name", "status"],
+      ["codex_native_chat_sessions", "原生会话目录", "title", "source_kind"],
+    ];
+    nativeWorkflowGroups.forEach(([key, label, primary, secondary]) => {
+      const items = multicaWorkspaceState.bootstrap?.collections?.[key]?.items || [];
+      const group = multicaWorkspaceEl("div", "ccp-multica-native-inventory-group");
+      group.appendChild(multicaWorkspaceEl("h4", "ccp-multica-native-inventory-label", `${label}（${items.length}）`));
+      if (items.length === 0) {
+        group.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", `当前本机没有可读取的${label}`));
+      } else {
+        const list = multicaWorkspaceEl("div", "ccp-multica-native-session-list");
+        items.slice(0, 100).forEach((item) => {
+          const first = String(item?.[primary] || item?.id || "未命名").replace(/\s+/g, " ").trim().slice(0, 160);
+          const second = String(item?.[secondary] || "").replace(/\s+/g, " ").trim().slice(0, 120);
+          const row = multicaWorkspaceEl("span", "ccp-multica-native-session", second ? `${first} · ${second}` : first);
+          row.title = "来自 Codex 本机数据库的只读原生状态投影";
+          list.appendChild(row);
+        });
+        group.appendChild(list);
+      }
+      section.appendChild(group);
+    });
     parent.appendChild(section);
   }
 

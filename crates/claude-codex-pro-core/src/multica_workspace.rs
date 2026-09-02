@@ -65,10 +65,13 @@ pub enum MulticaWorkspaceResourceKey {
     IssueViews,
     IssueStatuses,
     CodexNativeEvents,
+    CodexNativeInbox,
+    CodexNativeAutomations,
+    CodexNativeChatSessions,
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::MyTasks,
         Self::Issues,
         Self::Comments,
@@ -89,6 +92,9 @@ impl MulticaWorkspaceResourceKey {
         Self::IssueViews,
         Self::IssueStatuses,
         Self::CodexNativeEvents,
+        Self::CodexNativeInbox,
+        Self::CodexNativeAutomations,
+        Self::CodexNativeChatSessions,
     ];
 
     fn key(self) -> &'static str {
@@ -113,6 +119,9 @@ impl MulticaWorkspaceResourceKey {
             Self::IssueViews => "issue_views",
             Self::IssueStatuses => "issue_statuses",
             Self::CodexNativeEvents => "codex_native_events",
+            Self::CodexNativeInbox => "codex_native_inbox",
+            Self::CodexNativeAutomations => "codex_native_automations",
+            Self::CodexNativeChatSessions => "codex_native_chat_sessions",
         }
     }
 }
@@ -625,17 +634,113 @@ async fn local_workspace_bootstrap(
     })
 }
 
-fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
+fn codex_native_inventory() -> [(&'static str, Vec<Value>); 9] {
     let mut threads = Vec::new();
     let mut projects = Vec::new();
     let mut project_paths = Vec::new();
     let mut tool_calls = Vec::new();
     let mut native_events = Vec::new();
+    let mut native_inbox = Vec::new();
+    let mut native_automations = Vec::new();
+    let mut native_chat_sessions = Vec::new();
     let home = crate::codex_sqlite::default_codex_home_dir();
     for path in crate::codex_sqlite::codex_session_db_paths_from_home(&home) {
         let Ok(db) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
             continue;
         };
+        if sqlite_has_table(&db, "inbox_items") {
+            let columns = sqlite_columns_safe(&db, "inbox_items");
+            let optional = |name: &str, fallback: &str| -> String {
+                if columns.iter().any(|column| column == name) {
+                    name.to_string()
+                } else {
+                    fallback.to_string()
+                }
+            };
+            let sql = format!(
+                "SELECT id, {}, {}, {}, {}, {} FROM inbox_items ORDER BY {} DESC LIMIT 500",
+                optional("title", "''"),
+                optional("description", "''"),
+                optional("thread_id", "NULL"),
+                optional("read_at", "NULL"),
+                optional("created_at", "0"),
+                optional("created_at", "0")
+            );
+            if let Ok(mut stmt) = db.prepare(&sql) {
+                if let Ok(rows) = stmt.query_map([], |row| {
+                    Ok(json!({
+                        "id": row.get::<_, String>(0).unwrap_or_default(),
+                        "title": row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default(),
+                        "description": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default().chars().take(240).collect::<String>(),
+                        "thread_id": row.get::<_, Option<String>>(3).unwrap_or(None),
+                        "read_at": row.get::<_, Option<i64>>(4).unwrap_or(None),
+                        "created_at": row.get::<_, Option<i64>>(5).unwrap_or(None),
+                        "source": "codex_native"
+                    }))
+                }) { native_inbox.extend(rows.flatten()); }
+            }
+        }
+        if sqlite_has_table(&db, "automations") {
+            let columns = sqlite_columns_safe(&db, "automations");
+            let optional = |name: &str, fallback: &str| -> String {
+                if columns.iter().any(|column| column == name) {
+                    name.to_string()
+                } else {
+                    fallback.to_string()
+                }
+            };
+            let sql = format!(
+                "SELECT id, {}, {}, {}, {}, {} FROM automations ORDER BY {} DESC LIMIT 200",
+                optional("name", "''"),
+                optional("status", "''"),
+                optional("next_run_at", "NULL"),
+                optional("last_run_at", "NULL"),
+                optional("kind", "''"),
+                optional("updated_at", "0")
+            );
+            if let Ok(mut stmt) = db.prepare(&sql) {
+                if let Ok(rows) = stmt.query_map([], |row| Ok(json!({
+                    "id": row.get::<_, String>(0).unwrap_or_default(),
+                    "name": row.get::<_, Option<String>>(1).unwrap_or(None).unwrap_or_default(),
+                    "status": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default(),
+                    "next_run_at": row.get::<_, Option<i64>>(3).unwrap_or(None),
+                    "last_run_at": row.get::<_, Option<i64>>(4).unwrap_or(None),
+                    "kind": row.get::<_, Option<String>>(5).unwrap_or(None).unwrap_or_default(),
+                    "source": "codex_native"
+                }))) { native_automations.extend(rows.flatten()); }
+            }
+        }
+        if sqlite_has_table(&db, "local_thread_catalog") {
+            let columns = sqlite_columns_safe(&db, "local_thread_catalog");
+            let optional = |name: &str, fallback: &str| -> String {
+                if columns.iter().any(|column| column == name) {
+                    name.to_string()
+                } else {
+                    fallback.to_string()
+                }
+            };
+            let sql = format!(
+                "SELECT host_id, thread_id, {}, {}, {}, {}, {} FROM local_thread_catalog ORDER BY {} DESC LIMIT 500",
+                optional("display_title", "''"),
+                optional("cwd", "''"),
+                optional("source_kind", "''"),
+                optional("source_updated_at", "0"),
+                optional("project_id", "NULL"),
+                optional("source_updated_at", "0")
+            );
+            if let Ok(mut stmt) = db.prepare(&sql) {
+                if let Ok(rows) = stmt.query_map([], |row| Ok(json!({
+                    "host_id": row.get::<_, String>(0).unwrap_or_default(),
+                    "thread_id": row.get::<_, String>(1).unwrap_or_default(),
+                    "title": row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default(),
+                    "cwd": row.get::<_, Option<String>>(3).unwrap_or(None).unwrap_or_default(),
+                    "source_kind": row.get::<_, Option<String>>(4).unwrap_or(None).unwrap_or_default(),
+                    "updated_at": row.get::<_, Option<f64>>(5).unwrap_or(None),
+                    "project_id": row.get::<_, Option<String>>(6).unwrap_or(None),
+                    "source": "codex_native"
+                }))) { native_chat_sessions.extend(rows.flatten()); }
+            }
+        }
         if sqlite_has_table(&db, "threads") {
             let columns = sqlite_columns_safe(&db, "threads");
             let title = if columns.iter().any(|c| c == "title") {
@@ -983,6 +1088,9 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
     projects.truncate(100);
     tool_calls.truncate(500);
     native_events.truncate(1000);
+    native_inbox.truncate(500);
+    native_automations.truncate(200);
+    native_chat_sessions.truncate(500);
     [
         ("codex_native_threads", threads),
         ("codex_native_projects", projects),
@@ -990,6 +1098,9 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
         ("codex_native_agents", native_agents),
         ("codex_native_skills", native_skills),
         ("codex_native_events", native_events),
+        ("codex_native_inbox", native_inbox),
+        ("codex_native_automations", native_automations),
+        ("codex_native_chat_sessions", native_chat_sessions),
     ]
 }
 
@@ -1002,6 +1113,9 @@ fn codex_native_resource_key(key: &str) -> MulticaWorkspaceResourceKey {
         }
         "codex_native_agents" => MulticaWorkspaceResourceKey::Agents,
         "codex_native_skills" => MulticaWorkspaceResourceKey::Skills,
+        "codex_native_inbox" => MulticaWorkspaceResourceKey::Activities,
+        "codex_native_automations" => MulticaWorkspaceResourceKey::Autopilots,
+        "codex_native_chat_sessions" => MulticaWorkspaceResourceKey::Activities,
         _ => MulticaWorkspaceResourceKey::Activities,
     }
 }
@@ -1802,6 +1916,31 @@ fn query_local_collection(
         ));
     }
     match query.resource {
+        MulticaWorkspaceResourceKey::CodexNativeInbox
+        | MulticaWorkspaceResourceKey::CodexNativeAutomations
+        | MulticaWorkspaceResourceKey::CodexNativeChatSessions => {
+            let key = query.resource.key();
+            let items = codex_native_inventory()
+                .into_iter()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, items)| items)
+                .unwrap_or_default();
+            let total = items.len() as u64;
+            let start = usize::try_from(query.offset)
+                .unwrap_or(usize::MAX)
+                .min(items.len());
+            let end = start
+                .saturating_add(usize::from(query.limit))
+                .min(items.len());
+            Ok(collection(
+                &workspace,
+                query.resource,
+                items[start..end].to_vec(),
+                total,
+                query.limit,
+                query.offset,
+            ))
+        }
         MulticaWorkspaceResourceKey::Settings => Ok(settings_collection(workspace, enabled)),
         MulticaWorkspaceResourceKey::AgentTaskQueue => {
             agent_task_queue_collection(workspace, execution_store, query.limit, query.offset)
@@ -4002,6 +4141,9 @@ mod tests {
                 "issue_views",
                 "issue_statuses",
                 "codex_native_events",
+                "codex_native_inbox",
+                "codex_native_automations",
+                "codex_native_chat_sessions",
             ]
         );
     }
@@ -4634,6 +4776,57 @@ mod tests {
             codex_native_resource_key("codex_native_skills"),
             MulticaWorkspaceResourceKey::Skills
         );
+        assert_eq!(
+            codex_native_resource_key("codex_native_inbox"),
+            MulticaWorkspaceResourceKey::Activities
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_automations"),
+            MulticaWorkspaceResourceKey::Autopilots
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_chat_sessions"),
+            MulticaWorkspaceResourceKey::Activities
+        );
+    }
+
+    #[test]
+    fn codex_native_inventory_is_read_only_source_tagged_and_paginated() {
+        let inventory = codex_native_inventory();
+        for key in [
+            "codex_native_inbox",
+            "codex_native_automations",
+            "codex_native_chat_sessions",
+        ] {
+            let items = inventory
+                .iter()
+                .find(|(candidate, _)| *candidate == key)
+                .map(|(_, items)| items)
+                .expect("native collection is registered");
+            for item in items {
+                assert_eq!(item["source"], "codex_native");
+            }
+        }
+
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let execution_store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let workspace_store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let page = query_local_collection(
+            &workspace,
+            &execution_store,
+            &workspace_store,
+            true,
+            MulticaWorkspaceQuery {
+                resource: MulticaWorkspaceResourceKey::CodexNativeInbox,
+                limit: 1,
+                offset: 0,
+            },
+        )
+        .unwrap();
+        assert!(page.items.len() <= 1);
+        assert!(page.items.len() <= page.total as usize);
+        assert_eq!(page.limit, 1);
     }
 
     #[test]

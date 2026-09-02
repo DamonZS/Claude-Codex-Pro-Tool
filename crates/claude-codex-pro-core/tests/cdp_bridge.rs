@@ -1074,6 +1074,9 @@ fn codex_multica_native_agent_inventory_requires_codex_thread_binding() {
         "function multicaWorkspaceRenderNativeInventory(parent)",
         "function multicaWorkspaceRenderIssueBoard",
     );
+    assert!(inventory.contains("codex_native_inbox"));
+    assert!(inventory.contains("codex_native_automations"));
+    assert!(inventory.contains("codex_native_chat_sessions"));
 
     assert!(inventory.contains("codexThreadId"));
     assert!(inventory.contains("codex_thread_id"));
