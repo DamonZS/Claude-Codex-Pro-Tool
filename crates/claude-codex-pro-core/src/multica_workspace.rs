@@ -1352,7 +1352,7 @@ fn agent_task_queue_collection(
                 "issue_id": binding.issue_id,
                 "status": status,
                 "attempt": binding.attempt_no,
-                "max_attempts": 1,
+                "max_attempts": binding.max_attempts,
                 "parent_task_id": binding.parent_attempt_id,
                 "failure_reason": binding.last_error_code,
                 "last_heartbeat_at_ms": binding.last_heartbeat_at_ms,

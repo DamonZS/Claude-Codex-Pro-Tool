@@ -208,6 +208,8 @@ pub struct CodexMulticaExecutionBinding {
     pub parent_attempt_id: Option<String>,
     pub execution_kind: MulticaExecutionKind,
     pub attempt_no: u32,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
     pub idempotency_key: String,
     pub state: MulticaExecutionBindingState,
     pub revision: u64,
@@ -228,6 +230,10 @@ pub struct CodexMulticaExecutionBinding {
     pub lease_expires_at_ms: Option<u64>,
     #[serde(default)]
     pub last_heartbeat_at_ms: Option<u64>,
+}
+
+fn default_max_attempts() -> u32 {
+    2
 }
 
 /// Bounded task transcript metadata. Full Codex message bodies remain in the
@@ -721,6 +727,7 @@ impl MulticaExecutionStore {
             parent_attempt_id: input.parent_attempt_id,
             execution_kind: input.execution_kind,
             attempt_no,
+            max_attempts: 2,
             idempotency_key: input.idempotency_key,
             state: MulticaExecutionBindingState::BindingPending,
             revision: 1,
@@ -1537,7 +1544,11 @@ fn validate_execution_binding(binding: &CodexMulticaExecutionBinding) -> anyhow:
     }
     validate_id(&binding.multica_run_id, "multica_run_id")?;
     validate_id(&binding.idempotency_key, "idempotency_key")?;
-    if binding.attempt_no == 0 || binding.revision == 0 {
+    if binding.attempt_no == 0
+        || binding.max_attempts == 0
+        || binding.attempt_no > binding.max_attempts
+        || binding.revision == 0
+    {
         bail!("execution_binding_invalid");
     }
     for (value, field) in [
