@@ -4921,6 +4921,15 @@
       .ccp-multica-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
       .ccp-multica-card-actions .ccp-multica-button { min-height: 26px; padding: 2px 7px; font-size: 12px; }
       .ccp-multica-board-page[data-compact="true"] .ccp-multica-card-summary { display: none; }
+      .ccp-multica-issue-list, .ccp-multica-table, .ccp-multica-swimlane { display: grid; gap: 8px; min-width: 0; padding: 12px; }
+      .ccp-multica-issue-list-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 6px; }
+      .ccp-multica-issue-list-title { min-width: min(240px, 100%); flex: 1 1 240px; overflow-wrap: anywhere; }
+      .ccp-multica-table { overflow-x: auto; }
+      .ccp-multica-table-row { display: grid; grid-template-columns: minmax(220px, 2fr) 110px 90px minmax(120px, 1fr) minmax(140px, 1fr) 140px; gap: 10px; min-width: 850px; align-items: center; padding: 9px 10px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-table-header { position: sticky; top: 0; border-bottom-width: 2px; color: color-mix(in srgb, currentColor 65%, transparent); font-size: 12px; font-weight: 600; background: var(--ccp-multica-bg, #181b1a); }
+      .ccp-multica-table-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ccp-multica-swimlane { grid-template-columns: repeat(2, minmax(280px, 1fr)); align-items: start; }
+      .ccp-multica-swimlane-lane { min-width: 0; border: 1px solid color-mix(in srgb, currentColor 13%, transparent); border-radius: 6px; padding: 10px; }
       .ccp-multica-state { padding: 30px 8px; color: color-mix(in srgb, currentColor 66%, transparent); text-align: center; }
       .ccp-multica-state strong { display: block; margin-bottom: 8px; color: inherit; font-weight: 600; }
       .ccp-multica-list { display: grid; gap: 0; }
