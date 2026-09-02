@@ -4,10 +4,15 @@
 
 ## 必需证据
 
-- Rust 单元/集成测试覆盖 Agent 分配、重复幂等和非 Agent 分配。
+- Rust 单元/集成测试覆盖 Agent 分配、重复幂等、跨 Agent 改派并行、Issue 删除取消和非 Agent 分配。
 - `cargo fmt --check`。
 - `cargo test -p claude-codex-pro-core` 的相关测试通过。
 - `git diff --check`。
+
+## 语义断言
+
+- 改派到另一 Agent 不得隐式取消旧 Agent 的活跃执行；这是上游 `server/internal/handler/issue.go` 的明确约定。
+- 只有删除 Issue 才取消该 Issue 的全部非终态执行绑定。
 
 ## 非目标
 

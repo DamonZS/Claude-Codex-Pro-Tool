@@ -698,6 +698,7 @@ impl MulticaExecutionStore {
         if state.execution_bindings.iter().any(|binding| {
             binding.workspace_id == input.workspace_id
                 && binding.issue_id == input.issue_id
+                && binding.agent_id == input.agent_id
                 && !binding.state.is_terminal()
         }) {
             bail!("execution_active_attempt_conflict");
@@ -904,9 +905,9 @@ impl MulticaExecutionStore {
         Ok((all.into_iter().skip(offset).take(limit).collect(), total))
     }
 
-    /// Cancel queued/running attempts for an issue when its Agent assignee
-    /// changes. This mirrors the upstream reassignment fence and leaves
-    /// terminal history intact.
+    /// Cancel queued/running attempts when an Issue is deleted. Reassignment
+    /// deliberately does not call this: upstream keeps existing attempts
+    /// running while it enqueues work for the new assignee.
     pub fn cancel_active_for_issue(
         &self,
         workspace_id: &str,
@@ -2220,7 +2221,7 @@ mod tests {
     }
 
     #[test]
-    fn reassignment_cancels_old_active_agent_attempts_and_keeps_history() {
+    fn reassignment_keeps_old_active_agent_attempts_and_allows_new_agent() {
         let dir = tempfile::tempdir().unwrap();
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
         store
@@ -2235,10 +2236,6 @@ mod tests {
                 now_ms: 1,
             })
             .unwrap();
-        let cancelled = store
-            .cancel_active_for_issue("workspace-a", "issue-a", Some("agent-b"), 2)
-            .unwrap();
-        assert_eq!(cancelled, 1);
         store
             .reserve_execution(ExecutionReservation {
                 workspace_id: "workspace-a".into(),
@@ -2255,24 +2252,14 @@ mod tests {
             .list_executions("workspace-a", Some("issue-a"), 10, 0)
             .unwrap();
         assert_eq!(
-            bindings
-                .iter()
-                .filter(|b| b.state == MulticaExecutionBindingState::Cancelled)
-                .count(),
-            1
-        );
-        assert_eq!(
-            bindings
-                .iter()
-                .filter(|b| b.agent_id.as_deref() == Some("agent-b") && !b.state.is_terminal())
-                .count(),
-            1
+            bindings.iter().filter(|b| !b.state.is_terminal()).count(),
+            2
         );
         assert_eq!(
             store
-                .cancel_active_for_issue("workspace-a", "issue-a", Some("agent-b"), 3)
+                .cancel_active_for_issue("workspace-a", "issue-a", None, 3)
                 .unwrap(),
-            0
+            2
         );
     }
 

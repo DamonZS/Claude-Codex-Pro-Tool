@@ -1737,12 +1737,6 @@ impl BridgeRuntimeService for CoreRuntimeService {
                     .get("id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("multica_workspace_entity_invalid"))?;
-                self.multica_execution_store.cancel_active_for_issue(
-                    &workspace_id,
-                    issue_id,
-                    Some(agent_id),
-                    unix_now_ms(),
-                )?;
                 let key = format!("issue-assignment:{workspace_id}:{issue_id}:{agent_id}");
                 let reservation =
                     self.multica_execution_store
@@ -1787,6 +1781,14 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 expected_revision: request.expected_revision,
             },
         )?;
+        if deleted && request.resource == MulticaWorkspaceResourceKey::Issues {
+            self.multica_execution_store.cancel_active_for_issue(
+                &workspace_id,
+                &entity_id,
+                None,
+                unix_now_ms(),
+            )?;
+        }
         Ok(json!({"status": "ok", "deleted": deleted, "entityId": entity_id}))
     }
 
