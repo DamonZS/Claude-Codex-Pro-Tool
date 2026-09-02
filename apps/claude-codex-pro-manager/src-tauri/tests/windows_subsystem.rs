@@ -50,7 +50,9 @@ fn multica_saved_issue_views_have_local_cache_fallback_and_validation() {
     assert!(renderer.contains("控制面未连接"));
     assert!(renderer.contains("已保存到本机缓存"));
     assert!(renderer.contains("multicaWorkspaceLoadSavedIssueViewsFromCache();"));
-    assert!(renderer.contains("multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews)"));
+    assert!(renderer.contains(
+        "multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews)"
+    ));
     assert!(renderer.contains("multicaWorkspaceWriteSavedIssueViewsCache(mergedViews)"));
     assert!(renderer.contains("const controlPlaneViews = items.map"));
     assert!(renderer.contains("const cachedViews = multicaWorkspaceReadSavedIssueViewsCache();"));
