@@ -2871,6 +2871,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
         request: MulticaTaskQueueTransitionRequest,
     ) -> anyhow::Result<Value> {
         let next_state = MulticaExecutionBindingState::from_queue_status(&request.status)?;
+        let requested_failure_reason = request.failure_reason.clone();
         let binding = self
             .multica_execution_store
             .transition_queue(QueueTransition {
@@ -2878,9 +2879,41 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 expected_revision: request.expected_revision,
                 lease_token: request.lease_token,
                 next_state,
-                failure_reason: request.failure_reason,
+                failure_reason: requested_failure_reason.clone(),
                 now_ms: unix_now_ms(),
             })?;
+        if let Ok(run) = self
+            .multica_execution_store
+            .get_autopilot_run(&binding.multica_run_id)
+        {
+            let terminal = match binding.state {
+                MulticaExecutionBindingState::Completed => Some(("completed", None, None)),
+                MulticaExecutionBindingState::Failed | MulticaExecutionBindingState::Cancelled => {
+                    let reason = binding
+                        .last_error_code
+                        .clone()
+                        .or(requested_failure_reason)
+                        .or_else(|| Some(format!("task {}", request.status)));
+                    Some(("failed", reason.clone(), reason))
+                }
+                _ => None,
+            };
+            if let Some((status, failure_reason, reason_code)) = terminal {
+                let _ =
+                    self.multica_execution_store
+                        .transition_autopilot_run(AutopilotRunTransition {
+                            autopilot_id: run.autopilot_id,
+                            run_id: run.id,
+                            expected_revision: run.revision,
+                            next_status: status.into(),
+                            issue_id: run.issue_id,
+                            task_id: Some(binding.binding_id.clone()),
+                            failure_reason,
+                            reason_code,
+                            now_ms: unix_now_ms(),
+                        });
+            }
+        }
         Ok(json!({"status":"ok", "binding": binding}))
     }
 

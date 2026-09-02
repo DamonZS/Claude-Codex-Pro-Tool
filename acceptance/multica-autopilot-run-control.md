@@ -8,6 +8,7 @@
 - 无 Codex host 时不得报告 completed，必须保留 queued/pending 和稳定诊断码；重复触发幂等。
 - `run_only` 触发前后工作区 Issue 集合数量和内容不变，运行记录进入 `running` 或在 host 不可用时保持可诊断的 queued/pending。
 - 下游执行失败时运行记录为 `failed`，且 `failure_reason`、`reason_code` 均非空；host 暂不可用时不得误标失败或完成。
+- 通过队列状态转换提交终态后，按 `multica_run_id` 关联的工作流运行记录同步到对应终态，并保留失败原因。
 - 非法 source 被拒绝，超过容量被拒绝。
 - bridge 路由返回真实持久化记录，不再生成前端 `unsupported` 临时对象。
 - 前端“立即触发”调用 bridge 并刷新自动化资源。
