@@ -4791,7 +4791,7 @@
           // Multica's `my` scope uses API variants; local-only filters stay
           // in query.local_filter while `any` represents the all-tasks view.
           scope_variant: view.scope === "all" || view.scope === "agents" || view.scope === "working"
-            ? (view.scope === "all" ? "any" : "assigned")
+            ? (view.scope === "all" ? "any" : view.scope === "agents" ? "involved" : "assigned")
             : view.scope,
           visibility: "private",
           definition_version: 1,
@@ -4839,7 +4839,9 @@
         return {
           id: String(item.id || "").trim(),
           name: String(item.name || "").trim().slice(0, 80),
-          scope: ["all", "assigned", "created", "agents", "working"].includes(query.local_filter) ? query.local_filter : (item.scope_variant || "assigned"),
+          scope: ["all", "assigned", "created", "agents", "working"].includes(query.local_filter)
+            ? query.local_filter
+            : ({ any: "all", assigned: "assigned", created: "created", involved: "agents" }[String(item.scope_variant || "")] || "assigned"),
           issueViewMode: ["board", "list", "table", "swimlane"].includes(display.issue_view_mode) ? display.issue_view_mode : "board",
           boardCompact: display.board_compact === true,
           revision: Number(item.revision) > 0 ? Number(item.revision) : 1,
