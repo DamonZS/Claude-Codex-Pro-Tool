@@ -1112,6 +1112,38 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 9] {
     let native_agents = codex_native_agents_from_threads(&threads);
     let native_skills = codex_native_skills(&home);
 
+    // `local_thread_catalog` is a UI index and may lag behind the authoritative
+    // `threads` table. Merge both real local sources so native sessions remain
+    // visible immediately after creation or resume, without inventing records.
+    let catalog_ids: std::collections::HashSet<String> = native_chat_sessions
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    native_chat_sessions.extend(
+        threads
+            .iter()
+            .filter(|thread| {
+                thread
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| !catalog_ids.contains(id))
+                    .unwrap_or(false)
+            })
+            .map(|thread| {
+                json!({
+                    "id": thread.get("id").and_then(Value::as_str).unwrap_or_default(),
+                    "thread_id": thread.get("id").and_then(Value::as_str).unwrap_or_default(),
+                    "title": thread.get("title").and_then(Value::as_str).unwrap_or_default(),
+                    "cwd": thread.get("cwd").and_then(Value::as_str).unwrap_or_default(),
+                    "updated_at": thread.get("updated_at_ms").and_then(Value::as_i64).unwrap_or_default(),
+                    "project_id": thread.get("project_id").cloned(),
+                    "archived": thread.get("archived").and_then(Value::as_bool).unwrap_or(false),
+                    "is_pinned": thread.get("is_pinned").and_then(Value::as_bool).unwrap_or(false),
+                    "source": "codex_native"
+                })
+            }),
+    );
+
     threads.sort_by(|a, b| {
         b.get("updated_at_ms")
             .and_then(Value::as_i64)
