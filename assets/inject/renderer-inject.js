@@ -6371,9 +6371,19 @@
       // Match Multica's native assignment flow: an agent-owned issue is
       // dispatched as a child of the currently open Codex conversation.
       if (assigneeKind === "agent" && assigneeId) {
+        if (multicaWorkspaceState.bootstrap?.runtime?.multiAgentSupported !== true) {
+          multicaWorkspaceState.executionNotice = { state: "error", message: "当前 Codex 页面未提供可核实的原生多智能体能力，无法派发" };
+          if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+          return;
+        }
+        if (!parentThreadId) {
+          multicaWorkspaceState.executionNotice = { state: "error", message: "请先打开一个 Codex 原生对话，再派发智能体任务" };
+          if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+          return;
+        }
         payload.executionKind = "subagent";
         payload.agentId = assigneeId;
-        payload.parentThreadId = parentThreadId || undefined;
+        payload.parentThreadId = parentThreadId;
       }
     } else if (action === "continue") {
       path = "/multica/executions/continue";
