@@ -588,16 +588,10 @@ async fn local_workspace_bootstrap(
     // lifecycle are owned by Codex itself.
     for (key, items) in codex_native_inventory() {
         let total = items.len() as u64;
+        let resource = codex_native_resource_key(key);
         collections.insert(
             key.to_string(),
-            collection(
-                &workspace,
-                MulticaWorkspaceResourceKey::Projects,
-                items,
-                total,
-                100,
-                0,
-            ),
+            collection(&workspace, resource, items, total, 100, 0),
         );
     }
 
@@ -902,6 +896,19 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
         ("codex_native_skills", native_skills),
         ("codex_native_events", native_events),
     ]
+}
+
+fn codex_native_resource_key(key: &str) -> MulticaWorkspaceResourceKey {
+    match key {
+        "codex_native_threads" => MulticaWorkspaceResourceKey::Activities,
+        "codex_native_projects" => MulticaWorkspaceResourceKey::Projects,
+        "codex_native_tool_calls" | "codex_native_events" => {
+            MulticaWorkspaceResourceKey::CodexNativeEvents
+        }
+        "codex_native_agents" => MulticaWorkspaceResourceKey::Agents,
+        "codex_native_skills" => MulticaWorkspaceResourceKey::Skills,
+        _ => MulticaWorkspaceResourceKey::Activities,
+    }
 }
 
 fn codex_native_agents_from_threads(threads: &[Value]) -> Vec<Value> {
@@ -4467,6 +4474,30 @@ mod tests {
         assert!(!encoded.contains("\"scope\""));
         assert!(encoded.contains("\"inventory_source\":\"codex_page_host\""));
         assert!(encoded.contains("\"execution_supported\":true"));
+    }
+
+    #[test]
+    fn codex_native_collection_resource_metadata_matches_projection_kind() {
+        assert_eq!(
+            codex_native_resource_key("codex_native_threads"),
+            MulticaWorkspaceResourceKey::Activities
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_projects"),
+            MulticaWorkspaceResourceKey::Projects
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_tool_calls"),
+            MulticaWorkspaceResourceKey::CodexNativeEvents
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_agents"),
+            MulticaWorkspaceResourceKey::Agents
+        );
+        assert_eq!(
+            codex_native_resource_key("codex_native_skills"),
+            MulticaWorkspaceResourceKey::Skills
+        );
     }
 
     #[test]
