@@ -2622,6 +2622,18 @@ impl BridgeRuntimeService for CoreRuntimeService {
         if !agent_exists {
             anyhow::bail!("autopilot_assignee_unavailable");
         }
+        if let Some(trigger_id) = request.trigger_id.as_deref() {
+            if let Some(existing) = self
+                .multica_execution_store
+                .list_autopilot_runs(&request.autopilot_id)?
+                .into_iter()
+                .find(|run| {
+                    run.trigger_id.as_deref() == Some(trigger_id) && run.source == request.source
+                })
+            {
+                return Ok(json!({"status":"ok", "run": existing, "replay": true}));
+            }
+        }
         let now = unix_now_ms();
         let run = self.multica_execution_store.trigger_autopilot_run(
             request.autopilot_id.clone(),
