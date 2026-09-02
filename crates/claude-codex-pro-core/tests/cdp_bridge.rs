@@ -949,7 +949,9 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(!workspace.contains("createElement(\"iframe\")"));
     assert!(!workspace.contains("helperBase"));
     assert!(!workspace.contains("fetch("));
-    assert!(!workspace.contains("localStorage"));
+    // Saved issue views have an explicitly bounded local-only fallback cache.
+    assert!(workspace.contains("ccp.multica.issue-views.v1"));
+    assert!(!workspace.contains("localStorage.getItem(\"http"));
     assert!(!workspace.contains("sessionStorage"));
     assert!(!workspace.contains("history."));
     assert!(!workspace.contains("location."));
