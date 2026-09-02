@@ -667,7 +667,6 @@ export function OverviewScreen({
 // full), plus an archive/restore action. Shared by the overview detail list and
 // the memory management screen so both surfaces stay consistent.
 const CONTACT_QQ_GROUP_PRIMARY_URL = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
-const CONTACT_QQ_GROUP_SECONDARY_URL = "https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68";
 
 function MemoryTierControls({ actions, item }: { actions: AppActions; item: MemoryItem }) {
   const archived = item.tier === "archived";
@@ -4423,8 +4422,6 @@ export const AboutScreen = memo(function AboutScreen({
               <span className="contact-label">官方QQ群：</span>
               <span className="contact-group-number">10061615</span>
               <button className="contact-link" type="button" onClick={() => void actions.openExternalUrl(CONTACT_QQ_GROUP_PRIMARY_URL)}>一键添加</button>
-              <span className="contact-group-number">1076215359</span>
-              <button className="contact-link" type="button" onClick={() => void actions.openExternalUrl(CONTACT_QQ_GROUP_SECONDARY_URL)}>一键添加</button>
             </div>
             <div className="contact-wechat">
               <div>

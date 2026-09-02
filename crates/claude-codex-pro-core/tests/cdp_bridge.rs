@@ -260,15 +260,14 @@ fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
     assert!(script.contains("合作请联系微信"));
     assert!(script.contains("官方QQ群："));
     assert!(script.contains("10061615"));
-    assert!(script.contains("1076215359"));
     assert!(script.contains("一键添加"));
+    assert!(!script.contains("1076215359"));
     assert!(script.contains("claude-codex-pro-contact-group-number"));
     assert!(script.contains(
         ".claude-codex-pro-control-deck .claude-codex-pro-contact-group-number { color: #e8fff8;"
     ));
     assert!(script.contains("data:image/jpeg;base64,"));
     assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg"));
-    assert!(script.contains("https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68"));
     assert!(script.contains("target=\"_blank\" rel=\"noreferrer\""));
     assert!(script.contains("data-claude-codex-pro-setting"));
     assert!(script.contains("data-codex-backend-status"));

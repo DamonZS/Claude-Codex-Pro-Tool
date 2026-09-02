@@ -20,14 +20,12 @@
 
 ## 用户视角描述
 
-用户点击 Codex 顶部注入标识，打开功能弹窗后，可以点击“联系我”tab。页面第一行展示两个官方 QQ 群号和“一键添加”链接；第二行展示“合作代理请联系微信”和微信二维码。用户在管理工具关于页也能看到同样信息。
+用户点击 Codex 顶部注入标识，打开功能弹窗后，可以点击“联系我”tab。页面第一行展示官方群 `10061615` 和“一键添加”链接；第二行展示“合作代理请联系微信”和微信二维码。用户在管理工具关于页也能看到同样信息。
 
 ## 功能要求
 
 - QQ 群 1：`10061615`
   - 一键加群链接：`https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg`
-- QQ 群 2：`1076215359`
-  - 一键加群链接：`https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68`
 - 合作代理展示微信二维码。
 - 外链必须新窗口打开，并带 `rel="noreferrer"`。
 - 注入弹窗新增 tab 后，原 `主页`、`推荐内容`、`支持` 仍存在。

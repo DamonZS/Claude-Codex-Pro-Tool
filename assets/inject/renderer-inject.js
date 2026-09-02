@@ -96,7 +96,6 @@
   const claudeCodexProContactWechatQr = window.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ || "";
   const claudeCodexProBundledAnnouncement = window.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__ || { enabled: false, ads: [] };
   const claudeCodexProQqGroupPrimaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
-  const claudeCodexProQqGroupSecondaryUrl = "https://qm.qq.com/cgi-bin/qm/qr?k=cIeUYUFyy0ypTWMqo8CfgRwq8jU_OrXy&jump_from=webapi&authKey=njT7ceHMggvpptkiy9xD6FbBubVGCDof0cnX0adhLgUvi9kKZP4OY51M1xWZBy68";
   const claudeCodexProSettingsKey = "claudeCodexProSettings";
   const codexThreadScrollKey = "codexThreadScroll";
   const codexThreadServiceTierKey = "codexThreadServiceTierOverrides";
@@ -3519,8 +3518,6 @@
                   <span class="claude-codex-pro-contact-label">官方QQ群：</span>
                   <span class="claude-codex-pro-contact-group-number">10061615</span>
                   <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupPrimaryUrl)}">一键添加</a>
-                  <span class="claude-codex-pro-contact-group-number">1076215359</span>
-                  <a class="claude-codex-pro-contact-link" target="_blank" rel="noreferrer" href="${escapeHtml(claudeCodexProQqGroupSecondaryUrl)}">一键添加</a>
                 </div>
                 <div class="claude-codex-pro-contact-qr-wrap">
                   <p class="claude-codex-pro-contact-text">合作请联系微信</p>
