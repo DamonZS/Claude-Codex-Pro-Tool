@@ -17,6 +17,7 @@
 - `run_only` 的执行绑定必须将 `issue_id` 持久化为 `null`，与上游 `agent_task_queue.issue_id = NULL` 一致；不得用 `autopilot-issue-*` 等合成 ID 冒充 Issue。
 - 下游非连接类错误必须把运行记录推进到 `failed`，写入 `failure_reason` 与稳定 `reason_code`；仅 Codex host 暂不可用可保持排队状态。
 - 任务队列的终态事件必须同步运行记录：`completed` -> `completed`，`failed`/`cancelled` -> `failed`；重复事件遵守 revision/CAS，不得覆盖更新后的状态。
+- 当前 Codex 页面未提供稳定事件订阅时，工作流必须以受控间隔轮询 `/multica/executions/status` 同步未终态绑定；轮询失败只保留诊断并重试，不得把断线改写为 `failed` 或 `completed`。
 - 重复 trigger 使用稳定幂等键，不得重复创建 Issue 或执行绑定。
 - 不保存 webhook payload、凭据或完整任务正文。
 

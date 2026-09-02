@@ -4662,6 +4662,7 @@
     { key: "working", label: "工作中" },
   ]);
   const multicaWorkspaceBackgroundIntervalMs = 5000;
+  const multicaWorkspaceExecutionPollIntervalMs = 7000;
   // Background refreshes must use the same bounded budget as the foreground
   // preflight. A shorter timeout made normal CDP/IPC jitter look like a lost
   // connection and overwrote a previously healthy entry state.
@@ -4694,6 +4695,7 @@
     backgroundTimer: null,
     backgroundStarted: false,
     backgroundBusy: false,
+    executionPollAt: 0,
     workspaceId: "",
     bootstrap: null,
     bootstrapLoading: false,
@@ -6315,6 +6317,41 @@
         if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
       }
     }
+  }
+
+  // Codex page Host currently exposes authoritative thread/read status, but no
+  // stable event-subscription method. Poll only non-terminal bindings and let
+  // the backend perform the revision/CAS write; a transient disconnect never
+  // fabricates a terminal state in the local workflow projection.
+  async function multicaWorkspaceSyncExecutionStatuses(force = false) {
+    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled()) return;
+    const now = Date.now();
+    if (!force && now < multicaWorkspaceState.executionPollAt) return;
+    multicaWorkspaceState.executionPollAt = now + multicaWorkspaceExecutionPollIntervalMs;
+    const active = multicaWorkspaceState.executions
+      .filter((binding) => {
+        const state = multicaWorkspaceExecutionState(binding);
+        const threadId = String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim();
+        const executionId = String(multicaWorkspaceObjectValue(binding, "codexExecutionId", "codex_execution_id") || "").trim();
+        return threadId && executionId && !multicaWorkspaceTerminalExecutionStates.has(state);
+      })
+      .slice(0, 24);
+    for (const binding of active) {
+      const bindingId = multicaWorkspaceExecutionBindingId(binding);
+      if (!bindingId || multicaWorkspaceState.executionBusy.has(`status:${bindingId}`)) continue;
+      multicaWorkspaceState.executionBusy.add(`status:${bindingId}`);
+      try {
+        const result = await multicaWorkspaceCall("/multica/executions/status", { bindingId }, 15000);
+        if (result?.binding) multicaWorkspaceMergeExecution(result.binding);
+      } catch (error) {
+        // Keep the last authoritative state; the next tick retries after the
+        // normal backoff instead of marking a live Codex turn as failed.
+        multicaWorkspaceState.executionsError = multicaWorkspaceErrorMessage(error);
+      } finally {
+        multicaWorkspaceState.executionBusy.delete(`status:${bindingId}`);
+      }
+    }
+    if (multicaWorkspaceState.opened && active.length) multicaWorkspaceRenderContent();
   }
 
   function multicaWorkspaceOpenExecutionDraft(mode, issue, binding = null) {
@@ -8303,6 +8340,7 @@
         await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, multicaWorkspaceBackgroundTimeoutMs);
       }
       if (!multicaWorkspaceState.executionsLoading) await multicaWorkspaceLoadExecutions(true);
+      await multicaWorkspaceSyncExecutionStatuses();
     } finally {
       multicaWorkspaceState.backgroundBusy = false;
     }

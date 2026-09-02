@@ -10,6 +10,7 @@
 - `run_only` 触发后执行绑定 JSON 中 `issueId` 为 `null`，且调度仍能通过任务绑定恢复工作流运行上下文。
 - 下游执行失败时运行记录为 `failed`，且 `failure_reason`、`reason_code` 均非空；host 暂不可用时不得误标失败或完成。
 - 通过队列状态转换提交终态后，按 `multica_run_id` 关联的工作流运行记录同步到对应终态，并保留失败原因。
+- 前端后台同步仅轮询带有真实 Codex thread/turn ID 的非终态绑定，成功响应更新绑定；模拟断线后状态保持原值并在后续周期重试。
 - 非法 source 被拒绝，超过容量被拒绝。
 - bridge 路由返回真实持久化记录，不再生成前端 `unsupported` 临时对象。
 - 前端“立即触发”调用 bridge 并刷新自动化资源。
