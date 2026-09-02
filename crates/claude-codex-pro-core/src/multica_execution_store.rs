@@ -904,6 +904,43 @@ impl MulticaExecutionStore {
         Ok((all.into_iter().skip(offset).take(limit).collect(), total))
     }
 
+    /// Cancel queued/running attempts for an issue when its Agent assignee
+    /// changes. This mirrors the upstream reassignment fence and leaves
+    /// terminal history intact.
+    pub fn cancel_active_for_issue(
+        &self,
+        workspace_id: &str,
+        issue_id: &str,
+        keep_agent_id: Option<&str>,
+        now_ms: u64,
+    ) -> anyhow::Result<usize> {
+        validate_id(workspace_id, "workspace_id")?;
+        validate_id(issue_id, "issue_id")?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let mut cancelled = 0;
+        for binding in &mut state.execution_bindings {
+            if binding.workspace_id != workspace_id
+                || binding.issue_id != issue_id
+                || binding.state.is_terminal()
+                || keep_agent_id.is_some_and(|id| binding.agent_id.as_deref() == Some(id))
+            {
+                continue;
+            }
+            binding.state = MulticaExecutionBindingState::Cancelled;
+            binding.retryable = false;
+            binding.completed_at_ms = Some(now_ms);
+            binding.updated_at_ms = now_ms;
+            binding.revision = binding.revision.saturating_add(1);
+            cancelled += 1;
+        }
+        if cancelled > 0 {
+            validate_state(&state)?;
+            save_state_locked(&self.path, &state)?;
+        }
+        Ok(cancelled)
+    }
+
     pub fn reserve_command(
         &self,
         binding_id: &str,
@@ -2180,6 +2217,63 @@ mod tests {
             .unwrap();
         assert_eq!(completed.state, MulticaExecutionBindingState::Completed);
         assert!(completed.lease_token.is_none());
+    }
+
+    #[test]
+    fn reassignment_cancels_old_active_agent_attempts_and_keeps_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: "issue-a".into(),
+                agent_id: Some("agent-a".into()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "assignment-a".into(),
+                now_ms: 1,
+            })
+            .unwrap();
+        let cancelled = store
+            .cancel_active_for_issue("workspace-a", "issue-a", Some("agent-b"), 2)
+            .unwrap();
+        assert_eq!(cancelled, 1);
+        store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: "issue-a".into(),
+                agent_id: Some("agent-b".into()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "assignment-b".into(),
+                now_ms: 2,
+            })
+            .unwrap();
+        let (bindings, _) = store
+            .list_executions("workspace-a", Some("issue-a"), 10, 0)
+            .unwrap();
+        assert_eq!(
+            bindings
+                .iter()
+                .filter(|b| b.state == MulticaExecutionBindingState::Cancelled)
+                .count(),
+            1
+        );
+        assert_eq!(
+            bindings
+                .iter()
+                .filter(|b| b.agent_id.as_deref() == Some("agent-b") && !b.state.is_terminal())
+                .count(),
+            1
+        );
+        assert_eq!(
+            store
+                .cancel_active_for_issue("workspace-a", "issue-a", Some("agent-b"), 3)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
