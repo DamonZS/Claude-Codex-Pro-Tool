@@ -131,7 +131,7 @@ fn manager_navigation_hides_legacy_multica_runtime_page() {
     assert!(routes.contains("value === \"logs\" || value === \"multica\""));
     assert!(!app.contains("route === \"multica\""));
     assert!(!app.contains("<MulticaRuntimeScreen"));
-    assert!(screens.contains("[\"本地 Multica 工作区\", \"multicaWorkspaceEnabled\"]"));
+    assert!(screens.contains("[\"本地工作流\", \"multicaWorkspaceEnabled\"]"));
     assert!(screens.contains("s?.multicaWorkspaceEnabled !== false"));
 }
 

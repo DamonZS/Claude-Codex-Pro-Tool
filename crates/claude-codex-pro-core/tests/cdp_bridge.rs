@@ -756,7 +756,7 @@ fn codex_multica_workspace_settings_persist_and_apply_the_ui_only_toggle() {
         })
         .expect("Multica workspace settings segment");
 
-    assert!(settings.contains("启用本地 Multica 工作区"));
+    assert!(settings.contains("启用本地工作流"));
     assert!(settings.contains("setBackendSetting(\"multicaWorkspaceEnabled\", nextValue)"));
     assert!(script.contains("settings?.[key] !== value"));
     assert!(settings.contains("ensureMulticaWorkspaceRuntime();"));
