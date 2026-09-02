@@ -2265,10 +2265,24 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 skill_request,
             };
             native_request.validate()?;
-            let handle = service
-                .create_thread(native_request, &claimed.idempotency_key)
-                .await
-                .map_err(|error| anyhow::anyhow!(stable_execution_error_code(&error)))?;
+            // Preserve the execution kind recorded at reservation time.  A
+            // subagent binding must fork the verified parent thread; falling
+            // back to thread/start would silently lose the native parent /
+            // child relationship while still reporting success.
+            let handle = if claimed.execution_kind == MulticaExecutionKind::Subagent {
+                let parent_thread_id = claimed
+                    .parent_thread_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("subagent_parent_or_agent_required"))?;
+                service
+                    .create_subagent(parent_thread_id, native_request, &claimed.idempotency_key)
+                    .await
+            } else {
+                service
+                    .create_thread(native_request, &claimed.idempotency_key)
+                    .await
+            }
+            .map_err(|error| anyhow::anyhow!(stable_execution_error_code(&error)))?;
             let binding = match self.multica_execution_store.commit_execution(
                 binding_id,
                 claimed.revision,
@@ -3395,6 +3409,7 @@ mod tests {
 
     struct RecordingCodexHost {
         requests: Mutex<Vec<CodexThreadRequest>>,
+        subagent_parents: Mutex<Vec<String>>,
         skills: Vec<CodexSkill>,
     }
 
@@ -3402,6 +3417,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 requests: Mutex::new(Vec::new()),
+                subagent_parents: Mutex::new(Vec::new()),
                 skills: Vec::new(),
             }
         }
@@ -3424,7 +3440,7 @@ mod tests {
                 skills_supported,
                 skills_inventory_supported: skills_supported,
                 skill_protocol: skills_supported.then(|| "skill-bundles-v1".to_string()),
-                subagents_supported: false,
+                subagents_supported: true,
             })
         }
 
@@ -3456,11 +3472,22 @@ mod tests {
 
         async fn create_subagent(
             &self,
-            _parent_thread_id: &str,
-            _request: CodexThreadRequest,
-            _idempotency_key: &str,
+            parent_thread_id: &str,
+            request: CodexThreadRequest,
+            idempotency_key: &str,
         ) -> anyhow::Result<CodexExecutionHandle> {
-            bail!("unused")
+            self.subagent_parents
+                .lock()
+                .unwrap()
+                .push(parent_thread_id.to_string());
+            self.requests.lock().unwrap().push(request);
+            Ok(CodexExecutionHandle {
+                runtime_id: "codex-current-page".to_string(),
+                thread_id: "native-subagent-1".to_string(),
+                execution_id: Some("native-subagent-turn-1".to_string()),
+                parent_thread_id: Some(parent_thread_id.to_string()),
+                idempotency_key: idempotency_key.to_string(),
+            })
         }
 
         async fn open_thread(&self, _thread_id: &str) -> anyhow::Result<CodexExecutionHandle> {
@@ -3688,12 +3715,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_subagent_assignment_forks_the_persisted_parent_thread() {
+        let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
+        let queued = executions
+            .reserve_execution(ExecutionReservation {
+                workspace_id: workspace_id.clone(),
+                issue_id: "issue-a".to_string(),
+                agent_id: Some("agent-a".to_string()),
+                execution_kind: MulticaExecutionKind::Subagent,
+                parent_thread_id: Some("parent-native-thread".to_string()),
+                parent_attempt_id: None,
+                idempotency_key: "issue-assignment:subagent".to_string(),
+                now_ms: 3,
+            })
+            .unwrap()
+            .binding;
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_codex_execution_service(host.clone())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace);
+
+        let response = runtime
+            .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                binding_id: queued.binding_id.clone(),
+                expected_revision: queued.revision,
+                lease_token: "dispatch-subagent".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response["handle"]["parentThreadId"],
+            json!("parent-native-thread")
+        );
+        assert_eq!(
+            host.subagent_parents.lock().unwrap().as_slice(),
+            ["parent-native-thread"]
+        );
+        assert_eq!(response["handle"]["threadId"], json!("native-subagent-1"));
+    }
+
+    #[tokio::test]
     async fn agent_create_uses_dedicated_path_and_rejects_untrusted_skills_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
         let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let host = Arc::new(RecordingCodexHost {
             requests: Mutex::new(Vec::new()),
+            subagent_parents: Mutex::new(Vec::new()),
             skills: vec![CodexSkill {
                 id: "codex:untrusted".to_string(),
                 name: "Untrusted".to_string(),
@@ -3742,6 +3812,7 @@ mod tests {
         let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let host = Arc::new(RecordingCodexHost {
             requests: Mutex::new(Vec::new()),
+            subagent_parents: Mutex::new(Vec::new()),
             skills: vec![CodexSkill {
                 id: "codex:available".to_string(),
                 name: "Available".to_string(),
