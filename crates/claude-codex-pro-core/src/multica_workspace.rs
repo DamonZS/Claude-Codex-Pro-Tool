@@ -1336,6 +1336,13 @@ fn query_local_collection(
             query.limit,
             query.offset,
         )),
+        MulticaWorkspaceResourceKey::Agents => agent_collection_with_bindings(
+            workspace,
+            execution_store,
+            workspace_store,
+            query.limit,
+            query.offset,
+        ),
         MulticaWorkspaceResourceKey::MyTasks
         | MulticaWorkspaceResourceKey::Issues
         | MulticaWorkspaceResourceKey::Comments
@@ -1346,7 +1353,6 @@ fn query_local_collection(
         | MulticaWorkspaceResourceKey::Projects
         | MulticaWorkspaceResourceKey::ProjectResources
         | MulticaWorkspaceResourceKey::Autopilots
-        | MulticaWorkspaceResourceKey::Agents
         | MulticaWorkspaceResourceKey::Squads => local_entity_collection(
             workspace,
             workspace_store,
@@ -1355,6 +1361,63 @@ fn query_local_collection(
             query.offset,
         ),
     }
+}
+
+/// Overlay only bindings recorded by the local execution ledger onto Agent
+/// entities. The generic JSON entity may contain a legacy `skills` field, but
+/// it is deliberately ignored here so the UI cannot present unvalidated data
+/// as an executable Skill assignment.
+fn agent_collection_with_bindings(
+    workspace: &MulticaWorkspaceIdentity,
+    execution_store: &MulticaExecutionStore,
+    workspace_store: &LocalMulticaWorkspaceStore,
+    limit: u16,
+    offset: u32,
+) -> anyhow::Result<MulticaWorkspaceCollection> {
+    let mut agents = workspace_store.list(&workspace.id, MulticaWorkspaceResourceKey::Agents)?;
+    let bindings =
+        execution_store.list_bindings(&workspace.id, Some(SkillBindingScope::Agent), None)?;
+    for agent in &mut agents {
+        let Some(object) = agent.as_object_mut() else {
+            continue;
+        };
+        let Some(agent_id) = object.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let skills = bindings
+            .iter()
+            .filter(|binding| binding.scope_id == agent_id && binding.enabled)
+            .map(|binding| {
+                json!({
+                    "id": binding.skill_ref.id,
+                    "manifest_digest": binding.skill_ref.manifest_digest,
+                    "binding_id": binding.binding_id,
+                    "source": "codex_execution_store",
+                    "trusted": binding.trust_state == "trusted",
+                    "read_only": true,
+                })
+            })
+            .collect::<Vec<_>>();
+        object.insert("skills".to_string(), Value::Array(skills));
+        object.insert(
+            "skills_source".to_string(),
+            Value::String("codex_execution_store".to_string()),
+        );
+        object.insert("skills_read_only".to_string(), Value::Bool(true));
+    }
+    let items = paginate(&agents, limit, offset);
+    let mut value = collection(
+        workspace,
+        MulticaWorkspaceResourceKey::Agents,
+        items,
+        agents.len() as u64,
+        limit,
+        offset,
+    );
+    if agents.is_empty() {
+        value.diagnostic = Some(LOCAL_CONTROL_PLANE_EMPTY.to_string());
+    }
+    Ok(value)
 }
 
 /// Project the local execution ledger into the upstream `agent_task_queue`
@@ -3028,6 +3091,84 @@ mod tests {
         );
         assert!(collection.items.is_empty());
         assert_eq!(collection.total, 0);
+    }
+
+    #[test]
+    fn agent_projection_uses_execution_bindings_not_legacy_skill_json() {
+        let dir = tempdir().unwrap();
+        let workspace_id = "local-test";
+        let workspace = MulticaWorkspaceIdentity {
+            id: workspace_id.to_string(),
+            slug: workspace_id.to_string(),
+            name: "Local".to_string(),
+        };
+        let workspace_store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let mut state = LocalMulticaWorkspaceState::empty(workspace_id);
+        state.agents.push(json!({
+            "id": "agent-a",
+            "workspace_id": workspace_id,
+            "revision": 1,
+            "name": "Builder",
+            "runtime_id": "runtime-1",
+            "runtime_mode": "local",
+            "permission_mode": "plan",
+            "skills": [{"id": "unvalidated-skill"}]
+        }));
+        workspace_store.save(&state).unwrap();
+
+        let execution_store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        execution_store
+            .upsert_binding(SkillBindingUpsert {
+                binding_id: "binding-a".to_string(),
+                workspace_id: workspace_id.to_string(),
+                scope_kind: SkillBindingScope::Agent,
+                scope_id: "agent-a".to_string(),
+                skill_ref: SkillReference {
+                    id: "codex-skill:review".to_string(),
+                    manifest_digest: Some(
+                        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                            .to_string(),
+                    ),
+                },
+                source_kind: "explicit_review".to_string(),
+                trust_state: "trusted".to_string(),
+                enabled: true,
+                expected_revision: None,
+                now_ms: 1,
+            })
+            .unwrap();
+        execution_store
+            .upsert_binding(SkillBindingUpsert {
+                binding_id: "binding-disabled".to_string(),
+                workspace_id: workspace_id.to_string(),
+                scope_kind: SkillBindingScope::Agent,
+                scope_id: "agent-a".to_string(),
+                skill_ref: SkillReference {
+                    id: "codex-skill:disabled".to_string(),
+                    manifest_digest: None,
+                },
+                source_kind: "explicit_review".to_string(),
+                trust_state: "trusted".to_string(),
+                enabled: false,
+                expected_revision: None,
+                now_ms: 1,
+            })
+            .unwrap();
+
+        let collection =
+            agent_collection_with_bindings(&workspace, &execution_store, &workspace_store, 50, 0)
+                .unwrap();
+        let skills = collection.items[0]["skills"].as_array().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0]["id"], "codex-skill:review");
+        assert_eq!(skills[0]["source"], "codex_execution_store");
+        assert_eq!(collection.items[0]["skills_read_only"], true);
+        assert!(skills.iter().all(|item| item["id"] != "unvalidated-skill"));
+        assert!(
+            skills
+                .iter()
+                .all(|item| item["id"] != "codex-skill:disabled")
+        );
     }
 
     #[test]
