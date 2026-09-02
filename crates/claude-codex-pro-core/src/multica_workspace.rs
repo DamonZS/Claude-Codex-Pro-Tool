@@ -2142,6 +2142,23 @@ fn is_hex_color(value: &str) -> bool {
         && value.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
+fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+        && value[5..7]
+            .parse::<u8>()
+            .is_ok_and(|month| (1..=12).contains(&month))
+        && value[8..10]
+            .parse::<u8>()
+            .is_ok_and(|day| (1..=31).contains(&day))
+}
+
 fn validate_local_entity(
     entity: &Value,
     workspace_id: &str,
@@ -2222,6 +2239,118 @@ fn validate_entity_contract(
                     .map_err(|_| anyhow!("multica_workspace_label_ids_invalid"))?;
             }
         }
+    }
+    if resource == MulticaWorkspaceResourceKey::Projects {
+        if let Some(status) = object.get("status").and_then(Value::as_str)
+            && !matches!(
+                status,
+                "planned" | "in_progress" | "paused" | "completed" | "cancelled"
+            )
+        {
+            bail!("multica_workspace_project_status_invalid");
+        }
+        if let Some(priority) = object.get("priority").and_then(Value::as_str)
+            && !matches!(priority, "urgent" | "high" | "medium" | "low" | "none")
+        {
+            bail!("multica_workspace_project_priority_invalid");
+        }
+        if let Some(lead_type) = object.get("lead_type").and_then(Value::as_str)
+            && !matches!(lead_type, "member" | "agent")
+        {
+            bail!("multica_workspace_project_lead_invalid");
+        }
+        for key in ["start_date", "due_date"] {
+            if let Some(value) = object.get(key) {
+                if !value.is_null() && value.as_str().is_none_or(|date| !is_iso_date(date)) {
+                    bail!("multica_workspace_project_date_invalid");
+                }
+            }
+        }
+        if let Some(resources) = object.get("resources") {
+            for resource in resources.as_array().expect("bounded array validated") {
+                let Some(resource) = resource.as_object() else {
+                    bail!("multica_workspace_project_resource_invalid");
+                };
+                let resource_type = resource
+                    .get("resource_type")
+                    .or_else(|| resource.get("resourceType"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let reference = resource
+                    .get("resource_ref")
+                    .or_else(|| resource.get("resourceRef"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| anyhow!("multica_workspace_project_resource_invalid"))?;
+                match resource_type {
+                    "github_repo" => {
+                        if !is_supported_git_url(
+                            reference
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                        ) {
+                            bail!("multica_workspace_project_resource_invalid");
+                        }
+                    }
+                    "local_directory" => {
+                        let path = reference
+                            .get("local_path")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let daemon_id = reference
+                            .get("daemon_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if path.trim().is_empty()
+                            || path.len() > 1024
+                            || daemon_id.trim().is_empty()
+                            || daemon_id.len() > 240
+                        {
+                            bail!("multica_workspace_project_resource_invalid");
+                        }
+                        if let Some(mode) = reference.get("execution_mode").and_then(Value::as_str)
+                            && !matches!(mode, "in_place" | "worktree")
+                        {
+                            bail!("multica_workspace_project_resource_invalid");
+                        }
+                    }
+                    _ => bail!("multica_workspace_project_resource_invalid"),
+                }
+            }
+        }
+        return Ok(());
+    }
+    if resource == MulticaWorkspaceResourceKey::Issues {
+        if let Some(priority) = object.get("priority").and_then(Value::as_str)
+            && !matches!(priority, "urgent" | "high" | "medium" | "low" | "none")
+        {
+            bail!("multica_workspace_issue_priority_invalid");
+        }
+        if let Some(assignee_type) = object.get("assignee_type").and_then(Value::as_str)
+            && !matches!(assignee_type, "member" | "agent" | "squad")
+        {
+            bail!("multica_workspace_issue_assignee_invalid");
+        }
+        for key in ["start_date", "due_date"] {
+            if let Some(value) = object.get(key) {
+                if !value.is_null() && value.as_str().is_none_or(|date| !is_iso_date(date)) {
+                    bail!("multica_workspace_issue_date_invalid");
+                }
+            }
+        }
+        if let Some(metadata) = object.get("metadata") {
+            let Some(metadata) = metadata.as_object() else {
+                bail!("multica_workspace_issue_metadata_invalid");
+            };
+            if metadata.len() > 128
+                || metadata
+                    .values()
+                    .any(|value| !(value.is_string() || value.is_number() || value.is_boolean()))
+            {
+                bail!("multica_workspace_issue_metadata_invalid");
+            }
+        }
+        return Ok(());
     }
     if resource == MulticaWorkspaceResourceKey::ProjectResources {
         let project_id = object
@@ -3057,6 +3186,51 @@ mod tests {
             MulticaWorkspaceResourceKey::ProjectResources,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn project_and_issue_contracts_match_upstream_closed_fields() {
+        let project = json!({
+            "id": "project-1", "workspace_id": "local-test", "revision": 1,
+            "status": "in_progress", "priority": "high", "lead_type": "agent",
+            "start_date": "2026-09-01", "due_date": "2026-09-30"
+        });
+        validate_local_entity(
+            &project,
+            "local-test",
+            MulticaWorkspaceResourceKey::Projects,
+        )
+        .unwrap();
+        let issue = json!({
+            "id": "issue-1", "workspace_id": "local-test", "revision": 1,
+            "priority": "urgent", "assignee_type": "squad",
+            "start_date": "2026-09-01", "metadata": {"pipeline": "queued", "attempt": 1}
+        });
+        validate_local_entity(&issue, "local-test", MulticaWorkspaceResourceKey::Issues).unwrap();
+        for (resource, value) in [
+            (
+                MulticaWorkspaceResourceKey::Projects,
+                json!({"status": "doing"}),
+            ),
+            (
+                MulticaWorkspaceResourceKey::Projects,
+                json!({"due_date": "09/30/2026"}),
+            ),
+            (
+                MulticaWorkspaceResourceKey::Issues,
+                json!({"assignee_type": "user"}),
+            ),
+            (
+                MulticaWorkspaceResourceKey::Issues,
+                json!({"metadata": {"nested": {}}}),
+            ),
+        ] {
+            let mut entity = value.as_object().unwrap().clone();
+            entity.insert("id".to_string(), json!("entity-1"));
+            entity.insert("workspace_id".to_string(), json!("local-test"));
+            entity.insert("revision".to_string(), json!(1));
+            assert!(validate_local_entity(&Value::Object(entity), "local-test", resource).is_err());
+        }
     }
 
     #[test]
