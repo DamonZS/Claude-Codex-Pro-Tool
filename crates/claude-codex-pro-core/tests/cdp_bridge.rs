@@ -1436,6 +1436,9 @@ fn injection_script_hides_codex_internal_transport_messages_from_conversation() 
     let script = assets::injection_script(57321);
 
     assert!(script.contains("codexInternalMessageLeakMarkers"));
+    assert!(script.contains("codexInternalMessageLeakCandidates"));
+    assert!(script.contains("document.createTreeWalker(root, NodeFilter.SHOW_TEXT)"));
+    assert!(script.contains("const scanRoot = document.body || root || document.documentElement"));
     assert!(script.contains("由 ChatGPT 从另一项任务发送"));
     assert!(script.contains("function_call_output requires call_id"));
     assert!(script.contains("data-ccp-internal-message-hidden"));

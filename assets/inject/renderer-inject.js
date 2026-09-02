@@ -13504,14 +13504,15 @@
   }
 
   function codexInternalMessageLeakTarget(node) {
-    if (!node?.closest) return null;
-    if (codexInternalMessageLeakText(node).includes(codexInternalMessageLeakMarkers[0])) {
-      return node.closest('[data-testid="conversation-turn"]')
-        || node.closest('[data-message-author-role="assistant"]')
-        || node;
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    if (!element?.closest) return null;
+    if (codexInternalMessageLeakText(element).includes(codexInternalMessageLeakMarkers[0])) {
+      return element.closest('[data-testid="conversation-turn"]')
+        || element.closest('[data-message-author-role="assistant"]')
+        || element;
     }
     const conversationRoot = codexMemoryConversationRoot();
-    let current = node;
+    let current = element;
     for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
       const text = codexInternalMessageLeakText(current);
       if (text.length <= 420 && codexInternalMessageLeakMarkers.slice(1).some((marker) => text.includes(marker))) {
@@ -13528,14 +13529,36 @@
     return null;
   }
 
-  function codexHideInternalMessageLeaks(root = codexMemoryConversationRoot()) {
-    if (!root?.querySelectorAll) return 0;
-    const nodes = root.querySelectorAll([
+  function codexInternalMessageLeakCandidates(root) {
+    if (!root?.querySelectorAll) return [];
+    const candidates = new Set(root.querySelectorAll([
       '[data-testid="conversation-turn"]',
-      '[data-message-author-role="assistant"]',
+      '[data-message-author-role]',
       'main .prose',
+      '[data-message-content]',
+      '[data-testid="message-content"]',
       '[role="alert"]',
-    ].join(", "));
+    ].join(", ")));
+    // Some Codex builds render transport envelopes without message semantics.
+    // Walk text nodes so those frames are still caught without hiding the page
+    // root or unrelated controls.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let current;
+    while ((current = walker.nextNode())) {
+      const text = codexInternalMessageLeakText(current);
+      if (text && codexInternalMessageLeakMarkers.some((marker) => text.includes(marker))) {
+        candidates.add(current.parentElement);
+      }
+    }
+    return [...candidates].filter(Boolean);
+  }
+
+  function codexHideInternalMessageLeaks(root = codexMemoryConversationRoot()) {
+    // Use the document boundary: leaked envelopes can be mounted outside the
+    // conversation root by transient Codex overlays/portals.
+    const scanRoot = document.body || root || document.documentElement;
+    if (!scanRoot?.querySelectorAll) return 0;
+    const nodes = codexInternalMessageLeakCandidates(scanRoot);
     const hidden = new Set();
     nodes.forEach((node) => {
       if (isExtensionUiNode(node)) return;
