@@ -2513,6 +2513,18 @@ fn statistics_collection(
     execution_store: &MulticaExecutionStore,
     workspace_store: &LocalMulticaWorkspaceStore,
 ) -> anyhow::Result<MulticaWorkspaceCollection> {
+    // Keep dashboard counts aligned with the read-only Codex inventory shown
+    // in My Tasks. These are local SQLite/filesystem projections; they do not
+    // imply provider billing or cloud telemetry.
+    let native_inventory = codex_native_inventory()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    let native_count = |key: &str| {
+        native_inventory
+            .get(key)
+            .map(|items| items.len() as u64)
+            .unwrap_or_default()
+    };
     let execution_state = execution_store.load()?;
     let workspace_state = workspace_store.load(&workspace.id)?;
     let enabled_bindings = execution_state
@@ -2625,6 +2637,13 @@ fn statistics_collection(
             "retryable_failures": retryable_failures,
             "average_execution_duration_ms": if duration_count == 0 { Value::Null } else { json!(duration_total_ms / duration_count) },
             "issue_statuses": issue_statuses,
+            "codex_native_thread_total": native_count("codex_native_threads"),
+            "codex_native_project_total": native_count("codex_native_projects"),
+            "codex_native_agent_total": native_count("codex_native_agents"),
+            "codex_native_event_total": native_count("codex_native_events"),
+            "codex_native_tool_call_total": native_count("codex_native_tool_calls"),
+            "codex_native_skill_total": native_count("codex_native_skills"),
+            "codex_native_source": "codex_native",
         })],
         1,
         1,
