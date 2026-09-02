@@ -2101,6 +2101,16 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
         remove_codex_credential_aliases_from_table(doc.as_table_mut());
     }
     doc.as_table_mut().remove(CHAT_UPSTREAM_BASE_URL_KEY);
+    let existing_provider_name = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(&provider_id))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("name"))
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string);
     retain_only_provider_table(&mut doc, &provider_id);
     let provider = ensure_provider_table(&mut doc, &provider_id)?;
     let display_name = profile
@@ -2109,8 +2119,10 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
         .strip_suffix("(ccswitch)")
         .map(str::trim)
         .unwrap_or_else(|| profile.name.trim());
-    if !display_name.is_empty() {
+    if !display_name.is_empty() && display_name != "默认中转" {
         provider["name"] = toml_edit::value(display_name);
+    } else if let Some(existing_name) = existing_provider_name {
+        provider["name"] = toml_edit::value(existing_name);
     } else if provider
         .get("name")
         .and_then(Item::as_str)
