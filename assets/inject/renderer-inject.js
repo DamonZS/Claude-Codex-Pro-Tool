@@ -13510,11 +13510,19 @@
         || node.closest('[data-message-author-role="assistant"]')
         || node;
     }
+    const conversationRoot = codexMemoryConversationRoot();
     let current = node;
     for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
       const text = codexInternalMessageLeakText(current);
       if (text.length <= 420 && codexInternalMessageLeakMarkers.slice(1).some((marker) => text.includes(marker))) {
-        return current;
+        if (current === conversationRoot) break;
+        if (current.matches?.('[role="alert"], .prose, [data-message-content], [data-testid="message-content"]')) {
+          return current;
+        }
+        const parent = current.parentElement;
+        if (!parent || parent === conversationRoot || parent.matches?.('[data-testid="conversation-turn"], [data-message-author-role="assistant"]')) {
+          return current;
+        }
       }
     }
     return null;

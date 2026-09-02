@@ -1441,6 +1441,8 @@ fn injection_script_hides_codex_internal_transport_messages_from_conversation() 
     assert!(script.contains("data-ccp-internal-message-hidden"));
     assert!(script.contains("codexHideInternalMessageLeaks();"));
     assert!(script.contains("style.setProperty(\"display\", \"none\", \"important\")"));
+    assert!(script.contains("if (current === conversationRoot) break;"));
+    assert!(script.contains("[role=\"alert\"], .prose, [data-message-content]"));
 }
 
 #[test]
