@@ -78,7 +78,7 @@ function previewMulticaEmptyResult() {
  * expose a deterministic unavailable state instead of pretending that an
  * installer, daemon, or login session exists.
  */
-function previewMulticaManagedRuntimeFailure(message = "预览模式未连接托管 Multica Runtime，操作未执行。") {
+function previewMulticaManagedRuntimeFailure(message = "预览模式未连接托管工作流 Runtime，操作未执行。") {
   return {
     status: "failed",
     message,
@@ -675,19 +675,19 @@ export function invokeCommand<T>(command: string, args?: Record<string, unknown>
 async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
   if (command === "list_multica_connections") {
-    return ok("预览模式未配置 Multica 连接。", previewMulticaEmptyResult());
+    return ok("预览模式未配置工作流连接。", previewMulticaEmptyResult());
   }
   if (command === "get_multica_snapshot") {
     return {
       status: "failed",
-      message: "预览模式未连接 Multica 服务，无法读取快照。",
+      message: "预览模式未连接工作流服务，无法读取快照。",
       ...previewMulticaEmptyResult(),
       snapshot: null,
       sidecar: null,
     };
   }
   if (command === "get_multica_managed_runtime") {
-    return previewMulticaManagedRuntimeFailure("预览模式未连接托管 Multica Runtime，无法读取状态。");
+    return previewMulticaManagedRuntimeFailure("预览模式未连接托管工作流 Runtime，无法读取状态。");
   }
   if (
     command === "ensure_multica_runtime"
@@ -714,7 +714,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   ) {
     return {
       status: "failed",
-      message: "当前是无 Tauri 预览环境，Multica 操作未执行。",
+      message: "当前是无 Tauri 预览环境，工作流操作未执行。",
       ...previewMulticaEmptyResult(),
       snapshot: null,
       sidecar: null,

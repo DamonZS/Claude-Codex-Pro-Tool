@@ -685,7 +685,7 @@ export function App() {
           ? { ...current, stale: true, diagnostic: current.diagnostic || "snapshot_not_returned" }
           : current);
       } else {
-        setMulticaError("读取Multica快照未返回可用数据。");
+        setMulticaError("读取工作流快照未返回可用数据。");
       }
     }
     setMulticaSidecars((current) => {
@@ -729,7 +729,7 @@ export function App() {
   };
 
   const multicaCommandFailure = (title: string, result: { message?: string; status?: Status } | null, silent: boolean) => {
-    const message = result?.message || `${title}失败，请检查Multica服务或日志。`;
+    const message = result?.message || `${title}失败，请检查工作流服务或日志。`;
     setMulticaError(message);
     if (!silent) notifyResult({ title, message, status: result?.status || "failed" });
   };
@@ -738,16 +738,16 @@ export function App() {
     setMulticaLoading(true);
     const result = await run(
       () => call<MulticaConnectionsResult>("list_multica_connections"),
-      "Multica连接",
+      "工作流连接",
       { trackBusy: !silent, notify: false },
     );
     if (result && commitMulticaConnections(result)) {
-      if (!silent) notifyIfNeedsAttention({ title: "Multica连接", message: result.message, status: result.status });
+      if (!silent) notifyIfNeedsAttention({ title: "工作流连接", message: result.message, status: result.status });
     } else {
       // `run` returns null when IPC rejects. Keep that failure visible even
       // during a silent route refresh; otherwise the page appears empty with
       // no explanation and the user cannot distinguish it from no config.
-      multicaCommandFailure("Multica连接", result, silent);
+      multicaCommandFailure("工作流连接", result, silent);
     }
     setMulticaLoading(false);
     return result;
@@ -756,13 +756,13 @@ export function App() {
   const saveMulticaConnection = async (connection: MulticaConnectionConfig) => {
     const result = await run(
       () => call<MulticaConnectionsResult>("save_multica_connection", { connection }),
-      "保存 Multica 连接",
+      "保存工作流连接",
       { notify: false },
     );
     if (result && commitMulticaConnections(result)) {
-      notifyResult({ title: "保存 Multica 连接", message: result.message, status: result.status });
+      notifyResult({ title: "保存工作流连接", message: result.message, status: result.status });
     } else {
-      multicaCommandFailure("保存 Multica 连接", result, false);
+      multicaCommandFailure("保存工作流连接", result, false);
     }
     return result;
   };
@@ -770,7 +770,7 @@ export function App() {
   const deleteMulticaConnection = async (connectionId: string) => {
     const result = await run(
       () => call<MulticaConnectionsResult>("delete_multica_connection", { connectionId }),
-      "删除 Multica 连接",
+      "删除工作流连接",
       { notify: false },
     );
     if (result && commitMulticaConnections(result)) {
@@ -784,9 +784,9 @@ export function App() {
         delete next[connectionId];
         return next;
       });
-      notifyResult({ title: "删除 Multica 连接", message: result.message, status: result.status });
+      notifyResult({ title: "删除工作流连接", message: result.message, status: result.status });
     } else {
-      multicaCommandFailure("删除 Multica 连接", result, false);
+      multicaCommandFailure("删除工作流连接", result, false);
     }
     return result;
   };
@@ -794,13 +794,13 @@ export function App() {
   const checkMulticaConnection = async (connectionId: string, silent = false) => {
     const result = await run(
       () => call<MulticaConnectionStatusResult>("check_multica_connection", { connectionId }),
-      "检查 Multica 连接",
+      "检查工作流连接",
       { notify: false },
     );
     if (result && commitMulticaStatus(result)) {
-      if (!silent) notifyResult({ title: "检查 Multica 连接", message: result.message, status: result.status });
+      if (!silent) notifyResult({ title: "检查工作流连接", message: result.message, status: result.status });
     } else {
-      multicaCommandFailure("检查 Multica 连接", result, silent);
+      multicaCommandFailure("检查工作流连接", result, silent);
     }
     return result;
   };
@@ -813,7 +813,7 @@ export function App() {
     try {
       const result = await run(
         () => call<MulticaSnapshotResult>("get_multica_snapshot", { connectionId: requestedConnectionId }),
-        "读取 Multica 快照",
+        "读取工作流快照",
         { notify: false },
       );
       // A slower request must not replace a newer connection's result or
@@ -822,9 +822,9 @@ export function App() {
       const resultConnectionId = result?.snapshot?.sourceConnectionId ?? requestedConnectionId;
       if (requestedConnectionId && resultConnectionId && resultConnectionId !== requestedConnectionId) return result;
       if (result && commitMulticaSnapshot(result, requestedConnectionId)) {
-        if (!silent) notifyResult({ title: "读取 Multica 快照", message: result.message, status: result.status });
+        if (!silent) notifyResult({ title: "读取工作流快照", message: result.message, status: result.status });
       } else {
-        multicaCommandFailure("读取 Multica 快照", result, silent);
+        multicaCommandFailure("读取工作流快照", result, silent);
       }
       return result;
     } finally {
@@ -834,7 +834,7 @@ export function App() {
 
   const runMulticaSidecar = async (command: "start" | "stop" | "restart", connectionId: string, silent = false) => {
     const commandName = `${command}_multica_sidecar`;
-    const title = `${command === "start" ? "启动" : command === "stop" ? "停止" : "重启"} Multica sidecar`;
+    const title = `${command === "start" ? "启动" : command === "stop" ? "停止" : "重启"} 工作流 sidecar`;
     const result = await run(
       () => call<MulticaSnapshotResult>(commandName, { connectionId }),
       title,
@@ -879,7 +879,7 @@ export function App() {
     result: { message?: string; status?: Status } | null,
     silent: boolean,
   ) => {
-    const message = result?.message || `${title}失败，请检查托管 Multica 状态或日志。`;
+    const message = result?.message || `${title}失败，请检查托管工作流状态或日志。`;
     setMulticaManagedRuntimeError(message);
     if (!silent) notifyResult({ title, message, status: result?.status || "failed" });
   };
@@ -898,14 +898,14 @@ export function App() {
     try {
       const result = await run(
         () => call<MulticaManagedRuntimeResult>("get_multica_managed_runtime"),
-        "托管 Multica Runtime",
+        "托管工作流 Runtime",
         { trackBusy: !silent, notify: false },
       );
       if (requestId !== multicaManagedRuntimeRequestRef.current) return result;
       if (result && commitMulticaManagedRuntime(result)) {
-        if (!silent) notifyIfNeedsAttention({ title: "托管 Multica Runtime", message: result.message, status: result.status });
+        if (!silent) notifyIfNeedsAttention({ title: "托管工作流 Runtime", message: result.message, status: result.status });
       } else {
-        multicaManagedCommandFailure("托管 Multica Runtime", result, silent);
+        multicaManagedCommandFailure("托管工作流 Runtime", result, silent);
       }
       return result;
     } finally {
@@ -941,36 +941,36 @@ export function App() {
     }
   };
 
-  const ensureMulticaRuntime = () => runMulticaManagedOperation("ensure_multica_runtime", "准备托管 Multica Runtime");
-  const cancelMulticaRuntimeInstall = () => runMulticaManagedOperation("cancel_multica_runtime_install", "取消托管 Multica 安装");
-  const rollbackMulticaRuntime = () => runMulticaManagedOperation("rollback_multica_runtime", "回滚托管 Multica Runtime");
-  const loginMulticaManaged = () => runMulticaManagedOperation("login_multica_managed", "托管 Multica 登录");
-  const logoutMulticaManaged = () => runMulticaManagedOperation("logout_multica_managed", "托管 Multica 退出登录");
+  const ensureMulticaRuntime = () => runMulticaManagedOperation("ensure_multica_runtime", "准备托管工作流 Runtime");
+  const cancelMulticaRuntimeInstall = () => runMulticaManagedOperation("cancel_multica_runtime_install", "取消托管工作流安装");
+  const rollbackMulticaRuntime = () => runMulticaManagedOperation("rollback_multica_runtime", "回滚托管工作流 Runtime");
+  const loginMulticaManaged = () => runMulticaManagedOperation("login_multica_managed", "托管工作流登录");
+  const logoutMulticaManaged = () => runMulticaManagedOperation("logout_multica_managed", "托管工作流退出登录");
   const setMulticaManagedEnabled = (enabled: boolean) => runMulticaManagedOperation(
     "set_multica_managed_enabled",
-    enabled ? "启用托管 Multica" : "停用托管 Multica",
+    enabled ? "启用托管工作流" : "停用托管工作流",
     { enabled },
   );
   const saveMulticaManagedConnection = (update: MulticaManagedConnectionUpdate) => runMulticaManagedOperation(
     "save_multica_managed_connection",
-    "保存托管 Multica 连接",
+    "保存托管工作流连接",
     { update },
   );
   const checkMulticaManagedRuntime = () => runMulticaManagedOperation(
     "check_multica_managed_runtime",
-    "检查托管 Multica Runtime",
+    "检查托管工作流 Runtime",
   );
   const startMulticaManagedRuntime = () => runMulticaManagedOperation(
     "start_multica_managed_runtime",
-    "启动托管 Multica Runtime",
+    "启动托管工作流 Runtime",
   );
   const stopMulticaManagedRuntime = () => runMulticaManagedOperation(
     "stop_multica_managed_runtime",
-    "停止托管 Multica Runtime",
+    "停止托管工作流 Runtime",
   );
   const restartMulticaManagedRuntime = () => runMulticaManagedOperation(
     "restart_multica_managed_runtime",
-    "重启托管 Multica Runtime",
+    "重启托管工作流 Runtime",
   );
 
   const loadCodexSessionContext = async (session: LocalSession) => {

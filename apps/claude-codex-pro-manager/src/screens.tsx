@@ -5140,7 +5140,7 @@ export function MulticaRuntimeScreen({
                 {progressPercent != null ? <span>{progressPercent}%</span> : <span>进行中</span>}
               </div>
               <progress
-                aria-label={`托管 Multica 安装进度：${multicaInstallPhaseLabel(managedInstall.installPhase, managedInstallState)}`}
+                aria-label={`托管工作流安装进度：${multicaInstallPhaseLabel(managedInstall.installPhase, managedInstallState)}`}
                 className="multica-install-progress-bar"
                 max={100}
                 value={progressPercent}
