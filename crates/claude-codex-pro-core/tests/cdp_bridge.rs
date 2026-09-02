@@ -903,7 +903,7 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(workspace.contains("function multicaWorkspaceAppendAgentSkillMultiSelect"));
     assert!(workspace.contains("/multica/skills/bindings/replace"));
     assert!(workspace.contains("scopeKind: \"agent\""));
-    assert!(workspace.contains("editor.expectedRevision > 0"));
+    assert!(workspace.contains("expectedRevision: editor.expectedRevision"));
     assert!(workspace.contains("搜索 Agent Skills"));
     assert!(workspace.contains("保存绑定"));
     assert!(workspace.contains("解绑"));
@@ -1086,11 +1086,12 @@ fn codex_multica_autopilot_toggle_uses_upstream_status_field() {
 }
 
 #[test]
-fn codex_multica_autopilot_manual_trigger_records_unsupported_host_run() {
+fn codex_multica_autopilot_manual_trigger_uses_control_plane_run_endpoint() {
     let item = assets::injection_script(57321);
     assert!(item.contains("multicaWorkspaceTriggerAutopilot"));
-    assert!(item.contains("reason_code: \"codex_host_execution_unavailable\""));
-    assert!(item.contains("status: \"unsupported\""));
+    assert!(item.contains("/multica/autopilots/trigger"));
+    assert!(item.contains("source: \"manual\""));
+    assert!(item.contains("已创建待执行的 Autopilot 运行记录"));
     assert!(item.contains("立即触发"));
     assert!(item.contains("multicaWorkspaceCreateAutopilotTrigger"));
     assert!(item.contains("multicaWorkspaceDeleteAutopilotTrigger"));
