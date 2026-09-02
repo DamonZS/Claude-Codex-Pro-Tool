@@ -220,6 +220,31 @@ pub struct MulticaSkillBindingsReplaceAllCommand {
     pub expected_revision: Option<u64>,
 }
 
+/// The local equivalent of Multica's `CreateAgentRequest { skill_ids }`.
+/// Skill references are intentionally kept outside the generic entity JSON:
+/// only verified execution-store bindings may be dispatched to Codex.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MulticaAgentCreateCommand {
+    pub entity: Value,
+    pub skills: Vec<SkillReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentCreateJournal {
+    workspace_id: String,
+    entity: Value,
+    bindings: Vec<AgentCreateJournalBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentCreateJournalBinding {
+    skill_ref: SkillReference,
+    source_kind: String,
+    trust_state: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalWorkspaceEntityUpsert {
     pub resource: MulticaWorkspaceResourceKey,
@@ -470,6 +495,10 @@ impl LocalMulticaWorkspaceStore {
 
 /// Build the local control-plane snapshot without an execution host.
 pub async fn workspace_bootstrap() -> anyhow::Result<MulticaWorkspaceBootstrap> {
+    recover_pending_agent_create(
+        &LocalMulticaWorkspaceStore::default(),
+        &MulticaExecutionStore::default(),
+    )?;
     local_workspace_bootstrap(None).await
 }
 
@@ -479,6 +508,10 @@ pub async fn workspace_bootstrap() -> anyhow::Result<MulticaWorkspaceBootstrap> 
 pub async fn workspace_bootstrap_with_codex_runtime(
     runtime: Arc<dyn CodexExecutionService>,
 ) -> anyhow::Result<MulticaWorkspaceBootstrap> {
+    recover_pending_agent_create(
+        &LocalMulticaWorkspaceStore::default(),
+        &MulticaExecutionStore::default(),
+    )?;
     local_workspace_bootstrap(Some(runtime)).await
 }
 
@@ -1397,6 +1430,235 @@ pub async fn replace_skill_bindings_with_codex_runtime(
         }
     }
     replace_skill_bindings(command).await
+}
+
+/// Create an Agent and its verified Codex Skill bindings from one bridge
+/// request.  The validation phase completes before either store is mutated.
+/// A durable journal records the prepared transaction before the first write;
+/// an interrupted second write is finalized during the next workspace load.
+pub async fn create_agent_with_skill_bindings_with_codex_runtime(
+    command: MulticaAgentCreateCommand,
+    workspace_store: &LocalMulticaWorkspaceStore,
+    execution_store: &MulticaExecutionStore,
+    runtime: Arc<dyn CodexExecutionService>,
+) -> anyhow::Result<Value> {
+    let capabilities = runtime.capabilities().await?;
+    if !capabilities.skills_supported || !capabilities.skills_inventory_supported {
+        bail!("runtime_skills_unsupported");
+    }
+    if command.skills.len() > 512 {
+        bail!("skill_bindings_too_large");
+    }
+    let skills = runtime.list_skills().await?;
+    let trust_snapshot = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
+    let mut seen = BTreeSet::new();
+    let mut selected = Vec::with_capacity(command.skills.len());
+    for reference in command.skills {
+        if !seen.insert(reference.id.clone()) {
+            bail!("skill_binding_duplicate");
+        }
+        let runtime_skill = skills
+            .iter()
+            .find(|skill| skill.id == reference.id)
+            .ok_or_else(|| anyhow!("skill_unknown"))?;
+        if !runtime_skill.enabled {
+            bail!("skill_not_installed");
+        }
+        let trust = trust_snapshot
+            .get(&reference.id)
+            .ok_or_else(|| anyhow!("skill_unknown"))?;
+        if !trust.dispatch_allowed() {
+            bail!("skill_not_trusted");
+        }
+        let manifest_digest = trust
+            .manifest_digest
+            .clone()
+            .ok_or_else(|| anyhow!("skill_manifest_unavailable"))?;
+        if runtime_skill.manifest_digest.as_deref() != Some(manifest_digest.as_str())
+            || reference
+                .manifest_digest
+                .as_deref()
+                .is_some_and(|expected| expected != manifest_digest)
+        {
+            bail!("skill_manifest_conflict");
+        }
+        selected.push((
+            SkillReference {
+                id: reference.id,
+                manifest_digest: Some(manifest_digest),
+            },
+            trust.source_kind.clone(),
+            trust.trust_state.clone(),
+        ));
+    }
+
+    let workspace_id = local_workspace_id();
+    recover_pending_agent_create(workspace_store, execution_store)?;
+    let entity_id = command
+        .entity
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("multica_workspace_entity_invalid"))?;
+    if workspace_store
+        .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)?
+        .iter()
+        .any(|agent| agent.get("id").and_then(Value::as_str) == Some(entity_id))
+    {
+        bail!("multica_workspace_revision_conflict");
+    }
+    let journal = AgentCreateJournal {
+        workspace_id: workspace_id.clone(),
+        entity: command.entity.clone(),
+        bindings: selected
+            .iter()
+            .map(
+                |(skill_ref, source_kind, trust_state)| AgentCreateJournalBinding {
+                    skill_ref: skill_ref.clone(),
+                    source_kind: source_kind.clone(),
+                    trust_state: trust_state.clone(),
+                },
+            )
+            .collect(),
+    };
+    save_agent_create_journal(workspace_store, &journal)?;
+    let agent = match workspace_store.upsert(
+        &workspace_id,
+        LocalWorkspaceEntityUpsert {
+            resource: MulticaWorkspaceResourceKey::Agents,
+            entity: command.entity,
+            expected_revision: Some(0),
+        },
+        now_ms(),
+    ) {
+        Ok(agent) => agent,
+        Err(error) => {
+            let _ = remove_agent_create_journal(workspace_store);
+            return Err(error);
+        }
+    };
+    let agent_id = agent
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("multica_workspace_entity_invalid"))?;
+    let inputs = selected
+        .into_iter()
+        .map(|(skill_ref, source_kind, trust_state)| SkillBindingUpsert {
+            binding_id: binding_id(
+                &workspace_id,
+                SkillBindingScope::Agent,
+                agent_id,
+                &skill_ref.id,
+            ),
+            workspace_id: workspace_id.clone(),
+            scope_kind: SkillBindingScope::Agent,
+            scope_id: agent_id.to_string(),
+            skill_ref,
+            source_kind,
+            trust_state,
+            enabled: true,
+            expected_revision: None,
+            now_ms: now_ms(),
+        })
+        .collect();
+    let bindings = execution_store.replace_bindings(SkillBindingReplaceAll {
+        workspace_id: workspace_id.clone(),
+        scope_kind: SkillBindingScope::Agent,
+        scope_id: agent_id.to_string(),
+        bindings: inputs,
+        expected_revision: Some(0),
+        now_ms: now_ms(),
+    })?;
+    remove_agent_create_journal(workspace_store)?;
+    Ok(json!({"status": "ok", "workspaceId": workspace_id, "agent": agent, "bindings": bindings}))
+}
+
+fn agent_create_journal_path(store: &LocalMulticaWorkspaceStore) -> PathBuf {
+    store.path().with_extension("agent-create.journal.json")
+}
+
+fn save_agent_create_journal(
+    store: &LocalMulticaWorkspaceStore,
+    journal: &AgentCreateJournal,
+) -> anyhow::Result<()> {
+    let bytes = serde_json::to_vec_pretty(journal)
+        .map_err(|_| anyhow!("agent_skill_create_journal_invalid"))?;
+    crate::settings::atomic_write(&agent_create_journal_path(store), &bytes)
+        .map_err(|_| anyhow!("agent_skill_create_journal_write_failed"))
+}
+
+fn remove_agent_create_journal(store: &LocalMulticaWorkspaceStore) -> anyhow::Result<()> {
+    match fs::remove_file(agent_create_journal_path(store)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => bail!("agent_skill_create_journal_remove_failed"),
+    }
+}
+
+/// Finalize a previously prepared dual-store creation. This is deliberately
+/// idempotent: after an interrupted write it converges to Agent + all recorded
+/// bindings, never reports an absent binding as configured.
+fn recover_pending_agent_create(
+    workspace_store: &LocalMulticaWorkspaceStore,
+    execution_store: &MulticaExecutionStore,
+) -> anyhow::Result<()> {
+    let path = agent_create_journal_path(workspace_store);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => bail!("agent_skill_create_journal_read_failed"),
+    };
+    let journal: AgentCreateJournal = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow!("agent_skill_create_journal_invalid"))?;
+    let agent_id = journal
+        .entity
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("agent_skill_create_journal_invalid"))?;
+    let exists = workspace_store
+        .list(&journal.workspace_id, MulticaWorkspaceResourceKey::Agents)?
+        .iter()
+        .any(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id));
+    if !exists {
+        workspace_store.upsert(
+            &journal.workspace_id,
+            LocalWorkspaceEntityUpsert {
+                resource: MulticaWorkspaceResourceKey::Agents,
+                entity: journal.entity.clone(),
+                expected_revision: Some(0),
+            },
+            now_ms(),
+        )?;
+    }
+    let inputs = journal
+        .bindings
+        .into_iter()
+        .map(|binding| SkillBindingUpsert {
+            binding_id: binding_id(
+                &journal.workspace_id,
+                SkillBindingScope::Agent,
+                agent_id,
+                &binding.skill_ref.id,
+            ),
+            workspace_id: journal.workspace_id.clone(),
+            scope_kind: SkillBindingScope::Agent,
+            scope_id: agent_id.to_string(),
+            skill_ref: binding.skill_ref,
+            source_kind: binding.source_kind,
+            trust_state: binding.trust_state,
+            enabled: true,
+            expected_revision: None,
+            now_ms: now_ms(),
+        })
+        .collect();
+    execution_store.replace_bindings(SkillBindingReplaceAll {
+        workspace_id: journal.workspace_id,
+        scope_kind: SkillBindingScope::Agent,
+        scope_id: agent_id.to_string(),
+        bindings: inputs,
+        expected_revision: None,
+        now_ms: now_ms(),
+    })?;
+    remove_agent_create_journal(workspace_store)
 }
 
 fn query_local_collection(
@@ -3166,6 +3428,49 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn pending_agent_create_journal_recovers_agent_and_complete_binding_set() {
+        let dir = tempdir().unwrap();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let execution = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let journal = AgentCreateJournal {
+            workspace_id: "local-test".to_string(),
+            entity: json!({"id": "agent-a", "name": "Recovered agent"}),
+            bindings: vec![AgentCreateJournalBinding {
+                skill_ref: SkillReference {
+                    id: "codex:skill-a".to_string(),
+                    manifest_digest: Some(
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    ),
+                },
+                source_kind: "local".to_string(),
+                trust_state: "trusted".to_string(),
+            }],
+        };
+        save_agent_create_journal(&workspace, &journal).unwrap();
+        recover_pending_agent_create(&workspace, &execution).unwrap();
+        assert_eq!(
+            workspace
+                .list("local-test", MulticaWorkspaceResourceKey::Agents)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            execution
+                .list_bindings(
+                    "local-test",
+                    Some(SkillBindingScope::Agent),
+                    Some("agent-a")
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!agent_create_journal_path(&workspace).exists());
+    }
 
     #[test]
     fn workspace_query_rejects_unbounded_pagination() {

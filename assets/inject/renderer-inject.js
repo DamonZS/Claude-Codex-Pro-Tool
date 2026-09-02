@@ -4665,7 +4665,6 @@
   // preflight. A shorter timeout made normal CDP/IPC jitter look like a lost
   // connection and overwrote a previously healthy entry state.
   const multicaWorkspaceBackgroundTimeoutMs = 15000;
-  const multicaWorkspaceSavedViewsKey = "claudeCodexProMulticaSavedIssueViews";
   const multicaWorkspaceState = {
     entry: null,
     host: null,
@@ -4732,34 +4731,6 @@
   };
   const multicaWorkspaceVersion = "2";
 
-  function multicaWorkspaceLoadSavedIssueViews() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(multicaWorkspaceSavedViewsKey) || "[]");
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((view) => view && typeof view === "object")
-        .map((view) => ({
-          id: String(view.id || "").trim(),
-          name: String(view.name || "").trim().slice(0, 80),
-          scope: multicaWorkspaceIssueFilters.some((filter) => filter.key === view.scope) ? view.scope : "assigned",
-          issueViewMode: ["board", "list", "table", "swimlane"].includes(view.issueViewMode) ? view.issueViewMode : "board",
-          boardCompact: view.boardCompact === true,
-          revision: Number(view.revision) > 0 ? Number(view.revision) : 1,
-        }))
-        .filter((view) => view.id && view.name);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function multicaWorkspaceWriteSavedIssueViews() {
-    try {
-      localStorage.setItem(multicaWorkspaceSavedViewsKey, JSON.stringify(multicaWorkspaceState.savedIssueViews));
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
   async function multicaWorkspaceSaveCurrentIssueView() {
     const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
     if (!name) return;
@@ -4772,14 +4743,12 @@
       boardCompact: multicaWorkspaceState.boardCompact === true,
       revision: previous?.revision || 1,
     };
-    multicaWorkspaceState.savedIssueViews = [
-      ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
-      view,
-    ];
-    multicaWorkspaceState.activeIssueViewId = view.id;
-    let backendSaved = false;
-    if (multicaWorkspaceState.workspaceId) {
-      try {
+    if (!multicaWorkspaceState.workspaceId) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: "本地任务控制面尚未就绪，无法保存视图" };
+      multicaWorkspaceRenderContent();
+      return;
+    }
+    try {
         const backendView = {
           id: view.id,
           workspace_id: multicaWorkspaceState.workspaceId,
@@ -4796,25 +4765,20 @@
           display: { issue_view_mode: view.issueViewMode, board_compact: view.boardCompact },
           revision: 1,
         };
-        await multicaWorkspaceCall("/multica/workspace/upsert", {
-          resource: "issue_views",
-          entity: backendView,
-          expectedRevision: previous?.revision || undefined,
-        });
-        view.revision = previous ? previous.revision + 1 : 1;
-        multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.map((item) =>
-          item.id === view.id ? view : item,
-        );
-        backendSaved = true;
-      } catch (_) {
-        // The local cache remains usable when an older binary lacks the new
-        // resource; do not claim remote/server synchronization.
-      }
-    }
-    if (!multicaWorkspaceWriteSavedIssueViews()) {
-      multicaWorkspaceState.mutationNotice = { state: "error", message: "本机视图保存失败，请检查浏览器存储空间" };
-    } else {
-      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${name}”已保存${backendSaved ? "（控制面已记录）" : ""}` };
+      await multicaWorkspaceCall("/multica/workspace/upsert", {
+        resource: "issue_views",
+        entity: backendView,
+        expectedRevision: previous?.revision || undefined,
+      });
+      view.revision = previous ? previous.revision + 1 : 1;
+      multicaWorkspaceState.savedIssueViews = [
+        ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
+        view,
+      ];
+      multicaWorkspaceState.activeIssueViewId = view.id;
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本地视图“${name}”已保存` };
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
     }
     multicaWorkspaceRenderContent();
   }
@@ -4844,13 +4808,10 @@
           revision: Number(item.revision) > 0 ? Number(item.revision) : 1,
         };
       }).filter((view) => view.id && view.name);
-      if (views.length > 0) {
-        multicaWorkspaceState.savedIssueViews = views;
-        multicaWorkspaceWriteSavedIssueViews();
-        if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
-      }
-    } catch (_) {
-      // Older builds may not expose issue_views; local cache remains valid.
+      multicaWorkspaceState.savedIssueViews = views;
+      if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
     }
   }
 
@@ -4883,12 +4844,9 @@
     }
     multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.filter((item) => item.id !== view.id);
     multicaWorkspaceState.activeIssueViewId = "";
-    multicaWorkspaceWriteSavedIssueViews();
-    multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${view.name}”已删除` };
+    multicaWorkspaceState.mutationNotice = { state: "ok", message: `本地视图“${view.name}”已删除` };
     multicaWorkspaceRenderContent();
   }
-
-  multicaWorkspaceState.savedIssueViews = multicaWorkspaceLoadSavedIssueViews();
 
   function multicaWorkspaceEl(tag, className, text) {
     const element = document.createElement(tag);
@@ -5857,6 +5815,9 @@
       grid.appendChild(wrapper);
     });
     form.appendChild(grid);
+    if (resource === "agents") {
+      multicaWorkspaceAppendAgentSkillMultiSelect(form, editor);
+    }
     const actions = multicaWorkspaceEl("div", "ccp-multica-form-actions");
     const save = multicaWorkspaceEl("button", "ccp-multica-button", multicaWorkspaceState.mutationBusy ? "保存中…" : "保存");
     save.type = "submit";
@@ -5874,6 +5835,111 @@
     }
     form.appendChild(actions);
     content.appendChild(form);
+  }
+
+  // Existing Agents use replace-all. New Agents keep their selection on the
+  // draft and submit it with the dedicated atomic-create bridge command.
+  function multicaWorkspaceAppendAgentSkillMultiSelect(form, editor) {
+    const section = multicaWorkspaceEl("fieldset", "ccp-multica-form-field");
+    section.dataset.wide = "true";
+    section.appendChild(multicaWorkspaceEl("legend", "", "Skills"));
+    const runtime = multicaWorkspaceState.bootstrap?.runtime;
+    const executionSupported = runtime?.skillsSupported ?? runtime?.skills_supported;
+    const inventory = multicaWorkspaceState.collections.get("skills")?.items || [];
+    const bindings = multicaWorkspaceBindingsForScope("agent", editor.entityId);
+    const creating = editor.expectedRevision === 0;
+    const selected = new Set((creating ? (editor.skillRefs || []) : bindings
+      .map((binding) => multicaWorkspaceBindingValue(binding, "skillRef", "skill_ref")?.id)
+      .filter(Boolean)).map((entry) => typeof entry === "string" ? entry : entry?.id).filter(Boolean));
+    const original = new Set(selected);
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "搜索 Skill";
+    search.className = "ccp-multica-input";
+    search.setAttribute("aria-label", "搜索 Agent Skills");
+    const list = multicaWorkspaceEl("div", "ccp-multica-skill-bindings");
+    const render = () => {
+      list.replaceChildren();
+      const query = search.value.trim().toLocaleLowerCase();
+      const matches = inventory.filter((item) => {
+        const text = `${item?.name || ""} ${item?.id || ""} ${item?.summary || ""}`.toLocaleLowerCase();
+        return !query || text.includes(query);
+      });
+      if (!matches.length) {
+        list.appendChild(multicaWorkspaceEl("span", "ccp-multica-stale", query ? "没有匹配的 Skill" : "当前 Codex 页面没有可用 Skill"));
+        return;
+      }
+      matches.forEach((item) => {
+        const id = String(item?.id || "").trim();
+        const row = multicaWorkspaceEl("label", "ccp-multica-skill-binding");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selected.has(id);
+        checkbox.disabled = !id || executionSupported !== true || item?.dispatch_allowed !== true;
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selected.add(id); else selected.delete(id);
+          if (creating) {
+            editor.skillRefs = [...selected].map((skillId) => {
+              const selectedItem = inventory.find((candidate) => candidate?.id === skillId);
+              const digest = selectedItem?.manifest_digest ?? selectedItem?.manifestDigest;
+              return typeof digest === "string" && digest ? { id: skillId, manifestDigest: digest } : { id: skillId };
+            });
+          } else {
+            save.disabled = sameSelection(selected, original) || executionSupported !== true;
+          }
+        });
+        row.append(checkbox, multicaWorkspaceEl("span", "", item?.name || id));
+        list.appendChild(row);
+      });
+    };
+    const save = multicaWorkspaceEl("button", "ccp-multica-button", "保存 Skills");
+    save.type = "button";
+    save.disabled = executionSupported !== true;
+    save.hidden = creating;
+    save.title = executionSupported === true
+      ? "用当前选择完整替换此智能体的 Skill 绑定"
+      : "当前 Codex 页面未声明可执行的 Skill 协议";
+    save.addEventListener("click", async () => {
+      if (save.disabled || multicaWorkspaceState.mutationBusy) return;
+      const currentBindings = multicaWorkspaceBindingsForScope("agent", editor.entityId);
+      const itemsById = new Map(inventory.map((item) => [item?.id, item]));
+      const skills = [...selected].map((id) => {
+        const item = itemsById.get(id);
+        const ref = { id };
+        const digest = item?.manifest_digest ?? item?.manifestDigest;
+        if (typeof digest === "string" && digest) ref.manifestDigest = digest;
+        return ref;
+      });
+      save.disabled = true;
+      try {
+        await multicaWorkspaceCall("/multica/skills/bindings/replace", {
+          scopeKind: "agent",
+          scopeId: editor.entityId,
+          skills,
+          expectedRevision: multicaWorkspaceScopeRevision(currentBindings),
+        });
+        await multicaWorkspaceLoadSkillBindings();
+        original.clear(); selected.forEach((id) => original.add(id));
+      } catch (error) {
+        editor.message = multicaWorkspaceErrorMessage(error);
+      } finally {
+        save.disabled = sameSelection(selected, original) || executionSupported !== true;
+        if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+      }
+    });
+    search.addEventListener("input", render);
+    section.append(search, list, save);
+    render();
+    if (executionSupported !== true) {
+      section.appendChild(multicaWorkspaceEl("span", "ccp-multica-stale", creating
+        ? "当前 Codex 页面未提供可执行的 Skill 协议，不能创建带 Skill 绑定的智能体"
+        : "当前 Codex 页面只提供只读 Skill 清单，不能修改 Agent 绑定"));
+    }
+    form.appendChild(section);
+  }
+
+  function sameSelection(left, right) {
+    return left.size === right.size && [...left].every((value) => right.has(value));
   }
 
   async function multicaWorkspaceRefreshMutationResource(module, resource) {
@@ -5911,11 +5977,19 @@
     editor.message = "";
     multicaWorkspaceRenderContent();
     try {
-      await multicaWorkspaceCall("/multica/workspace/upsert", {
-        resource: editor.resource,
-        entity,
-        expectedRevision: editor.expectedRevision,
-      });
+      if (editor.resource === "agents" && editor.expectedRevision === 0) {
+        await multicaWorkspaceCall("/multica/agents/create", {
+          entity,
+          skills: Array.isArray(editor.skillRefs) ? editor.skillRefs : [],
+        });
+        await multicaWorkspaceLoadSkillBindings();
+      } else {
+        await multicaWorkspaceCall("/multica/workspace/upsert", {
+          resource: editor.resource,
+          entity,
+          expectedRevision: editor.expectedRevision,
+        });
+      }
       multicaWorkspaceState.editor = null;
       multicaWorkspaceState.mutationNotice = { state: "ok", message: "已保存" };
       await multicaWorkspaceRefreshMutationResource(module, editor.resource);

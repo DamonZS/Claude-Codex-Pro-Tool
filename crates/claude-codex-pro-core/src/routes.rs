@@ -27,8 +27,8 @@ use crate::multica_execution_store::{
 use crate::multica_skill_trust::review_local_skill;
 use crate::multica_workspace::{
     LocalMulticaWorkspaceStore, LocalWorkspaceEntityDelete, LocalWorkspaceEntityUpsert,
-    MulticaSkillBindingCommand, MulticaSkillBindingRemoveCommand, MulticaSkillBindingsQuery,
-    MulticaWorkspaceQuery, MulticaWorkspaceResourceKey,
+    MulticaAgentCreateCommand, MulticaSkillBindingCommand, MulticaSkillBindingRemoveCommand,
+    MulticaSkillBindingsQuery, MulticaWorkspaceQuery, MulticaWorkspaceResourceKey,
 };
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -160,6 +160,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn multica_workspace_delete(
         &self,
         _request: MulticaWorkspaceDeleteRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
+    async fn multica_agent_create(
+        &self,
+        _request: MulticaAgentCreateRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_workspace_mutation_unavailable")
     }
@@ -443,6 +449,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_workspace_delete(parse_multica_workspace_delete(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/agents/create" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_agent_create(parse_multica_agent_create(&payload)?)
                     .await
             }
             .await
@@ -870,6 +885,29 @@ pub struct MulticaWorkspaceDeleteRequest {
     pub resource: MulticaWorkspaceResourceKey,
     pub entity_id: String,
     pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaAgentCreateRequest {
+    pub entity: Value,
+    #[serde(default)]
+    pub skills: Vec<SkillReference>,
+}
+
+fn parse_multica_agent_create(payload: &Value) -> anyhow::Result<MulticaAgentCreateRequest> {
+    ensure_multica_payload_size(payload)?;
+    let request: MulticaAgentCreateRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_agent_create_invalid"))?;
+    if !request.entity.is_object() || request.skills.len() > 512 {
+        anyhow::bail!("multica_agent_create_invalid");
+    }
+    for skill in &request.skills {
+        if skill.id.trim().is_empty() || skill.id.len() > 240 {
+            anyhow::bail!("multica_agent_create_invalid");
+        }
+    }
+    Ok(request)
 }
 
 fn parse_multica_workspace_upsert(
@@ -1908,6 +1946,26 @@ impl BridgeRuntimeService for CoreRuntimeService {
         Ok(json!({"status": "ok", "deleted": deleted, "entityId": entity_id}))
     }
 
+    async fn multica_agent_create(
+        &self,
+        request: MulticaAgentCreateRequest,
+    ) -> anyhow::Result<Value> {
+        let service = self
+            .codex_execution
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))?;
+        crate::multica_workspace::create_agent_with_skill_bindings_with_codex_runtime(
+            MulticaAgentCreateCommand {
+                entity: request.entity,
+                skills: request.skills,
+            },
+            &self.multica_workspace_store,
+            &self.multica_execution_store,
+            Arc::clone(service),
+        )
+        .await
+    }
+
     async fn multica_skill_resolve(
         &self,
         selection: SkillBindingSelection,
@@ -2180,12 +2238,31 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 .into_iter()
                 .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
                 .ok_or_else(|| anyhow::anyhow!("execution_agent_unavailable"))?;
+            // Agent bindings are authoritative only after the current page
+            // host resolves their pinned digests against its live inventory.
+            // Do not silently create a thread without requested Skills when
+            // a persisted binding is no longer dispatchable.
+            let bindings = agent_skill_bindings(
+                &self.multica_execution_store,
+                &claimed.workspace_id,
+                agent_id,
+            )?;
+            let (skill_request, skill_audit) =
+                resolve_execution_skills(Arc::clone(&service), bindings).await?;
+            if let Some(audit) = skill_audit.as_ref() {
+                self.multica_execution_store.reserve_attempt_snapshot(
+                    &claimed.binding_id,
+                    claimed.attempt_no,
+                    audit,
+                    unix_now_ms(),
+                )?;
+            }
             let native_request = CodexThreadRequest {
                 workspace_id: claimed.workspace_id.clone(),
                 issue_id: claimed.issue_id.clone(),
                 prompt: assignment_prompt(&issue, &agent)?,
                 cwd: None,
-                skill_request: None,
+                skill_request,
             };
             native_request.validate()?;
             let handle = service
@@ -3024,6 +3101,27 @@ fn assignment_prompt(issue: &Value, agent: &Value) -> anyhow::Result<String> {
     Ok(prompt)
 }
 
+/// Build an execution selection exclusively from bindings persisted for one
+/// Agent. The generic workspace Agent JSON is intentionally not consulted:
+/// its `skills` field is a read-only projection and is never authoritative for
+/// execution.
+fn agent_skill_bindings(
+    store: &MulticaExecutionStore,
+    workspace_id: &str,
+    agent_id: &str,
+) -> anyhow::Result<SkillBindings> {
+    let bindings =
+        store.list_bindings(workspace_id, Some(SkillBindingScope::Agent), Some(agent_id))?;
+    Ok(SkillBindings {
+        task: Vec::new(),
+        agent: bindings
+            .into_iter()
+            .filter(|binding| binding.enabled)
+            .map(|binding| binding.skill_ref)
+            .collect(),
+    })
+}
+
 fn execution_handle_from_binding(
     binding: &CodexMulticaExecutionBinding,
     idempotency_key: &str,
@@ -3279,8 +3377,10 @@ mod tests {
     use crate::codex_execution::{
         CodexExecutionEvent, CodexRuntimeCapabilities, CodexSkill, CodexThreadRequest,
     };
-    use crate::multica_execution::CodexSkillExecutionRequest;
-    use crate::multica_execution_store::{ExecutionReservation, MulticaExecutionKind};
+    use crate::multica_execution::{CodexSkillExecutionRequest, SkillBindingScope, SkillReference};
+    use crate::multica_execution_store::{
+        ExecutionReservation, MulticaExecutionKind, SkillBindingUpsert,
+    };
     use crate::multica_workspace::{
         LocalMulticaWorkspaceStore, LocalWorkspaceEntityUpsert, MulticaWorkspaceResourceKey,
     };
@@ -3288,23 +3388,48 @@ mod tests {
 
     use super::{
         BridgeRuntimeService, CodexExecutionHandle, CodexExecutionService, CodexExecutionStatus,
-        CoreRuntimeService, MulticaExecutionBindingState, MulticaExecutionDispatchRequest,
-        MulticaExecutionStore, assignment_prompt, stable_execution_error_code,
+        CoreRuntimeService, MulticaAgentCreateRequest, MulticaExecutionBindingState,
+        MulticaExecutionDispatchRequest, MulticaExecutionStore, agent_skill_bindings,
+        assignment_prompt, stable_execution_error_code,
     };
 
-    #[derive(Default)]
     struct RecordingCodexHost {
         requests: Mutex<Vec<CodexThreadRequest>>,
+        skills: Vec<CodexSkill>,
+    }
+
+    impl Default for RecordingCodexHost {
+        fn default() -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                skills: Vec::new(),
+            }
+        }
     }
 
     #[async_trait]
     impl CodexExecutionService for RecordingCodexHost {
         async fn capabilities(&self) -> anyhow::Result<CodexRuntimeCapabilities> {
-            bail!("unused")
+            let skills_supported = !self.skills.is_empty();
+            Ok(CodexRuntimeCapabilities {
+                runtime_id: "codex-current-page".to_string(),
+                provider: "codex".to_string(),
+                protocol_version: None,
+                server_version: None,
+                capabilities: if skills_supported {
+                    vec!["skill-bundles-v1".to_string()]
+                } else {
+                    Vec::new()
+                },
+                skills_supported,
+                skills_inventory_supported: skills_supported,
+                skill_protocol: skills_supported.then(|| "skill-bundles-v1".to_string()),
+                subagents_supported: false,
+            })
         }
 
         async fn list_skills(&self) -> anyhow::Result<Vec<CodexSkill>> {
-            bail!("unused")
+            Ok(self.skills.clone())
         }
 
         async fn resolve_skills(
@@ -3482,6 +3607,47 @@ mod tests {
         assert_eq!(prompt, "任务标题：\n仅标题");
     }
 
+    #[test]
+    fn assignment_uses_only_enabled_persisted_agent_skill_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let binding = |id: &str, enabled: bool| SkillBindingUpsert {
+            binding_id: format!("binding-{id}"),
+            workspace_id: "workspace-a".to_string(),
+            scope_kind: SkillBindingScope::Agent,
+            scope_id: "agent-a".to_string(),
+            skill_ref: SkillReference {
+                id: id.to_string(),
+                manifest_digest: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                ),
+            },
+            source_kind: "local".to_string(),
+            trust_state: "trusted".to_string(),
+            enabled,
+            expected_revision: None,
+            now_ms: 1,
+        };
+        store
+            .upsert_binding(binding("codex:enabled", true))
+            .unwrap();
+        store
+            .upsert_binding(binding("codex:disabled", false))
+            .unwrap();
+        store
+            .upsert_binding(SkillBindingUpsert {
+                scope_id: "agent-b".to_string(),
+                ..binding("codex:other-agent", true)
+            })
+            .unwrap();
+
+        let selected = agent_skill_bindings(&store, "workspace-a", "agent-a").unwrap();
+        assert!(selected.task.is_empty());
+        assert_eq!(selected.agent.len(), 1);
+        assert_eq!(selected.agent[0].id, "codex:enabled");
+    }
+
     #[tokio::test]
     async fn queued_assignment_dispatches_once_to_the_current_codex_host() {
         let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
@@ -3519,6 +3685,96 @@ mod tests {
             .unwrap();
         assert_eq!(replay["handle"]["threadId"], "native-thread-1");
         assert_eq!(host.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn agent_create_uses_dedicated_path_and_rejects_untrusted_skills_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let host = Arc::new(RecordingCodexHost {
+            requests: Mutex::new(Vec::new()),
+            skills: vec![CodexSkill {
+                id: "codex:untrusted".to_string(),
+                name: "Untrusted".to_string(),
+                summary: None,
+                scope: None,
+                manifest_digest: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                ),
+                enabled: true,
+            }],
+        });
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_codex_execution_service(host)
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace.clone());
+        let error = runtime
+            .multica_agent_create(MulticaAgentCreateRequest {
+                entity: json!({"id": "agent-a", "name": "Agent A"}),
+                skills: vec![SkillReference {
+                    id: "codex:untrusted".to_string(),
+                    manifest_digest: None,
+                }],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "skill_unknown");
+        assert!(
+            workspace
+                .list("local-test", MulticaWorkspaceResourceKey::Agents)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            executions
+                .list_bindings("local-test", Some(SkillBindingScope::Agent), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_create_persists_agent_and_empty_real_binding_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let host = Arc::new(RecordingCodexHost {
+            requests: Mutex::new(Vec::new()),
+            skills: vec![CodexSkill {
+                id: "codex:available".to_string(),
+                name: "Available".to_string(),
+                summary: None,
+                scope: None,
+                manifest_digest: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                ),
+                enabled: true,
+            }],
+        });
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_codex_execution_service(host)
+            .with_multica_execution_store(executions)
+            .with_multica_workspace_store(workspace.clone());
+        let response = runtime
+            .multica_agent_create(MulticaAgentCreateRequest {
+                entity: json!({"id": "agent-a", "name": "Agent A"}),
+                skills: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response["agent"]["id"], json!("agent-a"));
+        assert!(response["bindings"].as_array().unwrap().is_empty());
+        let workspace_id = response["workspaceId"].as_str().unwrap();
+        assert_eq!(
+            workspace
+                .list(workspace_id, MulticaWorkspaceResourceKey::Agents)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

@@ -900,6 +900,11 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(workspace.contains("postJson(\"/multica/skills/bindings\", {}"));
     assert!(workspace.contains("postJson(\"/multica/skills/bind\", payload"));
     assert!(workspace.contains("postJson(\"/multica/skills/unbind\", payload"));
+    assert!(workspace.contains("function multicaWorkspaceAppendAgentSkillMultiSelect"));
+    assert!(workspace.contains("/multica/skills/bindings/replace"));
+    assert!(workspace.contains("scopeKind: \"agent\""));
+    assert!(workspace.contains("editor.expectedRevision > 0"));
+    assert!(workspace.contains("搜索 Agent Skills"));
     assert!(workspace.contains("保存绑定"));
     assert!(workspace.contains("解绑"));
     assert!(workspace.contains("审查并信任"));
