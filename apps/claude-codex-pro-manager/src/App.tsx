@@ -2513,6 +2513,13 @@ export function App() {
     updateSettingsDraft(result.settings);
     notifyResult({ title: `${targetLabel} 供应商切换`, message: result.message, status: result.status });
     await refreshSettings(true);
+    if (targetApp === "codex" && !statusFailed(result.status)) {
+      // Codex reads config.toml/auth.json during startup.  Persisting the
+      // profile alone leaves an already-running process on the old provider;
+      // reuse the existing restart path so the newly selected provider takes
+      // effect in the active Codex runtime as well.
+      await restartCodex(true);
+    }
     if (targetApp === "claude-desktop" && !statusFailed(result.status)) {
       await refreshClaudeDesktopDevMode(true);
     }

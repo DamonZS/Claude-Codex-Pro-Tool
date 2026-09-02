@@ -3677,6 +3677,8 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(!supplier_screen.contains("[model_providers.custom]"));
     assert!(app_tsx.contains("OPENAI_API_KEY"));
     assert!(app_tsx.contains("fetch_relay_profile_models"));
+    assert!(app_tsx.contains("if (targetApp === \"codex\" && !statusFailed(result.status))"));
+    assert!(app_tsx.contains("await restartCodex(true);"));
     assert!(
         app_tsx.contains("const hasExplicitModelList = typeof profile.modelList === \"string\";")
     );
