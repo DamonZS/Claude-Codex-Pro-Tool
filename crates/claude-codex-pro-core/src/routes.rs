@@ -1725,7 +1725,43 @@ impl BridgeRuntimeService for CoreRuntimeService {
             },
             unix_now_ms(),
         )?;
-        Ok(json!({"status": "ok", "entity": entity}))
+        let queue = if request.resource == MulticaWorkspaceResourceKey::Issues
+            && entity.get("assignee_type").and_then(Value::as_str) == Some("agent")
+        {
+            let agent_id = entity
+                .get("assignee_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty());
+            if let Some(agent_id) = agent_id {
+                let issue_id = entity
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("multica_workspace_entity_invalid"))?;
+                let key = format!("issue-assignment:{workspace_id}:{issue_id}:{agent_id}");
+                let reservation =
+                    self.multica_execution_store
+                        .reserve_execution(ExecutionReservation {
+                            workspace_id: workspace_id.clone(),
+                            issue_id: issue_id.to_string(),
+                            agent_id: Some(agent_id.to_string()),
+                            execution_kind: MulticaExecutionKind::Thread,
+                            parent_thread_id: None,
+                            parent_attempt_id: None,
+                            idempotency_key: key,
+                            now_ms: unix_now_ms(),
+                        })?;
+                Some(json!({
+                    "binding_id": reservation.binding.binding_id,
+                    "status": "queued",
+                    "replay": reservation.replay,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(json!({"status": "ok", "entity": entity, "queue": queue}))
     }
 
     async fn multica_workspace_delete(
