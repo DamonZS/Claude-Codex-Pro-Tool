@@ -309,15 +309,45 @@ impl CodexPageHostTransport {
         let response =
             crate::bridge::evaluate_script_with_await_promise(&websocket_url, &script, true)
                 .await
-                .map_err(|_| anyhow!("codex_page_host_request_failed"))?;
-        if response.pointer("/result/exceptionDetails").is_some() {
-            bail!("codex_page_host_request_failed");
+                .map_err(|error| {
+                    anyhow!(
+                        "codex_page_host_request_failed: {}",
+                        bounded_host_error(&error.to_string())
+                    )
+                })?;
+        if let Some(details) = response.pointer("/result/exceptionDetails") {
+            bail!(
+                "codex_page_host_request_failed: {}",
+                exception_detail_message(details)
+            );
         }
         response
             .pointer("/result/result/value")
             .cloned()
             .ok_or_else(|| anyhow!("codex_page_host_response_invalid"))
     }
+}
+
+const MAX_HOST_ERROR_LENGTH: usize = 256;
+
+fn bounded_host_error(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(MAX_HOST_ERROR_LENGTH).collect()
+}
+
+fn exception_detail_message(details: &Value) -> String {
+    let candidates = [
+        details.pointer("/exception/description"),
+        details.pointer("/exception/value"),
+        details.get("text"),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(bounded_host_error)
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| "runtime_exception".to_string())
 }
 
 #[async_trait]
@@ -1514,6 +1544,23 @@ mod tests {
         assert_eq!(transport.generation(), 1);
         transport.set_websocket_url("ws://page-1").unwrap();
         assert_eq!(transport.generation(), 2);
+    }
+
+    #[test]
+    fn host_exception_detail_is_bounded_and_prefers_runtime_description() {
+        let details = serde_json::json!({
+            "text": "fallback",
+            "exception": {"description": "function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2"}
+        });
+        let message = exception_detail_message(&details);
+        assert!(message.starts_with("function_call_output requires call_id"));
+        assert!(message.len() <= MAX_HOST_ERROR_LENGTH);
+    }
+
+    #[test]
+    fn host_transport_error_is_compacted_without_payload_dump() {
+        let value = bounded_host_error("  websocket   failed\nwith details  ");
+        assert_eq!(value, "websocket failed with details");
     }
 
     #[tokio::test]
