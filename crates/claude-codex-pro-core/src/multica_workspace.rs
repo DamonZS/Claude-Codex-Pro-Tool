@@ -63,11 +63,12 @@ pub enum MulticaWorkspaceResourceKey {
     Settings,
     AgentTaskQueue,
     IssueViews,
+    IssueStatuses,
     CodexNativeEvents,
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::MyTasks,
         Self::Issues,
         Self::Comments,
@@ -85,6 +86,7 @@ impl MulticaWorkspaceResourceKey {
         Self::Skills,
         Self::Settings,
         Self::AgentTaskQueue,
+        Self::IssueStatuses,
     ];
 
     fn key(self) -> &'static str {
@@ -107,6 +109,7 @@ impl MulticaWorkspaceResourceKey {
             Self::Settings => "settings",
             Self::AgentTaskQueue => "agent_task_queue",
             Self::IssueViews => "issue_views",
+            Self::IssueStatuses => "issue_statuses",
             Self::CodexNativeEvents => "codex_native_events",
         }
     }
@@ -288,6 +291,8 @@ pub struct LocalMulticaWorkspaceState {
     pub autopilots: Vec<Value>,
     #[serde(default)]
     pub issue_views: Vec<Value>,
+    #[serde(default)]
+    pub issue_statuses: Vec<Value>,
 }
 
 impl LocalMulticaWorkspaceState {
@@ -307,6 +312,7 @@ impl LocalMulticaWorkspaceState {
             squads: Vec::new(),
             autopilots: Vec::new(),
             issue_views: Vec::new(),
+            issue_statuses: default_issue_statuses(workspace_id),
         }
     }
 
@@ -326,6 +332,7 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Squads => Ok(&self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&self.autopilots),
             MulticaWorkspaceResourceKey::IssueViews => Ok(&self.issue_views),
+            MulticaWorkspaceResourceKey::IssueStatuses => Ok(&self.issue_statuses),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -351,6 +358,7 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Squads => Ok(&mut self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&mut self.autopilots),
             MulticaWorkspaceResourceKey::IssueViews => Ok(&mut self.issue_views),
+            MulticaWorkspaceResourceKey::IssueStatuses => Ok(&mut self.issue_statuses),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -415,13 +423,16 @@ impl LocalMulticaWorkspaceStore {
         entity.remove("workspaceId");
         let _guard = local_workspace_store_lock(&self.path)?;
         let mut state = load_local_workspace_state(&self.path, workspace_id)?;
-        let entities = state.collection_mut(command.resource)?;
-        let existing_index = entities.iter().position(|candidate| {
-            candidate.get("id").and_then(Value::as_str) == Some(entity_id.as_str())
-        });
+        let (existing_index, existing) = {
+            let entities = state.collection(command.resource)?;
+            let index = entities.iter().position(|candidate| {
+                candidate.get("id").and_then(Value::as_str) == Some(entity_id.as_str())
+            });
+            (index, index.map(|index| entities[index].clone()))
+        };
 
-        let revision = if let Some(index) = existing_index {
-            let current_revision = entities[index]
+        let revision = if let Some(existing) = existing.as_ref() {
+            let current_revision = existing
                 .get("revision")
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow!("multica_workspace_store_invalid"))?;
@@ -436,7 +447,7 @@ impl LocalMulticaWorkspaceStore {
             {
                 bail!("multica_workspace_revision_conflict");
             }
-            if entities.len() >= MAX_LOCAL_ENTITIES_PER_RESOURCE {
+            if state.collection(command.resource)?.len() >= MAX_LOCAL_ENTITIES_PER_RESOURCE {
                 bail!("multica_workspace_collection_too_large");
             }
             1
@@ -447,14 +458,22 @@ impl LocalMulticaWorkspaceStore {
         entity.insert("updated_at_ms".to_string(), json!(updated_at_ms));
         if existing_index.is_none() {
             entity.insert("created_at_ms".to_string(), json!(updated_at_ms));
-        } else if let Some(created_at_ms) = existing_index
-            .and_then(|index| entities[index].get("created_at_ms"))
+        } else if let Some(created_at_ms) = existing
+            .as_ref()
+            .and_then(|entity| entity.get("created_at_ms"))
             .cloned()
         {
             entity.insert("created_at_ms".to_string(), created_at_ms);
         }
         let value = Value::Object(entity);
         validate_local_entity(&value, workspace_id, command.resource)?;
+        if command.resource == MulticaWorkspaceResourceKey::IssueStatuses {
+            validate_issue_status_mutation(existing.as_ref(), &value)?;
+        }
+        if command.resource == MulticaWorkspaceResourceKey::Issues {
+            validate_issue_status_write(&state, existing.as_ref(), &value)?;
+        }
+        let entities = state.collection_mut(command.resource)?;
         if let Some(index) = existing_index {
             entities[index] = value.clone();
         } else {
@@ -472,6 +491,9 @@ impl LocalMulticaWorkspaceStore {
     ) -> anyhow::Result<bool> {
         validate_local_workspace_id(workspace_id)?;
         validate_local_entity_id(&command.entity_id)?;
+        if command.resource == MulticaWorkspaceResourceKey::IssueStatuses {
+            bail!("multica_workspace_issue_status_archive_required");
+        }
         let _guard = local_workspace_store_lock(&self.path)?;
         let mut state = load_local_workspace_state(&self.path, workspace_id)?;
         let entities = state.collection_mut(command.resource)?;
@@ -1689,6 +1711,13 @@ fn query_local_collection(
             query.limit,
             query.offset,
         ),
+        MulticaWorkspaceResourceKey::IssueStatuses => local_entity_collection(
+            workspace,
+            workspace_store,
+            MulticaWorkspaceResourceKey::IssueStatuses,
+            query.limit,
+            query.offset,
+        ),
         MulticaWorkspaceResourceKey::Statistics => {
             statistics_collection(workspace, execution_store, workspace_store)
         }
@@ -1865,6 +1894,7 @@ fn local_entity_collection(
     ) {
         let state = store.load(&workspace.id)?;
         project_issue_collaboration(&mut all_items, &state);
+        project_issue_statuses(&mut all_items, &state);
     }
     if resource == MulticaWorkspaceResourceKey::Autopilots {
         project_autopilot_contract(&mut all_items);
@@ -2467,8 +2497,14 @@ fn load_local_workspace_state(
     if bytes.len() > MAX_LOCAL_WORKSPACE_STORE_BYTES {
         bail!("multica_workspace_store_too_large");
     }
-    let state: LocalMulticaWorkspaceState =
+    let mut state: LocalMulticaWorkspaceState =
         serde_json::from_slice(&bytes).map_err(|_| anyhow!("multica_workspace_store_invalid"))?;
+    // Workspace files created before the catalog existed are upgraded in memory
+    // with the same seven immutable system entries. The next normal write uses
+    // the existing atomic store path and persists them with the rest of state.
+    if state.issue_statuses.is_empty() {
+        state.issue_statuses = default_issue_statuses(workspace_id);
+    }
     validate_local_workspace_state(&state)?;
     if state.workspace_id != workspace_id {
         bail!("multica_workspace_tenant_mismatch");
@@ -2511,6 +2547,10 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         (MulticaWorkspaceResourceKey::Squads, &state.squads),
         (MulticaWorkspaceResourceKey::Autopilots, &state.autopilots),
         (MulticaWorkspaceResourceKey::IssueViews, &state.issue_views),
+        (
+            MulticaWorkspaceResourceKey::IssueStatuses,
+            &state.issue_statuses,
+        ),
     ] {
         if entities.len() > MAX_LOCAL_ENTITIES_PER_RESOURCE {
             bail!("multica_workspace_collection_too_large");
@@ -2518,6 +2558,9 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         let mut ids = BTreeSet::new();
         for entity in entities {
             validate_local_entity(entity, &state.workspace_id, resource)?;
+            if resource == MulticaWorkspaceResourceKey::IssueStatuses {
+                validate_issue_status_mutation(Some(entity), entity)?;
+            }
             let id = entity
                 .get("id")
                 .and_then(Value::as_str)
@@ -2525,6 +2568,27 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
             if !ids.insert(id.to_ascii_lowercase()) {
                 bail!("multica_workspace_entity_conflict");
             }
+        }
+    }
+    let mut status_keys = BTreeSet::new();
+    for status in &state.issue_statuses {
+        let key = issue_status_key(status)
+            .ok_or_else(|| anyhow!("multica_workspace_issue_status_invalid"))?;
+        if !status_keys.insert(key.to_ascii_lowercase()) {
+            bail!("multica_workspace_issue_status_conflict");
+        }
+    }
+    for (category, _, _) in ISSUE_STATUS_CATEGORIES {
+        let Some(system) = state.issue_statuses.iter().find(|status| {
+            issue_status_key(status) == Some(category)
+                && status.get("is_system").and_then(Value::as_bool) == Some(true)
+        }) else {
+            bail!("multica_workspace_system_issue_status_missing");
+        };
+        if system.get("category").and_then(Value::as_str) != Some(category)
+            || issue_status_is_archived(system)
+        {
+            bail!("multica_workspace_system_issue_status_invalid");
         }
     }
     let project_ids = state
@@ -2634,6 +2698,178 @@ fn is_iso_date(value: &str) -> bool {
         && value[8..10]
             .parse::<u8>()
             .is_ok_and(|day| (1..=31).contains(&day))
+}
+
+const ISSUE_STATUS_CATEGORIES: [(&str, &str, &str); 7] = [
+    ("backlog", "待规划", "#6B7280"),
+    ("todo", "待办", "#2563EB"),
+    ("in_progress", "进行中", "#D97706"),
+    ("in_review", "审核中", "#059669"),
+    ("done", "已完成", "#16A34A"),
+    ("blocked", "已阻塞", "#DC2626"),
+    ("cancelled", "已取消", "#6B7280"),
+];
+
+fn default_issue_statuses(workspace_id: &str) -> Vec<Value> {
+    ISSUE_STATUS_CATEGORIES
+        .iter()
+        .enumerate()
+        .map(|(position, (key, name, color))| {
+            json!({
+                "id": format!("issue-status-{key}"),
+                "workspace_id": workspace_id,
+                "revision": 1,
+                "key": key,
+                "name": name,
+                "description": "",
+                "category": key,
+                "color": color,
+                "is_system": true,
+                "position": position,
+                "archived_at": Value::Null,
+            })
+        })
+        .collect()
+}
+
+fn is_issue_status_category(value: &str) -> bool {
+    ISSUE_STATUS_CATEGORIES
+        .iter()
+        .any(|(category, _, _)| *category == value)
+}
+
+fn issue_status_key(value: &Value) -> Option<&str> {
+    value.get("key").and_then(Value::as_str)
+}
+
+fn issue_status_is_archived(value: &Value) -> bool {
+    value
+        .get("archived_at")
+        .is_some_and(|value| !value.is_null())
+}
+
+fn validate_issue_status_mutation(existing: Option<&Value>, value: &Value) -> anyhow::Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("multica_workspace_issue_status_invalid"))?;
+    let key = object
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty() && key.len() <= 80)
+        .ok_or_else(|| anyhow!("multica_workspace_issue_status_invalid"))?;
+    if !key.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+    }) {
+        bail!("multica_workspace_issue_status_invalid");
+    }
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let description = object
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let category = object
+        .get("category")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let color = object
+        .get("color")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let is_system = object.get("is_system").and_then(Value::as_bool);
+    if name.trim().is_empty()
+        || name.chars().count() > 80
+        || description.chars().count() > 512
+        || !is_issue_status_category(category)
+        || !is_hex_color(color)
+        || is_system.is_none()
+        || object.get("position").and_then(Value::as_u64).is_none()
+    {
+        bail!("multica_workspace_issue_status_invalid");
+    }
+    if let Some(archived_at) = object.get("archived_at")
+        && !archived_at.is_null()
+        && archived_at
+            .as_str()
+            .is_none_or(|value| value.trim().is_empty() || value.len() > 80)
+    {
+        bail!("multica_workspace_issue_status_invalid");
+    }
+    if let Some(existing) = existing {
+        let existing_system = existing.get("is_system").and_then(Value::as_bool) == Some(true);
+        if existing_system {
+            for field in [
+                "key",
+                "name",
+                "description",
+                "category",
+                "color",
+                "is_system",
+                "position",
+                "archived_at",
+            ] {
+                if existing.get(field) != object.get(field) {
+                    bail!("multica_workspace_system_issue_status_immutable");
+                }
+            }
+        } else if existing.get("key") != object.get("key")
+            || existing.get("category") != object.get("category")
+            || is_system != Some(false)
+        {
+            bail!("multica_workspace_issue_status_immutable");
+        }
+    } else if is_system != Some(false) {
+        bail!("multica_workspace_system_issue_status_create_forbidden");
+    }
+    Ok(())
+}
+
+fn validate_issue_status_write(
+    state: &LocalMulticaWorkspaceState,
+    existing: Option<&Value>,
+    value: &Value,
+) -> anyhow::Result<()> {
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("backlog");
+    let active = state
+        .issue_statuses
+        .iter()
+        .any(|entry| issue_status_key(entry) == Some(status) && !issue_status_is_archived(entry));
+    if active {
+        return Ok(());
+    }
+    if existing.and_then(|entry| entry.get("status").and_then(Value::as_str)) == Some(status) {
+        return Ok(());
+    }
+    bail!("multica_workspace_issue_status_unknown_or_archived")
+}
+
+fn project_issue_statuses(issues: &mut [Value], state: &LocalMulticaWorkspaceState) {
+    for issue in issues {
+        let Some(status) = issue.get("status").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(entry) = state
+            .issue_statuses
+            .iter()
+            .find(|entry| issue_status_key(entry) == Some(status))
+        else {
+            continue;
+        };
+        let Some(object) = issue.as_object_mut() else {
+            continue;
+        };
+        if let Some(category) = entry.get("category").cloned() {
+            object.insert("status_category".to_string(), category);
+        }
+        if let Some(name) = entry.get("name").cloned() {
+            object.insert("status_name".to_string(), name);
+        }
+    }
 }
 
 fn validate_local_entity(
@@ -3654,6 +3890,7 @@ mod tests {
                 "skills",
                 "settings",
                 "agent_task_queue",
+                "issue_statuses",
             ]
         );
     }
@@ -3798,6 +4035,136 @@ mod tests {
                 .list(&workspace.id, MulticaWorkspaceResourceKey::Issues)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn issue_status_catalog_bootstraps_the_seven_system_categories() {
+        let state = LocalMulticaWorkspaceState::empty("local-test");
+        assert_eq!(state.issue_statuses.len(), 7);
+        for (category, _, _) in ISSUE_STATUS_CATEGORIES {
+            let entry = state
+                .issue_statuses
+                .iter()
+                .find(|entry| issue_status_key(entry) == Some(category))
+                .expect("system status exists");
+            assert_eq!(entry["category"], category);
+            assert_eq!(entry["is_system"], true);
+            assert_eq!(entry["archived_at"], Value::Null);
+        }
+        validate_local_workspace_state(&state).unwrap();
+    }
+
+    #[test]
+    fn custom_issue_status_controls_issue_writes_and_projection() {
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let custom = store
+            .upsert(
+                &workspace.id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::IssueStatuses,
+                    entity: json!({
+                        "id": "issue-status-triage",
+                        "key": "triage",
+                        "name": "分诊",
+                        "description": "等待分诊",
+                        "category": "todo",
+                        "color": "#2563EB",
+                        "is_system": false,
+                        "position": 1,
+                        "archived_at": null,
+                    }),
+                    expected_revision: None,
+                },
+                10,
+            )
+            .unwrap();
+        let issue = store
+            .upsert(
+                &workspace.id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity: json!({"id":"issue-triage", "title":"Needs triage", "status":"triage"}),
+                    expected_revision: None,
+                },
+                11,
+            )
+            .unwrap();
+        assert_eq!(issue["status"], "triage");
+        let execution_store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let projected = query_local_collection(
+            &workspace,
+            &execution_store,
+            &store,
+            true,
+            MulticaWorkspaceQuery {
+                resource: MulticaWorkspaceResourceKey::Issues,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(projected.items[0]["status_category"], "todo");
+        assert_eq!(projected.items[0]["status_name"], "分诊");
+
+        let mut archived = custom;
+        archived["archived_at"] = json!("2026-09-02T00:00:00Z");
+        store
+            .upsert(
+                &workspace.id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::IssueStatuses,
+                    entity: archived,
+                    expected_revision: Some(1),
+                },
+                12,
+            )
+            .unwrap();
+        let error = store
+            .upsert(
+                &workspace.id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity: json!({"id":"issue-new", "title":"No archived status", "status":"triage"}),
+                    expected_revision: None,
+                },
+                13,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "multica_workspace_issue_status_unknown_or_archived"
+        );
+    }
+
+    #[test]
+    fn system_issue_status_cannot_be_renamed_or_reclassified() {
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let mut system = store
+            .list(&workspace.id, MulticaWorkspaceResourceKey::IssueStatuses)
+            .unwrap()
+            .into_iter()
+            .find(|entry| issue_status_key(entry) == Some("todo"))
+            .unwrap();
+        system["name"] = json!("被篡改");
+        let error = store
+            .upsert(
+                &workspace.id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::IssueStatuses,
+                    entity: system,
+                    expected_revision: Some(1),
+                },
+                10,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "multica_workspace_system_issue_status_immutable"
         );
     }
 

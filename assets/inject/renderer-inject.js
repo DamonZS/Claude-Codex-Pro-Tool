@@ -4642,6 +4642,7 @@
     { key: "usage", resource: "statistics", label: "统计" },
     { key: "runtimes", resource: "runtimes", label: "运行时" },
     { key: "skills", resource: "skills", label: "Skills" },
+    { key: "issue-statuses", resource: "issue_statuses", label: "任务状态" },
     { key: "settings", resource: "settings", label: "设置" },
   ]);
   const multicaWorkspaceBoardColumns = Object.freeze([
@@ -5496,7 +5497,7 @@
     parent.appendChild(article);
   }
 
-  const multicaWorkspaceWritableResources = new Set(["issues", "comments", "labels", "subscribers", "reactions", "projects", "project_resources", "agents", "squads", "autopilots"]);
+  const multicaWorkspaceWritableResources = new Set(["issues", "comments", "labels", "subscribers", "reactions", "projects", "project_resources", "agents", "squads", "autopilots", "issue_statuses"]);
   const multicaWorkspaceTerminalExecutionStates = new Set(["completed", "failed", "cancelled"]);
 
   function multicaWorkspaceWritableResource(module) {
@@ -5594,7 +5595,7 @@
     if (resource === "issues") return [
       { key: "title", label: "标题", required: true, wide: true },
       { key: "description", label: "描述", type: "textarea", wide: true },
-      { key: "status", label: "状态", type: "select", options: [["backlog", "待规划"], ["todo", "待办"], ["in_progress", "进行中"], ["in_review", "审核中"], ["done", "已完成"], ["blocked", "已阻塞"], ["cancelled", "已取消"]] },
+      { key: "status", label: "状态", type: "select", options: multicaWorkspaceIssueStatusOptions() },
       { key: "priority", label: "优先级", type: "select", options: [["none", "无"], ["low", "低"], ["medium", "中"], ["high", "高"], ["urgent", "紧急"]] },
       { key: "project_id", label: "项目 ID" },
       { key: "parent_issue_id", label: "父任务 ID" },
@@ -5608,6 +5609,15 @@
       { key: "progress", label: "项目进度（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
       { key: "metadata", label: "流程元数据（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
       { key: "properties", label: "自定义属性（JSON）", type: "textarea", wide: true, valueType: "json", jsonEmpty: {} },
+    ];
+    if (resource === "issue_statuses") return [
+      { key: "key", label: "状态键", required: true },
+      { key: "name", label: "显示名称", required: true },
+      { key: "description", label: "描述", type: "textarea", wide: true },
+      { key: "category", label: "所属类别", type: "select", options: multicaWorkspaceBoardColumns.map((column) => [column.key, column.label]) },
+      { key: "color", label: "颜色（#rrggbb）", required: true },
+      { key: "position", label: "排序", type: "number" },
+      { key: "archived_at", label: "归档时间（ISO 8601，留空表示启用）" },
     ];
     if (resource === "projects") return [
       { key: "title", label: "项目名称", required: true, wide: true },
@@ -5673,6 +5683,7 @@
   function multicaWorkspaceDefaultEntity(resource) {
     const common = { id: multicaWorkspaceNewId(resource) };
     if (resource === "issues") return { ...common, title: "", description: "", status: "todo", priority: "medium", assignee_type: "", assignee_id: "", metadata: {}, properties: {} };
+    if (resource === "issue_statuses") return { ...common, key: "", name: "", description: "", category: "todo", color: "#2563EB", is_system: false, position: 0, archived_at: null };
     if (resource === "comments") return { ...common, issue_id: "", content: "", type: "comment", parent_id: null, author_type: "member", author_id: "" };
     if (resource === "labels") return { ...common, name: "", resource_type: "issue", description: "", color: "#6B7280" };
     if (resource === "subscribers") return { ...common, issue_id: "", user_type: "member", user_id: "", reason: "manual" };
@@ -5970,6 +5981,9 @@
       return;
     }
     const entity = { ...(editor.original || {}), ...editor.values, id: editor.entityId };
+    if (editor.resource === "issue_statuses" && !String(entity.archived_at || "").trim()) {
+      entity.archived_at = null;
+    }
     Object.keys(entity).forEach((key) => {
       if (!multicaWorkspaceSafeKey(key) || ["workspaceId", "workspace_id", "revision", "createdAtMs", "created_at_ms", "updatedAtMs", "updated_at_ms"].includes(key)) delete entity[key];
     });
@@ -6634,8 +6648,22 @@
         }
       }
     }
-    add("编辑", () => multicaWorkspaceOpenEditor(module, item));
-    add("删除", () => void multicaWorkspaceDeleteEntity(module, item), "danger");
+    if (resource === "issue_statuses") {
+      const system = multicaWorkspaceObjectValue(item, "is_system", "isSystem") === true;
+      const archived = !!multicaWorkspaceObjectValue(item, "archived_at", "archivedAt");
+      if (!system) {
+        add("编辑", () => multicaWorkspaceOpenEditor(module, item));
+        add(archived ? "恢复" : "归档", () => void multicaWorkspacePatchEntity(
+          module,
+          item,
+          { archived_at: archived ? null : new Date().toISOString() },
+          archived ? "已恢复状态" : "已归档状态",
+        ));
+      }
+    } else {
+      add("编辑", () => multicaWorkspaceOpenEditor(module, item));
+      add("删除", () => void multicaWorkspaceDeleteEntity(module, item), "danger");
+    }
     heading.appendChild(actions);
     article.appendChild(heading);
     const fields = multicaWorkspaceEl("div", "ccp-multica-fields");
@@ -6719,10 +6747,29 @@
     parent.appendChild(article);
   }
 
+  function multicaWorkspaceIssueStatusOptions() {
+    const catalog = multicaWorkspaceState.collections.get("issue-statuses")?.items || [];
+    const options = catalog
+      .filter((entry) => !entry?.archived_at && !entry?.archivedAt)
+      .map((entry) => [String(entry?.key || ""), String(entry?.name || entry?.key || "")])
+      .filter(([key]) => key);
+    return options.length ? options : multicaWorkspaceBoardColumns.map((column) => [column.key, column.label]);
+  }
+
   function multicaWorkspaceIssueStatus(item) {
+    const category = String(multicaWorkspaceObjectValue(item, "status_category", "statusCategory") || "").toLowerCase();
+    if (multicaWorkspaceBoardColumns.some((column) => column.key === category)) return category;
     const raw = String(multicaWorkspaceObjectValue(item, "status", "state") || "backlog").toLowerCase();
     if (raw === "archived") return "cancelled";
     return multicaWorkspaceBoardColumns.some((column) => column.key === raw) ? raw : "backlog";
+  }
+
+  function multicaWorkspaceIssueStatusLabel(item) {
+    const name = String(multicaWorkspaceObjectValue(item, "status_name", "statusName") || "").trim();
+    if (name) return name;
+    const raw = String(multicaWorkspaceObjectValue(item, "status", "state") || "backlog").trim();
+    const system = multicaWorkspaceBoardColumns.find((column) => column.key === raw.toLowerCase());
+    return system ? system.label : raw;
   }
 
   function multicaWorkspaceIssueSource() {
@@ -6853,6 +6900,7 @@
     const summary = String(multicaWorkspaceObjectValue(issue, "description", "summary") || "").trim();
     if (summary) article.appendChild(multicaWorkspaceEl("div", "ccp-multica-card-summary", summary.slice(0, 280)));
     const meta = multicaWorkspaceEl("div", "ccp-multica-card-meta");
+    meta.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", multicaWorkspaceIssueStatusLabel(issue)));
     const assignee = String(multicaWorkspaceObjectValue(issue, "assigneeId", "assignee_id") || "未分配");
     meta.appendChild(multicaWorkspaceEl("span", "", assignee));
     const updatedAt = multicaWorkspaceFormatUpdatedAt(issue);
@@ -7279,7 +7327,7 @@
       if (!source.items.length) list.appendChild(multicaWorkspaceEl("div", "ccp-multica-column-empty", "无任务"));
       source.items.forEach((issue) => {
         const id = multicaWorkspaceEntityId(issue);
-        const status = multicaWorkspaceBoardColumns.find((column) => column.key === multicaWorkspaceIssueStatus(issue))?.label || multicaWorkspaceIssueStatus(issue);
+        const status = multicaWorkspaceIssueStatusLabel(issue);
         const priority = String(multicaWorkspaceObjectValue(issue, "priority") || "-");
         const assignee = String(multicaWorkspaceObjectValue(issue, "assigneeId", "assignee_id") || "未分配");
         const project = String(multicaWorkspaceObjectValue(issue, "projectId", "project_id") || "-");
