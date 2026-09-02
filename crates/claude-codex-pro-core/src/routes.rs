@@ -2582,13 +2582,161 @@ impl BridgeRuntimeService for CoreRuntimeService {
         &self,
         request: MulticaAutopilotTriggerRequest,
     ) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::workspace_bootstrap()
+            .await?
+            .workspace
+            .id;
+        let autopilot = self
+            .multica_workspace_store
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Autopilots)?
+            .into_iter()
+            .find(|item| {
+                item.get("id").and_then(Value::as_str) == Some(request.autopilot_id.as_str())
+            })
+            .ok_or_else(|| anyhow::anyhow!("autopilot_not_found"))?;
+        let status = autopilot
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("active");
+        if status != "active" {
+            anyhow::bail!("autopilot_not_active");
+        }
+        let mode = autopilot
+            .get("execution_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("create_issue");
+        if !matches!(mode, "create_issue" | "run_only") {
+            anyhow::bail!("autopilot_execution_mode_invalid");
+        }
+        let agent_id = autopilot
+            .get("assignee_id")
+            .or_else(|| autopilot.get("agent_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("autopilot_assignee_unavailable"))?;
+        let agent_exists = self
+            .multica_workspace_store
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)?
+            .iter()
+            .any(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id));
+        if !agent_exists {
+            anyhow::bail!("autopilot_assignee_unavailable");
+        }
+        let now = unix_now_ms();
         let run = self.multica_execution_store.trigger_autopilot_run(
-            request.autopilot_id,
-            request.trigger_id,
+            request.autopilot_id.clone(),
+            request.trigger_id.clone(),
             request.source,
-            unix_now_ms(),
+            now,
         )?;
-        Ok(json!({"status":"ok", "run": run, "execution":"pending"}))
+        let issue_id = format!("autopilot-issue-{}", run.id);
+        let binding = if mode == "create_issue" {
+            let issue = json!({
+                "id": issue_id,
+                "title": autopilot.get("title").or_else(|| autopilot.get("name")).and_then(Value::as_str).unwrap_or("工作流任务"),
+                "description": autopilot.get("description").and_then(Value::as_str).unwrap_or(""),
+                "assignee_type": "agent", "assignee_id": agent_id,
+                "origin_type": "autopilot", "origin_id": run.autopilot_id,
+                "status": "todo"
+            });
+            let saved = self.multica_workspace_store.upsert(
+                &workspace_id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity: issue,
+                    expected_revision: None,
+                },
+                now,
+            )?;
+            let id = saved.get("id").and_then(Value::as_str).unwrap_or_default();
+            let key = format!("issue-assignment:{}:{}:{}", workspace_id, id, agent_id);
+            let reserved =
+                self.multica_execution_store
+                    .reserve_execution(ExecutionReservation {
+                        workspace_id: workspace_id.clone(),
+                        issue_id: id.to_string(),
+                        agent_id: Some(agent_id.to_string()),
+                        execution_kind: MulticaExecutionKind::Thread,
+                        parent_thread_id: None,
+                        parent_attempt_id: None,
+                        idempotency_key: key,
+                        now_ms: now,
+                    })?;
+            let _ =
+                self.multica_execution_store
+                    .transition_autopilot_run(AutopilotRunTransition {
+                        autopilot_id: run.autopilot_id.clone(),
+                        run_id: run.id.clone(),
+                        expected_revision: run.revision,
+                        next_status: "issue_created".into(),
+                        issue_id: Some(id.to_string()),
+                        task_id: Some(reserved.binding.binding_id.clone()),
+                        failure_reason: None,
+                        reason_code: None,
+                        now_ms: now,
+                    })?;
+            reserved.binding
+        } else if mode == "run_only" {
+            let key = format!("autopilot-run:{}", run.id);
+            let reserved =
+                self.multica_execution_store
+                    .reserve_execution(ExecutionReservation {
+                        workspace_id: workspace_id.clone(),
+                        issue_id: issue_id.clone(),
+                        agent_id: Some(agent_id.to_string()),
+                        execution_kind: MulticaExecutionKind::Thread,
+                        parent_thread_id: None,
+                        parent_attempt_id: None,
+                        idempotency_key: key,
+                        now_ms: now,
+                    })?;
+            let _ =
+                self.multica_execution_store
+                    .transition_autopilot_run(AutopilotRunTransition {
+                        autopilot_id: run.autopilot_id.clone(),
+                        run_id: run.id.clone(),
+                        expected_revision: run.revision,
+                        next_status: "issue_created".into(),
+                        issue_id: Some(issue_id),
+                        task_id: Some(reserved.binding.binding_id.clone()),
+                        failure_reason: None,
+                        reason_code: None,
+                        now_ms: now,
+                    })?;
+            reserved.binding
+        } else {
+            anyhow::bail!("autopilot_execution_mode_invalid");
+        };
+        let dispatch = self
+            .dispatch_pending_assignment(
+                &binding.binding_id,
+                binding.revision,
+                &format!("auto-{}", binding.binding_id),
+            )
+            .await;
+        if dispatch.is_ok() {
+            let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
+            if current.status == "issue_created" {
+                let _ =
+                    self.multica_execution_store
+                        .transition_autopilot_run(AutopilotRunTransition {
+                            autopilot_id: run.autopilot_id.clone(),
+                            run_id: run.id.clone(),
+                            expected_revision: current.revision,
+                            next_status: "running".into(),
+                            issue_id: current.issue_id.clone(),
+                            task_id: current.task_id.clone(),
+                            failure_reason: None,
+                            reason_code: None,
+                            now_ms: unix_now_ms(),
+                        });
+            }
+        }
+        let execution = dispatch.unwrap_or_else(
+            |error| json!({"status":"queued", "diagnostic": stable_execution_error_code(&error)}),
+        );
+        let final_run = self.multica_execution_store.get_autopilot_run(&run.id)?;
+        Ok(json!({"status":"ok", "run": final_run, "execution": execution, "binding": binding}))
     }
 
     async fn multica_autopilot_transition(

@@ -10,7 +10,10 @@
 - 运行记录包含上游核心字段：id、autopilot_id、trigger_id、source、status、issue_id、task_id、triggered_at、completed_at、failure_reason、reason_code、created_at。
 - source 仅允许 manual、schedule、webhook、api；新记录状态为 pending。
 - 记录持久化到独立 execution state，采用上限保护和文件锁。
-- bridge 提供 runs、run、trigger 路由；触发失败不得伪装成功。
+- bridge 提供 runs、run、trigger 路由；触发必须按上游语义创建 Issue 或执行绑定，并尝试进入 Codex 原生 thread/subagent 调度链；触发失败不得伪装成功。
+- `create_issue` 自动化创建带 `origin_type=autopilot`、`origin_id` 的 Issue，并通过 Agent assignment 幂等键生成执行绑定。
+- `run_only` 自动化直接生成执行绑定；Codex host 不可用时保持 `queued`/`pending`，返回稳定诊断码。
+- 重复 trigger 使用稳定幂等键，不得重复创建 Issue 或执行绑定。
 - 不保存 webhook payload、凭据或完整任务正文。
 
 ## 非目标
