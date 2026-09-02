@@ -899,6 +899,7 @@ fn validate_mutable_workspace_resource(
             | MulticaWorkspaceResourceKey::Agents
             | MulticaWorkspaceResourceKey::Squads
             | MulticaWorkspaceResourceKey::Autopilots
+            | MulticaWorkspaceResourceKey::IssueViews
     ) {
         Ok(())
     } else {

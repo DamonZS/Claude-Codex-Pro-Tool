@@ -4746,6 +4746,7 @@
           scope: multicaWorkspaceIssueFilters.some((filter) => filter.key === view.scope) ? view.scope : "assigned",
           issueViewMode: ["board", "list", "table", "swimlane"].includes(view.issueViewMode) ? view.issueViewMode : "board",
           boardCompact: view.boardCompact === true,
+          revision: Number(view.revision) > 0 ? Number(view.revision) : 1,
         }))
         .filter((view) => view.id && view.name);
     } catch (_) {
@@ -4762,7 +4763,7 @@
     }
   }
 
-  function multicaWorkspaceSaveCurrentIssueView() {
+  async function multicaWorkspaceSaveCurrentIssueView() {
     const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
     if (!name) return;
     const view = {
@@ -4771,18 +4772,77 @@
       scope: multicaWorkspaceState.issueFilter,
       issueViewMode: multicaWorkspaceState.issueViewMode,
       boardCompact: multicaWorkspaceState.boardCompact === true,
+      revision: 1,
     };
     multicaWorkspaceState.savedIssueViews = [
       ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
       view,
     ];
     multicaWorkspaceState.activeIssueViewId = view.id;
+    let backendSaved = false;
+    if (multicaWorkspaceState.workspaceId) {
+      try {
+        const backendView = {
+          id: view.id,
+          workspace_id: multicaWorkspaceState.workspaceId,
+          name: view.name,
+          scope_type: "my",
+          scope_variant: view.scope === "working" ? "assigned" : view.scope,
+          visibility: "private",
+          definition_version: 1,
+          query: { local_filter: view.scope },
+          display: { issue_view_mode: view.issueViewMode, board_compact: view.boardCompact },
+          revision: 1,
+        };
+        await multicaWorkspaceCall("/multica/workspace/upsert", {
+          resource: "issue_views",
+          entity: backendView,
+        });
+        backendSaved = true;
+      } catch (_) {
+        // The local cache remains usable when an older binary lacks the new
+        // resource; do not claim remote/server synchronization.
+      }
+    }
     if (!multicaWorkspaceWriteSavedIssueViews()) {
       multicaWorkspaceState.mutationNotice = { state: "error", message: "本机视图保存失败，请检查浏览器存储空间" };
     } else {
-      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${name}”已保存` };
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${name}”已保存${backendSaved ? "（控制面已记录）" : ""}` };
     }
     multicaWorkspaceRenderContent();
+  }
+
+  async function multicaWorkspaceLoadSavedIssueViewsFromControlPlane() {
+    if (!multicaWorkspaceState.workspaceId) return;
+    try {
+      const result = await multicaWorkspaceCall("/multica/workspace/query", {
+        resource: "issue_views",
+        limit: 100,
+        offset: 0,
+      });
+      const items = Array.isArray(result?.collection?.items)
+        ? result.collection.items
+        : Array.isArray(result?.items) ? result.items : [];
+      const views = items.map((item) => {
+        const display = item.display && typeof item.display === "object" ? item.display : {};
+        const query = item.query && typeof item.query === "object" ? item.query : {};
+        return {
+          id: String(item.id || "").trim(),
+          name: String(item.name || "").trim().slice(0, 80),
+          scope: ["all", "assigned", "created", "agents", "working"].includes(query.local_filter) ? query.local_filter : (item.scope_variant || "assigned"),
+          issueViewMode: ["board", "list", "table", "swimlane"].includes(display.issue_view_mode) ? display.issue_view_mode : "board",
+          boardCompact: display.board_compact === true,
+          revision: Number(item.revision) > 0 ? Number(item.revision) : 1,
+        };
+      }).filter((view) => view.id && view.name);
+      if (views.length > 0) {
+        multicaWorkspaceState.savedIssueViews = views;
+        multicaWorkspaceWriteSavedIssueViews();
+        if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+      }
+    } catch (_) {
+      // Older builds may not expose issue_views; local cache remains valid.
+    }
   }
 
   function multicaWorkspaceApplySavedIssueView(viewId) {
@@ -4796,9 +4856,22 @@
     multicaWorkspaceRefreshBoardSource(false);
   }
 
-  function multicaWorkspaceDeleteActiveIssueView() {
+  async function multicaWorkspaceDeleteActiveIssueView() {
     const view = multicaWorkspaceState.savedIssueViews.find((item) => item.id === multicaWorkspaceState.activeIssueViewId);
     if (!view || !window.confirm(`删除本机视图“${view.name}”？`)) return;
+    if (multicaWorkspaceState.workspaceId) {
+      try {
+        await multicaWorkspaceCall("/multica/workspace/delete", {
+          resource: "issue_views",
+          entityId: view.id,
+          expectedRevision: view.revision || 1,
+        });
+      } catch (_) {
+        multicaWorkspaceState.mutationNotice = { state: "error", message: "控制面删除失败，已保留本机视图" };
+        multicaWorkspaceRenderContent();
+        return;
+      }
+    }
     multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.filter((item) => item.id !== view.id);
     multicaWorkspaceState.activeIssueViewId = "";
     multicaWorkspaceWriteSavedIssueViews();
@@ -7726,6 +7799,7 @@
       multicaWorkspaceSetStatus(pageReady ? "本地工作区就绪" : "当前 Codex 页面能力不可用", pageReady ? "ok" : "warning");
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
       if (nextWorkspaceId) void multicaWorkspaceLoadExecutions(true);
+      if (nextWorkspaceId) void multicaWorkspaceLoadSavedIssueViewsFromControlPlane();
       return true;
     } catch (error) {
       if (sequence !== multicaWorkspaceState.bootstrapSeq) return false;

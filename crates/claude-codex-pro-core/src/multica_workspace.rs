@@ -60,6 +60,7 @@ pub enum MulticaWorkspaceResourceKey {
     Skills,
     Settings,
     AgentTaskQueue,
+    IssueViews,
     CodexNativeEvents,
 }
 
@@ -103,6 +104,7 @@ impl MulticaWorkspaceResourceKey {
             Self::Skills => "skills",
             Self::Settings => "settings",
             Self::AgentTaskQueue => "agent_task_queue",
+            Self::IssueViews => "issue_views",
             Self::CodexNativeEvents => "codex_native_events",
         }
     }
@@ -249,6 +251,8 @@ pub struct LocalMulticaWorkspaceState {
     pub squads: Vec<Value>,
     #[serde(default)]
     pub autopilots: Vec<Value>,
+    #[serde(default)]
+    pub issue_views: Vec<Value>,
 }
 
 impl LocalMulticaWorkspaceState {
@@ -267,6 +271,7 @@ impl LocalMulticaWorkspaceState {
             agents: Vec::new(),
             squads: Vec::new(),
             autopilots: Vec::new(),
+            issue_views: Vec::new(),
         }
     }
 
@@ -285,6 +290,7 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Agents => Ok(&self.agents),
             MulticaWorkspaceResourceKey::Squads => Ok(&self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&self.autopilots),
+            MulticaWorkspaceResourceKey::IssueViews => Ok(&self.issue_views),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -309,6 +315,7 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Agents => Ok(&mut self.agents),
             MulticaWorkspaceResourceKey::Squads => Ok(&mut self.squads),
             MulticaWorkspaceResourceKey::Autopilots => Ok(&mut self.autopilots),
+            MulticaWorkspaceResourceKey::IssueViews => Ok(&mut self.issue_views),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -1299,6 +1306,13 @@ fn query_local_collection(
         MulticaWorkspaceResourceKey::AgentTaskQueue => {
             agent_task_queue_collection(workspace, execution_store, query.limit, query.offset)
         }
+        MulticaWorkspaceResourceKey::IssueViews => local_entity_collection(
+            workspace,
+            workspace_store,
+            MulticaWorkspaceResourceKey::IssueViews,
+            query.limit,
+            query.offset,
+        ),
         MulticaWorkspaceResourceKey::Statistics => {
             statistics_collection(workspace, execution_store, workspace_store)
         }
@@ -2057,6 +2071,7 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         (MulticaWorkspaceResourceKey::Agents, &state.agents),
         (MulticaWorkspaceResourceKey::Squads, &state.squads),
         (MulticaWorkspaceResourceKey::Autopilots, &state.autopilots),
+        (MulticaWorkspaceResourceKey::IssueViews, &state.issue_views),
     ] {
         if entities.len() > MAX_LOCAL_ENTITIES_PER_RESOURCE {
             bail!("multica_workspace_collection_too_large");
@@ -2696,6 +2711,46 @@ fn validate_entity_contract(
         }
         return Ok(());
     }
+    if resource == MulticaWorkspaceResourceKey::IssueViews {
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if name.trim().is_empty() || name.chars().count() > 80 {
+            bail!("multica_workspace_issue_view_invalid");
+        }
+        let scope_type = object
+            .get("scope_type")
+            .or_else(|| object.get("scopeType"))
+            .and_then(Value::as_str)
+            .unwrap_or("my");
+        if !matches!(scope_type, "workspace" | "my" | "project") {
+            bail!("multica_workspace_issue_view_invalid");
+        }
+        if scope_type == "my" {
+            let variant = object
+                .get("scope_variant")
+                .or_else(|| object.get("scopeVariant"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !matches!(variant, "assigned" | "created" | "involved" | "any") {
+                bail!("multica_workspace_issue_view_invalid");
+            }
+        }
+        if let Some(visibility) = object.get("visibility").and_then(Value::as_str)
+            && !matches!(visibility, "private" | "workspace")
+        {
+            bail!("multica_workspace_issue_view_invalid");
+        }
+        for key in ["query", "display"] {
+            if let Some(value) = object.get(key) {
+                if !value.is_object() {
+                    bail!("multica_workspace_issue_view_invalid");
+                }
+            }
+        }
+        return Ok(());
+    }
     if resource != MulticaWorkspaceResourceKey::Projects {
         return Ok(());
     }
@@ -2973,6 +3028,44 @@ mod tests {
         );
         assert!(collection.items.is_empty());
         assert_eq!(collection.total, 0);
+    }
+
+    #[test]
+    fn issue_view_contract_matches_upstream_shape() {
+        let valid = json!({
+            "id": "view-1",
+            "workspace_id": "local-test",
+            "name": "进行中的任务",
+            "scope_type": "my",
+            "scope_variant": "assigned",
+            "visibility": "private",
+            "definition_version": 1,
+            "query": {"status": ["in_progress"]},
+            "display": {"mode": "board"},
+            "revision": 1
+        });
+        validate_local_entity(
+            &valid,
+            "local-test",
+            MulticaWorkspaceResourceKey::IssueViews,
+        )
+        .unwrap();
+        let invalid = json!({
+            "id": "view-2",
+            "workspace_id": "local-test",
+            "name": "bad",
+            "scope_type": "my",
+            "scope_variant": "agents",
+            "revision": 1
+        });
+        assert!(
+            validate_local_entity(
+                &invalid,
+                "local-test",
+                MulticaWorkspaceResourceKey::IssueViews
+            )
+            .is_err()
+        );
     }
 
     #[test]
