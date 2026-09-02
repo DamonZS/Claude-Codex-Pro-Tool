@@ -1457,6 +1457,13 @@ export function SupplierScreen({
       return;
     }
     if (!window.confirm(`确认删除供应商「${profile.name || profile.id}」？`)) return;
+    const deletingActiveCodex = supplierTargetForProfile(profile) === "codex"
+      && appSettings.activeRelayId === profile.id;
+    if (deletingActiveCodex) {
+      // 删除活动 Codex profile 前先清理 live config/auth，避免列表已删但
+      // 独立启动 Codex 仍继续使用已删除的中转供应商。
+      await actions.clearRelayMode();
+    }
     const nextProfiles = profiles
       .filter((item) => item.id !== profile.id)
       .map((item) => item.aggregateEnabled ? { ...item, aggregateMembers: (item.aggregateMembers ?? []).filter((id) => id !== profile.id) } : item);

@@ -3666,6 +3666,12 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     assert!(supplier_screen.contains("添加供应商"));
     assert!(supplier_screen.contains("编辑"));
     assert!(supplier_screen.contains("删除供应商"));
+    assert!(
+        supplier_screen.contains(
+            "const deletingActiveCodex = supplierTargetForProfile(profile) === \"codex\""
+        )
+    );
+    assert!(supplier_screen.contains("await actions.clearRelayMode();"));
     assert!(app_tsx.contains("function buildSupplierConfigToml"));
     assert!(!supplier_screen.contains("model_provider = \"custom\""));
     assert!(!supplier_screen.contains("[model_providers.custom]"));
