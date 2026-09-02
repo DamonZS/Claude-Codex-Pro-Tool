@@ -1442,7 +1442,15 @@ fn validate_idempotency_key(value: &str) -> anyhow::Result<()> {
 }
 
 fn validate_text(value: &str, max: usize, field: &str) -> anyhow::Result<()> {
-    if value.trim().is_empty() || value.len() > max || value.chars().any(char::is_control) {
+    // Native prompts are normal multi-line Unicode text. Retain line breaks
+    // and tabs while rejecting the remaining control range that cannot be
+    // represented safely by the page-host request protocol.
+    if value.trim().is_empty()
+        || value.len() > max
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
         bail!("codex_{field}_invalid");
     }
     Ok(())
@@ -1995,6 +2003,17 @@ mod tests {
         assert_eq!(
             request.validate().unwrap_err().to_string(),
             "codex_cwd_invalid"
+        );
+    }
+
+    #[test]
+    fn request_validation_accepts_multiline_unicode_prompts_but_rejects_nul() {
+        let mut request = request("第一行\n第二行");
+        assert!(request.validate().is_ok());
+        request.prompt.push('\0');
+        assert_eq!(
+            request.validate().unwrap_err().to_string(),
+            "codex_prompt_invalid"
         );
     }
 

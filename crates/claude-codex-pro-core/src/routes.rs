@@ -199,6 +199,20 @@ pub trait BridgeRuntimeService: Send + Sync {
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_execution_unavailable")
     }
+    async fn multica_execution_dispatch(
+        &self,
+        _request: MulticaExecutionDispatchRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
+    async fn dispatch_pending_assignment(
+        &self,
+        _binding_id: &str,
+        _expected_revision: u64,
+        _lease_token: &str,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
     async fn multica_execution_open(
         &self,
         _request: MulticaExecutionBindingRequest,
@@ -477,6 +491,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_execution_create(parse_multica_execution_create(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/executions/dispatch" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_execution_dispatch(parse_multica_execution_dispatch(&payload)?)
                     .await
             }
             .await
@@ -902,6 +925,17 @@ pub struct MulticaExecutionCreateRequest {
     pub bindings: SkillBindings,
 }
 
+/// Claim and dispatch one assignment-created queued binding. The renderer
+/// supplies a lease token so a retry from another page cannot create a second
+/// native Codex thread.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaExecutionDispatchRequest {
+    pub binding_id: String,
+    pub expected_revision: u64,
+    pub lease_token: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaExecutionBindingRequest {
@@ -1092,6 +1126,18 @@ fn parse_multica_execution_create(
         skill_request: None,
     }
     .validate()?;
+    Ok(request)
+}
+
+fn parse_multica_execution_dispatch(
+    payload: &Value,
+) -> anyhow::Result<MulticaExecutionDispatchRequest> {
+    let request: MulticaExecutionDispatchRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.binding_id)?;
+    validate_multica_execution_id(&request.lease_token)?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_execution_revision_invalid");
+    }
     Ok(request)
 }
 
@@ -1750,10 +1796,30 @@ impl BridgeRuntimeService for CoreRuntimeService {
                             idempotency_key: key,
                             now_ms: unix_now_ms(),
                         })?;
+                let auto_dispatch = self
+                    .dispatch_pending_assignment(
+                        &reservation.binding.binding_id,
+                        reservation.binding.revision,
+                        &format!("auto-{}", reservation.binding.binding_id),
+                    )
+                    .await;
+                let dispatched = match auto_dispatch {
+                    Ok(value) => Some(value),
+                    Err(error) => Some(json!({
+                        "status": "queued",
+                        "diagnostic": stable_execution_error_code(&error),
+                    })),
+                };
                 Some(json!({
                     "binding_id": reservation.binding.binding_id,
-                    "status": "queued",
+                    "status": dispatched
+                        .as_ref()
+                        .and_then(|value| value.get("binding"))
+                        .and_then(|binding| binding.get("state"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("queued"),
                     "replay": reservation.replay,
+                    "dispatch": dispatched,
                 }))
             } else {
                 None
@@ -1966,6 +2032,133 @@ impl BridgeRuntimeService for CoreRuntimeService {
             unix_now_ms(),
         )?;
         Ok(execution_handle_response(binding, handle))
+    }
+
+    async fn multica_execution_dispatch(
+        &self,
+        request: MulticaExecutionDispatchRequest,
+    ) -> anyhow::Result<Value> {
+        self.dispatch_pending_assignment(
+            &request.binding_id,
+            request.expected_revision,
+            &request.lease_token,
+        )
+        .await
+    }
+
+    /// Dispatch only a binding already created by Agent assignment. This is
+    /// deliberately separate from explicit execution creation because its
+    /// prompt comes only from persisted Issue and Agent fields.
+    async fn dispatch_pending_assignment(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+    ) -> anyhow::Result<Value> {
+        let binding = self.multica_execution_store.get_execution(binding_id)?;
+        if binding.revision != expected_revision {
+            anyhow::bail!("execution_revision_conflict");
+        }
+        if binding.state == MulticaExecutionBindingState::Dispatched {
+            let handle = execution_handle_from_binding(&binding, &binding.idempotency_key)?;
+            return Ok(execution_handle_response(binding, handle));
+        }
+        if binding.state != MulticaExecutionBindingState::BindingPending {
+            anyhow::bail!("execution_not_dispatchable");
+        }
+
+        let claimed = self.multica_execution_store.claim_execution_lease(
+            binding_id,
+            expected_revision,
+            lease_token,
+            unix_now_ms(),
+            30_000,
+        )?;
+        let release = |revision| {
+            self.multica_execution_store.release_execution_lease(
+                binding_id,
+                revision,
+                lease_token,
+                unix_now_ms(),
+            )
+        };
+
+        let result = async {
+            let service = self.codex_execution_service()?;
+            let agent_id = claimed
+                .agent_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("execution_agent_unavailable"))?;
+            let issues = self
+                .multica_workspace_store
+                .list(&claimed.workspace_id, MulticaWorkspaceResourceKey::Issues)?;
+            let issue = issues
+                .into_iter()
+                .find(|issue| {
+                    issue.get("id").and_then(Value::as_str) == Some(claimed.issue_id.as_str())
+                })
+                .ok_or_else(|| anyhow::anyhow!("execution_issue_unavailable"))?;
+            if issue.get("assignee_type").and_then(Value::as_str) != Some("agent")
+                || issue.get("assignee_id").and_then(Value::as_str) != Some(agent_id)
+            {
+                anyhow::bail!("execution_assignment_changed");
+            }
+            let agents = self
+                .multica_workspace_store
+                .list(&claimed.workspace_id, MulticaWorkspaceResourceKey::Agents)?;
+            let agent = agents
+                .into_iter()
+                .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
+                .ok_or_else(|| anyhow::anyhow!("execution_agent_unavailable"))?;
+            let native_request = CodexThreadRequest {
+                workspace_id: claimed.workspace_id.clone(),
+                issue_id: claimed.issue_id.clone(),
+                prompt: assignment_prompt(&issue, &agent)?,
+                cwd: None,
+                skill_request: None,
+            };
+            native_request.validate()?;
+            let handle = service
+                .create_thread(native_request, &claimed.idempotency_key)
+                .await
+                .map_err(|error| anyhow::anyhow!(stable_execution_error_code(&error)))?;
+            let binding = match self.multica_execution_store.commit_execution(
+                binding_id,
+                claimed.revision,
+                &handle,
+                unix_now_ms(),
+            ) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    // The native thread already exists but its durable
+                    // mapping is ambiguous. Fail closed instead of leaving
+                    // a queued binding that could create a second thread.
+                    let _ = self.multica_execution_store.fail_execution(
+                        binding_id,
+                        claimed.revision,
+                        "execution_mapping_pending",
+                        false,
+                        unix_now_ms(),
+                    );
+                    anyhow::bail!("execution_mapping_pending");
+                }
+            };
+            Ok::<_, anyhow::Error>((binding, handle))
+        }
+        .await;
+
+        match result {
+            Ok((binding, handle)) => {
+                let released = release(binding.revision)?;
+                Ok(execution_handle_response(released, handle))
+            }
+            Err(error) => {
+                // A failed preflight or host call is retryable: leave the
+                // assignment binding queued and make the lease available.
+                let _ = release(claimed.revision);
+                Err(error)
+            }
+        }
     }
 
     async fn multica_execution_open(
@@ -2731,6 +2924,36 @@ async fn resolve_execution_skills(
     Ok((Some(request), Some(audit)))
 }
 
+fn assignment_prompt(issue: &Value, agent: &Value) -> anyhow::Result<String> {
+    let title = issue
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("execution_issue_title_unavailable"))?;
+    let description = issue
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let instructions = agent
+        .get("instructions")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut prompt = format!("任务标题：\n{title}");
+    if let Some(description) = description {
+        prompt.push_str("\n\n任务描述：\n");
+        prompt.push_str(description);
+    }
+    if let Some(instructions) = instructions {
+        prompt.push_str("\n\n智能体指令：\n");
+        prompt.push_str(instructions);
+    }
+    Ok(prompt)
+}
+
 fn execution_handle_from_binding(
     binding: &CodexMulticaExecutionBinding,
     idempotency_key: &str,
@@ -2977,7 +3200,174 @@ fn empty_user_script_inventory() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::stable_execution_error_code;
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::bail;
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    use crate::codex_execution::{
+        CodexExecutionEvent, CodexRuntimeCapabilities, CodexSkill, CodexThreadRequest,
+    };
+    use crate::multica_execution::CodexSkillExecutionRequest;
+    use crate::multica_execution_store::{ExecutionReservation, MulticaExecutionKind};
+    use crate::multica_workspace::{
+        LocalMulticaWorkspaceStore, LocalWorkspaceEntityUpsert, MulticaWorkspaceResourceKey,
+    };
+    use crate::status::StatusStore;
+
+    use super::{
+        BridgeRuntimeService, CodexExecutionHandle, CodexExecutionService, CodexExecutionStatus,
+        CoreRuntimeService, MulticaExecutionBindingState, MulticaExecutionDispatchRequest,
+        MulticaExecutionStore, assignment_prompt, stable_execution_error_code,
+    };
+
+    #[derive(Default)]
+    struct RecordingCodexHost {
+        requests: Mutex<Vec<CodexThreadRequest>>,
+    }
+
+    #[async_trait]
+    impl CodexExecutionService for RecordingCodexHost {
+        async fn capabilities(&self) -> anyhow::Result<CodexRuntimeCapabilities> {
+            bail!("unused")
+        }
+
+        async fn list_skills(&self) -> anyhow::Result<Vec<CodexSkill>> {
+            bail!("unused")
+        }
+
+        async fn resolve_skills(
+            &self,
+            _request: CodexSkillExecutionRequest,
+        ) -> anyhow::Result<CodexSkillExecutionRequest> {
+            bail!("unused")
+        }
+
+        async fn create_thread(
+            &self,
+            request: CodexThreadRequest,
+            idempotency_key: &str,
+        ) -> anyhow::Result<CodexExecutionHandle> {
+            self.requests.lock().unwrap().push(request);
+            Ok(CodexExecutionHandle {
+                runtime_id: "codex-current-page".to_string(),
+                thread_id: "native-thread-1".to_string(),
+                execution_id: Some("native-turn-1".to_string()),
+                parent_thread_id: None,
+                idempotency_key: idempotency_key.to_string(),
+            })
+        }
+
+        async fn create_subagent(
+            &self,
+            _parent_thread_id: &str,
+            _request: CodexThreadRequest,
+            _idempotency_key: &str,
+        ) -> anyhow::Result<CodexExecutionHandle> {
+            bail!("unused")
+        }
+
+        async fn open_thread(&self, _thread_id: &str) -> anyhow::Result<CodexExecutionHandle> {
+            bail!("unused")
+        }
+
+        async fn continue_thread(
+            &self,
+            _thread_id: &str,
+            _request: CodexThreadRequest,
+            _idempotency_key: &str,
+        ) -> anyhow::Result<CodexExecutionHandle> {
+            bail!("unused")
+        }
+
+        async fn cancel_execution(
+            &self,
+            _thread_id: &str,
+            _execution_id: &str,
+        ) -> anyhow::Result<CodexExecutionStatus> {
+            bail!("unused")
+        }
+
+        async fn execution_status(
+            &self,
+            _thread_id: &str,
+            _execution_id: &str,
+        ) -> anyhow::Result<CodexExecutionStatus> {
+            bail!("unused")
+        }
+
+        async fn subscribe_events(
+            &self,
+            _cursor: Option<&str>,
+        ) -> anyhow::Result<Vec<CodexExecutionEvent>> {
+            bail!("unused")
+        }
+    }
+
+    fn dispatch_fixture() -> (
+        tempfile::TempDir,
+        MulticaExecutionStore,
+        LocalMulticaWorkspaceStore,
+        String,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = "local-test".to_string();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        workspace
+            .upsert(
+                &workspace_id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Agents,
+                    entity: json!({
+                        "id": "agent-a",
+                        "name": "修复智能体",
+                        "instructions": "先检查日志"
+                    }),
+                    expected_revision: None,
+                },
+                1,
+            )
+            .unwrap();
+        workspace
+            .upsert(
+                &workspace_id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity: json!({
+                        "id": "issue-a",
+                        "title": "同步失败",
+                        "description": "修复当前页面 host 连接",
+                        "assignee_type": "agent",
+                        "assignee_id": "agent-a"
+                    }),
+                    expected_revision: None,
+                },
+                2,
+            )
+            .unwrap();
+        let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        (dir, executions, workspace, workspace_id)
+    }
+
+    fn queued_assignment(
+        store: &MulticaExecutionStore,
+        workspace_id: &str,
+    ) -> crate::multica_execution_store::CodexMulticaExecutionBinding {
+        store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: workspace_id.to_string(),
+                issue_id: "issue-a".to_string(),
+                agent_id: Some("agent-a".to_string()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "issue-assignment:local-test:issue-a:agent-a".to_string(),
+                now_ms: 3,
+            })
+            .unwrap()
+            .binding
+    }
 
     #[test]
     fn known_codex_host_call_id_transport_error_gets_stable_code() {
@@ -2988,5 +3378,98 @@ mod tests {
             stable_execution_error_code(&error),
             "codex_host_transport_call_id_required"
         );
+    }
+
+    #[test]
+    fn assignment_prompt_uses_only_persisted_issue_and_agent_fields() {
+        let prompt = assignment_prompt(
+            &json!({
+                "title": "修复任务同步",
+                "description": "排查 host 连接状态",
+                "untrusted": "must not be included"
+            }),
+            &json!({
+                "instructions": "先收集日志，再提交最小修复",
+                "secret": "must not be included"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            prompt,
+            "任务标题：\n修复任务同步\n\n任务描述：\n排查 host 连接状态\n\n智能体指令：\n先收集日志，再提交最小修复"
+        );
+    }
+
+    #[test]
+    fn assignment_prompt_omits_empty_optional_sections() {
+        let prompt = assignment_prompt(
+            &json!({"title": "仅标题", "description": "  "}),
+            &json!({"instructions": ""}),
+        )
+        .unwrap();
+
+        assert_eq!(prompt, "任务标题：\n仅标题");
+    }
+
+    #[tokio::test]
+    async fn queued_assignment_dispatches_once_to_the_current_codex_host() {
+        let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
+        let queued = queued_assignment(&executions, &workspace_id);
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_codex_execution_service(host.clone())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace);
+        let request = MulticaExecutionDispatchRequest {
+            binding_id: queued.binding_id.clone(),
+            expected_revision: queued.revision,
+            lease_token: "dispatch-lease-a".to_string(),
+        };
+
+        let response = runtime.multica_execution_dispatch(request).await.unwrap();
+        assert_eq!(
+            response["binding"]["state"],
+            json!(MulticaExecutionBindingState::Dispatched)
+        );
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            host.requests.lock().unwrap()[0].prompt,
+            "任务标题：\n同步失败\n\n任务描述：\n修复当前页面 host 连接\n\n智能体指令：\n先检查日志"
+        );
+
+        let dispatched = executions.get_execution(&queued.binding_id).unwrap();
+        let replay = runtime
+            .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                binding_id: queued.binding_id,
+                expected_revision: dispatched.revision,
+                lease_token: "dispatch-lease-b".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(replay["handle"]["threadId"], "native-thread-1");
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unavailable_host_keeps_assignment_queued_and_releases_lease() {
+        let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
+        let queued = queued_assignment(&executions, &workspace_id);
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace);
+
+        let error = runtime
+            .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                binding_id: queued.binding_id.clone(),
+                expected_revision: queued.revision,
+                lease_token: "dispatch-lease-a".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "codex_page_host_unavailable");
+        let current = executions.get_execution(&queued.binding_id).unwrap();
+        assert_eq!(current.state, MulticaExecutionBindingState::BindingPending);
+        assert_eq!(current.lease_token, None);
     }
 }
