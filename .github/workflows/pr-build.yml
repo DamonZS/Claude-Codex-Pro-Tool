@@ -64,6 +64,16 @@ jobs:
       - name: Stage Multica runtime
         run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
 
+      - name: Verify staged Multica runtime
+        shell: pwsh
+        run: |
+          $runtimeDir = "dist/windows/app/resources/multica"
+          $archives = @(Get-ChildItem -LiteralPath $runtimeDir -File -ErrorAction SilentlyContinue)
+          if ($archives.Count -eq 0) {
+            throw "Multica runtime staging produced no archive in $runtimeDir"
+          }
+          Write-Host "Staged runtime archive: $($archives[0].Name) ($($archives[0].Length) bytes)"
+
       - name: Build Windows installer
         shell: pwsh
         run: |
