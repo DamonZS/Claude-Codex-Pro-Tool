@@ -12,7 +12,7 @@
 
 ## 功能要求
 
-- 允许保存 `all`、`assigned`、`created`、`agents` 四种 scope。
+- 允许保存 `all`、`assigned`、`created`、`agents`、`working` 五种 scope；`working` 仅包含本地执行绑定中非终态任务。
 - 允许保存 `board`、`list`、`table`、`swimlane` 四种显示模式及 `boardCompact`。
 - 读取 localStorage 时校验结构；损坏、非数组或缺少 id/name 的记录忽略。
 - localStorage 不可写时显示明确错误，不阻断任务查看和编辑。

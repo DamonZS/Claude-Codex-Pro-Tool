@@ -4661,6 +4661,7 @@
     { key: "assigned", label: "已分配" },
     { key: "created", label: "我创建的" },
     { key: "agents", label: "我的智能体和小队" },
+    { key: "working", label: "工作中" },
   ]);
   const multicaWorkspaceBackgroundIntervalMs = 5000;
   // Background refreshes must use the same bounded budget as the foreground
@@ -6524,6 +6525,15 @@
         const id = String(multicaWorkspaceObjectValue(item, "assigneeId", "assignee_id") || "");
         return (kind === "agent" || kind === "squad") && localAssignees.has(id);
       });
+    } else if (filter === "working") {
+      // Upstream exposes /api/working-agents as a separate projection. The
+      // local control plane has no remote endpoint, so derive this filter only
+      // from persisted non-terminal execution bindings and label it locally.
+      const workingIssueIds = new Set(multicaWorkspaceState.executions
+        .filter((binding) => !multicaWorkspaceTerminalExecutionStates.has(multicaWorkspaceExecutionState(binding)))
+        .map((binding) => String(multicaWorkspaceObjectValue(binding, "issueId", "issue_id") || "").trim())
+        .filter(Boolean));
+      items = items.filter((item) => workingIssueIds.has(multicaWorkspaceEntityId(item)));
     }
     return { sourceKey, collection, error, items };
   }

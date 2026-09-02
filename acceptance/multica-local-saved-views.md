@@ -8,6 +8,7 @@
 - 管理器类型检查通过：`npm --prefix apps/claude-codex-pro-manager run check`。
 - Vite 生产构建通过：`npm --prefix apps/claude-codex-pro-manager run vite:build`。
 - 任务工具栏显示本机视图选择、保存和当前视图删除控件。
+- 筛选器包含“工作中”，且只显示存在本地非终态 Codex 执行绑定的任务。
 - 保存后刷新页面，选择该视图可恢复 scope、显示模式和紧凑布局。
 - localStorage 中的无效记录不会导致页面崩溃。
 - `git diff --check` 无错误。
