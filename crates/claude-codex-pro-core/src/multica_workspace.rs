@@ -651,8 +651,24 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
             } else {
                 "0"
             };
+            let optional = |column: &str, fallback: &str| {
+                if columns.iter().any(|candidate| candidate == column) {
+                    column.to_string()
+                } else {
+                    fallback.to_string()
+                }
+            };
+            let project_id = optional("project_id", "NULL");
+            let archived = optional("archived", "0");
+            let pinned = optional("is_pinned", "0");
+            let model = optional("model", "NULL");
+            let provider = optional("model_provider", "NULL");
+            let source = optional("source", "NULL");
+            let branch = optional("git_branch", "NULL");
+            let origin = optional("git_origin_url", "NULL");
+            let nickname = optional("agent_nickname", "NULL");
             let sql = format!(
-                "SELECT id, {title}, {cwd}, {updated} FROM threads ORDER BY COALESCE({updated}, 0) DESC LIMIT {NATIVE_THREAD_SCAN_LIMIT}"
+                "SELECT id, {title}, {cwd}, {updated}, {project_id}, {archived}, {pinned}, {model}, {provider}, {source}, {branch}, {origin}, {nickname} FROM threads ORDER BY COALESCE({updated}, 0) DESC LIMIT {NATIVE_THREAD_SCAN_LIMIT}"
             );
             let _ = db
                 .prepare(&sql)
@@ -662,11 +678,25 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
                         let title = row.get::<_, Option<String>>(1)?.unwrap_or_default();
                         let cwd = row.get::<_, Option<String>>(2)?.unwrap_or_default();
                         let updated = row.get::<_, Option<i64>>(3)?.unwrap_or_default();
-                        Ok((id, title, cwd, updated))
+                        let project_id = row.get::<_, Option<String>>(4)?.unwrap_or_default();
+                        let archived = row.get::<_, Option<i64>>(5)?.unwrap_or_default() != 0;
+                        let pinned = row.get::<_, Option<i64>>(6)?.unwrap_or_default() != 0;
+                        let model = row.get::<_, Option<String>>(7)?.unwrap_or_default();
+                        let provider = row.get::<_, Option<String>>(8)?.unwrap_or_default();
+                        let source = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+                        let branch = row.get::<_, Option<String>>(10)?.unwrap_or_default();
+                        let origin = row.get::<_, Option<String>>(11)?.unwrap_or_default();
+                        let nickname = row.get::<_, Option<String>>(12)?.unwrap_or_default();
+                        Ok((id, title, cwd, updated, project_id, archived, pinned, model, provider, source, branch, origin, nickname))
                     })?;
                     for item in rows.flatten() {
-                        let (id, title, cwd, updated) = item;
-                        threads.push(json!({"id": id, "title": title, "cwd": cwd, "updated_at_ms": updated, "source": "codex_native"}));
+                        let (id, title, cwd, updated, project_id, archived, pinned, model, provider, source, branch, origin, nickname) = item;
+                        let mut thread = json!({"id": id, "title": title, "cwd": cwd, "updated_at_ms": updated, "source": "codex_native", "archived": archived, "is_pinned": pinned});
+                        for (key, value) in [("project_id", project_id), ("model", model), ("model_provider", provider), ("git_branch", branch), ("git_origin_url", origin), ("agent_nickname", nickname)] {
+                            if !value.trim().is_empty() { thread[key] = Value::String(value); }
+                        }
+                        if !source.trim().is_empty() { thread["codex_source"] = Value::String(source); }
+                        threads.push(thread);
                     }
                     Ok(())
                 });
