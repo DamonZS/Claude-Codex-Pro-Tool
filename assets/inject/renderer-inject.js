@@ -4766,13 +4766,14 @@
   async function multicaWorkspaceSaveCurrentIssueView() {
     const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
     if (!name) return;
+    const previous = multicaWorkspaceState.savedIssueViews.find((item) => item.name === name);
     const view = {
-      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: previous?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       name,
       scope: multicaWorkspaceState.issueFilter,
       issueViewMode: multicaWorkspaceState.issueViewMode,
       boardCompact: multicaWorkspaceState.boardCompact === true,
-      revision: 1,
+      revision: previous?.revision || 1,
     };
     multicaWorkspaceState.savedIssueViews = [
       ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
@@ -4787,7 +4788,11 @@
           workspace_id: multicaWorkspaceState.workspaceId,
           name: view.name,
           scope_type: "my",
-          scope_variant: view.scope === "working" ? "assigned" : view.scope,
+          // Multica's `my` scope uses API variants; local-only filters stay
+          // in query.local_filter while `any` represents the all-tasks view.
+          scope_variant: view.scope === "all" || view.scope === "agents" || view.scope === "working"
+            ? (view.scope === "all" ? "any" : "assigned")
+            : view.scope,
           visibility: "private",
           definition_version: 1,
           query: { local_filter: view.scope },
@@ -4797,7 +4802,12 @@
         await multicaWorkspaceCall("/multica/workspace/upsert", {
           resource: "issue_views",
           entity: backendView,
+          expectedRevision: previous?.revision || undefined,
         });
+        view.revision = previous ? previous.revision + 1 : 1;
+        multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.map((item) =>
+          item.id === view.id ? view : item,
+        );
         backendSaved = true;
       } catch (_) {
         // The local cache remains usable when an older binary lacks the new
