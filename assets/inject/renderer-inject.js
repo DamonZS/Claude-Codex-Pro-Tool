@@ -4733,6 +4733,62 @@
     settingsSave: null,
   };
   const multicaWorkspaceVersion = "2";
+  const multicaWorkspaceSavedIssueViewsStorageKey = "ccp.multica.issue-views.v1";
+  const multicaWorkspaceIssueViewScopes = Object.freeze(["all", "assigned", "created", "agents", "working"]);
+  const multicaWorkspaceIssueViewModes = Object.freeze(["board", "list", "table", "swimlane"]);
+
+  function multicaWorkspaceNormalizeSavedIssueView(value) {
+    if (!value || typeof value !== "object") return null;
+    const id = String(value.id || "").trim();
+    const name = String(value.name || "").trim().slice(0, 80);
+    if (!id || !name) return null;
+    const scope = multicaWorkspaceIssueViewScopes.includes(value.scope) ? value.scope : "assigned";
+    const issueViewMode = multicaWorkspaceIssueViewModes.includes(value.issueViewMode) ? value.issueViewMode : "board";
+    const revision = Number(value.revision);
+    return {
+      id,
+      name,
+      scope,
+      issueViewMode,
+      boardCompact: value.boardCompact === true,
+      revision: Number.isFinite(revision) && revision > 0 ? Math.floor(revision) : 1,
+    };
+  }
+
+  function multicaWorkspaceReadSavedIssueViewsCache() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(multicaWorkspaceSavedIssueViewsStorageKey) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      const seen = new Set();
+      return parsed.map(multicaWorkspaceNormalizeSavedIssueView).filter((view) => {
+        if (!view || seen.has(view.id)) return false;
+        seen.add(view.id);
+        return true;
+      });
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function multicaWorkspaceWriteSavedIssueViewsCache(views) {
+    try {
+      const normalized = Array.isArray(views)
+        ? views.map(multicaWorkspaceNormalizeSavedIssueView).filter(Boolean)
+        : [];
+      window.localStorage.setItem(multicaWorkspaceSavedIssueViewsStorageKey, JSON.stringify(normalized));
+      return true;
+    } catch (_) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: "本机视图缓存不可写，任务仍可正常查看和编辑" };
+      return false;
+    }
+  }
+
+  function multicaWorkspaceLoadSavedIssueViewsFromCache() {
+    const cached = multicaWorkspaceReadSavedIssueViewsCache();
+    if (!cached.length) return;
+    multicaWorkspaceState.savedIssueViews = cached;
+    if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+  }
 
   async function multicaWorkspaceSaveCurrentIssueView() {
     const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
@@ -4747,7 +4803,13 @@
       revision: previous?.revision || 1,
     };
     if (!multicaWorkspaceState.workspaceId) {
-      multicaWorkspaceState.mutationNotice = { state: "error", message: "本地任务控制面尚未就绪，无法保存视图" };
+      multicaWorkspaceState.savedIssueViews = [
+        ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
+        view,
+      ];
+      multicaWorkspaceState.activeIssueViewId = view.id;
+      multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews);
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${name}”已保存（控制面未连接）` };
       multicaWorkspaceRenderContent();
       return;
     }
@@ -4778,10 +4840,17 @@
         ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
         view,
       ];
+      multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews);
       multicaWorkspaceState.activeIssueViewId = view.id;
       multicaWorkspaceState.mutationNotice = { state: "ok", message: `本地视图“${name}”已保存` };
     } catch (error) {
-      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+      multicaWorkspaceState.savedIssueViews = [
+        ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
+        view,
+      ];
+      multicaWorkspaceState.activeIssueViewId = view.id;
+      multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews);
+      multicaWorkspaceState.mutationNotice = { state: "error", message: `控制面保存失败，已保存到本机缓存：${multicaWorkspaceErrorMessage(error)}` };
     }
     multicaWorkspaceRenderContent();
   }
@@ -4797,7 +4866,7 @@
       const items = Array.isArray(result?.collection?.items)
         ? result.collection.items
         : Array.isArray(result?.items) ? result.items : [];
-      const views = items.map((item) => {
+      const controlPlaneViews = items.map((item) => {
         const display = item.display && typeof item.display === "object" ? item.display : {};
         const query = item.query && typeof item.query === "object" ? item.query : {};
         return {
@@ -4811,7 +4880,15 @@
           revision: Number(item.revision) > 0 ? Number(item.revision) : 1,
         };
       }).filter((view) => view.id && view.name);
-      multicaWorkspaceState.savedIssueViews = views;
+      const cachedViews = multicaWorkspaceReadSavedIssueViewsCache();
+      const mergedViews = [...controlPlaneViews];
+      cachedViews.forEach((cached) => {
+        if (!mergedViews.some((view) => view.id === cached.id || view.name === cached.name)) {
+          mergedViews.push(cached);
+        }
+      });
+      multicaWorkspaceState.savedIssueViews = mergedViews;
+      multicaWorkspaceWriteSavedIssueViewsCache(mergedViews);
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
     } catch (error) {
       multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
@@ -4846,6 +4923,7 @@
       }
     }
     multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.filter((item) => item.id !== view.id);
+    multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews);
     multicaWorkspaceState.activeIssueViewId = "";
     multicaWorkspaceState.mutationNotice = { state: "ok", message: `本地视图“${view.name}”已删除` };
     multicaWorkspaceRenderContent();
@@ -8103,6 +8181,9 @@
 
   async function multicaWorkspaceLoadBootstrap(force = false, timeoutMs = 15000) {
     if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
+    // Render the last local view immediately; the control-plane query below may
+    // arrive later or be unavailable on an offline/local-only installation.
+    multicaWorkspaceLoadSavedIssueViewsFromCache();
     if (multicaWorkspaceState.bootstrapLoading && !force) {
       return !!multicaWorkspaceState.bootstrap && !multicaWorkspaceState.bootstrapError;
     }

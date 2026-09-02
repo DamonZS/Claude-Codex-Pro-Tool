@@ -41,6 +41,23 @@ fn read_all_frontend_sources() -> String {
     combined
 }
 
+#[test]
+fn multica_saved_issue_views_have_local_cache_fallback_and_validation() {
+    let renderer = include_str!("../../../../assets/inject/renderer-inject.js");
+    assert!(renderer.contains("ccp.multica.issue-views.v1"));
+    assert!(renderer.contains("multicaWorkspaceNormalizeSavedIssueView"));
+    assert!(renderer.contains("JSON.parse(window.localStorage.getItem(multicaWorkspaceSavedIssueViewsStorageKey) || \"[]\")"));
+    assert!(renderer.contains("控制面未连接"));
+    assert!(renderer.contains("已保存到本机缓存"));
+    assert!(renderer.contains("multicaWorkspaceLoadSavedIssueViewsFromCache();"));
+    assert!(renderer.contains("multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews)"));
+    assert!(renderer.contains("multicaWorkspaceWriteSavedIssueViewsCache(mergedViews)"));
+    assert!(renderer.contains("const controlPlaneViews = items.map"));
+    assert!(renderer.contains("const cachedViews = multicaWorkspaceReadSavedIssueViewsCache();"));
+    assert!(renderer.contains("view.id === cached.id || view.name === cached.name"));
+    assert!(renderer.contains("本机视图缓存不可写，任务仍可正常查看和编辑"));
+}
+
 /// 读取拆分后某个前端源文件的完整内容（相对 `src/`），用于结构化断言。
 fn normalize_source(source: String) -> String {
     source.replace("\r\n", "\n").replace('\r', "\n")
