@@ -720,6 +720,7 @@ fn codex_multica_workspace_hide_preserves_background_work_until_full_cleanup() {
     assert!(cleanup.contains("multicaWorkspaceState.host?.remove?.();"));
     assert!(workspace.contains("multicaWorkspaceBackgroundIntervalMs"));
     assert!(workspace.contains("multicaWorkspaceState.backgroundTimer ="));
+    assert!(workspace.contains("[\"source\", \"limitations\", \"status\""));
 
     // Native Codex does not expose a stable event subscription on every
     // page-host version. The board must therefore poll only active bindings

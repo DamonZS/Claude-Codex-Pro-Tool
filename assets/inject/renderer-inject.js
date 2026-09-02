@@ -5476,7 +5476,7 @@
       parent.appendChild(article);
       return;
     }
-    const preferred = ["status", "status_category", "status_name", "version", "priority", "labels", "reactions", "comment_count", "activity_count", "last_activity_at", "trigger_kinds", "next_run_at", "last_run_status", "subscribers", "timeline", "trust_state", "inventory_source", "workspace_slug"];
+    const preferred = ["source", "limitations", "status", "status_category", "status_name", "version", "priority", "labels", "reactions", "comment_count", "activity_count", "last_activity_at", "trigger_kinds", "next_run_at", "last_run_status", "subscribers", "timeline", "trust_state", "inventory_source", "workspace_slug"];
     const keys = preferred.concat(Object.keys(item)).filter((key, index, all) => all.indexOf(key) === index)
       .filter((key) => multicaWorkspaceSafeKey(key) && !["title", "name", "display_name", "displayName", "slug", "id", "key"].includes(key))
       .slice(0, 8);
