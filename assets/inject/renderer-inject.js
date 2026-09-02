@@ -4667,6 +4667,7 @@
   // preflight. A shorter timeout made normal CDP/IPC jitter look like a lost
   // connection and overwrote a previously healthy entry state.
   const multicaWorkspaceBackgroundTimeoutMs = 15000;
+  const multicaWorkspaceSavedViewsKey = "claudeCodexProMulticaSavedIssueViews";
   const multicaWorkspaceState = {
     entry: null,
     host: null,
@@ -4687,6 +4688,8 @@
     issueFilter: "assigned",
     boardCompact: false,
     issueViewMode: "board",
+    savedIssueViews: [],
+    activeIssueViewId: "",
     moduleMenuOpen: false,
     draggedIssue: null,
     nativeThreadActivation: false,
@@ -4730,6 +4733,79 @@
     settingsSave: null,
   };
   const multicaWorkspaceVersion = "2";
+
+  function multicaWorkspaceLoadSavedIssueViews() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(multicaWorkspaceSavedViewsKey) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((view) => view && typeof view === "object")
+        .map((view) => ({
+          id: String(view.id || "").trim(),
+          name: String(view.name || "").trim().slice(0, 80),
+          scope: multicaWorkspaceIssueFilters.some((filter) => filter.key === view.scope) ? view.scope : "assigned",
+          issueViewMode: ["board", "list", "table", "swimlane"].includes(view.issueViewMode) ? view.issueViewMode : "board",
+          boardCompact: view.boardCompact === true,
+        }))
+        .filter((view) => view.id && view.name);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function multicaWorkspaceWriteSavedIssueViews() {
+    try {
+      localStorage.setItem(multicaWorkspaceSavedViewsKey, JSON.stringify(multicaWorkspaceState.savedIssueViews));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function multicaWorkspaceSaveCurrentIssueView() {
+    const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
+    if (!name) return;
+    const view = {
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      scope: multicaWorkspaceState.issueFilter,
+      issueViewMode: multicaWorkspaceState.issueViewMode,
+      boardCompact: multicaWorkspaceState.boardCompact === true,
+    };
+    multicaWorkspaceState.savedIssueViews = [
+      ...multicaWorkspaceState.savedIssueViews.filter((item) => item.name !== name),
+      view,
+    ];
+    multicaWorkspaceState.activeIssueViewId = view.id;
+    if (!multicaWorkspaceWriteSavedIssueViews()) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: "本机视图保存失败，请检查浏览器存储空间" };
+    } else {
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${name}”已保存` };
+    }
+    multicaWorkspaceRenderContent();
+  }
+
+  function multicaWorkspaceApplySavedIssueView(viewId) {
+    const view = multicaWorkspaceState.savedIssueViews.find((item) => item.id === viewId);
+    if (!view) return;
+    multicaWorkspaceState.activeIssueViewId = view.id;
+    multicaWorkspaceState.issueFilter = view.scope;
+    multicaWorkspaceState.issueViewMode = view.issueViewMode;
+    multicaWorkspaceState.boardCompact = view.boardCompact;
+    multicaWorkspaceRenderContent();
+    multicaWorkspaceRefreshBoardSource(false);
+  }
+
+  function multicaWorkspaceDeleteActiveIssueView() {
+    const view = multicaWorkspaceState.savedIssueViews.find((item) => item.id === multicaWorkspaceState.activeIssueViewId);
+    if (!view || !window.confirm(`删除本机视图“${view.name}”？`)) return;
+    multicaWorkspaceState.savedIssueViews = multicaWorkspaceState.savedIssueViews.filter((item) => item.id !== view.id);
+    multicaWorkspaceState.activeIssueViewId = "";
+    multicaWorkspaceWriteSavedIssueViews();
+    multicaWorkspaceState.mutationNotice = { state: "ok", message: `本机视图“${view.name}”已删除` };
+    multicaWorkspaceRenderContent();
+  }
+
+  multicaWorkspaceState.savedIssueViews = multicaWorkspaceLoadSavedIssueViews();
 
   function multicaWorkspaceEl(tag, className, text) {
     const element = document.createElement(tag);
@@ -6849,6 +6925,37 @@
       });
       toolbar.appendChild(modeButton);
     });
+    const savedViews = multicaWorkspaceEl("select", "ccp-multica-filter");
+    savedViews.title = "选择本机保存视图";
+    savedViews.setAttribute("aria-label", "本机保存视图");
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "本机视图";
+    savedViews.appendChild(emptyOption);
+    multicaWorkspaceState.savedIssueViews.forEach((view) => {
+      const option = document.createElement("option");
+      option.value = view.id;
+      option.textContent = view.name;
+      savedViews.appendChild(option);
+    });
+    savedViews.value = multicaWorkspaceState.activeIssueViewId;
+    savedViews.addEventListener("change", () => {
+      if (savedViews.value) multicaWorkspaceApplySavedIssueView(savedViews.value);
+    });
+    toolbar.appendChild(savedViews);
+    const saveView = multicaWorkspaceEl("button", "ccp-multica-filter", "保存本机视图");
+    saveView.type = "button";
+    saveView.title = "将当前任务筛选和显示方式保存到本机浏览器";
+    saveView.addEventListener("click", multicaWorkspaceSaveCurrentIssueView);
+    toolbar.appendChild(saveView);
+    if (multicaWorkspaceState.activeIssueViewId) {
+      const deleteView = multicaWorkspaceEl("button", "ccp-multica-icon-button", "×");
+      deleteView.type = "button";
+      deleteView.title = "删除当前本机视图";
+      deleteView.setAttribute("aria-label", "删除当前本机视图");
+      deleteView.addEventListener("click", multicaWorkspaceDeleteActiveIssueView);
+      toolbar.appendChild(deleteView);
+    }
     const refresh = multicaWorkspaceEl("button", "ccp-multica-icon-button", "↻");
     refresh.type = "button";
     refresh.title = "刷新任务";
