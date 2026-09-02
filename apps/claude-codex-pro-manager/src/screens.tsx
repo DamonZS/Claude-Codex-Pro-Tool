@@ -5319,7 +5319,7 @@ export function MulticaRuntimeScreen({
                 </label>
                 <label className="ops-form-field">
                   <span>{isNew ? "服务地址" : "服务地址（留空保持原值）"}</span>
-                  <input autoComplete="url" disabled={Boolean(pending)} onChange={(event) => updateDraft({ serverUrl: event.currentTarget.value })} placeholder={isNew ? "https://multica.example" : "留空保持已保存地址；输入新地址则替换"} value={draft.serverUrl} />
+                  <input autoComplete="url" disabled={Boolean(pending)} onChange={(event) => updateDraft({ serverUrl: event.currentTarget.value })} placeholder={isNew ? "https://workflow.example" : "留空保持已保存地址；输入新地址则替换"} value={draft.serverUrl} />
                 </label>
                 <label className="ops-form-field">
                   <span>API 前缀</span>
@@ -5335,7 +5335,7 @@ export function MulticaRuntimeScreen({
                 </label>
                 <label className="ops-form-field">
                   <span>令牌环境变量名</span>
-                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => { setTokenEnvVarDraft(event.currentTarget.value); setClearToken(false); }} placeholder={selected?.tokenConfigured ? "已配置，输入新变量名覆盖" : "可选，例如 MULTICA_TOKEN"} value={tokenEnvVarDraft} />
+                  <input autoComplete="off" disabled={Boolean(pending)} onChange={(event) => { setTokenEnvVarDraft(event.currentTarget.value); setClearToken(false); }} placeholder={selected?.tokenConfigured ? "已配置，输入新变量名覆盖" : "可选，例如 WORKFLOW_TOKEN"} value={tokenEnvVarDraft} />
                 </label>
               </div>
               <label className="multica-checkbox-line">

@@ -3467,7 +3467,7 @@ fn multica_error_message(operation: &str, error: &anyhow::Error) -> String {
     // of the renderer. Only stable, actionable categories cross IPC.
     let lower = error.to_string().to_ascii_lowercase();
     let category = if lower.contains("managed_connection_reserved") {
-        "托管 Multica 连接只能在 Runtime 页面管理"
+        "托管工作流连接只能在运行时页面管理"
     } else if lower.contains("未找到") || lower.contains("not found") {
         "未找到该连接"
     } else if lower.contains("请先停止") || (lower.contains("sidecar") && lower.contains("running"))
@@ -3520,15 +3520,15 @@ fn multica_connections_payload(
 pub async fn list_multica_connections() -> CommandResult<MulticaConnectionsPayload> {
     match tauri::async_runtime::spawn_blocking(multica::list_connections).await {
         Ok(Ok(connections)) => ok(
-            "Multica 连接已加载。",
+            "工作流连接已加载。",
             multica_connections_payload(connections),
         ),
         Ok(Err(error)) => failed(
-            &multica_error_message("加载 Multica 连接", &error),
+            &multica_error_message("加载工作流连接", &error),
             MulticaConnectionsPayload::default(),
         ),
         Err(_) => failed(
-            "加载 Multica 连接的后台任务失败。",
+            "加载工作流连接的后台任务失败。",
             MulticaConnectionsPayload::default(),
         ),
     }
@@ -3548,15 +3548,15 @@ pub async fn save_multica_connection(
     .await;
     match result {
         Ok(Ok(connections)) => ok(
-            "Multica 连接已保存。",
+            "工作流连接已保存。",
             multica_connections_payload(connections),
         ),
         Ok(Err(error)) => failed(
-            &multica_error_message("保存 Multica 连接", &error),
+            &multica_error_message("保存工作流连接", &error),
             MulticaConnectionsPayload::default(),
         ),
         Err(_) => failed(
-            "保存 Multica 连接的后台任务失败。",
+            "保存工作流连接的后台任务失败。",
             MulticaConnectionsPayload::default(),
         ),
     }
@@ -3569,7 +3569,7 @@ pub async fn delete_multica_connection(
     let connection_id = connection_id.trim().to_string();
     if connection_id == "managed-multica" {
         return failed(
-            "删除 Multica 连接失败：托管 Multica 连接只能在 Runtime 页面管理。",
+            "删除工作流连接失败：托管工作流连接只能在运行时页面管理。",
             MulticaConnectionsPayload::default(),
         );
     }
@@ -3581,19 +3581,19 @@ pub async fn delete_multica_connection(
     .await;
     match result {
         Ok(Ok((true, connections))) => ok(
-            "Multica 连接已删除。",
+            "工作流连接已删除。",
             multica_connections_payload(connections),
         ),
         Ok(Ok((false, connections))) => failed(
-            "删除 Multica 连接失败：未找到该连接。",
+            "删除工作流连接失败：未找到该连接。",
             multica_connections_payload(connections),
         ),
         Ok(Err(error)) => failed(
-            &multica_error_message("删除 Multica 连接", &error),
+            &multica_error_message("删除工作流连接", &error),
             MulticaConnectionsPayload::default(),
         ),
         Err(_) => failed(
-            "删除 Multica 连接的后台任务失败。",
+            "删除工作流连接的后台任务失败。",
             MulticaConnectionsPayload::default(),
         ),
     }
@@ -3606,20 +3606,20 @@ pub async fn check_multica_connection(
     let connection_id = connection_id.trim().to_string();
     if connection_id.is_empty() {
         return failed(
-            "检查 Multica 连接失败：连接 ID 不能为空。",
+            "检查工作流连接失败：连接 ID 不能为空。",
             MulticaConnectionStatusPayload::default(),
         );
     }
     if connection_id == "managed-multica" {
         return failed(
-            "检查 Multica 连接失败：托管 Multica Runtime 只能在 Runtime 页面管理。",
+            "检查工作流连接失败：托管工作流运行时只能在运行时页面管理。",
             MulticaConnectionStatusPayload::default(),
         );
     }
     match multica::check_connection(&connection_id).await {
-        Ok(status) => ok("Multica 连接检查完成。", multica_status_payload(status)),
+        Ok(status) => ok("工作流连接检查完成。", multica_status_payload(status)),
         Err(error) => failed(
-            &multica_error_message("检查 Multica 连接", &error),
+            &multica_error_message("检查工作流连接", &error),
             MulticaConnectionStatusPayload {
                 connection_id: multica_safe_connection_id(&connection_id),
                 ..Default::default()
@@ -3639,7 +3639,7 @@ pub async fn get_multica_snapshot(
         .map(str::to_string);
     if requested_connection_id.as_deref() == Some("managed-multica") {
         return failed(
-            "读取 Multica 快照失败：托管 Multica Runtime 只能在 Runtime 页面管理。",
+            "读取工作流快照失败：托管工作流运行时只能在运行时页面管理。",
             MulticaSnapshotPayload::default(),
         );
     }
@@ -3647,13 +3647,13 @@ pub async fn get_multica_snapshot(
         Ok(Ok(connections)) => connections,
         Ok(Err(error)) => {
             return failed(
-                &multica_error_message("加载 Multica 连接", &error),
+                &multica_error_message("加载工作流连接", &error),
                 MulticaSnapshotPayload::default(),
             );
         }
         Err(_) => {
             return failed(
-                "加载 Multica 连接的后台任务失败。",
+                "加载工作流连接的后台任务失败。",
                 MulticaSnapshotPayload::default(),
             );
         }
@@ -3665,7 +3665,7 @@ pub async fn get_multica_snapshot(
     });
     let Some(selected_id) = selected_id else {
         return ok(
-            "尚未配置 Multica 连接。",
+            "尚未配置工作流连接。",
             MulticaSnapshotPayload {
                 connections,
                 ..Default::default()
@@ -3677,7 +3677,7 @@ pub async fn get_multica_snapshot(
         Ok(snapshot) => snapshot,
         Err(error) => {
             return failed(
-                &multica_error_message("刷新 Multica 快照", &error),
+                &multica_error_message("刷新工作流快照", &error),
                 MulticaSnapshotPayload {
                     connections,
                     ..Default::default()
@@ -3693,9 +3693,9 @@ pub async fn get_multica_snapshot(
     .ok()
     .and_then(Result::ok);
     let message = if snapshot.stale {
-        "Multica 快照刷新失败，已保留上次数据并标记过期。"
+        "工作流快照刷新失败，已保留上次数据并标记过期。"
     } else {
-        "Multica 只读快照已刷新。"
+        "工作流只读快照已刷新。"
     };
     ok(
         message,
@@ -3722,7 +3722,7 @@ async fn run_multica_sidecar_operation(
     }
     if connection_id == "managed-multica" {
         return failed(
-            &format!("{operation_name}失败：托管 Multica Runtime 只能在 Runtime 页面管理。"),
+            &format!("{operation_name}失败：托管工作流运行时只能在运行时页面管理。"),
             MulticaSnapshotPayload::default(),
         );
     }
@@ -3735,7 +3735,7 @@ async fn run_multica_sidecar_operation(
             .iter()
             .any(|connection| connection.connection_id == connection_id)
         {
-            return Err(anyhow::anyhow!("未找到 Multica 连接。"));
+            return Err(anyhow::anyhow!("未找到工作流连接。"));
         }
         let sidecar = operation(&connection_id)?;
         Ok::<_, anyhow::Error>((connections, sidecar))
@@ -3764,18 +3764,12 @@ async fn run_multica_sidecar_operation(
 
 #[tauri::command]
 pub async fn start_multica_sidecar(connection_id: String) -> CommandResult<MulticaSnapshotPayload> {
-    run_multica_sidecar_operation(
-        connection_id,
-        multica::start_sidecar,
-        "启动 Multica sidecar",
-    )
-    .await
+    run_multica_sidecar_operation(connection_id, multica::start_sidecar, "启动工作流旁路服务").await
 }
 
 #[tauri::command]
 pub async fn stop_multica_sidecar(connection_id: String) -> CommandResult<MulticaSnapshotPayload> {
-    run_multica_sidecar_operation(connection_id, multica::stop_sidecar, "停止 Multica sidecar")
-        .await
+    run_multica_sidecar_operation(connection_id, multica::stop_sidecar, "停止工作流旁路服务").await
 }
 
 #[tauri::command]
@@ -3785,7 +3779,7 @@ pub async fn restart_multica_sidecar(
     run_multica_sidecar_operation(
         connection_id,
         multica::restart_sidecar,
-        "重启 Multica sidecar",
+        "重启工作流旁路服务",
     )
     .await
 }
@@ -3809,7 +3803,7 @@ async fn collect_multica_managed_runtime_payload(
         Ok::<_, anyhow::Error>((connection, daemon, auth.status))
     })
     .await
-    .map_err(|_| anyhow::anyhow!("托管 Multica 状态任务失败。"))??;
+    .map_err(|_| anyhow::anyhow!("托管工作流状态任务失败。"))??;
 
     let (connection, daemon, login_status) = local;
     let connection_status = if check_server {
@@ -3840,12 +3834,9 @@ fn managed_runtime_install_result(
     payload: MulticaManagedRuntimePayload,
 ) -> CommandResult<MulticaManagedRuntimePayload> {
     if managed_runtime_install_is_startable(&payload.runtime) {
-        ok("托管 Multica Runtime 已准备。", payload)
+        ok("托管工作流运行时已准备。", payload)
     } else {
-        failed(
-            "托管 Multica Runtime 准备未完成，请根据安装状态重试。",
-            payload,
-        )
+        failed("托管工作流运行时准备未完成，请根据安装状态重试。", payload)
     }
 }
 
@@ -3867,10 +3858,10 @@ pub async fn get_multica_managed_runtime() -> CommandResult<MulticaManagedRuntim
     let runtime =
         match tauri::async_runtime::spawn_blocking(multica::get_managed_runtime_status).await {
             Ok(Ok(runtime)) => runtime,
-            Ok(Err(error)) => return managed_command_failure("加载托管 Multica Runtime", &error),
+            Ok(Err(error)) => return managed_command_failure("加载托管工作流运行时", &error),
             Err(_) => {
                 return failed(
-                    "加载托管 Multica Runtime 失败：后台任务失败。",
+                    "加载托管工作流运行时失败：后台任务失败。",
                     MulticaManagedRuntimePayload {
                         login_status: "unknown".to_string(),
                         ..Default::default()
@@ -3879,8 +3870,8 @@ pub async fn get_multica_managed_runtime() -> CommandResult<MulticaManagedRuntim
             }
         };
     match collect_multica_managed_runtime_payload(runtime, None, true).await {
-        Ok(payload) => ok("托管 Multica Runtime 状态已加载。", payload),
-        Err(error) => managed_command_failure("加载托管 Multica Runtime", &error),
+        Ok(payload) => ok("托管工作流运行时状态已加载。", payload),
+        Err(error) => managed_command_failure("加载托管工作流运行时", &error),
     }
 }
 
@@ -3888,12 +3879,12 @@ pub async fn get_multica_managed_runtime() -> CommandResult<MulticaManagedRuntim
 pub async fn ensure_multica_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
     let runtime = match multica::ensure_managed_runtime_async().await {
         Ok(runtime) => runtime,
-        Err(error) => return managed_command_failure("准备托管 Multica Runtime", &error),
+        Err(error) => return managed_command_failure("准备托管工作流运行时", &error),
     };
     let startable = managed_runtime_install_is_startable(&runtime);
     match collect_multica_managed_runtime_payload(runtime, None, startable).await {
         Ok(payload) => managed_runtime_install_result(payload),
-        Err(error) => managed_command_failure("准备托管 Multica Runtime", &error),
+        Err(error) => managed_command_failure("准备托管工作流运行时", &error),
     }
 }
 
@@ -3902,10 +3893,10 @@ pub async fn cancel_multica_runtime_install() -> CommandResult<MulticaManagedRun
     let runtime =
         match tauri::async_runtime::spawn_blocking(multica::cancel_managed_runtime_install).await {
             Ok(Ok(runtime)) => runtime,
-            Ok(Err(error)) => return managed_command_failure("取消托管 Multica 安装", &error),
+            Ok(Err(error)) => return managed_command_failure("取消托管工作流安装", &error),
             Err(_) => {
                 return failed(
-                    "取消托管 Multica 安装失败：后台任务失败。",
+                    "取消托管工作流安装失败：后台任务失败。",
                     MulticaManagedRuntimePayload {
                         login_status: "unknown".to_string(),
                         ..Default::default()
@@ -3914,8 +3905,8 @@ pub async fn cancel_multica_runtime_install() -> CommandResult<MulticaManagedRun
             }
         };
     match collect_multica_managed_runtime_payload(runtime, None, false).await {
-        Ok(payload) => ok("托管 Multica 安装取消请求已处理。", payload),
-        Err(error) => managed_command_failure("取消托管 Multica 安装", &error),
+        Ok(payload) => ok("托管工作流安装取消请求已处理。", payload),
+        Err(error) => managed_command_failure("取消托管工作流安装", &error),
     }
 }
 
@@ -3924,10 +3915,10 @@ pub async fn rollback_multica_runtime() -> CommandResult<MulticaManagedRuntimePa
     let runtime =
         match tauri::async_runtime::spawn_blocking(multica::rollback_managed_runtime).await {
             Ok(Ok(runtime)) => runtime,
-            Ok(Err(error)) => return managed_command_failure("回滚托管 Multica Runtime", &error),
+            Ok(Err(error)) => return managed_command_failure("回滚托管工作流运行时", &error),
             Err(_) => {
                 return failed(
-                    "回滚托管 Multica Runtime 失败：后台任务失败。",
+                    "回滚托管工作流运行时失败：后台任务失败。",
                     MulticaManagedRuntimePayload {
                         login_status: "unknown".to_string(),
                         ..Default::default()
@@ -3936,8 +3927,8 @@ pub async fn rollback_multica_runtime() -> CommandResult<MulticaManagedRuntimePa
             }
         };
     match collect_multica_managed_runtime_payload(runtime, None, false).await {
-        Ok(payload) => ok("托管 Multica Runtime 已回滚。", payload),
-        Err(error) => managed_command_failure("回滚托管 Multica Runtime", &error),
+        Ok(payload) => ok("托管工作流运行时已回滚。", payload),
+        Err(error) => managed_command_failure("回滚托管工作流运行时", &error),
     }
 }
 
@@ -3980,13 +3971,12 @@ async fn run_multica_managed_auth_operation(
 
 #[tauri::command]
 pub async fn login_multica_managed() -> CommandResult<MulticaManagedRuntimePayload> {
-    run_multica_managed_auth_operation(multica::login_managed_runtime, "托管 Multica 登录").await
+    run_multica_managed_auth_operation(multica::login_managed_runtime, "托管工作流登录").await
 }
 
 #[tauri::command]
 pub async fn logout_multica_managed() -> CommandResult<MulticaManagedRuntimePayload> {
-    run_multica_managed_auth_operation(multica::logout_managed_runtime, "托管 Multica 退出登录")
-        .await
+    run_multica_managed_auth_operation(multica::logout_managed_runtime, "托管工作流退出登录").await
 }
 
 #[tauri::command]
@@ -4003,10 +3993,10 @@ pub async fn set_multica_managed_enabled(
     .await;
     let (connection, runtime, auth) = match result {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return managed_command_failure("设置托管 Multica 开关", &error),
+        Ok(Err(error)) => return managed_command_failure("设置托管工作流开关", &error),
         Err(_) => {
             return failed(
-                "设置托管 Multica 开关失败：后台任务失败。",
+                "设置托管工作流开关失败：后台任务失败。",
                 MulticaManagedRuntimePayload {
                     login_status: "unknown".to_string(),
                     ..Default::default()
@@ -4017,10 +4007,10 @@ pub async fn set_multica_managed_enabled(
     let mut payload =
         match collect_multica_managed_runtime_payload(runtime, Some(auth), false).await {
             Ok(payload) => payload,
-            Err(error) => return managed_command_failure("设置托管 Multica 开关", &error),
+            Err(error) => return managed_command_failure("设置托管工作流开关", &error),
         };
     payload.connection = Some(connection);
-    ok("托管 Multica 开关已更新。", payload)
+    ok("托管工作流开关已更新。", payload)
 }
 
 /// Save the three user-editable values of the fixed Core-owned managed
@@ -4043,10 +4033,10 @@ pub async fn save_multica_managed_connection(
     .await;
     let (connection, runtime, auth) = match result {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return managed_command_failure("保存托管 Multica 连接", &error),
+        Ok(Err(error)) => return managed_command_failure("保存托管工作流连接", &error),
         Err(_) => {
             return failed(
-                "保存托管 Multica 连接失败：后台任务失败。",
+                "保存托管工作流连接失败：后台任务失败。",
                 MulticaManagedRuntimePayload {
                     login_status: "unknown".to_string(),
                     ..Default::default()
@@ -4057,10 +4047,10 @@ pub async fn save_multica_managed_connection(
     let mut payload =
         match collect_multica_managed_runtime_payload(runtime, Some(auth), false).await {
             Ok(payload) => payload,
-            Err(error) => return managed_command_failure("保存托管 Multica 连接", &error),
+            Err(error) => return managed_command_failure("保存托管工作流连接", &error),
         };
     payload.connection = Some(connection);
-    ok("托管 Multica 连接已保存。", payload)
+    ok("托管工作流连接已保存。", payload)
 }
 
 /// Execute a daemon lifecycle operation against the one Core-owned managed
@@ -4116,10 +4106,10 @@ pub async fn check_multica_managed_runtime() -> CommandResult<MulticaManagedRunt
     let runtime =
         match tauri::async_runtime::spawn_blocking(multica::get_managed_runtime_status).await {
             Ok(Ok(runtime)) => runtime,
-            Ok(Err(error)) => return managed_command_failure("检查托管 Multica Runtime", &error),
+            Ok(Err(error)) => return managed_command_failure("检查托管工作流运行时", &error),
             Err(_) => {
                 return failed(
-                    "检查托管 Multica Runtime 失败：后台任务失败。",
+                    "检查托管工作流运行时失败：后台任务失败。",
                     MulticaManagedRuntimePayload {
                         login_status: "unknown".to_string(),
                         ..Default::default()
@@ -4128,33 +4118,27 @@ pub async fn check_multica_managed_runtime() -> CommandResult<MulticaManagedRunt
             }
         };
     match collect_multica_managed_runtime_payload(runtime, None, true).await {
-        Ok(payload) => ok("托管 Multica Runtime 检查完成。", payload),
-        Err(error) => managed_command_failure("检查托管 Multica Runtime", &error),
+        Ok(payload) => ok("托管工作流运行时检查完成。", payload),
+        Err(error) => managed_command_failure("检查托管工作流运行时", &error),
     }
 }
 
 #[tauri::command]
 pub async fn start_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
-    run_multica_managed_sidecar_operation(
-        multica::start_managed_runtime,
-        "启动托管 Multica Runtime",
-    )
-    .await
+    run_multica_managed_sidecar_operation(multica::start_managed_runtime, "启动托管工作流运行时")
+        .await
 }
 
 #[tauri::command]
 pub async fn stop_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
-    run_multica_managed_sidecar_operation(multica::stop_managed_runtime, "停止托管 Multica Runtime")
+    run_multica_managed_sidecar_operation(multica::stop_managed_runtime, "停止托管工作流运行时")
         .await
 }
 
 #[tauri::command]
 pub async fn restart_multica_managed_runtime() -> CommandResult<MulticaManagedRuntimePayload> {
-    run_multica_managed_sidecar_operation(
-        multica::restart_managed_runtime,
-        "重启托管 Multica Runtime",
-    )
-    .await
+    run_multica_managed_sidecar_operation(multica::restart_managed_runtime, "重启托管工作流运行时")
+        .await
 }
 
 #[tauri::command]
@@ -11594,7 +11578,7 @@ mod tests {
             (&restart.status, &restart.message),
         ] {
             assert_eq!(result.0, "failed");
-            assert!(result.1.contains("托管 Multica Runtime"));
+            assert!(result.1.contains("托管工作流运行时"));
         }
     }
 
