@@ -4663,6 +4663,7 @@
   ]);
   const multicaWorkspaceBackgroundIntervalMs = 5000;
   const multicaWorkspaceExecutionPollIntervalMs = 7000;
+  const multicaWorkspaceQueueDispatchIntervalMs = 5000;
   // Background refreshes must use the same bounded budget as the foreground
   // preflight. A shorter timeout made normal CDP/IPC jitter look like a lost
   // connection and overwrote a previously healthy entry state.
@@ -4696,6 +4697,7 @@
     backgroundStarted: false,
     backgroundBusy: false,
     executionPollAt: 0,
+    queueDispatchAt: 0,
     workspaceId: "",
     bootstrap: null,
     bootstrapLoading: false,
@@ -6430,6 +6432,51 @@
       }
     }
     if (multicaWorkspaceState.opened && active.length) multicaWorkspaceRenderContent();
+  }
+
+  // Retry only authoritative queued Agent bindings. The upstream queue worker
+  // claims queue rows, not arbitrary Issue cards; the backend-created binding,
+  // its CAS revision, and the persisted Agent assignment are required.
+  async function multicaWorkspaceDispatchQueuedAssignments(force = false) {
+    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled()) return;
+    const now = Date.now();
+    if (!force && now < multicaWorkspaceState.queueDispatchAt) return;
+    multicaWorkspaceState.queueDispatchAt = now + multicaWorkspaceQueueDispatchIntervalMs;
+    if (multicaWorkspaceState.bootstrap?.runtime?.available === false) return;
+    const queued = multicaWorkspaceState.executions
+      .filter((binding) => {
+        if (multicaWorkspaceExecutionState(binding) !== "binding_pending" &&
+            multicaWorkspaceExecutionState(binding) !== "queued") return false;
+        const bindingId = multicaWorkspaceExecutionBindingId(binding);
+        const issueId = String(multicaWorkspaceObjectValue(binding, "issueId", "issue_id") || "").trim();
+        const agentId = String(multicaWorkspaceObjectValue(binding, "agentId", "agent_id") || "").trim();
+        return !!bindingId && !!issueId && !!agentId &&
+          !String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim() &&
+          !String(multicaWorkspaceObjectValue(binding, "codexExecutionId", "codex_execution_id") || "").trim();
+      })
+      .slice(0, 8);
+    for (const binding of queued) {
+      const bindingId = multicaWorkspaceExecutionBindingId(binding);
+      if (multicaWorkspaceState.executionBusy.has(`dispatch:${bindingId}`)) continue;
+      const revision = multicaWorkspaceEntityRevision(binding);
+      if (!bindingId || !revision) continue;
+      multicaWorkspaceState.executionBusy.add(`dispatch:${bindingId}`);
+      try {
+        const result = await multicaWorkspaceCall("/multica/executions/dispatch", {
+          bindingId,
+          expectedRevision: revision,
+          leaseToken: `auto-${bindingId}`,
+        }, 30000);
+        if (result?.binding) multicaWorkspaceMergeExecution(result.binding);
+      } catch (error) {
+        // Queue state is authoritative; leave it untouched so the next tick
+        // can retry after a transient host or revision failure.
+        multicaWorkspaceState.executionsError = multicaWorkspaceErrorMessage(error);
+      } finally {
+        multicaWorkspaceState.executionBusy.delete(`dispatch:${bindingId}`);
+      }
+    }
+    if (queued.length && multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
   }
 
   function multicaWorkspaceOpenExecutionDraft(mode, issue, binding = null) {
@@ -8456,6 +8503,7 @@
         await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, multicaWorkspaceBackgroundTimeoutMs);
       }
       if (!multicaWorkspaceState.executionsLoading) await multicaWorkspaceLoadExecutions(true);
+      await multicaWorkspaceDispatchQueuedAssignments();
       await multicaWorkspaceSyncExecutionStatuses();
     } finally {
       multicaWorkspaceState.backgroundBusy = false;
