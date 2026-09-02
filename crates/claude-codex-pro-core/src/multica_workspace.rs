@@ -38,6 +38,7 @@ const LOCAL_WORKSPACE_STORE_VERSION: u32 = 1;
 const MAX_LOCAL_ENTITIES_PER_RESOURCE: usize = 2_048;
 const MAX_LOCAL_ENTITY_BYTES: usize = 128 * 1024;
 const MAX_LOCAL_WORKSPACE_STORE_BYTES: usize = 8 * 1024 * 1024;
+const NATIVE_THREAD_SCAN_LIMIT: usize = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -585,7 +586,7 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
                 "0"
             };
             let sql = format!(
-                "SELECT id, {title}, {cwd}, {updated} FROM threads ORDER BY COALESCE({updated}, 0) DESC LIMIT 100"
+                "SELECT id, {title}, {cwd}, {updated} FROM threads ORDER BY COALESCE({updated}, 0) DESC LIMIT {NATIVE_THREAD_SCAN_LIMIT}"
             );
             let _ = db
                 .prepare(&sql)
