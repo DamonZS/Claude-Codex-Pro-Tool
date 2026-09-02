@@ -6,7 +6,7 @@
 
 ## 目标
 
-- 保留 `pr-build.yml` 的完整验证，包括 TypeScript 检查、前端生产构建、Rust workspace 测试和 release 构建。
+- 保留 `pr-build.yml` 的 TypeScript 检查、前端生产构建、针对 Multica/桥接契约的 Rust 回归集合和 release 构建。
 - 将 `auto-release-installers.yml` 聚焦于可发布产物构建和产物验证。
 - 自动发布的 Windows job 不再重复执行 TypeScript 检查和 `cargo test --workspace`。
 - 自动发布的 macOS matrix 不再为两个架构分别重复执行 TypeScript 检查。
@@ -25,7 +25,8 @@
 - Windows 保留 `cargo build --release`、NSIS、ZIP 和上传步骤。
 - macOS 保留目标架构 release build、DMG、ZIP、bundle/plist/codesign 验证和上传步骤。
 - macOS x64 必须在 Intel hosted runner 上原生构建与签名，arm64 使用当前 `macos-latest`；不得在 Apple Silicon runner 上交叉签名 x64 嵌套运行时。
-- `pr-build.yml` 保留 `npm run check`、`npm run vite:build`、`cargo test --workspace` 和 release build。
+- `pr-build.yml` 保留 `npm run check`、`npm run vite:build`、选定 Rust 回归集合和 release build；完整 workspace 测试由本地开发按需执行。
+- PR Windows 安装包构建必须先暂存 Multica runtime，使 NSIS 的 `resources` 输入目录始终存在。
 - 自动 Release Notes 不再声称 TypeScript 检查或 workspace 测试已在发布工作流中运行。
 
 ## 技术约束

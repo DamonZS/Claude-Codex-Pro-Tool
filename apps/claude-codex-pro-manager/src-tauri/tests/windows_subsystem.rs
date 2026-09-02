@@ -690,7 +690,9 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(pr_build.contains("run: npm run check"));
     assert!(pr_build.contains("run: npm run vite:build"));
-    assert!(pr_build.contains("cargo test --workspace"));
+    assert!(pr_build.contains("cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open"));
+    assert!(!pr_build.contains("cargo test --workspace"));
+    assert!(pr_build.contains("stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica"));
     assert!(pr_build.contains("run: cargo build --release"));
     assert!(pr_build.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));

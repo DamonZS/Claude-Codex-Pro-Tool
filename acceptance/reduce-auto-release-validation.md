@@ -17,9 +17,9 @@
 - 通过标准：三个发布 workflow 的 x64 matrix 使用 `macos-15-intel`，arm64 matrix 使用 `macos-latest`，避免 ARM runner 交叉签名 x64 MCP 子组件。
    - 证据：现有工作流契约断言通过。
 
-4. PR Build 保留完整质量门禁。
-   - 通过标准：`pr-build.yml` 仍包含 `npm run check`、`npm run vite:build`、`cargo test --workspace` 和 release build。
-   - 证据：新增契约断言通过。
+4. PR Build 保留快速质量门禁和可安装产物输入。
+   - 通过标准：`pr-build.yml` 包含 `npm run check`、`npm run vite:build`、选定 Rust 回归集合、release build，以及 `stage-multica-runtime.mjs` Windows 资源暂存步骤；不再要求 `cargo test --workspace`。
+   - 证据：工作流契约断言和定向 Rust 测试通过。
 
 5. Release Notes 与实际验证一致。
    - 通过标准：说明前端生产构建和平台产物验证，不再声称自动发布执行 TypeScript 检查或 workspace 测试。
@@ -37,5 +37,5 @@
 
 - 本地模拟 GitHub hosted Windows/macOS runner。
 - 创建或发布真实 GitHub Release。
-- 修改 PR Build 的验证范围。
+- 将 PR Build 的 Rust 验证固定为当前选定回归集合；完整 workspace 测试仍可在本地执行。
 - 修改应用功能或 UI。

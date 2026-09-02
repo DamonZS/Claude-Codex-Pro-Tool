@@ -61,6 +61,9 @@ jobs:
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
+      - name: Stage Multica runtime
+        run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
+
       - name: Build Windows installer
         shell: pwsh
         run: |
