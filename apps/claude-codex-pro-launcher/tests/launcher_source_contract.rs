@@ -54,6 +54,21 @@ fn launcher_keeps_multica_on_page_host_boundary_without_codex_runtime_registrati
             "launcher must expose Multica execution operation: {operation}"
         );
     }
+    for operation in [
+        "lease_claim",
+        "lease_renew",
+        "lease_release",
+        "message_append",
+        "message_list",
+    ] {
+        assert!(
+            source.contains(&format!(
+                "BridgeRuntimeService::multica_execution_{operation}"
+            )),
+            "launcher must expose Multica execution operation: {operation}"
+        );
+    }
+    assert!(source.contains("BridgeRuntimeService::multica_task_queue_transition"));
 }
 
 #[test]

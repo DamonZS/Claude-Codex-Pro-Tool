@@ -1004,6 +1004,48 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         BridgeRuntimeService::multica_execution_list(&self.multica_runtime, request).await
     }
 
+    async fn multica_execution_lease_claim(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionLeaseClaimRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_lease_claim(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_lease_renew(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionLeaseRenewRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_lease_renew(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_lease_release(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionLeaseReleaseRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_lease_release(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_message_append(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionMessageAppendRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_message_append(&self.multica_runtime, request).await
+    }
+
+    async fn multica_execution_message_list(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionMessageListRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_execution_message_list(&self.multica_runtime, request).await
+    }
+
+    async fn multica_task_queue_transition(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaTaskQueueTransitionRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_task_queue_transition(&self.multica_runtime, request).await
+    }
+
     async fn multica_autopilot_runs(
         &self,
         request: claude_codex_pro_core::routes::MulticaAutopilotRunsRequest,
