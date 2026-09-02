@@ -4109,6 +4109,10 @@ experimental_bearer_token = "sk-existing"
     fn atomic_write_applies_private_windows_acl() {
         use std::process::Command;
 
+        if !windows_acl_inspection_available_for_test() {
+            return;
+        }
+
         let dir = temp_dir();
         let path = dir.join("settings.json");
         atomic_write(&path, br#"{"secret":true}"#).unwrap();
@@ -4157,6 +4161,34 @@ experimental_bearer_token = "sk-existing"
 
         assert!(error.to_string().contains("forced security failure"));
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    fn windows_acl_inspection_available_for_test() -> bool {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop",
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        match command.output() {
+            Ok(output) if output.status.success() => true,
+            Ok(output) => {
+                eprintln!(
+                    "skipping Windows ACL inspection: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                false
+            }
+            Err(error) => {
+                eprintln!("skipping Windows ACL inspection: powershell unavailable: {error}");
+                false
+            }
+        }
     }
 
     #[cfg(windows)]

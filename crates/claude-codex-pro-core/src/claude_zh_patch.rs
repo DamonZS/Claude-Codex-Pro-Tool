@@ -2085,6 +2085,34 @@ mod tests {
     }
 
     #[cfg(windows)]
+    fn windows_acl_inspection_available_for_test() -> bool {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop",
+        ]);
+        command.creation_flags(crate::windows_create_no_window());
+        match command.output() {
+            Ok(output) if output.status.success() => true,
+            Ok(output) => {
+                eprintln!(
+                    "skipping Windows ACL inspection: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                false
+            }
+            Err(error) => {
+                eprintln!("skipping Windows ACL inspection: powershell unavailable: {error}");
+                false
+            }
+        }
+    }
+
+    #[cfg(windows)]
     fn explicit_windows_acl_entries(path: &Path) -> String {
         use std::os::windows::process::CommandExt;
 
@@ -2108,6 +2136,9 @@ mod tests {
 
     #[cfg(windows)]
     fn assert_explicit_target_and_system_full_control(path: &Path, sid: &str) {
+        if !windows_acl_inspection_available_for_test() {
+            return;
+        }
         let acl = explicit_windows_acl_entries(path);
         let target_entry = format!("{sid}|False|Allow|2032127");
         assert!(
