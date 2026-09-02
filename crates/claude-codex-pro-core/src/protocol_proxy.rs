@@ -338,6 +338,8 @@ pub fn local_claude_desktop_proxy_base_url(port: u16) -> String {
 }
 
 pub fn responses_to_chat_completions(body: Value) -> anyhow::Result<Value> {
+    let mut body = body;
+    normalize_responses_tool_output_call_ids(&mut body);
     let mut result = json!({});
 
     if let Some(model) = body.get("model") {
@@ -422,6 +424,56 @@ pub fn responses_to_chat_completions(body: Value) -> anyhow::Result<Value> {
     }
 
     Ok(result)
+}
+
+/// Preserve a call ID only when the request itself proves the association.
+///
+/// Some Codex Responses payloads use `id` for both the preceding call and its
+/// later output. The HTTP Responses API requires the latter to carry
+/// `call_id`; copying an arbitrary item ID would corrupt the tool transcript,
+/// so this only fills a value already observed on a function/custom call in
+/// the same ordered input array.
+fn normalize_responses_tool_output_call_ids(body: &mut Value) {
+    let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut known_call_ids = BTreeSet::new();
+    for item in items {
+        let item_type = item.get("type").and_then(Value::as_str);
+        match item_type {
+            Some("function_call") | Some("custom_tool_call") => {
+                if let Some(call_id) = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    known_call_ids.insert(call_id.to_string());
+                }
+            }
+            Some("function_call_output") | Some("custom_tool_call_output") => {
+                if item
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.is_empty())
+                {
+                    continue;
+                }
+                let candidate = item
+                    .get("tool_call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|value| known_call_ids.contains(*value))
+                    .map(str::to_string);
+                if let Some(call_id) = candidate
+                    && let Some(object) = item.as_object_mut()
+                {
+                    object.insert("call_id".to_string(), Value::String(call_id));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn chat_completion_to_response(body: Value) -> anyhow::Result<Value> {
@@ -915,7 +967,8 @@ async fn open_responses_proxy_request_with_relay(
         anyhow::bail!("上游 Key 不能为空");
     }
 
-    let request_json: Value = serde_json::from_str(body)?;
+    let mut request_json: Value = serde_json::from_str(body)?;
+    normalize_responses_tool_output_call_ids(&mut request_json);
     let is_stream = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -5577,5 +5630,41 @@ mod tests {
                 return String::from_utf8(request).expect("proxy request should be UTF-8");
             }
         }
+    }
+
+    #[test]
+    fn responses_tool_output_reuses_only_a_prior_matching_call_id() {
+        let mut request = json!({
+            "previous_response_id": "resp-previous",
+            "input": [
+                {"type": "function_call", "id": "call-a", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "id": "call-a", "output": "ok"},
+                {"type": "function_call_output", "id": "call-unknown", "output": "leave alone"}
+            ]
+        });
+
+        normalize_responses_tool_output_call_ids(&mut request);
+
+        assert_eq!(request["previous_response_id"], "resp-previous");
+        assert_eq!(request["input"][1]["call_id"], "call-a");
+        assert!(request["input"][2].get("call_id").is_none());
+    }
+
+    #[test]
+    fn chat_conversion_uses_normalized_tool_output_call_id() {
+        let converted = responses_to_chat_completions(json!({
+            "input": [
+                {"type": "function_call", "id": "call-a", "name": "read_file", "arguments": "{}"},
+                {"type": "function_call_output", "id": "call-a", "output": "ok"}
+            ]
+        }))
+        .expect("Responses request should convert");
+
+        let messages = converted["messages"]
+            .as_array()
+            .expect("converted messages should be an array");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call-a");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call-a");
     }
 }
