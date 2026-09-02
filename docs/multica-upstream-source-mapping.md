@@ -1,6 +1,6 @@
 # Multica 上游源码对接映射
 
-本文记录当前对照的上游仓库版本：`multica-ai/multica`，提交 `5bc021c369ca8ad5d24ccdf7a02588a54b2e5835`。
+本文记录当前对照的上游仓库版本：`multica-ai/multica`，提交 `2e29745`（本地审计工作树对应的最新提交）。
 
 ## 上游真实职责
 
@@ -43,7 +43,7 @@ rg -n "createAgent|assign.*issue|daemon-manager|thread/fork|agent/list" .
 
 ## 本轮源码与文档核对记录
 
-本轮以锁定提交 `5bc021c369ca8ad5d24ccdf7a02588a54b2e5835` 为准，实际阅读了类型、客户端、视图、服务端 handler 与运行文档，而非只读取 README：
+本轮以提交 `2e29745` 为准，实际阅读了类型、客户端、视图、服务端 handler、daemon 实现与运行文档，而非只读取 README：
 
 | 上游证据 | 核对结论 | 本地边界 |
 | --- | --- | --- |

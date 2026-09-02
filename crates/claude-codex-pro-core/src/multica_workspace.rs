@@ -770,6 +770,29 @@ fn codex_native_inventory() -> [(&'static str, Vec<Value>); 6] {
             }
         }
     }
+    // Some Codex versions do not persist project_roots (for example, a fresh
+    // profile). In that case the thread's real cwd is the only authoritative
+    // project signal we have; expose it as a read-only project projection.
+    if project_paths.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for cwd in threads
+            .iter()
+            .filter_map(|thread| thread.get("cwd").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|cwd| !cwd.is_empty())
+        {
+            let normalized = normalize_project_path(cwd);
+            if seen.insert(normalized) {
+                project_paths.push(cwd.to_string());
+                projects.push(json!({
+                    "id": format!("codex-project:{cwd}"),
+                    "path": cwd,
+                    "source": "codex_native",
+                    "derived_from": "thread.cwd"
+                }));
+            }
+        }
+    }
     // `threads.project_id` is not present or reliable in every Codex schema. Resolve
     // the owning project from the read-only project root paths and the thread cwd.
     for thread in &mut threads {
