@@ -6590,6 +6590,32 @@
     parent.appendChild(article);
   }
 
+  function multicaWorkspaceAppendNativeAgentItem(parent, item) {
+    const article = multicaWorkspaceEl("article", "ccp-multica-item ccp-multica-native-agent-item");
+    const id = String(item?.id || "").trim();
+    const title = String(item?.title || id || "未命名原生智能体").trim();
+    const heading = multicaWorkspaceEl("div", "ccp-multica-item-heading");
+    heading.appendChild(multicaWorkspaceEl("h3", "ccp-multica-item-title", title));
+    heading.appendChild(multicaWorkspaceEl("span", "ccp-multica-badge", "Codex 原生子智能体 · 只读"));
+    article.appendChild(heading);
+    const fields = multicaWorkspaceEl("div", "ccp-multica-fields");
+    [
+      ["线程 ID", item?.id],
+      ["父线程", item?.parent_thread_id],
+      ["项目", item?.project_path || item?.cwd],
+      ["更新时间", item?.updated_at_ms ? new Date(Number(item.updated_at_ms)).toLocaleString() : ""],
+    ].forEach(([key, value]) => {
+      const text = multicaWorkspaceValue(value);
+      if (!text) return;
+      const field = multicaWorkspaceEl("span", "ccp-multica-field");
+      field.append(multicaWorkspaceEl("span", "ccp-multica-field-key", `${key}:`), document.createTextNode(text));
+      fields.appendChild(field);
+    });
+    if (fields.childNodes.length) article.appendChild(fields);
+    article.title = "来自 Codex 原生线程父子关系的只读投影，不可作为 Multica Agent 编辑或派发";
+    parent.appendChild(article);
+  }
+
   function multicaWorkspaceIssueStatus(item) {
     const raw = String(multicaWorkspaceObjectValue(item, "status", "state") || "backlog").toLowerCase();
     if (raw === "archived") return "cancelled";
@@ -7659,6 +7685,17 @@
         };
       }
     }
+    if (module.key === "agents" && (!collection || !Array.isArray(collection.items) || collection.items.length === 0)) {
+      const nativeAgents = multicaWorkspaceState.bootstrap?.collections?.codex_native_agents;
+      if (nativeAgents && Array.isArray(nativeAgents.items) && nativeAgents.items.length > 0) {
+        collection = {
+          ...nativeAgents,
+          items: nativeAgents.items.map((item) => ({ ...item, read_only: true })),
+          stale: true,
+          source: "codex_native_read_only",
+        };
+      }
+    }
     multicaWorkspaceClear(content);
     content.dataset.route = module.key;
     if (module.key === "my-issues") {
@@ -7763,6 +7800,7 @@
     const list = multicaWorkspaceEl("div", "ccp-multica-list");
     collection.items.forEach((item) => {
       if (module.key === "skills") multicaWorkspaceAppendSkillItem(list, item);
+      else if (module.key === "agents" && collection.source === "codex_native_read_only") multicaWorkspaceAppendNativeAgentItem(list, item);
       else if (writableResource) multicaWorkspaceAppendEntityItem(list, item, module);
       else multicaWorkspaceAppendItem(list, item);
     });
