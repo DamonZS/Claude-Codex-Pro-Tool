@@ -5906,7 +5906,10 @@
     const resource = multicaWorkspaceWritableResource(module);
     // Continue-creating replaces the just-saved issue editor before the request
     // releases its busy marker; all unrelated opens remain blocked.
-    if (!resource || (multicaWorkspaceState.mutationBusy && multicaWorkspaceState.editor?.continueCreating !== true)) return;
+    // When a save has already cleared the editor, its background refresh may
+    // still hold mutationBusy briefly. That transient state must not make the
+    // column-header "new task" action a no-op.
+    if (!resource || (multicaWorkspaceState.mutationBusy && multicaWorkspaceState.editor && multicaWorkspaceState.editor.continueCreating !== true)) return;
     const values = multicaWorkspaceNormalizeEditableEntity(
       resource,
       item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults },
