@@ -5053,11 +5053,11 @@
     const shadow = host.attachShadow({ mode: "open" });
     const style = multicaWorkspaceEl("style");
     style.textContent = `
-      :host { color-scheme: dark; }
+      :host { color-scheme: light dark; }
       .ccp-multica-shell {
         box-sizing: border-box; width: 100%; height: 100%; min-width: 280px;
         display: flex; flex-direction: column; overflow: hidden;
-        background: var(--ccp-multica-bg, #171918); color: var(--ccp-multica-fg, #f2f5f3);
+        background: var(--ccp-multica-bg, #181b1a); color: var(--ccp-multica-fg, #f2f5f3);
         font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
       .ccp-multica-button { min-height: 30px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: 4px 10px; background: color-mix(in srgb, currentColor 7%, transparent); color: inherit; font: inherit; cursor: pointer; }
@@ -5067,7 +5067,7 @@
       .ccp-multica-button[data-variant="danger"] { border-color: color-mix(in srgb, #e17d83 58%, transparent); color: #e17d83; }
       .ccp-multica-button:focus-visible, .ccp-multica-module-item:focus-visible, .ccp-multica-filter:focus-visible, .ccp-multica-icon-button:focus-visible, .ccp-multica-card:focus-visible { box-shadow: 0 0 0 2px #4fb995; outline: none; }
       .ccp-multica-content { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; padding: 16px 18px 24px; }
-      .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; background: #171918; color: #f2f5f3; }
+      .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; background: var(--ccp-multica-bg, #181b1a); color: var(--ccp-multica-fg, #f2f5f3); }
       .ccp-multica-content-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
       .ccp-multica-content-title { min-width: 0; flex: 1; margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; }
       .ccp-multica-count { color: color-mix(in srgb, currentColor 58%, transparent); white-space: nowrap; }
