@@ -4690,6 +4690,7 @@
     issueViewMode: "board",
     savedIssueViews: [],
     activeIssueViewId: "",
+    issueViewDialog: null,
     moduleMenuOpen: false,
     draggedIssue: null,
     nativeThreadActivation: false,
@@ -4738,6 +4739,7 @@
   const multicaWorkspaceSavedIssueViewsStorageKey = "ccp.multica.issue-views.v1";
   const multicaWorkspaceIssueViewScopes = Object.freeze(["all", "assigned", "created", "agents", "working"]);
   const multicaWorkspaceIssueViewModes = Object.freeze(["board", "list", "table", "swimlane"]);
+  const multicaWorkspaceIssueViewModeLabels = Object.freeze({ board: "看板", list: "列表", table: "表格", swimlane: "泳道" });
 
   function multicaWorkspaceNormalizeSavedIssueView(value) {
     if (!value || typeof value !== "object") return null;
@@ -4792,8 +4794,8 @@
     if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
   }
 
-  async function multicaWorkspaceSaveCurrentIssueView() {
-    const name = String(window.prompt("保存本机视图名称", "我的任务视图") || "").trim().slice(0, 80);
+  async function multicaWorkspaceSaveCurrentIssueView(requestedName) {
+    const name = String(requestedName || "").trim().slice(0, 80);
     if (!name) return;
     const previous = multicaWorkspaceState.savedIssueViews.find((item) => item.name === name);
     const view = {
@@ -4929,6 +4931,40 @@
     multicaWorkspaceState.activeIssueViewId = "";
     multicaWorkspaceState.mutationNotice = { state: "ok", message: `本地视图“${view.name}”已删除` };
     multicaWorkspaceRenderContent();
+  }
+
+  function multicaWorkspaceRenderIssueViewDialog(parent) {
+    const mode = multicaWorkspaceState.issueViewDialog;
+    if (!mode) return;
+    const overlay = multicaWorkspaceEl("div", "ccp-multica-view-dialog-overlay");
+    const dialog = multicaWorkspaceEl("section", "ccp-multica-view-dialog");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const close = () => { multicaWorkspaceState.issueViewDialog = null; multicaWorkspaceRenderContent(); };
+    const header = multicaWorkspaceEl("div", "ccp-multica-view-dialog-header");
+    header.appendChild(multicaWorkspaceEl("h3", "", mode === "create" ? "保存为视图" : "管理视图"));
+    const closeButton = multicaWorkspaceEl("button", "ccp-multica-icon-button", "×");
+    closeButton.type = "button"; closeButton.title = "关闭"; closeButton.addEventListener("click", close); header.appendChild(closeButton); dialog.appendChild(header);
+    if (mode === "create") {
+      dialog.appendChild(multicaWorkspaceEl("label", "ccp-multica-control-popover-label", "视图名称"));
+      const input = document.createElement("input"); input.className = "ccp-multica-input"; input.value = "我的任务视图"; input.maxLength = 80; dialog.appendChild(input);
+      const actions = multicaWorkspaceEl("div", "ccp-multica-view-dialog-actions");
+      const cancel = multicaWorkspaceEl("button", "ccp-multica-button", "取消"); cancel.type = "button"; cancel.addEventListener("click", close);
+      const save = multicaWorkspaceEl("button", "ccp-multica-button", "保存"); save.type = "button"; save.dataset.variant = "primary";
+      save.addEventListener("click", async () => { await multicaWorkspaceSaveCurrentIssueView(input.value); multicaWorkspaceState.issueViewDialog = null; multicaWorkspaceRenderContent(); });
+      actions.append(cancel, save); dialog.appendChild(actions); setTimeout(() => input.focus(), 0);
+    } else {
+      const views = multicaWorkspaceState.savedIssueViews;
+      if (!views.length) dialog.appendChild(multicaWorkspaceEl("div", "ccp-multica-inline-message", "暂无自定义视图"));
+      views.forEach((view) => {
+        const row = multicaWorkspaceEl("div", "ccp-multica-view-dialog-row"); row.appendChild(multicaWorkspaceEl("span", "", view.name));
+        const actions = multicaWorkspaceEl("div", "ccp-multica-view-dialog-actions");
+        const apply = multicaWorkspaceEl("button", "ccp-multica-button", "应用"); apply.type = "button"; apply.addEventListener("click", () => { multicaWorkspaceApplySavedIssueView(view.id); });
+        const remove = multicaWorkspaceEl("button", "ccp-multica-icon-button", "×"); remove.type = "button"; remove.title = `删除${view.name}`;
+        remove.addEventListener("click", () => { multicaWorkspaceState.activeIssueViewId = view.id; void multicaWorkspaceDeleteActiveIssueView(); }); actions.append(apply, remove); row.appendChild(actions); dialog.appendChild(row);
+      });
+    }
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); }); overlay.appendChild(dialog); parent.appendChild(overlay);
   }
 
   function multicaWorkspaceEl(tag, className, text) {
@@ -5083,7 +5119,7 @@
       .ccp-multica-module-item { display: flex; align-items: center; width: 100%; min-height: 34px; border: 0; border-radius: 5px; padding: 6px 9px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
       .ccp-multica-module-item:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
       .ccp-multica-module-item[aria-current="page"] { background: color-mix(in srgb, #4fb995 17%, transparent); }
-      .ccp-multica-board-page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+      .ccp-multica-board-page { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
       .ccp-multica-board-heading { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 12px 18px 3px; border-bottom: 0; }
       .ccp-multica-board-heading-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; color: color-mix(in srgb, currentColor 72%, transparent); font-size: 15px; }
       .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; white-space: nowrap; }
@@ -5104,6 +5140,20 @@
       .ccp-multica-board-menu-select { width: 100%; min-height: 30px; box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 5px; padding: 4px 7px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: inherit; }
       .ccp-multica-board-menu-actions { display: flex; align-items: center; gap: 6px; }
       .ccp-multica-empty-state { display: grid; place-content: center; gap: 10px; min-height: 180px; padding: 20px; color: color-mix(in srgb, currentColor 65%, transparent); text-align: center; }
+      .ccp-multica-viewbar-menu { position: relative; flex: 0 0 auto; }
+      .ccp-multica-viewbar-menu > summary { min-width: 28px; padding-inline: 6px; font-size: 16px; line-height: 1; list-style: none; }
+      .ccp-multica-viewbar-menu > summary::-webkit-details-marker, .ccp-multica-control-menu > summary::-webkit-details-marker { display: none; }
+      .ccp-multica-viewbar-popover { position: absolute; z-index: 9; top: calc(100% + 6px); left: 0; display: grid; gap: 2px; width: 176px; padding: 6px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-viewbar-action { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; border: 0; border-radius: 5px; padding: 6px 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+      .ccp-multica-viewbar-action:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
+      .ccp-multica-viewbar-action-icon { width: 14px; color: color-mix(in srgb, currentColor 72%, transparent); text-align: center; }
+      .ccp-multica-control-menu { position: relative; flex: 0 0 auto; }
+      .ccp-multica-control-menu > summary { list-style: none; }
+      .ccp-multica-control-popover { position: absolute; z-index: 9; top: calc(100% + 6px); right: 0; display: grid; gap: 7px; width: 210px; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-control-popover-label { color: color-mix(in srgb, currentColor 60%, transparent); font-size: 12px; }
+      .ccp-multica-control-popover-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; color: color-mix(in srgb, currentColor 78%, transparent); font-size: 12px; }
+      .ccp-multica-control-popover select { min-height: 28px; min-width: 108px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 5px; padding: 3px 6px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: inherit; }
+      .ccp-multica-control-popover input[type="checkbox"] { accent-color: #4fb995; }
       .ccp-multica-native-inventory { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
       .ccp-multica-native-inventory-title { grid-column: 1 / -1; margin: 0; font-size: 13px; }
       .ccp-multica-native-inventory-label { margin: 0 0 6px; font-size: 12px; opacity: .72; }
@@ -5113,22 +5163,22 @@
       .ccp-multica-native-session[aria-current="page"] { border-color: #56b9a6; }
       .ccp-multica-working-count { color: color-mix(in srgb, currentColor 66%, transparent); white-space: nowrap; }
       .ccp-multica-board-scroll { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
-      .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, minmax(250px, 1fr)); gap: 10px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 10px 18px 18px; }
-      .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 250px; min-width: 250px; min-height: 0; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; background: rgba(255,255,255,.035); overflow: hidden; }
+      .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, minmax(260px, 1fr)); gap: 12px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 8px 12px 16px; }
+      .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 260px; min-width: 260px; min-height: 0; border: 0; border-radius: 12px; background: color-mix(in srgb, currentColor 3%, var(--ccp-multica-bg, #181b1a)); overflow: hidden; }
       .ccp-multica-board-column[data-tone="warning"] { background: color-mix(in srgb, #b78923 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="success"] { background: color-mix(in srgb, #2f9a68 7%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="info"] { background: color-mix(in srgb, #2f79a8 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="danger"] { background: color-mix(in srgb, #a24a5a 8%, var(--ccp-multica-bg, #181b1a)); }
       .ccp-multica-board-column[data-tone="muted"] { background: color-mix(in srgb, currentColor 3%, var(--ccp-multica-bg, #181b1a)); }
-      .ccp-multica-column-header { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+      .ccp-multica-column-header { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 7px 10px; border-bottom: 0; }
       .ccp-multica-column-dot { width: 8px; height: 8px; flex: 0 0 8px; border: 1px solid currentColor; border-radius: 50%; color: color-mix(in srgb, currentColor 64%, transparent); }
       .ccp-multica-column-title { min-width: 0; flex: 1; margin: 0; font-size: 13px; font-weight: 620; letter-spacing: 0; }
       .ccp-multica-column-count { color: color-mix(in srgb, currentColor 58%, transparent); }
       .ccp-multica-column-actions { display: inline-flex; align-items: center; gap: 2px; }
       .ccp-multica-column-actions .ccp-multica-icon-button { min-width: 26px; min-height: 26px; border-color: transparent; padding: 2px 5px; background: transparent; }
       .ccp-multica-column-list { min-height: 0; flex: 1; overflow-y: auto; padding: 4px 8px 10px; }
-      .ccp-multica-column-empty { display: flex; align-items: center; justify-content: center; min-height: 120px; color: color-mix(in srgb, currentColor 54%, transparent); }
-      .ccp-multica-card { box-sizing: border-box; display: grid; gap: 7px; width: 100%; min-width: 0; margin-bottom: 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; padding: 10px; background: #202422; color: inherit; }
+      .ccp-multica-column-empty { display: flex; align-items: flex-start; justify-content: center; min-height: 120px; padding-top: 48px; color: color-mix(in srgb, currentColor 54%, transparent); }
+      .ccp-multica-card { box-sizing: border-box; display: grid; gap: 6px; width: 100%; min-width: 0; margin-bottom: 7px; border: 1px solid color-mix(in srgb, currentColor 9%, transparent); border-radius: 9px; padding: 9px 10px; background: color-mix(in srgb, currentColor 5%, var(--ccp-multica-bg, #181b1a)); color: inherit; }
       .ccp-multica-card[draggable="true"] { cursor: grab; }
       .ccp-multica-card[data-has-session="true"] { cursor: pointer; }
       .ccp-multica-card[data-dragging="true"] { opacity: .48; }
@@ -5138,6 +5188,12 @@
       .ccp-multica-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; color: color-mix(in srgb, currentColor 58%, transparent); font-size: 11px; }
       .ccp-multica-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
       .ccp-multica-card-actions .ccp-multica-button { min-height: 26px; padding: 2px 7px; font-size: 12px; }
+      .ccp-multica-view-dialog-overlay { position: absolute; z-index: 20; inset: 0; display: grid; place-items: center; padding: 18px; background: color-mix(in srgb, #000 38%, transparent); }
+      .ccp-multica-view-dialog { display: grid; gap: 13px; width: min(520px, calc(100% - 36px)); max-height: calc(100% - 36px); overflow: auto; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 8px; padding: 16px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 18px 44px color-mix(in srgb, #000 46%, transparent); }
+      .ccp-multica-view-dialog-header, .ccp-multica-view-dialog-row, .ccp-multica-view-dialog-actions { display: flex; align-items: center; gap: 8px; }
+      .ccp-multica-view-dialog-header h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 620; }
+      .ccp-multica-view-dialog-row { justify-content: space-between; min-height: 36px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); padding-top: 10px; }
+      .ccp-multica-view-dialog-actions { justify-content: flex-end; }
       .ccp-multica-board-page[data-compact="true"] .ccp-multica-card-summary { display: none; }
       .ccp-multica-issue-list, .ccp-multica-table, .ccp-multica-swimlane { display: grid; gap: 8px; min-width: 0; padding: 12px; }
       .ccp-multica-issue-list-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 6px; }
@@ -7432,77 +7488,53 @@
     if (queue && Number.isFinite(Number(queue.total))) {
       toolbarRight.appendChild(multicaWorkspaceEl("span", "ccp-multica-working-count", `队列 ${queue.total} 条`));
     }
-    const display = multicaWorkspaceEl("button", "ccp-multica-filter", "显示");
-    display.type = "button";
-    display.title = "切换卡片摘要";
-    display.setAttribute("aria-pressed", String(multicaWorkspaceState.boardCompact));
-    display.addEventListener("click", () => {
-      multicaWorkspaceState.boardCompact = !multicaWorkspaceState.boardCompact;
-      multicaWorkspaceRenderContent();
+    const layerMenu = multicaWorkspaceEl("details", "ccp-multica-viewbar-menu");
+    const layerButton = multicaWorkspaceEl("summary", "ccp-multica-icon-button", "▱");
+    layerButton.title = "视图管理";
+    layerButton.setAttribute("aria-label", "视图管理");
+    layerMenu.appendChild(layerButton);
+    const layerPopover = multicaWorkspaceEl("div", "ccp-multica-viewbar-popover");
+    const addView = multicaWorkspaceEl("button", "ccp-multica-viewbar-action", "＋ 新增视图");
+    addView.type = "button";
+    addView.addEventListener("click", () => { multicaWorkspaceState.issueViewDialog = "create"; multicaWorkspaceRenderContent(); });
+    const manageView = multicaWorkspaceEl("button", "ccp-multica-viewbar-action", "☷ 管理视图");
+    manageView.type = "button";
+    manageView.addEventListener("click", () => { multicaWorkspaceState.issueViewDialog = "manage"; multicaWorkspaceRenderContent(); });
+    layerPopover.append(addView, manageView);
+    layerMenu.appendChild(layerPopover);
+    toolbarLeft.appendChild(layerMenu);
+
+    const filterMenu = multicaWorkspaceEl("details", "ccp-multica-control-menu");
+    filterMenu.appendChild(multicaWorkspaceEl("summary", "ccp-multica-filter", "筛选"));
+    const filterPopover = multicaWorkspaceEl("div", "ccp-multica-control-popover");
+    filterPopover.appendChild(multicaWorkspaceEl("span", "ccp-multica-control-popover-label", "任务范围"));
+    multicaWorkspaceIssueFilters.forEach((filter) => {
+      const option = multicaWorkspaceEl("button", "ccp-multica-viewbar-action", filter.label);
+      option.type = "button";
+      option.setAttribute("aria-pressed", String(multicaWorkspaceState.issueFilter === filter.key));
+      option.addEventListener("click", () => { multicaWorkspaceState.issueFilter = filter.key; filterMenu.removeAttribute("open"); multicaWorkspaceRenderContent(); multicaWorkspaceRefreshBoardSource(false); });
+      filterPopover.appendChild(option);
     });
-    toolbarRight.appendChild(display);
+    filterMenu.appendChild(filterPopover);
+    toolbarRight.appendChild(filterMenu);
+
+    const displayMenu = multicaWorkspaceEl("details", "ccp-multica-control-menu");
+    displayMenu.appendChild(multicaWorkspaceEl("summary", "ccp-multica-filter", "显示"));
+    const displayPopover = multicaWorkspaceEl("div", "ccp-multica-control-popover");
+    const compactRow = multicaWorkspaceEl("label", "ccp-multica-control-popover-row");
+    compactRow.appendChild(multicaWorkspaceEl("span", "", "紧凑卡片"));
+    const compact = document.createElement("input"); compact.type = "checkbox"; compact.checked = multicaWorkspaceState.boardCompact;
+    compact.addEventListener("change", () => { multicaWorkspaceState.boardCompact = compact.checked; multicaWorkspaceRenderContent(); });
+    compactRow.appendChild(compact); displayPopover.appendChild(compactRow); displayMenu.appendChild(displayPopover); toolbarRight.appendChild(displayMenu);
+
     const viewMenu = multicaWorkspaceEl("details", "ccp-multica-board-menu");
-    const viewSummary = multicaWorkspaceEl("summary", "", "视图");
-    viewSummary.title = "切换任务视图或管理本机保存视图";
-    viewMenu.appendChild(viewSummary);
+    viewMenu.appendChild(multicaWorkspaceEl("summary", "", multicaWorkspaceIssueViewModeLabels[multicaWorkspaceState.issueViewMode] || "看板"));
     const viewPopover = multicaWorkspaceEl("div", "ccp-multica-board-menu-popover");
-    viewPopover.setAttribute("role", "group");
-    viewPopover.setAttribute("aria-label", "任务视图");
-    viewPopover.appendChild(multicaWorkspaceEl("span", "ccp-multica-board-menu-label", "布局"));
-    const viewOptions = multicaWorkspaceEl("div", "ccp-multica-board-menu-options");
-    [
-      ["board", "看板"],
-      ["list", "列表"],
-      ["table", "表格"],
-      ["swimlane", "泳道"],
-    ].forEach(([mode, label]) => {
-      const modeButton = multicaWorkspaceEl("button", "ccp-multica-filter", label);
-      modeButton.type = "button";
-      modeButton.setAttribute("aria-pressed", String(multicaWorkspaceState.issueViewMode === mode));
-      modeButton.addEventListener("click", () => {
-        if (multicaWorkspaceState.issueViewMode === mode) return;
-        multicaWorkspaceState.issueViewMode = mode;
-        multicaWorkspaceRenderContent();
-      });
-      viewOptions.appendChild(modeButton);
+    [ ["board", "看板"], ["list", "列表"], ["table", "表格"], ["swimlane", "泳道"] ].forEach(([mode, label]) => {
+      const button = multicaWorkspaceEl("button", "ccp-multica-filter", label); button.type = "button"; button.setAttribute("aria-pressed", String(multicaWorkspaceState.issueViewMode === mode));
+      button.addEventListener("click", () => { multicaWorkspaceState.issueViewMode = mode; viewMenu.removeAttribute("open"); multicaWorkspaceRenderContent(); }); viewPopover.appendChild(button);
     });
-    viewPopover.appendChild(viewOptions);
-    viewPopover.appendChild(multicaWorkspaceEl("span", "ccp-multica-board-menu-label", "本机保存视图"));
-    const savedViews = multicaWorkspaceEl("select", "ccp-multica-board-menu-select");
-    savedViews.title = "选择本机保存视图";
-    savedViews.setAttribute("aria-label", "本机保存视图");
-    const emptyOption = document.createElement("option");
-    emptyOption.value = "";
-    emptyOption.textContent = "本机视图";
-    savedViews.appendChild(emptyOption);
-    multicaWorkspaceState.savedIssueViews.forEach((view) => {
-      const option = document.createElement("option");
-      option.value = view.id;
-      option.textContent = view.name;
-      savedViews.appendChild(option);
-    });
-    savedViews.value = multicaWorkspaceState.activeIssueViewId;
-    savedViews.addEventListener("change", () => {
-      if (savedViews.value) multicaWorkspaceApplySavedIssueView(savedViews.value);
-    });
-    viewPopover.appendChild(savedViews);
-    const viewActions = multicaWorkspaceEl("div", "ccp-multica-board-menu-actions");
-    const saveView = multicaWorkspaceEl("button", "ccp-multica-filter", "保存本机视图");
-    saveView.type = "button";
-    saveView.title = "将当前任务筛选和显示方式保存到本机浏览器";
-    saveView.addEventListener("click", multicaWorkspaceSaveCurrentIssueView);
-    viewActions.appendChild(saveView);
-    if (multicaWorkspaceState.activeIssueViewId) {
-      const deleteView = multicaWorkspaceEl("button", "ccp-multica-icon-button", "×");
-      deleteView.type = "button";
-      deleteView.title = "删除当前本机视图";
-      deleteView.setAttribute("aria-label", "删除当前本机视图");
-      deleteView.addEventListener("click", multicaWorkspaceDeleteActiveIssueView);
-      viewActions.appendChild(deleteView);
-    }
-    viewPopover.appendChild(viewActions);
-    viewMenu.appendChild(viewPopover);
-    toolbarRight.appendChild(viewMenu);
+    viewMenu.appendChild(viewPopover); toolbarRight.appendChild(viewMenu);
     const refresh = multicaWorkspaceEl("button", "ccp-multica-icon-button", "↻");
     refresh.type = "button";
     refresh.title = "刷新任务";
@@ -7549,6 +7581,7 @@
     const assignedFilterEmpty = multicaWorkspaceState.issueFilter === "assigned" &&
       !source.error && source.collection && Array.isArray(source.collection.items) && source.items.length === 0;
     multicaWorkspaceRenderEditor(page, module);
+    multicaWorkspaceRenderIssueViewDialog(page);
     const scroll = multicaWorkspaceEl("div", "ccp-multica-board-scroll");
     if (assignedFilterEmpty) {
       const empty = multicaWorkspaceEl("div", "ccp-multica-empty-state", "当前没有分配给本地用户的任务。");
