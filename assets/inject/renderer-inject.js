@@ -5196,6 +5196,28 @@
       .ccp-multica-view-dialog-header h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 620; }
       .ccp-multica-view-dialog-row { justify-content: space-between; min-height: 36px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); padding-top: 10px; }
       .ccp-multica-view-dialog-actions { justify-content: flex-end; }
+      .ccp-multica-issue-editor-overlay { position: absolute; z-index: 30; inset: 0; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, #000 42%, transparent); }
+      .ccp-multica-issue-editor { display: flex; flex-direction: column; width: min(600px, calc(100% - 48px)); min-height: 340px; max-height: min(560px, calc(100% - 48px)); overflow: hidden; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 12px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 24px 56px color-mix(in srgb, #000 50%, transparent); }
+      .ccp-multica-issue-editor[data-expanded="true"] { width: min(880px, calc(100% - 48px)); min-height: min(620px, calc(100% - 48px)); }
+      .ccp-multica-issue-editor-top { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 16px; color: color-mix(in srgb, currentColor 64%, transparent); font-size: 12px; }
+      .ccp-multica-issue-editor-top-spacer { flex: 1; }
+      .ccp-multica-issue-editor-top .ccp-multica-icon-button { min-width: 26px; min-height: 26px; border: 0; padding: 2px 5px; background: transparent; }
+      .ccp-multica-issue-editor-body { display: grid; flex: 1; align-content: start; gap: 8px; min-height: 0; padding: 2px 18px 16px; }
+      .ccp-multica-issue-editor-title { width: 100%; border: 0; outline: 0; padding: 0; background: transparent; color: inherit; font: 620 20px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .ccp-multica-issue-editor-title::placeholder, .ccp-multica-issue-editor-description::placeholder { color: color-mix(in srgb, currentColor 48%, transparent); }
+      .ccp-multica-issue-editor-description { width: 100%; min-height: 92px; resize: none; border: 0; outline: 0; padding: 0; background: transparent; color: inherit; font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .ccp-multica-issue-editor-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: auto; }
+      .ccp-multica-issue-editor-chips select, .ccp-multica-issue-editor-chip { min-height: 26px; max-width: 160px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 999px; padding: 3px 8px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .ccp-multica-issue-editor-chip { cursor: pointer; }
+      .ccp-multica-issue-editor-advanced { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-top: 8px; }
+      .ccp-multica-issue-editor-advanced label { display: grid; gap: 4px; color: color-mix(in srgb, currentColor 62%, transparent); font-size: 11px; }
+      .ccp-multica-issue-editor-advanced input { min-width: 0; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 5px; padding: 5px 7px; background: transparent; color: inherit; }
+      .ccp-multica-issue-editor-footer { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 14px; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+      .ccp-multica-issue-editor-footer-spacer { flex: 1; }
+      .ccp-multica-issue-editor-footer .ccp-multica-button { min-height: 28px; }
+      .ccp-multica-issue-editor-continue { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: color-mix(in srgb, currentColor 68%, transparent); font-size: 12px; }
+      .ccp-multica-issue-editor-continue input { margin: 0; accent-color: var(--ccp-multica-accent, #4c9aff); }
+      .ccp-multica-issue-editor-shortcut { color: color-mix(in srgb, currentColor 52%, transparent); font-size: 11px; white-space: nowrap; }
       .ccp-multica-board-page[data-compact="true"] .ccp-multica-card-summary { display: none; }
       .ccp-multica-issue-list, .ccp-multica-table, .ccp-multica-swimlane { display: grid; gap: 8px; min-width: 0; padding: 12px; }
       .ccp-multica-issue-list-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 6px; }
@@ -5882,7 +5904,9 @@
 
   function multicaWorkspaceOpenEditor(module, item = null, defaults = {}) {
     const resource = multicaWorkspaceWritableResource(module);
-    if (!resource || multicaWorkspaceState.mutationBusy) return;
+    // Continue-creating replaces the just-saved issue editor before the request
+    // releases its busy marker; all unrelated opens remain blocked.
+    if (!resource || (multicaWorkspaceState.mutationBusy && multicaWorkspaceState.editor?.continueCreating !== true)) return;
     const values = multicaWorkspaceNormalizeEditableEntity(
       resource,
       item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults },
@@ -5904,6 +5928,9 @@
       original: item ? multicaWorkspaceEditableEntity(item) : null,
       values,
       message: "",
+      continueCreating: false,
+      expanded: false,
+      showAdvanced: false,
     };
     multicaWorkspaceState.mutationNotice = null;
     multicaWorkspaceRenderContent();
@@ -5964,6 +5991,10 @@
     const editor = multicaWorkspaceState.editor;
     const resource = multicaWorkspaceWritableResource(module);
     if (!editor || editor.resource !== resource) return;
+    if (resource === "issues" && module?.key === "my-issues") {
+      multicaWorkspaceRenderIssueEditor(content, module, editor);
+      return;
+    }
     const form = multicaWorkspaceEl("form", "ccp-multica-form");
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -6004,6 +6035,81 @@
     }
     form.appendChild(actions);
     content.appendChild(form);
+  }
+
+  function multicaWorkspaceRenderIssueEditor(content, module, editor) {
+    const overlay = multicaWorkspaceEl("div", "ccp-multica-issue-editor-overlay");
+    const form = multicaWorkspaceEl("form", "ccp-multica-issue-editor");
+    form.dataset.expanded = String(editor.expanded === true);
+    form.addEventListener("submit", (event) => { event.preventDefault(); void multicaWorkspaceSaveEditor(module); });
+    const close = () => multicaWorkspaceCloseEditor();
+    const top = multicaWorkspaceEl("div", "ccp-multica-issue-editor-top");
+    top.appendChild(multicaWorkspaceEl("span", "", editor.expectedRevision ? "任务 › 编辑" : "拓扑 › 手动创建"));
+    top.appendChild(multicaWorkspaceEl("span", "ccp-multica-issue-editor-top-spacer"));
+    const expand = multicaWorkspaceEl("button", "ccp-multica-icon-button", editor.expanded ? "↙" : "↗"); expand.type = "button"; expand.title = editor.expanded ? "恢复常规大小" : "在更大窗口编辑";
+    expand.addEventListener("click", () => { editor.expanded = !editor.expanded; multicaWorkspaceRenderContent(); });
+    const closeButton = multicaWorkspaceEl("button", "ccp-multica-icon-button", "×"); closeButton.type = "button"; closeButton.title = "关闭"; closeButton.addEventListener("click", close);
+    top.append(expand, closeButton); form.appendChild(top);
+    const body = multicaWorkspaceEl("div", "ccp-multica-issue-editor-body");
+    const title = document.createElement("input"); title.className = "ccp-multica-issue-editor-title"; title.placeholder = "任务标题"; title.value = String(editor.values.title || ""); title.required = true;
+    title.addEventListener("input", () => { editor.values.title = title.value; editor.message = ""; }); body.appendChild(title);
+    const description = document.createElement("textarea"); description.className = "ccp-multica-issue-editor-description"; description.placeholder = "添加描述..."; description.value = String(editor.values.description || "");
+    description.addEventListener("input", () => { editor.values.description = description.value; editor.message = ""; }); body.appendChild(description);
+    form.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        if (!multicaWorkspaceState.mutationBusy) form.requestSubmit();
+      }
+      if (event.key === "Escape") { event.preventDefault(); close(); }
+    });
+    const chips = multicaWorkspaceEl("div", "ccp-multica-issue-editor-chips");
+    const addSelect = (label, key, options) => {
+      const select = document.createElement("select"); select.title = label;
+      options.forEach(([value, text]) => { const option = document.createElement("option"); option.value = value; option.textContent = text; select.appendChild(option); });
+      select.value = String(editor.values[key] || options[0][0]); select.addEventListener("change", () => { editor.values[key] = select.value; }); chips.appendChild(select);
+    };
+    addSelect("状态", "status", multicaWorkspaceIssueStatusOptions());
+    addSelect("优先级", "priority", [["none", "无优先级"], ["low", "低优先级"], ["medium", "中优先级"], ["high", "高优先级"], ["urgent", "紧急"]]);
+    const agents = multicaWorkspaceState.collections.get("agents")?.items || [];
+    const assigneeOptions = [["", "未分配"], ...agents.map((agent) => [multicaWorkspaceEntityId(agent), multicaWorkspaceItemTitle(agent)]).filter(([id]) => id)];
+    const assignee = document.createElement("select"); assignee.title = "分配给智能体";
+    assigneeOptions.forEach(([value, text]) => { const option = document.createElement("option"); option.value = value; option.textContent = text; assignee.appendChild(option); });
+    assignee.value = String(editor.values.assignee_type === "agent" ? editor.values.assignee_id || "" : "");
+    assignee.addEventListener("change", () => { editor.values.assignee_type = assignee.value ? "agent" : ""; editor.values.assignee_id = assignee.value; }); chips.appendChild(assignee);
+    const labels = multicaWorkspaceState.collections.get("labels")?.items || [];
+    const labelButton = multicaWorkspaceEl("button", "ccp-multica-issue-editor-chip", "添加标签"); labelButton.type = "button";
+    labelButton.title = "循环选择工作区标签";
+    labelButton.addEventListener("click", () => {
+      const ids = Array.isArray(editor.values.label_ids) ? editor.values.label_ids : [];
+      const next = labels.find((label) => !ids.includes(multicaWorkspaceEntityId(label)));
+      editor.values.label_ids = next ? [...ids, multicaWorkspaceEntityId(next)] : [];
+      labelButton.textContent = editor.values.label_ids.length ? `标签 ${editor.values.label_ids.length}` : "添加标签";
+    }); chips.appendChild(labelButton);
+    const projects = multicaWorkspaceState.collections.get("projects")?.items || [];
+    const project = document.createElement("select"); project.title = "所属项目";
+    [["", "无项目"], ...projects.map((item) => [multicaWorkspaceEntityId(item), multicaWorkspaceItemTitle(item)]).filter(([id], index) => index === 0 || id)].forEach(([value, text]) => { const option = document.createElement("option"); option.value = value; option.textContent = text; project.appendChild(option); });
+    project.value = String(editor.values.project_id || ""); project.addEventListener("change", () => { editor.values.project_id = project.value; }); chips.appendChild(project);
+    const more = multicaWorkspaceEl("button", "ccp-multica-issue-editor-chip", "..."); more.type = "button"; more.title = "更多字段";
+    more.addEventListener("click", () => { editor.showAdvanced = !editor.showAdvanced; multicaWorkspaceRenderContent(); }); chips.appendChild(more);
+    body.appendChild(chips); form.appendChild(body);
+    if (editor.showAdvanced) {
+      const advanced = multicaWorkspaceEl("div", "ccp-multica-issue-editor-advanced");
+      [["开始日期", "start_date"], ["截止日期", "due_date"]].forEach(([label, key]) => {
+        const field = multicaWorkspaceEl("label", "", label); const input = document.createElement("input"); input.type = "date"; input.value = String(editor.values[key] || ""); input.addEventListener("input", () => { editor.values[key] = input.value; }); field.appendChild(input); advanced.appendChild(field);
+      });
+      body.appendChild(advanced);
+    }
+    const footer = multicaWorkspaceEl("div", "ccp-multica-issue-editor-footer");
+    const attachment = multicaWorkspaceEl("button", "ccp-multica-icon-button", "+"); attachment.type = "button"; attachment.title = "附件上传目前不受本地任务协议支持"; attachment.disabled = true; footer.appendChild(attachment);
+    const switchAgent = multicaWorkspaceEl("button", "ccp-multica-icon-button", "↔"); switchAgent.type = "button"; switchAgent.title = "切换智能体分配";
+    switchAgent.addEventListener("click", () => { assignee.focus(); }); footer.appendChild(switchAgent);
+    footer.appendChild(multicaWorkspaceEl("span", "ccp-multica-issue-editor-footer-spacer"));
+    const continueLabel = multicaWorkspaceEl("label", "ccp-multica-issue-editor-continue"); const continueCreating = document.createElement("input"); continueCreating.type = "checkbox"; continueCreating.checked = editor.continueCreating === true; continueCreating.addEventListener("change", () => { editor.continueCreating = continueCreating.checked; }); continueLabel.append(continueCreating, multicaWorkspaceEl("span", "", "继续创建")); footer.appendChild(continueLabel);
+    const cancel = multicaWorkspaceEl("button", "ccp-multica-button", "取消"); cancel.type = "button"; cancel.disabled = multicaWorkspaceState.mutationBusy; cancel.addEventListener("click", close);
+    const save = multicaWorkspaceEl("button", "ccp-multica-button", multicaWorkspaceState.mutationBusy ? "创建中…" : editor.expectedRevision ? "保存" : "创建任务"); save.type = "submit"; save.dataset.variant = "primary"; save.disabled = multicaWorkspaceState.mutationBusy;
+    footer.append(cancel, multicaWorkspaceEl("span", "ccp-multica-issue-editor-shortcut", "Ctrl Enter"), save); form.appendChild(footer);
+    if (editor.message) { const message = multicaWorkspaceEl("div", "ccp-multica-inline-message", editor.message); message.dataset.state = "error"; body.appendChild(message); }
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); }); overlay.appendChild(form); content.appendChild(overlay); setTimeout(() => title.focus(), 0);
   }
 
   // Existing Agents use replace-all. New Agents keep their selection on the
@@ -6139,6 +6245,7 @@
       return;
     }
     const entity = { ...(editor.original || {}), ...editor.values, id: editor.entityId };
+    const continueCreating = editor.resource === "issues" && editor.expectedRevision === 0 && editor.continueCreating === true;
     if (editor.resource === "issue_statuses" && !String(entity.archived_at || "").trim()) {
       entity.archived_at = null;
     }
@@ -6162,7 +6269,20 @@
           expectedRevision: editor.expectedRevision,
         });
       }
-      multicaWorkspaceState.editor = null;
+      if (continueCreating) {
+        const nextDefaults = {
+          status: editor.values.status,
+          priority: editor.values.priority,
+          project_id: editor.values.project_id,
+          assignee_type: editor.values.assignee_type,
+          assignee_id: editor.values.assignee_id,
+          label_ids: Array.isArray(editor.values.label_ids) ? [...editor.values.label_ids] : [],
+        };
+        multicaWorkspaceOpenEditor(module, null, nextDefaults);
+        if (multicaWorkspaceState.editor) multicaWorkspaceState.editor.continueCreating = true;
+      } else {
+        multicaWorkspaceState.editor = null;
+      }
       multicaWorkspaceState.mutationNotice = { state: "ok", message: "已保存" };
       await multicaWorkspaceRefreshMutationResource(module, editor.resource);
     } catch (error) {
