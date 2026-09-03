@@ -5123,7 +5123,9 @@
       .ccp-multica-board-heading { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 12px 18px 3px; border-bottom: 0; }
       .ccp-multica-board-heading-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; color: color-mix(in srgb, currentColor 72%, transparent); font-size: 15px; }
       .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; white-space: nowrap; }
-      .ccp-multica-board-toolbar { display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 12px; min-height: 34px; padding: 5px 18px 10px; overflow-x: auto; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); scrollbar-width: thin; }
+      /* The toolbar owns popovers.  Do not make it a scrolling ancestor: an
+         overflow container clips its menu even when the menu has a z-index. */
+      .ccp-multica-board-toolbar { position: relative; z-index: 10; display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 12px; min-height: 34px; padding: 5px 18px 10px; overflow: visible; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
       .ccp-multica-board-toolbar-left, .ccp-multica-board-toolbar-right { display: inline-flex; align-items: center; gap: 6px; min-width: max-content; }
       .ccp-multica-board-toolbar-right { margin-left: auto; }
       .ccp-multica-board-toolbar .ccp-multica-filter, .ccp-multica-board-toolbar .ccp-multica-icon-button { min-height: 28px; }
@@ -5133,7 +5135,7 @@
       .ccp-multica-board-menu > summary::-webkit-details-marker { display: none; }
       .ccp-multica-board-menu > summary:hover { background: color-mix(in srgb, currentColor 9%, transparent); color: inherit; }
       .ccp-multica-board-menu[open] > summary { border-color: color-mix(in srgb, #4fb995 55%, transparent); color: inherit; }
-      .ccp-multica-board-menu-popover { position: absolute; z-index: 8; top: calc(100% + 6px); right: 0; display: grid; gap: 7px; width: min(252px, calc(100vw - 36px)); padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-board-menu-popover { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; gap: 7px; width: min(252px, calc(100vw - 36px)); padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
       .ccp-multica-board-menu-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
       .ccp-multica-board-menu-options .ccp-multica-filter { width: 100%; min-height: 28px; padding-inline: 7px; }
       .ccp-multica-board-menu-label { color: color-mix(in srgb, currentColor 60%, transparent); font-size: 12px; }
@@ -5143,13 +5145,13 @@
       .ccp-multica-viewbar-menu { position: relative; flex: 0 0 auto; }
       .ccp-multica-viewbar-menu > summary { min-width: 28px; padding-inline: 6px; font-size: 16px; line-height: 1; list-style: none; }
       .ccp-multica-viewbar-menu > summary::-webkit-details-marker, .ccp-multica-control-menu > summary::-webkit-details-marker { display: none; }
-      .ccp-multica-viewbar-popover { position: absolute; z-index: 9; top: calc(100% + 6px); left: 0; display: grid; gap: 2px; width: 176px; padding: 6px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-viewbar-popover { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; display: grid; gap: 2px; width: 176px; padding: 6px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
       .ccp-multica-viewbar-action { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; border: 0; border-radius: 5px; padding: 6px 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
       .ccp-multica-viewbar-action:hover { background: color-mix(in srgb, currentColor 9%, transparent); }
       .ccp-multica-viewbar-action-icon { width: 14px; color: color-mix(in srgb, currentColor 72%, transparent); text-align: center; }
       .ccp-multica-control-menu { position: relative; flex: 0 0 auto; }
       .ccp-multica-control-menu > summary { list-style: none; }
-      .ccp-multica-control-popover { position: absolute; z-index: 9; top: calc(100% + 6px); right: 0; display: grid; gap: 7px; width: 210px; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
+      .ccp-multica-control-popover { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; gap: 7px; width: 210px; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 7px; background: var(--ccp-multica-bg, #181b1a); box-shadow: 0 12px 30px color-mix(in srgb, #000 35%, transparent); }
       .ccp-multica-control-popover-label { color: color-mix(in srgb, currentColor 60%, transparent); font-size: 12px; }
       .ccp-multica-control-popover-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; color: color-mix(in srgb, currentColor 78%, transparent); font-size: 12px; }
       .ccp-multica-control-popover select { min-height: 28px; min-width: 108px; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 5px; padding: 3px 6px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font: inherit; }
@@ -5162,7 +5164,7 @@
       .ccp-multica-native-session { cursor: pointer; text-align: left; }
       .ccp-multica-native-session[aria-current="page"] { border-color: #56b9a6; }
       .ccp-multica-working-count { color: color-mix(in srgb, currentColor 66%, transparent); white-space: nowrap; }
-      .ccp-multica-board-scroll { min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
+      .ccp-multica-board-scroll { position: relative; z-index: 0; min-width: 0; min-height: 0; flex: 1; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; }
       .ccp-multica-board { box-sizing: border-box; display: grid; grid-template-columns: repeat(7, minmax(260px, 1fr)); gap: 12px; width: max-content; min-width: 100%; height: 100%; min-height: 360px; padding: 8px 12px 16px; }
       .ccp-multica-board-column { box-sizing: border-box; display: flex; flex-direction: column; width: 260px; min-width: 260px; min-height: 0; border: 0; border-radius: 12px; background: color-mix(in srgb, currentColor 3%, var(--ccp-multica-bg, #181b1a)); overflow: hidden; }
       .ccp-multica-board-column[data-tone="warning"] { background: color-mix(in srgb, #b78923 8%, var(--ccp-multica-bg, #181b1a)); }
