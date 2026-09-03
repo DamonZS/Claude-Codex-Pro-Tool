@@ -869,11 +869,12 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         "function multicaWorkspaceRenderIssueBoard(content, module)",
         "function multicaWorkspaceAppendSkillItem",
     );
-    assert!(board.contains("multicaWorkspaceAppendModuleMenu(heading)"));
+    assert!(
+        !board.contains("multicaWorkspaceRenderEditor(content, module)"),
+        "issue board must not render the generic editor above the board"
+    );
     assert!(!board.contains("multicaWorkspaceRenderNativeInventory(page)"));
     assert!(!board.contains("Codex 任务队列"));
-    assert!(workspace.contains("multicaWorkspaceRenderNativeActivity(page)"));
-    assert!(workspace.contains("当前活动"));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
     assert!(board.contains("lane.dataset.multicaBoardStatus = column.key"));
     let dependency_loader = source_between(
@@ -909,7 +910,8 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     assert!(refresh.contains("multicaWorkspaceState.issueFilter === \"agents\""));
     assert!(board.contains("正在读取智能体和小队"));
     assert!(board.contains("读取智能体和小队失败"));
-    assert!(workspace.contains("grid-template-columns: repeat(7, 280px)"));
+    assert!(workspace.contains("grid-template-columns: repeat(7, minmax(260px, 1fr))"));
+    assert!(workspace.contains(".ccp-multica-board-scroll"));
     assert!(workspace.contains("overflow-x: auto"));
     assert!(
         workspace

@@ -7702,7 +7702,6 @@
     }
     const assignedFilterEmpty = multicaWorkspaceState.issueFilter === "assigned" &&
       !source.error && source.collection && Array.isArray(source.collection.items) && source.items.length === 0;
-    multicaWorkspaceRenderEditor(page, module);
     multicaWorkspaceRenderIssueViewDialog(page);
     const scroll = multicaWorkspaceEl("div", "ccp-multica-board-scroll");
     if (assignedFilterEmpty) {
