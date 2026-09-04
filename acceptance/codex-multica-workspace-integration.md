@@ -310,6 +310,8 @@ bridge 未安装、Launcher 未启动、binding 缺失、本地传输错误或�
 
 验证方式与证据：`bridge_routes` 表驱动测试含成功白名单及上述拒绝用例；路由覆盖清单更新。
 
+补充：`/multica/workspace/query` 的成功响应（含 `items: []`）必须有顶层 `status: "ok"`；首次 bootstrap 后默认本地 `workspace.json` 必须存在且含七个系统状态，重复 bootstrap 不覆盖已有 Issue。
+
 #### AC-28：权限与租户边界由 Core 复核
 
 通过标准：伪造 workspace ID、跨 workspace entity ID、过期 revision 和 renderer 自报管理员均不能读取或修改他人数据，403/409 不泄漏实体内容。

@@ -1,7 +1,9 @@
 use base64::Engine;
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::settings::BackendSettings;
 
@@ -20,6 +22,13 @@ pub const CODEX_THEME_STYLE_ID: &str = "claude-codex-pro-codex-theme";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
+}
+
+/// Fingerprint the actual renderer payload rather than the app version. The
+/// launcher uses this to detect an already-live bridge backed by stale UI code.
+pub fn renderer_fingerprint() -> &'static str {
+    static FINGERPRINT: OnceLock<String> = OnceLock::new();
+    FINGERPRINT.get_or_init(|| format!("sha256:{:x}", Sha256::digest(RENDERER_SCRIPT.as_bytes())))
 }
 
 pub fn claude_chinese_injection_script() -> &'static str {
@@ -55,12 +64,14 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
     // this script cannot read the token off `window`.
     let helper_token = crate::helper_auth::helper_token();
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.{} = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
+        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.{} = {};\nwindow.__CLAUDE_CODEX_PRO_VERSION__ = {};\nwindow.__CLAUDE_CODEX_PRO_BUILD__ = {};\nwindow.__CLAUDE_CODEX_PRO_RENDERER_EXPECTED_FINGERPRINT__ = {};\nwindow.__CLAUDE_CODEX_PRO_IMAGE_OVERLAY__ = {};\nwindow.__CLAUDE_CODEX_PRO_SUPPORT_PAYMENT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_CONTACT_WECHAT_QR__ = {};\nwindow.__CLAUDE_CODEX_PRO_ANNOUNCEMENT__ = {};\nwindow.__CLAUDE_CODEX_PRO_PLUGIN_MARKETPLACES__ = {};\n{}",
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
         crate::helper_auth::HELPER_TOKEN_GLOBAL,
         serde_json::to_string(helper_token).expect("helper token should serialize"),
         serde_json::to_string(crate::version::VERSION).expect("version should serialize"),
         serde_json::to_string(DIAGNOSTIC_BUILD_ID).expect("build id should serialize"),
+        serde_json::to_string(renderer_fingerprint())
+            .expect("renderer fingerprint should serialize"),
         serde_json::to_string(&image_overlay).expect("image overlay config should serialize"),
         serde_json::to_string(&support_payment_qr).expect("support payment QR should serialize"),
         serde_json::to_string(&contact_wechat_qr).expect("contact WeChat QR should serialize"),

@@ -7,11 +7,12 @@ use claude_codex_pro_core::app_paths::{
     normalize_codex_app_path, packaged_app_user_model_id, resolve_codex_app_dir_with_saved,
     standalone_codex_candidates_from, user_data_candidates_from,
 };
+use claude_codex_pro_core::cdp::CdpTarget;
 use claude_codex_pro_core::launcher::{
     CodexLaunch, DefaultLaunchHooks, LaunchHooks, LaunchOptions, MacosCleanupPolicy,
     build_codex_arguments, build_codex_command, build_macos_cleanup_command,
     build_macos_open_command, build_macos_open_command_with_environment, build_packaged_activation,
-    ensure_detached_helper, launch_and_inject_with_hooks,
+    ensure_detached_helper, launch_and_inject_with_hooks, select_existing_codex_cdp_port,
 };
 #[cfg(windows)]
 use claude_codex_pro_core::launcher::{
@@ -991,6 +992,48 @@ async fn launch_lifecycle_still_injects_when_global_enhancements_disabled_but_ch
             "shutdown-helper:57321",
         ]
     );
+}
+
+fn cdp_target(title: &str, url: &str, target_type: &str) -> CdpTarget {
+    CdpTarget {
+        id: format!("{title}-{url}"),
+        target_type: target_type.to_string(),
+        title: title.to_string(),
+        url: url.to_string(),
+        web_socket_debugger_url: Some("ws://127.0.0.1:9230/devtools/page/test".to_string()),
+    }
+}
+
+#[test]
+fn existing_codex_cdp_port_reuses_discovered_running_codex_port() {
+    let selected = select_existing_codex_cdp_port(
+        55618,
+        [
+            (
+                55618,
+                vec![cdp_target("Other app", "http://127.0.0.1/", "page")],
+            ),
+            (
+                9230,
+                vec![cdp_target("ChatGPT", "app://-/index.html", "page")],
+            ),
+        ],
+    );
+
+    assert_eq!(selected, Some(9230));
+}
+
+#[test]
+fn existing_codex_cdp_port_rejects_non_codex_listener() {
+    let selected = select_existing_codex_cdp_port(
+        55618,
+        [(
+            9230,
+            vec![cdp_target("Other app", "http://127.0.0.1/", "page")],
+        )],
+    );
+
+    assert_eq!(selected, None);
 }
 
 #[tokio::test]

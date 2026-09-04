@@ -27,8 +27,9 @@ use crate::multica_execution_store::{
 use crate::multica_skill_trust::review_local_skill;
 use crate::multica_workspace::{
     LocalMulticaWorkspaceStore, LocalWorkspaceEntityDelete, LocalWorkspaceEntityUpsert,
-    MulticaAgentCreateCommand, MulticaSkillBindingCommand, MulticaSkillBindingRemoveCommand,
-    MulticaSkillBindingsQuery, MulticaWorkspaceQuery, MulticaWorkspaceResourceKey,
+    LocalWorkspaceIssueMove, MulticaAgentCreateCommand, MulticaSkillBindingCommand,
+    MulticaSkillBindingRemoveCommand, MulticaSkillBindingsQuery, MulticaWorkspaceQuery,
+    MulticaWorkspaceResourceKey,
 };
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -154,6 +155,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn multica_workspace_upsert(
         &self,
         _request: MulticaWorkspaceUpsertRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
+    async fn multica_workspace_move_issue(
+        &self,
+        _request: MulticaWorkspaceMoveIssueRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_workspace_mutation_unavailable")
     }
@@ -440,6 +447,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_workspace_upsert(parse_multica_workspace_upsert(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/workspace/move-issue" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_workspace_move_issue(parse_multica_workspace_move_issue(&payload)?)
                     .await
             }
             .await
@@ -813,7 +829,14 @@ pub async fn handle_bridge_request(
         }
     };
 
-    let response = result.unwrap_or_else(|error| failed_from_error(&payload, error));
+    let mut response = result.unwrap_or_else(|error| failed_from_error(&payload, error));
+    if path == "/multica/workspace/query"
+        && response.get("status").and_then(Value::as_str).is_none()
+    {
+        if let Some(object) = response.as_object_mut() {
+            object.insert("status".to_string(), json!("ok"));
+        }
+    }
     let _ = crate::diagnostic_log::append_diagnostic_log(
         "bridge.response",
         json!({
@@ -881,6 +904,25 @@ pub struct MulticaWorkspaceUpsertRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaWorkspaceMoveIssueRequest {
+    pub issue_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub assignee_type: Option<Option<String>>,
+    #[serde(default)]
+    pub assignee_id: Option<Option<String>>,
+    #[serde(default)]
+    pub parent_issue_id: Option<Option<String>>,
+    #[serde(default)]
+    pub project_id: Option<Option<String>>,
+    pub before_id: Option<String>,
+    pub after_id: Option<String>,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaWorkspaceDeleteRequest {
     pub resource: MulticaWorkspaceResourceKey,
     pub entity_id: String,
@@ -919,6 +961,42 @@ fn parse_multica_workspace_upsert(
     validate_mutable_workspace_resource(request.resource)?;
     if !request.entity.is_object() {
         anyhow::bail!("multica_workspace_entity_invalid");
+    }
+    Ok(request)
+}
+
+fn parse_multica_workspace_move_issue(
+    payload: &Value,
+) -> anyhow::Result<MulticaWorkspaceMoveIssueRequest> {
+    ensure_multica_payload_size(payload)?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("multica_workspace_move_invalid"))?;
+    for key in ["beforeId", "afterId"] {
+        if !object.contains_key(key) {
+            anyhow::bail!("multica_workspace_move_invalid");
+        }
+    }
+    let request: MulticaWorkspaceMoveIssueRequest = serde_json::from_value(payload.clone())
+        .map_err(|_| anyhow::anyhow!("multica_workspace_move_invalid"))?;
+    validate_multica_execution_id(&request.issue_id)
+        .map_err(|_| anyhow::anyhow!("multica_workspace_move_invalid"))?;
+    if request.expected_revision == 0 {
+        anyhow::bail!("multica_workspace_revision_invalid");
+    }
+    for value in request
+        .status
+        .as_deref()
+        .into_iter()
+        .chain(request.assignee_type.as_ref().and_then(Option::as_deref))
+        .chain(request.assignee_id.as_ref().and_then(Option::as_deref))
+        .chain(request.parent_issue_id.as_ref().and_then(Option::as_deref))
+        .chain(request.project_id.as_ref().and_then(Option::as_deref))
+        .chain(request.before_id.as_deref())
+        .chain(request.after_id.as_deref())
+    {
+        validate_multica_execution_id(value)
+            .map_err(|_| anyhow::anyhow!("multica_workspace_move_invalid"))?;
     }
     Ok(request)
 }
@@ -1839,7 +1917,13 @@ impl BridgeRuntimeService for CoreRuntimeService {
             }
             None => crate::multica_workspace::workspace_query(query).await?,
         };
-        Ok(serde_json::to_value(collection)?)
+        let mut value = serde_json::to_value(collection)?;
+        // Workspace collections use the same bridge envelope as mutations.
+        // Keep an explicit success status even when the collection is empty.
+        if let Some(object) = value.as_object_mut() {
+            object.insert("status".to_string(), json!("ok"));
+        }
+        Ok(value)
     }
 
     async fn multica_workspace_upsert(
@@ -1916,6 +2000,32 @@ impl BridgeRuntimeService for CoreRuntimeService {
             None
         };
         Ok(json!({"status": "ok", "entity": entity, "queue": queue}))
+    }
+
+    async fn multica_workspace_move_issue(
+        &self,
+        request: MulticaWorkspaceMoveIssueRequest,
+    ) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::workspace_bootstrap()
+            .await?
+            .workspace
+            .id;
+        let entity = self.multica_workspace_store.move_issue(
+            &workspace_id,
+            LocalWorkspaceIssueMove {
+                issue_id: request.issue_id,
+                status: request.status,
+                assignee_type: request.assignee_type,
+                assignee_id: request.assignee_id,
+                parent_issue_id: request.parent_issue_id,
+                project_id: request.project_id,
+                before_id: request.before_id,
+                after_id: request.after_id,
+                expected_revision: request.expected_revision,
+            },
+            unix_now_ms(),
+        )?;
+        Ok(json!({"status": "ok", "entity": entity}))
     }
 
     async fn multica_workspace_delete(
@@ -3683,6 +3793,7 @@ mod tests {
                     Vec::new()
                 },
                 skills_supported,
+                native_task_host_supported: true,
                 skills_inventory_supported: skills_supported,
                 skill_protocol: skills_supported.then(|| "skill-bundles-v1".to_string()),
                 subagents_supported: true,

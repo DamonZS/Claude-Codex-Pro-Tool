@@ -148,6 +148,8 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("window.__CLAUDE_CODEX_PRO_BUILD__"));
+    assert!(script.contains("window.__CLAUDE_CODEX_PRO_RENDERER_EXPECTED_FINGERPRINT__"));
+    assert!(script.contains(assets::renderer_fingerprint()));
     assert!(script.contains(claude_codex_pro_core::assets::DIAGNOSTIC_BUILD_ID));
     assert!(script.contains("script_loaded"));
     assert!(script.contains("data-claude-codex-pro-build"));
@@ -963,6 +965,66 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
 }
 
 #[test]
+fn codex_multica_column_create_bypasses_transient_save_busy_state() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let open_editor = source_between(
+        workspace,
+        "function multicaWorkspaceOpenEditor(module, item = null, defaults = {})",
+        "function multicaWorkspaceCloseEditor",
+    );
+    let board = source_between(
+        workspace,
+        "function multicaWorkspaceRenderIssueBoard(content, module)",
+        "function multicaWorkspaceAppendSkillItem",
+    );
+
+    assert!(open_editor.contains("const openingNewIssue = !item && resource === \"issues\""));
+    assert!(open_editor.contains("!openingNewIssue && multicaWorkspaceState.mutationBusy"));
+    assert!(
+        board.contains("multicaWorkspaceOpenEditor(module, null, { status: column.key })"),
+        "every board column create action must open the issue editor with its status"
+    );
+    assert!(workspace.contains("ccp-multica-issue-editor-overlay"));
+}
+
+#[test]
+fn codex_multica_workspace_keeps_board_create_actions_when_assigned_queue_is_empty() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let board = source_between(
+        workspace,
+        "function multicaWorkspaceRenderIssueBoard(content, module)",
+        "function multicaWorkspaceAppendSkillItem",
+    );
+
+    let empty_state = board
+        .find("if (assignedFilterEmpty)")
+        .expect("assigned empty-state branch");
+    let board_render = board
+        .find("const board = multicaWorkspaceEl(\"div\", \"ccp-multica-board\")")
+        .expect("seven-column board render");
+    assert!(
+        empty_state < board_render,
+        "an empty assigned queue must preserve the seven-column board"
+    );
+    assert!(
+        board[empty_state..board_render].contains("scroll.appendChild(empty);"),
+        "empty assigned queue must render a notice instead of returning early"
+    );
+    assert!(board.contains("新建${column.label}任务"));
+    assert!(board.contains("multicaWorkspaceOpenEditor(module, null, { status: column.key })"));
+}
+
+#[test]
 fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
     let script = assets::injection_script(57321);
     let workspace = source_between(
@@ -992,7 +1054,10 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
     let takeover = open
         .find("multicaWorkspaceState.opened = true;")
         .expect("board takeover assignment");
-    assert!(takeover < background_load, "board takeover must not wait for data");
+    assert!(
+        takeover < background_load,
+        "board takeover must not wait for data"
+    );
     assert!(open.contains("multicaWorkspaceState.opening = false;"));
     assert!(open.contains("本地任务暂不可用，请点击重试"));
 
@@ -1004,8 +1069,7 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
     assert!(opened_branch.contains("multicaWorkspaceState.opening = false"));
     assert!(!opened_branch.contains("multicaWorkspaceHide()"));
 
-    assert!(board.contains("notice.dataset.state = \"warning\""));
-    assert!(board.contains("当前 Codex 执行能力不可用，本地任务仍可查看和编辑"));
+    assert!(!board.contains("当前 Codex 执行能力不可用，本地任务仍可查看和编辑"));
     assert!(board.contains("assignedFilterEmpty"));
     assert!(board.contains("当前没有分配给本地用户的任务"));
     assert!(board.contains("查看全部任务"));
@@ -2210,10 +2274,12 @@ fn runtime_evaluate_params_can_await_promise_for_bridge_health_checks() {
 
 #[test]
 fn bridge_health_check_script_uses_real_backend_round_trip() {
-    let script = bridge::bridge_health_check_script();
+    let script = bridge::bridge_health_check_script("sha256:expected-renderer");
 
     assert!(script.contains("__codexSessionDeleteBridge"));
     assert!(script.contains("__CLAUDE_CODEX_PRO_MODAL_THEME__"));
+    assert!(script.contains("__CLAUDE_CODEX_PRO_RENDERER_FINGERPRINT__"));
+    assert!(script.contains("sha256:expected-renderer"));
     assert!(script.contains("pangu-control-deck"));
     assert!(script.contains("/backend/status"));
     assert!(script.contains("Promise.race"));

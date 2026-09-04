@@ -3031,6 +3031,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running local Claude Desktop process; never run in the default workspace test suite"]
     fn open_devtools_uses_devtools_action_when_not_running() {
         if !claude_process_ids().is_empty() {
             return;
@@ -3043,6 +3044,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running local Claude Desktop process; never run in the default workspace test suite"]
     fn enter_desktop_devtools_uses_expected_action_when_not_running() {
         if !claude_process_ids().is_empty() {
             return;
@@ -3103,6 +3105,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a local Claude Desktop launch environment; never run in the default workspace test suite"]
     fn open_response_uses_open_action_when_launch_fails_without_process() {
         if !claude_process_ids().is_empty() {
             return;
@@ -3115,6 +3118,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a running local Claude Desktop process; never run in the default workspace test suite"]
     fn new_chat_uses_new_chat_action_when_not_running() {
         if !claude_process_ids().is_empty() {
             return;

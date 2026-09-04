@@ -384,6 +384,10 @@ impl LaunchHooks for LauncherHooks {
         self.core.select_debug_port(requested)
     }
 
+    async fn select_or_reuse_debug_port(&self, requested: u16) -> u16 {
+        self.core.select_or_reuse_debug_port(requested).await
+    }
+
     fn select_helper_port(&self, requested: u16) -> u16 {
         self.core.select_helper_port(requested)
     }
@@ -886,6 +890,13 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         request: claude_codex_pro_core::routes::MulticaWorkspaceUpsertRequest,
     ) -> anyhow::Result<Value> {
         BridgeRuntimeService::multica_workspace_upsert(&self.multica_runtime, request).await
+    }
+
+    async fn multica_workspace_move_issue(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaWorkspaceMoveIssueRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_workspace_move_issue(&self.multica_runtime, request).await
     }
 
     async fn multica_workspace_delete(
@@ -1426,6 +1437,14 @@ mod tests {
         assert!(source.contains("async fn start_computer_use_guard_watchdog"));
         assert!(source.contains("self.core"));
         assert!(source.contains(".start_computer_use_guard_watchdog(settings)"));
+    }
+
+    #[test]
+    fn launcher_hooks_forward_existing_codex_cdp_reuse() {
+        let source = include_str!("lib.rs");
+
+        assert!(source.contains("async fn select_or_reuse_debug_port"));
+        assert!(source.contains("self.core.select_or_reuse_debug_port(requested).await"));
     }
 
     #[test]

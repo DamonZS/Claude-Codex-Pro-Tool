@@ -373,6 +373,8 @@ subscribe_events(cursor)
 }
 ```
 
+所有工作区查询响应都必须保留稳定的顶层 `status` 字段。成功查询（包括空集合）返回 `status: "ok"`，不得因为 `items` 为空而被渲染层解释为失败或“数据待同步”。首次 bootstrap 负责以原子写入创建缺失的本地 `workspace.json`；普通查询保持无副作用，避免读路径反复写盘。
+
 ### 变更请求
 
 ```json

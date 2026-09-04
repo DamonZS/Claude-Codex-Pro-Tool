@@ -155,6 +155,9 @@ pub trait LaunchHooks: Send + Sync {
         settings: &BackendSettings,
     ) -> anyhow::Result<PathBuf>;
     fn select_debug_port(&self, requested: u16) -> u16;
+    async fn select_or_reuse_debug_port(&self, requested: u16) -> u16 {
+        self.select_debug_port(requested)
+    }
     fn select_helper_port(&self, requested: u16) -> u16;
     fn codex_theme_injection_enabled(&self) -> bool {
         false
@@ -424,22 +427,63 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 }
 
 #[cfg(windows)]
+fn windows_listening_loopback_ports_for_processes(process_ids: &[u32]) -> anyhow::Result<Vec<u16>> {
+    if process_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let process_id_filter = process_ids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let script = format!(
+        r#"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+$processIds = @({process_id_filter})
+Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object {{ $processIds -contains $_.OwningProcess -and ($_.LocalAddress -eq '127.0.0.1' -or $_.LocalAddress -eq '::1') }} |
+  Select-Object -ExpandProperty LocalPort -Unique |
+  ConvertTo-Json -Depth 3 -Compress
+"#
+    );
+    let Some(value) = powershell_json(&script)? else {
+        return Ok(Vec::new());
+    };
+    let values = match value {
+        serde_json::Value::Array(items) => items,
+        item => vec![item],
+    };
+    Ok(values
+        .into_iter()
+        .filter_map(|value| value.as_u64())
+        .filter_map(|port| u16::try_from(port).ok())
+        .collect())
+}
+
+#[cfg(windows)]
 fn windows_process_looks_like_claude_codex_pro(process_id: u32) -> bool {
     crate::windows_integration::enumerate_processes()
         .into_iter()
         .find(|process| process.process_id == process_id)
-        .is_some_and(|process| {
-            let exe_file = process.exe_file.to_ascii_lowercase();
-            let executable_path = process
-                .executable_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default();
-            exe_file.contains("claude-codex-pro")
-                || executable_path.contains("claude-codex-pro")
-                || exe_file == "chatgpt.exe"
-                || executable_path.contains("\\windowsapps\\openai.codex_")
-        })
+        .is_some_and(|process| windows_process_is_claude_codex_pro(&process))
+}
+
+#[cfg(windows)]
+fn windows_process_is_claude_codex_pro(
+    process: &crate::windows_integration::WindowsProcessInfo,
+) -> bool {
+    let exe_file = process.exe_file.to_ascii_lowercase();
+    let executable_path = process
+        .executable_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    exe_file.contains("claude-codex-pro")
+        || executable_path.contains("claude-codex-pro")
+        || exe_file == "chatgpt.exe"
+        || executable_path.contains("\\windowsapps\\openai.codex_")
 }
 
 #[cfg(windows)]
@@ -499,7 +543,7 @@ where
     H: IntoLaunchHooks,
 {
     let hooks = hooks.into_launch_hooks();
-    let debug_port = hooks.select_debug_port(options.debug_port);
+    let debug_port = hooks.select_or_reuse_debug_port(options.debug_port).await;
     let helper_port = hooks.select_helper_port(options.helper_port);
     let settings = hooks.load_settings().await?;
     let app_dir = hooks.resolve_app_dir(options.app_dir.as_deref(), &settings)?;
@@ -662,6 +706,23 @@ impl LaunchHooks for DefaultLaunchHooks {
 
     fn select_debug_port(&self, requested: u16) -> u16 {
         crate::ports::select_packaged_codex_debug_port(requested)
+    }
+
+    async fn select_or_reuse_debug_port(&self, requested: u16) -> u16 {
+        if cfg!(windows) {
+            if let Some(debug_port) = discover_existing_codex_cdp_port(requested).await {
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "launcher.reuse_existing_codex_cdp",
+                    serde_json::json!({
+                        "requested_debug_port": requested,
+                        "debug_port": debug_port
+                    }),
+                );
+                return debug_port;
+            }
+        }
+
+        self.select_debug_port(requested)
     }
 
     fn select_helper_port(&self, requested: u16) -> u16 {
@@ -2587,6 +2648,51 @@ async fn query_cdp_targets(debug_port: u16) -> Vec<crate::cdp::CdpTarget> {
     targets
 }
 
+/// Returns a previously-running Codex CDP port only after its `/json` payload
+/// contains an injectable Codex page. Process ownership is intentionally only
+/// used to narrow the local port candidates; CDP target validation remains the
+/// authority so unrelated loopback listeners are never reused.
+async fn discover_existing_codex_cdp_port(requested: u16) -> Option<u16> {
+    let mut candidate_ports = vec![requested];
+
+    #[cfg(windows)]
+    {
+        let process_ids = crate::windows_integration::enumerate_processes()
+            .into_iter()
+            .filter(windows_process_is_claude_codex_pro)
+            .map(|process| process.process_id)
+            .collect::<Vec<_>>();
+        candidate_ports.extend(
+            windows_listening_loopback_ports_for_processes(&process_ids).unwrap_or_default(),
+        );
+    }
+
+    candidate_ports.sort_unstable();
+    candidate_ports.dedup();
+    let mut candidates = Vec::with_capacity(candidate_ports.len());
+    for port in candidate_ports {
+        candidates.push((port, query_cdp_targets(port).await));
+    }
+    select_existing_codex_cdp_port(requested, candidates)
+}
+
+pub fn select_existing_codex_cdp_port(
+    requested: u16,
+    candidates: impl IntoIterator<Item = (u16, Vec<crate::cdp::CdpTarget>)>,
+) -> Option<u16> {
+    let mut fallback = None;
+    for (port, targets) in candidates {
+        if !targets.iter().any(is_codex_cdp_target) {
+            continue;
+        }
+        if port == requested {
+            return Some(port);
+        }
+        fallback.get_or_insert(port);
+    }
+    fallback
+}
+
 fn cdp_target_fingerprints(targets: &[crate::cdp::CdpTarget]) -> HashSet<String> {
     targets.iter().map(cdp_target_fingerprint).collect()
 }
@@ -2792,7 +2898,7 @@ pub async fn bridge_health_ok(debug_port: u16) -> anyhow::Result<bool> {
         .ok_or_else(|| anyhow::anyhow!("selected CDP target has no websocket URL"))?;
     let result = crate::bridge::evaluate_script_with_await_promise(
         websocket_url,
-        crate::bridge::bridge_health_check_script(),
+        &crate::bridge::bridge_health_check_script(crate::assets::renderer_fingerprint()),
         true,
     )
     .await?;

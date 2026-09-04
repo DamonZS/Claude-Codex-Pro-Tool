@@ -186,6 +186,8 @@ pub struct MulticaCodexRuntimeSummary {
     pub capabilities: Vec<String>,
     pub skills_supported: bool,
     #[serde(default)]
+    pub native_task_host_supported: bool,
+    #[serde(default)]
     pub skills_inventory_supported: bool,
     pub skill_protocol: Option<String>,
     pub multi_agent_supported: bool,
@@ -270,6 +272,22 @@ pub struct LocalWorkspaceEntityUpsert {
 pub struct LocalWorkspaceEntityDelete {
     pub resource: MulticaWorkspaceResourceKey,
     pub entity_id: String,
+    pub expected_revision: u64,
+}
+
+/// Typed equivalent of Multica's `POST /api/issues/:id/move` contract.
+/// Neighbor ids are a move intent only; the store computes and persists the
+/// canonical position and never stores the anchors on the issue entity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalWorkspaceIssueMove {
+    pub issue_id: String,
+    pub status: Option<String>,
+    pub assignee_type: Option<Option<String>>,
+    pub assignee_id: Option<Option<String>>,
+    pub parent_issue_id: Option<Option<String>>,
+    pub project_id: Option<Option<String>>,
+    pub before_id: Option<String>,
+    pub after_id: Option<String>,
     pub expected_revision: u64,
 }
 
@@ -399,6 +417,22 @@ impl LocalMulticaWorkspaceStore {
         load_local_workspace_state(&self.path, workspace_id)
     }
 
+    /// Ensure the local workspace has a durable initial snapshot. Reads remain
+    /// side-effect free; only bootstrap calls this method.
+    pub fn ensure_initialized(
+        &self,
+        workspace_id: &str,
+    ) -> anyhow::Result<LocalMulticaWorkspaceState> {
+        validate_local_workspace_id(workspace_id)?;
+        let _guard = local_workspace_store_lock(&self.path)?;
+        if self.path.exists() {
+            return load_local_workspace_state(&self.path, workspace_id);
+        }
+        let state = LocalMulticaWorkspaceState::empty(workspace_id);
+        save_local_workspace_state_locked(&self.path, &state)?;
+        Ok(state)
+    }
+
     pub fn save(&self, state: &LocalMulticaWorkspaceState) -> anyhow::Result<()> {
         validate_local_workspace_state(state)?;
         let _guard = local_workspace_store_lock(&self.path)?;
@@ -524,6 +558,152 @@ impl LocalMulticaWorkspaceStore {
         save_local_workspace_state_locked(&self.path, &state)?;
         Ok(true)
     }
+
+    pub fn move_issue(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceIssueMove,
+        updated_at_ms: u64,
+    ) -> anyhow::Result<Value> {
+        validate_local_workspace_id(workspace_id)?;
+        validate_local_entity_id(&command.issue_id)?;
+        if command.expected_revision == 0 {
+            bail!("multica_workspace_revision_invalid");
+        }
+        if command.before_id.as_deref() == Some(command.issue_id.as_str())
+            || command.after_id.as_deref() == Some(command.issue_id.as_str())
+        {
+            bail!("multica_workspace_move_invalid_anchor");
+        }
+        if command.before_id.is_some() && command.before_id == command.after_id {
+            bail!("multica_workspace_move_invalid_anchor");
+        }
+
+        let _guard = local_workspace_store_lock(&self.path)?;
+        let mut state = load_local_workspace_state(&self.path, workspace_id)?;
+        let index = state
+            .collection(MulticaWorkspaceResourceKey::Issues)?
+            .iter()
+            .position(|candidate| {
+                candidate.get("id").and_then(Value::as_str) == Some(command.issue_id.as_str())
+            })
+            .ok_or_else(|| anyhow!("multica_workspace_issue_not_found"))?;
+        let existing = state.collection(MulticaWorkspaceResourceKey::Issues)?[index].clone();
+        let current_revision = existing
+            .get("revision")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("multica_workspace_store_invalid"))?;
+        if current_revision != command.expected_revision {
+            bail!("multica_workspace_revision_conflict");
+        }
+
+        let find_anchor = |id: &Option<String>| -> anyhow::Result<Option<f64>> {
+            let Some(id) = id else { return Ok(None) };
+            let anchor = state
+                .collection(MulticaWorkspaceResourceKey::Issues)?
+                .iter()
+                .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                .ok_or_else(|| anyhow!("multica_workspace_move_anchor_not_found"))?;
+            let position = anchor
+                .get("position")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            if !position.is_finite() {
+                bail!("multica_workspace_move_conflict");
+            }
+            Ok(Some(position))
+        };
+        let before_position = find_anchor(&command.before_id)?;
+        let after_position = find_anchor(&command.after_id)?;
+        if let (Some(before), Some(after)) = (before_position, after_position) {
+            if before >= after || (after - before) <= f64::EPSILON {
+                bail!("multica_workspace_move_conflict");
+            }
+        }
+        let current_position = existing
+            .get("position")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let position = match (before_position, after_position) {
+            (Some(before), Some(after)) => (before + after) / 2.0,
+            (Some(before), None) => before + 1.0,
+            (None, Some(after)) => after - 1.0,
+            (None, None) => current_position,
+        };
+        if !position.is_finite()
+            || (before_position.is_some_and(|before| (position - before).abs() <= f64::EPSILON))
+            || (after_position.is_some_and(|after| (after - position).abs() <= f64::EPSILON))
+        {
+            bail!("multica_workspace_move_conflict");
+        }
+
+        let mut value = existing
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow!("multica_workspace_entity_invalid"))?;
+        if let Some(status) = command.status {
+            value.insert("status".to_string(), Value::String(status));
+        }
+        if let Some(assignee_type) = command.assignee_type {
+            match assignee_type {
+                Some(assignee_type_value) => {
+                    value.insert(
+                        "assignee_type".to_string(),
+                        Value::String(assignee_type_value),
+                    );
+                }
+                None => {
+                    value.insert("assignee_type".to_string(), Value::Null);
+                }
+            }
+        }
+        if let Some(assignee_id) = command.assignee_id {
+            match assignee_id {
+                Some(id) => {
+                    value.insert("assignee_id".to_string(), Value::String(id));
+                }
+                None => {
+                    value.insert("assignee_id".to_string(), Value::Null);
+                }
+            }
+        }
+        if let Some(parent_issue_id) = command.parent_issue_id {
+            match parent_issue_id {
+                Some(id) => {
+                    value.insert("parent_issue_id".to_string(), Value::String(id));
+                }
+                None => {
+                    value.insert("parent_issue_id".to_string(), Value::Null);
+                }
+            }
+        }
+        if let Some(project_id) = command.project_id {
+            match project_id {
+                Some(id) => {
+                    value.insert("project_id".to_string(), Value::String(id));
+                }
+                None => {
+                    value.insert("project_id".to_string(), Value::Null);
+                }
+            }
+        }
+        value.remove("before_id");
+        value.remove("after_id");
+        value.insert("position".to_string(), json!(position));
+        value.insert(
+            "revision".to_string(),
+            json!(current_revision.saturating_add(1)),
+        );
+        value.insert("updated_at_ms".to_string(), json!(updated_at_ms));
+        let value = Value::Object(value);
+        validate_local_entity(&value, workspace_id, MulticaWorkspaceResourceKey::Issues)?;
+        validate_issue_status_write(&state, Some(&existing), &value)?;
+        let issues = state.collection_mut(MulticaWorkspaceResourceKey::Issues)?;
+        issues[index] = value.clone();
+        validate_local_workspace_state(&state)?;
+        save_local_workspace_state_locked(&self.path, &state)?;
+        Ok(value)
+    }
 }
 
 /// Build the local control-plane snapshot without an execution host.
@@ -555,6 +735,7 @@ async fn local_workspace_bootstrap(
     let enabled = local_workspace_enabled()?;
     let execution_store = MulticaExecutionStore::default();
     let workspace_store = LocalMulticaWorkspaceStore::default();
+    let _ = workspace_store.ensure_initialized(&workspace.id)?;
     let mut collections = BTreeMap::new();
 
     for resource in MulticaWorkspaceResourceKey::ALL {
@@ -2209,6 +2390,10 @@ fn local_entity_collection(
         resource,
         MulticaWorkspaceResourceKey::Issues | MulticaWorkspaceResourceKey::MyTasks
     ) {
+        // The upstream board orders issue cards by their persisted position,
+        // while the JSON store itself keeps insertion order for CAS updates.
+        // Sort the read projection so drag moves remain stable after reload.
+        sort_issue_projection(&mut all_items);
         let state = store.load(&workspace.id)?;
         project_issue_collaboration(&mut all_items, &state);
         project_issue_statuses(&mut all_items, &state);
@@ -2240,6 +2425,16 @@ fn local_entity_collection(
         value.diagnostic = Some(LOCAL_CONTROL_PLANE_EMPTY.to_string());
     }
     Ok(value)
+}
+
+fn sort_issue_projection(items: &mut [Value]) {
+    items.sort_by(|left, right| {
+        let left_position = left.get("position").and_then(Value::as_f64).unwrap_or(0.0);
+        let right_position = right.get("position").and_then(Value::as_f64).unwrap_or(0.0);
+        left_position
+            .partial_cmp(&right_position)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 }
 
 /// Normalize embedded automation detail into the list-endpoint fields used by
@@ -2707,6 +2902,7 @@ fn runtime_collection(
             "status": runtime.status,
             "capabilities": runtime.capabilities,
             "skills_supported": runtime.skills_supported,
+            "native_task_host_supported": runtime.native_task_host_supported,
             "skills_inventory_supported": runtime.skills_inventory_supported,
             "skill_protocol": runtime.skill_protocol,
             "multi_agent_supported": runtime.multi_agent_supported,
@@ -2737,6 +2933,7 @@ fn runtime_summary_from_capabilities(
         status: Some("available".to_string()),
         capabilities: capabilities.capabilities.clone(),
         skills_supported: capabilities.skills_supported,
+        native_task_host_supported: capabilities.native_task_host_supported,
         skills_inventory_supported: capabilities.skills_inventory_supported,
         skill_protocol: capabilities.skill_protocol.clone(),
         multi_agent_supported: capabilities.subagents_supported,
@@ -2751,6 +2948,7 @@ fn unavailable_runtime_summary(diagnostic: &str) -> MulticaCodexRuntimeSummary {
         status: Some(diagnostic.to_string()),
         capabilities: Vec::new(),
         skills_supported: false,
+        native_task_host_supported: false,
         skills_inventory_supported: false,
         skill_protocol: None,
         multi_agent_supported: false,
@@ -4074,6 +4272,32 @@ mod tests {
     }
 
     #[test]
+    fn ensure_initialized_persists_empty_workspace_once() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        let store = LocalMulticaWorkspaceStore::new(path.clone());
+
+        let state = store.ensure_initialized("local-test").unwrap();
+        assert!(path.is_file());
+        assert_eq!(state.workspace_id, "local-test");
+        assert_eq!(state.issue_statuses.len(), 7);
+
+        let mut existing = state;
+        existing.issues.push(json!({
+            "id": "issue-1",
+            "workspace_id": "local-test",
+            "revision": 1,
+            "title": "Keep me",
+            "status": "todo"
+        }));
+        store.save(&existing).unwrap();
+
+        let reloaded = store.ensure_initialized("local-test").unwrap();
+        assert_eq!(reloaded.issues.len(), 1);
+        assert_eq!(reloaded.issues[0]["title"], "Keep me");
+    }
+
+    #[test]
     fn agent_task_queue_projection_is_empty_without_bindings() {
         let dir = tempdir().unwrap();
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
@@ -4415,6 +4639,150 @@ mod tests {
                 .list(&workspace.id, MulticaWorkspaceResourceKey::Issues)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn issue_projection_orders_dragged_cards_by_persisted_position() {
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        for (id, position) in [("issue-a", 10), ("issue-b", 20), ("issue-c", 30)] {
+            store
+                .upsert(
+                    &workspace.id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Issues,
+                        entity: json!({
+                            "id": id,
+                            "title": id,
+                            "status": "todo",
+                            "position": position,
+                        }),
+                        expected_revision: None,
+                    },
+                    position,
+                )
+                .unwrap();
+        }
+
+        // Mirror the upstream typed move DTO: move issue-c before issue-a.
+        let moved = store
+            .move_issue(
+                &workspace.id,
+                LocalWorkspaceIssueMove {
+                    issue_id: "issue-c".to_string(),
+                    status: None,
+                    assignee_type: None,
+                    assignee_id: None,
+                    parent_issue_id: None,
+                    project_id: None,
+                    before_id: None,
+                    after_id: Some("issue-a".to_string()),
+                    expected_revision: 1,
+                },
+                40,
+            )
+            .unwrap();
+        assert_eq!(moved["position"], 9.0);
+        assert!(moved.get("before_id").is_none());
+        assert!(moved.get("after_id").is_none());
+
+        let projected = query_local_collection(
+            &workspace,
+            &MulticaExecutionStore::new(dir.path().join("execution.json")),
+            &store,
+            true,
+            MulticaWorkspaceQuery {
+                resource: MulticaWorkspaceResourceKey::Issues,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
+        let ids = projected
+            .items
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["issue-c", "issue-a", "issue-b"]);
+    }
+
+    #[test]
+    fn typed_issue_move_supports_last_item_and_rejects_stale_or_self_anchor() {
+        let workspace = local_workspace_identity();
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        for (id, position) in [("issue-a", 10), ("issue-b", 20), ("issue-c", 30)] {
+            store
+                .upsert(
+                    &workspace.id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Issues,
+                        entity: json!({"id": id, "title": id, "status": "todo", "position": position}),
+                        expected_revision: None,
+                    },
+                    position,
+                )
+                .unwrap();
+        }
+        let moved = store
+            .move_issue(
+                &workspace.id,
+                LocalWorkspaceIssueMove {
+                    issue_id: "issue-a".to_string(),
+                    status: Some("in_progress".to_string()),
+                    assignee_type: None,
+                    assignee_id: None,
+                    parent_issue_id: None,
+                    project_id: None,
+                    before_id: Some("issue-c".to_string()),
+                    after_id: None,
+                    expected_revision: 1,
+                },
+                40,
+            )
+            .unwrap();
+        assert_eq!(moved["position"], 31.0);
+        assert_eq!(moved["status"], "in_progress");
+        let stale = store
+            .move_issue(
+                &workspace.id,
+                LocalWorkspaceIssueMove {
+                    issue_id: "issue-a".to_string(),
+                    status: None,
+                    assignee_type: None,
+                    assignee_id: None,
+                    parent_issue_id: None,
+                    project_id: None,
+                    before_id: None,
+                    after_id: Some("issue-b".to_string()),
+                    expected_revision: 1,
+                },
+                50,
+            )
+            .unwrap_err();
+        assert_eq!(stale.to_string(), "multica_workspace_revision_conflict");
+        let self_anchor = store
+            .move_issue(
+                &workspace.id,
+                LocalWorkspaceIssueMove {
+                    issue_id: "issue-b".to_string(),
+                    status: None,
+                    assignee_type: None,
+                    assignee_id: None,
+                    parent_issue_id: None,
+                    project_id: None,
+                    before_id: Some("issue-b".to_string()),
+                    after_id: None,
+                    expected_revision: 1,
+                },
+                50,
+            )
+            .unwrap_err();
+        assert_eq!(
+            self_anchor.to_string(),
+            "multica_workspace_move_invalid_anchor"
         );
     }
 
@@ -4798,6 +5166,7 @@ mod tests {
             server_version: None,
             capabilities: vec!["agent-skill-v1".to_string(), "thread-fork".to_string()],
             skills_supported: true,
+            native_task_host_supported: true,
             skills_inventory_supported: true,
             skill_protocol: Some("agent-skill-v1".to_string()),
             subagents_supported: true,

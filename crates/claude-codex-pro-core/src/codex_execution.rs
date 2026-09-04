@@ -109,6 +109,11 @@ pub struct CodexRuntimeCapabilities {
     pub server_version: Option<String>,
     pub capabilities: Vec<String>,
     pub skills_supported: bool,
+    /// The current page exposes the native Codex task/thread lifecycle.
+    /// Skill inventory support is intentionally independent: a renderer may
+    /// enumerate Skills while not exposing a callable task host.
+    #[serde(default)]
+    pub native_task_host_supported: bool,
     /// The current page can enumerate its Skills, even when it does not
     /// advertise a protocol that permits dispatching them in native turns.
     #[serde(default)]
@@ -698,7 +703,18 @@ impl CodexPageExecutionClient {
 
     async fn ensure_subagent_capability_at(&self, generation: u64) -> anyhow::Result<()> {
         let capabilities = self.capabilities_for_generation(generation).await?;
+        if !capabilities.native_task_host_supported {
+            bail!("unsupported");
+        }
         if !capabilities.subagents_supported {
+            bail!("unsupported");
+        }
+        Ok(())
+    }
+
+    async fn ensure_native_task_host_at(&self, generation: u64) -> anyhow::Result<()> {
+        let capabilities = self.capabilities_for_generation(generation).await?;
+        if !capabilities.native_task_host_supported {
             bail!("unsupported");
         }
         Ok(())
@@ -819,8 +835,8 @@ impl CodexExecutionService for CodexPageExecutionClient {
         if let Some(existing) = self.idempotent("create", idempotency_key)? {
             return Ok(existing);
         }
-        self.capabilities_for_generation(generation).await?;
         let native_skills = self.resolve_request_skills_at(generation, &request).await?;
+        self.ensure_native_task_host_at(generation).await?;
         let thread_id =
             if let Some(partial) = self.partial_thread("create", idempotency_key, generation)? {
                 if partial.parent_thread_id.is_some() {
@@ -943,7 +959,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
     async fn open_thread(&self, thread_id: &str) -> anyhow::Result<CodexExecutionHandle> {
         validate_id(thread_id, "thread_id")?;
         let generation = self.sync_generation()?;
-        self.capabilities_for_generation(generation).await?;
+        self.ensure_native_task_host_at(generation).await?;
         let response = self
             .request_host_at(
                 generation,
@@ -980,8 +996,8 @@ impl CodexExecutionService for CodexPageExecutionClient {
         if let Some(existing) = self.idempotent("continue", idempotency_key)? {
             return Ok(existing);
         }
-        self.capabilities_for_generation(generation).await?;
         let native_skills = self.resolve_request_skills_at(generation, &request).await?;
+        self.ensure_native_task_host_at(generation).await?;
         let response = self
             .request_host_at(
                 generation,
@@ -1010,7 +1026,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
         validate_id(thread_id, "thread_id")?;
         validate_id(execution_id, "execution_id")?;
         let generation = self.sync_generation()?;
-        self.capabilities_for_generation(generation).await?;
+        self.ensure_native_task_host_at(generation).await?;
         let response = self
             .request_host_at(
                 generation,
@@ -1040,7 +1056,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
         validate_id(thread_id, "thread_id")?;
         validate_id(execution_id, "execution_id")?;
         let generation = self.sync_generation()?;
-        self.capabilities_for_generation(generation).await?;
+        self.ensure_native_task_host_at(generation).await?;
         let response = self
             .request_host_at(
                 generation,
@@ -1133,7 +1149,7 @@ impl FakeCodexPageHostTransport {
             CodexPageHostMethod::Initialize => json!({
                 "provider": "codex",
                 "serverVersion": "fake",
-                "capabilities": ["skill-bundles-v1", "subagent-v1"]
+                "capabilities": ["skill-bundles-v1", "subagent-v1", "native-task-v1"]
             }),
             CodexPageHostMethod::SkillsList => json!({ "data": [] }),
             CodexPageHostMethod::ThreadStart => {
@@ -1202,6 +1218,26 @@ fn parse_capabilities(
             .pointer("/pageHostProbe/skillsList")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+    // A page-host fallback can expose `skills/list` without exposing the
+    // native task lifecycle.  Never infer execution from mere connectivity;
+    // use the explicit probe when present, otherwise require a known task
+    // capability advertised by the live initialize response.
+    let native_task_host_supported = response
+        .pointer("/pageHostProbe/nativeTaskHost")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            capabilities.iter().any(|value| {
+                matches!(
+                    value.as_str(),
+                    "native-task-v1"
+                        | "codex-task-v1"
+                        | "task-execution-v1"
+                        | "thread-start"
+                        | "turn-start"
+                        | "thread-lifecycle-v1"
+                )
+            })
+        });
     Ok(CodexRuntimeCapabilities {
         runtime_id: binding.runtime_id.clone(),
         provider,
@@ -1215,6 +1251,7 @@ fn parse_capabilities(
             .and_then(Value::as_str)
             .map(str::to_string),
         skills_supported: skill_protocol.is_some(),
+        native_task_host_supported,
         skills_inventory_supported,
         skill_protocol,
         subagents_supported: capabilities.iter().any(|value| {

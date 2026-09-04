@@ -56,13 +56,20 @@ pub fn build_bridge_script(binding_name: &str) -> String {
     )
 }
 
-pub fn bridge_health_check_script() -> &'static str {
-    r#"
+pub fn bridge_health_check_script(expected_renderer_fingerprint: &str) -> String {
+    let expected_renderer_fingerprint = serde_json::to_string(expected_renderer_fingerprint)
+        .expect("renderer fingerprint should serialize");
+    [
+        r#"
 (() => {
   const bridge = window.__codexSessionDeleteBridge;
   const modalTheme = window.__CLAUDE_CODEX_PRO_MODAL_THEME__;
+  const rendererFingerprint = window.__CLAUDE_CODEX_PRO_RENDERER_FINGERPRINT__;
   if (typeof bridge !== "function") return false;
   if (modalTheme !== "pangu-control-deck") return false;
+  if (rendererFingerprint !== "#,
+        &expected_renderer_fingerprint,
+        r#") return false;
   try {
     return Promise.race([
       Promise.resolve(bridge("/backend/status", {})).then((result) => !!result && result.status === "ok"),
@@ -72,7 +79,9 @@ pub fn bridge_health_check_script() -> &'static str {
     return false;
   }
 })()
-"#
+"#,
+    ]
+    .concat()
 }
 
 pub async fn evaluate_script(websocket_url: &str, script: &str) -> anyhow::Result<Value> {

@@ -5909,7 +5909,8 @@
     // When a save has already cleared the editor, its background refresh may
     // still hold mutationBusy briefly. That transient state must not make the
     // column-header "new task" action a no-op.
-    if (!resource || (multicaWorkspaceState.mutationBusy && multicaWorkspaceState.editor && multicaWorkspaceState.editor.continueCreating !== true)) return;
+    const openingNewIssue = !item && resource === "issues";
+    if (!resource || (!openingNewIssue && multicaWorkspaceState.mutationBusy && multicaWorkspaceState.editor && multicaWorkspaceState.editor.continueCreating !== true)) return;
     const values = multicaWorkspaceNormalizeEditableEntity(
       resource,
       item ? multicaWorkspaceEditableEntity(item, resource) : { ...multicaWorkspaceDefaultEntity(resource), ...defaults },
@@ -6322,6 +6323,12 @@
   async function multicaWorkspacePatchEntity(module, item, patch, successMessage) {
     const resource = multicaWorkspaceWritableResource(module);
     if (!resource || multicaWorkspaceState.mutationBusy) return;
+    const isIssueMove = resource === "issues"
+      && Object.prototype.hasOwnProperty.call(patch, "before_id")
+      && Object.prototype.hasOwnProperty.call(patch, "after_id");
+    if (isIssueMove) {
+      return multicaWorkspaceMoveIssue(module, item, patch, successMessage);
+    }
     const entity = { ...multicaWorkspaceEditableEntity(item, resource), ...patch, id: multicaWorkspaceEntityId(item) };
     multicaWorkspaceState.mutationBusy = true;
     try {
@@ -6330,6 +6337,38 @@
       await multicaWorkspaceRefreshMutationResource(module, resource);
     } catch (error) {
       multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+    } finally {
+      multicaWorkspaceState.mutationBusy = false;
+      if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
+    }
+  }
+
+  async function multicaWorkspaceMoveIssue(module, item, move, successMessage) {
+    const issueId = multicaWorkspaceEntityId(item);
+    const expectedRevision = multicaWorkspaceEntityRevision(item);
+    if (!issueId || !expectedRevision || multicaWorkspaceState.mutationBusy) return;
+    multicaWorkspaceState.mutationBusy = true;
+    multicaWorkspaceState.mutationNotice = { state: "loading", message: "正在移动…" };
+    multicaWorkspaceRenderContent();
+    try {
+      await multicaWorkspaceCall("/multica/workspace/move-issue", {
+        issueId,
+        status: move.status,
+        assigneeType: move.assignee_type,
+        assigneeId: move.assignee_id,
+        projectId: move.project_id,
+        beforeId: move.before_id,
+        afterId: move.after_id,
+        expectedRevision,
+      });
+      multicaWorkspaceState.mutationNotice = { state: "ok", message: successMessage };
+      await multicaWorkspaceRefreshMutationResource(module, "issues");
+    } catch (error) {
+      multicaWorkspaceState.mutationNotice = { state: "error", message: multicaWorkspaceErrorMessage(error) };
+      // A revision conflict must reload authoritative ordering before retry.
+      if (String(error?.message || error).includes("revision_conflict")) {
+        await multicaWorkspaceRefreshMutationResource(module, "issues");
+      }
     } finally {
       multicaWorkspaceState.mutationBusy = false;
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
@@ -7133,6 +7172,49 @@
     return system ? system.label : raw;
   }
 
+  // Port the pure ordering part of Multica's upstream drag-utils into the
+  // injected boundary. The page cannot import TypeScript modules, so keep
+  // this deliberately transport-free and mirror the upstream DTO semantics.
+  function multicaWorkspaceIssuePosition(item) {
+    const value = Number(multicaWorkspaceObjectValue(item, "position"));
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function multicaWorkspaceMoveAnchors(ids, activeId) {
+    const index = ids.indexOf(activeId);
+    return {
+      before_id: index > 0 ? ids[index - 1] : null,
+      after_id: index >= 0 && index < ids.length - 1 ? ids[index + 1] : null,
+    };
+  }
+
+  function multicaWorkspaceMovePosition(ids, activeId, issueMap) {
+    const index = ids.indexOf(activeId);
+    if (index < 0 || ids.length <= 1) return index === 0 ? multicaWorkspaceIssuePosition(issueMap.get(activeId)) : 0;
+    const positionOf = (id) => multicaWorkspaceIssuePosition(issueMap.get(id));
+    if (index === 0) return positionOf(ids[1]) - 1;
+    if (index === ids.length - 1) return positionOf(ids[index - 1]) + 1;
+    return (positionOf(ids[index - 1]) + positionOf(ids[index + 1])) / 2;
+  }
+
+  function multicaWorkspaceMoveUpdates(items, activeIssue, targetStatus) {
+    const issueId = multicaWorkspaceEntityId(activeIssue);
+    const ordered = items
+      .filter((item) => multicaWorkspaceIssueStatus(item) === targetStatus || multicaWorkspaceEntityId(item) === issueId)
+      .slice()
+      .sort((left, right) => multicaWorkspaceIssuePosition(left) - multicaWorkspaceIssuePosition(right));
+    const ids = ordered.map(multicaWorkspaceEntityId).filter(Boolean);
+    if (!ids.includes(issueId)) ids.push(issueId);
+    const issueMap = new Map(ordered.map((item) => [multicaWorkspaceEntityId(item), item]));
+    issueMap.set(issueId, activeIssue);
+    const position = multicaWorkspaceMovePosition(ids, issueId, issueMap);
+    return {
+      status: targetStatus,
+      position,
+      ...multicaWorkspaceMoveAnchors(ids, issueId),
+    };
+  }
+
   function multicaWorkspaceIssueSource() {
     const filter = multicaWorkspaceState.issueFilter;
     const sourceKey = filter === "assigned" ? "my-issues" : "issues";
@@ -7294,7 +7376,8 @@
       actions.appendChild(button);
     };
     const active = attempts.find((binding) => !multicaWorkspaceTerminalExecutionStates.has(multicaWorkspaceExecutionState(binding)));
-    const pageHostAvailable = multicaWorkspaceState.bootstrap?.runtime?.available !== false;
+    const runtime = multicaWorkspaceState.bootstrap?.runtime;
+    const pageHostAvailable = (runtime?.nativeTaskHostSupported ?? runtime?.native_task_host_supported) === true;
     const pageHostUnavailableTitle = "当前 Codex 页面执行能力不可用；本地任务仍可查看、编辑和流转";
     if (!active) addAction("执行", () => multicaWorkspaceOpenExecutionDraft("create", issue), {
       variant: "primary",
@@ -7794,8 +7877,9 @@
         event.preventDefault();
         const dragged = multicaWorkspaceState.draggedIssue;
         multicaWorkspaceState.draggedIssue = null;
-        if (!dragged || multicaWorkspaceIssueStatus(dragged) === column.key) return;
-        void multicaWorkspacePatchEntity(module, dragged, { status: column.key }, `已移至${column.label}`);
+        if (!dragged) return;
+        const move = multicaWorkspaceMoveUpdates(source.items, dragged, column.key);
+        void multicaWorkspacePatchEntity(module, dragged, move, `已移至${column.label}`);
       });
       const laneHeader = multicaWorkspaceEl("div", "ccp-multica-column-header");
       laneHeader.appendChild(multicaWorkspaceEl("span", "ccp-multica-column-dot"));
@@ -8495,8 +8579,16 @@
         multicaWorkspaceState.errors.delete(module.key);
       });
       const runtime = result.runtime;
-      const pageReady = runtime?.available !== false;
-      multicaWorkspaceSetStatus(pageReady ? "本地工作区就绪" : "当前 Codex 页面能力不可用", pageReady ? "ok" : "warning");
+      const nativeTaskHostAvailable = (runtime?.nativeTaskHostSupported ?? runtime?.native_task_host_supported) === true;
+      const pageConnected = runtime?.available !== false;
+      const statusText = !pageConnected
+        ? "当前 Codex 页面未连接"
+        : nativeTaskHostAvailable
+          ? "本地工作区就绪"
+          : (runtime?.skillsInventorySupported ?? runtime?.skills_inventory_supported) === true
+            ? "Codex 页面已连接，当前仅可读取 Skill 清单"
+            : "Codex 原生任务执行能力不可用";
+      multicaWorkspaceSetStatus(statusText, pageConnected && nativeTaskHostAvailable ? "ok" : "warning");
       if (multicaWorkspaceState.opened) multicaWorkspaceRenderContent();
       if (nextWorkspaceId) void multicaWorkspaceLoadExecutions(true);
       if (nextWorkspaceId) void multicaWorkspaceLoadSavedIssueViewsFromControlPlane();
@@ -14720,4 +14812,9 @@
     attributeFilter: ["class", "aria-label", "title", "hidden"],
     characterData: true,
   });
+  // Mark completion only after the renderer has installed its current closure.
+  // The launcher compares this with its bundled payload fingerprint before it
+  // accepts an existing bridge as healthy.
+  window.__CLAUDE_CODEX_PRO_RENDERER_FINGERPRINT__ =
+    window.__CLAUDE_CODEX_PRO_RENDERER_EXPECTED_FINGERPRINT__ || "";
 })();

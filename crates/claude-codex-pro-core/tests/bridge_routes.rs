@@ -64,6 +64,10 @@ async fn bridge_routes_cover_all_current_paths() {
             "/multica/workspace/query",
             json!({"resource": "skills", "limit": 25, "offset": 0}),
         ),
+        (
+            "/multica/workspace/move-issue",
+            json!({"issueId": "issue-a", "beforeId": null, "afterId": null, "expectedRevision": 1}),
+        ),
         ("/multica/skills/resolve", json!({"bindings": {}})),
         (
             "/multica/skills/review",
@@ -316,6 +320,7 @@ async fn multica_workspace_bridge_accepts_only_typed_read_operations() {
     .await;
 
     assert_eq!(bootstrap["status"], "ok");
+    assert_eq!(query["status"], "ok");
     assert_eq!(query["resource"], "skills");
     assert_eq!(
         runtime.multica_calls.lock().unwrap().as_slice(),
