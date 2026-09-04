@@ -995,6 +995,30 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
 }
 
 #[test]
+fn codex_multica_workspace_never_dispatches_claude_or_devtools_actions() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+
+    for forbidden in [
+        "/claude-desktop/open",
+        "/claude-desktop/new-chat",
+        "/claude-desktop/submit",
+        "/claude-desktop/open-devtools",
+        "openClaudeCodexProModal()",
+        "data-codex-open-devtools",
+    ] {
+        assert!(
+            !workspace.contains(forbidden),
+            "workspace actions must not reach Claude or DevTools: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn codex_multica_column_create_bypasses_transient_save_busy_state() {
     let script = assets::injection_script(57321);
     let workspace = source_between(
