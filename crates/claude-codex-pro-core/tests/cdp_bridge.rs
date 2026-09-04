@@ -2471,6 +2471,26 @@ fn pick_injectable_codex_page_target_rejects_non_codex_pages() {
 }
 
 #[test]
+fn pick_injectable_codex_page_target_never_falls_back_to_claude_page() {
+    let targets = vec![target(
+        "claude-page",
+        "page",
+        "Claude",
+        "app://localhost/epitaxy",
+        Some("ws://claude-page"),
+    )];
+
+    let error = pick_injectable_codex_page_target(&targets)
+        .expect_err("a Claude renderer must never be selected for Codex DevTools");
+
+    assert!(
+        error
+            .to_string()
+            .contains("No injectable Codex page target found")
+    );
+}
+
+#[test]
 fn pick_injectable_codex_page_target_requires_websocket() {
     let targets = vec![target("codex", "page", "Codex", "https://codex.test", None)];
 

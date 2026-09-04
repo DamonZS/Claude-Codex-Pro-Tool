@@ -749,7 +749,9 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     async fn open_devtools(&self) -> anyhow::Result<Value> {
         let debug_port = *self.debug_port.lock().unwrap();
         let targets = claude_codex_pro_core::cdp::list_targets(debug_port).await?;
-        let target = claude_codex_pro_core::cdp::pick_page_target(&targets)?;
+        // This route is presented inside Codex. Never fall back to an arbitrary
+        // CDP page: a shared or stale port can expose a Claude renderer.
+        let target = claude_codex_pro_core::cdp::pick_injectable_codex_page_target(&targets)?;
         let url = claude_codex_pro_core::routes::devtools_url(debug_port, &target.id);
         open_url(&url)?;
         Ok(json!({
