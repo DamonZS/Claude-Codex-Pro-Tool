@@ -865,6 +865,11 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         .expect("generic module header");
     assert!(board_call < generic_header);
     assert!(render[board_call..generic_header].contains("return;"));
+    assert!(
+        render[board_call..generic_header]
+            .contains("multicaWorkspaceRenderEditor(content, module)"),
+        "the direct my-issues board path must mount the issue-editor overlay"
+    );
     assert!(render.contains("multicaWorkspaceAppendModuleMenu(header)"));
     let board = source_between(
         workspace,
@@ -873,12 +878,16 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
     );
     assert!(
         !board.contains("multicaWorkspaceRenderEditor(content, module)"),
-        "issue board must not render the generic editor above the board"
+        "the board renderer must not render the generic editor above the board"
     );
     assert!(!board.contains("multicaWorkspaceRenderNativeInventory(page)"));
     assert!(!board.contains("Codex 任务队列"));
     assert!(board.contains("multicaWorkspaceBoardColumns.forEach"));
     assert!(board.contains("lane.dataset.multicaBoardStatus = column.key"));
+    assert!(
+        board.contains("multicaWorkspaceAppendModuleMenu(toolbarRight)"),
+        "the default my-issues board must expose the compact ten-module switcher"
+    );
     let dependency_loader = source_between(
         workspace,
         "async function multicaWorkspaceLoadAgentFilterDependencies",

@@ -7749,6 +7749,10 @@
     refresh.setAttribute("aria-label", "刷新任务");
     refresh.addEventListener("click", () => multicaWorkspaceRefreshBoardSource(true));
     toolbarRight.appendChild(refresh);
+    // My Issues is the default route, so it must expose the same compact
+    // module switcher as the other workspace surfaces. Keep it in the board
+    // toolbar instead of adding a second persistent navigation rail.
+    multicaWorkspaceAppendModuleMenu(toolbarRight);
     toolbar.append(toolbarLeft, toolbarRight);
     page.appendChild(toolbar);
     // The upstream My Issues surface contains only its header controls and
@@ -8399,6 +8403,10 @@
     }
     if (module.key === "my-issues") {
       multicaWorkspaceRenderIssueBoard(content, module);
+      // The board owns the page body, but the issue editor is an overlay on
+      // that body. Mount it after the board so every column-header create
+      // action can present its draft instead of silently updating state.
+      multicaWorkspaceRenderEditor(content, module);
       return;
     }
     const header = multicaWorkspaceEl("div", "ccp-multica-content-header");
