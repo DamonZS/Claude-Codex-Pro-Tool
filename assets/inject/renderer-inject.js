@@ -4645,6 +4645,17 @@
     { key: "issue-statuses", resource: "issue_statuses", label: "任务状态" },
     { key: "settings", resource: "settings", label: "设置" },
   ]);
+  // Resource-level routes remain available to their owning entity workflows,
+  // but the persistent workspace switcher follows the public ten-module IA.
+  const multicaWorkspacePrimaryModuleKeys = Object.freeze([
+    "my-issues", "issues", "projects", "autopilots", "agents",
+    "squads", "usage", "runtimes", "skills", "settings",
+  ]);
+  const multicaWorkspacePrimaryModules = Object.freeze(
+    multicaWorkspacePrimaryModuleKeys
+      .map((key) => multicaWorkspaceModules.find((module) => module.key === key))
+      .filter(Boolean),
+  );
   const multicaWorkspaceBoardColumns = Object.freeze([
     { key: "backlog", label: "待规划", tone: "neutral" },
     { key: "todo", label: "待办", tone: "neutral" },
@@ -5344,7 +5355,7 @@
     if (multicaWorkspaceState.moduleMenuOpen) {
       const menu = multicaWorkspaceEl("div", "ccp-multica-module-popover");
       menu.setAttribute("role", "menu");
-      multicaWorkspaceModules.forEach((module) => {
+      multicaWorkspacePrimaryModules.forEach((module) => {
         const item = multicaWorkspaceEl("button", "ccp-multica-module-item", module.label);
         item.type = "button";
         item.dataset.multicaRoute = module.key;

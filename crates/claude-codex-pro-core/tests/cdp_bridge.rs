@@ -888,6 +888,27 @@ fn codex_multica_workspace_renders_my_issues_as_direct_seven_column_board() {
         board.contains("multicaWorkspaceAppendModuleMenu(toolbarRight)"),
         "the default my-issues board must expose the compact ten-module switcher"
     );
+    assert!(workspace.contains("const multicaWorkspacePrimaryModuleKeys"));
+    assert!(workspace.contains("multicaWorkspacePrimaryModules.forEach((module)"));
+    for hidden_resource_route in [
+        "comments",
+        "labels",
+        "subscribers",
+        "reactions",
+        "activities",
+        "project-resources",
+        "issue-statuses",
+    ] {
+        assert!(
+            !source_between(
+                workspace,
+                "function multicaWorkspaceAppendModuleMenu(parent)",
+                "function multicaWorkspaceEnsureHost",
+            )
+            .contains(&format!("key: \"{hidden_resource_route}\"")),
+            "resource route {hidden_resource_route} must not appear in the public module menu"
+        );
+    }
     let dependency_loader = source_between(
         workspace,
         "async function multicaWorkspaceLoadAgentFilterDependencies",
