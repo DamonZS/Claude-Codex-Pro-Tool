@@ -4240,7 +4240,7 @@ fn codex_memory_badge_aligns_with_injection_status_strip() {
 }
 
 #[test]
-fn overview_startup_uses_light_claude_status_and_defers_heavy_checks() {
+fn overview_startup_keeps_claude_integration_lazy() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx)
@@ -4268,10 +4268,10 @@ fn overview_startup_uses_light_claude_status_and_defers_heavy_checks() {
     assert!(commands_rs.contains("detect_status_light()"));
     assert!(lib_rs.contains("commands::load_claude_desktop_status_light"));
     assert!(app_tsx.contains("\"load_claude_desktop_status_light\""));
-    assert!(overview_branch.contains("refreshClaudeLight(true)"));
+    assert!(!overview_branch.contains("refreshClaudeLight(true)"));
     assert!(!overview_branch.contains("refreshClaude(true)"));
     assert!(overview_branch.contains("afterFirstPaint"));
-    assert!(overview_branch.contains("refreshClaudeZhPatch(true)"));
+    assert!(!overview_branch.contains("refreshClaudeZhPatch(true)"));
     assert!(overview_branch.contains("refreshMemoryAssistStatus(true)"));
 }
 

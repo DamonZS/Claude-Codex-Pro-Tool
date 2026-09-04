@@ -2720,13 +2720,13 @@ export function App() {
     };
     let requiredResults: Array<{ status?: Status } | null | void> = [];
     if (target === "overview") {
-      await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);
+      // Keep the default manager/Codex entrypoint side-effect free for Claude.
+      // Claude status and development-mode probes are loaded only after the
+      // user enters the dedicated client/tool surfaces or triggers an action.
+      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
         void refreshMemoryAssistStatus(true);
       }, 250);
-      afterFirstPaintIfFresh(() => {
-        void refreshClaudeZhPatch(true);
-      }, 650);
       afterFirstPaintIfFresh(() => {
         void refreshLogs(true);
       }, 900);
