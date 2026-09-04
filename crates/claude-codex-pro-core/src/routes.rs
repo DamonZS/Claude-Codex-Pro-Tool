@@ -43,6 +43,7 @@ pub struct BridgeContext {
     settings: Arc<dyn BridgeSettingsService>,
     runtime: Arc<dyn BridgeRuntimeService>,
     data: Arc<dyn BridgeDataService>,
+    diagnostics_enabled: bool,
 }
 
 impl BridgeContext {
@@ -55,7 +56,15 @@ impl BridgeContext {
             settings,
             runtime,
             data,
+            diagnostics_enabled: true,
         }
+    }
+
+    /// Keeps route-level diagnostics out of the user's persistent log when a
+    /// test exercises synthetic bridge traffic.
+    pub fn without_diagnostics(mut self) -> Self {
+        self.diagnostics_enabled = false;
+        self
     }
 
     pub fn core(runtime: Arc<dyn BridgeRuntimeService>) -> Self {
@@ -379,16 +388,18 @@ pub async fn handle_bridge_request(
     payload: Value,
 ) -> serde_json::Value {
     let started = Instant::now();
-    let _ = crate::diagnostic_log::append_diagnostic_log(
-        "bridge.request",
-        json!({
-            "path": path,
-            "payload_keys": payload
-                .as_object()
-                .map(|object| object.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
-        }),
-    );
+    if ctx.diagnostics_enabled {
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "bridge.request",
+            json!({
+                "path": path,
+                "payload_keys": payload
+                    .as_object()
+                    .map(|object| object.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            }),
+        );
+    }
     let result = match path {
         "/settings/get" => settings_value(&ctx, ctx.settings.get_settings().await).await,
         "/settings/set" => {
@@ -815,12 +826,14 @@ pub async fn handle_bridge_request(
                 .await
         }
         _ => {
-            let _ = crate::diagnostic_log::append_diagnostic_log(
-                "bridge.unknown_path",
-                json!({
-                    "path": path
-                }),
-            );
+            if ctx.diagnostics_enabled {
+                let _ = crate::diagnostic_log::append_diagnostic_log(
+                    "bridge.unknown_path",
+                    json!({
+                        "path": path
+                    }),
+                );
+            }
             return json!({
                 "status": "failed",
                 "session_id": "",
@@ -837,14 +850,16 @@ pub async fn handle_bridge_request(
             object.insert("status".to_string(), json!("ok"));
         }
     }
-    let _ = crate::diagnostic_log::append_diagnostic_log(
-        "bridge.response",
-        json!({
-            "path": path,
-            "elapsed_ms": started.elapsed().as_millis() as u64,
-            "status": response.get("status").and_then(Value::as_str).unwrap_or("")
-        }),
-    );
+    if ctx.diagnostics_enabled {
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "bridge.response",
+            json!({
+                "path": path,
+                "elapsed_ms": started.elapsed().as_millis() as u64,
+                "status": response.get("status").and_then(Value::as_str).unwrap_or("")
+            }),
+        );
+    }
     response
 }
 

@@ -1893,6 +1893,7 @@ fn test_context() -> BridgeContext {
         Arc::new(FakeRuntime::default()),
         Arc::new(FakeData::default()),
     )
+    .without_diagnostics()
 }
 
 fn multica_execution_test_context() -> (BridgeContext, FakeCodexPageHostTransport, tempfile::TempDir)
@@ -1919,7 +1920,8 @@ fn multica_execution_test_context() -> (BridgeContext, FakeCodexPageHostTranspor
         Arc::new(FakeSettings::default()),
         Arc::new(runtime),
         Arc::new(FakeData::default()),
-    );
+    )
+    .without_diagnostics();
     (context, transport, store_dir)
 }
 

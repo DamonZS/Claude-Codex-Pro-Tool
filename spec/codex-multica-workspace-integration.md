@@ -453,6 +453,7 @@ subscribe_events(cursor)
 - 自动化、事件轮询和重试有连接级与全局并发上限，避免重复执行和阻塞 Codex 主界面。
 - 本集成不得停止、重启、注入或监管 Codex 进程；工作区开关只暂停本地 Multica 页面壳、编排、轮询和新派发。legacy 同步/daemon 开关必须独立，且其停止范围只能限于归属已验证的 CCP 自有进程。
 - 工作区开启、关闭、派发和对账不得调用供应商切换、代理启动/改写、模型增强或 Claude 配置命令。
+- 测试产生的合成 bridge 请求必须使用独立诊断上下文；不得写入用户的 `~/.claude-codex-pro/claude-codex-pro.log`，以免把测试的 Claude 或 DevTools 路由伪装为真实运行时事件。
 
 ## 第三方许可与来源约束
 

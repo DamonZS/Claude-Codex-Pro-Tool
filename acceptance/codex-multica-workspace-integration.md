@@ -387,6 +387,12 @@ bridge 未安装、Launcher 未启动、binding 缺失、本地传输错误或�
 
 验证方式与证据：端到端前后文件摘要、mtime 和配置语义 diff；没有变化才通过。
 
+#### AC-39：桥接测试诊断隔离
+
+通过标准：路由覆盖及其他合成 bridge 测试不向用户的 `~/.claude-codex-pro/claude-codex-pro.log` 写入请求、响应或未知路由记录；生产 BridgeContext 仍保留同等诊断记录。
+
+验证方式与证据：运行路由覆盖测试后，确认测试上下文使用诊断隔离；运行生产诊断定向测试，确认显式配置的临时日志仍包含 `bridge.request` 与 `bridge.response`。
+
 ### 11. 性能、稳定性与回滚
 
 #### AC-39：页面壳即时反馈且不冻结 Codex
