@@ -48,9 +48,9 @@ pub fn run() {
                     );
                 }
             }
-            tauri::async_runtime::spawn(async {
-                commands::ensure_claude_desktop_proxy_on_startup().await;
-            });
+            // Claude Desktop is an explicit, user-triggered integration. Do
+            // not start its proxy while opening the manager or Codex task
+            // workspace; Claude commands initialize it on demand.
             tauri::async_runtime::spawn(async {
                 // Restore only user-configured manual sidecars. The core
                 // filter excludes the reserved managed connection, so startup

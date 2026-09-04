@@ -113,15 +113,14 @@ fn manager_release_binary_uses_embedded_frontend_assets() {
 }
 
 #[test]
-fn manager_startup_restores_claude_desktop_proxy_helper() {
+fn manager_startup_does_not_launch_claude_desktop_proxy() {
     let lib = include_str!("../src/lib.rs");
     let commands = include_str!("../src/commands.rs");
+    let setup = source_section(lib, ".setup(move |app| {", ".on_window_event");
 
-    assert!(lib.contains("ensure_claude_desktop_proxy_on_startup"));
-    assert!(lib.contains("tauri::async_runtime::spawn"));
-    assert!(commands.contains("pub(crate) async fn ensure_claude_desktop_proxy_on_startup"));
-    assert!(commands.contains("manager.claude_proxy.startup_ok"));
-    assert!(commands.contains("manager.claude_proxy.startup_failed"));
+    assert!(!setup.contains("ensure_claude_desktop_proxy_on_startup"));
+    assert!(commands.contains("pub async fn open_claude_desktop"));
+    assert!(commands.contains("ensure_claude_desktop_proxy_helper().await"));
 }
 
 #[test]

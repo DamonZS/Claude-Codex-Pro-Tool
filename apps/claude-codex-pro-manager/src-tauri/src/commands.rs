@@ -1317,24 +1317,6 @@ async fn ensure_claude_desktop_proxy_helper() -> anyhow::Result<u16> {
     }
 }
 
-pub(crate) async fn ensure_claude_desktop_proxy_on_startup() {
-    match ensure_claude_desktop_proxy_helper().await {
-        Ok(port) => log_manager_event(
-            "manager.claude_proxy.startup_ok",
-            json!({
-                "port": port,
-                "address": format!("http://127.0.0.1:{port}/claude-desktop")
-            }),
-        ),
-        Err(error) => log_manager_event(
-            "manager.claude_proxy.startup_failed",
-            json!({
-                "error": error.to_string()
-            }),
-        ),
-    }
-}
-
 fn current_claude_desktop_proxy_port_hint() -> u16 {
     cached_claude_desktop_proxy_port().unwrap_or_else(|| {
         let preferred = claude_codex_pro_core::protocol_proxy::DEFAULT_CLAUDE_DESKTOP_PROXY_PORT;
