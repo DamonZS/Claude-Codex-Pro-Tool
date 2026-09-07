@@ -128,6 +128,9 @@ fn manager_startup_restores_only_user_configured_multica_sidecars() {
     let lib = include_str!("../src/lib.rs");
     let setup = source_section(lib, ".setup(move |app| {", ".on_window_event");
 
+    assert!(setup.contains("ensure_detached_helper(commands::DEFAULT_HELPER_PORT)"));
+    assert!(setup.contains("manager.helper.detached_ready"));
+    assert!(setup.contains("manager.helper.detached_failed"));
     assert!(setup.contains("start_auto_start_sidecars"));
     assert!(!setup.contains("ensure_managed_runtime_async"));
     assert!(!setup.contains("start_managed_runtime_supervision_if_enabled"));
@@ -3196,17 +3199,13 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshClaudeLight(true), refreshClaudeDesktopDevMode(true), refreshSettings(true)]);"
+        "if (target === \"overview\") {\n      // Keep the default manager/Codex entrypoint side-effect free for Claude.\n      // Claude status and development-mode probes are loaded only after the\n      // user enters the dedicated client/tool surfaces or triggers an action.\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);"
     ));
     assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy\n    ? \"写入中...\"\n    : devModeConfigured\n      ? \"开发模式已写入\"\n      : \"写入开发模式\";"));
     assert!(
         app_tsx.contains(
             "afterFirstPaintIfFresh(() => {\n        void refreshMemoryAssistStatus(true);"
         )
-    );
-    assert!(
-        app_tsx
-            .contains("afterFirstPaintIfFresh(() => {\n        void refreshClaudeZhPatch(true);")
     );
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
@@ -4947,7 +4946,7 @@ fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
 }
 
 #[test]
-fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() {
+fn frontend_connection_repair_reuses_live_codex_and_requires_new_heartbeat() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
@@ -4961,7 +4960,8 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
         })
         .expect("repair_frontend_connection source");
     assert!(repair.contains("let repair_started_ms = current_time_ms();"));
-    assert!(repair.contains("restart_codex_for_frontend_repair(&mut details).await"));
+    assert!(repair.contains("current_codex_status_for_frontend_repair(&mut details)"));
+    assert!(!repair.contains("restart_codex_for_frontend_repair(&mut details).await"));
     assert!(!repair.contains("let initial_runtime_online"));
     assert!(repair.contains("ensure_detached_helper(helper_port)"));
     assert!(repair.contains("wait_helper_backend_online(helper_port).await"));
@@ -4979,28 +4979,17 @@ fn frontend_connection_repair_forces_codex_restart_and_requires_new_heartbeat() 
             .contains("const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);")
     );
 
-    let restart = commands_rs
-        .split("async fn restart_codex_for_frontend_repair")
+    let reuse = commands_rs
+        .split("fn current_codex_status_for_frontend_repair")
         .nth(1)
         .and_then(|rest| {
-            rest.split("async fn wait_for_renderer_runtime_after")
+            rest.split("async fn restart_codex_for_frontend_repair")
                 .next()
         })
-        .expect("restart_codex_for_frontend_repair source");
-    assert!(restart.contains("stop_launcher_processes_for_codex_restart()"));
-    assert!(restart.contains("let old_launcher_pids ="));
-    assert!(restart.contains("let old_codex_pids ="));
-    assert!(restart.contains("stop_codex_processes()"));
-    assert!(restart.contains("wait_for_processes_to_exit"));
-    assert!(restart.contains("force_kill_process_tree_for_frontend_repair(&old_process_pids)"));
-    assert!(restart.contains("旧 launcher/Codex 进程仍未退出"));
-    assert!(restart.contains("select_repair_debug_port(default_debug_port()).await"));
-    assert!(restart.contains("debug_port: selected_debug_port"));
-    assert!(restart.contains("let launch_started_at_ms = current_time_ms();"));
-    assert!(restart.contains("launch_started_at_ms,"));
-    assert!(restart.contains("正在等待 Codex 自启完成"));
-    assert!(commands_rs.contains("taskkill.exe"));
-    assert!(commands_rs.contains(".args([\"/PID\", &pid.to_string(), \"/F\", \"/T\"])"));
+        .expect("current_codex_status_for_frontend_repair source");
+    assert!(reuse.contains("codex_debug_port_online"));
+    assert!(reuse.contains("不会关闭或重启当前 Codex"));
+    assert!(!reuse.contains("stop_codex_processes"));
 
     let wait_ports = commands_rs
         .split("async fn wait_for_codex_launch_ports")

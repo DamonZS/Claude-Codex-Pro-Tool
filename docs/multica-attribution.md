@@ -3,16 +3,15 @@
 Claude Codex Pro Tool's Codex workspace is **Built on Multica**.
 
 - Upstream: <https://github.com/multica-ai/multica>
-- Reviewed source revision: `c1e1f11e21cc2ee7dca0ac506a21cb64cca87af4`
-- Revision date: `2026-08-31T06:26:15Z`
+- Reviewed source revision: `9fce92f427694d7d303258aa281b05c902a95ba9`
 - Copyright: `Copyright 2025-2026 Multica, Inc.`
 - License and NOTICE snapshots: `docs/third-party/multica/`
-- `LICENSE` SHA-256: `0E42D37BB02DC61F270C5A0528D489DA76E5A578B209856F2E95EE4D60AACDBE`
-- `NOTICE` SHA-256: `763619B43AE4F18C43BEF5284C04A5739F84CD9F935C0123CF67834541EC3D9A`
+- `LICENSE` SHA-256: `7505297A2A4BF866354D482699DB44EF8B50E8893674E674C5844D3F75DA4464`
+- `NOTICE` SHA-256: `431EC97BF0002E9ADDDB31431750C2000A5895586FE1EE56A4D1D02B5DD8B71C`
 
 ## Integration Boundary
 
-This repository does not copy or embed Multica's Web, desktop, mobile, or shared UI source. The Codex workspace UI and its local storage/execution adapters are implemented in CCP and communicate only with the currently open Codex page Host API.
+This repository currently carries Multica license and attribution snapshots only. Any later copied or derived Multica UI source must be recorded in `docs/third-party/multica/SOURCE_MANIFEST.md`, retain upstream attribution and visual branding, and communicate only with the currently open Codex page Host API.
 
 The default integration does not download, package, launch, supervise, or require the Multica server, daemon, CLI, database, or Web application. It also does not register or launch a second Codex runtime. Any legacy external-runtime compatibility remains a separate, explicitly enabled path.
 

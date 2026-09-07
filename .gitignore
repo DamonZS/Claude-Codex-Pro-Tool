@@ -22,6 +22,10 @@ docs/superpowers/
 # Local codebase-memory runtime lock; the graph database itself is managed outside Git.
 .codegraph/codegraph.lock
 
+# Read-only upstream audit checkout. The tracked source manifest and license
+# snapshots identify the reviewed revision; this full clone is never shipped.
+/.upstream-multica/
+
 *.log
 .DS_Store
 Thumbs.db
@@ -34,3 +38,6 @@ Thumbs.db
 /claude-dev-launcher.sh
 /claude-dev-launcher.bat
 /package.json
+
+# Upstream Multica is consumed from external D:/Project/multica; never vendor it here.
+/apps/codex-workflow-surface/vendor/

@@ -2246,7 +2246,12 @@
 
   function codexServiceTierBadgeState() {
     if (claudeCodexProBackendStatus.status === "checking") return { tier: "loading", label: "...", disabled: true, title: "服务模式：正在检查连接" };
-    if (claudeCodexProBackendStatus.status && claudeCodexProBackendStatus.status !== "ok") return { tier: "failed", label: "未连接", disabled: true, title: "服务模式：未连接，无法切换" };
+    // This badge is a CCP-only control beside Codex's native composer. A
+    // failed control-plane probe must not look like Codex itself is offline,
+    // and it must never leave a red "未连接" marker in the native UI.
+    if (claudeCodexProBackendStatus.status && claudeCodexProBackendStatus.status !== "ok") {
+      return { visible: false, tier: "unavailable", label: "", disabled: true, title: "" };
+    }
     if (codexServiceTierState.status === "loading") return { tier: "loading", label: "...", title: "服务模式：正在读取" };
     if (codexServiceTierState.status === "failed") return { tier: "failed", label: "?", title: "服务模式：读取失败" };
     const fastAvailability = codexServiceTierFastAvailability();
@@ -2269,6 +2274,7 @@
   function refreshCodexServiceTierBadges() {
     const state = codexServiceTierBadgeState();
     document.querySelectorAll(`[data-codex-service-tier-badge="true"]`).forEach((node) => {
+      node.hidden = state.visible === false;
       node.dataset.tier = state.tier;
       node.dataset.disabled = String(!!state.disabled);
       node.textContent = state.label;
@@ -4646,9 +4652,10 @@
     { key: "settings", resource: "settings", label: "设置" },
   ]);
   // Resource-level routes remain available to their owning entity workflows,
-  // but the persistent workspace switcher follows the public ten-module IA.
+  // but the persistent workspace switcher follows the public nine-module IA.
+  // Projects is handled by Codex's native project region, not the workspace.
   const multicaWorkspacePrimaryModuleKeys = Object.freeze([
-    "my-issues", "issues", "projects", "autopilots", "agents",
+    "my-issues", "issues", "autopilots", "agents",
     "squads", "usage", "runtimes", "skills", "settings",
   ]);
   const multicaWorkspacePrimaryModules = Object.freeze(
@@ -4656,6 +4663,14 @@
       .map((key) => multicaWorkspaceModules.find((module) => module.key === key))
       .filter(Boolean),
   );
+  // Keep the injected navigation limited to workflow actions. Codex's own
+  // project region remains untouched, and Skills stay available only from
+  // the workspace module menu rather than becoming a duplicate sidebar item.
+  const multicaWorkspaceSidebarModules = Object.freeze([
+    { key: "my-issues", label: "我的任务", icon: "M" },
+    { key: "autopilots", label: "自动化", icon: "A" },
+    { key: "agents", label: "智能体", icon: "G" },
+  ]);
   const multicaWorkspaceBoardColumns = Object.freeze([
     { key: "backlog", label: "待规划", tone: "neutral" },
     { key: "todo", label: "待办", tone: "neutral" },
@@ -4681,6 +4696,7 @@
   const multicaWorkspaceBackgroundTimeoutMs = 15000;
   const multicaWorkspaceState = {
     entry: null,
+    entries: new Map(),
     host: null,
     shadow: null,
     root: null,
@@ -5136,9 +5152,10 @@
       .ccp-multica-board-title { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; white-space: nowrap; }
       /* The toolbar owns popovers.  Do not make it a scrolling ancestor: an
          overflow container clips its menu even when the menu has a z-index. */
-      .ccp-multica-board-toolbar { position: relative; z-index: 10; display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 12px; min-height: 34px; padding: 5px 18px 10px; overflow: visible; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-      .ccp-multica-board-toolbar-left, .ccp-multica-board-toolbar-right { display: inline-flex; align-items: center; gap: 6px; min-width: max-content; }
+      .ccp-multica-board-toolbar { position: relative; z-index: 10; display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px 12px; min-height: 34px; padding: 5px 18px 10px; overflow: visible; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+      .ccp-multica-board-toolbar-left, .ccp-multica-board-toolbar-right { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: min-content; }
       .ccp-multica-board-toolbar-right { margin-left: auto; }
+      @media (max-width: 760px) { .ccp-multica-board-toolbar-right { flex: 1 0 100%; margin-left: 0; } }
       .ccp-multica-board-toolbar .ccp-multica-filter, .ccp-multica-board-toolbar .ccp-multica-icon-button { min-height: 28px; }
       .ccp-multica-working-count { display: inline-flex; align-items: center; min-height: 28px; padding: 0 7px; border-radius: 5px; background: color-mix(in srgb, currentColor 5%, transparent); font-size: 12px; }
       .ccp-multica-board-menu { position: relative; flex: 0 0 auto; }
@@ -5335,6 +5352,11 @@
     multicaWorkspaceState.loading.clear();
     multicaWorkspaceState.editor = null;
     multicaWorkspaceState.executionDraft = null;
+    multicaWorkspaceState.entries.forEach((entry, entryRoute) => {
+      const selected = entryRoute === module.key;
+      entry?.setAttribute?.("aria-current", selected ? "page" : "false");
+      entry?.setAttribute?.("data-state", selected ? "active" : "inactive");
+    });
     multicaWorkspaceRenderContent();
     if (module.key !== "settings") void multicaWorkspaceQuery(module, false);
   }
@@ -5420,73 +5442,75 @@
 
   function multicaWorkspaceEnsureEntry(pluginButton) {
     if (!pluginButton?.parentElement || !document.createElement) return null;
-    const entries = Array.from(document.querySelectorAll('[data-ccp-multica-nav="true"]'));
-    let entry = multicaWorkspaceState.entry?.isConnected ? multicaWorkspaceState.entry : entries[0];
-    entries.forEach((candidate) => {
-      if (candidate !== entry) candidate.remove();
+    const allowedRoutes = new Set(multicaWorkspaceSidebarModules.map((module) => module.key));
+    const found = new Map();
+    Array.from(document.querySelectorAll('[data-ccp-multica-nav="true"]')).forEach((candidate) => {
+      const route = String(candidate.dataset.ccpMulticaNavRoute || "");
+      if (!allowedRoutes.has(route) || found.has(route)) {
+        candidate.remove();
+        return;
+      }
+      found.set(route, candidate);
     });
-    if (!entry) {
-      entry = document.createElement("button");
-      entry.type = "button";
-      entry.className = pluginButton.className || "sidebar-item flex w-full";
-      entry.dataset.ccpMulticaNav = "true";
-      entry.dataset.ccpMulticaNavVersion = multicaWorkspaceVersion;
-      entry.setAttribute("aria-label", "我的任务");
-      entry.title = "我的任务";
-      const icon = document.createElement("span");
-      icon.textContent = "M";
-      Object.assign(icon.style, {
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "16px",
-        height: "16px",
-        flex: "0 0 16px",
-        fontWeight: "700",
-        fontSize: "11px",
-        lineHeight: "16px",
-      });
-      const label = document.createElement("span");
-      label.textContent = "我的任务";
-      label.dataset.ccpMulticaNavLabel = "true";
-      label.style.minWidth = "0";
-      label.style.overflow = "hidden";
-      label.style.textOverflow = "ellipsis";
-      label.style.whiteSpace = "nowrap";
-      entry.append(icon, label);
-      multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
-    }
-    // React and reinjection can preserve the DOM node across generations.
-    // Always bind the current generation's handler so an unavailable entry
-    // remains retryable instead of retaining a stale closure.
-    if (entry.__ccpMulticaClickHandler) {
-      entry.removeEventListener("click", entry.__ccpMulticaClickHandler, true);
-    }
-    entry.__ccpMulticaClickHandler = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void multicaWorkspaceOpen();
-    };
-    entry.addEventListener("click", entry.__ccpMulticaClickHandler, true);
-    // Reused entries can survive a partial reinjection. Keep their accessible
-    // name and visible label in sync with the current navigation contract.
-    entry.setAttribute("aria-label", "我的任务");
-    entry.title = "我的任务";
-    const label = entry.querySelector?.('[data-ccp-multica-nav-label="true"]')
-      || entry.lastElementChild;
-    if (label && label !== entry) {
-      label.textContent = "我的任务";
-      label.dataset.ccpMulticaNavLabel = "true";
-    }
-    multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
-    if (entry.parentElement !== pluginButton.parentElement || entry.previousElementSibling !== pluginButton) {
-      pluginButton.parentElement.insertBefore(entry, pluginButton.nextSibling);
-    }
-    entry.setAttribute("aria-current", multicaWorkspaceState.opened ? "page" : "false");
-    entry.setAttribute("data-state", multicaWorkspaceState.opened ? "active" : "inactive");
-    multicaWorkspaceState.entry = entry;
+    multicaWorkspaceState.entries.forEach((entry, route) => {
+      if (!entry?.isConnected || found.get(route) !== entry) multicaWorkspaceState.entries.delete(route);
+    });
+    let previous = pluginButton;
+    multicaWorkspaceSidebarModules.forEach((module) => {
+      let entry = multicaWorkspaceState.entries.get(module.key) || found.get(module.key);
+      if (!entry) {
+        entry = document.createElement("button");
+        entry.type = "button";
+        entry.className = pluginButton.className || "sidebar-item flex w-full";
+        entry.dataset.ccpMulticaNav = "true";
+        entry.dataset.ccpMulticaNavRoute = module.key;
+        entry.dataset.ccpMulticaNavVersion = multicaWorkspaceVersion;
+        const icon = document.createElement("span");
+        icon.dataset.ccpMulticaNavIcon = "true";
+        Object.assign(icon.style, {
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: "16px", height: "16px", flex: "0 0 16px", fontWeight: "700",
+          fontSize: "11px", lineHeight: "16px",
+        });
+        const label = document.createElement("span");
+        label.dataset.ccpMulticaNavLabel = "true";
+        Object.assign(label.style, { minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+        entry.append(icon, label);
+      }
+      const icon = entry.querySelector?.('[data-ccp-multica-nav-icon="true"]') || entry.firstElementChild;
+      if (icon) icon.textContent = module.icon;
+      const label = entry.querySelector?.('[data-ccp-multica-nav-label="true"]') || entry.lastElementChild;
+      if (label && label !== entry) {
+        label.textContent = module.label;
+        label.dataset.ccpMulticaNavLabel = "true";
+      }
+      entry.dataset.ccpMulticaNavRoute = module.key;
+      entry.setAttribute("aria-label", module.label);
+      entry.title = module.label;
+      if (entry.__ccpMulticaClickHandler) entry.removeEventListener("click", entry.__ccpMulticaClickHandler, true);
+      entry.__ccpMulticaClickHandler = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (multicaWorkspaceState.opened) {
+          multicaWorkspaceSelectRoute(module.key);
+        } else {
+          multicaWorkspaceState.route = module.key;
+          void multicaWorkspaceOpen();
+        }
+      };
+      entry.addEventListener("click", entry.__ccpMulticaClickHandler, true);
+      if (module.key === "my-issues") multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
+      if (entry.parentElement !== pluginButton.parentElement || entry.previousElementSibling !== previous) {
+        pluginButton.parentElement.insertBefore(entry, previous.nextSibling);
+      }
+      entry.setAttribute("aria-current", multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route ? "page" : "false");
+      entry.setAttribute("data-state", multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route ? "active" : "inactive");
+      multicaWorkspaceState.entries.set(module.key, entry);
+      previous = entry;
+    });
+    multicaWorkspaceState.entry = multicaWorkspaceState.entries.get("my-issues") || null;
     multicaWorkspaceSetEntryAvailability(multicaWorkspaceState.entryAvailabilityMessage);
-    return entry;
+    return multicaWorkspaceState.entry;
   }
 
   function multicaWorkspaceSetStatus(text, state) {
@@ -5502,18 +5526,10 @@
     multicaWorkspaceState.entryAvailabilityMessage = detail;
     if (!entry) return;
     const badge = multicaWorkspaceEnsureEntryAvailabilityBadge(entry);
-    if (detail) {
-      entry.dataset.ccpMulticaAvailability = "unavailable";
-      entry.setAttribute("data-state", "unavailable");
-      entry.setAttribute("aria-label", "我的任务，未连接，点击重试");
-      entry.setAttribute("aria-description", `${detail}；点击重试`);
-      entry.title = `我的任务（未连接，点击重试：${detail}）`;
-      if (badge) {
-        badge.textContent = "未连接";
-        badge.style.display = "inline-flex";
-      }
-      return;
-    }
+    // The sidebar is a navigation affordance, not a transport status display.
+    // A transient bridge timeout used to turn it into a permanent-looking
+    // "unavailable" entry even though clicking it opened a recoverable page.
+    // Keep failure details inside the page-level retry state instead.
     delete entry.dataset.ccpMulticaAvailability;
     entry.setAttribute("aria-label", "我的任务");
     entry.removeAttribute("aria-description");
@@ -5523,6 +5539,18 @@
       badge.textContent = "";
       badge.style.display = "none";
     }
+  }
+
+  function multicaWorkspaceNativeProjectsCollection() {
+    const nativeProjects = multicaWorkspaceState.bootstrap?.collections?.codex_native_projects;
+    const items = Array.isArray(nativeProjects?.items) ? nativeProjects.items : [];
+    return {
+      ...(nativeProjects || {}),
+      items: items.map((item) => ({ ...item, read_only: true })),
+      total: Number.isFinite(Number(nativeProjects?.total)) ? Number(nativeProjects.total) : items.length,
+      stale: !nativeProjects,
+      source: "codex_native_read_only",
+    };
   }
 
   function multicaWorkspaceBridgeUnavailable(error) {
@@ -8358,7 +8386,7 @@
     const content = multicaWorkspaceState.root?.content;
     if (!content) return;
     const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
-    const error = multicaWorkspaceState.errors.get(module.key);
+    let error = multicaWorkspaceState.errors.get(module.key);
     let collection = multicaWorkspacePermissionError(error)
       ? null
       : multicaWorkspaceState.collections.get(module.key);
@@ -8394,18 +8422,13 @@
         };
       }
     }
-    let nativeProjectReadOnly = false;
-    if (module.key === "projects" && (!collection || !Array.isArray(collection.items) || collection.items.length === 0)) {
-      const nativeProjects = multicaWorkspaceState.bootstrap?.collections?.codex_native_projects;
-      if (nativeProjects && Array.isArray(nativeProjects.items) && nativeProjects.items.length > 0) {
-        collection = {
-          ...nativeProjects,
-          items: nativeProjects.items.map((item) => ({ ...item, read_only: true })),
-          stale: true,
-          source: "codex_native_read_only",
-        };
-        nativeProjectReadOnly = true;
-      }
+    // Projects is always read-only Codex native projection. The workspace does
+    // not provide writable project CRUD; users access projects via Codex's own
+    // project region, not the workspace module menu.
+    const isCodexNativeProjectsRoute = module.key === "projects";
+    if (isCodexNativeProjectsRoute) {
+      collection = multicaWorkspaceNativeProjectsCollection();
+      error = null;
     }
     multicaWorkspaceClear(content);
     content.dataset.route = module.key;
@@ -8435,7 +8458,7 @@
       header.appendChild(resolve);
     }
     const writableResource = multicaWorkspaceWritableResource(module);
-    if (writableResource && !nativeProjectReadOnly) {
+    if (writableResource && !isCodexNativeProjectsRoute) {
       const create = multicaWorkspaceEl("button", "ccp-multica-button", "新建");
       create.type = "button";
       create.dataset.variant = "primary";
@@ -8481,7 +8504,7 @@
       notice.dataset.state = "error";
       content.appendChild(notice);
     }
-    if (!nativeProjectReadOnly) multicaWorkspaceRenderEditor(content, module);
+    if (!isCodexNativeProjectsRoute) multicaWorkspaceRenderEditor(content, module);
     if (module.key === "skills" && multicaWorkspaceState.skillBindingsError) {
       const bindingNotice = multicaWorkspaceEl("div", "ccp-multica-state ccp-multica-stale", `绑定状态：${multicaWorkspaceState.skillBindingsError}`);
       content.appendChild(bindingNotice);
@@ -8644,6 +8667,13 @@
       if (multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
       return true;
     }
+    if (module.key === "projects") {
+      // Native projects are supplied by bootstrap from Codex state, not the
+      // workspace project's CRUD endpoint.
+      multicaWorkspaceState.errors.delete(module.key);
+      if (multicaWorkspaceState.opened && module.key === multicaWorkspaceState.route) multicaWorkspaceRenderContent();
+      return true;
+    }
     if (multicaWorkspaceState.loading.has(module.key) && !force) {
       return multicaWorkspaceState.collections.has(module.key);
     }
@@ -8794,10 +8824,10 @@
     multicaWorkspaceState.main = null;
     multicaWorkspaceState.mainSnapshot = null;
     if (multicaWorkspaceState.host) multicaWorkspaceState.host.style.display = "none";
-    if (multicaWorkspaceState.entry) {
-      multicaWorkspaceState.entry.setAttribute("aria-current", "false");
-      multicaWorkspaceState.entry.setAttribute("data-state", "inactive");
-    }
+    multicaWorkspaceState.entries.forEach((entry) => {
+      entry?.setAttribute?.("aria-current", "false");
+      entry?.setAttribute?.("data-state", "inactive");
+    });
     multicaWorkspaceSetEntryAvailability("");
   }
 
@@ -8874,7 +8904,7 @@
     if (!document?.querySelectorAll || !document?.createElement) return;
     window.__claudeCodexProMulticaWorkspaceCleanup = cleanupMulticaWorkspace;
     if (!multicaWorkspaceFeatureEnabled()) {
-      if (multicaWorkspaceState.entry || multicaWorkspaceState.host || multicaWorkspaceState.opened) {
+      if (multicaWorkspaceState.entries.size || multicaWorkspaceState.entry || multicaWorkspaceState.host || multicaWorkspaceState.opened) {
         cleanupMulticaWorkspace();
       }
       return;
@@ -8911,7 +8941,7 @@
     if (!multicaWorkspaceState.navHandler) {
       multicaWorkspaceState.navHandler = (event) => {
         const target = event.target;
-        if (multicaWorkspaceState.entry?.contains?.(target)) return;
+        if (Array.from(multicaWorkspaceState.entries.values()).some((entry) => entry?.contains?.(target))) return;
         if (multicaWorkspaceState.nativeThreadActivation) return;
         const nativeNavigation = target?.closest?.([
           "[data-app-action-sidebar-thread-id]",
@@ -8957,11 +8987,12 @@
       multicaWorkspaceState.mainResizeObserver = null;
     }
     multicaWorkspaceRestoreMain();
-    multicaWorkspaceState.entry?.remove?.();
+    multicaWorkspaceState.entries.forEach((entry) => entry?.remove?.());
     multicaWorkspaceState.host?.remove?.();
     document.querySelectorAll?.('[data-ccp-multica-nav="true"], #ccp-multica-workspace-root')
       .forEach((node) => node.remove());
     multicaWorkspaceState.entry = null;
+    multicaWorkspaceState.entries.clear();
     multicaWorkspaceState.host = null;
     multicaWorkspaceState.shadow = null;
     multicaWorkspaceState.root = null;
@@ -11929,12 +11960,21 @@
     confirmDelete(ref.title).then(async (confirmed) => {
       if (!confirmed) return;
       releaseDeleteFocus(row, button);
-      const result = await postJson("/delete", ref);
-      if (result.status === "server_deleted" || result.status === "local_deleted") {
-        removeDeletedRow(row, button, ref);
-        showToast(result.message || "删除成功", result.undo_token);
-      } else {
-        showToast(result.message || "删除失败", null);
+      try {
+        const result = await postJson("/delete", ref);
+        if (result?.status === "server_deleted" || result?.status === "local_deleted") {
+          removeDeletedRow(row, button, ref);
+          showToast(result.message || "删除成功", result.undo_token);
+        } else {
+          showToast(result?.message || "删除失败", null);
+        }
+      } catch (error) {
+        sendClaudeCodexProDiagnostic("session_delete_failed", {
+          sessionId: ref.session_id,
+          errorName: error?.name || "",
+          errorMessage: error?.message || String(error),
+        });
+        showToast(`删除失败：${error?.message || error}`, null);
       }
     });
   }
@@ -12129,6 +12169,17 @@
   }
 
   function installActionButtonEvents(row, button, onActivate) {
+    let lastPointerActivationAt = 0;
+    const activateOnce = (event) => {
+      // Chromium emits pointerup followed by click for one pointer gesture.
+      // The delete flow must open only one confirmation dialog per gesture.
+      if (event.type === "pointerup") {
+        lastPointerActivationAt = performance.now();
+      } else if (event.type === "click" && performance.now() - lastPointerActivationAt < 500) {
+        return;
+      }
+      onActivate(event);
+    };
     ["pointerdown", "mousedown", "mouseup", "touchstart"].forEach((eventName) => {
       button.addEventListener(eventName, (event) => stopActionButtonEvent(row, button, event), true);
     });
@@ -12136,10 +12187,10 @@
     button.addEventListener("pointerleave", hideActionButtonTooltip);
     button.addEventListener("focus", () => showActionButtonTooltip(button));
     button.addEventListener("blur", hideActionButtonTooltip);
-    button.addEventListener("pointerup", onActivate, true);
+    button.addEventListener("pointerup", activateOnce, true);
     button.addEventListener("click", (event) => {
       hideActionButtonTooltip();
-      onActivate(event);
+      activateOnce(event);
     }, true);
   }
 

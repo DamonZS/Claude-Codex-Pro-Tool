@@ -123,7 +123,7 @@ fn multica_workspace_background_refresh_uses_foreground_timeout_budget() {
 }
 
 #[test]
-fn multica_workspace_unavailable_entry_remains_retryable_and_is_not_empty_board() {
+fn multica_workspace_bridge_failure_keeps_sidebar_navigation_neutral() {
     let script = assets::injection_script(57321);
     let workspace = source_between(
         &script,
@@ -147,11 +147,10 @@ fn multica_workspace_unavailable_entry_remains_retryable_and_is_not_empty_board(
         entry
             .contains("entry.removeEventListener(\"click\", entry.__ccpMulticaClickHandler, true)")
     );
-    assert!(availability.contains("entry.dataset.ccpMulticaAvailability = \"unavailable\""));
-    assert!(availability.contains("entry.setAttribute(\"data-state\", \"unavailable\")"));
-    assert!(
-        availability.contains("entry.setAttribute(\"aria-description\", `${detail}；点击重试`)")
-    );
-    assert!(availability.contains("entry.title = `我的任务（未连接，点击重试：${detail}）`"));
+    assert!(availability.contains("The sidebar is a navigation affordance"));
+    assert!(availability.contains("entry.setAttribute(\"aria-label\", \"我的任务\")"));
+    assert!(availability.contains("entry.setAttribute(\"data-state\", multicaWorkspaceState.opened ? \"active\" : \"inactive\")"));
+    assert!(!availability.contains("entry.dataset.ccpMulticaAvailability = \"unavailable\""));
+    assert!(!availability.contains("我的任务，未连接，点击重试"));
     assert!(!availability.contains("无任务"));
 }

@@ -48,6 +48,31 @@ pub fn run() {
                     );
                 }
             }
+            // The Codex renderer talks to the local helper on the reserved
+            // port even when the user did not launch Codex through CCP.
+            // Start the detached helper as part of manager setup so the
+            // injected status bridge is available immediately after opening
+            // the manager. This is deliberately separate from user-configured
+            // Multica sidecars below.
+            tauri::async_runtime::spawn(async {
+                match claude_codex_pro_core::launcher::ensure_detached_helper(commands::DEFAULT_HELPER_PORT).await {
+                    Ok(()) => {
+                        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                            "manager.helper.detached_ready",
+                            serde_json::json!({ "helper_port": commands::DEFAULT_HELPER_PORT }),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                            "manager.helper.detached_failed",
+                            serde_json::json!({
+                                "helper_port": commands::DEFAULT_HELPER_PORT,
+                                "error": error.to_string()
+                            }),
+                        );
+                    }
+                }
+            });
             // Claude Desktop is an explicit, user-triggered integration. Do
             // not start its proxy while opening the manager or Codex task
             // workspace; Claude commands initialize it on demand.

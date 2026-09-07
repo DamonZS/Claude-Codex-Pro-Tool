@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@multica/core": ["D:/Project/multica/packages/core/index.ts"],
+      "@multica/core/*": ["D:/Project/multica/packages/core/*"],
+      "@multica/ui": ["D:/Project/multica/packages/ui/index.ts"],
+      "@multica/ui/*": ["D:/Project/multica/packages/ui/*"],
+      "@multica/views": ["D:/Project/multica/packages/views/index.ts"],
+      "@multica/views/*": ["D:/Project/multica/packages/views/*"]
+    }
+  },
+  "include": ["src", "D:/Project/multica/packages/core", "D:/Project/multica/packages/ui", "D:/Project/multica/packages/views"],
+  "exclude": ["D:/Project/multica/packages/**/*.test.ts", "D:/Project/multica/packages/**/*.test.tsx"]
+}

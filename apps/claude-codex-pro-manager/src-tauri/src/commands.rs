@@ -2423,8 +2423,8 @@ pub struct RepairConnectionPayload {
 pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPayload> {
     let mut details = Vec::new();
     let repair_started_ms = current_time_ms();
-    details.push("已请求重启 Codex 注入入口，旧前端心跳不会作为本次修复成功依据。".to_string());
-    let latest = restart_codex_for_frontend_repair(&mut details).await;
+    details.push("正在复用当前 Codex 注入入口；不会为了修复连接关闭现有会话。".to_string());
+    let latest = current_codex_status_for_frontend_repair(&mut details);
 
     let mut codex_backend_online = latest
         .as_ref()
@@ -2566,6 +2566,64 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
             details,
         },
     }
+}
+
+/// Resolve the live Codex endpoint without treating an injection repair as a
+/// reason to terminate the user's active application.  A CDP probe is the
+/// authority here because `latest-status.json` can outlive its launcher.
+fn current_codex_status_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
+    let latest = StatusStore::default()
+        .load_latest()
+        .ok()
+        .flatten()
+        .map(refresh_launch_port_status);
+    let recorded_debug_port = latest.as_ref().and_then(|status| status.debug_port);
+    let debug_port = [recorded_debug_port, Some(default_debug_port())]
+        .into_iter()
+        .flatten()
+        .find(|port| codex_debug_port_online(*port));
+    let Some(debug_port) = debug_port else {
+        details.push("未发现可复用的 Codex CDP 端口；本次不会关闭或重启当前 Codex。".to_string());
+        return latest;
+    };
+
+    let helper_port = latest
+        .as_ref()
+        .and_then(|status| status.helper_port)
+        .unwrap_or_else(default_helper_port);
+    details.push(format!(
+        "检测到当前 Codex CDP 端口 {debug_port}，将复用该实例并恢复后端端口 {helper_port}。"
+    ));
+
+    let mut status = latest.unwrap_or_else(|| {
+        // When latest status is missing, use a timestamp far in the past so
+        // only fresh heartbeats after reinject will be accepted.
+        let fallback_started_at_ms = current_time_ms().saturating_sub(86400_000);
+        details.push(format!(
+            "未找到启动状态文件，将使用回退时间戳 {} 以确保只接受本次修复后的新心跳。",
+            fallback_started_at_ms
+        ));
+        LaunchStatus {
+            status: "running_degraded".to_string(),
+            message: "修复前端连接时发现已运行的 Codex。".to_string(),
+            started_at_ms: fallback_started_at_ms,
+            debug_port: Some(debug_port),
+            helper_port: Some(helper_port),
+            debug_port_online: true,
+            helper_port_online: false,
+            frontend_runtime_online: false,
+            frontend_runtime_seen_at_ms: None,
+            codex_app: current_codex_app_path_for_launch()
+                .map(|path| path.to_string_lossy().to_string()),
+        }
+    });
+    status.debug_port = Some(debug_port);
+    status.helper_port = Some(helper_port);
+    status.debug_port_online = true;
+    status.frontend_runtime_online = false;
+    status.frontend_runtime_seen_at_ms = None;
+    let _ = StatusStore::default().save_latest(&status);
+    Some(status)
 }
 
 async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
@@ -10600,9 +10658,6 @@ fn codex_debug_port_online(port: u16) -> bool {
 }
 
 fn helper_backend_online(port: u16) -> bool {
-    if !tcp_port_open(port) {
-        return false;
-    }
     let Ok(mut stream) = connect_loopback(port) else {
         return false;
     };
@@ -10610,12 +10665,7 @@ fn helper_backend_online(port: u16) -> bool {
     if stream.write_all(request).is_err() {
         return false;
     }
-    let mut response = String::new();
-    stream.read_to_string(&mut response).is_ok()
-        && response.starts_with("HTTP/1.1 200")
-        && response.contains("\"status\":\"ok\"")
-        && response.contains("\"transport\":\"http-helper\"")
-        && response.contains("\"version\":")
+    read_helper_status_response(&mut stream)
 }
 
 async fn wait_helper_backend_online(port: u16) -> bool {
@@ -10645,17 +10695,65 @@ async fn async_helper_backend_online(port: u16) -> bool {
     {
         return false;
     }
-    let mut response = String::new();
-    tokio::time::timeout(
-        Duration::from_millis(800),
-        stream.read_to_string(&mut response),
-    )
-    .await
-    .is_ok_and(|result| result.is_ok())
-        && response.starts_with("HTTP/1.1 200")
-        && response.contains("\"status\":\"ok\"")
-        && response.contains("\"transport\":\"http-helper\"")
-        && response.contains("\"version\":")
+    let mut response = Vec::with_capacity(4096);
+    let mut buffer = [0_u8; 4096];
+    while response.len() < HELPER_STATUS_MAX_RESPONSE_BYTES {
+        match tokio::time::timeout(Duration::from_millis(800), stream.read(&mut buffer)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(read)) => {
+                response.extend_from_slice(&buffer[..read]);
+                if helper_status_response_is_ok(&response) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+    }
+    false
+}
+
+const HELPER_STATUS_MAX_RESPONSE_BYTES: usize = 64 * 1024;
+pub const DEFAULT_HELPER_PORT: u16 = 57321;
+
+fn helper_status_response_is_ok(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 200")
+        && [
+            b"\"status\":\"ok\"".as_slice(),
+            b"\"transport\":\"http-helper\"".as_slice(),
+            b"\"version\":".as_slice(),
+        ]
+        .into_iter()
+        .all(|marker| {
+            response
+                .windows(marker.len())
+                .any(|window| window == marker)
+        })
+}
+
+fn read_helper_status_response(stream: &mut TcpStream) -> bool {
+    let mut response = Vec::with_capacity(4096);
+    let mut buffer = [0_u8; 4096];
+    while response.len() < HELPER_STATUS_MAX_RESPONSE_BYTES {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&buffer[..read]);
+                if helper_status_response_is_ok(&response) {
+                    return true;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 fn codex_debug_json_ready(port: u16) -> bool {
@@ -11863,6 +11961,44 @@ mod tests {
         });
 
         assert!(!codex_debug_json_ready(port));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn helper_backend_online_accepts_complete_status_before_peer_closes() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\",\"transport\":\"http-helper\",\"version\":\"test\"}",
+                )
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(750));
+        });
+
+        assert!(helper_backend_online(port));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn async_helper_backend_online_accepts_complete_status_before_peer_closes() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\",\"transport\":\"http-helper\",\"version\":\"test\"}",
+                )
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(750));
+        });
+
+        assert!(tauri::async_runtime::block_on(async_helper_backend_online(
+            port
+        )));
         server.join().unwrap();
     }
 

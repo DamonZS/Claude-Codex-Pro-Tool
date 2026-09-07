@@ -12,8 +12,8 @@
    - 通过标准：非 `HTTP 200` 或不含 `webSocketDebuggerUrl` 的响应返回 `false`。
    - 证据：Rust 单元测试或现有判定断言。
 
-3. 修复结果保持真实重启约束
-   - 通过标准：`repair_frontend_connection` 仍调用 Codex 重启链路并要求本次修复后的新前端心跳，不接受旧心跳。
+3. 修复结果保持当前会话
+   - 通过标准：`repair_frontend_connection` 复用可探测的当前 Codex CDP 端口，不调用 Codex 结束或重启链路，并要求本次修复后的新前端心跳，不接受旧心跳。
    - 证据：`windows_subsystem` 回归测试。
 
 4. 项目检查与构建
@@ -47,5 +47,13 @@
 - 通过标准：一次失败保留最近成功状态；连续失败达到阈值才显示“未连接”；下一次成功立即恢复“已连接”。
 - 通过标准：`/backend/status` 的 bridge 与 helper 探测并行启动，任一通道先返回成功时立即显示“已连接”；修复请求不并行重复执行。
 - 通过标准：页面重新可见时立即发起状态检查，watchdog 周期与 renderer 的 5 秒心跳错开。
+- 通过标准：控制面不可用时，输入框旁的 CCP 服务模式徽标隐藏且不显示“未连接”；Codex 原生输入框和对话保持可用。控制面恢复后，徽标恢复正常显示。
+- 通过标准：Helper 返回完整 `HTTP 200` 成功正文但保持连接打开时，同步和异步 Helper 探测都判定在线。
 - 验证证据：`cdp_bridge` 定向测试、core 测试、前端检查和生产构建通过。
 - 运行证据：结束旧 Manager/launcher 后全量构建到默认 `target/release`，启动新 Manager，并连续检查实际 renderer 日志不再出现排队造成的 `backend_bridge_timeout`。
+
+## 补充验收：最近对话删除交互
+
+- 通过标准：删除按钮的 `pointerup` 后紧随的 `click` 仅触发一次确认流程，不会出现两个确认层或重复删除调用。
+- 通过标准：删除 bridge 失败或抛出异常时，页面显示“删除失败”提示，并写入 `session_delete_failed` 诊断事件。
+- 验证证据：`cdp_bridge` 注入脚本断言、Manager Release 构建，以及一次运行态点击验证。

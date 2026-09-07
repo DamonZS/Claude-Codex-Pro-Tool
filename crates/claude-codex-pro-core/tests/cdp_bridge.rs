@@ -578,7 +578,7 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
 }
 
 #[test]
-fn codex_multica_workspace_anchors_after_plugin_before_projects() {
+fn codex_multica_workspace_anchors_three_workflow_routes_after_plugin() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("nav[role=\"navigation\"] button.sidebar-item"));
@@ -594,16 +594,44 @@ fn codex_multica_workspace_anchors_after_plugin_before_projects() {
     assert!(script.contains("M8.25031 1.46094"));
     assert!(script.contains("M7.94562 14.0277"));
     assert!(script.contains("/^(插件|Plugins)"));
-    assert!(
-        script
-            .contains("pluginButton.parentElement.insertBefore(entry, pluginButton.nextSibling);")
+    assert!(script.contains("const multicaWorkspaceSidebarModules = Object.freeze(["));
+    let sidebar_modules = source_between(
+        &script,
+        "const multicaWorkspaceSidebarModules = Object.freeze([",
+        "const multicaWorkspaceBoardColumns = Object.freeze([",
     );
-    assert!(script.contains("entry.previousElementSibling !== pluginButton"));
+    for (route, label, icon) in [
+        ("my-issues", "我的任务", "M"),
+        ("autopilots", "自动化", "A"),
+        ("agents", "智能体", "G"),
+    ] {
+        assert!(sidebar_modules.contains(&format!(
+            "{{ key: \"{route}\", label: \"{label}\", icon: \"{icon}\" }}"
+        )));
+    }
+    assert!(!sidebar_modules.contains("key: \"projects\""));
+    assert!(!sidebar_modules.contains("key: \"skills\""));
+    assert!(script.contains("entry.dataset.ccpMulticaNavRoute = module.key"));
+    assert!(
+        script.contains("pluginButton.parentElement.insertBefore(entry, previous.nextSibling);")
+    );
+    assert!(script.contains("entry.previousElementSibling !== previous"));
+    assert!(
+        script.contains("multicaWorkspaceState.entries = new Map()")
+            || script.contains("entries: new Map()")
+    );
+    assert!(script.contains(
+        "if (multicaWorkspaceState.opened) {\n          multicaWorkspaceSelectRoute(module.key);"
+    ));
+    assert!(script.contains(
+        "multicaWorkspaceState.route = module.key;\n          void multicaWorkspaceOpen();"
+    ));
+    assert!(script.contains("if (!allowedRoutes.has(route) || found.has(route))"));
     assert!(script.contains("function multicaPluginAnchorMutationNode(node)"));
     assert!(script.contains("data-ccp-multica-nav=\"true\""));
-    assert!(script.contains("entry.setAttribute(\"aria-label\", \"我的任务\")"));
-    assert!(script.contains("entry.title = \"我的任务\""));
-    assert!(script.contains("label.textContent = \"我的任务\""));
+    assert!(script.contains("entry.setAttribute(\"aria-label\", module.label)"));
+    assert!(script.contains("entry.title = module.label"));
+    assert!(script.contains("label.textContent = module.label"));
     assert!(script.contains("label.dataset.ccpMulticaNavLabel = \"true\""));
     assert!(script.contains("entry.querySelector?.('[data-ccp-multica-nav-label=\"true\"]')"));
 }
@@ -625,7 +653,9 @@ fn codex_multica_workspace_is_shadow_dom_singleton_without_product_shell() {
     assert!(script.contains("host.attachShadow({ mode: \"open\" })"));
     assert!(script.contains("host.id = \"ccp-multica-workspace-root\""));
     assert!(script.contains("entry.dataset.ccpMulticaNav = \"true\""));
-    assert!(script.contains("multicaWorkspaceState.entry?.remove?.();"));
+    assert!(
+        script.contains("multicaWorkspaceState.entries.forEach((entry) => entry?.remove?.());")
+    );
     assert!(script.contains("multicaWorkspaceState.host?.remove?.();"));
     assert!(script.contains("multicaWorkspaceRestoreMain();"));
     assert!(script.contains("#ccp-multica-workspace-root"));
@@ -691,7 +721,7 @@ fn codex_multica_workspace_hide_preserves_background_work_until_full_cleanup() {
     assert!(hide.contains("multicaWorkspaceState.opened = false"));
     assert!(hide.contains("multicaWorkspaceRestoreMain()"));
     assert!(hide.contains("multicaWorkspaceState.host.style.display = \"none\""));
-    assert!(hide.contains("multicaWorkspaceState.entry.setAttribute(\"aria-current\", \"false\")"));
+    assert!(hide.contains("multicaWorkspaceState.entries.forEach((entry) => {"));
     for forbidden in [
         "multicaWorkspaceCancelQuery",
         "multicaWorkspaceCancelBootstrap",
@@ -718,7 +748,9 @@ fn codex_multica_workspace_hide_preserves_background_work_until_full_cleanup() {
     assert!(cleanup.contains("multicaWorkspaceStopBackgroundSync();"));
     assert!(background.contains("multicaWorkspaceState.backgroundTimer ="));
     assert!(background.contains("clearTimeout") || background.contains("clearInterval"));
-    assert!(cleanup.contains("multicaWorkspaceState.entry?.remove?.();"));
+    assert!(
+        cleanup.contains("multicaWorkspaceState.entries.forEach((entry) => entry?.remove?.());")
+    );
     assert!(cleanup.contains("multicaWorkspaceState.host?.remove?.();"));
     assert!(workspace.contains("multicaWorkspaceBackgroundIntervalMs"));
     assert!(workspace.contains("multicaWorkspaceState.backgroundTimer ="));
@@ -756,6 +788,53 @@ fn codex_multica_workspace_hide_preserves_background_work_until_full_cleanup() {
             "workspace feature flag crossed runtime or supplier/proxy boundary: {forbidden}"
         );
     }
+}
+
+#[test]
+fn codex_multica_projects_route_is_a_read_only_codex_projection() {
+    let script = assets::injection_script(57321);
+    let workspace = source_between(
+        &script,
+        "// The workspace is deliberately kept in this injection file",
+        "function labelUnlockedPluginEntry",
+    );
+    let render = source_between(
+        workspace,
+        "function multicaWorkspaceRenderContent()",
+        "async function multicaWorkspaceLoadBootstrap",
+    );
+    let native_branch = source_between(
+        render,
+        "// The public Projects entry means Codex projects, never workspace project",
+        "multicaWorkspaceClear(content);",
+    );
+    let query = source_between(
+        workspace,
+        "async function multicaWorkspaceQuery(module, force = false, timeoutMs = 15000)",
+        "async function multicaWorkspaceLoadCurrentRoute",
+    );
+    let native_query = source_between(
+        query,
+        "if (module.key === \"projects\") {",
+        "if (multicaWorkspaceState.loading.has(module.key) && !force)",
+    );
+    let card = source_between(
+        workspace,
+        "function multicaWorkspaceAppendNativeProjectItem(parent, item)",
+        "function multicaWorkspaceIssueStatusOptions()",
+    );
+
+    assert!(workspace.contains("function multicaWorkspaceNativeProjectsCollection()"));
+    assert!(workspace.contains("bootstrap?.collections?.codex_native_projects"));
+    assert!(native_branch.contains("const nativeProjectReadOnly = module.key === \"projects\""));
+    assert!(native_branch.contains("collection = multicaWorkspaceNativeProjectsCollection();"));
+    assert!(native_branch.contains("error = null;"));
+    assert!(native_query.contains("Native projects are supplied by bootstrap from Codex state"));
+    assert!(!native_query.contains("multicaWorkspaceRequest"));
+    assert!(card.contains("Codex 原生项目 · 只读"));
+    assert!(card.contains("nativeProjectTargets().find"));
+    assert!(card.contains("if (target.row.isConnected) target.row.click();"));
+    assert!(card.contains("不可作为工作流项目编辑或删除"));
 }
 
 #[test]
@@ -1131,7 +1210,7 @@ fn codex_multica_workspace_keeps_native_surface_until_board_is_ready() {
 }
 
 #[test]
-fn codex_multica_unavailable_entry_is_visible_and_retryable() {
+fn codex_multica_sidebar_navigation_stays_neutral_when_bridge_is_unavailable() {
     let script = assets::injection_script(57321);
     let workspace = source_between(
         &script,
@@ -1151,14 +1230,31 @@ fn codex_multica_unavailable_entry_is_visible_and_retryable() {
 
     assert!(entry.contains("data-ccp-multica-nav-availability=\"true\""));
     assert!(entry.contains("multicaWorkspaceEnsureEntryAvailabilityBadge(entry);"));
-    assert!(availability.contains("badge.textContent = \"未连接\""));
-    assert!(availability.contains("badge.style.display = \"inline-flex\""));
-    assert!(availability.contains("点击重试"));
-    assert!(
-        availability.contains("entry.setAttribute(\"aria-label\", \"我的任务，未连接，点击重试\")")
-    );
+    assert!(availability.contains("The sidebar is a navigation affordance"));
+    assert!(availability.contains("entry.setAttribute(\"aria-label\", \"我的任务\")"));
+    assert!(!availability.contains("badge.textContent = \"未连接\""));
+    assert!(!availability.contains("我的任务，未连接，点击重试"));
     assert!(availability.contains("badge.style.display = \"none\""));
-    assert!(entry.contains("multicaWorkspaceOpen();"));
+    assert!(entry.contains("void multicaWorkspaceOpen();"));
+}
+
+#[test]
+fn disconnected_service_tier_control_hides_its_badge_without_marking_codex_offline() {
+    let script = assets::injection_script(57321);
+    let badge_state = source_between(
+        &script,
+        "function codexServiceTierBadgeState()",
+        "function refreshCodexServiceTierBadges()",
+    );
+    let badge_refresh = source_between(
+        &script,
+        "function refreshCodexServiceTierBadges()",
+        "function refreshCodexServiceTierControls()",
+    );
+
+    assert!(badge_state.contains("visible: false"));
+    assert!(!badge_state.contains("label: \"未连接\""));
+    assert!(badge_refresh.contains("node.hidden = state.visible === false"));
 }
 
 #[test]
@@ -1809,6 +1905,17 @@ fn injection_script_moves_export_and_project_move_into_more_menu() {
     assert!(!script.contains("installActionButtonEvents(row, moreButton, openMoreMenu)"));
     assert!(!script.contains("group.appendChild(exportButton)"));
     assert!(!script.contains("group.appendChild(moveButton)"));
+}
+
+#[test]
+fn injection_script_deduplicates_pointer_delete_activation_and_reports_failures() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("let lastPointerActivationAt = 0;"));
+    assert!(script.contains("performance.now() - lastPointerActivationAt < 500"));
+    assert!(script.contains("button.addEventListener(\"pointerup\", activateOnce, true);"));
+    assert!(script.contains("session_delete_failed"));
+    assert!(script.contains("showToast(`删除失败：${error?.message || error}`, null);"));
 }
 
 #[test]

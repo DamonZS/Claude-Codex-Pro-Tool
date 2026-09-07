@@ -528,11 +528,41 @@ fn helper_backend_online_blocking(port: u16) -> bool {
     if stream.write_all(request).is_err() {
         return false;
     }
-    let mut response = String::new();
-    stream.read_to_string(&mut response).is_ok()
-        && response.starts_with("HTTP/1.1 200")
-        && response.contains("\"transport\":\"http-helper\"")
-        && response.contains("\"version\":")
+    helper_status_response_is_ok(&mut stream)
+}
+
+fn helper_status_response_is_ok(stream: &mut TcpStream) -> bool {
+    const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+    let mut response = Vec::with_capacity(4096);
+    let mut buffer = [0_u8; 4096];
+    while response.len() < MAX_RESPONSE_BYTES {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&buffer[..read]);
+                let response_is_ok = response.starts_with(b"HTTP/1.1 200")
+                    && [
+                        b"\"status\":\"ok\"".as_slice(),
+                        b"\"transport\":\"http-helper\"".as_slice(),
+                        b"\"version\":".as_slice(),
+                    ]
+                    .into_iter()
+                    .all(|marker| {
+                        response
+                            .windows(marker.len())
+                            .any(|window| window == marker)
+                    });
+                if response_is_ok {
+                    return true;
+                }
+            }
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                break;
+            }
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 pub async fn launch_and_inject_with_hooks<H>(
@@ -3430,6 +3460,24 @@ mod tests {
         assert_eq!(BRIDGE_WATCHDOG_INITIAL_DELAY.as_secs(), 7);
         assert_eq!(BRIDGE_WATCHDOG_INTERVAL.as_secs(), 11);
         assert_ne!(BRIDGE_WATCHDOG_INTERVAL.as_secs(), 5);
+    }
+
+    #[test]
+    fn protocol_proxy_backend_online_accepts_complete_status_before_peer_closes() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"status\":\"ok\",\"transport\":\"http-helper\",\"version\":\"test\"}",
+                )
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(750));
+        });
+
+        assert!(protocol_proxy_backend_online(port));
+        server.join().unwrap();
     }
 
     fn cdp_target(

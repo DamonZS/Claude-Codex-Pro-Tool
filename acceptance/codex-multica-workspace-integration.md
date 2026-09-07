@@ -91,24 +91,24 @@ bridge 未安装、Launcher 未启动、binding 缺失、本地传输错误或�
 
 ### 3. Codex 左侧入口
 
-#### AC-05：入口位于原生“插件”下方、项目上方
+#### AC-05：三个工作流入口位于原生“插件”下方
 
 通过标准：
 
 - 入口使用原生插件按钮作为锚点。
-- `我的任务` 与插件同属一个导航父节点，入口可见文案、title 和无障碍名称均为“我的任务”。
-- DOM 顺序和视觉顺序均为插件在前、我的任务在中、项目在后。
+- `我的任务`、`自动化`、`智能体`与插件同属一个导航父节点，入口可见文案、title 和无障碍名称分别与模块名称一致。
+- DOM 顺序和视觉顺序均为插件在前、三个工作区入口居中、Codex 原生项目入口在后；CCP 不注入 `项目` 或 `Skill` 侧栏项。
 - 中英文 Codex 文案均可定位。
 
 验证方式与证据：
 
-- 注入契约测试覆盖 `pluginEntryButton()`、`selectors.pluginNavButton`、`插件|Plugins` fallback、`insertBefore(..., pluginEntry.nextSibling)` 和唯一入口约束。
-- 实时 CDP 返回插件、我的任务和项目三个节点的共同父节点、bounding box 和 DOM order。
-- Windows 截图清楚显示入口位于插件下方、项目上方且无重叠。
+- 注入契约测试覆盖 `pluginEntryButton()`、`selectors.pluginNavButton`、`插件|Plugins` fallback、连续 `insertBefore` 和每个路由的唯一入口约束。
+- 实时 CDP 返回插件、三个工作区入口和原生项目三个区域的共同父节点、bounding box 和 DOM order。
+- Windows 截图清楚显示三个入口位于插件下方、原生项目区域保持原位且无重叠或裁剪。
 
-#### AC-06：重注入保持单实例
+#### AC-06：重注入保持每路由单实例
 
-通过标准：初次注入、连续注入三次、切换原生页面、侧栏折叠/展开和 Codex React 重绘后，`[data-ccp-multica-nav]` 与工作区根节点各不超过一个，事件只触发一次。
+通过标准：初次注入、连续注入三次、切换原生页面、侧栏折叠/展开和 Codex React 重绘后，三个 `data-ccp-multica-nav-route` 路由各恰好一个，工作区根节点恰好一个，任一入口事件只触发一次；`projects` 和 `skills` 不得作为注入侧栏路由存在。
 
 验证方式与证据：Playwright/CDP 自动执行上述动作，记录每一步节点数量、一次点击对应的 bridge 请求数和最终截图。
 
@@ -144,56 +144,55 @@ bridge 未安装、Launcher 未启动、binding 缺失、本地传输错误或�
 
 验证方式与证据：Playwright/CDP 先打开“我的任务”，断言 Shadow DOM 中 `.ccp-multica-header`、`.ccp-multica-nav` 和 `[aria-label="关闭 Multica 工作区"]` 均不存在，且可见文本不含 `Local Multica Workspace`。再分别点击原生项目 row、`[data-app-action-sidebar-thread-id]` 的嵌套子元素、新对话和插件；记录 host 可见性、原生 main 的 `visibility/pointer-events/inert/aria-hidden`、active thread ID、正文节点、原生事件计数和 500ms 稳定状态。另以运行中 attempt fixture 记录隐藏前后事件游标和状态继续推进、cleanup 调用为零；最后关闭持久化开关，证明 cleanup 恰好调用一次且入口/host 消失。
 
-#### AC-10：十个模块均为真实页面
+#### AC-10：十个模块均为真实页面且三个高频模块直达
 
-通过标准：不渲染永久竖向模块导航；通过看板工具栏中单个带 tooltip、键盘 focus 和选中反馈的紧凑模块菜单，按以下顺序提供并可进入：
+通过标准：不渲染第二个永久内容竖向模块导航；左侧插件区按固定顺序提供带 tooltip、键盘 focus 和选中反馈的三个直达入口：`我的任务` / `my-issues`、`自动化` / `autopilots`、`智能体` / `agents`。Codex 原生项目继续由原生项目区域处理，不提供 CCP `projects` 侧栏路由；`Skills` 仅从看板工具栏的紧凑模块菜单进入。其余模块通过该菜单按以下顺序提供并可进入：
 
 1. `我的任务` / `my-issues`
 2. `任务` / `issues`
-3. `项目` / `projects`
-4. `自动化` / `autopilots`
-5. `智能体` / `agents`
-6. `小队` / `squads`
-7. `统计` / `usage`
-8. `运行时` / `runtimes`
-9. `Skills` / `skills`
-10. `设置` / `settings`
+3. `自动化` / `autopilots`
+4. `智能体` / `agents`
+5. `小队` / `squads`
+6. `统计` / `usage`
+7. `运行时` / `runtimes`
+8. `Skills` / `skills`
+9. `设置` / `settings`
 
 每个模块至少能读取真实数据，并具备加载、空、错误、过期和无权限状态，不允许只有外链、静态说明或假数据占位。
 
-验证方式与证据：Playwright 断言永久模块侧栏不存在，打开紧凑模块菜单后逐项点击，断言稳定路由键、标题、真实查询操作和五类状态 fixture；输出菜单、各模块截图和 bridge 调用摘要。关闭菜单不得隐藏工作区或触发 cleanup。
+验证方式与证据：Playwright 断言第二个永久内容模块侧栏不存在，逐项点击三个插件区入口并打开紧凑模块菜单检查剩余路由，断言稳定路由键、标题、真实查询操作和五类状态 fixture；输出入口、菜单、各模块截图和 bridge 调用摘要。关闭菜单不得隐藏工作区或触发 cleanup。
 
 #### AC-11：响应式、键盘与样式隔离
 
 通过标准：
 
 - 常用桌面和窄窗口下无文字/控件重叠、横向溢出或标题栏遮挡。
-- 入口、紧凑模块菜单、筛选、对话框、表单、看板列、卡片和 hover/focus 预览可以键盘访问，focus 清晰。
+- 三个入口、紧凑模块菜单、筛选、对话框、表单、看板列、卡片和 hover/focus 预览可以键盘访问，focus 清晰。
 - 状态不只靠颜色表达，并尊重 reduced motion。
 - 工作区样式不改变 Codex 输入框、模型菜单、插件页、主题或窗口控制按钮。
 
 验证方式与证据：至少两种窗口尺寸的 Playwright 截图、自动几何断言、键盘路径记录和工作区开关前后的 Codex 关键元素 computed style 对比。
 
-### 5. Issue、项目与看板
+### 5. Issue 与看板
 
 #### AC-12：Issue CRUD 和字段完整
 
-通过标准：可以创建、读取、编辑和取消/归档 Issue；支持标题、描述、优先级、agent/squad/member、项目、父任务、日期、位置和自定义状态。标题为空、无权限和服务端校验失败均显示字段级错误且不产生脏记录。
+通过标准：可以创建、读取、编辑和取消/归档 Issue；支持标题、描述、优先级、agent/squad/member、父任务、日期、位置和自定义状态。既有内部项目关联不显示为工作流项目编辑能力。标题为空、无权限和服务端校验失败均显示字段级错误且不产生脏记录。
 
 验证方式与证据：fake server 契约测试和一个真实 workspace CRUD 回放，包含创建前后实体 JSON 摘要、revision 和 UI 结果。
 
-#### AC-13：项目闭环
+#### AC-13：Codex 原生项目访问
 
-通过标准：可以创建/编辑项目、设置 `planned/in_progress/paused/completed/cancelled` 状态、管理日期/成员、把 Issue 归入项目并显示由真实 Issue 计算的进度。
+通过标准：`projects` 路由只读取 `codex_native_projects`，在有对应侧栏原生项目行时显示“打开原生项目”，点击后触发该行自身的原生激活行为。没有对应行或原生项目为空时显示只读空态或不可用提示，不创建、编辑、删除、伪造或替换 Codex 项目。
 
-验证方式与证据：定向 API/UI 测试及项目详情截图；进度计算 fixture 覆盖空项目和混合状态项目。
+验证方式与证据：定向 bridge/UI 测试和项目投影截图；覆盖原生项目存在、原生项目空、缓存快照存在但当前行不可点击三种状态，验证本地工作流项目 CRUD endpoint 未被调用。
 
 #### AC-14：看板状态与拖拽 CAS
 
 通过标准：
 
 - `my-issues` 使用真实数据渲染全宽看板，不是列表、静态示例或空白占位；顶部只包含看板自身“我的任务”标题和工具栏。
-- 工具栏包含 `全部`、`已分配`、`我创建的`、`我的智能体和小队`，默认选中 `已分配`；右侧工作中智能体数量来自真实状态，并提供筛选、显示方式、看板模式和紧凑模块菜单。
+- 工具栏包含 `全部`、`已分配`、`我创建的`、`我的智能体和小队`，默认选中 `已分配`；右侧工作中智能体数量来自真实状态，并提供筛选、显示方式、看板模式和紧凑模块菜单。窄窗口时工具栏动作必须换行，模块菜单不得被裁剪。
 - 看板按 `backlog/todo/in_progress/in_review/done/blocked/cancelled` 固定映射为 `待规划/待办/进行中/审核中/已完成/已阻塞/已取消` 七列，顺序不可变化或缺列。
 - 每列显示状态图标、真实数量、更多/新增动作和 `无任务` 空态；卡片展示真实编号、标题、摘要、负责人或执行者、更新时间和独立执行状态。
 - 点击任一列头的“新建”动作后，必须在当前看板上方打开任务编辑器，并预填该列对应的业务状态；不得只更新内部草稿状态而没有可见编辑器。
@@ -454,7 +453,7 @@ cargo test -p claude-codex-pro-core multica_issue -- --nocapture
 npm --prefix apps/claude-codex-pro-manager run check
 ```
 
-仅验证七列真实看板、筛选、卡片/预览、局部横向滚动、Issue/项目 CRUD、revision、拖拽、权限和 optimistic rollback。
+仅验证七列真实看板、筛选、卡片/预览、局部横向滚动、Issue CRUD、revision、拖拽、权限和 optimistic rollback；左侧“项目”入口另按 AC-13 验证 Codex 原生项目只读投影和原生行激活。
 
 ### 阶段 3：Codex 原生执行
 

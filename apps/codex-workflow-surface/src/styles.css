@@ -1,0 +1,17 @@
+/*
+ * Derived build entry for the external Multica UI source tree.
+ * Set MULTICA_SOURCE_ROOT when the checkout is not D:/Project/multica.
+ */
+@import "tailwindcss";
+@import "D:/Project/multica/packages/ui/styles/tokens.css";
+@import "D:/Project/multica/packages/ui/styles/base.css";
+
+@source "D:/Project/multica/packages/core/**/*.{ts,tsx}";
+@source "D:/Project/multica/packages/ui/**/*.{ts,tsx}";
+@source "D:/Project/multica/packages/views/**/*.{ts,tsx}";
+
+:host, :root {
+  color: inherit;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
