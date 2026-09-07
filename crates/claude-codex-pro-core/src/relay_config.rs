@@ -744,7 +744,19 @@ pub fn clear_relay_config_to_home_with_auth_and_computer_use_guard(
     };
     let config_path = home.join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let without_tables = remove_table(&existing, &format!("model_providers.{RELAY_PROVIDER}"));
+    let mut without_tables = existing.clone();
+    // CCP historically used the fixed `custom` id, while newer profiles use a
+    // sanitized profile id. Remove both the active relay id and the legacy id
+    // so switching back to official mode cannot leave an orphaned provider.
+    if let Ok(doc) = parse_toml_document(&existing) {
+        if let Some(active) = active_provider_id(&doc).filter(|id| is_custom_provider_id(id)) {
+            without_tables = remove_table(&without_tables, &format!("model_providers.{active}"));
+        }
+    }
+    without_tables = remove_table(
+        &without_tables,
+        &format!("model_providers.{RELAY_PROVIDER}"),
+    );
     let mut updated = without_tables;
     for key in [
         "OPENAI_API_KEY",
@@ -1170,6 +1182,12 @@ fn write_codex_live_atomic(
     crate::settings::create_private_dir_all(home)?;
     let config_path = home.join("config.toml");
     let auth_path = home.join("auth.json");
+    let normalized_config = match config_text {
+        Some(text) => Some(normalize_provider_config_consistency(text)?),
+        None => None,
+    };
+    let config_text = normalized_config.as_deref();
+
     #[cfg(windows)]
     let guarded_config_text = match config_text {
         Some(config_text) if preserve_computer_use_guard => {
@@ -1274,9 +1292,55 @@ fn is_custom_provider_id(provider: &str) -> bool {
 
 fn provider_table_exists(doc: &DocumentMut, provider_id: &str) -> bool {
     doc.get("model_providers")
-        .and_then(Item::as_table)
+        .and_then(Item::as_table_like)
         .and_then(|table| table.get(provider_id))
-        .is_some()
+        .is_some_and(|item| item.as_table_like().is_some())
+}
+
+/// Keep Codex's root `model_provider` pointer and provider table in sync.
+/// Codex refuses to load a config that points at a missing/non-table provider;
+/// repair that state before every live write, regardless of which UI action
+/// initiated the write.
+fn normalize_provider_config_consistency(config_text: &str) -> anyhow::Result<String> {
+    let mut doc = parse_toml_document(config_text)?;
+    let Some(active) = active_provider_id(&doc) else {
+        return Ok(ensure_trailing_newline(doc.to_string()));
+    };
+    // Built-in Codex providers are resolved internally and do not require a
+    // `[model_providers.<id>]` table. Only CCP-managed custom ids participate
+    // in this referential-integrity check.
+    if !is_custom_provider_id(&active) {
+        return Ok(ensure_trailing_newline(doc.to_string()));
+    }
+    if provider_table_exists(&doc, &active) {
+        return Ok(ensure_trailing_newline(doc.to_string()));
+    }
+
+    if let Some(item) = doc
+        .get("model_providers")
+        .and_then(Item::as_table_like)
+        .and_then(|providers| providers.get(&active))
+    {
+        if item.as_table_like().is_none() {
+            anyhow::bail!("model_providers.{active} 必须是 TOML table");
+        }
+    }
+
+    let fallback = doc
+        .get("model_providers")
+        .and_then(Item::as_table_like)
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find_map(|(id, item)| item.as_table_like().map(|_| id.to_string()))
+        });
+    match fallback {
+        Some(provider_id) => set_provider_id(&mut doc, &provider_id),
+        None => {
+            doc.as_table_mut().remove("model_provider");
+        }
+    }
+    Ok(ensure_trailing_newline(doc.to_string()))
 }
 
 fn parse_toml_document(contents: &str) -> anyhow::Result<DocumentMut> {
@@ -2981,6 +3045,44 @@ mod tests {
 
         let status = relay_config_status_from_home(temp.path());
         assert!(!status.configured);
+    }
+
+    #[test]
+    fn normalize_provider_config_repairs_missing_active_provider_table() {
+        let repaired = normalize_provider_config_consistency(
+            "model_provider = \"custom\"\nmodel = \"gpt-5\"\n\n[model_providers.other]\nname = \"other\"\n",
+        )
+        .unwrap();
+        assert!(repaired.contains("model_provider = \"other\""));
+        assert!(!repaired.contains("model_provider = \"custom\""));
+    }
+
+    #[test]
+    fn normalize_provider_config_removes_orphaned_root_provider_without_tables() {
+        let repaired = normalize_provider_config_consistency(
+            "model_provider = \"custom\"\nmodel = \"gpt-5\"\n",
+        )
+        .unwrap();
+        assert!(!repaired.contains("model_provider"));
+        assert!(repaired.contains("model = \"gpt-5\""));
+    }
+
+    #[test]
+    fn normalize_provider_config_rejects_non_table_provider_entry() {
+        let error = normalize_provider_config_consistency(
+            "model_provider = \"custom\"\n[model_providers]\ncustom = \"invalid\"\n",
+        )
+        .expect_err("non-table provider entries must be rejected");
+        assert!(error.to_string().contains("必须是 TOML table"));
+    }
+
+    #[test]
+    fn normalize_provider_config_preserves_builtin_provider_without_table() {
+        let normalized = normalize_provider_config_consistency(
+            "model_provider = \"openai\"\nmodel = \"gpt-5\"\n",
+        )
+        .unwrap();
+        assert!(normalized.contains("model_provider = \"openai\""));
     }
 
     #[test]

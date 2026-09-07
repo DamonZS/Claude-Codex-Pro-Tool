@@ -97,8 +97,12 @@ fn apply_selected_relay_profile(
     };
     let status = relay_config_status_from_home(home);
     if relay.relay_mode == RelayMode::PureApi && !status.configured {
+        let provider_id =
+            crate::relay_config::root_key_string(&relay.config_contents, "model_provider")
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| relay.id.clone());
         anyhow::bail!(
-            "纯 API 配置写入后未检测到完整 custom provider，请检查 config.toml 和供应商 API Key。"
+            "纯 API 配置写入后未检测到完整供应商 `{provider_id}`，请检查 config.toml 中 model_provider 与 model_providers 表是否一致，以及供应商 API Key 是否有效。"
         );
     }
     Ok(RelaySwitchResult {

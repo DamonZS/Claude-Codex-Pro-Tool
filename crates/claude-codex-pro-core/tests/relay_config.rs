@@ -2158,6 +2158,37 @@ model = "gpt-5-mini"
 }
 
 #[test]
+fn clear_relay_config_removes_active_dynamic_provider_and_preserves_other_provider() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model = "gpt-5"
+model_provider = "team-relay"
+
+[model_providers.team-relay]
+name = "team-relay"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example.test/v1"
+
+[model_providers.keep-me]
+name = "keep-me"
+wire_api = "responses"
+base_url = "https://keep.example.test/v1"
+"#,
+    )
+    .unwrap();
+
+    clear_relay_config_to_home(temp.path()).unwrap();
+    let updated = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+
+    assert!(!updated.contains("model_provider ="));
+    assert!(!updated.contains("[model_providers.team-relay]"));
+    assert!(updated.contains("[model_providers.keep-me]"));
+    assert!(updated.contains("model = \"gpt-5\""));
+}
+
+#[test]
 fn clear_relay_config_removes_pure_api_auth_json_key_and_preserves_other_auth_fields() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(
