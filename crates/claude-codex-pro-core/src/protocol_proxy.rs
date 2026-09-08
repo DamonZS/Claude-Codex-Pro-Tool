@@ -437,59 +437,55 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
     let Some(items) = body.get_mut("input").and_then(Value::as_array_mut) else {
         return;
     };
+
+    // 🔍 DEBUG
+    eprintln!("🔍 [DEBUG] normalize: 处理 {} 个输入项", items.len());
+
+    // 收集 call_ids
     let mut known_call_ids = BTreeSet::new();
-
-    // 🔍 DEBUG: 记录处理前的状态
-    eprintln!("🔍 [DEBUG] normalize_responses_tool_output_call_ids: 开始处理 {} 个输入项", items.len());
-
-    for item in items {
-        let item_type = item.get("type").and_then(Value::as_str);
-        match item_type {
-            Some("function_call") | Some("custom_tool_call") => {
-                if let Some(call_id) = item
-                    .get("call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-                {
-                    known_call_ids.insert(call_id.to_string());
-                    eprintln!("🔍 [DEBUG] 收集工具调用 call_id: {}", call_id);
-                }
+    for item in items.iter() {
+        if matches!(item.get("type").and_then(Value::as_str), Some("function_call") | Some("custom_tool_call")) {
+            if let Some(call_id) = item
+                .get("call_id")
+                .or_else(|| item.get("id"))
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+            {
+                known_call_ids.insert(call_id.to_string());
+                eprintln!("🔍 [DEBUG] 收集 call_id: {}", call_id);
             }
-            Some("function_call_output") | Some("custom_tool_call_output") => {
-                eprintln!("🔍 [DEBUG] 发现工具输出: {:?}", item);
-
-                if item
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| !value.is_empty())
-                {
-                    eprintln!("🔍 [DEBUG] 工具输出已有 call_id，跳过");
-                    continue;
-                }
-                let candidate = item
-                    .get("tool_call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(Value::as_str)
-                    .filter(|value| known_call_ids.contains(*value))
-                    .map(str::to_string);
-
-                eprintln!("🔍 [DEBUG] 候选 call_id: {:?}, 已知 call_ids: {:?}", candidate, known_call_ids);
-
-                if let Some(call_id) = candidate
-                    && let Some(object) = item.as_object_mut()
-                {
-                    object.insert("call_id".to_string(), Value::String(call_id.clone()));
-                    eprintln!("✅ [DEBUG] 成功添加 call_id: {}", call_id);
-                } else {
-                    eprintln!("❌ [DEBUG] 无法添加 call_id - 候选为空或无法匹配");
-                }
-            }
-            _ => {}
         }
     }
 
-    eprintln!("🔍 [DEBUG] normalize 完成，已知 call_ids: {:?}", known_call_ids);
+    eprintln!("🔍 [DEBUG] 已知 call_ids: {:?}", known_call_ids);
+
+    // 补全工具输出
+    for item in items.iter_mut() {
+        if !matches!(item.get("type").and_then(Value::as_str), Some("function_call_output") | Some("custom_tool_call_output")) {
+            continue;
+        }
+
+        if item.get("call_id").and_then(Value::as_str).is_some_and(|v| !v.is_empty()) {
+            continue;
+        }
+
+        // 先提取 ID（避免借用冲突）
+        let candidate_id = item
+            .get("tool_call_id")
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|v| known_call_ids.contains(v));
+
+        if let Some(id) = candidate_id {
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert("call_id".to_string(), Value::String(id.clone()));
+                eprintln!("✅ [DEBUG] 添加 call_id: {}", id);
+            }
+        } else {
+            eprintln!("❌ [DEBUG] 无法匹配 call_id");
+        }
+    }
 }
 
 pub fn chat_completion_to_response(body: Value) -> anyhow::Result<Value> {
