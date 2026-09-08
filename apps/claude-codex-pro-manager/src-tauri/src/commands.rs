@@ -1867,6 +1867,11 @@ fn run_claude_zh_patch_elevated(
     install_root: Option<&Path>,
 ) -> anyhow::Result<ClaudeZhPatchCliResult> {
     let exe = std::env::current_exe()?;
+
+    // ✅ 验证可执行文件路径
+    let exe_validated = validate_executable_path(&exe)
+        .context("可执行文件路径验证失败")?;
+
     let result_dir = claude_codex_pro_core::paths::default_app_state_dir().join("tmp");
     fs::create_dir_all(&result_dir)
         .with_context(|| format!("创建 Claude 汉化结果目录失败：{}", result_dir.display()))?;
@@ -1921,7 +1926,13 @@ fn run_claude_zh_patch_elevated(
     let mut command: std::process::Command;
     #[cfg(windows)]
     {
-        let exe_quoted = powershell_single_quoted(&exe.to_string_lossy());
+        // ✅ 验证所有参数
+        for arg in &arguments {
+            validate_powershell_argument(arg)
+                .with_context(|| format!("参数验证失败: {}", arg))?;
+        }
+
+        let exe_quoted = powershell_single_quoted(&exe_validated.to_string_lossy());
         let argument_list = windows_argument_list(&arguments);
         let argument_list_quoted = powershell_single_quoted(&argument_list);
         let script = format!(
@@ -2006,6 +2017,52 @@ fn run_claude_zh_patch_elevated(
 
 fn powershell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+/// 验证可执行文件路径在允许的目录范围内
+fn validate_executable_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("路径不存在或不可访问: {:?}", path))?;
+
+    // 白名单：仅允许 Program Files、Windows、本地应用目录
+    let allowed_prefixes = vec![
+        PathBuf::from(r"C:\Program Files"),
+        PathBuf::from(r"C:\Program Files (x86)"),
+        PathBuf::from(r"C:\Windows\System32"),
+        dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?,
+        dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
+    ];
+
+    if !allowed_prefixes.iter().any(|prefix| canonical.starts_with(prefix)) {
+        anyhow::bail!(
+            "可执行文件路径不在允许的目录范围内: {:?}。仅允许 Program Files、Windows 或本地应用目录。",
+            canonical
+        );
+    }
+
+    Ok(canonical)
+}
+
+/// 验证参数不包含危险字符
+fn validate_powershell_argument(arg: &str) -> anyhow::Result<()> {
+    const FORBIDDEN_CHARS: &[char] = &['`', '$', ';', '&', '|', '<', '>', '\n', '\r', '{', '}'];
+
+    if let Some(bad_char) = arg.chars().find(|c| FORBIDDEN_CHARS.contains(c)) {
+        anyhow::bail!("参数包含不允许的特殊字符: '{}'", bad_char);
+    }
+
+    // 额外检查：拒绝包含 PowerShell 关键字的参数
+    const FORBIDDEN_KEYWORDS: &[&str] = &[
+        "Invoke-Expression", "Invoke-Command", "Start-Process",
+        "New-Object", "Add-Type", "iex", "icm",
+    ];
+
+    let lower = arg.to_lowercase();
+    if FORBIDDEN_KEYWORDS.iter().any(|kw| lower.contains(&kw.to_lowercase())) {
+        anyhow::bail!("参数包含禁止的 PowerShell 命令关键字");
+    }
+
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -2135,11 +2192,43 @@ fn current_user_data_dirs() -> (String, String) {
 pub async fn install_claude_zh_patch_at_install_root(
     install_root: String,
 ) -> CommandResult<ClaudeZhPatchPayload> {
-    let install_root = PathBuf::from(install_root);
+    let install_root_path = PathBuf::from(install_root);
+
+    // ✅ 验证安装路径
+    let validated_root = match validate_executable_path(&install_root_path) {
+        Ok(path) => path,
+        Err(e) => {
+            log_manager_event(
+                "manager.install_zh_patch.path_validation_failed",
+                json!({
+                    "error": e.to_string(),
+                    "provided_path": install_root_path.display().to_string(),
+                }),
+            );
+            return failed(
+                &format!(
+                    "安装路径验证失败: {}。仅允许 Program Files、Windows 或本地应用目录。",
+                    e
+                ),
+                claude_zh_patch_payload(
+                    claude_codex_pro_core::claude_zh_patch::detect_status(),
+                    Vec::new()
+                ),
+            );
+        }
+    };
+
+    log_manager_event(
+        "manager.install_zh_patch.path_validated",
+        json!({
+            "validated_path": validated_root.display().to_string(),
+        }),
+    );
+
     log_manager_event(
         "manager.claude_zh_patch.manual_install.start",
         json!({
-            "installRoot": install_root,
+            "installRoot": validated_root.display().to_string(),
         }),
     );
     if !claude_codex_pro_core::claude_desktop::close_claude_desktop_for_patch() {
@@ -2147,23 +2236,23 @@ pub async fn install_claude_zh_patch_at_install_root(
             "manager.claude_zh_patch.manual_install.close_claude_failed",
             json!({}),
         );
-        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
         return failed(
             "手动打补丁前关闭 Claude Desktop 失败。请退出 Claude 后重试。",
             claude_zh_patch_payload(status, Vec::new()),
         );
     }
-    if claude_codex_pro_core::claude_zh_patch::install_root_patch_needs_elevation(&install_root) {
+    if claude_codex_pro_core::claude_zh_patch::install_root_patch_needs_elevation(&validated_root) {
         log_manager_event(
             "manager.claude_zh_patch.manual_install.elevation_required",
             json!({
-                "installRoot": install_root,
+                "installRoot": validated_root.display().to_string(),
             }),
         );
-        match install_claude_zh_patch_elevated_at_install_root(&install_root) {
+        match install_claude_zh_patch_elevated_at_install_root(&validated_root) {
             Ok(result) if result.status == "ok" => {
                 let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                 if status.status != "ok" {
                     return failed(
                         &format!("Claude 手动汉化提权运行未完成：{}", status.message),
@@ -2174,7 +2263,7 @@ pub async fn install_claude_zh_patch_at_install_root(
             }
             Ok(result) => {
                 let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                 return failed(
                     &format!("Claude 手动汉化提权运行失败：{}", result.message),
                     claude_zh_patch_payload(status, Vec::new()),
@@ -2182,7 +2271,7 @@ pub async fn install_claude_zh_patch_at_install_root(
             }
             Err(error) => {
                 let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                 return failed(
                     &format!("Claude 手动汉化需要管理员授权，但提权失败：{error}"),
                     claude_zh_patch_payload(status, Vec::new()),
@@ -2193,10 +2282,10 @@ pub async fn install_claude_zh_patch_at_install_root(
     log_manager_event(
         "manager.claude_zh_patch.manual_install.direct.start",
         json!({
-            "installRoot": install_root,
+            "installRoot": validated_root.display().to_string(),
         }),
     );
-    match claude_codex_pro_core::claude_zh_patch::install_patch_at_install_root_with_remote_resources(&install_root).await {
+    match claude_codex_pro_core::claude_zh_patch::install_patch_at_install_root_with_remote_resources(&validated_root).await {
         Ok(outcome) => complete_claude_zh_patch_install(
             outcome.status.message.clone(),
             outcome.status,
@@ -2206,14 +2295,14 @@ pub async fn install_claude_zh_patch_at_install_root(
             log_manager_event(
                 "manager.claude_zh_patch.manual_direct.failed",
                 json!({
-                    "installRoot": install_root,
+                    "installRoot": validated_root.display().to_string(),
                     "error": error.to_string(),
                 }),
             );
-            if should_retry_claude_zh_patch_with_elevation_at_install_root(&install_root, &error) {
-                match install_claude_zh_patch_elevated_at_install_root(&install_root) {
+            if should_retry_claude_zh_patch_with_elevation_at_install_root(&validated_root, &error) {
+                match install_claude_zh_patch_elevated_at_install_root(&validated_root) {
                     Ok(result) if result.status == "ok" => {
-                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                         if status.status != "ok" {
                             return failed(
                                 &format!("Claude 手动汉化提权回退运行未完成：{}", status.message),
@@ -2223,14 +2312,14 @@ pub async fn install_claude_zh_patch_at_install_root(
                         return complete_claude_zh_patch_install(result.message, status, Vec::new());
                     }
                     Ok(result) => {
-                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                         return failed(
                             &format!("Claude 手动汉化提权回退运行失败：{}", result.message),
                             claude_zh_patch_payload(status, Vec::new()),
                         );
                     }
                     Err(elevation_error) => {
-                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+                        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
                         return failed(
                             &format!("Claude 手动汉化需要管理员授权，但回退提权失败：{elevation_error}；直接执行错误：{error}"),
                             claude_zh_patch_payload(status, Vec::new()),
@@ -2238,7 +2327,7 @@ pub async fn install_claude_zh_patch_at_install_root(
                     }
                 }
             }
-            let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&install_root);
+            let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
             failed(
                 &format!("Claude 手动汉化失败：{error}"),
                 claude_zh_patch_payload(status, Vec::new()),
