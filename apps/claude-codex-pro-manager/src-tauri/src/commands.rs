@@ -231,6 +231,114 @@ struct ClaudeZhPatchCliResult {
     message: String,
 }
 
+// ============================================================================
+// ✅ Issue #12: 安全事件日志
+// ============================================================================
+
+/// 安全事件类型
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SecurityEventType {
+    /// 权限提升请求
+    PrivilegeElevation,
+    /// 文件权限修改
+    FilePermissionChange,
+    /// 配置修改
+    ConfigurationChange,
+    /// 敏感操作（删除、重置等）
+    SensitiveOperation,
+    /// 认证相关
+    Authentication,
+    /// 输入验证失败
+    ValidationFailure,
+}
+
+/// 记录安全事件
+fn log_security_event(event_type: SecurityEventType, details: Value) {
+    let event = json!({
+        "type": "security_event",
+        "event_type": event_type,
+        "timestamp": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        "details": details,
+    });
+
+    log_manager_event(
+        &format!("security.{:?}", event_type).to_lowercase(),
+        event,
+    );
+}
+
+// ============================================================================
+// ✅ Issue #13: 可配置的超时和默认值
+// ============================================================================
+
+/// 超时配置 - 可通过环境变量覆盖
+#[derive(Debug, Clone)]
+pub struct TimeoutConfig {
+    /// Claude 汉化提权操作超时 (默认 300 秒)
+    pub claude_zh_patch_elevated: Duration,
+    /// Codex 前端修复超时 (默认 45 秒)
+    pub repair_codex_frontend: Duration,
+    /// Codex 重启超时 (默认 90 秒)
+    pub repair_codex_restart: Duration,
+    /// Codex 端口释放超时 (默认 2 秒)
+    pub repair_codex_port_release: Duration,
+}
+
+impl TimeoutConfig {
+    /// 从环境变量加载配置，使用默认值作为后备
+    fn from_env() -> Self {
+        Self {
+            claude_zh_patch_elevated: Self::parse_env_duration(
+                "CCP_TIMEOUT_ZH_PATCH_ELEVATED",
+                300,
+            ),
+            repair_codex_frontend: Self::parse_env_duration(
+                "CCP_TIMEOUT_REPAIR_FRONTEND",
+                45,
+            ),
+            repair_codex_restart: Self::parse_env_duration(
+                "CCP_TIMEOUT_REPAIR_RESTART",
+                90,
+            ),
+            repair_codex_port_release: Self::parse_env_duration(
+                "CCP_TIMEOUT_PORT_RELEASE",
+                2,
+            ),
+        }
+    }
+
+    /// 从环境变量解析超时值（秒）
+    fn parse_env_duration(env_var: &str, default_secs: u64) -> Duration {
+        std::env::var(env_var)
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or_else(|| Duration::from_secs(default_secs))
+    }
+
+    /// 获取全局超时配置单例
+    fn global() -> &'static TimeoutConfig {
+        static CONFIG: OnceLock<TimeoutConfig> = OnceLock::new();
+        CONFIG.get_or_init(TimeoutConfig::from_env)
+    }
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            claude_zh_patch_elevated: Duration::from_secs(300),
+            repair_codex_frontend: Duration::from_secs(45),
+            repair_codex_restart: Duration::from_secs(90),
+            repair_codex_port_release: Duration::from_secs(2),
+        }
+    }
+}
+
+// 向后兼容的常量（现在使用配置）
 const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);
 const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);
@@ -2161,6 +2269,16 @@ fn run_claude_zh_patch_elevated(
     internal_command: &str,
     install_root: Option<&Path>,
 ) -> anyhow::Result<ClaudeZhPatchCliResult> {
+    // ✅ Issue #12: 记录权限提升请求
+    log_security_event(
+        SecurityEventType::PrivilegeElevation,
+        json!({
+            "operation": "claude_zh_patch",
+            "command": internal_command,
+            "install_root": install_root.map(|p| p.display().to_string()),
+        }),
+    );
+
     let exe = std::env::current_exe()?;
 
     // ✅ 验证可执行文件路径
@@ -6114,6 +6232,17 @@ fn delete_claude_session_blocking(
     let validated = match request.validate() {
         Ok(v) => v,
         Err(e) => {
+            // ✅ Issue #12: 记录验证失败
+            log_security_event(
+                SecurityEventType::ValidationFailure,
+                json!({
+                    "operation": "delete_claude_session",
+                    "error": e.to_string(),
+                    "session_id": request.session_id,
+                    "source_path": request.source_path,
+                }),
+            );
+
             log_manager_event(
                 "manager.delete_claude_session.validation_failed",
                 json!({
@@ -6131,6 +6260,16 @@ fn delete_claude_session_blocking(
             );
         }
     };
+
+    // ✅ Issue #12: 记录敏感操作
+    log_security_event(
+        SecurityEventType::SensitiveOperation,
+        json!({
+            "operation": "delete_claude_session",
+            "session_id": validated.session_id,
+            "validated_path": validated.source_path.display().to_string(),
+        }),
+    );
 
     log_manager_event(
         "manager.delete_claude_session.start",
