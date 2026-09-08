@@ -281,16 +281,20 @@ fn sanitize_api_key_patterns(text: &str) -> String {
     let mut result = text.to_string();
 
     // Anthropic API keys: sk-ant-api03-...
-    let anthropic_pattern = regex::Regex::new(r"sk-ant-api\d+-[A-Za-z0-9_-]{95}").unwrap();
-    result = anthropic_pattern.replace_all(&result, "sk-ant-[REDACTED]").to_string();
+    // 注意：正则表达式是硬编码的，编译失败表示程序错误
+    if let Ok(anthropic_pattern) = regex::Regex::new(r"sk-ant-api\d+-[A-Za-z0-9_-]{95}") {
+        result = anthropic_pattern.replace_all(&result, "sk-ant-[REDACTED]").to_string();
+    }
 
     // OpenAI API keys: sk-proj-... or sk-...
-    let openai_pattern = regex::Regex::new(r"sk-[A-Za-z0-9_-]{20,}").unwrap();
-    result = openai_pattern.replace_all(&result, "sk-[REDACTED]").to_string();
+    if let Ok(openai_pattern) = regex::Regex::new(r"sk-[A-Za-z0-9_-]{20,}") {
+        result = openai_pattern.replace_all(&result, "sk-[REDACTED]").to_string();
+    }
 
     // Bearer tokens
-    let bearer_pattern = regex::Regex::new(r"Bearer\s+[A-Za-z0-9_\-\.]+").unwrap();
-    result = bearer_pattern.replace_all(&result, "Bearer [REDACTED]").to_string();
+    if let Ok(bearer_pattern) = regex::Regex::new(r"Bearer\s+[A-Za-z0-9_\-\.]+") {
+        result = bearer_pattern.replace_all(&result, "Bearer [REDACTED]").to_string();
+    }
 
     result
 }
@@ -606,7 +610,9 @@ impl DeleteClaudeSessionRequest {
 
         // ✅ 验证 session_id 格式 (只允许字母、数字、下划线、连字符)
         // 防止 "../" 等路径遍历字符
-        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
+        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$")
+            .expect("Session ID 正则表达式无效（程序错误）");
+
         if !session_id_regex.is_match(session_id) {
             anyhow::bail!(
                 "会话 ID 格式无效。仅允许字母、数字、下划线和连字符，长度 1-64 个字符。"
@@ -681,7 +687,9 @@ impl LoadClaudeSessionContextRequest {
         }
 
         // ✅ 验证 session_id 格式
-        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
+        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$")
+            .expect("Session ID 正则表达式无效（程序错误）");
+
         if !session_id_regex.is_match(session_id) {
             anyhow::bail!(
                 "会话 ID 格式无效。仅允许字母、数字、下划线和连字符。"

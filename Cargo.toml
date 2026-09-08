@@ -14,6 +14,16 @@ edition = "2024"
 license-file = "LICENSE"
 repository = "https://github.com/DamonZS/Claude-Codex-Pro-Tool"
 
+# 🚨 Workspace-wide Clippy lints for security and correctness
+[workspace.lints.clippy]
+# Warn on unwrap() usage - prefer ? or expect() with clear messages
+unwrap_used = "warn"
+expect_used = "warn"
+# Warn on panic in production code
+panic = "warn"
+# Warn on indexing that could panic
+indexing_slicing = "warn"
+
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22"

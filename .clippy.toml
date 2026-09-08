@@ -1,0 +1,8 @@
+# Clippy 配置 - 防止新增不安全代码模式
+
+# 🚨 警告级别：unwrap() 使用
+# 生产代码中应避免 unwrap()，使用 ? 或 expect() 替代
+warn-on-all-wildcard-imports = true
+
+# 允许在测试代码中使用 unwrap()
+# 但在生产代码中会产生警告
