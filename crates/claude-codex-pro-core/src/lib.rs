@@ -52,6 +52,7 @@ pub mod watcher;
 #[cfg(windows)]
 mod windows_integration;
 pub mod zed_remote;
+pub mod system_prompt;
 
 #[cfg(windows)]
 pub fn windows_create_no_window() -> u32 {
