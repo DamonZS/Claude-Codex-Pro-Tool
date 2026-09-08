@@ -434,6 +434,7 @@ dependencies = [
  "claude-codex-pro-launcher",
  "directories",
  "dirs 5.0.1",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -443,6 +444,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml_edit 0.22.27",
+ "url",
 ]
 
 [[package]]

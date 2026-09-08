@@ -194,6 +194,107 @@ const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);
 const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 const REPAIR_CODEX_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
+// ============================================================================
+// ✅ 安全日志工具函数 - 清理敏感信息
+// ============================================================================
+
+/// ✅ 清理 URL 中的敏感信息以用于日志记录
+///
+/// 移除以下敏感数据：
+/// - Query 参数 (可能包含 API 密钥)
+/// - Basic Auth 凭据 (http://user:pass@host)
+/// - Fragment (#后面的内容)
+///
+/// # Examples
+/// ```
+/// sanitize_url_for_logging("https://api.example.com/v1?api_key=secret123")
+/// // Returns: "https://api.example.com/v1?[REDACTED]"
+///
+/// sanitize_url_for_logging("http://user:pass@api.example.com")
+/// // Returns: "http://[REDACTED]@api.example.com"
+/// ```
+fn sanitize_url_for_logging(url: &str) -> String {
+    // 尝试解析 URL
+    match url::Url::parse(url) {
+        Ok(mut parsed) => {
+            // 移除 query 参数
+            if parsed.query().is_some() {
+                parsed.set_query(Some("[REDACTED]"));
+            }
+
+            // 移除 fragment
+            parsed.set_fragment(None);
+
+            // 移除 basic auth 凭据
+            if parsed.username() != "" || parsed.password().is_some() {
+                let _ = parsed.set_username("[REDACTED]");
+                let _ = parsed.set_password(None);
+            }
+
+            parsed.to_string()
+        }
+        Err(_) => {
+            // 如果不是有效 URL，尝试简单清理
+            if url.contains('?') {
+                format!("{}?[REDACTED]", url.split('?').next().unwrap_or(url))
+            } else if url.contains('@') && url.contains("://") {
+                // 尝试清理 basic auth
+                let parts: Vec<&str> = url.split("://").collect();
+                if parts.len() == 2 {
+                    format!("{}://[REDACTED]@{}", parts[0], parts[1].split('@').last().unwrap_or(parts[1]))
+                } else {
+                    "[INVALID_URL]".to_string()
+                }
+            } else {
+                url.to_string()
+            }
+        }
+    }
+}
+
+/// ✅ 清理 Authorization header 以用于日志记录
+///
+/// # Examples
+/// ```
+/// sanitize_auth_header("Bearer sk-ant-api03-abc123...")
+/// // Returns: "Bearer [REDACTED]"
+///
+/// sanitize_auth_header("Basic dXNlcjpwYXNz")
+/// // Returns: "Basic [REDACTED]"
+/// ```
+fn sanitize_auth_header(header: &str) -> String {
+    let parts: Vec<&str> = header.splitn(2, ' ').collect();
+    if parts.len() == 2 {
+        format!("{} [REDACTED]", parts[0])
+    } else {
+        "[REDACTED]".to_string()
+    }
+}
+
+/// ✅ 清理任意字符串中可能的 API 密钥模式
+///
+/// 检测并替换常见的 API 密钥格式：
+/// - `sk-ant-api03-...` (Anthropic)
+/// - `sk-proj-...` (OpenAI)
+/// - `Bearer ...`
+fn sanitize_api_key_patterns(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Anthropic API keys: sk-ant-api03-...
+    let anthropic_pattern = regex::Regex::new(r"sk-ant-api\d+-[A-Za-z0-9_-]{95}").unwrap();
+    result = anthropic_pattern.replace_all(&result, "sk-ant-[REDACTED]").to_string();
+
+    // OpenAI API keys: sk-proj-... or sk-...
+    let openai_pattern = regex::Regex::new(r"sk-[A-Za-z0-9_-]{20,}").unwrap();
+    result = openai_pattern.replace_all(&result, "sk-[REDACTED]").to_string();
+
+    // Bearer tokens
+    let bearer_pattern = regex::Regex::new(r"Bearer\s+[A-Za-z0-9_\-\.]+").unwrap();
+    result = bearer_pattern.replace_all(&result, "Bearer [REDACTED]").to_string();
+
+    result
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionPayload {
@@ -489,6 +590,74 @@ pub struct DeleteClaudeSessionRequest {
     pub source_path: String,
 }
 
+impl DeleteClaudeSessionRequest {
+    /// ✅ 验证会话 ID 和来源路径
+    fn validate(&self) -> anyhow::Result<ValidatedDeleteSessionRequest> {
+        let session_id = self.session_id.trim();
+        let source_path = self.source_path.trim();
+
+        // 验证不为空
+        if session_id.is_empty() {
+            anyhow::bail!("会话 ID 不能为空");
+        }
+        if source_path.is_empty() {
+            anyhow::bail!("来源路径不能为空");
+        }
+
+        // ✅ 验证 session_id 格式 (只允许字母、数字、下划线、连字符)
+        // 防止 "../" 等路径遍历字符
+        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
+        if !session_id_regex.is_match(session_id) {
+            anyhow::bail!(
+                "会话 ID 格式无效。仅允许字母、数字、下划线和连字符，长度 1-64 个字符。"
+            );
+        }
+
+        // ✅ 验证 source_path 必须是规范路径且在允许的目录内
+        let source_path_buf = PathBuf::from(source_path);
+        let canonical_source = source_path_buf
+            .canonicalize()
+            .with_context(|| format!("来源路径不存在或无法访问: {}", source_path))?;
+
+        // 获取允许的数据目录 (Claude Desktop 的数据库位置)
+        #[cfg(windows)]
+        let allowed_dirs = vec![
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
+            dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?,
+        ];
+
+        #[cfg(not(windows))]
+        let allowed_dirs = vec![
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
+            dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("无法获取主目录"))?
+                .join(".config"),
+        ];
+
+        let is_in_allowed_dir = allowed_dirs
+            .iter()
+            .any(|allowed| canonical_source.starts_with(allowed));
+
+        if !is_in_allowed_dir {
+            anyhow::bail!(
+                "来源路径不在允许的数据目录内: {}。仅允许应用数据目录。",
+                canonical_source.display()
+            );
+        }
+
+        Ok(ValidatedDeleteSessionRequest {
+            session_id: session_id.to_string(),
+            source_path: canonical_source,
+        })
+    }
+}
+
+/// ✅ 验证后的删除请求
+struct ValidatedDeleteSessionRequest {
+    session_id: String,
+    source_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadClaudeSessionContextRequest {
@@ -496,6 +665,75 @@ pub struct LoadClaudeSessionContextRequest {
     pub source_path: String,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+}
+
+impl LoadClaudeSessionContextRequest {
+    /// ✅ 验证会话 ID 和来源路径
+    fn validate(&self) -> anyhow::Result<ValidatedLoadSessionRequest> {
+        let session_id = self.session_id.trim();
+        let source_path = self.source_path.trim();
+
+        if session_id.is_empty() {
+            anyhow::bail!("会话 ID 不能为空");
+        }
+        if source_path.is_empty() {
+            anyhow::bail!("来源路径不能为空");
+        }
+
+        // ✅ 验证 session_id 格式
+        let session_id_regex = regex::Regex::new(r"^[a-zA-Z0-9_-]{1,64}$").unwrap();
+        if !session_id_regex.is_match(session_id) {
+            anyhow::bail!(
+                "会话 ID 格式无效。仅允许字母、数字、下划线和连字符。"
+            );
+        }
+
+        // ✅ 验证 source_path
+        let source_path_buf = PathBuf::from(source_path);
+        let canonical_source = source_path_buf
+            .canonicalize()
+            .with_context(|| format!("来源路径不存在: {}", source_path))?;
+
+        #[cfg(windows)]
+        let allowed_dirs = vec![
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
+            dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?,
+        ];
+
+        #[cfg(not(windows))]
+        let allowed_dirs = vec![
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
+            dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("无法获取主目录"))?
+                .join(".config"),
+        ];
+
+        let is_in_allowed_dir = allowed_dirs
+            .iter()
+            .any(|allowed| canonical_source.starts_with(allowed));
+
+        if !is_in_allowed_dir {
+            anyhow::bail!(
+                "来源路径不在允许的数据目录内: {}",
+                canonical_source.display()
+            );
+        }
+
+        Ok(ValidatedLoadSessionRequest {
+            session_id: session_id.to_string(),
+            source_path: canonical_source,
+            offset: self.offset,
+            limit: self.limit,
+        })
+    }
+}
+
+/// ✅ 验证后的加载请求
+struct ValidatedLoadSessionRequest {
+    session_id: String,
+    source_path: PathBuf,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4463,33 +4701,46 @@ pub async fn load_claude_session_context(
 fn load_claude_session_context_blocking(
     request: LoadClaudeSessionContextRequest,
 ) -> CommandResult<claude_codex_pro_core::claude_sessions::ClaudeSessionContextPage> {
-    let session_id = request.session_id.trim();
-    let source_path = request.source_path.trim();
-    if session_id.is_empty() || source_path.is_empty() {
-        return failed(
-            "Claude 会话 ID 和来源路径不能为空。",
-            empty_claude_session_context(&request),
-        );
-    }
+    // ✅ 验证输入
+    let validated = match request.validate() {
+        Ok(v) => v,
+        Err(e) => {
+            log_manager_event(
+                "manager.load_claude_session_context.validation_failed",
+                json!({
+                    "error": e.to_string(),
+                    "session_id": request.session_id,
+                    "source_path": request.source_path,
+                }),
+            );
+            return failed(
+                &format!("加载会话请求验证失败: {}", e),
+                empty_claude_session_context(&request),
+            );
+        }
+    };
+
     log_manager_event(
         "manager.load_claude_session_context.start",
         json!({
-            "session_id": session_id,
-            "offset": request.offset,
-            "limit": request.limit,
+            "session_id": validated.session_id,
+            "validated_path": validated.source_path.display().to_string(),
+            "offset": validated.offset,
+            "limit": validated.limit,
         }),
     );
+
     match claude_codex_pro_core::claude_sessions::load_claude_session_context(
-        session_id,
-        Path::new(source_path),
-        request.offset,
-        request.limit,
+        &validated.session_id,
+        &validated.source_path,
+        validated.offset,
+        validated.limit,
     ) {
         Ok(page) => {
             log_manager_event(
                 "manager.load_claude_session_context.finish",
                 json!({
-                    "session_id": session_id,
+                    "session_id": validated.session_id,
                     "status": "ok",
                     "offset": page.offset,
                     "message_count": page.messages.len(),
@@ -4510,10 +4761,10 @@ fn load_claude_session_context_blocking(
             log_manager_event(
                 "manager.load_claude_session_context.finish",
                 json!({
-                    "session_id": session_id,
+                    "session_id": validated.session_id,
                     "status": "failed",
-                    "offset": request.offset,
-                    "limit": request.limit,
+                    "offset": validated.offset,
+                    "limit": validated.limit,
                     "message": message,
                 }),
             );
@@ -5798,31 +6049,47 @@ pub async fn delete_claude_session(
 fn delete_claude_session_blocking(
     request: DeleteClaudeSessionRequest,
 ) -> CommandResult<DeleteClaudeSessionPayload> {
-    let session_id = request.session_id.trim();
-    let source_path = request.source_path.trim();
-    if session_id.is_empty() || source_path.is_empty() {
-        return failed(
-            "Claude 会话 ID 和来源路径不能为空。",
-            DeleteClaudeSessionPayload {
-                session_id: session_id.to_string(),
-                backup_path: None,
-            },
-        );
-    }
+    // ✅ 验证输入
+    let validated = match request.validate() {
+        Ok(v) => v,
+        Err(e) => {
+            log_manager_event(
+                "manager.delete_claude_session.validation_failed",
+                json!({
+                    "error": e.to_string(),
+                    "session_id": request.session_id,
+                    "source_path": request.source_path,
+                }),
+            );
+            return failed(
+                &format!("删除会话请求验证失败: {}", e),
+                DeleteClaudeSessionPayload {
+                    session_id: request.session_id,
+                    backup_path: None,
+                },
+            );
+        }
+    };
+
     log_manager_event(
         "manager.delete_claude_session.start",
-        json!({ "session_id": session_id }),
+        json!({
+            "session_id": validated.session_id,
+            "validated_path": validated.source_path.display().to_string(),
+        }),
     );
+
     let result = claude_codex_pro_core::claude_sessions::delete_claude_session(
         &claude_codex_pro_core::paths::default_app_state_dir().join("backups"),
-        session_id,
-        Path::new(source_path),
+        &validated.session_id,
+        &validated.source_path,
     );
+
     match result {
         Ok(outcome) => {
             log_manager_event(
                 "manager.delete_claude_session.finish",
-                json!({ "session_id": session_id, "status": "ok" }),
+                json!({ "session_id": validated.session_id, "status": "ok" }),
             );
             ok(
                 &outcome.message,
@@ -5836,12 +6103,12 @@ fn delete_claude_session_blocking(
             let message = format!("删除 Claude 会话失败：{error}");
             log_manager_event(
                 "manager.delete_claude_session.finish",
-                json!({ "session_id": session_id, "status": "failed", "message": message }),
+                json!({ "session_id": validated.session_id, "status": "failed", "message": message }),
             );
             failed(
                 &message,
                 DeleteClaudeSessionPayload {
-                    session_id: session_id.to_string(),
+                    session_id: validated.session_id,
                     backup_path: None,
                 },
             )

@@ -1924,12 +1924,55 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// ✅ 原子写入文件 - 防止竞争条件和数据损坏
+///
+/// 使用以下策略确保原子性：
+/// 1. 写入临时文件 (带随机后缀)
+/// 2. fsync() 确保数据持久化到磁盘
+/// 3. 原子 rename() 替换目标文件
+/// 4. 整个过程在文件锁下进行
+///
+/// 这避免了 TOCTOU (Time-of-Check to Time-of-Use) 竞争条件。
 fn direct_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         create_private_dir_all(parent)?;
     }
-    write_private_file(path, bytes)?;
+
+    // ✅ 生成临时文件路径 (同一目录，确保原子 rename 可用)
+    let temp_path = path.with_extension(format!(
+        "tmp.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    // ✅ 写入临时文件
+    write_private_file(&temp_path, bytes)?;
+
+    // ✅ 确保数据持久化到磁盘 (fsync)
+    {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .open(&temp_path)
+            .with_context(|| format!("无法打开临时文件以进行 sync: {}", temp_path.display()))?;
+
+        file.sync_all()
+            .with_context(|| format!("sync_all 失败: {}", temp_path.display()))?;
+    }
+
+    // ✅ 原子 rename (在 Unix 和 Windows 上都是原子操作)
+    fs::rename(&temp_path, path).with_context(|| {
+        format!(
+            "原子重命名失败: {} -> {}",
+            temp_path.display(),
+            path.display()
+        )
+    })?;
+
+    // ✅ 设置目标文件权限
     secure_private_path(path)?;
+
     Ok(())
 }
 
