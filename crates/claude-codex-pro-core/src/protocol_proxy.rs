@@ -438,6 +438,10 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
         return;
     };
     let mut known_call_ids = BTreeSet::new();
+
+    // 🔍 DEBUG: 记录处理前的状态
+    eprintln!("🔍 [DEBUG] normalize_responses_tool_output_call_ids: 开始处理 {} 个输入项", items.len());
+
     for item in items {
         let item_type = item.get("type").and_then(Value::as_str);
         match item_type {
@@ -449,14 +453,18 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
                     .filter(|value| !value.is_empty())
                 {
                     known_call_ids.insert(call_id.to_string());
+                    eprintln!("🔍 [DEBUG] 收集工具调用 call_id: {}", call_id);
                 }
             }
             Some("function_call_output") | Some("custom_tool_call_output") => {
+                eprintln!("🔍 [DEBUG] 发现工具输出: {:?}", item);
+
                 if item
                     .get("call_id")
                     .and_then(Value::as_str)
                     .is_some_and(|value| !value.is_empty())
                 {
+                    eprintln!("🔍 [DEBUG] 工具输出已有 call_id，跳过");
                     continue;
                 }
                 let candidate = item
@@ -465,15 +473,23 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
                     .and_then(Value::as_str)
                     .filter(|value| known_call_ids.contains(*value))
                     .map(str::to_string);
+
+                eprintln!("🔍 [DEBUG] 候选 call_id: {:?}, 已知 call_ids: {:?}", candidate, known_call_ids);
+
                 if let Some(call_id) = candidate
                     && let Some(object) = item.as_object_mut()
                 {
-                    object.insert("call_id".to_string(), Value::String(call_id));
+                    object.insert("call_id".to_string(), Value::String(call_id.clone()));
+                    eprintln!("✅ [DEBUG] 成功添加 call_id: {}", call_id);
+                } else {
+                    eprintln!("❌ [DEBUG] 无法添加 call_id - 候选为空或无法匹配");
                 }
             }
             _ => {}
         }
     }
+
+    eprintln!("🔍 [DEBUG] normalize 完成，已知 call_ids: {:?}", known_call_ids);
 }
 
 pub fn chat_completion_to_response(body: Value) -> anyhow::Result<Value> {
