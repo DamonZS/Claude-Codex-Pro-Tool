@@ -18,6 +18,10 @@ apps/claude-codex-pro-manager/src-tauri/gen/
 .claude/
 docs/superpowers/
 .workbuddy/
+
+# 临时分析和修复脚本
+analyze_*.py
+fix_*.py
 .codegraph/daemon.pid
 # Local codebase-memory runtime lock; the graph database itself is managed outside Git.
 .codegraph/codegraph.lock
