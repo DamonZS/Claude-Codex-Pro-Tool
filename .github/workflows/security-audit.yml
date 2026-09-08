@@ -1,0 +1,58 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run every Monday at 9:00 AM UTC
+    - cron: '0 9 * * 1'
+
+jobs:
+  cargo-audit:
+    name: Cargo Audit (Dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit || true
+
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
+  cargo-deny:
+    name: Cargo Deny (Licenses & Bans)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache cargo-deny
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny
+
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny || true
+
+      - name: Run cargo deny (advisories)
+        run: cargo deny check advisories
+
+      - name: Run cargo deny (licenses)
+        run: cargo deny check licenses
+
+      - name: Run cargo deny (bans)
+        run: cargo deny check bans
+
+      - name: Run cargo deny (sources)
+        run: cargo deny check sources

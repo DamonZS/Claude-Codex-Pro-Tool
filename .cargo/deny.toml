@@ -1,0 +1,57 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # Add vulnerability IDs to ignore here if needed
+    # Format: "RUSTSEC-YYYY-NNNN"
+]
+
+[licenses]
+# We're permissive about licenses, but document them
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+copyleft = "warn"
+allow-osi-fsf-free = "both"
+confidence-threshold = 0.8
+
+[bans]
+# Deny multiple versions of the same crate
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+
+# Specific crates to deny (security/quality issues)
+deny = [
+    # Add problematic crates here
+]
+
+skip = [
+    # Allow multiple versions for these commonly-duplicated crates
+    { name = "windows-sys" },
+    { name = "windows_x86_64_msvc" },
+    { name = "windows_x86_64_gnu" },
+]
+
+skip-tree = [
+    # Skip checking dependencies of these crates
+]
+
+[sources]
+# Ensure all dependencies come from trusted sources
+unknown-registry = "deny"
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
