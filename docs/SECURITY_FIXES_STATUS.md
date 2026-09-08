@@ -11,11 +11,13 @@
 | Batch | Priority | Issues | Fixed | In Progress | Pending | Effort | Deadline |
 |-------|----------|--------|-------|-------------|---------|--------|----------|
 | Batch 1 | P0 Critical | 6 | 6 | 0 | 0 | 15h | 2 days |
-| Batch 2 | P1 Medium | 4 | 0 | 0 | 4 | 20h | 1 week |
+| Batch 2 | P1 Medium | 4 | 0 | 1 | 3 | 20h + 60h unwrap | 1 week |
 | Batch 3 | P2 Low | 6 | 0 | 0 | 6 | 25h | 2 weeks |
-| **Total** | - | **16** | **6** | **0** | **10** | **60h** | **2 weeks** |
+| **Total** | - | **16** | **6** | **1** | **9** | **120h** | **3 months** |
 
-**Completion:** 37.5% (6/16 issues fixed) ✅ **BATCH 1 COMPLETE**
+**Completion:** 37.5% (6/16 issues fixed) + 1 in progress ✅ **BATCH 1 COMPLETE**
+
+**Note:** Issue #7 (unwrap() cleanup) is long-term work requiring ~60 hours continuous effort over 3 months.
 
 ---
 
