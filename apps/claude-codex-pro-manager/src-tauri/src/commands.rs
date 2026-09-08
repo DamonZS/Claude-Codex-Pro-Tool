@@ -170,6 +170,48 @@ pub struct MulticaConnectionSaveRequest {
     pub sidecar: Option<Option<MulticaSidecarConfig>>,
 }
 
+impl MulticaConnectionSaveRequest {
+    /// ✅ 验证连接请求的输入
+    fn validate(&self) -> anyhow::Result<()> {
+        // 验证显示名称
+        if !self.display_name.trim().is_empty() {
+            validate_string_length(&self.display_name, "显示名称", 1, 128)?;
+        }
+
+        // 验证服务器 URL
+        if !self.server_url.trim().is_empty() {
+            let url = validate_url(&self.server_url)?;
+
+            // 警告：不安全的 HTTP 连接
+            if url.scheme() == "http" && !self.allow_insecure_lan_http {
+                // 检查是否是本地地址
+                if let Some(host) = url.host_str() {
+                    let is_local = host == "localhost"
+                        || host == "127.0.0.1"
+                        || host.starts_with("192.168.")
+                        || host.starts_with("10.")
+                        || host.starts_with("172.");
+
+                    if !is_local {
+                        anyhow::bail!(
+                            "不允许使用不安全的 HTTP 连接到公网地址。请使用 HTTPS 或在本地网络上启用 allow_insecure_lan_http。"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 验证 workspace_id (如果提供)
+        if let Some(ref workspace_id) = self.workspace_id {
+            if !workspace_id.is_empty() {
+                validate_string_length(workspace_id, "Workspace ID", 1, 256)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// The dedicated managed form deliberately has no connection ID, profile,
 /// sidecar, token, executable, path, header, or generic connection fields.
 /// Empty display names and URLs are meaningful user values and must cross the
@@ -1859,8 +1901,15 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
             }
             Err(error) => {
                 let status = claude_codex_pro_core::claude_zh_patch::detect_status();
+                log_manager_event(
+                    "manager.claude_zh_patch.elevation_failed",
+                    json!({
+                        "error": error.to_string(),
+                        "error_chain": format_error_chain(&error),
+                    }),
+                );
                 return failed(
-                    &format!("Claude 汉化需要管理员授权，但提权失败：{error}"),
+                    &format!("Claude 汉化需要管理员授权，但提权失败：{}", error),
                     claude_zh_patch_payload(status, Vec::new()),
                 );
             }
@@ -3777,6 +3826,10 @@ fn save_settings_blocking(
 fn multica_save_request_to_config(
     request: MulticaConnectionSaveRequest,
 ) -> anyhow::Result<MulticaConnectionConfig> {
+    // ✅ 验证输入
+    request.validate()
+        .context("连接配置验证失败")?;
+
     let connection_id = request.connection_id.unwrap_or_default().trim().to_string();
     if connection_id == "managed-multica" {
         anyhow::bail!("managed_connection_reserved");
@@ -11947,6 +12000,146 @@ fn ok<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
     }
 }
 
+// ============================================================================
+// ✅ 输入验证辅助函数 - 通用验证逻辑
+// ============================================================================
+
+/// ✅ 验证端口号是否在有效范围内
+///
+/// 有效端口范围: 1024-65535 (排除特权端口 0-1023)
+fn validate_port(port: u16) -> anyhow::Result<u16> {
+    if port < 1024 {
+        anyhow::bail!("端口号 {} 无效：不允许使用特权端口 (1-1023)", port);
+    }
+    Ok(port)
+}
+
+/// ✅ 验证 URL 格式
+///
+/// 检查：
+/// - 有效的 URL 语法
+/// - 必须是 http 或 https scheme
+/// - 主机名不能为空
+fn validate_url(url_str: &str) -> anyhow::Result<url::Url> {
+    let url = url::Url::parse(url_str)
+        .with_context(|| format!("URL 格式无效: {}", url_str))?;
+
+    // 只允许 http/https
+    if url.scheme() != "http" && url.scheme() != "https" {
+        anyhow::bail!(
+            "URL scheme 无效: {}。仅支持 http 和 https。",
+            url.scheme()
+        );
+    }
+
+    // 必须有主机名
+    if url.host_str().is_none() || url.host_str().unwrap().is_empty() {
+        anyhow::bail!("URL 必须包含主机名");
+    }
+
+    Ok(url)
+}
+
+/// ✅ 验证非空字符串
+///
+/// 去除前后空格后检查是否为空
+fn validate_non_empty_string(s: &str, field_name: &str) -> anyhow::Result<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{} 不能为空", field_name);
+    }
+    Ok(trimmed.to_string())
+}
+
+/// ✅ 验证字符串长度
+///
+/// 检查字符串长度是否在指定范围内
+fn validate_string_length(
+    s: &str,
+    field_name: &str,
+    min: usize,
+    max: usize,
+) -> anyhow::Result<()> {
+    let len = s.len();
+    if len < min {
+        anyhow::bail!("{} 长度不足：最少 {} 字符，当前 {} 字符", field_name, min, len);
+    }
+    if len > max {
+        anyhow::bail!("{} 长度超限：最多 {} 字符，当前 {} 字符", field_name, max, len);
+    }
+    Ok(())
+}
+
+// ============================================================================
+// ✅ 错误处理改进 - 保留完整错误上下文
+// ============================================================================
+
+/// ✅ 格式化完整的错误链用于日志记录
+///
+/// 将 anyhow::Error 的完整错误链转换为字符串，包括：
+/// - 根本原因
+/// - 中间上下文
+/// - 所有错误层级
+///
+/// # Examples
+/// ```
+/// let error = some_operation().context("Failed to do X")?;
+/// eprintln!("Operation failed: {}", format_error_chain(&error));
+/// // Prints: "Failed to do X: original error message"
+/// ```
+fn format_error_chain(error: &anyhow::Error) -> String {
+    let mut messages = vec![error.to_string()];
+
+    // 收集整个错误链
+    let mut current = error.source();
+    while let Some(cause) = current {
+        messages.push(cause.to_string());
+        current = cause.source();
+    }
+
+    // 反转以显示：根本原因 → 高层上下文
+    messages.reverse();
+    messages.join(" → ")
+}
+
+/// ✅ 改进的失败结果构造器 - 带错误链日志
+///
+/// 相比原 `failed()` 函数的改进：
+/// 1. 自动记录完整错误链到日志事件
+/// 2. 用户看到友好消息
+/// 3. 开发者可以在日志中看到详细堆栈
+///
+/// # Examples
+/// ```
+/// let result = operation().context("Failed during setup")?;
+/// return failed_with_context(
+///     "操作失败，请重试",
+///     payload,
+///     &error
+/// );
+/// ```
+fn failed_with_context<T: Serialize>(
+    user_message: &str,
+    payload: T,
+    error: &anyhow::Error,
+) -> CommandResult<T> {
+    // 记录完整错误链供调试 (使用现有的 log_manager_event)
+    log_manager_event(
+        "manager.command.error",
+        json!({
+            "user_message": user_message,
+            "error_chain": format_error_chain(error),
+        }),
+    );
+
+    CommandResult {
+        status: "failed".to_string(),
+        message: user_message.to_string(),
+        payload,
+    }
+}
+
+/// ✅ 原有的简单失败函数 (保持向后兼容)
 fn failed<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
     CommandResult {
         status: "failed".to_string(),
