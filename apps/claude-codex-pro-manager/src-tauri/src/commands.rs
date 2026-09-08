@@ -12140,6 +12140,100 @@ fn ok<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
 }
 
 // ============================================================================
+// ✅ Issue #14: 剪贴板安全
+// ============================================================================
+
+/// 剪贴板操作结果
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardPayload {
+    pub cleared: bool,
+    pub previous_length: Option<usize>,
+}
+
+/// 清除系统剪贴板
+///
+/// **用途:** 在粘贴敏感信息后清除剪贴板，防止泄漏
+///
+/// **前端集成:**
+/// ```typescript
+/// import { invoke } from '@tauri-apps/api/tauri';
+///
+/// async function clearClipboard() {
+///   const result = await invoke('clear_clipboard');
+///   console.log(result);
+/// }
+/// ```
+#[tauri::command]
+pub fn clear_clipboard() -> CommandResult<ClipboardPayload> {
+    log_security_event(
+        SecurityEventType::SensitiveOperation,
+        json!({
+            "operation": "clear_clipboard",
+        }),
+    );
+
+    #[cfg(windows)]
+    {
+        match clear_system_clipboard_windows() {
+            Ok(()) => ok(
+                "剪贴板已清除。",
+                ClipboardPayload {
+                    cleared: true,
+                    previous_length: None,
+                },
+            ),
+            Err(e) => failed(
+                &format!("清除剪贴板失败: {}", e),
+                ClipboardPayload {
+                    cleared: false,
+                    previous_length: None,
+                },
+            ),
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        failed(
+            "当前平台不支持剪贴板清除功能。",
+            ClipboardPayload {
+                cleared: false,
+                previous_length: None,
+            },
+        )
+    }
+}
+
+#[cfg(windows)]
+fn clear_system_clipboard_windows() -> anyhow::Result<()> {
+    // TODO: 添加 clipboard-win 依赖后实现
+    //
+    // use clipboard_win::{formats, set_clipboard};
+    // set_clipboard(formats::Unicode, "")?;
+    // Ok(())
+
+    // 临时实现：使用 PowerShell
+    use std::process::Command;
+
+    let output = Command::new("powershell")
+        .args(&[
+            "-NoProfile",
+            "-Command",
+            "Set-Clipboard -Value $null"
+        ])
+        .output()
+        .context("执行 PowerShell 清除剪贴板失败")?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("PowerShell 清除剪贴板失败: {}", stderr)
+    }
+}
+
+// ============================================================================
 // ✅ 输入验证辅助函数 - 通用验证逻辑
 // ============================================================================
 

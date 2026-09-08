@@ -11,8 +11,67 @@ use fs2::FileExt;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item};
+use zeroize::Zeroize;
 
 use crate::zed_remote::ZedOpenStrategy;
+
+// ============================================================================
+// ✅ Issue #11: 敏感数据内存安全
+// ============================================================================
+
+/// 安全字符串，在 Drop 时自动清零
+/// 用于存储 API 密钥、密码等敏感数据
+#[derive(Clone, Default, Zeroize)]
+#[zeroize(drop)]
+pub struct SecureString(String);
+
+impl SecureString {
+    /// 创建安全字符串
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    /// 获取内容引用（使用时需谨慎，避免复制）
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// 转换为普通字符串（会失去安全保护）
+    pub fn into_string(mut self) -> String {
+        std::mem::take(&mut self.0)
+    }
+
+    /// 检查是否为空
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<String> for SecureString {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<&str> for SecureString {
+    fn from(s: &str) -> Self {
+        Self::new(s.to_string())
+    }
+}
+
+/// 安全地清零字符串内容
+///
+/// 用于在不再需要敏感数据时立即清除，而不是等待 Drop
+pub fn secure_zero_string(s: &mut String) {
+    s.zeroize();
+}
+
+/// 安全地清零字节数组
+pub fn secure_zero_bytes(b: &mut [u8]) {
+    b.zeroize();
+}
+
+// ============================================================================
 
 static SETTINGS_WRITE_TURN: Mutex<u64> = Mutex::new(0);
 static SETTINGS_WRITE_READY: Condvar = Condvar::new();
