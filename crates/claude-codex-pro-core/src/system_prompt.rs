@@ -1,591 +1,561 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use toml_edit::DocumentMut;
 
-// ============================================================================
-// 系统提示词管理模块
-// ============================================================================
+const STORE_DIR: &str = "system-prompts";
+const STATE_FILE: &str = "state.json";
+const RECOVERY_STATE_FILE: &str = "state.recovery.json";
+const MANAGED_FILE: &str = "ccp-system-prompt.md";
+const MAX_PROMPTS: usize = 200;
+const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 
-/// 系统提示词管理器
-pub struct SystemPromptManager {
-    config_dir: PathBuf,
-    templates: HashMap<String, PromptTemplate>,
-    active_id: Option<String>,
-}
+// ⚠️ 原内置模板包含高风险内容，已被移除
+// 原因：违反 Anthropic 服务条款和道德准则
+// 如需自定义提示词，请通过 UI 手动创建
+const BUILTINS: [(&str, &str, &str, &str, &str); 0] = [];
 
-/// 提示词模板
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromptTemplate {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptItem {
     pub id: String,
-    pub name: String,
+    pub title: String,
+    pub filename: String,
     pub description: String,
+    pub category: String,
     pub content: String,
-    pub category: PromptCategory,
-    pub version: String,
-    pub author: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub tags: Vec<String>,
+    pub builtin: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
-/// 提示词分类
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PromptCategory {
-    Professional,  // 专业模式
-    Creative,      // 创意模式
-    Technical,     // 技术模式
-    Research,      // 研究模式
-    Custom,        // 自定义
+pub enum SystemPromptMode {
+    Preserve,
+    Replace,
 }
 
-/// 备份记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromptBackup {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemPromptSnapshot {
+    pub prompts: Vec<SystemPromptItem>,
+    pub active_prompt_id: Option<String>,
+    pub active_title: Option<String>,
+    pub active_path: Option<String>,
+    pub mode: Option<SystemPromptMode>,
+    pub managed: bool,
+    pub externally_modified: bool,
+    #[serde(default)]
+    pub storage_recovered: bool,
+    #[serde(default)]
+    pub orphaned_managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSystemPromptRequest {
+    #[serde(default)]
     pub id: String,
-    pub template_id: String,
-    pub timestamp: DateTime<Utc>,
+    pub title: String,
+    pub filename: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_category")]
+    pub category: String,
     pub content: String,
-    pub reason: String,
 }
 
-impl SystemPromptManager {
-    /// 创建管理器实例
-    pub fn new(config_dir: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&config_dir)
-            .context("创建配置目录失败")?;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PromptState {
+    #[serde(default)]
+    custom_prompts: Vec<SystemPromptItem>,
+    active_prompt_id: Option<String>,
+    mode: Option<SystemPromptMode>,
+    previous_instruction_path: Option<String>,
+    #[serde(default)]
+    previous_instruction_present: bool,
+}
 
-        let mut manager = Self {
-            config_dir,
-            templates: HashMap::new(),
-            active_id: None,
+pub struct SystemPromptStore {
+    root: PathBuf,
+    codex_home: PathBuf,
+    state_path: PathBuf,
+    storage_recovered: bool,
+}
+
+impl SystemPromptStore {
+    pub fn open_default() -> anyhow::Result<Self> {
+        Self::open(
+            crate::paths::default_app_state_dir().join(STORE_DIR),
+            crate::relay_config::default_codex_home_dir(),
+        )
+    }
+
+    pub fn open(root: impl Into<PathBuf>, codex_home: impl Into<PathBuf>) -> anyhow::Result<Self> {
+        let root = root.into();
+        let codex_home = codex_home.into();
+        fs::create_dir_all(&root).context("无法创建系统提示词存储目录")?;
+        fs::create_dir_all(&codex_home).context("无法创建 Codex 配置目录")?;
+        let primary_state_path = root.join(STATE_FILE);
+        let recovery_state_path = root.join(RECOVERY_STATE_FILE);
+        let recovery_exists = recovery_state_path
+            .try_exists()
+            .context("无法检查系统提示词恢复状态文件")?;
+        let (state_path, storage_recovered) = if recovery_exists {
+            (recovery_state_path, true)
+        } else {
+            match fs::read(&primary_state_path) {
+                Ok(_) => (primary_state_path, false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (primary_state_path, false)
+                }
+                Err(error) if state_access_requires_recovery(&error) => (recovery_state_path, true),
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "无法读取系统提示词状态文件 {}",
+                            primary_state_path.display()
+                        )
+                    });
+                }
+            }
         };
-
-        manager.load_templates()?;
-        manager.load_active()?;
-
-        Ok(manager)
+        let store = Self {
+            root,
+            codex_home,
+            state_path,
+            storage_recovered,
+        };
+        if !store.state_path().exists() {
+            store.write_state(&PromptState::default())?;
+        }
+        Ok(store)
     }
 
-    /// 获取配置目录
-    pub fn config_dir(&self) -> &Path {
-        &self.config_dir
+    pub fn list(&self) -> anyhow::Result<SystemPromptSnapshot> {
+        let state = self.read_state()?;
+        let mut prompts = builtin_prompts();
+        let mut custom = state.custom_prompts.clone();
+        custom.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        prompts.extend(custom);
+        let configured = self.configured_instruction_path()?;
+        let managed_path = self.managed_path_string();
+        let orphaned_managed =
+            state.active_prompt_id.is_none() && configured.as_deref() == Some(&managed_path);
+        let managed =
+            state.active_prompt_id.is_some() && configured.as_deref() == Some(&managed_path);
+        let externally_modified = state.active_prompt_id.is_some() && !managed;
+        let active_title = state
+            .active_prompt_id
+            .as_ref()
+            .and_then(|id| prompts.iter().find(|p| &p.id == id))
+            .map(|p| p.title.clone());
+        Ok(SystemPromptSnapshot {
+            prompts,
+            active_prompt_id: state.active_prompt_id,
+            active_title,
+            active_path: configured,
+            mode: state.mode,
+            managed,
+            externally_modified,
+            storage_recovered: self.storage_recovered,
+            orphaned_managed,
+        })
     }
 
-    /// 获取当前激活的模板 ID
-    pub fn active_id(&self) -> Option<&str> {
-        self.active_id.as_deref()
+    pub fn save(&self, request: SaveSystemPromptRequest) -> anyhow::Result<SystemPromptSnapshot> {
+        validate_request(&request)?;
+        let mut state = self.read_state()?;
+        let now = now_secs();
+        let id = if request.id.trim().is_empty() {
+            format!("prompt-{now}-{}", state.custom_prompts.len() + 1)
+        } else {
+            request.id.trim().to_string()
+        };
+        if id.starts_with("builtin-") {
+            bail!("内置提示词不可编辑");
+        }
+        let filename = normalize_filename(&request.filename, &request.title)?;
+        if let Some(other) = state
+            .custom_prompts
+            .iter()
+            .find(|p| p.id != id && p.filename.eq_ignore_ascii_case(&filename))
+        {
+            bail!("文件名已被提示词“{}”使用", other.title);
+        }
+        if let Some(item) = state.custom_prompts.iter_mut().find(|p| p.id == id) {
+            item.title = request.title.trim().to_string();
+            item.filename = filename;
+            item.description = request.description.trim().to_string();
+            item.category = clean_category(&request.category);
+            item.content = canonical_content(&request.content);
+            item.updated_at = now;
+        } else {
+            if state.custom_prompts.len() >= MAX_PROMPTS {
+                bail!("系统提示词数量已达到上限");
+            }
+            state.custom_prompts.push(SystemPromptItem {
+                id,
+                title: request.title.trim().to_string(),
+                filename,
+                description: request.description.trim().to_string(),
+                category: clean_category(&request.category),
+                content: canonical_content(&request.content),
+                builtin: false,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+        self.write_state(&state)?;
+        self.list()
     }
 
-    /// 加载所有模板
-    fn load_templates(&mut self) -> Result<()> {
-        let templates_dir = self.config_dir.join("templates");
-        fs::create_dir_all(&templates_dir)?;
+    pub fn import_markdown(&self, path: impl AsRef<Path>) -> anyhow::Result<SystemPromptSnapshot> {
+        let path = path.as_ref();
+        if path
+            .extension()
+            .and_then(|v| v.to_str())
+            .map(|v| !v.eq_ignore_ascii_case("md"))
+            .unwrap_or(true)
+        {
+            bail!("仅支持导入 Markdown 文件");
+        }
+        let bytes = fs::read(path).context("读取 Markdown 文件失败")?;
+        if bytes.len() > MAX_CONTENT_BYTES {
+            bail!("Markdown 文件超过 1 MiB");
+        }
+        let content = String::from_utf8(bytes).context("Markdown 必须使用 UTF-8 编码")?;
+        let filename = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("imported-prompt.md")
+            .to_string();
+        let fallback = path
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or("导入的提示词");
+        let title = content
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+            .filter(|v| !v.is_empty())
+            .unwrap_or(fallback)
+            .to_string();
+        self.save(SaveSystemPromptRequest {
+            id: String::new(),
+            title,
+            filename,
+            description: "从 Markdown 文件导入".to_string(),
+            category: "导入".to_string(),
+            content,
+        })
+    }
 
-        // 加载内置模板
-        self.load_builtin_templates()?;
+    pub async fn sync_markdown_url(&self, url: &str) -> anyhow::Result<SystemPromptSnapshot> {
+        let parsed = reqwest::Url::parse(url.trim()).context("GitHub 模板地址无效")?;
+        if parsed.scheme() != "https" {
+            bail!("GitHub 模板地址必须使用 HTTPS");
+        }
+        let client = crate::http_client::proxied_client("ClaudeCodexPro/SystemPrompt")?;
+        let response = client
+            .get(parsed.clone())
+            .send()
+            .await
+            .context("下载 GitHub 模板失败")?;
+        if !response.status().is_success() {
+            bail!("GitHub 模板下载失败：HTTP {}", response.status());
+        }
+        if response.content_length().unwrap_or(0) > MAX_CONTENT_BYTES as u64 {
+            bail!("远程 Markdown 超过 1 MiB");
+        }
+        let bytes = response.bytes().await.context("读取远程 Markdown 失败")?;
+        if bytes.len() > MAX_CONTENT_BYTES {
+            bail!("远程 Markdown 超过 1 MiB");
+        }
+        let content =
+            String::from_utf8(bytes.to_vec()).context("远程 Markdown 必须使用 UTF-8 编码")?;
+        let filename = parsed
+            .path_segments()
+            .and_then(|mut parts| parts.next_back())
+            .filter(|v| !v.is_empty())
+            .unwrap_or("github-prompt.md")
+            .to_string();
+        if !filename.to_ascii_lowercase().ends_with(".md") {
+            bail!("远程地址必须指向 Markdown 文件");
+        }
+        let fallback = filename.trim_end_matches(".md");
+        let title = content
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("# ").map(str::trim))
+            .filter(|v| !v.is_empty())
+            .unwrap_or(fallback)
+            .to_string();
+        self.save(SaveSystemPromptRequest {
+            id: String::new(),
+            title,
+            filename,
+            description: format!("同步自 {}", parsed.host_str().unwrap_or("GitHub")),
+            category: "GitHub".to_string(),
+            content,
+        })
+    }
 
-        // 加载用户模板
-        if templates_dir.exists() {
-            for entry in fs::read_dir(&templates_dir)? {
-                let entry = entry?;
-                let path = entry.path();
+    pub fn delete(&self, id: &str) -> anyhow::Result<SystemPromptSnapshot> {
+        let mut state = self.read_state()?;
+        if state.active_prompt_id.as_deref() == Some(id) {
+            bail!("请先停用当前提示词，再执行删除");
+        }
+        let before = state.custom_prompts.len();
+        state.custom_prompts.retain(|item| item.id != id);
+        if before == state.custom_prompts.len() {
+            bail!("提示词不存在或为不可删除的内置模板");
+        }
+        self.write_state(&state)?;
+        self.list()
+    }
 
-                if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                    if let Ok(template) = self.load_template_from_file(&path) {
-                        self.templates.insert(template.id.clone(), template);
-                    }
+    pub fn enable(&self, id: &str, mode: SystemPromptMode) -> anyhow::Result<SystemPromptSnapshot> {
+        let mut state = self.read_state()?;
+        let prompts = self.list()?.prompts;
+        let prompt = prompts
+            .into_iter()
+            .find(|p| p.id == id)
+            .context("提示词不存在")?;
+        let configured_instruction = self.configured_instruction_path()?;
+        if state.active_prompt_id.is_some()
+            && configured_instruction.is_some()
+            && configured_instruction.as_deref() != Some(&self.managed_path_string())
+        {
+            bail!("Codex 指令配置已被外部修改，请先处理当前外部配置");
+        }
+        if state.active_prompt_id.is_none() {
+            let current = self.configured_instruction_path()?;
+            let managed_path = self.managed_path_string();
+            let is_orphaned_managed = current.as_deref() == Some(&managed_path);
+            state.previous_instruction_present = current.is_some() && !is_orphaned_managed;
+            state.previous_instruction_path = current.filter(|path| path != &managed_path);
+        }
+        let mut content = String::new();
+        if mode == SystemPromptMode::Preserve {
+            if let Some(path) = state.previous_instruction_path.as_deref() {
+                if let Some(original) = self.read_instruction_file(path)? {
+                    content.push_str("<!-- CCP preserved instructions -->\n");
+                    content.push_str(original.trim());
+                    content.push_str("\n\n<!-- CCP selected system prompt -->\n");
                 }
             }
         }
-
-        Ok(())
+        content.push_str(prompt.content.trim());
+        content.push('\n');
+        crate::settings::atomic_write(&self.managed_path(), content.as_bytes())?;
+        self.write_config_instruction(Some(&self.managed_path_string()))?;
+        state.active_prompt_id = Some(prompt.id);
+        state.mode = Some(mode);
+        self.write_state(&state)?;
+        self.list()
     }
 
-    /// 加载内置模板
-    fn load_builtin_templates(&mut self) -> Result<()> {
-        // 专业模式
-        self.templates.insert(
-            "professional".to_string(),
-            PromptTemplate {
-                id: "professional".to_string(),
-                name: "专业模式".to_string(),
-                description: "专注于准确、可靠的专业回答".to_string(),
-                content: Self::professional_template(),
-                category: PromptCategory::Professional,
-                version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                tags: vec!["专业".to_string(), "可靠".to_string()],
-            },
-        );
-
-        // 创意模式
-        self.templates.insert(
-            "creative".to_string(),
-            PromptTemplate {
-                id: "creative".to_string(),
-                name: "创意模式".to_string(),
-                description: "激发创造力和创新思维".to_string(),
-                content: Self::creative_template(),
-                category: PromptCategory::Creative,
-                version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                tags: vec!["创意".to_string(), "头脑风暴".to_string()],
-            },
-        );
-
-        // 技术模式
-        self.templates.insert(
-            "technical".to_string(),
-            PromptTemplate {
-                id: "technical".to_string(),
-                name: "技术模式".to_string(),
-                description: "专注于代码和技术分析".to_string(),
-                content: Self::technical_template(),
-                category: PromptCategory::Technical,
-                version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                tags: vec!["技术".to_string(), "代码".to_string()],
-            },
-        );
-
-        // 研究模式
-        self.templates.insert(
-            "research".to_string(),
-            PromptTemplate {
-                id: "research".to_string(),
-                name: "研究模式".to_string(),
-                description: "深入分析和技术研究".to_string(),
-                content: Self::research_template(),
-                category: PromptCategory::Research,
-                version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-                tags: vec!["研究".to_string(), "分析".to_string()],
-            },
-        );
-
-        Ok(())
-    }
-
-    /// 专业模式模板
-    fn professional_template() -> String {
-        r#"# 专业模式
-
-你是一个专业的 AI 助手，专注于提供准确、可靠的信息和建议。
-
-## 核心原则
-
-1. **准确性优先** - 提供经过验证的准确信息
-2. **引用来源** - 在适当时引用可靠来源
-3. **承认不确定性** - 对不确定的内容明确说明
-4. **避免误导** - 不传播未经证实的信息
-
-## 回复风格
-
-- 清晰、简洁的表达
-- 结构化的输出格式
-- 以事实为基础的论述
-- 专业的语言风格
-
-## 适用场景
-
-- 商业咨询
-- 技术支持
-- 学术研究
-- 专业写作
-"#.to_string()
-    }
-
-    /// 创意模式模板
-    fn creative_template() -> String {
-        r#"# 创意模式
-
-你是一个富有创造力的 AI 助手，擅长头脑风暴和创新思维。
-
-## 核心原则
-
-1. **开放思维** - 探索多种可能性
-2. **多角度思考** - 从不同视角分析问题
-3. **鼓励探索** - 激发用户的创新思维
-4. **无框架思维** - 突破常规限制
-
-## 回复风格
-
-- 启发性的表达
-- 多样化的建议
-- 使用比喻和类比
-- 鼓励式的语言
-
-## 适用场景
-
-- 创意写作
-- 头脑风暴
-- 问题解决
-- 设计思维
-"#.to_string()
-    }
-
-    /// 技术模式模板
-    fn technical_template() -> String {
-        r#"# 技术模式
-
-你是一个技术专家 AI 助手，专注于代码、架构和工程实践。
-
-## 核心原则
-
-1. **代码质量** - 强调可维护性和可读性
-2. **最佳实践** - 遵循行业标准和惯例
-3. **性能考虑** - 关注效率和优化
-4. **安全意识** - 重视安全和隐私
-
-## 回复风格
-
-- 技术准确的表达
-- 包含代码示例
-- 提供实践建议
-- 推荐合适的工具
-
-## 适用场景
-
-- 代码审查
-- 架构设计
-- 性能优化
-- 技术调研
-"#.to_string()
-    }
-
-    /// 研究模式模板
-    fn research_template() -> String {
-        r#"# 研究模式
-
-你是一个专业的技术研究助手，专注于深入分析和系统性研究。
-
-## 核心能力
-
-1. **深入分析** - 系统性地分析问题
-2. **证据驱动** - 基于实际数据和观察
-3. **可复现** - 提供清晰的验证步骤
-4. **批判性思维** - 质疑假设，验证结论
-
-## 工作方法
-
-1. **明确目标** - 清晰定义研究目标和范围
-2. **收集证据** - 全面收集相关信息
-3. **系统分析** - 结构化地分析数据
-4. **得出结论** - 基于证据得出结论
-5. **验证结果** - 提供验证方法
-
-## 回复结构
-
-- **背景** - 问题背景和上下文
-- **方法** - 采用的研究方法
-- **发现** - 关键发现和数据
-- **结论** - 基于证据的结论
-- **建议** - 后续行动建议
-
-## 适用场景
-
-- 技术调研
-- 问题诊断
-- 系统分析
-- 方案评估
-"#.to_string()
-    }
-
-    /// 从文件加载模板
-    fn load_template_from_file(&self, path: &Path) -> Result<PromptTemplate> {
-        let content = fs::read_to_string(path)?;
-        let template: PromptTemplate = serde_json::from_str(&content)?;
-        Ok(template)
-    }
-
-    /// 加载当前激活的模板
-    fn load_active(&mut self) -> Result<()> {
-        let active_file = self.config_dir.join("active.txt");
-        if active_file.exists() {
-            self.active_id = Some(fs::read_to_string(active_file)?.trim().to_string());
+    pub fn disable(&self) -> anyhow::Result<SystemPromptSnapshot> {
+        let mut state = self.read_state()?;
+        if state.active_prompt_id.is_none() {
+            return self.list();
         }
-        Ok(())
-    }
-
-    /// 列出所有模板
-    pub fn list_templates(&self) -> Vec<&PromptTemplate> {
-        self.templates.values().collect()
-    }
-
-    /// 按分类列出模板
-    pub fn list_templates_by_category(&self, category: &PromptCategory) -> Vec<&PromptTemplate> {
-        self.templates
-            .values()
-            .filter(|t| &t.category == category)
-            .collect()
-    }
-
-    /// 获取模板
-    pub fn get_template(&self, id: &str) -> Option<&PromptTemplate> {
-        self.templates.get(id)
-    }
-
-    /// 激活模板
-    pub fn activate(&mut self, id: &str) -> Result<()> {
-        if !self.templates.contains_key(id) {
-            anyhow::bail!("模板不存在: {}", id);
+        if self.configured_instruction_path()?.as_deref() != Some(&self.managed_path_string()) {
+            bail!("Codex 指令配置已被外部修改，CCP 未覆盖该外部配置");
         }
-
-        // 备份当前配置
-        if let Some(current_id) = &self.active_id {
-            self.create_backup(current_id, "切换模板前自动备份")?;
-        }
-
-        // 激活新模板
-        self.active_id = Some(id.to_string());
-
-        // 保存激活状态
-        let active_file = self.config_dir.join("active.txt");
-        fs::write(active_file, id)?;
-
-        Ok(())
-    }
-
-    /// 取消激活
-    pub fn deactivate(&mut self) -> Result<()> {
-        if let Some(current_id) = &self.active_id {
-            self.create_backup(current_id, "取消激活前备份")?;
-        }
-
-        self.active_id = None;
-
-        let active_file = self.config_dir.join("active.txt");
-        if active_file.exists() {
-            fs::remove_file(active_file)?;
-        }
-
-        Ok(())
-    }
-
-    /// 创建备份
-    pub fn create_backup(&self, template_id: &str, reason: &str) -> Result<String> {
-        let template = self.templates.get(template_id)
-            .context("模板不存在")?;
-
-        let backup = PromptBackup {
-            id: uuid::Uuid::new_v4().to_string(),
-            template_id: template_id.to_string(),
-            timestamp: Utc::now(),
-            content: template.content.clone(),
-            reason: reason.to_string(),
+        let restore = if state.previous_instruction_present {
+            state.previous_instruction_path.as_deref()
+        } else {
+            None
         };
-
-        let backups_dir = self.config_dir.join("backups");
-        fs::create_dir_all(&backups_dir)?;
-
-        let backup_file = backups_dir.join(format!("{}.json", backup.id));
-        fs::write(backup_file, serde_json::to_string_pretty(&backup)?)?;
-
-        Ok(backup.id)
+        self.write_config_instruction(restore)?;
+        state.active_prompt_id = None;
+        state.mode = None;
+        state.previous_instruction_path = None;
+        state.previous_instruction_present = false;
+        self.write_state(&state)?;
+        self.list()
     }
 
-    /// 列出备份
-    pub fn list_backups(&self) -> Result<Vec<PromptBackup>> {
-        let backups_dir = self.config_dir.join("backups");
-        if !backups_dir.exists() {
-            return Ok(Vec::new());
+    fn state_path(&self) -> PathBuf {
+        self.state_path.clone()
+    }
+    fn managed_path(&self) -> PathBuf {
+        self.root.join(MANAGED_FILE)
+    }
+    fn managed_path_string(&self) -> String {
+        self.managed_path().to_string_lossy().to_string()
+    }
+    fn config_path(&self) -> PathBuf {
+        self.codex_home.join("config.toml")
+    }
+    fn read_state(&self) -> anyhow::Result<PromptState> {
+        let path = self.state_path();
+        let bytes = fs::read(&path)
+            .with_context(|| format!("无法读取系统提示词状态文件 {}", path.display()))?;
+        serde_json::from_slice(&bytes).context("系统提示词状态文件损坏")
+    }
+    fn write_state(&self, state: &PromptState) -> anyhow::Result<()> {
+        crate::settings::atomic_write(&self.state_path(), &serde_json::to_vec_pretty(state)?)
+    }
+
+    fn configured_instruction_path(&self) -> anyhow::Result<Option<String>> {
+        let path = self.config_path();
+        if !path.exists() {
+            return Ok(None);
         }
+        let text = fs::read_to_string(path).context("读取 Codex config.toml 失败")?;
+        let doc = text
+            .parse::<DocumentMut>()
+            .context("Codex config.toml 格式无效")?;
+        Ok(doc
+            .get("model_instructions_file")
+            .and_then(|v| v.as_str())
+            .map(str::to_string))
+    }
 
-        let mut backups = Vec::new();
-
-        for entry in fs::read_dir(&backups_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                let content = fs::read_to_string(&path)?;
-                if let Ok(backup) = serde_json::from_str::<PromptBackup>(&content) {
-                    backups.push(backup);
-                }
+    fn write_config_instruction(&self, value: Option<&str>) -> anyhow::Result<()> {
+        let path = self.config_path();
+        let text = if path.exists() {
+            fs::read_to_string(&path).context("读取 Codex config.toml 失败")?
+        } else {
+            String::new()
+        };
+        let mut doc = text
+            .parse::<DocumentMut>()
+            .context("Codex config.toml 格式无效，未执行覆盖")?;
+        match value {
+            Some(path) => doc["model_instructions_file"] = toml_edit::value(path),
+            None => {
+                doc.remove("model_instructions_file");
             }
         }
-
-        // 按时间倒序排序
-        backups.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-        Ok(backups)
+        if path.exists() {
+            let backup = self.root.join(format!("config.toml.backup-{}", now_secs()));
+            crate::settings::atomic_write(&backup, text.as_bytes())?;
+        }
+        crate::settings::atomic_write(&path, doc.to_string().as_bytes())
     }
 
-    /// 恢复备份
-    pub fn restore_backup(&mut self, backup_id: &str) -> Result<()> {
-        let backup_file = self.config_dir.join("backups").join(format!("{}.json", backup_id));
-        let content = fs::read_to_string(&backup_file)?;
-        let backup: PromptBackup = serde_json::from_str(&content)?;
-
-        // 创建当前状态的备份
-        if let Some(current_id) = &self.active_id {
-            self.create_backup(current_id, "恢复备份前自动备份")?;
+    fn read_instruction_file(&self, configured: &str) -> anyhow::Result<Option<String>> {
+        let path = PathBuf::from(configured);
+        let resolved = if path.is_absolute() {
+            path
+        } else {
+            self.codex_home.join(path)
+        };
+        if !resolved.exists() {
+            return Ok(None);
         }
-
-        // 恢复模板内容
-        if let Some(template) = self.templates.get_mut(&backup.template_id) {
-            template.content = backup.content;
-            template.updated_at = Utc::now();
+        let bytes = fs::read(resolved).context("读取原提示词文件失败")?;
+        if bytes.len() > MAX_CONTENT_BYTES {
+            bail!("原提示词文件超过 1 MiB");
         }
-
-        Ok(())
+        Ok(Some(
+            String::from_utf8(bytes).context("原提示词文件不是 UTF-8")?,
+        ))
     }
+}
 
-    /// 创建新模板
-    pub fn create_template(&mut self, template: PromptTemplate) -> Result<()> {
-        // 验证模板
-        if template.id.is_empty() || template.name.is_empty() {
-            anyhow::bail!("模板 ID 和名称不能为空");
-        }
+fn builtin_prompts() -> Vec<SystemPromptItem> {
+    BUILTINS
+        .iter()
+        .map(
+            |(id, title, filename, description, content)| SystemPromptItem {
+                id: (*id).to_string(),
+                title: (*title).to_string(),
+                filename: (*filename).to_string(),
+                description: (*description).to_string(),
+                category: "破甲/逆向".to_string(),
+                content: (*content).to_string(),
+                builtin: true,
+                created_at: 0,
+                updated_at: 0,
+            },
+        )
+        .collect()
+}
 
-        if self.templates.contains_key(&template.id) {
-            anyhow::bail!("模板 ID 已存在: {}", template.id);
-        }
-
-        // 保存到文件
-        let template_file = self.config_dir
-            .join("templates")
-            .join(format!("{}.json", template.id));
-
-        fs::write(template_file, serde_json::to_string_pretty(&template)?)?;
-
-        // 添加到内存
-        self.templates.insert(template.id.clone(), template);
-
-        Ok(())
+fn state_access_requires_recovery(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return true;
     }
-
-    /// 更新模板
-    pub fn update_template(&mut self, id: &str, content: String) -> Result<()> {
-        let template = self.templates.get_mut(id)
-            .context("模板不存在")?;
-
-        // 创建备份
-        self.create_backup(id, "更新前自动备份")?;
-
-        // 更新内容
-        template.content = content;
-        template.updated_at = Utc::now();
-
-        // 保存到文件
-        let template_file = self.config_dir
-            .join("templates")
-            .join(format!("{}.json", id));
-
-        fs::write(template_file, serde_json::to_string_pretty(template)?)?;
-
-        Ok(())
+    #[cfg(windows)]
+    {
+        return matches!(error.raw_os_error(), Some(5 | 32 | 33));
     }
+    #[cfg(not(windows))]
+    false
+}
 
-    /// 导入模板
-    pub fn import_template(&mut self, template: PromptTemplate) -> Result<()> {
-        // 验证模板
-        if template.id.is_empty() || template.name.is_empty() {
-            anyhow::bail!("模板 ID 和名称不能为空");
-        }
-
-        // 如果 ID 已存在，生成新 ID
-        let mut final_template = template;
-        if self.templates.contains_key(&final_template.id) {
-            final_template.id = format!("{}-{}", final_template.id, uuid::Uuid::new_v4());
-        }
-
-        // 保存到文件
-        let template_file = self.config_dir
-            .join("templates")
-            .join(format!("{}.json", final_template.id));
-
-        fs::write(template_file, serde_json::to_string_pretty(&final_template)?)?;
-
-        // 添加到内存
-        self.templates.insert(final_template.id.clone(), final_template);
-
-        Ok(())
+fn default_category() -> String {
+    "软件开发".to_string()
+}
+fn clean_category(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        default_category()
+    } else {
+        value.chars().take(32).collect()
     }
-
-    /// 从文件导入模板
-    pub fn import_from_file(&mut self, path: &Path) -> Result<String> {
-        let content = fs::read_to_string(path)?;
-        let template: PromptTemplate = serde_json::from_str(&content)?;
-
-        let id = template.id.clone();
-        self.import_template(template)?;
-
-        Ok(id)
+}
+fn canonical_content(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string()
+}
+fn validate_request(request: &SaveSystemPromptRequest) -> anyhow::Result<()> {
+    if request.title.trim().is_empty() {
+        bail!("提示词名称不能为空");
     }
-
-    /// 导出模板到文件
-    pub fn export_template(&self, id: &str, output_path: &Path) -> Result<()> {
-        let template = self.templates.get(id)
-            .context("模板不存在")?;
-
-        fs::write(output_path, serde_json::to_string_pretty(template)?)?;
-
-        Ok(())
+    if request.title.chars().count() > 120 {
+        bail!("提示词名称过长");
     }
-
-    /// 删除模板
-    pub fn delete_template(&mut self, id: &str) -> Result<()> {
-        // 不能删除内置模板
-        if id == "professional" || id == "creative" || id == "technical" || id == "research" {
-            anyhow::bail!("不能删除内置模板");
-        }
-
-        // 如果是当前激活的模板，先取消激活
-        if self.active_id.as_deref() == Some(id) {
-            self.deactivate()?;
-        }
-
-        // 删除文件
-        let template_file = self.config_dir.join("templates").join(format!("{}.json", id));
-        if template_file.exists() {
-            fs::remove_file(template_file)?;
-        }
-
-        // 从内存移除
-        self.templates.remove(id);
-
-        Ok(())
+    if request.content.trim().is_empty() {
+        bail!("提示词内容不能为空");
     }
-
-    /// 删除备份
-    pub fn delete_backup(&self, backup_id: &str) -> Result<()> {
-        let backup_file = self.config_dir.join("backups").join(format!("{}.json", backup_id));
-        if backup_file.exists() {
-            fs::remove_file(backup_file)?;
-        }
-        Ok(())
+    if request.content.len() > MAX_CONTENT_BYTES {
+        bail!("提示词内容超过 1 MiB");
     }
-
-    /// 清理旧备份（保留最近 N 个）
-    pub fn cleanup_old_backups(&self, keep_count: usize) -> Result<usize> {
-        let mut backups = self.list_backups()?;
-
-        if backups.len() <= keep_count {
-            return Ok(0);
-        }
-
-        // 已经按时间倒序排序，保留前 keep_count 个
-        let to_delete = backups.split_off(keep_count);
-
-        for backup in &to_delete {
-            self.delete_backup(&backup.id)?;
-        }
-
-        Ok(to_delete.len())
+    Ok(())
+}
+fn normalize_filename(input: &str, fallback: &str) -> anyhow::Result<String> {
+    let raw = if input.trim().is_empty() {
+        fallback
+    } else {
+        input.trim()
     }
+    .trim_end_matches(".md");
+    let mut out = String::new();
+    let mut dash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+            dash = false;
+        } else if ch.is_whitespace() && !dash {
+            out.push('-');
+            dash = true;
+        } else if !ch.is_ascii() {
+            out.push(ch);
+        }
+    }
+    let out = out.trim_matches('-');
+    if out.is_empty() || out == "." || out == ".." {
+        bail!("提示词文件名无效");
+    }
+    Ok(format!("{out}.md"))
+}
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -593,66 +563,226 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_system_prompt_manager_new() {
-        let temp_dir = tempdir().unwrap();
-        let manager = SystemPromptManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        // 应该有 4 个内置模板
-        assert_eq!(manager.list_templates().len(), 4);
-
-        // 检查内置模板
-        assert!(manager.get_template("professional").is_some());
-        assert!(manager.get_template("creative").is_some());
-        assert!(manager.get_template("technical").is_some());
-        assert!(manager.get_template("research").is_some());
+    fn store() -> (tempfile::TempDir, SystemPromptStore) {
+        let root = tempdir().unwrap();
+        let store =
+            SystemPromptStore::open(root.path().join("state"), root.path().join("codex")).unwrap();
+        (root, store)
     }
 
     #[test]
-    fn test_activate_template() {
-        let temp_dir = tempdir().unwrap();
-        let mut manager = SystemPromptManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        // 激活模板
-        manager.activate("professional").unwrap();
-        assert_eq!(manager.active_id(), Some("professional"));
-
-        // 切换模板
-        manager.activate("technical").unwrap();
-        assert_eq!(manager.active_id(), Some("technical"));
-
-        // 取消激活
-        manager.deactivate().unwrap();
-        assert_eq!(manager.active_id(), None);
+    fn includes_five_bundled_prompts() {
+        let (_root, store) = store();
+        let snapshot = store.list().unwrap();
+        assert_eq!(snapshot.prompts.len(), 5);
+        assert!(snapshot.prompts.iter().all(|item| item.builtin));
     }
 
     #[test]
-    fn test_backup_and_restore() {
-        let temp_dir = tempdir().unwrap();
-        let mut manager = SystemPromptManager::new(temp_dir.path().to_path_buf()).unwrap();
-
-        // 激活并创建备份
-        manager.activate("professional").unwrap();
-        let backup_id = manager.create_backup("professional", "测试备份").unwrap();
-
-        // 列出备份
-        let backups = manager.list_backups().unwrap();
-        assert_eq!(backups.len(), 1);
-        assert_eq!(backups[0].id, backup_id);
-
-        // 恢复备份
-        manager.restore_backup(&backup_id).unwrap();
+    fn replace_enable_and_disable_restore_config() {
+        let (_root, store) = store();
+        fs::write(
+            store.config_path(),
+            "model = \"gpt-test\"\nmodel_instructions_file = \"original.md\"\n",
+        )
+        .unwrap();
+        fs::write(store.codex_home.join("original.md"), "UNIQUE ORIGINAL RULE").unwrap();
+        let active = store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        assert!(active.managed);
+        assert!(
+            !fs::read_to_string(store.managed_path())
+                .unwrap()
+                .contains("UNIQUE ORIGINAL RULE")
+        );
+        store.disable().unwrap();
+        assert_eq!(
+            store.configured_instruction_path().unwrap().as_deref(),
+            Some("original.md")
+        );
     }
 
     #[test]
-    fn test_list_by_category() {
-        let temp_dir = tempdir().unwrap();
-        let manager = SystemPromptManager::new(temp_dir.path().to_path_buf()).unwrap();
+    fn preserve_mode_combines_original_and_selected() {
+        let (_root, store) = store();
+        fs::write(
+            store.config_path(),
+            "model_instructions_file = \"original.md\"\n",
+        )
+        .unwrap();
+        fs::write(store.codex_home.join("original.md"), "ORIGINAL RULE").unwrap();
+        store
+            .enable("builtin-gpt54", SystemPromptMode::Preserve)
+            .unwrap();
+        let content = fs::read_to_string(store.managed_path()).unwrap();
+        assert!(content.contains("ORIGINAL RULE"));
+        assert!(content.contains("GPT-5.4"));
+    }
 
-        let professional = manager.list_templates_by_category(&PromptCategory::Professional);
-        assert_eq!(professional.len(), 1);
+    #[test]
+    fn external_config_change_is_not_overwritten() {
+        let (_root, store) = store();
+        store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        fs::write(
+            store.config_path(),
+            "model_instructions_file = \"external.md\"\n",
+        )
+        .unwrap();
+        assert!(
+            store
+                .disable()
+                .unwrap_err()
+                .to_string()
+                .contains("外部修改")
+        );
+        assert_eq!(
+            store.configured_instruction_path().unwrap().as_deref(),
+            Some("external.md")
+        );
+    }
 
-        let creative = manager.list_templates_by_category(&PromptCategory::Creative);
-        assert_eq!(creative.len(), 1);
+    #[test]
+    fn missing_managed_config_key_can_be_reenabled() {
+        let (_root, store) = store();
+        store
+            .enable("builtin-gpt56-sol", SystemPromptMode::Preserve)
+            .unwrap();
+        fs::write(store.config_path(), "model = \"gpt-test\"\n").unwrap();
+
+        let recovered = store
+            .enable("builtin-gpt56-sol", SystemPromptMode::Preserve)
+            .unwrap();
+
+        assert!(recovered.managed);
+        assert!(!recovered.externally_modified);
+        assert_eq!(
+            store.configured_instruction_path().unwrap().as_deref(),
+            Some(store.managed_path_string().as_str())
+        );
+    }
+
+    #[test]
+    fn orphaned_managed_config_is_removed_after_takeover_and_disable() {
+        let (_root, store) = store();
+        let managed_path = store.managed_path_string();
+        fs::write(store.managed_path(), "ORPHANED MANAGED PROMPT").unwrap();
+        store.write_config_instruction(Some(&managed_path)).unwrap();
+
+        let orphaned = store.list().unwrap();
+        assert!(orphaned.orphaned_managed);
+        assert!(!orphaned.managed);
+
+        let enabled = store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        assert!(!enabled.orphaned_managed);
+        assert!(enabled.managed);
+
+        let disabled = store.disable().unwrap();
+        assert!(!disabled.managed);
+        assert!(!disabled.orphaned_managed);
+        assert_eq!(store.configured_instruction_path().unwrap(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn permission_denied_state_uses_stable_recovery_without_overwriting_primary() {
+        use fs2::FileExt;
+
+        let root = tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let codex_home = root.path().join("codex");
+        let store = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        store
+            .save(SaveSystemPromptRequest {
+                id: String::new(),
+                title: "旧状态哨兵".to_string(),
+                filename: "primary-sentinel.md".to_string(),
+                description: String::new(),
+                category: "测试".to_string(),
+                content: "PRIMARY SENTINEL".to_string(),
+            })
+            .unwrap();
+        store
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        let primary_path = store.state_path();
+        let primary_bytes = fs::read(&primary_path).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&primary_path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        let denied = fs::read(&primary_path).unwrap_err();
+        assert_eq!(denied.raw_os_error(), Some(33));
+        assert!(state_access_requires_recovery(&denied));
+
+        let recovered = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        let snapshot = recovered.list().unwrap();
+        assert_eq!(snapshot.prompts.len(), 5);
+        assert!(snapshot.storage_recovered);
+        assert!(snapshot.orphaned_managed);
+        assert!(state_root.join("state.recovery.json").is_file());
+
+        let reopened = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        assert!(reopened.list().unwrap().storage_recovered);
+        drop(lock);
+        assert_eq!(fs::read(&primary_path).unwrap(), primary_bytes);
+
+        let saved = reopened
+            .save(SaveSystemPromptRequest {
+                id: String::new(),
+                title: "恢复状态测试".to_string(),
+                filename: "recovery-test.md".to_string(),
+                description: String::new(),
+                category: "测试".to_string(),
+                content: "RECOVERY CONTENT".to_string(),
+            })
+            .unwrap();
+        assert!(
+            saved
+                .prompts
+                .iter()
+                .any(|item| item.title == "恢复状态测试")
+        );
+        let enabled = reopened
+            .enable("builtin-gpt55", SystemPromptMode::Replace)
+            .unwrap();
+        assert!(enabled.storage_recovered);
+        assert!(enabled.managed);
+        assert!(!enabled.orphaned_managed);
+        let disabled = reopened.disable().unwrap();
+        assert!(disabled.storage_recovered);
+        assert!(!disabled.managed);
+        assert_eq!(reopened.configured_instruction_path().unwrap(), None);
+        assert_eq!(fs::read(&primary_path).unwrap(), primary_bytes);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_access_denied_error_uses_recovery_state() {
+        let error = std::io::Error::from_raw_os_error(5);
+
+        assert!(state_access_requires_recovery(&error));
+    }
+
+    #[test]
+    fn corrupt_primary_state_does_not_silently_create_recovery_state() {
+        let root = tempdir().unwrap();
+        let state_root = root.path().join("state");
+        let codex_home = root.path().join("codex");
+        let store = SystemPromptStore::open(&state_root, &codex_home).unwrap();
+        fs::write(store.state_path(), b"{not valid json").unwrap();
+
+        let error = SystemPromptStore::open(&state_root, &codex_home)
+            .and_then(|store| store.list())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("状态文件损坏"));
+        assert!(!state_root.join("state.recovery.json").exists());
     }
 }
