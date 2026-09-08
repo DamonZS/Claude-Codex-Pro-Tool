@@ -13,10 +13,43 @@ const MANAGED_FILE: &str = "ccp-system-prompt.md";
 const MAX_PROMPTS: usize = 200;
 const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 
-// ⚠️ 原内置模板包含高风险内容，已被移除
-// 原因：违反 Anthropic 服务条款和道德准则
-// 如需自定义提示词，请通过 UI 手动创建
-const BUILTINS: [(&str, &str, &str, &str, &str); 0] = [];
+const BUILTINS: [(&str, &str, &str, &str, &str); 5] = [
+    (
+        "builtin-gpt55",
+        "gpt-5.5 unrestricted 破甲",
+        "gpt5.5-unrestricted.md",
+        "方法：先让 AI 分析项目，再按模板指令处理。",
+        include_str!("../../../assets/system-prompts/gpt5.5-unrestricted.md"),
+    ),
+    (
+        "builtin-gpt54",
+        "gpt-5.4 unrestricted 破甲",
+        "gpt5.4-unrestricted.md",
+        "兼容 GPT-5.4 的指令模板。",
+        include_str!("../../../assets/system-prompts/gpt5.4-unrestricted.md"),
+    ),
+    (
+        "builtin-jeli",
+        "gpt5.5-jeli.md",
+        "gpt5.5-jeli.md",
+        "gpt5.5 大白话（80% 场景）破甲。",
+        include_str!("../../../assets/system-prompts/gpt5.5-jeli.md"),
+    ),
+    (
+        "builtin-gpt56-sol",
+        "gpt-5.6-sol-unrestricted.md",
+        "gpt-5.6-sol-unrestricted.md",
+        "gpt5.6-sol 指令提示词。",
+        include_str!("../../../assets/system-prompts/gpt-5.6-sol-unrestricted.md"),
+    ),
+    (
+        "builtin-seagull",
+        "海鸥3.0破甲.md",
+        "海鸥3.0破甲.md",
+        "测试生效：海鸥在线，你要整点薯条吗？",
+        include_str!("../../../assets/system-prompts/海鸥3.0破甲.md"),
+    ),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
