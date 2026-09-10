@@ -6070,6 +6070,274 @@ html.dark > body > .supplier-model-dropdown-menu,
   box-shadow: none;
 }
 
+.leila-deployment-panel {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--card));
+}
+
+.leila-deployment-header,
+.leila-deployment-title,
+.leila-deployment-state,
+.leila-deployment-message,
+.leila-deployment-actions {
+  display: flex;
+  align-items: center;
+}
+
+.leila-deployment-header {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.leila-deployment-title {
+  gap: 11px;
+  min-width: 0;
+}
+
+.leila-deployment-title p {
+  margin: 0 0 2px;
+  color: hsl(var(--primary));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.leila-deployment-title h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.leila-deployment-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 7px;
+  color: hsl(var(--primary));
+  background: hsl(var(--accent));
+}
+
+.leila-deployment-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.leila-deployment-state {
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.leila-deployment-state svg {
+  width: 13px;
+  height: 13px;
+}
+
+.leila-deployment-state.is-ok {
+  border-color: rgb(16 185 129 / 0.38);
+  color: #047857;
+  background: rgb(16 185 129 / 0.12);
+}
+
+.leila-deployment-state.is-warn {
+  border-color: rgb(217 119 6 / 0.4);
+  color: #92400e;
+  background: rgb(245 158 11 / 0.12);
+}
+
+.dark .leila-deployment-state.is-ok {
+  color: #34d399;
+}
+
+.dark .leila-deployment-state.is-warn {
+  color: #fbbf24;
+}
+
+.leila-deployment-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.leila-deployment-facts > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 13px 16px;
+  border-right: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.leila-deployment-facts > div:nth-child(4),
+.leila-deployment-facts > div:last-child {
+  border-right: 0;
+}
+
+.leila-deployment-facts > div.is-wide {
+  grid-column: span 2;
+}
+
+.leila-deployment-facts span {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+}
+
+.leila-deployment-facts strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leila-deployment-facts strong.is-mono,
+.leila-deployment-confirm code,
+.leila-deployment-logs {
+  font-family: var(--font-mono, Consolas, "SFMono-Regular", monospace);
+}
+
+.leila-deployment-message {
+  min-height: 42px;
+  gap: 8px;
+  padding: 10px 16px;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.55);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.leila-deployment-message svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.leila-deployment-message.is-warning {
+  color: #92400e;
+}
+
+.leila-deployment-message.is-error {
+  align-items: flex-start;
+  color: hsl(var(--destructive));
+}
+
+.leila-deployment-message.is-error span {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.leila-deployment-message.is-error code {
+  max-height: 96px;
+  padding: 7px 9px;
+  overflow: auto;
+  border: 1px solid hsl(var(--destructive) / 0.28);
+  border-radius: 5px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background) / 0.76);
+  font: 11px/1.5 var(--font-mono, Consolas, "SFMono-Regular", monospace);
+  white-space: pre-wrap;
+}
+
+.leila-deployment-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 13px 16px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.leila-deployment-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.leila-deployment-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+}
+
+.leila-deployment-confirm p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.leila-deployment-confirm code {
+  display: block;
+  min-width: 0;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border: 1px solid hsl(var(--border));
+  border-radius: 5px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted) / 0.62);
+  font-size: 12px;
+}
+
+.leila-deployment-confirm p code {
+  display: inline;
+  padding: 1px 4px;
+  border: 0;
+}
+
+.leila-deployment-log-section {
+  padding: 14px 16px 16px;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.32);
+}
+
+.leila-deployment-log-section > header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.leila-deployment-log-section > header div {
+  display: grid;
+  gap: 2px;
+}
+
+.leila-deployment-log-section > header small,
+.leila-deployment-log-section > header span {
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+
+.leila-deployment-log-section > header strong {
+  font-size: 13px;
+}
+
+.leila-deployment-logs {
+  height: 132px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  overflow-y: scroll;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background) / 0.82);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .system-prompt-filter-row {
   justify-content: space-between;
   gap: 16px;
@@ -6463,6 +6731,23 @@ html.dark > body > .supplier-model-dropdown-menu,
     border-top: 1px solid hsl(var(--border));
     border-left: 0;
   }
+
+  .leila-deployment-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .leila-deployment-facts > div:nth-child(odd) {
+    border-right: 1px solid hsl(var(--border));
+  }
+
+  .leila-deployment-facts > div:nth-child(even) {
+    border-right: 0;
+  }
+
+
+  .leila-deployment-facts > div.is-wide {
+    border-right: 0;
+  }
 }
 
 @media (max-width: 680px) {
@@ -6483,6 +6768,25 @@ html.dark > body > .supplier-model-dropdown-menu,
 
   .system-prompt-toolbar {
     justify-content: flex-start;
+  }
+
+  .leila-deployment-header {
+    align-items: flex-start;
+  }
+
+  .leila-deployment-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .leila-deployment-facts > div,
+  .leila-deployment-facts > div:nth-child(odd),
+  .leila-deployment-facts > div.is-wide {
+    grid-column: auto;
+    border-right: 0;
+  }
+
+  .leila-deployment-actions > button {
+    flex: 1 1 calc(50% - 4px);
   }
 }
 

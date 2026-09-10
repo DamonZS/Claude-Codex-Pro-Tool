@@ -20,6 +20,7 @@ use claude_codex_pro_core::codex_theme::{
 };
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
 use claude_codex_pro_core::install::MCP_BINARY;
+use claude_codex_pro_core::leila_deploy::{self, LeilaDeploymentStatus};
 use claude_codex_pro_core::memory_assist::{
     MemoryAssistMigrationRequest, MemoryAssistMigrationResult, MemoryAssistStatus,
     MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryCaptureProgressStatus,
@@ -54,6 +55,7 @@ use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt as TokioAsyncWriteExt};
 use toml_edit::DocumentMut;
 
@@ -7542,6 +7544,182 @@ pub fn restore_codex_default_theme() -> CommandResult<CodexThemeOperationResult>
         Err(error) => {
             let message = format!("默认主题恢复失败：{error}");
             failed(&message, failed_codex_theme_operation("default", &message))
+        }
+    }
+}
+
+fn leila_target(target_codex_home: Option<&str>) -> PathBuf {
+    target_codex_home
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(claude_codex_pro_core::relay_config::default_codex_home_dir)
+}
+
+fn leila_resources(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok();
+    let dev_assets = cfg!(debug_assertions).then(leila_deploy::default_dev_assets_root);
+    leila_deploy::resolve_assets_root(resource_dir.as_deref(), dev_assets.as_deref())
+}
+
+fn failed_leila_status(
+    target: &Path,
+    resources: Option<&Path>,
+    error: &anyhow::Error,
+) -> LeilaDeploymentStatus {
+    let mut status = leila_deploy::inspect_status(target, resources);
+    status.last_error = Some(error.to_string());
+    if error.to_string().to_ascii_lowercase().contains("pip")
+        || error.to_string().contains("Python 模块")
+    {
+        status.python_module_status = "failed".to_string();
+    }
+    status.logs.push(format!("操作失败：{error}"));
+    status
+}
+
+#[tauri::command]
+pub async fn inspect_leila_status(
+    app: tauri::AppHandle,
+    target_codex_home: Option<String>,
+) -> CommandResult<LeilaDeploymentStatus> {
+    let target = leila_target(target_codex_home.as_deref());
+    let resources = match leila_resources(&app) {
+        Ok(resources) => resources,
+        Err(error) => {
+            return failed(
+                &format!("破甲打包资源不可用：{error}"),
+                failed_leila_status(&target, None, &error),
+            );
+        }
+    };
+    let operation_target = target.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        leila_deploy::inspect_status(&operation_target, Some(&resources))
+    })
+    .await
+    {
+        Ok(status) => ok("破甲环境和部署状态检测完成。", status),
+        Err(error) => {
+            let error = anyhow::anyhow!("破甲状态检测任务失败：{error}");
+            failed(
+                &error.to_string(),
+                failed_leila_status(&target, None, &error),
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn choose_leila_codex_target(
+    app: tauri::AppHandle,
+    current_target: Option<String>,
+) -> CommandResult<LeilaDeploymentStatus> {
+    let current = leila_target(current_target.as_deref());
+    let mut picker = app.dialog().file().set_title("选择 Codex .codex 目录");
+    if current.is_dir() {
+        picker = picker.set_directory(&current);
+    }
+    let Some(selected) = picker.blocking_pick_folder() else {
+        let resources = leila_resources(&app).ok();
+        return ok(
+            "已取消选择 Codex 目录。",
+            leila_deploy::inspect_status(&current, resources.as_deref()),
+        );
+    };
+    let selected = match selected.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            let error = anyhow::anyhow!("选择的目录路径无效：{error}");
+            return failed(
+                &error.to_string(),
+                failed_leila_status(&current, None, &error),
+            );
+        }
+    };
+    if !selected.join("config.toml").is_file() {
+        let error = anyhow::anyhow!("所选目录不包含 config.toml：{}", selected.display());
+        return failed(
+            &error.to_string(),
+            failed_leila_status(&selected, None, &error),
+        );
+    }
+    let resources = leila_resources(&app).ok();
+    ok(
+        "Codex 目标目录已更新。",
+        leila_deploy::inspect_status(&selected, resources.as_deref()),
+    )
+}
+
+#[tauri::command]
+pub async fn deploy_leila(
+    app: tauri::AppHandle,
+    target_codex_home: Option<String>,
+) -> CommandResult<LeilaDeploymentStatus> {
+    let target = leila_target(target_codex_home.as_deref());
+    let resources = match leila_resources(&app) {
+        Ok(resources) => resources,
+        Err(error) => {
+            return failed(
+                &format!("破甲打包资源不可用：{error}"),
+                failed_leila_status(&target, None, &error),
+            );
+        }
+    };
+    let operation_target = target.clone();
+    let operation_resources = resources.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        leila_deploy::deploy_leila(&operation_target, &operation_resources)
+    })
+    .await
+    {
+        Ok(Ok(status)) => {
+            let message = if status.deployed && !status.rollback_available {
+                "破甲资源和配置已匹配，本次未替换文件。"
+            } else {
+                "破甲部署完成，资源和配置校验通过。"
+            };
+            ok(message, status)
+        }
+        Ok(Err(error)) => failed(
+            &format!("破甲部署失败：{error}"),
+            failed_leila_status(&target, Some(&resources), &error),
+        ),
+        Err(error) => {
+            let error = anyhow::anyhow!("破甲部署任务失败：{error}");
+            failed(
+                &error.to_string(),
+                failed_leila_status(&target, Some(&resources), &error),
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn rollback_leila(
+    app: tauri::AppHandle,
+    target_codex_home: Option<String>,
+) -> CommandResult<LeilaDeploymentStatus> {
+    let target = leila_target(target_codex_home.as_deref());
+    let resources = leila_resources(&app).ok();
+    let operation_target = target.clone();
+    let operation_resources = resources.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        leila_deploy::rollback_leila(&operation_target, operation_resources.as_deref())
+    })
+    .await
+    {
+        Ok(Ok(status)) => ok("最近一次破甲部署已回滚。", status),
+        Ok(Err(error)) => failed(
+            &format!("破甲回滚失败：{error}"),
+            failed_leila_status(&target, resources.as_deref(), &error),
+        ),
+        Err(error) => {
+            let error = anyhow::anyhow!("破甲回滚任务失败：{error}");
+            failed(
+                &error.to_string(),
+                failed_leila_status(&target, resources.as_deref(), &error),
+            )
         }
     }
 }

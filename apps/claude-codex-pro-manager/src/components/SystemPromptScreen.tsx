@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, Check, CircleHelp, CirclePlus, FileText, Github, LoaderCircle, Pencil, Plus, RefreshCw, TriangleAlert, Trash2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LeilaDeploymentPanel } from "@/components/LeilaDeploymentPanel";
 import guideMarkdown from "@/content/ccp-deepseek-guide.md?raw";
 import type { AppActions } from "@/lib/actions";
 import { statusOk } from "@/lib/helpers";
-import type { SaveSystemPromptRequest, SystemPromptItem, SystemPromptMode, SystemPromptResult } from "@/types";
+import type { LeilaDeploymentStatus, SaveSystemPromptRequest, SystemPromptItem, SystemPromptMode, SystemPromptResult } from "@/types";
 
-type Props = { actions: AppActions; prompts: SystemPromptResult | null };
+type Props = { actions: AppActions; leilaStatus: LeilaDeploymentStatus | null; prompts: SystemPromptResult | null };
 
 const EMPTY_FORM: SaveSystemPromptRequest = {
   id: "", title: "", filename: "", description: "", category: "软件开发", content: "",
@@ -49,7 +50,7 @@ function PromptCard({ actions, item, active, mode, onEdit }: {
   );
 }
 
-export function SystemPromptScreen({ actions, prompts }: Props) {
+export function SystemPromptScreen({ actions, leilaStatus, prompts }: Props) {
   const [mode, setMode] = useState<SystemPromptMode>("preserve");
   const [category, setCategory] = useState("全部");
   const [form, setForm] = useState<SaveSystemPromptRequest | null>(null);
@@ -111,6 +112,8 @@ export function SystemPromptScreen({ actions, prompts }: Props) {
           使用方式
         </Button>
       </div>
+
+      <LeilaDeploymentPanel actions={actions} status={leilaStatus} />
 
       <div className="system-prompt-filter-row">
         <div className="system-prompt-categories" role="tablist" aria-label="提示词分类">

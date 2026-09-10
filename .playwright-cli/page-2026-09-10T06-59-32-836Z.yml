@@ -1,0 +1,199 @@
+- generic [ref=e3]:
+  - complementary "一级导航" [ref=e4]:
+    - button "Claude Codex Pro Local AI Operations" [ref=e5] [cursor=pointer]:
+      - generic [aria-hidden] [ref=e6]: CCP
+      - generic [ref=e7]:
+        - strong [ref=e8]: Claude Codex Pro
+        - generic [ref=e9]: Local AI Operations
+    - navigation [ref=e10]:
+      - button "概览" [ref=e11] [cursor=pointer]
+      - button "供应商与路由" [ref=e18] [cursor=pointer]
+      - button "客户端与增强" [ref=e25] [cursor=pointer]
+      - button "主题中心" [ref=e37] [cursor=pointer]
+      - button "系统提示词" [ref=e45] [cursor=pointer]
+      - button "会话与记忆" [ref=e50] [cursor=pointer]
+      - button "插件、Skills 与 MCP" [ref=e54] [cursor=pointer]
+      - button "维护与诊断" [ref=e62] [cursor=pointer]
+      - button "设置" [ref=e66] [cursor=pointer]
+    - generic [ref=e71]:
+      - button "跟随系统" [ref=e73] [cursor=pointer]
+      - button "折叠侧栏" [ref=e77] [cursor=pointer]
+  - main [ref=e82]:
+    - generic [ref=e83]:
+      - generic [ref=e84]:
+        - strong [ref=e85]: 运维概览
+        - generic [ref=e86]: 供应商、路由与 Agent 运行态
+      - generic [ref=e87]:
+        - generic [ref=e88]:
+          - group "Agent 范围" [ref=e89]:
+            - button "Codex" [pressed] [ref=e90] [cursor=pointer]
+            - button "Claude" [ref=e91] [cursor=pointer]
+          - button [ref=e92] [cursor=pointer]
+          - button "默认中转 · 当前" [ref=e97] [cursor=pointer]:
+            - generic [ref=e99]: 默认中转
+            - generic [ref=e100]: · 当前
+        - generic [ref=e103]:
+          - button "启动/重启 Codex" [ref=e104] [cursor=pointer]
+          - button "启动/重启 Claude" [ref=e111] [cursor=pointer]
+          - button "Claude 一键汉化" [ref=e115] [cursor=pointer]
+    - main [ref=e125]:
+      - generic "运行关键指标" [ref=e126]:
+        - generic [ref=e127]:
+          - generic [ref=e128]: 当前供应商
+          - generic [ref=e133]:
+            - strong [ref=e134]: "1"
+            - generic [ref=e135]: 条可用配置
+          - paragraph [ref=e136]: 1 个当前配置 · 0 条路由
+        - generic [ref=e137]:
+          - generic [ref=e138]: 本地代理
+          - generic [ref=e143]:
+            - strong [ref=e144]: 在线
+            - generic [ref=e145]: 本机服务
+          - paragraph [ref=e146]: 本机端口 57322
+        - generic [ref=e147]:
+          - generic [ref=e148]: Codex 增强
+          - generic [ref=e152]:
+            - strong [ref=e153]: 已注入
+            - generic [ref=e154]: 增强状态
+          - paragraph [ref=e155]: Renderer 与 Bridge 已连接
+        - generic [ref=e156]:
+          - generic [ref=e157]: 盘古记忆
+          - generic [ref=e163]:
+            - strong [ref=e164]: 未检测
+            - generic [ref=e165]: 等待状态
+          - paragraph [ref=e166]: 记忆状态尚未加载
+      - generic [ref=e167]:
+        - complementary [ref=e168]:
+          - generic [ref=e169]:
+            - generic [ref=e170]:
+              - strong [ref=e176]: 供应商路由
+              - generic [ref=e177]: "1"
+            - button "管理供应商" [ref=e178] [cursor=pointer]
+          - group "供应商 Agent 范围" [ref=e180]:
+            - button "Codex" [pressed] [ref=e181] [cursor=pointer]
+            - button "Claude" [ref=e182] [cursor=pointer]
+          - button "默认 默认中转 Responses · Codex 当前" [pressed] [ref=e184] [cursor=pointer]:
+            - generic [ref=e185]: 默认
+            - generic [ref=e186]:
+              - strong [ref=e187]: 默认中转
+              - generic [ref=e188]: Responses · Codex
+            - generic [ref=e189]: 当前
+        - generic [ref=e191]:
+          - generic [ref=e192]:
+            - generic [ref=e196]:
+              - strong [ref=e197]: 当前请求链路
+              - generic [ref=e198]: 供应商 → 协议代理 → 目标 Agent
+            - button "刷新概览" [ref=e199] [cursor=pointer]
+          - generic [ref=e205]:
+            - generic "默认中转 到 Codex 的当前链路" [ref=e206]:
+              - article [ref=e208]:
+                - generic [ref=e209]: PROVIDER
+                - generic [ref=e216]:
+                  - strong [ref=e217]: 默认中转
+                  - generic [ref=e218]: Base URL 未配置
+                - generic [ref=e219]:
+                  - generic [ref=e220]: 已配置
+                  - generic [ref=e221]: 凭据状态
+              - article [ref=e222]:
+                - generic [ref=e223]: PROTOCOL ENGINE
+                - generic [ref=e230]:
+                  - strong [ref=e231]: Responses
+                  - generic [ref=e232]: 上游直连
+                - generic [ref=e233]:
+                  - generic [ref=e234]: 直连
+                  - generic [ref=e235]: 代理状态
+              - article [ref=e236]:
+                - generic [ref=e237]: AGENT
+                - generic [ref=e246]:
+                  - strong [ref=e247]: Codex
+                  - generic [ref=e248]: 模型未配置
+                - generic [ref=e249]:
+                  - generic [ref=e250]: 在线
+                  - generic [ref=e251]: 运行状态
+            - paragraph [ref=e252]: 实时配置视图 · 状态来自本机检测
+      - complementary [ref=e253]:
+        - strong [ref=e258]: 智能诊断
+        - generic [ref=e259]:
+          - generic [ref=e260]:
+            - generic [ref=e261]: ROUTE / default
+            - generic [ref=e262]:
+              - heading "默认中转 → Codex" [level=2] [ref=e263]
+              - emphasis [ref=e264]: 当前配置
+            - paragraph [ref=e265]: 该面板只读取已保存配置与本机运行状态；检查供应商不会自动切换或覆写配置。
+          - generic [ref=e266]:
+            - generic [ref=e267]:
+              - term [ref=e268]: 实际模型
+              - definition [ref=e269]: 未配置
+            - generic [ref=e270]:
+              - term [ref=e271]: 请求协议
+              - definition [ref=e272]: Responses
+            - generic [ref=e273]:
+              - term [ref=e274]: 目标客户端
+              - definition [ref=e275]: Codex
+            - generic [ref=e276]:
+              - term [ref=e277]: 路由状态
+              - definition [ref=e278]: 直连
+            - generic [ref=e279]:
+              - term [ref=e280]: 凭据状态
+              - definition [ref=e281]: •••••••• · 已配置
+          - generic [ref=e285]:
+            - generic [ref=e286]:
+              - generic [ref=e287]: 在线
+              - generic [ref=e288]: 本地代理
+            - generic [ref=e289]:
+              - generic [ref=e290]: 已配置
+              - generic [ref=e291]: 连接凭据
+            - generic [ref=e292]:
+              - generic [ref=e293]: 在线
+              - generic [ref=e294]: Agent 状态
+          - generic [ref=e295]:
+            - strong [ref=e299]: 运行建议
+            - list [ref=e300]:
+              - listitem [ref=e301]: 当前链路没有已知异常，可继续使用当前配置。
+          - generic [ref=e302]:
+            - generic [ref=e307]:
+              - strong [ref=e308]: 盘古记忆
+              - generic [ref=e309]: 当前未监听
+            - button [pressed] [ref=e310]
+          - generic "诊断与修复" [ref=e312]:
+            - button "修复前端" [ref=e313] [cursor=pointer]
+            - button "修复后端" [ref=e316] [cursor=pointer]
+            - button "刷新 Claude" [ref=e319] [cursor=pointer]
+            - button "写入开发模式" [ref=e325] [cursor=pointer]
+          - button "CCP官方中转站 拓扑API" [ref=e328] [cursor=pointer]:
+            - generic [ref=e333]:
+              - strong [ref=e334]: CCP官方中转站
+              - generic [ref=e335]: 拓扑API
+        - generic [ref=e336]:
+          - button "编辑配置" [ref=e337]
+          - button "测试连接" [ref=e341]
+      - generic [ref=e344]:
+        - generic [ref=e345]:
+          - generic [ref=e350]:
+            - strong [ref=e351]: 请求与事件时间线
+            - generic [ref=e352]: 最近 2 项脱敏事件
+          - generic [ref=e353]: 成功降级失败
+        - generic [ref=e357]:
+          - generic [ref=e358]:
+            - strong [ref=e359]: Provider 请求
+            - strong [ref=e361]: 协议与代理
+            - strong [ref=e363]: Agent 响应
+            - strong [ref=e365]: 记忆活动
+          - generic [ref=e367]:
+            - generic [ref=e368]:
+              - time [ref=e369]: 14:58:32
+              - time [ref=e370]: 14:58:41
+              - time [ref=e371]: 14:58:49
+              - time [ref=e372]: 14:58:58
+              - time [ref=e373]: 14:59:07
+              - time [ref=e374]: 14:59:15
+              - time [ref=e375]: 14:59:24
+              - time [ref=e376]: 14:59:32
+            - generic [ref=e378]: 暂无事件
+            - generic [ref=e380]: 暂无事件
+            - generic [ref=e383]:
+              - generic [ref=e385]: Codex 已启动
+              - time [ref=e386]: 14:59:32
+            - generic [ref=e387]: 暂无事件
+            - generic [aria-hidden] [ref=e389]: 最新
+        - paragraph [ref=e390]: 仅展示事件名称与时间，原始日志 detail 不进入概览。

@@ -21,6 +21,7 @@ pub mod http_client;
 pub mod install;
 pub mod install_registration;
 pub mod launcher;
+pub mod leila_deploy;
 pub mod memory_assist;
 pub mod model_catalog;
 pub mod models;

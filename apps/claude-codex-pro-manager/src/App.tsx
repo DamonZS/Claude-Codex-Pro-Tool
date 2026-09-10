@@ -205,6 +205,8 @@ import type {
   DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
   InstallEntrypointsResult,
+  LeilaDeploymentResult,
+  LeilaDeploymentStatus,
   LaunchStatus,
   LegacyRoute,
   LiveContextEntriesResult,
@@ -345,6 +347,7 @@ export function App() {
   const [codexManagerBackgrounds, setCodexManagerBackgrounds] = useState<CodexManagerBackgroundLibraryResult | null>(null);
   const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
   const [systemPrompts, setSystemPrompts] = useState<SystemPromptResult | null>(null);
+  const [leilaStatus, setLeilaStatus] = useState<LeilaDeploymentStatus | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
   const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
   // Monotonic token bumped on every refreshRoute call. Rapid tab switches used
@@ -1913,6 +1916,67 @@ export function App() {
     await run(() => call<SystemPromptResult>("sync_system_prompt_url", { request: { url } }), "同步系统提示词"),
   );
 
+  const refreshLeilaStatus = async (silent = false) => {
+    const result = await run(
+      () => call<LeilaDeploymentStatus>("inspect_leila_status", { targetCodexHome: leilaStatus?.targetCodexHome ?? null }),
+      "破甲部署状态",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (result) {
+      setLeilaStatus(result);
+      if (!silent) notifyResult({ title: "破甲环境检测", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const chooseLeilaTarget = async () => {
+    const result = await run(
+      () => call<LeilaDeploymentStatus>("choose_leila_codex_target", { currentTarget: leilaStatus?.targetCodexHome ?? null }),
+      "选择破甲 Codex 目录",
+    );
+    if (result) {
+      setLeilaStatus(result);
+      notifyResult({ title: "破甲 Codex 目录", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const deployLeila = async () => {
+    const result = await run(
+      () => call<LeilaDeploymentResult>("deploy_leila", { targetCodexHome: leilaStatus?.targetCodexHome ?? null }),
+      "部署破甲",
+    );
+    if (result) {
+      setLeilaStatus(result);
+      notifyResult({ title: "部署破甲", message: result.message, status: result.status });
+    }
+    if (result && statusOk(result.status)) {
+      // Keep the command's stage log visible; a status refresh only contains inspection output.
+      await refreshSystemPrompts(true);
+    } else {
+      await refreshSystemPrompts(true);
+    }
+    return result;
+  };
+
+  const rollbackLeila = async () => {
+    const result = await run(
+      () => call<LeilaDeploymentResult>("rollback_leila", { targetCodexHome: leilaStatus?.targetCodexHome ?? null }),
+      "回滚破甲",
+    );
+    if (result) {
+      setLeilaStatus(result);
+      notifyResult({ title: "回滚破甲", message: result.message, status: result.status });
+    }
+    if (result && statusOk(result.status)) {
+      // Keep the command's stage log visible; a status refresh only contains inspection output.
+      await refreshSystemPrompts(true);
+    } else {
+      await refreshSystemPrompts(true);
+    }
+    return result;
+  };
+
   const previewPlugin = async (id: string) => {
     const result = await run(() => call<PluginInstallPreviewResult>("preview_plugin_hub_install", { request: { id } }), "安装预览");
     if (result) {
@@ -2745,7 +2809,7 @@ export function App() {
     } else if (target === "themes") {
       await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
-      await refreshSystemPrompts(true);
+      requiredResults = await Promise.all([refreshSystemPrompts(true), refreshLeilaStatus(true)]);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -2876,6 +2940,10 @@ export function App() {
       enableSystemPrompt,
       disableSystemPrompt,
       syncSystemPromptUrl,
+      refreshLeilaStatus,
+      chooseLeilaTarget,
+      deployLeila,
+      rollbackLeila,
       openExternalUrl,
       goPluginHub,
       goMemoryAssist,
@@ -3023,6 +3091,10 @@ export function App() {
       enableSystemPrompt: (...args) => actionsRef.current!.enableSystemPrompt(...args),
       disableSystemPrompt: (...args) => actionsRef.current!.disableSystemPrompt(...args),
       syncSystemPromptUrl: (...args) => actionsRef.current!.syncSystemPromptUrl(...args),
+      refreshLeilaStatus: (...args) => actionsRef.current!.refreshLeilaStatus(...args),
+      chooseLeilaTarget: (...args) => actionsRef.current!.chooseLeilaTarget(...args),
+      deployLeila: (...args) => actionsRef.current!.deployLeila(...args),
+      rollbackLeila: (...args) => actionsRef.current!.rollbackLeila(...args),
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
       goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
@@ -3226,7 +3298,7 @@ export function App() {
               themes={codexThemes}
             />
           ) : null}
-          {route === "prompts" ? <SystemPromptScreen actions={actions} prompts={systemPrompts} /> : null}
+          {route === "prompts" ? <SystemPromptScreen actions={actions} leilaStatus={leilaStatus} prompts={systemPrompts} /> : null}
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}

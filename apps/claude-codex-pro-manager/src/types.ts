@@ -633,6 +633,39 @@ export type SystemPromptResult = CommandResult<{
   orphanedManaged: boolean;
 }>;
 
+export type LeilaPythonModuleStatus = "not_checked" | "pending" | "installing" | "complete" | "failed" | string;
+
+export type LeilaDeploymentStatus = CommandResult<{
+  supported: boolean;
+  packageVersion: string;
+  platform: string;
+  architecture: string;
+  pythonVersion: string | null;
+  pythonBits: number | null;
+  pythonModulesInstalled: boolean;
+  pythonModuleStatus?: LeilaPythonModuleStatus;
+  targetCodexHome: string | null;
+  deployed: boolean;
+  promptVerified: boolean;
+  identityVerified: boolean;
+  acVerified: boolean;
+  globalProfileActive: boolean;
+  externallyModified: boolean;
+  rollbackAvailable: boolean;
+  lastDeploymentAt: string | number | null;
+  lastResult?: string | null;
+  lastError: string | null;
+  resourceSha256?: string | null;
+  promptSha256?: string | null;
+  identitySha256?: string | null;
+  acSha256?: string | null;
+  operationManifest?: string | null;
+  backupPaths?: string[];
+  logs: string[];
+}>;
+
+export type LeilaDeploymentResult = LeilaDeploymentStatus;
+
 export type RelayProfileTestResult = CommandResult<{
   httpStatus: number;
   endpoint: string;

@@ -28,6 +28,9 @@
   "bundle": {
     "active": false,
     "targets": "all",
+    "resources": [
+      "resources/leila/assets/**/*"
+    ],
     "icon": [
       "icons/icon.ico"
     ]

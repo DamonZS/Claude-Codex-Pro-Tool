@@ -665,6 +665,41 @@ function previewUnifiedToolInventory(message = "检测完成：已加载预览�
   });
 }
 
+let previewLeilaDeployed = false;
+let previewLeilaLogs = [
+  "[preview] 破甲 1.0.7 资源清单校验完成。",
+  "[preview] Python 3.13 x64 模块状态：已安装。",
+  "[preview] 浏览器预览不会修改真实 Codex 配置。",
+];
+
+function previewLeilaStatus(message = "预览模式破甲部署状态。") {
+  return ok(message, {
+    supported: true,
+    packageVersion: "1.0.7",
+    platform: "win32",
+    architecture: "x64",
+    pythonVersion: "3.13.7",
+    pythonBits: 64,
+    pythonModulesInstalled: true,
+    pythonModuleStatus: "complete",
+    targetCodexHome: "~\\.codex",
+    deployed: previewLeilaDeployed,
+    promptVerified: previewLeilaDeployed,
+    identityVerified: previewLeilaDeployed,
+    acVerified: previewLeilaDeployed,
+    globalProfileActive: previewLeilaDeployed,
+    externallyModified: false,
+    rollbackAvailable: previewLeilaDeployed,
+    lastDeploymentAt: previewLeilaDeployed ? new Date().toISOString() : null,
+    lastError: null,
+    resourceSha256: previewLeilaDeployed ? "c9f30ca56a43b85d5475a41d5433d5a1a51a8a11ea3faf6f0a1d4497a89c3117" : null,
+    promptSha256: previewLeilaDeployed ? "c9f30ca56a43b85d5475a41d5433d5a1a51a8a11ea3faf6f0a1d4497a89c3117" : null,
+    identitySha256: previewLeilaDeployed ? "11aec9cf8f865f306a73944db9557a5db7a4c62955c71141af02d51f2ab83c69" : null,
+    acSha256: previewLeilaDeployed ? "53a0f4d27df7901b66c4f440c500247d52e3ef809841398f04805953f8392ef4" : null,
+    logs: [...previewLeilaLogs],
+  });
+}
+
 const hasTauriInternals = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
@@ -674,6 +709,22 @@ export function invokeCommand<T>(command: string, args?: Record<string, unknown>
 
 async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
+  if (command === "inspect_leila_status") return previewLeilaStatus();
+  if (command === "choose_leila_codex_target") return previewLeilaStatus("预览模式已模拟选择 Codex 目录。");
+  if (command === "deploy_leila") {
+    previewLeilaDeployed = true;
+    previewLeilaLogs = [
+      ...previewLeilaLogs,
+      "[preview] Python 模块检查通过。",
+      "[preview] 破甲资源已模拟部署并完成 SHA-256 校验。",
+    ];
+    return previewLeilaStatus("预览模式已模拟部署破甲，未修改真实文件。");
+  }
+  if (command === "rollback_leila") {
+    previewLeilaDeployed = false;
+    previewLeilaLogs = [...previewLeilaLogs, "[preview] 最近一次破甲部署已模拟回滚。"];
+    return previewLeilaStatus("预览模式已模拟回滚破甲，未修改真实文件。");
+  }
   if (command === "list_multica_connections") {
     return ok("预览模式未配置工作流连接。", previewMulticaEmptyResult());
   }

@@ -1,0 +1,124 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - complementary "一级导航" [ref=e4]:
+      - button "Claude Codex Pro Local AI Operations" [ref=e5] [cursor=pointer]:
+        - generic [aria-hidden] [ref=e6]: CCP
+        - generic [ref=e7]:
+          - strong [ref=e8]: Claude Codex Pro
+          - generic [ref=e9]: Local AI Operations
+      - navigation [ref=e10]:
+        - button "概览" [ref=e11] [cursor=pointer]
+        - button "供应商与路由" [ref=e18] [cursor=pointer]
+        - button "客户端与增强" [ref=e25] [cursor=pointer]
+        - button "主题中心" [ref=e37] [cursor=pointer]
+        - button "系统提示词" [ref=e45] [cursor=pointer]
+        - button "会话与记忆" [ref=e50] [cursor=pointer]
+        - button "插件、Skills 与 MCP" [ref=e54] [cursor=pointer]
+        - button "维护与诊断" [ref=e62] [cursor=pointer]
+        - button "设置" [ref=e66] [cursor=pointer]
+      - generic [ref=e71]:
+        - button "跟随系统" [ref=e73] [cursor=pointer]
+        - button "折叠侧栏" [ref=e77] [cursor=pointer]
+    - main [ref=e82]:
+      - generic [ref=e83]:
+        - generic "当前位置" [ref=e391]:
+          - generic [ref=e392]: CCP
+          - generic [ref=e394]: 系统提示词
+        - generic [ref=e87]:
+          - generic [ref=e88]:
+            - group "Agent 范围" [ref=e89]:
+              - button "Codex" [pressed] [ref=e90] [cursor=pointer]
+              - button "Claude" [ref=e91] [cursor=pointer]
+            - button "搜索页面与命令 K" [ref=e583] [cursor=pointer]:
+              - generic [ref=e584]: 搜索页面与命令
+              - generic [ref=e585]: K
+            - button "默认中转 · 当前" [ref=e97] [cursor=pointer]:
+              - generic [ref=e99]: 默认中转
+              - generic [ref=e100]: · 当前
+          - generic [ref=e103]:
+            - button "启动/重启 Codex" [ref=e588] [cursor=pointer]
+            - button "启动/重启 Claude" [ref=e589] [cursor=pointer]
+            - button "Claude 一键汉化" [ref=e590] [cursor=pointer]
+      - region [ref=e398]:
+        - generic [ref=e399]:
+          - generic [ref=e400]:
+            - paragraph [ref=e401]: PROMPT INJECTION
+            - heading "一键管理指令提示词" [level=1] [ref=e402]
+            - paragraph [ref=e403]: 管理 Codex 的本地 Markdown 指令模板，修改配置前自动备份。
+          - generic [ref=e404]:
+            - button "同步 GitHub 模板" [ref=e405]
+            - button "导入 md" [ref=e409]
+            - button "添加提示词" [ref=e413]
+        - generic [ref=e415]:
+          - generic [ref=e416]:
+            - text: 当前状态
+            - strong [ref=e417]:
+              - generic [ref=e419]: 未启用提示词
+            - paragraph [ref=e420]: 选择下方模板后启用。
+          - generic [ref=e421]:
+            - generic [ref=e422]:
+              - strong [ref=e423]: 启用方式
+              - paragraph [ref=e427]: 点击模板开关时，使用这里选择的方式。
+            - group "启用方式" [ref=e428]:
+              - button "保留原提示词" [ref=e429] [cursor=pointer]
+              - button "替换原提示词" [ref=e432] [cursor=pointer]
+          - button "使用方式" [ref=e436]
+        - region [ref=e514]:
+          - generic [ref=e515]:
+            - generic [ref=e523]:
+              - paragraph [ref=e524]: LEILA CODEX
+              - heading "Leila Codex 部署" [level=2] [ref=e525]
+            - generic [ref=e526]: 已部署，可回滚
+          - generic [ref=e527]:
+            - generic [ref=e528]:
+              - generic [ref=e529]: 资源版本
+              - strong [ref=e530]: 1.0.7
+            - generic [ref=e531]:
+              - generic [ref=e532]: 运行环境
+              - strong [ref=e533]: win32/x64
+            - generic [ref=e534]:
+              - generic [ref=e535]: Python
+              - strong [ref=e536]: 3.13.7 / 64 位
+            - generic [ref=e537]:
+              - generic [ref=e538]: Python 模块
+              - strong [ref=e539]: 已完成
+            - generic [ref=e540]:
+              - generic [ref=e541]: Codex 目标目录
+              - strong [ref=e542]: ~\.codex
+            - generic [ref=e543]:
+              - generic [ref=e544]: 全局指令
+              - strong [ref=e545]: Leila 已激活
+            - generic [ref=e546]:
+              - generic [ref=e547]: 最近部署
+              - strong [ref=e548]: 2026/9/10 15:31:02
+            - generic [ref=e549]:
+              - generic [ref=e550]: 最近资源 SHA-256
+              - strong [ref=e551]: c9f30ca56a43...4497a89c3117
+          - generic [ref=e552]: 提示词和 Skill 从 CCP 本地资源部署；Python 模块安装需要网络连接。
+          - generic [ref=e557]:
+            - button "检测环境" [ref=e558]
+            - button "选择 Codex 目录" [ref=e564]
+            - button "部署 Leila" [ref=e567]
+            - button "回滚最近一次" [ref=e616]
+            - button "收起部署日志" [expanded] [ref=e575]
+          - region [ref=e576]:
+            - generic [ref=e577]:
+              - generic [ref=e578]:
+                - generic [ref=e579]: 操作记录
+                - strong [ref=e580]: 部署日志
+              - generic [ref=e581]: 7 条
+            - generic [ref=e582]: "[preview] Leila 1.0.7 资源清单校验完成。 [preview] Python 3.13 x64 模块状态：已安装。 [preview] 浏览器预览不会修改真实 Codex 配置。 [preview] Python 模块检查通过。 [preview] Leila 资源已模拟部署并完成 SHA-256 校验。 [preview] Python 模块检查通过。 [preview] Leila 资源已模拟部署并完成 SHA-256 校验。"
+        - generic [ref=e498]:
+          - tablist "提示词分类" [ref=e499]:
+            - tab "全部" [selected] [ref=e500] [cursor=pointer]
+          - button "刷新" [ref=e501]
+        - generic [ref=e507]:
+          - strong [ref=e508]: 系统提示词加载失败
+          - paragraph [ref=e509]: 当前是无 Tauri 预览环境，命令未执行：list_system_prompts
+          - button "重试" [ref=e510]
+  - status:
+    - generic [ref=e655]:
+      - generic [ref=e661]:
+        - heading "部署 Leila" [level=2] [ref=e662]
+        - paragraph [ref=e663]: 预览模式已模拟部署 Leila，未修改真实文件。
+      - button "关闭提示" [ref=e664] [cursor=pointer]
