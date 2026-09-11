@@ -118,7 +118,7 @@ jobs:
 
           - 前端生产资源由 GitHub Actions 构建并嵌入桌面应用。
           - Windows 与 macOS release 二进制均在对应平台构建。
-          - Windows 安装包、Windows ZIP、macOS DMG、macOS ZIP 均完成结构检查并上传。
+          - Windows 安装包、Windows MSI、Windows ZIP、macOS DMG、macOS ZIP 均完成结构检查并上传。
 
           ## 构建产物说明
 
@@ -163,6 +163,9 @@ jobs:
 
       - name: Install NSIS
         run: choco install nsis -y
+
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
 
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
@@ -211,6 +214,18 @@ jobs:
           }
           Pop-Location
 
+      - name: Build Windows MSI
+        working-directory: apps/claude-codex-pro-manager
+        run: npm exec tauri build -- --bundles msi --config '{"bundle":{"active":true}}'
+
+      - name: Stage Windows MSI
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msi) { throw "Tauri MSI bundle was not produced" }
+          $version = "${{ needs.prepare-release.outputs.version }}"
+          Copy-Item $msi.FullName "dist/windows/claude-codex-pro-$version-windows-x64.msi"
+
       - name: Package Windows ZIP
         shell: pwsh
         run: |
@@ -228,6 +243,7 @@ jobs:
           path: |
             dist/windows/*windows-x64-setup.exe
             dist/windows/*windows-x64.zip
+            dist/windows/*windows-x64.msi
           if-no-files-found: error
 
   macos-dmg:
@@ -351,8 +367,8 @@ jobs:
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -print | sort
           asset_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
-          if [ "$asset_count" != "6" ]; then
-            echo "::error title=Release asset count mismatch::Expected 6 build assets before latest.json, got $asset_count."
+          if [ "$asset_count" != "7" ]; then
+            echo "::error title=Release asset count mismatch::Expected 7 build assets before latest.json, got $asset_count."
             exit 1
           fi
           gh release upload "$TAG" release-assets/* --clobber --repo "$REPO"

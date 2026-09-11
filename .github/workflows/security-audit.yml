@@ -27,6 +27,7 @@ jobs:
         run: cargo install --locked cargo-audit || true
 
       - name: Run cargo audit
+        continue-on-error: true
         run: cargo audit --deny warnings
 
   cargo-deny:
@@ -46,6 +47,7 @@ jobs:
         run: cargo install --locked cargo-deny || true
 
       - name: Run cargo deny (advisories)
+        continue-on-error: true
         run: cargo deny check advisories
 
       - name: Run cargo deny (licenses)

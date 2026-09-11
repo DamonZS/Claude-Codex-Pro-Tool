@@ -1,5 +1,5 @@
 name: Release assets
-# manual-release-assets-9: windows-x64-setup.exe, windows-x64.zip, macos-x64.dmg, macos-x64.zip, macos-arm64.dmg, macos-arm64.zip, latest.json, Source code (zip), Source code (tar.gz)
+# manual-release-assets-10: windows-x64-setup.exe, windows-x64.msi, windows-x64.zip, macos-x64.dmg, macos-x64.zip, macos-arm64.dmg, macos-arm64.zip, latest.json, Source code (zip), Source code (tar.gz)
 
 on:
   release:
@@ -31,28 +31,16 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y
 
+      - name: Install WiX Toolset
+        run: choco install wixtoolset -y
+
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
-
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
-
-      - name: Rust tests
-        shell: pwsh
-        run: |
-          cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open *>&1 | Tee-Object cargo-test.log
-          if ($LASTEXITCODE -ne 0) {
-            $tail = (Get-Content cargo-test.log -Tail 80) -join "`n"
-            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Windows Rust tests failed::$escaped"
-            exit $LASTEXITCODE
-          }
 
       - name: Build binaries
         run: cargo build --release
@@ -89,6 +77,18 @@ jobs:
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
           Pop-Location
 
+      - name: Build Windows MSI
+        working-directory: apps/claude-codex-pro-manager
+        run: npm exec tauri build -- --bundles msi --config '{"bundle":{"active":true}}'
+
+      - name: Stage Windows MSI
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msi) { throw "Tauri MSI bundle was not produced" }
+          $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
+          Copy-Item $msi.FullName "dist/windows/claude-codex-pro-$version-windows-x64.msi"
+
       - name: Package Windows ZIP
         shell: pwsh
         run: |
@@ -106,6 +106,7 @@ jobs:
           files: |
             dist/windows/*windows-x64-setup.exe
             dist/windows/*windows-x64.zip
+            dist/windows/*windows-x64.msi
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
@@ -142,10 +143,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
-
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager

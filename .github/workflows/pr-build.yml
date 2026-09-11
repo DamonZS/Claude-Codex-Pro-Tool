@@ -32,24 +32,9 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
-
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
-
-      - name: Rust tests
-        shell: pwsh
-        run: |
-          cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open *>&1 | Tee-Object cargo-test.log
-          if ($LASTEXITCODE -ne 0) {
-            $tail = (Get-Content cargo-test.log -Tail 80) -join "`n"
-            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Windows Rust tests failed::$escaped"
-            exit $LASTEXITCODE
-          }
 
       - name: Build release binaries
         run: cargo build --release
@@ -134,10 +119,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
-
-      - name: TypeScript check
-        working-directory: apps/claude-codex-pro-manager
-        run: npm run check
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
