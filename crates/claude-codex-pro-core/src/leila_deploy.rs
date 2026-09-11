@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
 #[cfg(not(windows))]
 use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -816,7 +816,10 @@ where
     F: FnMut(&str),
 {
     let mut command = Command::new(executable);
-    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut child = command.spawn().context("启动 Python pip 安装失败")?;
     let stdout = child.stdout.take().context("读取 Python stdout 失败")?;
     let stderr = child.stderr.take().context("读取 Python stderr 失败")?;

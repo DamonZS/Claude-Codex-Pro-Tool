@@ -7566,7 +7566,16 @@ fn leila_target(target_codex_home: Option<&str>) -> PathBuf {
 fn leila_resources(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     let resource_dir = app.path().resource_dir().ok();
     let dev_assets = cfg!(debug_assertions).then(leila_deploy::default_dev_assets_root);
-    leila_deploy::resolve_assets_root(resource_dir.as_deref(), dev_assets.as_deref())
+    if let Ok(resources) =
+        leila_deploy::resolve_assets_root(resource_dir.as_deref(), dev_assets.as_deref())
+    {
+        return Ok(resources);
+    }
+    let exe_assets = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("resources")))
+        .ok_or_else(|| anyhow::anyhow!("未能确定应用程序资源目录"))?;
+    leila_deploy::resolve_assets_root(Some(&exe_assets), None)
 }
 
 #[derive(Debug, Clone, Serialize)]
