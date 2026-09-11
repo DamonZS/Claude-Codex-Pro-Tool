@@ -77,7 +77,7 @@
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
   const codexProjectMoveVersion = "1";
-  const codexActionGroupVersion = "5";
+  const codexActionGroupVersion = "6";
   const codexArchiveRowActionsVersion = "1";
   const codexArchiveDeleteAllVersion = "2";
   const codexConversationTimelineVersion = "2";
@@ -12198,6 +12198,17 @@
   }
 
   function installMoreButtonEvents(row, button, onActivate) {
+    let lastPointerActivationAt = 0;
+    const activateOnce = (event) => {
+      // Chromium normally emits pointerup followed by click for one gesture.
+      // Keep click as a fallback for environments that do not deliver pointerup.
+      if (event.type === "pointerup") {
+        lastPointerActivationAt = performance.now();
+      } else if (event.type === "click" && performance.now() - lastPointerActivationAt < 500) {
+        return;
+      }
+      onActivate(event);
+    };
     ["pointerdown", "mousedown", "mouseup", "touchstart"].forEach((eventName) => {
       button.addEventListener(eventName, (event) => stopActionButtonEvent(row, button, event), true);
     });
@@ -12205,10 +12216,10 @@
     button.addEventListener("pointerleave", hideActionButtonTooltip);
     button.addEventListener("focus", () => showActionButtonTooltip(button));
     button.addEventListener("blur", hideActionButtonTooltip);
-    button.addEventListener("pointerup", onActivate, true);
+    button.addEventListener("pointerup", activateOnce, true);
     button.addEventListener("click", (event) => {
       hideActionButtonTooltip();
-      stopActionButtonEvent(row, button, event);
+      activateOnce(event);
     }, true);
   }
 
