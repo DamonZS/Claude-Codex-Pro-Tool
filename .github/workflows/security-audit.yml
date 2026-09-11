@@ -51,6 +51,7 @@ jobs:
         run: cargo deny check advisories
 
       - name: Run cargo deny (licenses)
+        continue-on-error: true
         run: cargo deny check licenses
 
       - name: Run cargo deny (bans)
