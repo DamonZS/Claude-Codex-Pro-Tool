@@ -185,6 +185,23 @@ jobs:
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
           Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
+      - name: Stage Leila resources
+        shell: pwsh
+        run: |
+          $source = "apps/claude-codex-pro-manager/src-tauri/resources/leila/assets"
+          $destination = "dist/windows/app/resources/leila/assets"
+          if (-not (Test-Path "$source/manifest.json")) { throw "Leila 1.0.7 manifest was not found" }
+          New-Item -ItemType Directory -Force $destination | Out-Null
+          Copy-Item "$source/*" $destination -Recurse -Force
+
+      - name: Verify staged Leila resources
+        shell: pwsh
+        run: |
+          $manifest = "dist/windows/app/resources/leila/assets/manifest.json"
+          if (-not (Test-Path $manifest)) { throw "Leila 1.0.7 manifest was not staged" }
+          $data = Get-Content $manifest -Raw | ConvertFrom-Json
+          if ($data.version -ne "1.0.7") { throw "Unexpected Leila resource version: $($data.version)" }
+
       - name: Stage Multica runtime
         run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
 
