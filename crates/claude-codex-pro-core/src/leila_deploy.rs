@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -806,7 +806,8 @@ where
     let stdout = child.stdout.take().context("读取 Python stdout 失败")?;
     let stderr = child.stderr.take().context("读取 Python stderr 失败")?;
     let (sender, receiver) = mpsc::channel::<String>();
-    for stream in [stdout, stderr] {
+    let streams: [Box<dyn Read + Send>; 2] = [Box::new(stdout), Box::new(stderr)];
+    for stream in streams {
         let sender = sender.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stream).lines().flatten() {
