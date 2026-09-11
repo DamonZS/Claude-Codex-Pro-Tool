@@ -141,20 +141,29 @@ pub fn resolve_assets_root(
     }
     candidates
         .into_iter()
-        .flat_map(|path| {
-            let mut roots = vec![path.clone()];
-            if let Ok(entries) = fs::read_dir(&path) {
-                for entry in entries.flatten() {
-                    let child = entry.path();
-                    if child.is_dir() {
-                        roots.push(child);
-                    }
-                }
-            }
-            roots
-        })
+        .flat_map(|path| resource_root_candidates(&path))
         .find(|path| validate_assets_root(path).is_ok())
         .ok_or_else(|| anyhow::anyhow!("未找到完整的破甲 {PACKAGE_VERSION} 打包资源"))
+}
+
+fn resource_root_candidates(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    while let Some((path, depth)) = pending.pop() {
+        candidates.push(path.clone());
+        if depth >= 4 {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let child = entry.path();
+                if child.is_dir() {
+                    pending.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    candidates
 }
 
 pub fn package_assets_root(package_root: &Path) -> Result<PathBuf> {
