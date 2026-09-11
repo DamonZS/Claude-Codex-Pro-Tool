@@ -141,6 +141,18 @@ pub fn resolve_assets_root(
     }
     candidates
         .into_iter()
+        .flat_map(|path| {
+            let mut roots = vec![path.clone()];
+            if let Ok(entries) = fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    let child = entry.path();
+                    if child.is_dir() {
+                        roots.push(child);
+                    }
+                }
+            }
+            roots
+        })
         .find(|path| validate_assets_root(path).is_ok())
         .ok_or_else(|| anyhow::anyhow!("未找到完整的破甲 {PACKAGE_VERSION} 打包资源"))
 }
@@ -156,7 +168,8 @@ pub fn package_assets_root(package_root: &Path) -> Result<PathBuf> {
 pub fn inspect_status(target: &Path, resources: Option<&Path>) -> LeilaDeploymentStatus {
     let platform = status_platform().to_string();
     let architecture = status_architecture().to_string();
-    let supported = cfg!(windows) && std::env::consts::ARCH == "x86_64";
+    let supported = matches!(std::env::consts::OS, "windows" | "macos")
+        && matches!(std::env::consts::ARCH, "x86_64" | "aarch64");
     let python_runtime = detect_python_runtime();
     let runtime = python_runtime.as_ref().ok();
     let python_modules_installed = runtime
