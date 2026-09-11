@@ -61,7 +61,7 @@ Codex 内嵌的“我的任务”工作流由本仓库的本地控制面和 Code
 
 从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载最新版：
 
-- Windows：`claude-codex-pro-*-windows-x64-setup.exe`
+- Windows：`claude-codex-pro-*-windows-x64-setup.exe`、`claude-codex-pro-*-windows-x64.msi`
 - macOS Intel：`claude-codex-pro-*-macos-x64.dmg`
 - macOS Apple Silicon：`claude-codex-pro-*-macos-arm64.dmg`
 
@@ -429,6 +429,7 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 - Rust stable toolchain，包含 `cargo`、`rustc`、`rustfmt`。
 - Windows 构建需要 Visual Studio Build Tools / MSVC C++ 工具链。
 - Windows 打安装包需要 NSIS。
+- Windows MSI 打包需要 WiX Toolset（Release 工作流会自动安装）。
 - macOS 构建需要 Xcode Command Line Tools。
 - macOS 打 DMG 会使用系统自带的 `sips`、`iconutil`、`codesign`、`hdiutil`。
 
@@ -437,6 +438,8 @@ Windows 安装 NSIS 示例：
 ```powershell
 choco install nsis -y
 ```
+
+Release 工作流会额外生成独立的 Windows MSI 资产；默认 Tauri 配置仍关闭 bundle，避免本地开发构建额外打包。
 
 macOS 安装 Rust 目标示例：
 
