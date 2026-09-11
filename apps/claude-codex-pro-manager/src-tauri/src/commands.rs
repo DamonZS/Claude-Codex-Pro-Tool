@@ -57,6 +57,7 @@ use serde_json::{Value, json};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt as TokioAsyncWriteExt};
+use tokio::sync::oneshot;
 use toml_edit::DocumentMut;
 
 use crate::install::{self, InstallActionResult, InstallOptions};
@@ -267,10 +268,7 @@ fn log_security_event(event_type: SecurityEventType, details: Value) {
         "details": details,
     });
 
-    log_manager_event(
-        &format!("security.{:?}", event_type).to_lowercase(),
-        event,
-    );
+    log_manager_event(&format!("security.{:?}", event_type).to_lowercase(), event);
 }
 
 // ============================================================================
@@ -298,18 +296,9 @@ impl TimeoutConfig {
                 "CCP_TIMEOUT_ZH_PATCH_ELEVATED",
                 300,
             ),
-            repair_codex_frontend: Self::parse_env_duration(
-                "CCP_TIMEOUT_REPAIR_FRONTEND",
-                45,
-            ),
-            repair_codex_restart: Self::parse_env_duration(
-                "CCP_TIMEOUT_REPAIR_RESTART",
-                90,
-            ),
-            repair_codex_port_release: Self::parse_env_duration(
-                "CCP_TIMEOUT_PORT_RELEASE",
-                2,
-            ),
+            repair_codex_frontend: Self::parse_env_duration("CCP_TIMEOUT_REPAIR_FRONTEND", 45),
+            repair_codex_restart: Self::parse_env_duration("CCP_TIMEOUT_REPAIR_RESTART", 90),
+            repair_codex_port_release: Self::parse_env_duration("CCP_TIMEOUT_PORT_RELEASE", 2),
         }
     }
 
@@ -393,7 +382,11 @@ fn sanitize_url_for_logging(url: &str) -> String {
                 // 尝试清理 basic auth
                 let parts: Vec<&str> = url.split("://").collect();
                 if parts.len() == 2 {
-                    format!("{}://[REDACTED]@{}", parts[0], parts[1].split('@').last().unwrap_or(parts[1]))
+                    format!(
+                        "{}://[REDACTED]@{}",
+                        parts[0],
+                        parts[1].split('@').last().unwrap_or(parts[1])
+                    )
                 } else {
                     "[INVALID_URL]".to_string()
                 }
@@ -435,17 +428,23 @@ fn sanitize_api_key_patterns(text: &str) -> String {
     // Anthropic API keys: sk-ant-api03-...
     // 注意：正则表达式是硬编码的，编译失败表示程序错误
     if let Ok(anthropic_pattern) = regex::Regex::new(r"sk-ant-api\d+-[A-Za-z0-9_-]{95}") {
-        result = anthropic_pattern.replace_all(&result, "sk-ant-[REDACTED]").to_string();
+        result = anthropic_pattern
+            .replace_all(&result, "sk-ant-[REDACTED]")
+            .to_string();
     }
 
     // OpenAI API keys: sk-proj-... or sk-...
     if let Ok(openai_pattern) = regex::Regex::new(r"sk-[A-Za-z0-9_-]{20,}") {
-        result = openai_pattern.replace_all(&result, "sk-[REDACTED]").to_string();
+        result = openai_pattern
+            .replace_all(&result, "sk-[REDACTED]")
+            .to_string();
     }
 
     // Bearer tokens
     if let Ok(bearer_pattern) = regex::Regex::new(r"Bearer\s+[A-Za-z0-9_\-\.]+") {
-        result = bearer_pattern.replace_all(&result, "Bearer [REDACTED]").to_string();
+        result = bearer_pattern
+            .replace_all(&result, "Bearer [REDACTED]")
+            .to_string();
     }
 
     result
@@ -766,9 +765,7 @@ impl DeleteClaudeSessionRequest {
             .expect("Session ID 正则表达式无效（程序错误）");
 
         if !session_id_regex.is_match(session_id) {
-            anyhow::bail!(
-                "会话 ID 格式无效。仅允许字母、数字、下划线和连字符，长度 1-64 个字符。"
-            );
+            anyhow::bail!("会话 ID 格式无效。仅允许字母、数字、下划线和连字符，长度 1-64 个字符。");
         }
 
         // ✅ 验证 source_path 必须是规范路径且在允许的目录内
@@ -843,9 +840,7 @@ impl LoadClaudeSessionContextRequest {
             .expect("Session ID 正则表达式无效（程序错误）");
 
         if !session_id_regex.is_match(session_id) {
-            anyhow::bail!(
-                "会话 ID 格式无效。仅允许字母、数字、下划线和连字符。"
-            );
+            anyhow::bail!("会话 ID 格式无效。仅允许字母、数字、下划线和连字符。");
         }
 
         // ✅ 验证 source_path
@@ -2284,8 +2279,7 @@ fn run_claude_zh_patch_elevated(
     let exe = std::env::current_exe()?;
 
     // ✅ 验证可执行文件路径
-    let exe_validated = validate_executable_path(&exe)
-        .context("可执行文件路径验证失败")?;
+    let exe_validated = validate_executable_path(&exe).context("可执行文件路径验证失败")?;
 
     let result_dir = claude_codex_pro_core::paths::default_app_state_dir().join("tmp");
     fs::create_dir_all(&result_dir)
@@ -2343,8 +2337,7 @@ fn run_claude_zh_patch_elevated(
     {
         // ✅ 验证所有参数
         for arg in &arguments {
-            validate_powershell_argument(arg)
-                .with_context(|| format!("参数验证失败: {}", arg))?;
+            validate_powershell_argument(arg).with_context(|| format!("参数验证失败: {}", arg))?;
         }
 
         let exe_quoted = powershell_single_quoted(&exe_validated.to_string_lossy());
@@ -2436,8 +2429,8 @@ fn powershell_single_quoted(value: &str) -> String {
 
 /// 验证可执行文件路径在允许的目录范围内
 fn validate_executable_path(path: &Path) -> anyhow::Result<PathBuf> {
-    let canonical = std::fs::canonicalize(path)
-        .with_context(|| format!("路径不存在或不可访问: {:?}", path))?;
+    let canonical =
+        std::fs::canonicalize(path).with_context(|| format!("路径不存在或不可访问: {:?}", path))?;
 
     // 白名单：仅允许 Program Files、Windows、本地应用目录
     let allowed_prefixes = vec![
@@ -2448,7 +2441,10 @@ fn validate_executable_path(path: &Path) -> anyhow::Result<PathBuf> {
         dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
     ];
 
-    if !allowed_prefixes.iter().any(|prefix| canonical.starts_with(prefix)) {
+    if !allowed_prefixes
+        .iter()
+        .any(|prefix| canonical.starts_with(prefix))
+    {
         anyhow::bail!(
             "可执行文件路径不在允许的目录范围内: {:?}。仅允许 Program Files、Windows 或本地应用目录。",
             canonical
@@ -2468,12 +2464,20 @@ fn validate_powershell_argument(arg: &str) -> anyhow::Result<()> {
 
     // 额外检查：拒绝包含 PowerShell 关键字的参数
     const FORBIDDEN_KEYWORDS: &[&str] = &[
-        "Invoke-Expression", "Invoke-Command", "Start-Process",
-        "New-Object", "Add-Type", "iex", "icm",
+        "Invoke-Expression",
+        "Invoke-Command",
+        "Start-Process",
+        "New-Object",
+        "Add-Type",
+        "iex",
+        "icm",
     ];
 
     let lower = arg.to_lowercase();
-    if FORBIDDEN_KEYWORDS.iter().any(|kw| lower.contains(&kw.to_lowercase())) {
+    if FORBIDDEN_KEYWORDS
+        .iter()
+        .any(|kw| lower.contains(&kw.to_lowercase()))
+    {
         anyhow::bail!("参数包含禁止的 PowerShell 命令关键字");
     }
 
@@ -2627,7 +2631,7 @@ pub async fn install_claude_zh_patch_at_install_root(
                 ),
                 claude_zh_patch_payload(
                     claude_codex_pro_core::claude_zh_patch::detect_status(),
-                    Vec::new()
+                    Vec::new(),
                 ),
             );
         }
@@ -2651,7 +2655,8 @@ pub async fn install_claude_zh_patch_at_install_root(
             "manager.claude_zh_patch.manual_install.close_claude_failed",
             json!({}),
         );
-        let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
+        let status =
+            claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
         return failed(
             "手动打补丁前关闭 Claude Desktop 失败。请退出 Claude 后重试。",
             claude_zh_patch_payload(status, Vec::new()),
@@ -2666,8 +2671,9 @@ pub async fn install_claude_zh_patch_at_install_root(
         );
         match install_claude_zh_patch_elevated_at_install_root(&validated_root) {
             Ok(result) if result.status == "ok" => {
-                let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
+                let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(
+                    &validated_root,
+                );
                 if status.status != "ok" {
                     return failed(
                         &format!("Claude 手动汉化提权运行未完成：{}", status.message),
@@ -2677,16 +2683,18 @@ pub async fn install_claude_zh_patch_at_install_root(
                 return complete_claude_zh_patch_install(result.message, status, Vec::new());
             }
             Ok(result) => {
-                let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
+                let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(
+                    &validated_root,
+                );
                 return failed(
                     &format!("Claude 手动汉化提权运行失败：{}", result.message),
                     claude_zh_patch_payload(status, Vec::new()),
                 );
             }
             Err(error) => {
-                let status =
-                    claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
+                let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(
+                    &validated_root,
+                );
                 return failed(
                     &format!("Claude 手动汉化需要管理员授权，但提权失败：{error}"),
                     claude_zh_patch_payload(status, Vec::new()),
@@ -3947,8 +3955,7 @@ fn multica_save_request_to_config(
     request: MulticaConnectionSaveRequest,
 ) -> anyhow::Result<MulticaConnectionConfig> {
     // ✅ 验证输入
-    request.validate()
-        .context("连接配置验证失败")?;
+    request.validate().context("连接配置验证失败")?;
 
     let connection_id = request.connection_id.unwrap_or_default().trim().to_string();
     if connection_id == "managed-multica" {
@@ -7562,20 +7569,100 @@ fn leila_resources(app: &tauri::AppHandle) -> anyhow::Result<PathBuf> {
     leila_deploy::resolve_assets_root(resource_dir.as_deref(), dev_assets.as_deref())
 }
 
-fn failed_leila_status(
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LeilaDeployLogEvent {
+    line: String,
+    phase: String,
+    level: String,
+    target_codex_home: String,
+}
+
+fn leila_log_phase(line: &str) -> &'static str {
+    if line.contains("Python") || line.contains("pip") {
+        "python"
+    } else if line.contains("SHA-256") || line.contains("校验") {
+        "verify"
+    } else {
+        "deploy"
+    }
+}
+
+fn emit_leila_log(app: &tauri::AppHandle, target: &Path, line: &str) {
+    let payload = LeilaDeployLogEvent {
+        line: line.to_string(),
+        phase: leila_log_phase(line).to_string(),
+        level: if line.contains("失败") || line.contains("错误") {
+            "error".to_string()
+        } else {
+            "info".to_string()
+        },
+        target_codex_home: target.to_string_lossy().to_string(),
+    };
+    let _ = app.emit("leila-deploy-log", payload);
+}
+
+fn failed_leila_status_sync(
     target: &Path,
     resources: Option<&Path>,
-    error: &anyhow::Error,
+    error: &str,
 ) -> LeilaDeploymentStatus {
     let mut status = leila_deploy::inspect_status(target, resources);
     status.last_error = Some(error.to_string());
-    if error.to_string().to_ascii_lowercase().contains("pip")
-        || error.to_string().contains("Python 模块")
-    {
+    if error.to_ascii_lowercase().contains("pip") || error.contains("Python 模块") {
         status.python_module_status = "failed".to_string();
     }
     status.logs.push(format!("操作失败：{error}"));
     status
+}
+
+async fn failed_leila_status(
+    target: PathBuf,
+    resources: Option<PathBuf>,
+    error: String,
+) -> LeilaDeploymentStatus {
+    let fallback_target = target.clone();
+    let fallback_error = error.clone();
+    match tauri::async_runtime::spawn_blocking(move || {
+        failed_leila_status_sync(&target, resources.as_deref(), &error)
+    })
+    .await
+    {
+        Ok(status) => status,
+        Err(join_error) => {
+            let status = LeilaDeploymentStatus {
+                supported: false,
+                package_version: "1.0.7".to_string(),
+                platform: std::env::consts::OS.to_string(),
+                architecture: std::env::consts::ARCH.to_string(),
+                python_version: None,
+                python_bits: None,
+                python_modules_installed: false,
+                python_module_status: "failed".to_string(),
+                target_codex_home: fallback_target.to_string_lossy().to_string(),
+                deployed: false,
+                prompt_verified: false,
+                identity_verified: false,
+                ac_verified: false,
+                global_profile_active: false,
+                externally_modified: false,
+                rollback_available: false,
+                last_deployment_at: None,
+                last_result: None,
+                last_error: Some(fallback_error.clone()),
+                prompt_sha256: None,
+                identity_sha256: None,
+                ac_sha256: None,
+                operation_manifest: None,
+                backup_paths: Vec::new(),
+                logs: vec![
+                    format!("操作失败：{fallback_error}"),
+                    format!("状态检测任务失败：{join_error}"),
+                ],
+            };
+            status
+        }
+    }
 }
 
 #[tauri::command]
@@ -7589,7 +7676,7 @@ pub async fn inspect_leila_status(
         Err(error) => {
             return failed(
                 &format!("破甲打包资源不可用：{error}"),
-                failed_leila_status(&target, None, &error),
+                failed_leila_status(target.clone(), None, error.to_string()).await,
             );
         }
     };
@@ -7604,7 +7691,7 @@ pub async fn inspect_leila_status(
             let error = anyhow::anyhow!("破甲状态检测任务失败：{error}");
             failed(
                 &error.to_string(),
-                failed_leila_status(&target, None, &error),
+                failed_leila_status(target.clone(), None, error.to_string()).await,
             )
         }
     }
@@ -7620,12 +7707,24 @@ pub async fn choose_leila_codex_target(
     if current.is_dir() {
         picker = picker.set_directory(&current);
     }
-    let Some(selected) = picker.blocking_pick_folder() else {
-        let resources = leila_resources(&app).ok();
-        return ok(
-            "已取消选择 Codex 目录。",
-            leila_deploy::inspect_status(&current, resources.as_deref()),
-        );
+    let (selected_tx, selected_rx) = oneshot::channel();
+    picker.pick_folder(move |selected| {
+        let _ = selected_tx.send(selected);
+    });
+    let selected = match selected_rx.await {
+        Ok(Some(selected)) => selected,
+        Ok(None) | Err(_) => {
+            let resources = leila_resources(&app).ok();
+            let inspect_target = current.clone();
+            return ok(
+                "已取消选择 Codex 目录。",
+                tauri::async_runtime::spawn_blocking(move || {
+                    leila_deploy::inspect_status(&inspect_target, resources.as_deref())
+                })
+                .await
+                .unwrap_or_else(|_| leila_deploy::inspect_status(&current, None)),
+            );
+        }
     };
     let selected = match selected.into_path() {
         Ok(path) => path,
@@ -7633,7 +7732,7 @@ pub async fn choose_leila_codex_target(
             let error = anyhow::anyhow!("选择的目录路径无效：{error}");
             return failed(
                 &error.to_string(),
-                failed_leila_status(&current, None, &error),
+                failed_leila_status(current.clone(), None, error.to_string()).await,
             );
         }
     };
@@ -7641,13 +7740,18 @@ pub async fn choose_leila_codex_target(
         let error = anyhow::anyhow!("所选目录不包含 config.toml：{}", selected.display());
         return failed(
             &error.to_string(),
-            failed_leila_status(&selected, None, &error),
+            failed_leila_status(selected.clone(), None, error.to_string()).await,
         );
     }
     let resources = leila_resources(&app).ok();
+    let inspect_target = selected.clone();
     ok(
         "Codex 目标目录已更新。",
-        leila_deploy::inspect_status(&selected, resources.as_deref()),
+        tauri::async_runtime::spawn_blocking(move || {
+            leila_deploy::inspect_status(&inspect_target, resources.as_deref())
+        })
+        .await
+        .unwrap_or_else(|_| leila_deploy::inspect_status(&selected, None)),
     )
 }
 
@@ -7662,14 +7766,19 @@ pub async fn deploy_leila(
         Err(error) => {
             return failed(
                 &format!("破甲打包资源不可用：{error}"),
-                failed_leila_status(&target, None, &error),
+                failed_leila_status(target.clone(), None, error.to_string()).await,
             );
         }
     };
     let operation_target = target.clone();
     let operation_resources = resources.clone();
+    let log_app = app.clone();
+    let log_target = operation_target.clone();
+    emit_leila_log(&app, &target, "部署任务已启动");
     match tauri::async_runtime::spawn_blocking(move || {
-        leila_deploy::deploy_leila(&operation_target, &operation_resources)
+        leila_deploy::deploy_leila_with_logger(&operation_target, &operation_resources, |line| {
+            emit_leila_log(&log_app, &log_target, line);
+        })
     })
     .await
     {
@@ -7683,13 +7792,14 @@ pub async fn deploy_leila(
         }
         Ok(Err(error)) => failed(
             &format!("破甲部署失败：{error}"),
-            failed_leila_status(&target, Some(&resources), &error),
+            failed_leila_status(target.clone(), Some(resources.clone()), error.to_string()).await,
         ),
         Err(error) => {
             let error = anyhow::anyhow!("破甲部署任务失败：{error}");
             failed(
                 &error.to_string(),
-                failed_leila_status(&target, Some(&resources), &error),
+                failed_leila_status(target.clone(), Some(resources.clone()), error.to_string())
+                    .await,
             )
         }
     }
@@ -7712,13 +7822,13 @@ pub async fn rollback_leila(
         Ok(Ok(status)) => ok("最近一次破甲部署已回滚。", status),
         Ok(Err(error)) => failed(
             &format!("破甲回滚失败：{error}"),
-            failed_leila_status(&target, resources.as_deref(), &error),
+            failed_leila_status(target.clone(), resources.clone(), error.to_string()).await,
         ),
         Err(error) => {
             let error = anyhow::anyhow!("破甲回滚任务失败：{error}");
             failed(
                 &error.to_string(),
-                failed_leila_status(&target, resources.as_deref(), &error),
+                failed_leila_status(target.clone(), resources.clone(), error.to_string()).await,
             )
         }
     }
@@ -9366,6 +9476,7 @@ fn switch_relay_profile_blocking(
             )
         }
         Err(error) => {
+            let error_detail = format!("{error:#}");
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);
             let settings = store.load().unwrap_or_default();
             log_manager_event(
@@ -9373,11 +9484,11 @@ fn switch_relay_profile_blocking(
                 json!({
                     "previousActiveRelayId": previous_active_relay_id,
                     "activeRelayId": settings.active_relay_id,
-                    "error": error.to_string()
+                    "error": error_detail
                 }),
             );
             failed(
-                &format!("切换供应商配置失败：{error}"),
+                &format!("切换供应商配置失败：{error:#}"),
                 relay_switch_payload(settings, status, None),
             )
         }
@@ -12395,11 +12506,7 @@ fn clear_system_clipboard_windows() -> anyhow::Result<()> {
     use std::process::Command;
 
     let output = Command::new("powershell")
-        .args(&[
-            "-NoProfile",
-            "-Command",
-            "Set-Clipboard -Value $null"
-        ])
+        .args(&["-NoProfile", "-Command", "Set-Clipboard -Value $null"])
         .output()
         .context("执行 PowerShell 清除剪贴板失败")?;
 
@@ -12432,15 +12539,11 @@ fn validate_port(port: u16) -> anyhow::Result<u16> {
 /// - 必须是 http 或 https scheme
 /// - 主机名不能为空
 fn validate_url(url_str: &str) -> anyhow::Result<url::Url> {
-    let url = url::Url::parse(url_str)
-        .with_context(|| format!("URL 格式无效: {}", url_str))?;
+    let url = url::Url::parse(url_str).with_context(|| format!("URL 格式无效: {}", url_str))?;
 
     // 只允许 http/https
     if url.scheme() != "http" && url.scheme() != "https" {
-        anyhow::bail!(
-            "URL scheme 无效: {}。仅支持 http 和 https。",
-            url.scheme()
-        );
+        anyhow::bail!("URL scheme 无效: {}。仅支持 http 和 https。", url.scheme());
     }
 
     // 必须有主机名
@@ -12465,18 +12568,23 @@ fn validate_non_empty_string(s: &str, field_name: &str) -> anyhow::Result<String
 /// ✅ 验证字符串长度
 ///
 /// 检查字符串长度是否在指定范围内
-fn validate_string_length(
-    s: &str,
-    field_name: &str,
-    min: usize,
-    max: usize,
-) -> anyhow::Result<()> {
+fn validate_string_length(s: &str, field_name: &str, min: usize, max: usize) -> anyhow::Result<()> {
     let len = s.len();
     if len < min {
-        anyhow::bail!("{} 长度不足：最少 {} 字符，当前 {} 字符", field_name, min, len);
+        anyhow::bail!(
+            "{} 长度不足：最少 {} 字符，当前 {} 字符",
+            field_name,
+            min,
+            len
+        );
     }
     if len > max {
-        anyhow::bail!("{} 长度超限：最多 {} 字符，当前 {} 字符", field_name, max, len);
+        anyhow::bail!(
+            "{} 长度超限：最多 {} 字符，当前 {} 字符",
+            field_name,
+            max,
+            len
+        );
     }
     Ok(())
 }

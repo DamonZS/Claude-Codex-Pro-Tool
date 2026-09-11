@@ -1396,6 +1396,37 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void listen<{ line: string; phase: string; level: string; targetCodexHome: string }>("leila-deploy-log", (event) => {
+      if (disposed) return;
+      const { line, targetCodexHome } = event.payload;
+      if (!line) return;
+      setLeilaStatus((current) => {
+        if (!current || (targetCodexHome && current.targetCodexHome && current.targetCodexHome !== targetCodexHome)) {
+          return current;
+        }
+        const logs = current.logs ?? [];
+        return { ...current, logs: [...logs, line] };
+      });
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stopListening = unlisten;
+      })
+      .catch(() => {
+        // Browser-only preview mode has no Tauri event runtime.
+      });
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, []);
+
   const writeUiEvent = async (event: string, detail: Record<string, unknown> = {}) => {
     try {
       await call<CommandResult<Record<string, unknown>>>("write_diagnostic_event", { event, detail });
@@ -1950,12 +1981,7 @@ export function App() {
       setLeilaStatus(result);
       notifyResult({ title: "部署破甲", message: result.message, status: result.status });
     }
-    if (result && statusOk(result.status)) {
-      // Keep the command's stage log visible; a status refresh only contains inspection output.
-      await refreshSystemPrompts(true);
-    } else {
-      await refreshSystemPrompts(true);
-    }
+    await refreshSystemPrompts(true);
     return result;
   };
 
@@ -1968,12 +1994,7 @@ export function App() {
       setLeilaStatus(result);
       notifyResult({ title: "回滚破甲", message: result.message, status: result.status });
     }
-    if (result && statusOk(result.status)) {
-      // Keep the command's stage log visible; a status refresh only contains inspection output.
-      await refreshSystemPrompts(true);
-    } else {
-      await refreshSystemPrompts(true);
-    }
+    await refreshSystemPrompts(true);
     return result;
   };
 

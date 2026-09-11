@@ -1964,10 +1964,19 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     }
 
     let temp_path = temp_path_for(path);
-    if let Err(error) = write_private_file(&temp_path, bytes) {
+    let file = match write_private_file(&temp_path, bytes) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error);
+        }
+    };
+    if let Err(error) = file.sync_all() {
         let _ = fs::remove_file(&temp_path);
-        return Err(error);
+        return Err(error)
+            .with_context(|| format!("failed to sync temp file {}", temp_path.display()));
     }
+    drop(file);
     let replace_result = replace_file(&temp_path, path).with_context(|| {
         format!(
             "failed to replace {} with {}",
@@ -1983,56 +1992,8 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// ✅ 原子写入文件 - 防止竞争条件和数据损坏
-///
-/// 使用以下策略确保原子性：
-/// 1. 写入临时文件 (带随机后缀)
-/// 2. fsync() 确保数据持久化到磁盘
-/// 3. 原子 rename() 替换目标文件
-/// 4. 整个过程在文件锁下进行
-///
-/// 这避免了 TOCTOU (Time-of-Check to Time-of-Use) 竞争条件。
 fn direct_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        create_private_dir_all(parent)?;
-    }
-
-    // ✅ 生成临时文件路径 (同一目录，确保原子 rename 可用)
-    let temp_path = path.with_extension(format!(
-        "tmp.{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    // ✅ 写入临时文件
-    write_private_file(&temp_path, bytes)?;
-
-    // ✅ 确保数据持久化到磁盘 (fsync)
-    {
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .open(&temp_path)
-            .with_context(|| format!("无法打开临时文件以进行 sync: {}", temp_path.display()))?;
-
-        file.sync_all()
-            .with_context(|| format!("sync_all 失败: {}", temp_path.display()))?;
-    }
-
-    // ✅ 原子 rename (在 Unix 和 Windows 上都是原子操作)
-    fs::rename(&temp_path, path).with_context(|| {
-        format!(
-            "原子重命名失败: {} -> {}",
-            temp_path.display(),
-            path.display()
-        )
-    })?;
-
-    // ✅ 设置目标文件权限
-    secure_private_path(path)?;
-
-    Ok(())
+    atomic_write(path, bytes)
 }
 
 pub(crate) fn create_private_dir_all(path: &Path) -> anyhow::Result<()> {
@@ -2054,7 +2015,7 @@ pub(crate) fn create_private_dir_all(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<File> {
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -2071,6 +2032,7 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
             .with_context(|| format!("failed to secure temp file {}", path.display()))?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
+        Ok(file)
     }
     #[cfg(not(unix))]
     {
@@ -2087,8 +2049,8 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         secure_then_truncate_windows_file(path, &file, secure_private_path)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write temp file {}", path.display()))?;
+        Ok(file)
     }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -2668,6 +2630,39 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
         assert_eq!(
             persisted["relayProfiles"][0]["upstreamBaseUrl"],
             "https://relay.example/v1"
+        );
+    }
+
+    #[test]
+    fn settings_store_save_replaces_existing_supplier_settings_file() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let mut settings = BackendSettings {
+            relay_profiles_enabled: true,
+            active_relay_id: "supplier-a".to_string(),
+            ..BackendSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        settings.active_relay_id = "supplier-b".to_string();
+        store.save(&settings).unwrap();
+
+        assert_eq!(store.load().unwrap().active_relay_id, "supplier-b");
+        assert!(path.is_file());
+        assert_eq!(
+            fs::read_dir(&dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("settings.tmp.")
+                })
+                .count(),
+            0,
+            "a successful replacement must not leave a temporary settings file"
         );
     }
 

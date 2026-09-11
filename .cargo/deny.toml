@@ -12,7 +12,6 @@ ignore = [
 
 [licenses]
 # We're permissive about licenses, but document them
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -22,8 +21,6 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
 ]
-copyleft = "warn"
-allow-osi-fsf-free = "both"
 confidence-threshold = 0.8
 
 [bans]

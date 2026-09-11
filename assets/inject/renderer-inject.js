@@ -1391,7 +1391,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5, multicaWorkspaceEnabled: true };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: false, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5, multicaWorkspaceEnabled: true };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -1464,6 +1464,9 @@
     // Claude localization is owned by the Claude integration. Codex DOM content
     // can contain user input and project data, so it must never be translated.
     settings.chineseOverlayEnabled = false;
+    // Codex owns thread deletion and its local-storage lifecycle. CCP must not
+    // replace that flow with a DOM handler or a helper endpoint call.
+    settings.sessionDelete = false;
     if (claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)) {
       return {
         ...settings,
@@ -12408,17 +12411,6 @@
       document.body.appendChild(moreMenu);
       installSessionMoreMenuAutoClose(row, moreMenu);
     }
-    if (settings.sessionDelete) {
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = `${actionButtonClass} ${buttonClass}`;
-      deleteButton.dataset.codexDeleteVersion = codexDeleteVersion;
-      configureSvgActionButton(deleteButton, "删除", trashIconSvg());
-      const openDeleteConfirm = (event) => openDeleteConfirmForRow(row, deleteButton, ref, event);
-      installActionButtonEvents(row, deleteButton, openDeleteConfirm);
-      group.appendChild(deleteButton);
-      setTimeout(() => refreshActionButton(deleteButton, row, openDeleteConfirm), 0);
-    }
     row.appendChild(group);
     syncActionGroupLayout(row, group);
   }
@@ -13202,7 +13194,10 @@
     installCodexServiceTierDispatcherPatch();
     installClaudeCodexProMenu();
     scheduleBackendHeartbeat();
-    installDeleteButtonEventDelegation();
+    document.removeEventListener("pointerup", window.__codexSessionDeleteDocumentDeleteHandler, true);
+    document.removeEventListener("click", window.__codexSessionDeleteDocumentDeleteHandler, true);
+    window.__codexSessionDeleteDocumentDeleteHandler = null;
+    document.querySelectorAll(".codex-delete-confirm-overlay, .codex-delete-toast").forEach((node) => node.remove());
     updateThreadScrollHandlers();
     installThreadScrollProgrammaticScrollGuard();
     installThreadScrollNavigationCapture();

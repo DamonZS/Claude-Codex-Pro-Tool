@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use uuid::Uuid;
 
 const PACKAGE_VERSION: &str = "1.0.7";
@@ -214,7 +216,9 @@ pub fn inspect_status(target: &Path, resources: Option<&Path>) -> LeilaDeploymen
     if !target.join("config.toml").is_file() {
         status.logs.push("目标目录缺少 config.toml".to_string());
     } else {
-        status.logs.push("Codex 目标目录：已找到 config.toml".to_string());
+        status
+            .logs
+            .push("Codex 目标目录：已找到 config.toml".to_string());
     }
 
     if let Some(resources) = resources {
@@ -281,6 +285,17 @@ pub fn inspect_status(target: &Path, resources: Option<&Path>) -> LeilaDeploymen
 }
 
 pub fn deploy_leila(target: &Path, resources: &Path) -> Result<LeilaDeploymentStatus> {
+    deploy_leila_with_logger(target, resources, |_| {})
+}
+
+pub fn deploy_leila_with_logger<F>(
+    target: &Path,
+    resources: &Path,
+    mut on_log: F,
+) -> Result<LeilaDeploymentStatus>
+where
+    F: FnMut(&str),
+{
     validate_target(target)?;
     let resource_manifest = validate_assets_root(resources)?;
     ensure_supported_environment()?;
@@ -291,54 +306,64 @@ pub fn deploy_leila(target: &Path, resources: &Path) -> Result<LeilaDeploymentSt
         "部署开始".to_string(),
         format!("检测到 Python {} {} 位", runtime.version, runtime.bits),
     ];
-    install_python_modules(&runtime, &mut logs)?;
+    for line in &logs {
+        on_log(line);
+    }
+    install_python_modules(&runtime, &mut logs, &mut on_log)?;
 
-    deploy_assets_after_prerequisites(target, resources, resource_manifest, logs)
+    deploy_assets_after_prerequisites(target, resources, resource_manifest, logs, &mut on_log)
 }
 
-fn deploy_assets_after_prerequisites(
+fn deploy_assets_after_prerequisites<F>(
     target: &Path,
     resources: &Path,
     resource_manifest: ResourceManifest,
     logs: Vec<String>,
-) -> Result<LeilaDeploymentStatus> {
+    on_log: &mut F,
+) -> Result<LeilaDeploymentStatus>
+where
+    F: FnMut(&str),
+{
     let mut current = inspect_status(target, Some(resources));
     if current.deployed {
         current.logs = logs;
         if current.rollback_available {
-            current
-                .logs
-                .push("破甲资源和 Codex 配置均为当前版本，无需替换".to_string());
+            push_log(
+                &mut current.logs,
+                on_log,
+                "破甲资源和 Codex 配置均为当前版本，无需替换",
+            );
         } else {
-            current.logs.push(
-                "检测到现有破甲资源和配置已匹配，但没有 CCP 部署清单；本次未替换文件，以避免无法安全回滚的覆盖"
-                    .to_string(),
+            push_log(
+                &mut current.logs,
+                on_log,
+                "检测到现有破甲资源和配置已匹配，但没有 CCP 部署清单；本次未替换文件，以避免无法安全回滚的覆盖",
             );
             current.last_result = Some("外部已有匹配资源，未替换".to_string());
         }
         return Ok(current);
     }
-    deploy_assets_transaction(target, resources, resource_manifest, logs)
+    deploy_assets_transaction_with_logger(
+        target,
+        resources,
+        resource_manifest,
+        logs,
+        || Ok(()),
+        on_log,
+    )
 }
 
-fn deploy_assets_transaction(
-    target: &Path,
-    resources: &Path,
-    resource_manifest: ResourceManifest,
-    logs: Vec<String>,
-) -> Result<LeilaDeploymentStatus> {
-    deploy_assets_transaction_with_hook(target, resources, resource_manifest, logs, || Ok(()))
-}
-
-fn deploy_assets_transaction_with_hook<F>(
+fn deploy_assets_transaction_with_logger<F, L>(
     target: &Path,
     resources: &Path,
     resource_manifest: ResourceManifest,
     logs: Vec<String>,
     after_resources: F,
+    on_log: &mut L,
 ) -> Result<LeilaDeploymentStatus>
 where
     F: FnOnce() -> Result<()>,
+    L: FnMut(&str),
 {
     let operation_dir = create_operation_dir(target)?;
     let manifest_path = operation_dir.join(MANIFEST_FILE);
@@ -391,11 +416,17 @@ where
             if !same_hash(source, destination) {
                 replace_path(source, destination)
                     .with_context(|| format!("替换破甲资源 {name} 失败"))?;
-                operation.stage_results.push(format!("已部署资源：{name}"));
+                push_log(
+                    &mut operation.stage_results,
+                    on_log,
+                    &format!("已部署资源：{name}"),
+                );
             } else {
-                operation
-                    .stage_results
-                    .push(format!("资源已是当前版本：{name}"));
+                push_log(
+                    &mut operation.stage_results,
+                    on_log,
+                    &format!("资源已是当前版本：{name}"),
+                );
             }
         }
         after_resources()?;
@@ -404,13 +435,17 @@ where
         if updated_config.as_bytes() != original_config.as_slice() {
             crate::settings::atomic_write(&config, updated_config.as_bytes())
                 .context("写入 config.toml 失败")?;
-            operation
-                .stage_results
-                .push("已更新 model_instructions_file".to_string());
+            push_log(
+                &mut operation.stage_results,
+                on_log,
+                "已更新 model_instructions_file",
+            );
         } else {
-            operation
-                .stage_results
-                .push("model_instructions_file 已是目标值".to_string());
+            push_log(
+                &mut operation.stage_results,
+                on_log,
+                "model_instructions_file 已是目标值",
+            );
         }
 
         for ((_, source, destination, _), record) in
@@ -425,44 +460,60 @@ where
             bail!("Codex 全局指令配置校验失败");
         }
         operation.config_after_sha256 = Some(file_sha256(&config)?);
-        operation
-            .stage_results
-            .push("资源与 Codex 配置 SHA-256 校验通过".to_string());
+        push_log(
+            &mut operation.stage_results,
+            on_log,
+            "资源与 Codex 配置 SHA-256 校验通过",
+        );
         Ok(())
     })();
 
     if let Err(error) = deployment {
         let restore_result = restore_from_manifest(target, &operation, &operation_dir);
         operation.last_error = Some(error.to_string());
-        operation.stage_results.push(format!("部署失败：{error}"));
+        push_log(
+            &mut operation.stage_results,
+            on_log,
+            &format!("部署失败：{error}"),
+        );
         match restore_result {
-            Ok(()) => operation
-                .stage_results
-                .push("本次资源和配置修改已恢复".to_string()),
-            Err(restore_error) => operation
-                .stage_results
-                .push(format!("自动恢复失败：{restore_error}")),
+            Ok(()) => push_log(
+                &mut operation.stage_results,
+                on_log,
+                "本次资源和配置修改已恢复",
+            ),
+            Err(restore_error) => push_log(
+                &mut operation.stage_results,
+                on_log,
+                &format!("自动恢复失败：{restore_error}"),
+            ),
         }
         let _ = write_operation_manifest(&manifest_path, &operation);
         return Err(error);
     }
 
     operation.completed = true;
-    operation.stage_results.push("破甲部署完成".to_string());
+    push_log(&mut operation.stage_results, on_log, "破甲部署完成");
     if let Err(error) = write_operation_manifest(&manifest_path, &operation) {
         operation.completed = false;
         operation.last_error = Some(error.to_string());
-        operation
-            .stage_results
-            .push(format!("写入最终部署清单失败：{error}"));
+        push_log(
+            &mut operation.stage_results,
+            on_log,
+            &format!("写入最终部署清单失败：{error}"),
+        );
         let restore_result = restore_from_manifest(target, &operation, &operation_dir);
         match restore_result {
-            Ok(()) => operation
-                .stage_results
-                .push("本次资源和配置修改已恢复".to_string()),
-            Err(restore_error) => operation
-                .stage_results
-                .push(format!("自动恢复失败：{restore_error}")),
+            Ok(()) => push_log(
+                &mut operation.stage_results,
+                on_log,
+                "本次资源和配置修改已恢复",
+            ),
+            Err(restore_error) => push_log(
+                &mut operation.stage_results,
+                on_log,
+                &format!("自动恢复失败：{restore_error}"),
+            ),
         }
         let _ = write_operation_manifest(&manifest_path, &operation);
         return Err(error);
@@ -624,13 +675,24 @@ fn python_modules_match(runtime: &PythonRuntime) -> bool {
     })
 }
 
-fn install_python_modules(runtime: &PythonRuntime, logs: &mut Vec<String>) -> Result<()> {
+fn install_python_modules<F>(
+    runtime: &PythonRuntime,
+    logs: &mut Vec<String>,
+    on_log: &mut F,
+) -> Result<()>
+where
+    F: FnMut(&str),
+{
     if python_modules_match(runtime) {
-        logs.push("Python 模块已是要求版本，跳过 pip 安装".to_string());
+        push_log(logs, on_log, "Python 模块已是要求版本，跳过 pip 安装");
         return Ok(());
     }
     let packages = python_packages_for_version(runtime.major, runtime.minor)?;
-    logs.push("正在通过动态 pip 源安装 Python 模块（需要网络）".to_string());
+    push_log(
+        logs,
+        on_log,
+        "正在通过动态 pip 源安装 Python 模块（需要网络）",
+    );
     let mut invocation = Vec::new();
     invocation.extend(runtime.prefix_args.iter().cloned());
     invocation.extend([
@@ -642,29 +704,34 @@ fn install_python_modules(runtime: &PythonRuntime, logs: &mut Vec<String>) -> Re
     ]);
     invocation.extend(packages);
 
-    let output = run_hidden_powershell(&runtime.executable, &invocation)
+    let exit_status =
+        run_hidden_powershell_streaming(&runtime.executable, &invocation, &mut |line| {
+            push_log(logs, on_log, line);
+        })
         .context("启动 PowerShell pip 安装失败")?;
-    let stdout = summarize_output(&output.stdout);
-    let stderr = summarize_output(&output.stderr);
-    if !stdout.is_empty() {
-        logs.push(format!("pip stdout：{stdout}"));
-    }
-    if !stderr.is_empty() {
-        logs.push(format!("pip stderr：{stderr}"));
-    }
-    if !output.status.success() {
+    if !exit_status.success() {
         bail!(
-            "Python 模块安装失败（退出码 {:?}）；pip stdout：{}；pip stderr：{}",
-            output.status.code(),
-            stdout,
-            stderr
+            "Python 模块安装失败（退出码 {:?}）；详见部署日志",
+            exit_status.code()
         );
     }
     if !python_modules_match(runtime) {
         bail!("pip 执行成功，但模块版本校验未通过");
     }
-    logs.push(format!("Python {} x64 模块安装完成", runtime.version));
+    push_log(
+        logs,
+        on_log,
+        &format!("Python {} x64 模块安装完成", runtime.version),
+    );
     Ok(())
+}
+
+fn push_log<F>(logs: &mut Vec<String>, on_log: &mut F, line: &str)
+where
+    F: FnMut(&str),
+{
+    logs.push(line.to_string());
+    on_log(line);
 }
 
 fn run_python(runtime: &PythonRuntime, args: &[&str]) -> Result<Output> {
@@ -675,7 +742,14 @@ fn run_python(runtime: &PythonRuntime, args: &[&str]) -> Result<Output> {
 }
 
 #[cfg(windows)]
-fn run_hidden_powershell(executable: &str, args: &[String]) -> Result<Output> {
+fn run_hidden_powershell_streaming<F>(
+    executable: &str,
+    args: &[String],
+    on_line: &mut F,
+) -> Result<std::process::ExitStatus>
+where
+    F: FnMut(&str),
+{
     let mut tokens = vec![powershell_quote(executable)];
     tokens.extend(args.iter().map(|arg| powershell_quote(arg)));
     let script = format!(
@@ -691,28 +765,44 @@ fn run_hidden_powershell(executable: &str, args: &[String]) -> Result<Output> {
         &script,
     ]);
     hide_window(&mut command);
-    command.output().context("执行隐藏 PowerShell 失败")
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().context("执行隐藏 PowerShell 失败")?;
+    let stdout = child.stdout.take().context("读取 PowerShell stdout 失败")?;
+    let stderr = child.stderr.take().context("读取 PowerShell stderr 失败")?;
+    let (sender, receiver) = mpsc::channel::<String>();
+    let stderr_sender = sender.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            let _ = stderr_sender.send(line);
+        }
+    });
+    let stdout_sender = sender.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            let _ = stdout_sender.send(line);
+        }
+    });
+    drop(sender);
+    for line in receiver {
+        on_line(&line);
+    }
+    child.wait().context("等待 PowerShell pip 安装失败")
 }
 
 #[cfg(not(windows))]
-fn run_hidden_powershell(_executable: &str, _args: &[String]) -> Result<Output> {
+fn run_hidden_powershell_streaming<F>(
+    _executable: &str,
+    _args: &[String],
+    _on_line: &mut F,
+) -> Result<std::process::ExitStatus>
+where
+    F: FnMut(&str),
+{
     bail!("动态 pip 安装仅支持 Windows")
 }
 
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
-}
-
-fn summarize_output(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes)
-        .trim()
-        .replace(['\r', '\n'], " | ");
-    const LIMIT: usize = 4000;
-    if text.chars().count() > LIMIT {
-        format!("{}...", text.chars().take(LIMIT).collect::<String>())
-    } else {
-        text
-    }
 }
 
 fn validate_target(target: &Path) -> Result<()> {
@@ -1084,6 +1174,7 @@ mod tests {
             resources,
             resource_manifest,
             vec!["test deploy".into()],
+            &mut |_| {},
         )
     }
 
@@ -1317,8 +1408,16 @@ mod tests {
 
         assert!(status.deployed);
         assert!(!status.rollback_available);
-        assert_eq!(status.last_result.as_deref(), Some("外部已有匹配资源，未替换"));
-        assert!(status.logs.iter().any(|line| line.contains("没有 CCP 部署清单")));
+        assert_eq!(
+            status.last_result.as_deref(),
+            Some("外部已有匹配资源，未替换")
+        );
+        assert!(
+            status
+                .logs
+                .iter()
+                .any(|line| line.contains("没有 CCP 部署清单"))
+        );
         assert!(!target.join(BACKUP_DIR).exists());
     }
 
@@ -1374,12 +1473,13 @@ mod tests {
         );
         fs::write(target.join(PROMPT), "OLD\n").unwrap();
         let resource_manifest = validate_assets_root(&resources).unwrap();
-        let result = deploy_assets_transaction_with_hook(
+        let result = deploy_assets_transaction_with_logger(
             &target,
             &resources,
             resource_manifest,
             vec!["test deploy".to_string()],
             || bail!("injected failure"),
+            &mut |_| {},
         );
         assert!(result.is_err());
         assert_eq!(

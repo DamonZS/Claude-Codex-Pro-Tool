@@ -58,7 +58,7 @@ function deploymentState(status: LeilaDeploymentStatus | null) {
   if (!statusOk(status.status)) return { label: "检测失败", tone: "warn" };
   if (!status.supported) return { label: "不支持", tone: "warn" };
   if (status.externallyModified) return { label: "外部修改", tone: "warn" };
-  if (status.deployed && (!status.promptVerified || !status.identityVerified || !status.acVerified)) {
+  if (status.operationManifest && (!status.promptVerified || !status.identityVerified || !status.acVerified || !status.globalProfileActive)) {
     return { label: "资源不匹配", tone: "warn" };
   }
   if (status.deployed) return { label: status.rollbackAvailable ? "已部署，可回滚" : "已部署", tone: "ok" };

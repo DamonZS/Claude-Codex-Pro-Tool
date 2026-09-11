@@ -1908,14 +1908,14 @@ fn injection_script_moves_export_and_project_move_into_more_menu() {
 }
 
 #[test]
-fn injection_script_deduplicates_pointer_delete_activation_and_reports_failures() {
+fn injection_script_leaves_session_deletion_to_codex_native() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("let lastPointerActivationAt = 0;"));
-    assert!(script.contains("performance.now() - lastPointerActivationAt < 500"));
-    assert!(script.contains("button.addEventListener(\"pointerup\", activateOnce, true);"));
-    assert!(script.contains("session_delete_failed"));
-    assert!(script.contains("showToast(`删除失败：${error?.message || error}`, null);"));
+    assert!(script.contains("settings.sessionDelete = false;"));
+    assert!(script.contains("window.__codexSessionDeleteDocumentDeleteHandler = null;"));
+    assert!(script.contains(".codex-delete-confirm-overlay, .codex-delete-toast"));
+    assert!(!script.contains("    installDeleteButtonEventDelegation();"));
+    assert!(!script.contains("group.appendChild(deleteButton)"));
 }
 
 #[test]
