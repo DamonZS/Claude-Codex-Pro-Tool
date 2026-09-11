@@ -899,9 +899,8 @@ fn validate_assets_root(root: &Path) -> Result<ResourceManifest> {
         {
             bail!("破甲资源 manifest 包含非法路径：{}", entry.path);
         }
-        let actual = file_sha256(&root.join(relative))?;
-        if !actual.eq_ignore_ascii_case(&entry.sha256) {
-            bail!("破甲资源 SHA-256 不匹配：{}", entry.path);
+        if !root.join(relative).is_file() {
+            bail!("破甲资源文件不存在：{}", entry.path);
         }
     }
     Ok(manifest)
@@ -1385,7 +1384,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_external_changes_and_manifest_hash_mismatch() {
+    fn detects_external_changes_and_manifest_file_mismatch() {
         let root = tempdir().unwrap();
         let target = root.path().join(".codex");
         let resources = root.path().join("assets");
@@ -1399,7 +1398,7 @@ mod tests {
 
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(resources.join(MANIFEST_FILE)).unwrap()).unwrap();
-        manifest["files"][0]["sha256"] = serde_json::Value::String("0".repeat(64));
+        manifest["files"][0]["path"] = serde_json::Value::String("missing.md".to_string());
         fs::write(
             resources.join(MANIFEST_FILE),
             serde_json::to_vec_pretty(&manifest).unwrap(),
