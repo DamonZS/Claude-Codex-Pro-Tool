@@ -133,7 +133,7 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
       {!status ? (
         <div className="leila-deployment-message"><LoaderCircle className="spin" aria-hidden="true" />正在检测破甲环境和部署状态</div>
       ) : !supported ? (
-        <div className="leila-deployment-message is-warning"><TriangleAlert aria-hidden="true" />不支持当前破甲部署包，仅支持 Windows x64。</div>
+        <div className="leila-deployment-message is-warning"><TriangleAlert aria-hidden="true" />不支持当前破甲部署包，仅支持 Windows/macOS 64 位。</div>
       ) : targetMissingConfig ? (
         <div className="leila-deployment-message is-warning"><TriangleAlert aria-hidden="true" />目标目录缺少 config.toml，请先选择有效的 Codex 目录。</div>
       ) : status.lastError ? (

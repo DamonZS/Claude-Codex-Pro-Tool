@@ -176,6 +176,7 @@ jobs:
             --target "${{ matrix.target }}" \
             --destination "target/multica-runtime/${{ matrix.target }}"
           MULTICA_RESOURCE_DIR="$PWD/target/multica-runtime/${{ matrix.target }}" \
+          LEILA_RESOURCE_DIR="$PWD/apps/claude-codex-pro-manager/src-tauri/resources/leila/assets" \
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" \
           bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
 
@@ -185,6 +186,8 @@ jobs:
           app="dist/macos/stage/Claude Codex Pro.app"
           test -f "$app/Contents/Info.plist"
           test -f "$app/Contents/PkgInfo"
+          test -f "$app/Contents/Resources/leila/assets/manifest.json"
+          node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); if(m.version!=="1.0.7") throw new Error(`Unexpected Leila version: ${m.version}`)' "$app/Contents/Resources/leila/assets/manifest.json"
           plutil -lint "$app/Contents/Info.plist" >/dev/null
           codesign --verify --strict "$app"
           for runtime in claude-codex-pro claude-codex-pro-mcp; do

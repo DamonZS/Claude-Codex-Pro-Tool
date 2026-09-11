@@ -566,8 +566,10 @@ pub fn python_packages_for_version(major: u8, minor: u8) -> Result<Vec<String>> 
 }
 
 fn ensure_supported_environment() -> Result<()> {
-    if !cfg!(windows) || std::env::consts::ARCH != "x86_64" {
-        bail!("不支持当前破甲部署包，仅支持 Windows x64");
+    if !matches!(std::env::consts::OS, "windows" | "macos")
+        || !matches!(std::env::consts::ARCH, "x86_64" | "aarch64")
+    {
+        bail!("不支持当前破甲部署包，仅支持 Windows/macOS 64 位");
     }
     Ok(())
 }
@@ -791,14 +793,32 @@ where
 
 #[cfg(not(windows))]
 fn run_hidden_powershell_streaming<F>(
-    _executable: &str,
-    _args: &[String],
-    _on_line: &mut F,
+    executable: &str,
+    args: &[String],
+    on_line: &mut F,
 ) -> Result<std::process::ExitStatus>
 where
     F: FnMut(&str),
 {
-    bail!("动态 pip 安装仅支持 Windows")
+    let mut command = Command::new(executable);
+    command.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().context("启动 Python pip 安装失败")?;
+    let stdout = child.stdout.take().context("读取 Python stdout 失败")?;
+    let stderr = child.stderr.take().context("读取 Python stderr 失败")?;
+    let (sender, receiver) = mpsc::channel::<String>();
+    for stream in [stdout, stderr] {
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().flatten() {
+                let _ = sender.send(line);
+            }
+        });
+    }
+    drop(sender);
+    for line in receiver {
+        on_line(&line);
+    }
+    child.wait().context("等待 Python pip 安装失败")
 }
 
 fn powershell_quote(value: &str) -> String {

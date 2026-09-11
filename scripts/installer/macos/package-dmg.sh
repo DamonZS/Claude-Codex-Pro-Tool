@@ -8,6 +8,7 @@ DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
 MULTICA_RESOURCE_DIR="${MULTICA_RESOURCE_DIR:-}"
+LEILA_RESOURCE_DIR="${LEILA_RESOURCE_DIR:-}"
 DMG="$DIST/claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/claude-codex-pro-manager/src-tauri/icons/icon.png"
 ICON_NAME="claude-codex-pro.icns"
@@ -57,6 +58,14 @@ create_app() {
     fi
     mkdir -p "$app_dir/Contents/Resources/multica"
     cp -R "$MULTICA_RESOURCE_DIR/." "$app_dir/Contents/Resources/multica/"
+  fi
+  if [ -n "$LEILA_RESOURCE_DIR" ]; then
+    if [ ! -f "$LEILA_RESOURCE_DIR/manifest.json" ]; then
+      echo "error: Leila resource manifest not found: $LEILA_RESOURCE_DIR/manifest.json" >&2
+      return 1
+    fi
+    mkdir -p "$app_dir/Contents/Resources/leila/assets"
+    cp -R "$LEILA_RESOURCE_DIR/." "$app_dir/Contents/Resources/leila/assets/"
   fi
   cp "$binary_path" "$app_dir/Contents/MacOS/$executable_name"
   cp "$ICON_ICNS" "$app_dir/Contents/Resources/$ICON_NAME"
