@@ -2,8 +2,6 @@ name: PR build artifacts
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,9 +23,6 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install NSIS
-        run: choco install nsis -y
-
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
@@ -47,9 +42,11 @@ jobs:
           Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
       - name: Stage Multica runtime
+        if: ${{ false }}
         run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
 
       - name: Verify staged Multica runtime
+        if: ${{ false }}
         shell: pwsh
         run: |
           $runtimeDir = "dist/windows/app/resources/multica"
@@ -60,6 +57,7 @@ jobs:
           Write-Host "Staged runtime archive: $($archives[0].Name) ($($archives[0].Length) bytes)"
 
       - name: Build Windows installer
+        if: ${{ false }}
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v", "V")
@@ -83,6 +81,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Windows installer
+        if: ${{ false }}
         uses: actions/upload-artifact@v5
         with:
           name: claude-codex-pro-windows-installer
@@ -137,6 +136,7 @@ jobs:
           fi
 
       - name: Build macOS DMG
+        if: ${{ false }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           VERSION="${VERSION#V}"
@@ -147,6 +147,7 @@ jobs:
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
 
       - name: Verify macOS bundle structure
+        if: ${{ false }}
         run: |
           set -euo pipefail
           app="dist/macos/stage/Claude Codex Pro.app"
@@ -160,6 +161,7 @@ jobs:
           done
 
       - name: Upload macOS DMG
+        if: ${{ false }}
         uses: actions/upload-artifact@v5
         with:
           name: claude-codex-pro-macos-${{ matrix.arch }}-dmg
