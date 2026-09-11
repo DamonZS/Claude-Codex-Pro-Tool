@@ -1721,7 +1721,9 @@ enabled = true
 }
 
 #[test]
-fn apply_relay_profile_does_not_write_model_catalog_json_for_selected_models() {
+fn apply_relay_profile_without_mapping_does_not_write_model_catalog_json() {
+    // 映射为空时，新语义与旧行为一致：既不改 config.toml 的 model_catalog_json，
+    // 也不生成 model-catalogs 目录。映射非空的覆盖见下方 mapping 前缀用例。
     let temp = tempfile::tempdir().unwrap();
     let profile = RelayProfile {
         id: "relay-a".to_string(),
@@ -1757,7 +1759,9 @@ experimental_bearer_token = "sk-new"
 }
 
 #[test]
-fn apply_relay_profile_preserves_user_model_catalog_json() {
+fn apply_relay_profile_without_mapping_preserves_user_model_catalog_json() {
+    // 映射为空：用户自配的 model_catalog_json 必须原样保留，且不生成
+    // 本 CCP 的 model-catalogs 目录文件。
     let temp = tempfile::tempdir().unwrap();
     let profile = RelayProfile {
         id: "relay-a".to_string(),
@@ -1792,7 +1796,218 @@ experimental_bearer_token = "sk-new"
             .exists()
     );
 }
+#[test]
+fn apply_relay_profile_maps_codex_catalog_to_native_model_catalog_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-a".to_string(),
+        name: "国产模型".to_string(),
+        model: "deepseek-v4.1-flash".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "deepseek-v4.1-flash"
+model_provider = "custom"
 
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        model_insert_mode: Default::default(),
+        codex_catalog_json: r#"[
+  {"model":"deepseek-v4.1-flash","displayName":"DeepSeek V4.1 Flash"},
+  {"model":"glm-5.3","displayName":"GLM 5.3","contextWindow":200000},
+  {"model":"glm-5.3","displayName":"重复项应被去重"},
+  {"model":"","displayName":"空模型应被跳过"}
+]"#
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+    // 文件名 = "relay-" + 净化后的 profile id，因此这里 id 为 relay-a 时属 relay-relay-a.json。
+    let catalog_path = temp
+        .path()
+        .join("model-catalogs")
+        .join("relay-relay-a.json");
+    assert!(catalog_path.exists(), "目录文件必须先落盘");
+    let catalog: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&catalog_path).unwrap()).unwrap();
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2, "去重后应为 2 条：{catalog}");
+    assert_eq!(models[0]["slug"], "deepseek-v4.1-flash");
+    assert_eq!(models[0]["display_name"], "DeepSeek V4.1 Flash");
+    assert_eq!(models[0]["description"], "DeepSeek V4.1 Flash");
+    assert_eq!(models[0]["visibility"], "list");
+    assert_eq!(models[0]["supported_in_api"], true);
+    assert_eq!(models[0]["shell_type"], "unified_exec");
+    assert_eq!(models[0]["priority"], 1);
+    assert!(
+        models[0].get("context_window").is_none(),
+        "无窗口的条目不应写窗口字段"
+    );
+    assert_eq!(models[1]["slug"], "glm-5.3");
+    assert_eq!(models[1]["display_name"], "GLM 5.3");
+    assert_eq!(models[1]["priority"], 2);
+    assert_eq!(models[1]["context_window"], 200000);
+    assert_eq!(models[1]["max_context_window"], 200000);
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(config.contains("model_catalog_json = "));
+    assert!(config.contains("model-catalogs"));
+    assert!(config.contains("relay-relay-a.json"));
+}
+
+#[test]
+fn apply_relay_profile_mapping_overrides_previous_model_catalog_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-a".to_string(),
+        model: "glm-5.3".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "glm-5.3"
+model_catalog_json = "C:\\old\\catalog.json"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        model_insert_mode: Default::default(),
+        codex_catalog_json: r#"[{"model":"glm-5.3","displayName":"GLM 5.3"}]"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(
+        !config.contains(r#"C:\\old\\catalog.json"#),
+        "本次有映射时应覆盖既有取值：{config}"
+    );
+    assert!(config.contains("relay-relay-a.json"));
+}
+
+#[test]
+fn apply_relay_profile_sanitizes_catalog_file_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "../evil/name".to_string(),
+        model: "glm-5.3".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "glm-5.3"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        model_insert_mode: Default::default(),
+        codex_catalog_json: r#"[{"model":"glm-5.3","displayName":"GLM 5.3"}]"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+    let catalog_dir = temp.path().join("model-catalogs");
+    let entries = std::fs::read_dir(&catalog_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1, "只应生成一个目录文件：{entries:?}");
+    assert!(
+        entries[0].starts_with("relay-") && entries[0].ends_with(".json"),
+        "{entries:?}"
+    );
+    assert!(
+        !entries[0].contains('/') && !entries[0].contains('\\'),
+        "{entries:?}"
+    );
+    assert!(!temp.path().join("evil").exists(), "净化后不得逃出目录");
+}
+
+#[test]
+fn apply_relay_profile_for_claude_target_skips_model_catalog_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-a".to_string(),
+        model: "glm-5.3".to_string(),
+        target_app: "claude-desktop".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "glm-5.3"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        model_insert_mode: Default::default(),
+        codex_catalog_json: r#"[{"model":"glm-5.3","displayName":"GLM 5.3"}]"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(!config.contains("model_catalog_json"));
+    assert!(!temp.path().join("model-catalogs").exists());
+}
+
+#[test]
+fn clear_relay_config_removes_generated_model_catalog_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-a".to_string(),
+        model: "glm-5.3".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "glm-5.3"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        model_insert_mode: Default::default(),
+        codex_catalog_json: r#"[{"model":"glm-5.3","displayName":"GLM 5.3"}]"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+    let applied = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(applied.contains("model_catalog_json"));
+
+    clear_relay_config_to_home(temp.path()).unwrap();
+    let cleared = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(!cleared.contains("model_catalog_json"));
+}
 #[test]
 fn apply_relay_profile_skips_common_config_when_disabled() {
     let temp = tempfile::tempdir().unwrap();

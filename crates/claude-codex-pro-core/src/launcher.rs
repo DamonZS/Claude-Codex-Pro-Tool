@@ -781,6 +781,16 @@ impl LaunchHooks for DefaultLaunchHooks {
     }
 
     async fn start_helper(&self, helper_port: u16) -> anyhow::Result<()> {
+        // The manager may already own the persistent detached helper on the
+        // reserved port. Reuse that healthy listener instead of failing the
+        // Codex launch on a second bind attempt.
+        if helper_backend_online_blocking(helper_port) {
+            let _ = crate::diagnostic_log::append_diagnostic_log(
+                "helper.reused_existing_listener",
+                serde_json::json!({ "helper_port": helper_port }),
+            );
+            return Ok(());
+        }
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", helper_port))
             .await
             .with_context(|| format!("failed to bind helper runtime on 127.0.0.1:{helper_port}"))?;

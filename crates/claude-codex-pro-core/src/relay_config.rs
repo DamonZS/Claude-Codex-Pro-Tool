@@ -12,6 +12,11 @@ use crate::settings::{RelayContextSelection, RelayProfile, RelayProtocol};
 const RELAY_PROVIDER: &str = "custom";
 const CODEX_PROVIDER_AUTH_ENV_KEY: &str = "OPENAI_API_KEY";
 const CHAT_UPSTREAM_BASE_URL_KEY: &str = "claude_codex_pro_chat_base_url";
+/// Codex 根键：指向本机一个 {"models":[...]} 目录文件，完全替换内置模型目录。
+const MODEL_CATALOG_JSON_KEY: &str = "model_catalog_json";
+/// 本 CCP 生成的目录文件统一放在这个子目录下，便于整体识别与回滚。
+const MODEL_CATALOGS_DIR_NAME: &str = "model-catalogs";
+
 const CLAUDE_CREDENTIAL_FIELDS: &[&str] = &[
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
@@ -434,7 +439,8 @@ pub fn apply_relay_profile_files_to_home_with_context(
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    apply_relay_files_to_home(home, &config_with_limits, &profile.auth_contents)
+    let config_with_catalog = inject_supplier_model_catalog(profile, home, &config_with_limits)?;
+    apply_relay_files_to_home(home, &config_with_catalog, &profile.auth_contents)
 }
 
 pub fn apply_relay_profile_to_home_with_switch_rules(
@@ -471,10 +477,11 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
         &profile.auto_compact_limit,
     )?;
 
+    let config_with_catalog = inject_supplier_model_catalog(profile, home, &config_with_limits)?;
     if profile.relay_mode == crate::settings::RelayMode::PureApi {
         let result = apply_relay_files_to_home_with_computer_use_guard(
             home,
-            &config_with_limits,
+            &config_with_catalog,
             &profile.auth_contents,
             preserve_computer_use_guard,
         )?;
@@ -483,7 +490,7 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
         let auth_contents = official_profile_auth_for_switch(home, &profile.auth_contents)?;
         apply_relay_files_to_home_with_computer_use_guard(
             home,
-            &config_with_limits,
+            &config_with_catalog,
             &auth_contents,
             preserve_computer_use_guard,
         )
@@ -507,7 +514,8 @@ pub fn apply_relay_profile_config_to_home_with_context(
         &profile.context_window,
         &profile.auto_compact_limit,
     )?;
-    apply_relay_config_file_to_home(home, &config_with_limits)
+    let config_with_catalog = inject_supplier_model_catalog(profile, home, &config_with_limits)?;
+    apply_relay_config_file_to_home(home, &config_with_catalog)
 }
 
 pub fn apply_relay_config_file_to_home(
@@ -2247,6 +2255,46 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     Ok(move_model_providers_before_profiles(
         &ensure_trailing_newline(doc.to_string()),
     ))
+}
+
+/// 把供应商「模型映射」投影成 Codex 原生模型目录。
+///
+/// 目录文件必须先于 `config.toml` 落盘：Codex 在 `model_catalog_json` 指向的文件
+/// 不存在时会直接拒绝启动。写入失败则整个应用流程失败，绝不产出悬空引用。
+fn inject_supplier_model_catalog(
+    profile: &RelayProfile,
+    home: &Path,
+    config_text: &str,
+) -> anyhow::Result<String> {
+    if relay_profile_targets_claude(profile) {
+        return Ok(ensure_trailing_newline(config_text.to_string()));
+    }
+    let Some(document) = crate::model_catalog::codex_model_catalog_document_for_profile(profile)
+    else {
+        // 映射为空：保留用户自配的 model_catalog_json，不做任何改动。
+        return Ok(ensure_trailing_newline(config_text.to_string()));
+    };
+    if !home.is_absolute() {
+        return Ok(ensure_trailing_newline(config_text.to_string()));
+    }
+
+    let catalog_dir = home.join(MODEL_CATALOGS_DIR_NAME);
+    crate::settings::create_private_dir_all(&catalog_dir)?;
+    let file_name = format!(
+        "relay-{}.json",
+        crate::model_catalog::codex_model_catalog_file_name(&profile.id)
+    );
+    let catalog_path = catalog_dir.join(&file_name);
+    std::fs::write(&catalog_path, document.as_bytes())
+        .with_context(|| format!("写入 Codex 模型目录失败：{}", catalog_path.display()))?;
+    let absolute_path = std::fs::canonicalize(&catalog_path).unwrap_or(catalog_path);
+
+    let mut doc = parse_toml_document(config_text)?;
+    doc.as_table_mut().insert(
+        MODEL_CATALOG_JSON_KEY,
+        toml_edit::value(absolute_path.to_string_lossy().to_string()),
+    );
+    Ok(ensure_trailing_newline(doc.to_string()))
 }
 
 fn relay_profile_targets_claude(profile: &RelayProfile) -> bool {

@@ -1,3 +1,5 @@
+> 状态：本文件中「注入层始终关闭 sessionDelete 且不创建删除按钮」的结论已被 `spec/codex-injected-session-delete-restore.md` 取代（2026-09-11）。
+
 # Codex 原生会话删除恢复
 
 ## 背景

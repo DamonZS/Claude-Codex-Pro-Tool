@@ -9447,6 +9447,28 @@ fn switch_relay_profile_blocking(
     let store = SettingsStore::default();
     let previous_active_relay_id = request.previous_active_relay_id;
     let settings = normalize_settings_before_save(request.settings);
+    let relay = settings.active_relay_profile();
+    if settings.relay_profiles_enabled
+        && relay.route_enabled
+        && (relay.relay_mode != claude_codex_pro_core::settings::RelayMode::Official
+            || relay.official_mix_api_key)
+    {
+        // Both switch commands run here on a blocking worker. Start the proxy
+        // on the persistent Tauri runtime before committing its URL to disk.
+        let proxy_port = claude_codex_pro_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT;
+        if let Err(error) = tauri::async_runtime::block_on(
+            claude_codex_pro_core::launcher::ensure_detached_helper(proxy_port),
+        ) {
+            return failed(
+                &format!("本地路由代理 {proxy_port} 启动失败，供应商配置未切换：{error}"),
+                relay_switch_payload(
+                    store.load().unwrap_or_default(),
+                    claude_codex_pro_core::relay_config::relay_status_from_home(&home),
+                    None,
+                ),
+            );
+        }
+    }
     log_manager_event(
         "manager.switch_relay_profile.start",
         json!({

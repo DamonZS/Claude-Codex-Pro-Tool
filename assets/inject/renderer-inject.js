@@ -1391,7 +1391,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: false, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5, multicaWorkspaceEnabled: true };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5, multicaWorkspaceEnabled: true };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -1464,9 +1464,6 @@
     // Claude localization is owned by the Claude integration. Codex DOM content
     // can contain user input and project data, so it must never be translated.
     settings.chineseOverlayEnabled = false;
-    // Codex owns thread deletion and its local-storage lifecycle. CCP must not
-    // replace that flow with a DOM handler or a helper endpoint call.
-    settings.sessionDelete = false;
     if (claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)) {
       return {
         ...settings,
@@ -11959,12 +11956,21 @@
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation?.();
+    if (button.__codexDeletePending) return;
+    button.__codexDeletePending = true;
     releaseDeleteFocus(row, button);
     confirmDelete(ref.title).then(async (confirmed) => {
       if (!confirmed) return;
       releaseDeleteFocus(row, button);
+      button.disabled = true;
+      let timeout;
       try {
-        const result = await postJson("/delete", ref);
+        const result = await Promise.race([
+          postJson("/delete", ref),
+          new Promise((resolve) => {
+            timeout = setTimeout(() => resolve({ status: "failed", message: "删除结果尚未确认，请刷新会话列表核实并检查启动器连接" }), 15000);
+          }),
+        ]);
         if (result?.status === "server_deleted" || result?.status === "local_deleted") {
           removeDeletedRow(row, button, ref);
           showToast(result.message || "删除成功", result.undo_token);
@@ -11978,7 +11984,12 @@
           errorMessage: error?.message || String(error),
         });
         showToast(`删除失败：${error?.message || error}`, null);
+      } finally {
+        clearTimeout(timeout);
+        button.disabled = false;
       }
+    }).finally(() => {
+      button.__codexDeletePending = false;
     });
   }
 
@@ -12421,6 +12432,17 @@
       moreMenu.__codexSessionMoreGroup = group;
       document.body.appendChild(moreMenu);
       installSessionMoreMenuAutoClose(row, moreMenu);
+    }
+    if (settings.sessionDelete) {
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = `${actionButtonClass} ${buttonClass}`;
+      deleteButton.dataset.codexDeleteVersion = codexDeleteVersion;
+      configureSvgActionButton(deleteButton, "删除", trashIconSvg());
+      const openDeleteConfirm = (event) => openDeleteConfirmForRow(row, deleteButton, ref, event);
+      installActionButtonEvents(row, deleteButton, openDeleteConfirm);
+      group.appendChild(deleteButton);
+      setTimeout(() => refreshActionButton(deleteButton, row, openDeleteConfirm), 0);
     }
     row.appendChild(group);
     syncActionGroupLayout(row, group);
@@ -13205,10 +13227,7 @@
     installCodexServiceTierDispatcherPatch();
     installClaudeCodexProMenu();
     scheduleBackendHeartbeat();
-    document.removeEventListener("pointerup", window.__codexSessionDeleteDocumentDeleteHandler, true);
-    document.removeEventListener("click", window.__codexSessionDeleteDocumentDeleteHandler, true);
-    window.__codexSessionDeleteDocumentDeleteHandler = null;
-    document.querySelectorAll(".codex-delete-confirm-overlay, .codex-delete-toast").forEach((node) => node.remove());
+    installDeleteButtonEventDelegation();
     updateThreadScrollHandlers();
     installThreadScrollProgrammaticScrollGuard();
     installThreadScrollNavigationCapture();

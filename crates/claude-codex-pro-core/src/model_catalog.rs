@@ -65,10 +65,10 @@ enum ModelPayloadResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RelayProfileCatalogModel {
-    model: String,
-    display_name: String,
-    context_window: Option<u64>,
+pub(crate) struct RelayProfileCatalogModel {
+    pub(crate) model: String,
+    pub(crate) display_name: String,
+    pub(crate) context_window: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -178,7 +178,9 @@ fn relay_profile_model_ids(profile: &RelayProfile) -> Vec<String> {
     )
 }
 
-fn relay_profile_catalog_models(profile: &RelayProfile) -> Vec<RelayProfileCatalogModel> {
+pub(crate) fn relay_profile_catalog_models(
+    profile: &RelayProfile,
+) -> Vec<RelayProfileCatalogModel> {
     let Ok(Value::Array(rows)) = serde_json::from_str::<Value>(&profile.codex_catalog_json) else {
         return Vec::new();
     };
@@ -220,6 +222,88 @@ fn relay_profile_catalog_models(profile: &RelayProfile) -> Vec<RelayProfileCatal
             })
         })
         .collect()
+}
+
+/// Codex 原生模型目录中每一档推理档位的固定说明文案。
+const CATALOG_REASONING_LEVEL_DESCRIPTIONS: &[(&str, &str)] = &[
+    (
+        "low",
+        "Balances speed with some reasoning; useful for straightforward queries and short explanations",
+    ),
+    (
+        "medium",
+        "Provides a solid balance of reasoning depth and latency for general-purpose tasks",
+    ),
+    (
+        "high",
+        "Maximizes reasoning depth for complex or ambiguous problems",
+    ),
+    ("xhigh", "Extra high reasoning for complex problems"),
+];
+
+/// 供应商「模型映射」投影出的 Codex 原生目录条目。字段集与 Codex 内置
+/// 目录保持一致，`visibility = "list"` 才会出现在原生「选择模型」下拉中。
+fn catalog_entry_from_mapped_model(model: &RelayProfileCatalogModel, priority: usize) -> Value {
+    let reasoning_levels = CATALOG_REASONING_LEVEL_DESCRIPTIONS
+        .iter()
+        .map(|(effort, description)| json!({ "effort": effort, "description": description }))
+        .collect::<Vec<Value>>();
+    let mut entry = json!({
+        "slug": model.model,
+        "display_name": model.display_name,
+        "description": model.display_name,
+        "supported_reasoning_levels": reasoning_levels,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": priority,
+        "support_verbosity": true,
+        "truncation_policy": { "mode": "bytes", "limit": 10000 },
+        "experimental_supported_tools": [],
+        "base_instructions": "",
+    });
+    if let (Some(window), Some(object)) = (model.context_window, entry.as_object_mut()) {
+        object.insert("context_window".to_string(), json!(window));
+        object.insert("max_context_window".to_string(), json!(window));
+    }
+    entry
+}
+
+/// 把供应商模型映射转换成 Codex 原生模型目录文档。
+///
+/// 顶层必须是对象 `{"models": [...] }`：Codex 拒绝加载裸数组。映射为空时返回
+/// `None`，调用方据此保持 `config.toml` 现状不动。
+pub(crate) fn codex_model_catalog_document_for_profile(profile: &RelayProfile) -> Option<String> {
+    let models = relay_profile_catalog_models(profile);
+    if models.is_empty() {
+        return None;
+    }
+    let entries = models
+        .iter()
+        .enumerate()
+        .map(|(index, model)| catalog_entry_from_mapped_model(model, index + 1))
+        .collect::<Vec<Value>>();
+    serde_json::to_string_pretty(&json!({ "models": entries })).ok()
+}
+
+/// 由 profile id 派生目录文件名，避免路径分隔符或非法字符逃出目录。
+pub(crate) fn codex_model_catalog_file_name(profile_id: &str) -> String {
+    let sanitized = profile_id
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "profile".to_string()
+    } else {
+        sanitized
+    }
 }
 
 pub async fn read_codex_model_catalog_from_home(

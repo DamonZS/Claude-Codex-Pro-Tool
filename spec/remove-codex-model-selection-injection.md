@@ -12,7 +12,8 @@ Codex 当前已经能够正常显示可用模型。CCP 过去为模型白名单�
 
 ## 非目标
 
-- 不修改 Codex 官方模型菜单、模型目录或账号数据。
+- 不通过前端注入（DOM 补丁、React/Statsig/App Server 状态、`model/list`、`list-models-for-host`、请求字段覆盖）修改 Codex 官方模型菜单或账号数据。
+- `model_catalog_json` 是 Codex 官方支持的静态模型目录机制，不属于前端注入范畴；供应商模型映射通过它投影到 Codex 原生模型目录，属独立规格：`spec/codex-native-model-catalog-from-supplier-mapping.md`。
 - 不修改供应商配置、Base URL、API Key 或代理路由。
 - 不删除服务层级控制本身，但不得借此重新启用模型选择注入。
 

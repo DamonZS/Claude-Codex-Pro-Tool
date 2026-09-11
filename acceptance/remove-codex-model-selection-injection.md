@@ -27,5 +27,6 @@ git diff --check
 ## 非目标检查
 
 - 不要求修改 Codex 官方应用文件。
+- 不通过前端注入修改 Codex 原生模型菜单；`model_catalog_json` 投影属独立验收：`acceptance/codex-native-model-catalog-from-supplier-mapping.md`。
 - 不要求验证供应商是否提供某个具体模型。
 - 不要求删除服务层级控制的只读当前模型状态读取。

@@ -12,7 +12,8 @@ Codex 现在已经能够由自身正常渲染和管理模型选择器。CCP 过�
 
 - 当前目标和禁止事项：[`spec/remove-codex-model-selection-injection.md`](remove-codex-model-selection-injection.md)
 - 当前验收标准：[`acceptance/remove-codex-model-selection-injection.md`](../acceptance/remove-codex-model-selection-injection.md)
-- 供应商模型目录字段仍可用于管理工具的配置与路由，但不代表 CCP 会修改 Codex 原生模型菜单。
+- 供应商模型目录字段仍可用于管理工具的配置与路由，但不代表 CCP 会通过前端注入修改 Codex 原生模型菜单。
+- 供应商模型映射改由 Codex 官方 `model_catalog_json` 机制投影，见 [spec/codex-native-model-catalog-from-supplier-mapping.md](codex-native-model-catalog-from-supplier-mapping.md)。
 
 ## 历史交付物处理
 

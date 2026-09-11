@@ -1908,14 +1908,44 @@ fn injection_script_moves_export_and_project_move_into_more_menu() {
 }
 
 #[test]
-fn injection_script_leaves_session_deletion_to_codex_native() {
+fn injection_script_restores_injected_session_delete() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("settings.sessionDelete = false;"));
-    assert!(script.contains("window.__codexSessionDeleteDocumentDeleteHandler = null;"));
-    assert!(script.contains(".codex-delete-confirm-overlay, .codex-delete-toast"));
-    assert!(!script.contains("    installDeleteButtonEventDelegation();"));
-    assert!(!script.contains("group.appendChild(deleteButton)"));
+    assert!(script.contains("forcePluginInstall: true, sessionDelete: true, markdownExport: true"));
+    assert!(!script.contains("settings.sessionDelete = false;"));
+    assert!(!script.contains("window.__codexSessionDeleteDocumentDeleteHandler = null;"));
+
+    let attach = source_between(
+        &script,
+        "function attachButton(row) {",
+        "function tryAttachButton(row) {",
+    );
+    assert!(attach.contains("if (settings.sessionDelete) {"));
+    assert!(attach.contains("deleteButton.dataset.codexDeleteVersion = codexDeleteVersion;"));
+    assert!(attach.contains("configureSvgActionButton(deleteButton, \"删除\", trashIconSvg());"));
+    assert!(attach.contains("installActionButtonEvents(row, deleteButton, openDeleteConfirm);"));
+    assert!(attach.contains("group.appendChild(deleteButton);"));
+    assert!(attach.contains(
+        "setTimeout(() => refreshActionButton(deleteButton, row, openDeleteConfirm), 0);"
+    ));
+
+    let scan = source_between(
+        &script,
+        "function scanLightweight() {",
+        "let zedRemoteStatusPromise",
+    );
+    assert!(scan.contains("    installDeleteButtonEventDelegation();"));
+    assert!(!scan.contains(".codex-delete-confirm-overlay, .codex-delete-toast"));
+
+    // 关闭 sessionDelete 时仍需移除旧版本遗留的 CCP 删除 UI。
+    assert!(script.contains(
+        "const hasUnexpectedDelete = !settings.sessionDelete && !!existingDeleteButton;"
+    ));
+    assert!(script.contains("row.dataset.codexDeleteRow = \"false\";"));
+
+    // 8ca18cd 的手势去重与版本号保持不变。
+    assert!(script.contains("const codexActionGroupVersion = \"6\";"));
+    assert!(script.contains("lastPointerActivationAt = performance.now();"));
 }
 
 #[test]

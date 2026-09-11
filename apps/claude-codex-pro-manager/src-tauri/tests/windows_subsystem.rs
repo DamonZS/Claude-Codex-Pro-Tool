@@ -42,6 +42,45 @@ fn read_all_frontend_sources() -> String {
 }
 
 #[test]
+fn codex_supplier_switch_starts_route_proxy_before_writing_config() {
+    let commands = include_str!("../src/commands.rs");
+    let start = commands.find("fn switch_relay_profile_blocking(").unwrap();
+    let end = commands[start..]
+        .find("pub async fn preview_claude_desktop_provider(")
+        .unwrap()
+        + start;
+    let switch = &commands[start..end];
+    let ready = switch.find("ensure_detached_helper(proxy_port)").unwrap();
+    let write = switch
+        .find("relay_switch::switch_relay_profile_in_home(")
+        .unwrap();
+    assert!(ready < write);
+    assert!(switch[..ready].contains("settings.relay_profiles_enabled"));
+    assert!(switch[..ready].contains("relay.route_enabled"));
+    assert!(switch[..ready].contains("relay.official_mix_api_key"));
+    assert!(switch[ready..write].contains("return failed("));
+    let codex = commands.find("fn switch_codex_supplier_blocking(").unwrap();
+    assert!(
+        commands[codex..]
+            .split("#[tauri::command]")
+            .next()
+            .unwrap()
+            .contains("switch_relay_profile_blocking(RelayProfileSwitchRequest")
+    );
+}
+
+#[test]
+fn codex_launcher_reuses_existing_manager_helper_before_binding() {
+    let launcher = include_str!("../../../../crates/claude-codex-pro-core/src/launcher.rs");
+    let start = launcher.rfind("async fn start_helper(&self, helper_port: u16)").unwrap();
+    let reuse = launcher[start..].find("helper_backend_online_blocking(helper_port)").unwrap() + start;
+    let bind = launcher[start..].find("TcpListener::bind").unwrap() + start;
+    assert!(reuse < bind);
+    let return_ok = launcher[reuse..].find("return Ok(())").unwrap() + reuse;
+    assert!(launcher[reuse..return_ok].contains("helper.reused_existing_listener"));
+}
+
+#[test]
 fn multica_saved_issue_views_have_local_cache_fallback_and_validation() {
     let renderer = include_str!("../../../../assets/inject/renderer-inject.js");
     assert!(renderer.contains("ccp.multica.issue-views.v1"));
