@@ -11930,13 +11930,10 @@
     }
   }
 
-  function removeDeletedRow(row, button, ref) {
+  function removeDeletedRow(row, button) {
     releaseDeleteFocus(row, button);
-    const shouldReload = isCurrentSessionRow(row, ref);
     row.remove();
-    if (shouldReload) {
-      window.location.reload();
-    }
+    window.location.reload();
   }
 
   function updateDeleteButtonOffsets() {
@@ -11972,7 +11969,7 @@
           }),
         ]);
         if (result?.status === "server_deleted" || result?.status === "local_deleted") {
-          removeDeletedRow(row, button, ref);
+          removeDeletedRow(row, button);
           showToast(result.message || "删除成功", result.undo_token);
         } else {
           showToast(result?.message || "删除失败", null);

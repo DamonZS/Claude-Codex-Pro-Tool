@@ -1949,6 +1949,21 @@ fn injection_script_restores_injected_session_delete() {
 }
 
 #[test]
+fn injection_script_refreshes_session_list_after_delete() {
+    let script = assets::injection_script(57321);
+    let remove = source_between(
+        &script,
+        "function removeDeletedRow(row, button) {",
+        "function updateDeleteButtonOffsets() {",
+    );
+
+    assert!(remove.contains("row.remove();"));
+    assert!(remove.contains("window.location.reload();"));
+    assert!(!remove.contains("shouldReload"));
+    assert!(script.contains("removeDeletedRow(row, button);"));
+}
+
+#[test]
 fn injection_script_does_not_add_delete_controls_on_archived_page() {
     let script = assets::injection_script(57321);
 

@@ -2432,18 +2432,12 @@ fn validate_executable_path(path: &Path) -> anyhow::Result<PathBuf> {
     let canonical =
         std::fs::canonicalize(path).with_context(|| format!("路径不存在或不可访问: {:?}", path))?;
 
-    // 白名单：仅允许 Program Files、Windows、本地应用目录
-    let allowed_prefixes = vec![
-        PathBuf::from(r"C:\Program Files"),
-        PathBuf::from(r"C:\Program Files (x86)"),
-        PathBuf::from(r"C:\Windows\System32"),
-        dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?,
-        dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?,
-    ];
+    // 白名单：使用系统实际目录，兼容非 C 盘和 Windows 扩展路径前缀。
+    let allowed_prefixes = allowed_executable_prefixes()?;
 
     if !allowed_prefixes
         .iter()
-        .any(|prefix| canonical.starts_with(prefix))
+        .any(|prefix| path_is_within_prefix(&canonical, prefix))
     {
         anyhow::bail!(
             "可执行文件路径不在允许的目录范围内: {:?}。仅允许 Program Files、Windows 或本地应用目录。",
@@ -2452,6 +2446,52 @@ fn validate_executable_path(path: &Path) -> anyhow::Result<PathBuf> {
     }
 
     Ok(canonical)
+}
+
+fn allowed_executable_prefixes() -> anyhow::Result<Vec<PathBuf>> {
+    let mut prefixes = Vec::new();
+    for variable in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(path) = std::env::var_os(variable).map(PathBuf::from) {
+            prefixes.push(path);
+        }
+    }
+    if let Some(windows_dir) = std::env::var_os("WINDIR")
+        .or_else(|| std::env::var_os("SystemRoot"))
+        .map(PathBuf::from)
+    {
+        prefixes.push(windows_dir.join("System32"));
+    }
+    if prefixes.is_empty() {
+        prefixes.extend([
+            PathBuf::from(r"C:\Program Files"),
+            PathBuf::from(r"C:\Program Files (x86)"),
+            PathBuf::from(r"C:\Windows\System32"),
+        ]);
+    }
+    prefixes.push(dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?);
+    prefixes.push(dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?);
+    Ok(prefixes)
+}
+
+fn path_is_within_prefix(path: &Path, prefix: &Path) -> bool {
+    let path = normalize_windows_path(path);
+    let prefix = normalize_windows_path(prefix);
+    path == prefix
+        || path
+            .strip_prefix(&prefix)
+            .map(|suffix| suffix.starts_with('\\'))
+            .unwrap_or(false)
+}
+
+fn normalize_windows_path(path: &Path) -> String {
+    let mut value = path.to_string_lossy().replace('/', "\\");
+    for extended_prefix in [r"\\?\", r"\\.\"] {
+        if let Some(stripped) = value.strip_prefix(extended_prefix) {
+            value = stripped.to_string();
+            break;
+        }
+    }
+    value.trim_end_matches('\\').to_ascii_lowercase()
 }
 
 /// 验证参数不包含危险字符
@@ -12722,6 +12762,22 @@ mod tests {
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn executable_allowlist_accepts_windows_extended_paths_and_rejects_sibling_prefixes() {
+        assert!(path_is_within_prefix(
+            Path::new(r"\\?\D:\Program Files\WindowsApps\Claude-Codex-Pro.exe"),
+            Path::new(r"D:\Program Files"),
+        ));
+        assert!(path_is_within_prefix(
+            Path::new(r"d:\program files\WindowsApps\Claude-Codex-Pro.exe"),
+            Path::new(r"D:\Program Files"),
+        ));
+        assert!(!path_is_within_prefix(
+            Path::new(r"D:\Program Files-Backup\Claude-Codex-Pro.exe"),
+            Path::new(r"D:\Program Files"),
+        ));
     }
 
     #[test]
