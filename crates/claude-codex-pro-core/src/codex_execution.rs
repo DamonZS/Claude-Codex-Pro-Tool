@@ -848,7 +848,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
                     .request_host_at(
                         generation,
                         CodexPageHostMethod::ThreadStart,
-                        thread_start_params(&request, &native_skills),
+                        thread_start_params(&request),
                     )
                     .await?;
                 let thread_id = extract_thread_id(&response)?;
@@ -917,7 +917,6 @@ impl CodexExecutionService for CodexPageExecutionClient {
                         CodexPageHostMethod::ThreadFork,
                         json!({
                             "threadId": parent_thread_id,
-                            "threadSource": "multica-subagent",
                             "cwd": request.cwd,
                         }),
                     )
@@ -964,7 +963,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
             .request_host_at(
                 generation,
                 CodexPageHostMethod::ThreadRead,
-                json!({ "threadId": thread_id }),
+                json!({ "threadId": thread_id, "includeTurns": false }),
             )
             .await?;
         let returned_id = extract_thread_id(&response)?;
@@ -1061,12 +1060,24 @@ impl CodexExecutionService for CodexPageExecutionClient {
             .request_host_at(
                 generation,
                 CodexPageHostMethod::ThreadRead,
-                json!({ "threadId": thread_id }),
+                json!({ "threadId": thread_id, "includeTurns": true }),
             )
             .await?;
-        let status = response
-            .pointer("/turn/status")
-            .or_else(|| response.pointer("/thread/status/type"))
+        if extract_thread_id(&response)? != thread_id {
+            bail!("codex_thread_id_mismatch");
+        }
+        // Thread activity is not the outcome of a particular turn. A later
+        // turn may already be running, or an idle thread may contain a failure.
+        let turn = response
+            .pointer("/thread/turns")
+            .and_then(Value::as_array)
+            .and_then(|turns| {
+                turns
+                    .iter()
+                    .find(|turn| turn.get("id").and_then(Value::as_str) == Some(execution_id))
+            });
+        let status = turn
+            .and_then(|turn| turn.get("status"))
             .and_then(Value::as_str)
             .map(parse_execution_state)
             .unwrap_or(CodexExecutionState::Unknown);
@@ -1075,7 +1086,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
             thread_id: thread_id.to_string(),
             execution_id: execution_id.to_string(),
             state: status,
-            diagnostic: None,
+            diagnostic: turn.is_none().then(|| "codex_turn_unavailable".to_string()),
         })
     }
 }
@@ -1206,7 +1217,33 @@ fn parse_capabilities(
     if capabilities.len() > MAX_CAPABILITIES {
         bail!("runtime_capabilities_invalid");
     }
-    let skill_protocol = if capabilities.iter().any(|value| value == "agent-skill-v1") {
+    // This is evidence from the installed page adapter, not server feature
+    // flags. Codex's initialized native client does not advertise our legacy
+    // capability strings. Inventory alone never proves execution support.
+    let methods = response
+        .pointer("/pageHostProbe/methods")
+        .and_then(Value::as_array);
+    let has_method = |method: &str| {
+        methods.is_some_and(|methods| methods.iter().any(|value| value.as_str() == Some(method)))
+    };
+    let verified_lifecycle = [
+        "thread/start",
+        "thread/read",
+        "turn/start",
+        "turn/interrupt",
+    ]
+    .iter()
+    .all(|method| has_method(method));
+    let native_skill_input = verified_lifecycle
+        && has_method("skills/list")
+        && response
+            .pointer("/pageHostProbe/skillInput")
+            .and_then(Value::as_bool)
+            == Some(true);
+    let skill_protocol = if native_skill_input {
+        capabilities.push("codex-user-input-skill".to_string());
+        Some("codex-user-input-skill".to_string())
+    } else if capabilities.iter().any(|value| value == "agent-skill-v1") {
         Some("agent-skill-v1".to_string())
     } else if capabilities.iter().any(|value| value == "skill-bundles-v1") {
         Some("skill-bundles-v1".to_string())
@@ -1214,6 +1251,7 @@ fn parse_capabilities(
         None
     };
     let skills_inventory_supported = skill_protocol.is_some()
+        || has_method("skills/list")
         || response
             .pointer("/pageHostProbe/skillsList")
             .and_then(Value::as_bool)
@@ -1222,22 +1260,23 @@ fn parse_capabilities(
     // native task lifecycle.  Never infer execution from mere connectivity;
     // use the explicit probe when present, otherwise require a known task
     // capability advertised by the live initialize response.
-    let native_task_host_supported = response
-        .pointer("/pageHostProbe/nativeTaskHost")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| {
-            capabilities.iter().any(|value| {
-                matches!(
-                    value.as_str(),
-                    "native-task-v1"
-                        | "codex-task-v1"
-                        | "task-execution-v1"
-                        | "thread-start"
-                        | "turn-start"
-                        | "thread-lifecycle-v1"
-                )
-            })
-        });
+    let native_task_host_supported = verified_lifecycle
+        || response
+            .pointer("/pageHostProbe/nativeTaskHost")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                capabilities.iter().any(|value| {
+                    matches!(
+                        value.as_str(),
+                        "native-task-v1"
+                            | "codex-task-v1"
+                            | "task-execution-v1"
+                            | "thread-start"
+                            | "turn-start"
+                            | "thread-lifecycle-v1"
+                    )
+                })
+            });
     Ok(CodexRuntimeCapabilities {
         runtime_id: binding.runtime_id.clone(),
         provider,
@@ -1339,34 +1378,10 @@ fn skill_manifest_digest_from_path(path: &str) -> Option<String> {
     Some(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-fn thread_start_params(request: &CodexThreadRequest, native_skills: &[NativeCodexSkill]) -> Value {
+fn thread_start_params(request: &CodexThreadRequest) -> Value {
     let mut params = Map::new();
-    params.insert("threadSource".to_string(), json!("multica"));
     if let Some(cwd) = request.cwd.as_deref() {
         params.insert("cwd".to_string(), json!(cwd));
-    }
-    if let Some(skill_request) = request.skill_request.as_ref() {
-        // Keep the thread-level metadata path-only-free.  The actual native
-        // `type=skill` inputs are added to turn/start; this block is the
-        // immutable protocol envelope used by the page host for
-        // auditing and capability negotiation.
-        let skill_refs = native_skills
-            .iter()
-            .map(|skill| {
-                json!({
-                    "id": skill.skill.id,
-                    "manifestDigest": skill.skill.manifest_digest,
-                })
-            })
-            .collect::<Vec<_>>();
-        params.insert(
-            "skills".to_string(),
-            json!({
-                "protocol": skill_request.protocol,
-                "skillRefs": skill_refs,
-                "manifestDigest": skill_request.manifest_digest,
-            }),
-        );
     }
     Value::Object(params)
 }
@@ -1380,11 +1395,12 @@ fn turn_start_params(
     let mut input = vec![json!({
         "type": "text",
         "text": request.prompt,
+        "text_elements": [],
     })];
     input.extend(native_skills.iter().map(native_skill_input));
     json!({
         "threadId": thread_id,
-        "clientUserMessageId": idempotency_key,
+        "clientUserMessageId": uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, format!("ccp:turn:{thread_id}:{idempotency_key}").as_bytes()).to_string(),
         "input": input,
     })
 }
@@ -1439,7 +1455,7 @@ fn extract_execution_id(response: &Value) -> anyhow::Result<String> {
 fn validate_skill_execution_request(request: &CodexSkillExecutionRequest) -> anyhow::Result<()> {
     if !matches!(
         request.protocol.as_str(),
-        "agent-skill-v1" | "skill-bundles-v1"
+        "agent-skill-v1" | "skill-bundles-v1" | "codex-user-input-skill"
     ) {
         bail!("runtime_skills_unsupported");
     }
@@ -1586,6 +1602,162 @@ mod tests {
     }
 
     #[test]
+    fn verified_page_methods_enable_native_protocol_without_custom_server_flags() {
+        let response = json!({
+            "provider": "codex",
+            "pageHostProbe": {
+                "methods": ["thread/start", "thread/read", "turn/start", "turn/interrupt", "skills/list", "thread/fork"],
+                "skillInput": true
+            }
+        });
+        let caps = parse_capabilities(&binding(), &response).unwrap();
+        assert!(caps.native_task_host_supported);
+        assert!(caps.skills_inventory_supported);
+        assert!(caps.skills_supported);
+        assert_eq!(
+            caps.skill_protocol.as_deref(),
+            Some("codex-user-input-skill")
+        );
+        // A fork is a copied conversation, not evidence of native subagent support.
+        assert!(!caps.subagents_supported);
+
+        let inventory = parse_capabilities(
+            &binding(),
+            &json!({
+                "pageHostProbe": {"methods": ["skills/list"], "skillInput": true}
+            }),
+        )
+        .unwrap();
+        assert!(inventory.skills_inventory_supported);
+        assert!(!inventory.native_task_host_supported);
+        assert!(!inventory.skills_supported);
+    }
+
+    #[test]
+    fn native_wire_omits_custom_source_and_uses_stable_uuid_message_id() {
+        let request = request("hello");
+        assert_eq!(thread_start_params(&request), json!({}));
+        let first = turn_start_params("thread-a", &request, "issue:assignment:one", &[]);
+        let replay = turn_start_params("thread-a", &request, "issue:assignment:one", &[]);
+        let next = turn_start_params("thread-a", &request, "issue:assignment:two", &[]);
+        assert_eq!(first, replay);
+        assert_ne!(first["clientUserMessageId"], next["clientUserMessageId"]);
+        assert!(uuid::Uuid::parse_str(first["clientUserMessageId"].as_str().unwrap()).is_ok());
+        assert_eq!(
+            first["input"][0],
+            json!({"type":"text","text":"hello","text_elements":[]})
+        );
+    }
+
+    #[tokio::test]
+    async fn verified_page_client_dispatches_and_polls_without_custom_server_flags() {
+        let transport = FakeCodexPageHostTransport::default();
+        transport.push_response(CodexPageHostMethod::Initialize, Ok(json!({
+            "provider": "codex", "pageHostProbe": {
+                "methods": ["thread/start", "thread/read", "turn/start", "turn/interrupt", "skills/list"],
+                "skillInput": true
+            }
+        })));
+        transport.push_response(
+            CodexPageHostMethod::ThreadStart,
+            Ok(json!({"thread": {"id": "native-thread"}})),
+        );
+        transport.push_response(
+            CodexPageHostMethod::TurnStart,
+            Ok(json!({"turn": {"id": "native-turn", "status": "inProgress"}})),
+        );
+        transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread": {
+            "id": "native-thread", "turns": [{"id": "native-turn", "status": "completed", "items": []}]
+        }})));
+        let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
+        let handle = client
+            .create_thread(request("native task"), "native-command")
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .create_thread(request("native task"), "native-command")
+                .await
+                .unwrap(),
+            handle
+        );
+        let status = client
+            .execution_status(&handle.thread_id, handle.execution_id.as_deref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(status.state, CodexExecutionState::Completed);
+        assert_eq!(
+            transport
+                .calls()
+                .iter()
+                .map(|call| call.method)
+                .collect::<Vec<_>>(),
+            vec![
+                CodexPageHostMethod::Initialize,
+                CodexPageHostMethod::ThreadStart,
+                CodexPageHostMethod::TurnStart,
+                CodexPageHostMethod::ThreadRead,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reads_the_requested_turn_not_the_thread_or_latest_turn() {
+        for (wire_status, expected) in [
+            ("completed", CodexExecutionState::Completed),
+            ("failed", CodexExecutionState::Failed),
+            ("interrupted", CodexExecutionState::Cancelled),
+        ] {
+            let transport = FakeCodexPageHostTransport::default();
+            transport.push_response(
+                CodexPageHostMethod::ThreadRead,
+                Ok(json!({
+                    "thread": {"id": "thread-a", "status": {"type": "active"}, "turns": [
+                        {"id": "turn-a", "status": wire_status},
+                        {"id": "turn-b", "status": "inProgress"}
+                    ]}
+                })),
+            );
+            let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
+            let status = client.execution_status("thread-a", "turn-a").await.unwrap();
+            assert_eq!(status.state, expected);
+            assert_eq!(
+                transport.calls().last().unwrap().params,
+                json!({"threadId": "thread-a", "includeTurns": true})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn status_missing_turn_and_wrong_thread_do_not_invent_completion() {
+        let transport = FakeCodexPageHostTransport::default();
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(json!({
+                "thread": {"id": "thread-a", "status": {"type": "idle"}, "turns": []}
+            })),
+        );
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(json!({
+                "thread": {"id": "other-thread", "turns": [{"id": "turn-a", "status": "completed"}]}
+            })),
+        );
+        let client = CodexPageExecutionClient::new(transport, binding()).unwrap();
+        let status = client.execution_status("thread-a", "turn-a").await.unwrap();
+        assert_eq!(status.state, CodexExecutionState::Unknown);
+        assert_eq!(status.diagnostic.as_deref(), Some("codex_turn_unavailable"));
+        assert_eq!(
+            client
+                .execution_status("thread-a", "turn-a")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "codex_thread_id_mismatch"
+        );
+    }
+
+    #[test]
     fn rebinding_same_cdp_target_starts_a_new_page_generation() {
         let state = Arc::new(Mutex::new(None));
         let transport = CodexPageHostTransport::new(state);
@@ -1713,22 +1885,16 @@ mod tests {
         assert_eq!(
             thread_start.params,
             json!({
-                "threadSource": "multica",
                 "cwd": "C:/workspace",
-                "skills": {
-                    "protocol": "skill-bundles-v1",
-                    "skillRefs": [{
-                        "id": "codex:review-helper",
-                        "manifestDigest": digest,
-                    }],
-                    "manifestDigest": digest,
-                },
             })
         );
         assert_eq!(turn_start.params.as_object().unwrap().len(), 3);
         let input = turn_start.params["input"].as_array().unwrap();
         assert_eq!(input.len(), 2);
-        assert_eq!(input[0], json!({"type": "text", "text": "next"}));
+        assert_eq!(
+            input[0],
+            json!({"type": "text", "text": "next", "text_elements": []})
+        );
         assert_eq!(
             input[1],
             json!({

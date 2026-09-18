@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod markdown;
 pub mod provider_sync;
+pub mod request_history;
 pub mod session_migration;
 pub mod storage;
 
@@ -15,6 +16,7 @@ pub use provider_sync::{
     ProviderSyncTargetOption, ProviderSyncTargetSource, load_provider_sync_targets,
     run_provider_sync, run_provider_sync_with_target, run_provider_sync_with_target_waiting,
 };
+pub use request_history::read_recent_local_requests;
 pub use session_migration::{
     ClaudeCodeMigration, SessionExport, SessionExportFormat, claude_code_projects_dir,
     export_session_universal, migrate_codex_thread_to_claude_code,

@@ -72,8 +72,13 @@ fn codex_supplier_switch_starts_route_proxy_before_writing_config() {
 #[test]
 fn codex_launcher_reuses_existing_manager_helper_before_binding() {
     let launcher = include_str!("../../../../crates/claude-codex-pro-core/src/launcher.rs");
-    let start = launcher.rfind("async fn start_helper(&self, helper_port: u16)").unwrap();
-    let reuse = launcher[start..].find("helper_backend_online_blocking(helper_port)").unwrap() + start;
+    let start = launcher
+        .rfind("async fn start_helper(&self, helper_port: u16)")
+        .unwrap();
+    let reuse = launcher[start..]
+        .find("helper_backend_online(helper_port).await")
+        .unwrap()
+        + start;
     let bind = launcher[start..].find("TcpListener::bind").unwrap() + start;
     assert!(reuse < bind);
     let return_ok = launcher[reuse..].find("return Ok(())").unwrap() + reuse;
@@ -167,7 +172,11 @@ fn manager_startup_restores_only_user_configured_multica_sidecars() {
     let lib = include_str!("../src/lib.rs");
     let setup = source_section(lib, ".setup(move |app| {", ".on_window_event");
 
-    assert!(setup.contains("ensure_detached_helper(commands::DEFAULT_HELPER_PORT)"));
+    let compact_setup = setup
+        .split_whitespace()
+        .collect::<String>()
+        .replace(",)", ")");
+    assert!(compact_setup.contains("ensure_detached_helper(commands::DEFAULT_HELPER_PORT).await"));
     assert!(setup.contains("manager.helper.detached_ready"));
     assert!(setup.contains("manager.helper.detached_failed"));
     assert!(setup.contains("start_auto_start_sidecars"));
@@ -418,8 +427,6 @@ fn codex_launch_and_injected_status_do_not_auto_open_manager() {
     assert!(launcher_main.contains("async fn open_manager(&self)"));
     assert!(!codex_inject.contains("data-codex-open-manager"));
     assert!(!codex_inject.contains("function openManagerFromCodex"));
-    assert!(codex_inject.contains("data-codex-memory-manager"));
-    assert!(codex_inject.contains("void postJson(\"/manager/open\", {});"));
 }
 
 #[test]
@@ -484,22 +491,16 @@ fn macos_packager_builds_one_visible_unified_app() {
         "create_app \"Claude Codex Pro\" \"claude-codex-pro\" \"$BINARY_DIR/claude-codex-pro\" \"com.damonzs.claudecodexpro\" \"false\""
     ));
     assert!(!script.contains("create_app \"Claude Codex Pro Manager\""));
-    assert!(script.contains("install_app_runtime \"claude-codex-pro-mcp\""));
-    assert!(script.contains("sign_and_verify_binary \"MCP runtime\" \"$mcp_runtime\""));
     assert!(script.contains("sign_and_verify_binary \"main executable\" \"$main_executable\""));
     assert!(script.contains("codesign --force --sign - \"$app_dir\""));
     assert!(script.contains("codesign --verify --deep --strict --verbose=4 \"$app_dir\""));
     assert!(!script.contains("codesign --force --deep --sign - \"$app_dir\""));
-    let mcp_sign_position = script
-        .find("sign_and_verify_binary \"MCP runtime\" \"$mcp_runtime\"")
-        .expect("MCP signing invocation");
     let main_sign_position = script
         .find("sign_and_verify_binary \"main executable\" \"$main_executable\"")
         .expect("main executable signing invocation");
     let bundle_sign_position = script
         .find("codesign --force --sign - \"$app_dir\"")
         .expect("bundle signing invocation");
-    assert!(mcp_sign_position < main_sign_position);
     assert!(main_sign_position < bundle_sign_position);
     let verify_position = script
         .rfind("verify_app_runtime_before_signing")
@@ -524,7 +525,7 @@ fn macos_workflows_verify_all_unified_bundle_runtimes() {
         ".github/workflows/auto-release-installers.yml",
     ] {
         let source = std::fs::read_to_string(repo_root.join(workflow)).expect("read workflow");
-        assert!(source.contains("for runtime in claude-codex-pro claude-codex-pro-mcp"));
+        assert!(source.contains("for runtime in claude-codex-pro"));
         assert!(source.contains("app=\"dist/macos/stage/Claude Codex Pro.app\""));
         assert!(!source.contains("Claude Codex Pro Manager.app"));
     }
@@ -743,7 +744,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains(r#"git push origin ":refs/tags/$tag""#));
     assert!(workflow.contains("name: Prepare auto release tag"));
     assert!(!workflow.contains("Prepare V0.01 release tag"));
-    assert!(!workflow.contains("npm run check"));
+    assert_eq!(workflow.matches("run: npm run check").count(), 2);
     assert_eq!(workflow.matches("run: npm run vite:build").count(), 2);
     assert!(!workflow.contains("cargo test --workspace"));
     assert!(workflow.contains("run: cargo build --release"));
@@ -790,7 +791,7 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains(
         "asset_count=\"$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')\""
     ));
-    assert!(workflow.contains("Expected 6 build assets before latest.json"));
+    assert!(workflow.contains("Expected 7 build assets before latest.json"));
     assert!(
         workflow.contains("gh release upload \"$TAG\" release-assets/* --clobber --repo \"$REPO\"")
     );
@@ -905,7 +906,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
     assert!(app_tsx.contains("id: \"tools\""));
     assert!(app_tsx.contains("label: \"插件、Skills 与 MCP\""));
     assert!(app_tsx.contains("id: \"sessions\""));
-    assert!(app_tsx.contains("label: \"会话与记忆\""));
+    assert!(app_tsx.contains("label: \"会话\""));
     assert!(app_tsx.contains("function PluginHubScreen"));
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("function SessionManagementScreen"));
@@ -1045,7 +1046,49 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
 }
 
 #[test]
-fn plugin_memory_tools_ui_regression_is_locked_down() {
+fn pangu_memory_public_surfaces_are_removed() {
+    let frontend = read_all_frontend_sources();
+    let sources = [
+        frontend.as_str(),
+        include_str!("../../src/styles.css"),
+        include_str!("../../src/workspace.css"),
+        include_str!("../src/lib.rs"),
+        include_str!("../src/commands.rs"),
+        include_str!("../../../../assets/inject/renderer-inject.js"),
+        include_str!("../../../../crates/claude-codex-pro-core/src/settings.rs"),
+        include_str!("../../../../crates/claude-codex-pro-core/src/routes.rs"),
+        include_str!("../../../claude-codex-pro-launcher/src/lib.rs"),
+        include_str!("../../../../Cargo.toml"),
+    ];
+    for source in sources {
+        for removed in [
+            "MemoryAssist",
+            "memory_assist",
+            "memoryAssist",
+            "codexMemory",
+            "/memory/",
+            "claude-codex-pro-mcp",
+            ".memory-",
+            "overview-memory",
+        ] {
+            assert!(
+                !source.contains(removed),
+                "removed surface remains: {removed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn session_page_omits_redundant_heading_band() {
+    let shell = normalize_source(include_str!("../../src/components/AppShell.tsx").to_string());
+    assert!(shell.contains(
+        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" ? (\n            <div className=\"ops-page-heading\">"
+    ));
+}
+
+#[test]
+fn plugin_tools_ui_regression_is_locked_down() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // 拆分后：字符串存在性护栏改读前端源码全集（迁到哪个文件都命中；!contains 覆盖更广）。
     let app_tsx = read_all_frontend_sources();
@@ -1361,7 +1404,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         ("overview", "概览"),
         ("supplier", "供应商与路由"),
         ("clients", "客户端与增强"),
-        ("sessions", "会话与记忆"),
+        ("sessions", "会话"),
         ("tools", "插件、Skills 与 MCP"),
         ("maintenance", "维护与诊断"),
         ("settings", "设置"),
@@ -1384,8 +1427,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "export const compatibilityRoutes: RouteItem[] = [",
         "export const routeCatalog",
     );
-    assert_eq!(compatibility_routes.matches("id: \"").count(), 2);
-    assert!(compatibility_routes.contains("id: \"memory\", label: \"盘古记忆\""));
+    assert_eq!(compatibility_routes.matches("id: \"").count(), 1);
     assert!(compatibility_routes.contains("id: \"about\", label: \"关于与更新\""));
     assert!(
         routes.contains(
@@ -1393,11 +1435,9 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         )
     );
     assert!(routes.contains("return routeCatalog.some((item) => item.id === value);"));
-    assert!(routes.contains("if (route === \"memory\") return \"sessions\";"));
     assert!(routes.contains("if (route === \"about\") return \"settings\";"));
-    assert!(routes.contains("if (route === \"sessions\" || route === \"memory\")"));
+    assert!(routes.contains("if (route === \"sessions\")"));
     assert!(routes.contains("{ id: \"sessions\", label: \"会话\" }"));
-    assert!(routes.contains("{ id: \"memory\", label: \"盘古记忆\" }"));
     assert!(routes.contains("if (route === \"settings\" || route === \"about\")"));
     assert!(routes.contains("{ id: \"settings\", label: \"偏好设置\" }"));
     assert!(routes.contains("{ id: \"about\", label: \"关于与更新\" }"));
@@ -1428,7 +1468,6 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "themes",
         "tools",
         "sessions",
-        "memory",
         "maintenance",
         "settings",
         "about",
@@ -1575,7 +1614,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let overview_screen = source_section(
         &screens,
         "export function OverviewScreen",
-        "function MemoryTierControls",
+        "function SupplierModelDropdown",
     );
     assert!(screens.contains("type OverviewAgentScope = \"codex\" | \"claude\";"));
     assert!(overview_screen.contains("[[\"codex\", \"Codex\"], [\"claude\", \"Claude\"]]"));
@@ -2799,22 +2838,12 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     // 且 !contains 覆盖所有前端文件，护栏更强）；结构化切片仍读 App.tsx 单文件。
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_frontend_file("screens.tsx");
-    let tauri_bridge = manifest_dir.parent().unwrap().join("src/tauriBridge.ts");
-    let tauri_bridge = read_source_file(&tauri_bridge);
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let workspace = read_frontend_file("workspace.css");
     let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
     let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
     let tauri_conf = read_source_file(&manifest_dir.join("tauri.conf.json"));
-    let launcher_main = read_source_file(
-        &manifest_dir
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("claude-codex-pro-launcher/src/lib.rs"),
-    );
 
     assert!(app_tsx.contains("ops-shell"));
     assert!(app_tsx.contains("ops-rail"));
@@ -2850,15 +2879,10 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!app_tsx.contains("className=\"ops-topbar-pill\""));
     assert!(app_tsx.contains("function codexOverviewStatus"));
     assert!(app_tsx.contains("function claudeOverviewStatus"));
-    assert!(app_tsx.contains("function memoryOverviewStatus"));
     assert!(app_tsx.contains(
         "const result = await run(() => call<SettingsResult>(\"load_settings\"), \"设置\""
     ));
     assert!(app_tsx.contains("if (result) {\n      setSettings(result);"));
-    assert!(app_tsx.contains(
-        "const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });"
-    ));
-    assert!(app_tsx.contains("if (saved) await actions.refreshMemoryAssist();"));
     assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch)"));
     assert!(!app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
     let overview_screen = screens_file
@@ -2872,7 +2896,6 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         "<span>当前供应商</span>",
         "<span>本地代理</span>",
         "<span>Codex 增强</span>",
-        "<span>盘古记忆</span>",
         "className=\"overview-route-board overview-glass-panel\"",
         "<strong>供应商路由</strong>",
         "<strong>当前请求链路</strong>",
@@ -2881,8 +2904,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         "className=\"overview-topology-node agent\"",
         "className=\"overview-inspector overview-glass-panel\"",
         "<strong>智能诊断</strong>",
-        "className=\"overview-timeline overview-glass-panel\"",
-        "<strong>请求与事件时间线</strong>",
+        "<RequestTimeline agentScope={agentScope}",
     ] {
         assert!(
             overview_screen.contains(contract),
@@ -2898,10 +2920,20 @@ fn manager_window_and_ops_console_layout_stay_usable() {
             "actions.switchSupplierProfile(selectedTarget, selectedProfile.id, settings)"
         )
     );
-    assert!(overview_screen.contains("buildOverviewTimeline(logs, overview, memoryAssist)"));
-    assert!(overview_screen.contains("原始日志 detail 不进入概览"));
-    assert!(overview_screen.contains("className=\"overview-memory-control\""));
-    assert!(overview_screen.contains("toggleMemoryAssistEnabled(value)"));
+    let timeline = read_frontend_file("components/RequestTimeline.tsx");
+    assert!(timeline.contains("<strong>请求与事件时间线</strong>"));
+    assert!(!timeline.contains("value.detail"));
+    assert!(timeline.contains("for (const record of records)"));
+    assert!(timeline.contains("lane.items.map"));
+    assert!(!timeline.contains("records.slice("));
+    assert!(timeline.contains("record.first_byte_ms"));
+    assert!(timeline.contains("\"cache_creation_tokens\""));
+    assert!(timeline.contains("\"cached_tokens\""));
+    assert!(timeline.contains("number(record[key])"));
+    assert!(timeline.contains("record.http_status"));
+    assert!(lib_rs.contains("commands::read_request_timeline"));
+    assert!(app_tsx.contains("if (route !== \"overview\") return;"));
+    assert!(app_tsx.contains("requestTimelineInFlight.current"));
     assert!(overview_screen.contains("aria-label=\"诊断与修复\""));
     assert!(overview_screen.contains("actions.repairFrontendConnection()"));
     assert!(overview_screen.contains("actions.repairBackendService()"));
@@ -2918,31 +2950,12 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     }
     assert!(app_tsx.contains("call<AdsResult>(\"load_ads\")"));
     assert!(app_tsx.contains("ads={ads}"));
-    assert!(app_tsx.contains("function OverviewMemoryDetails"));
-    assert!(app_tsx.contains("经验教训手册详情"));
-    assert!(app_tsx.contains("提炼结果会合成为一条精简手册，可在这里直接查看和编辑。"));
-    assert!(app_tsx.contains("const refineLongTermMemory = async () => {"));
-    assert!(app_tsx.contains("\"提炼经验教训\""));
-    assert!(app_tsx.contains(
-        "正在使用 Codex 本地 SQLite、rollout 会话文件和 memory_assist.sqlite 遍历工作区与会话"
-    ));
-    assert!(app_tsx.contains("writeUiEvent(\"memory.refine_long_term.click\""));
-    assert!(
-        app_tsx.contains("function memoryRefineSummary(result: MemorySelfCheckResult): string")
-    );
-    assert!(app_tsx.contains("check.name === \"history\""));
-    assert!(app_tsx.contains("结果：${historyMessage}"));
-    assert!(app_tsx.contains("call<MemorySelfCheckResult>(\"run_memory_assist_selfcheck\", { request: { repair: true } })"));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.start\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.result\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.failed\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.button.click\""));
     assert!(app_tsx.contains("function buttonLogLabel(button: HTMLButtonElement): string"));
     assert!(app_tsx.contains("document.addEventListener(\"click\", handleButtonClick, true)"));
-    assert!(commands_rs.contains("manager.memory.selfcheck.start"));
-    assert!(commands_rs.contains("manager.memory.selfcheck.result"));
-    assert!(commands_rs.contains("manager.memory.selfcheck.failed"));
-    assert!(commands_rs.contains("\"historyScan\": \"all_visible_workspaces_and_sessions\""));
     for style_contract in [
         ".overview-control-plane",
         ".overview-kpi-grid",
@@ -2963,30 +2976,14 @@ fn manager_window_and_ops_console_layout_stay_usable() {
             "workspace is missing overview style contract: {style_contract}"
         );
     }
-    for (selector, declaration) in [
-        (".overview-timeline-labels strong", "font-size: 12px;"),
-        (
-            ".overview-timeline-axis time",
-            "font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;",
-        ),
-        (".overview-timeline-event b", "font-size: 11px;"),
-        (".overview-timeline-event time", "font-size: 10px;"),
-        (".overview-timeline-empty", "font-size: 11px;"),
-        (".overview-timeline-note", "font-size: 10px;"),
-    ] {
-        let marker = format!("{selector} {{");
-        let start = workspace
-            .rfind(&marker)
-            .unwrap_or_else(|| panic!("missing overview timeline selector: {selector}"));
-        let end = workspace[start..]
-            .find('}')
-            .map(|offset| start + offset)
-            .expect("overview timeline rule end");
-        assert!(
-            workspace[start..end].contains(declaration),
-            "overview timeline text must remain readable: {selector}"
-        );
-    }
+    let timeline_styles = read_frontend_file("components/request-timeline.css");
+    assert!(timeline_styles.contains(
+        ".overview-timeline-body { display: flex; flex: 1; min-height: 0; overflow: auto; }"
+    ));
+    assert!(timeline_styles.contains(".overview-timeline-track {"));
+    assert!(timeline_styles.contains("overflow-y: auto;"));
+    assert!(timeline_styles.contains("font-size: 12px;"));
+    assert!(timeline_styles.contains("text-overflow: ellipsis;"));
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
@@ -3012,28 +3009,6 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::refresh_claude_third_party_config"));
     assert!(lib_rs.contains("commands::repair_frontend_connection"));
     assert!(lib_rs.contains("commands::repair_backend_service"));
-    assert!(lib_rs.contains("commands::update_memory_assist_item"));
-    assert!(app_tsx.contains("\"update_memory_assist_item\""));
-    assert!(tauri_bridge.contains("command === \"update_memory_assist_item\""));
-    let memory_assist_panel = screens_file
-        .split("function MemoryAssistPanel")
-        .nth(1)
-        .and_then(|rest| rest.split("export function MemoryScreen").next())
-        .expect("memory assist panel source");
-    assert!(memory_assist_panel.contains("<strong>经验教训手册</strong>"));
-    assert!(memory_assist_panel.contains("memory-lesson-card"));
-    assert!(!memory_assist_panel.contains("<strong>待确认</strong>"));
-    assert!(!memory_assist_panel.contains("approveMemoryAssistCandidate(candidate.id)"));
-    assert!(!memory_assist_panel.contains("rejectMemoryAssistCandidate(candidate.id)"));
-    assert!(memory_assist_panel.contains("const allItems = items?.items ?? [];"));
-    assert!(!memory_assist_panel.contains("items?.items.slice(0, 5)"));
-    assert!(memory_assist_panel.contains("beginEditMemory"));
-    assert!(memory_assist_panel.contains("saveEditedMemory"));
-    assert!(memory_assist_panel.contains("actions.updateMemoryAssistItem"));
-    assert!(memory_assist_panel.contains("actions.refineLongTermMemory()"));
-    assert!(memory_assist_panel.contains("workspace: item.workspace"));
-    assert!(memory_assist_panel.contains("tags: item.tags"));
-    assert!(memory_assist_panel.contains("sourceSessionId: item.sourceSessionId"));
     assert!(commands_rs.contains("codex_frontend_injected"));
     assert!(!commands_rs.contains("claude_frontend_injected"));
     assert!(commands_rs.contains("codex_backend_online"));
@@ -3042,29 +3017,13 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("latest_renderer_runtime_heartbeat"));
     assert!(commands_rs.contains("renderer_heartbeat_is_fresh"));
     assert!(commands_rs.contains("renderer_frontend_heartbeat_confirms_injection"));
-    assert!(commands_rs.contains("heartbeat.runtime_reported"));
     assert!(commands_rs.contains("renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)"));
-    assert!(commands_rs.contains(".map(|runtime| runtime.status != \"failed\")"));
-    assert!(commands_rs.contains("renderer.memory_runtime"));
     assert!(commands_rs.contains("renderer.script_loaded"));
     assert!(commands_rs.contains("#[serde(default)]"));
-    assert!(commands_rs.contains("fn normalize_memory_runtime_status"));
-    assert!(commands_rs.contains("\"idle\" => \"ok\".to_string()"));
     assert!(commands_rs.contains(".take(2_000)"));
-    assert!(commands_rs.contains("Codex 前端脚本已注入，正在等待盘古记忆运行时同步。"));
-    assert!(commands_rs.contains("等待真实对话消息后写入盘古记忆。"));
     assert!(app_tsx.contains("status === \"idle\""));
     assert!(commands_rs.contains("force_reinject_bridge"));
     assert!(commands_rs.contains("stop_launcher_processes_for_codex_restart"));
-    assert!(launcher_main.contains("MemoryAssistStore"));
-    assert!(launcher_main.contains("MemoryCaptureRequest"));
-    assert!(launcher_main.contains("async fn memory_session(&self, payload: Value)"));
-    assert!(launcher_main.contains("self.memory_store.session_summary(request)"));
-    assert!(launcher_main.contains("async fn memory_capture(&self, payload: Value)"));
-    assert!(launcher_main.contains("self.memory_store.record_capture(request)"));
-    assert!(launcher_main.contains("async fn memory_resolve_workspace(&self, payload: Value)"));
-    assert!(launcher_main.contains("resolve_codex_memory_workspace_response"));
-    assert!(launcher_main.contains("async fn memory_status(&self)"));
     assert!(!commands_rs.contains("repair_claude_frontend_via_node_inspector"));
     assert!(!commands_rs.contains("repair_claude_frontend_via_wrapped_window"));
     assert!(!commands_rs.contains("open_claude_chinese_window(app.clone()).await"));
@@ -3223,7 +3182,6 @@ fn supplier_editor_generates_config_from_editable_supplier_id() {
 fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
     let app_tsx = read_all_frontend_sources().replace("\r\n", "\n");
 
-    assert!(app_tsx.contains("const refreshMemoryAssistStatus = async (silent = false) => {"));
     assert!(app_tsx.contains("options: { trackBusy?: boolean; notify?: boolean } = {}"));
     assert!(app_tsx.contains("const trackBusy = options.trackBusy !== false;"));
     assert!(app_tsx.contains("if (trackBusy) setBusyCount((count) => count + 1);"));
@@ -3235,17 +3193,9 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_claude_desktop_status\"), \"Claude Desktop\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "load_memory_assist_status\"), \"盘古记忆\", { trackBusy: !silent, notify: !silent }"
-    ));
-    assert!(app_tsx.contains(
         "if (target === \"overview\") {\n      // Keep the default manager/Codex entrypoint side-effect free for Claude.\n      // Claude status and development-mode probes are loaded only after the\n      // user enters the dedicated client/tool surfaces or triggers an action.\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);"
     ));
     assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy\n    ? \"写入中...\"\n    : devModeConfigured\n      ? \"开发模式已写入\"\n      : \"写入开发模式\";"));
-    assert!(
-        app_tsx.contains(
-            "afterFirstPaintIfFresh(() => {\n        void refreshMemoryAssistStatus(true);"
-        )
-    );
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
         "useEffect(() => {\n    void (async () => {\n      await Promise.all([\n        refreshOverview(true),\n        refreshClaude(true),\n        refreshSettings(true),\n        refreshPluginHub(true),"
@@ -4236,8 +4186,6 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
     assert!(app.contains("settingsDraftRevisionRef.current += 1;"));
     assert!(app.contains("const draftRevision = beginSettingsDraftRequest();"));
     assert!(app.contains("commitSettingsDraftRequest(draftRevision, result.settings);"));
-    assert!(app.contains("const requestId = ++memorySearchRequestRef.current;"));
-    assert!(app.contains("requestId === memorySearchRequestRef.current"));
 
     assert!(screens.contains("readOnly value={visibleCodexAuthJson}"));
     assert!(screens.contains("readOnly value={visibleCodexConfigToml}"));
@@ -4246,35 +4194,6 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
     assert!(screens.contains("readOnly={!showSupplierApiKey}"));
     assert!(screens.contains("const loadFailed = Boolean(data && statusFailed(data.status));"));
     assert!(screens.contains("role=\"alert\""));
-}
-
-#[test]
-fn codex_memory_badge_aligns_with_injection_status_strip() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
-        .expect("read renderer inject");
-
-    assert!(codex_inject.contains("const left = Math.max(8, statusRect.left - badgeWidth - 8);"));
-    assert!(codex_inject.contains("badge.style.height = `${statusRect.height}px`;"));
-    assert!(codex_inject.contains("window.__claudeCodexProMemoryAssistRuntime"));
-    assert!(codex_inject.contains("function codexMemoryExposeRuntime"));
-    assert!(codex_inject.contains("function codexMemoryPulseActivity"));
-    assert!(codex_inject.contains("sendClaudeCodexProDiagnostic(\"memory_runtime\""));
-    assert!(codex_inject.contains("__claudeCodexProMemoryHeartbeatTimer"));
-    assert!(codex_inject.contains("window.setInterval(() =>"));
-    assert!(codex_inject.contains("activeUntil"));
-    assert!(codex_inject.contains("data-active"));
-    assert!(codex_inject.contains("background: transparent;"));
-    assert!(codex_inject.contains("<span>盘古记忆</span>"));
-    assert!(codex_inject.contains("display: inline-flex;"));
-    assert!(!codex_inject.contains("statusRect.right + 8"));
 }
 
 #[test]
@@ -4310,7 +4229,6 @@ fn overview_startup_keeps_claude_integration_lazy() {
     assert!(!overview_branch.contains("refreshClaude(true)"));
     assert!(overview_branch.contains("afterFirstPaint"));
     assert!(!overview_branch.contains("refreshClaudeZhPatch(true)"));
-    assert!(overview_branch.contains("refreshMemoryAssistStatus(true)"));
 }
 
 #[test]
@@ -4367,11 +4285,11 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
     assert!(manual_action.contains("install_claude_zh_patch_at_install_root"));
     assert!(app_tsx.contains("actions.installClaudeZhPatchFromDirectory()"));
     assert!(commands_rs.contains("pub async fn install_claude_zh_patch_at_install_root"));
-    assert!(commands_rs.contains("install_root_patch_needs_elevation(&install_root)"));
+    assert!(commands_rs.contains("install_root_patch_needs_elevation(&validated_root)"));
     assert!(
-        commands_rs.contains("install_claude_zh_patch_elevated_at_install_root(&install_root)")
+        commands_rs.contains("install_claude_zh_patch_elevated_at_install_root(&validated_root)")
     );
-    assert!(commands_rs.contains("status_for_install_root(&install_root)"));
+    assert!(commands_rs.contains("status_for_install_root(&validated_root)"));
 }
 
 #[test]
@@ -4727,7 +4645,7 @@ fn claude_zh_patch_closes_claude_before_elevation_branch() {
             .find("close_claude_desktop_for_patch()")
             .unwrap()
             < manual_action
-                .find("install_root_patch_needs_elevation(&install_root)")
+                .find("install_root_patch_needs_elevation(&validated_root)")
                 .unwrap()
     );
     assert!(
@@ -4813,10 +4731,10 @@ fn claude_zh_patch_manual_install_falls_back_to_uac_when_direct_msix_write_fails
     assert!(manual_action.contains("manager.claude_zh_patch.manual_install.elevation_required"));
     assert!(manual_action.contains("manager.claude_zh_patch.manual_install.direct.start"));
     assert!(manual_action.contains(
-        "should_retry_claude_zh_patch_with_elevation_at_install_root(&install_root, &error)"
+        "should_retry_claude_zh_patch_with_elevation_at_install_root(&validated_root, &error)"
     ));
     assert!(
-        manual_action.contains("install_claude_zh_patch_elevated_at_install_root(&install_root)")
+        manual_action.contains("install_claude_zh_patch_elevated_at_install_root(&validated_root)")
     );
     assert!(
         commands_rs.contains("fn should_retry_claude_zh_patch_with_elevation_at_install_root(")
@@ -5065,13 +4983,6 @@ fn manager_status_rejects_renderer_heartbeat_from_previous_codex_launch() {
     assert!(commands_rs.contains("fn renderer_heartbeat_is_current("));
     assert!(commands_rs.contains("timestamp_ms >= launch_started_at_ms"));
 
-    let memory_status = commands_rs
-        .split("fn enrich_memory_status")
-        .nth(1)
-        .and_then(|rest| rest.split("fn normalize_memory_runtime_status").next())
-        .expect("enrich_memory_status source");
-    assert!(memory_status.contains("renderer_heartbeat_is_current("));
-
     let launch_status = commands_rs
         .split("fn refresh_launch_port_status")
         .nth(1)
@@ -5132,11 +5043,9 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
     assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
     assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
-    assert!(!settings_screen.contains("<Panel title=\"盘古记忆\""));
     assert!(!settings_screen.contains("<Panel title=\"安全边界\""));
     assert!(!settings_screen.contains("保存启动参数"));
     assert!(!settings_screen.contains("保存图片覆盖"));
-    assert!(!settings_screen.contains("保存盘古记忆设置"));
     assert!(!settings_screen.contains("重置图片覆盖"));
     assert!(!settings_screen.contains("重置设置"));
     assert!(app_tsx.contains("saveSettings"));
@@ -5255,83 +5164,6 @@ fn about_screen_exposes_contact_entrypoints() {
     assert!(styles.contains(".contact-link"));
     assert!(styles.contains(".contact-wechat"));
     assert!(styles.contains(".contact-qr"));
-}
-
-#[test]
-fn pangu_memory_new_project_guide_keeps_lazy_loading_and_complete_contract() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manager_root = manifest_dir.parent().expect("manager root");
-    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
-    let command_registry = read_source_file(&manifest_dir.join("src/lib.rs"));
-    let app = read_frontend_file("App.tsx");
-    let screens = read_frontend_file("screens.tsx");
-    let types = read_frontend_file("types.ts");
-
-    assert!(commands.contains("pub async fn load_memory_new_project_guide()"));
-    assert!(commands.contains("MemoryAssistStore::default().new_project_guide()"));
-    assert!(commands.contains("guide: MemoryNewProjectGuide::default()"));
-    assert!(command_registry.contains("commands::load_memory_new_project_guide"));
-    assert!(commands.contains("fn restrict_manager_memory_workspace(workspace: &str) -> String"));
-    assert!(
-        commands
-            .contains("request.workspace = restrict_manager_memory_workspace(&request.workspace);")
-    );
-    assert!(
-        commands.contains("let workspace = restrict_manager_memory_workspace(&request.workspace);")
-    );
-    assert!(commands.contains("let range_days = if request.range_days <= 7 { 7 } else { 30 };"));
-    assert!(commands.contains(
-        "MemoryAssistStore::default().outcome_dashboard(&requested_workspace, range_days)"
-    ));
-    assert!(commands.contains("MemoryAssistStore::default().list_candidates(&workspace, true)"));
-
-    for field in [
-        "generatedAt: number",
-        "sourceItemCount: number",
-        "sourceWorkspaceCount: number",
-        "pitfalls: MemoryNewProjectExperience[]",
-        "bestPractices: MemoryNewProjectExperience[]",
-        "prompt: string",
-    ] {
-        assert!(
-            types.contains(field),
-            "missing frontend guide field: {field}"
-        );
-    }
-    assert!(types.contains("workspaceBreakdown: Array<{ key: string; count: number }>"));
-    assert!(types.contains("categoryBreakdown: Array<{ key: string; count: number }>"));
-    assert!(screens.contains("workspace-${item.key}"));
-    assert!(screens.contains("category-${item.key}"));
-
-    let initial_memory_refresh = app
-        .split("const refreshMemoryAssist = async")
-        .nth(1)
-        .and_then(|rest| rest.split("const refreshMemoryOutcomeDashboard").next())
-        .expect("initial memory refresh source");
-    assert!(!initial_memory_refresh.contains("load_memory_new_project_guide"));
-    assert!(!initial_memory_refresh.contains("workspace: MEMORY_ALL_WORKSPACES"));
-    assert!(app.contains("call<MemoryNewProjectGuideResult>(\"load_memory_new_project_guide\")"));
-    assert!(app.contains("guide && statusOk(guide.status)"));
-
-    for copy in [
-        "继续当前项目",
-        "开启新项目",
-        "最近更新：",
-        "来源范围",
-        "源记忆",
-        "精选经验",
-        "完整提示词",
-        "真实命中",
-        "高级诊断",
-    ] {
-        assert!(screens.contains(copy), "missing memory UI copy: {copy}");
-    }
-    assert!(screens.contains("<details className=\"memory-diagnostics\">"));
-
-    let styles = read_source_file(&manager_root.join("src/styles.css"));
-    assert!(styles.contains(".memory-start-grid"));
-    assert!(styles.contains(".memory-new-project-preview"));
-    assert!(styles.contains("@media (max-width:"));
 }
 
 #[test]

@@ -115,6 +115,29 @@ impl SQLiteStorageAdapter {
         }
     }
 
+    pub fn available_session_ids(
+        &self,
+        requested: &HashSet<String>,
+    ) -> anyhow::Result<HashSet<String>> {
+        if !self.db_path.exists() || requested.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let db = Connection::open(&self.db_path)?;
+        if schema_kind(&db)? != Some(SchemaKind::CodexThreads) {
+            return Ok(HashSet::new());
+        }
+        Ok(self
+            .list_codex_threads(&db)?
+            .into_iter()
+            .filter(|session| {
+                requested.contains(&session.id)
+                    && !session.rollout_path.trim().is_empty()
+                    && Path::new(&session.rollout_path).is_file()
+            })
+            .map(|session| session.id)
+            .collect())
+    }
+
     fn list_codex_threads(&self, db: &Connection) -> anyhow::Result<Vec<LocalSession>> {
         let columns = table_columns(&db, "threads")?
             .into_iter()

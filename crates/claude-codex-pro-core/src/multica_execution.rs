@@ -238,7 +238,12 @@ pub fn record_runtime_loaded(
 }
 
 fn skill_protocol(capabilities: &[String]) -> &'static str {
-    if capabilities.iter().any(|value| value == "agent-skill-v1") {
+    if capabilities
+        .iter()
+        .any(|value| value == "codex-user-input-skill")
+    {
+        "codex-user-input-skill"
+    } else if capabilities.iter().any(|value| value == "agent-skill-v1") {
         "agent-skill-v1"
     } else {
         "skill-bundles-v1"
@@ -295,10 +300,12 @@ fn validate_capabilities(capabilities: &[String]) -> anyhow::Result<()> {
     if capabilities.len() > 64 {
         bail!("runtime_capabilities_invalid");
     }
-    if !capabilities
-        .iter()
-        .any(|capability| capability == "skill-bundles-v1" || capability == "agent-skill-v1")
-    {
+    if !capabilities.iter().any(|capability| {
+        matches!(
+            capability.as_str(),
+            "skill-bundles-v1" | "agent-skill-v1" | "codex-user-input-skill"
+        )
+    }) {
         bail!("runtime_skills_unsupported");
     }
     if capabilities.iter().any(|capability| {

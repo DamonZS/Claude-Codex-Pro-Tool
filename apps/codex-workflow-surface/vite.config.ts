@@ -4,29 +4,18 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 const fromRoot = (path: string) => fileURLToPath(new URL(path, import.meta.url));
-const multicaRoot = process.env.MULTICA_SOURCE_ROOT || "D:/Project/multica";
-const multicaPackage = (name: string) => fileURLToPath(new URL(`file:///${multicaRoot.replace(/\\/g, "/").replace(/^\/+/, "")}/packages/${name}`));
+const multicaPackage = (name: string) => fromRoot(`./vendor/multica/packages/${name}`);
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // The copied packages retain their upstream per-package tsconfig files. They
-  // extend the upstream monorepo preset, which intentionally is not a runtime
-  // dependency of this derived bundle. Force Vite's transform to use this
-  // package's compatible compiler settings instead of walking that monorepo.
-  esbuild: {
-    tsconfigRaw: {
-      compilerOptions: {
-        jsx: "react-jsx",
-        target: "es2023",
-        useDefineForClassFields: true,
-      },
-    },
-  },
+  define: { "process.env.NODE_ENV": JSON.stringify("production") },
   resolve: {
     alias: {
+      "@multica/ui/i18n-types": multicaPackage("ui/types/i18next.ts"),
       "@multica/core": multicaPackage("core"),
       "@multica/ui": multicaPackage("ui"),
       "@multica/views": multicaPackage("views"),
+      "@ccp/workflow-host": fromRoot("./src/upstream-host.ts"),
     },
   },
   build: {
@@ -39,6 +28,7 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
+        inlineDynamicImports: true,
         assetFileNames: "codex-workflow-surface.[ext]",
       },
     },

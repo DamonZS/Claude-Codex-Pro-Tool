@@ -1,5 +1,6 @@
 export interface WorkflowSurfaceBridge {
   postJson(path: string, payload: Record<string, unknown>): Promise<unknown>;
+  openThread?(id: string): Promise<unknown>;
 }
 
 declare global {

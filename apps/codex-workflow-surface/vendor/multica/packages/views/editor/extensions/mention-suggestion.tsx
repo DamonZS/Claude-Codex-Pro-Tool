@@ -1,0 +1,842 @@
+"use client";
+
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { getCurrentWsId } from "@multica/core/platform";
+import { flattenIssueBuckets, issueKeys } from "@multica/core/issues/queries";
+import { issueStatusCategory } from "@multica/core/issues";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { workspaceKeys } from "@multica/core/workspace/queries";
+import { useAuthStore } from "@multica/core/auth";
+import { canAssignAgentToIssue } from "@multica/core/permissions";
+import { isAgentRuntimeBound } from "@multica/core/agents";
+import { api } from "@multica/core/api";
+import {
+  isIssueDirectHit,
+  isProjectDirectHit,
+} from "@multica/core/search/cancelled-rank";
+import { isImeComposing } from "@multica/core/utils";
+import type {
+  Issue,
+  ListIssuesCache,
+  MemberWithUser,
+  Agent,
+  Squad,
+} from "@multica/core/types";
+import { ListTodo } from "lucide-react";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { StatusIcon } from "../../issues/components/status-icon";
+import { ProjectIcon } from "../../projects/components/project-icon";
+import { useT } from "../../i18n";
+import { Badge } from "@multica/ui/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
+import { cn } from "@multica/ui/lib/utils";
+import type { IssueStatus, IssueStatusCategory, ProjectStatus } from "@multica/core/types";
+import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";
+import type { SuggestionOptions } from "@tiptap/suggestion";
+import { PluginKey } from "@tiptap/pm/state";
+import {
+  getRecencyMap,
+  recordMentionUsage,
+  sortUserItemsByRecency,
+} from "./mention-recency";
+import { matchesPinyin } from "./pinyin-match";
+import {
+  createSuggestionPopupRender,
+} from "./suggestion-popup";
+import {
+  isPickerAcceptKey,
+  pickerNavigationDirection,
+} from "../../common/picker-keys";
+import { isTriggerArmedAt } from "./suggestion-trigger-arming";
+import { blockedReasonLabel } from "../../issues/blocked-trigger-copy";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface MentionItem {
+  id: string;
+  label: string;
+  type: "member" | "agent" | "squad" | "issue" | "project" | "all";
+  /** Optional grouping hint for injected context items. */
+  group?: "current" | "recent" | "search";
+  /** Secondary text shown beside the label (e.g. issue title) */
+  description?: string;
+  /** Issue status for StatusIcon rendering */
+  status?: IssueStatus;
+  /**
+   * The category that status behaves as, carried from the issue payload so the
+   * list never has to resolve a custom key itself. Both the glyph and the
+   * "closed / demoted" rules read this — comparing the raw key left a custom
+   * done status looking and ranking like active work. (MUL-6243)
+   */
+  statusCategory?: IssueStatusCategory;
+  /** Project emoji/icon snapshot for ProjectIcon rendering */
+  icon?: string | null;
+  /** Project status snapshot for recent/current project rendering */
+  projectStatus?: ProjectStatus;
+  /** Present when the target should remain discoverable but cannot be selected. */
+  disabledReason?: "agent_runtime_required";
+}
+
+interface MentionListProps {
+  items: MentionItem[];
+  query: string;
+  command: (item: MentionItem) => void;
+  includeProjectSearch?: boolean;
+}
+
+export interface MentionListRef {
+  onKeyDown: (props: { event: KeyboardEvent }) => boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Group items by section
+// ---------------------------------------------------------------------------
+
+interface MentionGroup {
+  label: string;
+  items: MentionItem[];
+}
+
+function groupItems(items: MentionItem[], query: string): MentionGroup[] {
+  const current: MentionItem[] = [];
+  const recent: MentionItem[] = [];
+  const search: MentionItem[] = [];
+  const users: MentionItem[] = [];
+  const issues: MentionItem[] = [];
+  const cancelled: MentionItem[] = [];
+
+  for (const item of items) {
+    if (isDemotedCancelled(item, query)) {
+      cancelled.push(item);
+    } else if (item.group === "current") {
+      current.push(item);
+    } else if (item.group === "recent") {
+      recent.push(item);
+    } else if (item.group === "search") {
+      search.push(item);
+    } else if (item.type === "issue" || item.type === "project") {
+      issues.push(item);
+    } else {
+      users.push(item);
+    }
+  }
+
+  const groups: MentionGroup[] = [];
+  if (current.length > 0) groups.push({ label: "Current", items: current });
+  if (recent.length > 0) groups.push({ label: "Recent", items: recent });
+  if (search.length > 0) groups.push({ label: "Search", items: search });
+  if (users.length > 0) groups.push({ label: "Users", items: users });
+  if (issues.length > 0) groups.push({ label: "Issues", items: issues });
+  // Always last: no cancelled row of any type may precede a live one.
+  if (cancelled.length > 0) groups.push({ label: "Cancelled", items: cancelled });
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// MentionList — the popup rendered inside the editor
+// ---------------------------------------------------------------------------
+
+const MAX_ITEMS = 20;
+const SERVER_ISSUE_SEARCH_LIMIT = 20;
+const SERVER_CONTEXT_SEARCH_LIMIT = 8;
+const SERVER_SEARCH_DEBOUNCE_MS = 150;
+
+function mentionItemKey(item: MentionItem): string {
+  return `${item.type}:${item.id}`;
+}
+
+function mergeMentionItems(
+  ...itemGroups: MentionItem[][]
+): MentionItem[] {
+  const seen = new Set<string>();
+  const merged: MentionItem[] = [];
+
+  for (const item of itemGroups.flat()) {
+    const key = mentionItemKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+
+  return merged;
+}
+
+/**
+ * Cancelled work is abandoned work: keep it reachable, but never ahead of a
+ * live match and never at the cost of a live match's slot.
+ *
+ * Two independent reasons the picker needs this even though the search API
+ * already ranks cancelled results last:
+ *
+ * 1. Cached rows are merged BEFORE the server rows and the list is only then
+ *    truncated to MAX_ITEMS, so a locally cached cancelled issue outranks every
+ *    backend-ranked result and can push active work out of the window.
+ * 2. Context mentions aggregate two independently ranked responses — issues
+ *    then projects, both tagged `search` — so a cancelled project still lands
+ *    above a live issue. Per-type ranking cannot fix a cross-type list.
+ *
+ * Exempt, matching the server and the other search surfaces:
+ *
+ * - Direct hits. An exact identifier, a bare number, or a full title means the
+ *   user is targeting that one record; demoting it hides exactly what they
+ *   asked for. Shared with the backend rule via isIssueDirectHit /
+ *   isProjectDirectHit so the three surfaces cannot drift.
+ * - The curated `current` / `recent` groups. They are explicit context rather
+ *   than relevance hits, and "Current" has to survive the truncation even when
+ *   the issue being viewed is itself cancelled.
+ */
+function isDemotedCancelled(item: MentionItem, query: string): boolean {
+  if (isPinnedAboveTruncation(item, query)) return false;
+  if (item.type === "issue") return item.statusCategory === "cancelled";
+  if (item.type === "project") return item.projectStatus === "cancelled";
+  return false;
+}
+
+/**
+ * Rows that must survive the MAX_ITEMS truncation: curated context and direct
+ * hits. Exempting a direct hit from the demotion is not enough on its own —
+ * `slice(0, MAX_ITEMS)` runs on the merged list, so a direct hit sitting behind
+ * 20 cached candidates would still be cut. Pinning it to the front is what
+ * actually keeps the record the user typed in full reachable, and it mirrors the
+ * server, which already ranks direct hits first.
+ *
+ * Issue mention rows carry the identifier in `label` and the title in
+ * `description`; project rows carry the title in `label`.
+ */
+function isPinnedAboveTruncation(item: MentionItem, query: string): boolean {
+  if (item.group === "current" || item.group === "recent") return true;
+  if (!query) return false;
+  if (item.type === "issue") {
+    return isIssueDirectHit(
+      { identifier: item.label, title: item.description },
+      query,
+    );
+  }
+  if (item.type === "project") {
+    return isProjectDirectHit({ title: item.label }, query);
+  }
+  return false;
+}
+
+/**
+ * Stable three-tier partition applied BEFORE the MAX_ITEMS truncation, so
+ * cancelled rows give up their slot rather than merely their position:
+ *
+ *   pinned (curated context + direct hits) → live → cancelled
+ *
+ * Relative order within each tier is untouched, leaving the backend ranking in
+ * charge of everything else. groupItems() then renders the cancelled tier as the
+ * trailing section.
+ */
+function demoteCancelledItems(items: MentionItem[], query: string): MentionItem[] {
+  const pinned: MentionItem[] = [];
+  const live: MentionItem[] = [];
+  const cancelled: MentionItem[] = [];
+
+  for (const item of items) {
+    if (isPinnedAboveTruncation(item, query)) pinned.push(item);
+    else if (isDemotedCancelled(item, query)) cancelled.push(item);
+    else live.push(item);
+  }
+
+  return pinned.length > 0 || cancelled.length > 0
+    ? [...pinned, ...live, ...cancelled]
+    : items;
+}
+
+export const MentionList = forwardRef<MentionListRef, MentionListProps>(
+  function MentionList({ items, query, command, includeProjectSearch = false }, ref) {
+    const { t } = useT("editor");
+    const { colorOf: statusColorOf } = useIssueStatuses(getCurrentWsId() ?? "");
+    // Selection is tracked by item identity, NOT by a positional index. The
+    // list is re-bucketed by groupItems() and grows asynchronously (server
+    // search results), so a slot index is not a stable target — the row under
+    // index N changes as the list reorders. selectedKey pins the highlight to
+    // a specific item; the numeric index is derived from it against the SAME
+    // order the popup renders (orderedItems). null means "no explicit pick yet"
+    // → the first rendered row is highlighted by default.
+    const [selectedKey, setSelectedKey] = useState<string | null>(null);
+    const [serverItems, setServerItems] = useState<MentionItem[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchedQuery, setSearchedQuery] = useState("");
+    const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+    const normalizedQuery = query.trim();
+
+    useEffect(() => {
+      const q = normalizedQuery;
+      setServerItems([]);
+
+      if (!q) {
+        setIsSearching(false);
+        setSearchedQuery("");
+        return;
+      }
+
+      const wsId = getCurrentWsId();
+      if (!wsId) {
+        setIsSearching(false);
+        setSearchedQuery(q);
+        return;
+      }
+
+      let cancelled = false;
+      const controller = new AbortController();
+      setIsSearching(true);
+
+      const timer = setTimeout(() => {
+        void (async () => {
+          try {
+            if (includeProjectSearch) {
+              const [issues, projects] = await Promise.all([
+                api.searchIssues({
+                  q,
+                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                  include_closed: true,
+                  signal: controller.signal,
+                }),
+                api.searchProjects({
+                  q,
+                  limit: SERVER_CONTEXT_SEARCH_LIMIT,
+                  include_closed: true,
+                  signal: controller.signal,
+                }),
+              ]);
+              if (!cancelled && !controller.signal.aborted) {
+                setServerItems([
+                  ...issues.issues.map((issue) => ({ ...issueToMention(issue), group: "search" as const })),
+                  ...projects.projects.map((project) => ({ ...projectToMention(project), group: "search" as const })),
+                ]);
+              }
+            } else {
+              const res = await api.searchIssues({
+                q,
+                limit: SERVER_ISSUE_SEARCH_LIMIT,
+                include_closed: true,
+                signal: controller.signal,
+              });
+              if (!cancelled && !controller.signal.aborted) {
+                setServerItems(res.issues.map(issueToMention));
+              }
+            }
+          } catch {
+            // Aborted or network error: keep the synchronous cache results.
+          } finally {
+            if (!cancelled && !controller.signal.aborted) {
+              setSearchedQuery(q);
+              setIsSearching(false);
+            }
+          }
+        })();
+      }, SERVER_SEARCH_DEBOUNCE_MS);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+        controller.abort();
+      };
+    }, [includeProjectSearch, normalizedQuery]);
+
+    const displayItems = useMemo(() => {
+      const currentServerItems = searchedQuery === normalizedQuery ? serverItems : [];
+      return demoteCancelledItems(
+        mergeMentionItems(items, currentServerItems),
+        normalizedQuery,
+      ).slice(0, MAX_ITEMS);
+    }, [items, normalizedQuery, searchedQuery, serverItems]);
+
+    // The single index space for selection. groupItems() re-buckets displayItems
+    // (current → recent → search → users → issues); orderedItems is exactly what
+    // the popup renders, top to bottom. Keyboard nav, Enter, clicks, highlight,
+    // and scroll all index THIS, so the highlighted row always equals the
+    // committed item — there is no second "data order" to drift against.
+    const groups = useMemo(
+      () => groupItems(displayItems, normalizedQuery),
+      [displayItems, normalizedQuery],
+    );
+    const orderedItems = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+
+    // Derive the numeric index from the pinned identity. If the selected item
+    // is no longer in the list (query narrowed it away) or nothing is picked
+    // yet, fall back to the first row. This self-heals across reorders and
+    // async result arrival without ever force-resetting an active selection.
+    const selectedIndex = useMemo(() => {
+      const firstSelectable = orderedItems.findIndex((item) => !item.disabledReason);
+      if (selectedKey === null) return firstSelectable;
+      const i = orderedItems.findIndex((it) => mentionItemKey(it) === selectedKey);
+      return i === -1 || orderedItems[i]?.disabledReason
+        ? firstSelectable
+        : i;
+    }, [orderedItems, selectedKey]);
+
+    useEffect(() => {
+      if (selectedIndex >= 0) {
+        itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
+      }
+    }, [selectedIndex]);
+
+    const selectItem = useCallback(
+      (item: MentionItem | undefined) => {
+        if (!item || item.disabledReason) return;
+        const wsId = getCurrentWsId();
+        if (wsId) recordMentionUsage(wsId, item);
+        command(item);
+      },
+      [command],
+    );
+
+    useImperativeHandle(ref, () => ({
+      onKeyDown: ({ event }) => {
+        // IME is composing — don't intercept Enter/Arrow as picker actions;
+        // those keys belong to the IME (Enter commits composition, etc).
+        if (isImeComposing(event)) return false;
+        // Arrow keys plus the Ctrl+N/J/P/K aliases the command bar accepts —
+        // see pickerNavigationDirection.
+        const direction = pickerNavigationDirection(event);
+        if (direction !== null) {
+          const selectableIndexes = orderedItems.flatMap((item, index) =>
+            item.disabledReason ? [] : [index],
+          );
+          if (selectableIndexes.length === 0) return true;
+          const current = selectableIndexes.indexOf(selectedIndex);
+          const delta =
+            direction === "next" ? 1 : selectableIndexes.length - 1;
+          const next =
+            selectableIndexes[
+              ((current === -1 ? 0 : current) + delta) %
+                selectableIndexes.length
+            ]!;
+          setSelectedKey(mentionItemKey(orderedItems[next]!));
+          return true;
+        }
+        // Enter is the canonical accept; plain Tab is an additive alias (see
+        // isPickerAcceptKey). Shift/modifier+Tab fall through to focus nav.
+        if (isPickerAcceptKey(event)) {
+          if (selectedIndex < 0) return true;
+          selectItem(orderedItems[selectedIndex]);
+          return true;
+        }
+        return false;
+      },
+    }));
+
+    if (orderedItems.length === 0) {
+      const isWaitingForServer =
+        normalizedQuery !== "" &&
+        (isSearching || searchedQuery !== normalizedQuery);
+
+      return (
+        <div className="rounded-md border bg-popover p-2 text-caption text-muted-foreground shadow-md">
+          {isWaitingForServer
+            ? t(($) => $.mention.searching)
+            : t(($) => $.mention.no_results)}
+        </div>
+      );
+    }
+
+    const hasContextGroups = orderedItems.some((item) => item.group === "current" || item.group === "recent");
+    const contextLayout = hasContextGroups;
+    const groupLabel = (label: string): string => {
+      if (label === "Current") return t(($) => $.mention.group_current);
+      if (label === "Recent") return t(($) => $.mention.group_recent);
+      if (label === "Search") return t(($) => $.mention.group_search);
+      if (label === "Users") return t(($) => $.mention.group_users);
+      if (label === "Issues") return t(($) => $.mention.group_issues);
+      if (label === "Cancelled") return t(($) => $.mention.group_cancelled);
+      return label;
+    };
+
+    // Build a flat index mapping: globalIndex → item
+    let globalIndex = 0;
+
+    const renderRows = (group: MentionGroup): ReactNode =>
+      group.items.map((item) => {
+        const idx = globalIndex++;
+        return (
+          <MentionRow
+            key={`${item.type}-${item.id}`}
+            item={item}
+            statusColor={
+              item.type === "issue" && item.status
+                ? statusColorOf(item.status)
+                : null
+            }
+            selected={idx === selectedIndex}
+            onSelect={() => selectItem(item)}
+            buttonRef={(el) => { itemRefs.current[idx] = el; }}
+          />
+        );
+      });
+
+    // One scroll container for every group. Previously the context layout made
+    // only the "Recent" group scrollable while the rest were `shrink-0`, so a
+    // query that mixed context items with search results squeezed Recent toward
+    // zero height and its un-clipped rows painted over the groups below it. With
+    // a single `overflow-y-auto` flex column the groups simply stack and the
+    // whole popup scrolls — no group can collapse onto another. The context
+    // variant only differs in width / max-height / chrome.
+    return (
+      <div
+        className={cn(
+          "flex flex-col overflow-y-auto overscroll-contain border bg-popover py-1",
+          // Height budget: clamp to whichever is smaller — the design max or the
+          // viewport-aware `--suggestion-available-height` published by the
+          // floating-ui `size` middleware (suggestion-popup.tsx). The var falls
+          // back to the design max when the popup renders outside that
+          // controller. This is the single height authority; do not add a second
+          // fixed max-height above it or the list can overflow the viewport.
+          contextLayout
+            ? "max-h-[min(420px,var(--suggestion-available-height,420px))] w-96 rounded-lg shadow-xl"
+            : "max-h-[min(300px,var(--suggestion-available-height,300px))] w-72 rounded-md shadow-md",
+        )}
+      >
+        {groups.map((group) => (
+          <div key={group.label}>
+            <div className="px-3 py-2 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
+              {groupLabel(group.label)}
+            </div>
+            {renderRows(group)}
+          </div>
+        ))}
+      </div>
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// MentionRow — single item in the list
+// ---------------------------------------------------------------------------
+
+function MentionRow({
+  item,
+  statusColor,
+  selected,
+  onSelect,
+  buttonRef,
+}: {
+  item: MentionItem;
+  statusColor?: string | null;
+  selected: boolean;
+  onSelect: () => void;
+  buttonRef: (el: HTMLButtonElement | null) => void;
+}) {
+  const { t } = useT("editor");
+  const { t: issuesT } = useT("issues");
+  if (item.type === "issue") {
+    // Visually dim closed issues (done/cancelled) so they're distinguishable
+    // from active ones in the suggestion list — they're still selectable.
+    const isClosed =
+      item.statusCategory === "done" || item.statusCategory === "cancelled";
+    return (
+      <button
+        type="button"
+        ref={buttonRef}
+        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-caption transition-colors ${
+          selected ? "bg-accent" : "hover:bg-accent/50"
+        } ${isClosed ? "opacity-60" : ""}`}
+        onClick={onSelect}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+          {item.status ? (
+            <StatusIcon
+              status={item.status}
+              category={item.statusCategory}
+              color={statusColor}
+              className="h-3.5 w-3.5"
+            />
+          ) : (
+            <ListTodo className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 font-medium text-muted-foreground">{item.label}</span>
+            {item.description && (
+              <span
+                className={`truncate text-foreground ${isClosed ? "line-through" : ""}`}
+              >
+                {item.description}
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+    );
+  }
+
+  if (item.type === "project") {
+    const projectStatusCfg = item.projectStatus ? PROJECT_STATUS_CONFIG[item.projectStatus] : null;
+    return (
+      <button
+        type="button"
+        ref={buttonRef}
+        className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-caption transition-colors ${
+          selected ? "bg-accent" : "hover:bg-accent/50"
+        }`}
+        onClick={onSelect}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+          <ProjectIcon project={{ icon: item.icon ?? null }} size="sm" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-foreground">{item.label}</span>
+          {item.description && (
+            <span className="block truncate text-muted-foreground">
+              {item.description}
+            </span>
+          )}
+        </span>
+        {projectStatusCfg && (
+          <span className={`${projectStatusCfg.dotColor} ml-auto size-1.5 shrink-0 rounded-full`} />
+        )}
+      </button>
+    );
+  }
+
+  const disabledMessage = item.disabledReason
+    ? blockedReasonLabel(item.disabledReason, issuesT)
+    : null;
+  const button = (
+    <button
+      type="button"
+      ref={buttonRef}
+      aria-disabled={disabledMessage ? true : undefined}
+      aria-label={
+        disabledMessage ? `${item.label}: ${disabledMessage}` : undefined
+      }
+      className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-caption transition-colors ${
+        selected ? "bg-accent" : disabledMessage ? "" : "hover:bg-accent/50"
+      } ${disabledMessage ? "cursor-not-allowed opacity-50" : ""}`}
+      onClick={onSelect}
+    >
+      <ActorAvatar
+        actorType={item.type === "all" ? "member" : item.type}
+        actorId={item.id}
+        size="sm"
+        showStatusDot
+      />
+      <span className="truncate font-medium">
+        {item.type === "all" ? t(($) => $.mention.all_members) : item.label}
+      </span>
+      {item.type === "agent" && (
+        <Badge variant="outline" className="ml-auto text-micro h-4 px-1.5">
+          {t(($) => $.mention.agent_badge)}
+        </Badge>
+      )}
+      {item.type === "squad" && (
+        <Badge variant="outline" className="ml-auto text-micro h-4 px-1.5">
+          {t(($) => $.mention.squad_badge)}
+        </Badge>
+      )}
+    </button>
+  );
+
+  if (!disabledMessage) return button;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={button} />
+      <TooltipContent side="top" className="max-w-72 text-caption">
+        {disabledMessage}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Suggestion config factory
+// ---------------------------------------------------------------------------
+
+function issueToMention(
+  i: Pick<Issue, "id" | "identifier" | "title" | "status"> & Partial<Pick<Issue, "status_category">>,
+): MentionItem {
+  return {
+    id: i.id,
+    label: i.identifier,
+    type: "issue" as const,
+    description: i.title,
+    status: i.status as IssueStatus,
+    statusCategory: issueStatusCategory(i) ?? undefined,
+  };
+}
+
+function projectToMention(p: { id: string; title: string; description?: string | null; icon?: string | null; status?: ProjectStatus }): MentionItem {
+  return {
+    id: p.id,
+    label: p.title,
+    type: "project" as const,
+    description: p.description ?? undefined,
+    icon: p.icon ?? null,
+    projectStatus: p.status,
+  };
+}
+
+function matchesMentionQuery(item: MentionItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    item.label.toLowerCase().includes(q) ||
+    item.description?.toLowerCase().includes(q) === true ||
+    matchesPinyin(item.label, q) ||
+    (item.description ? matchesPinyin(item.description, q) : false)
+  );
+}
+
+interface MentionSuggestionOptions {
+  mode?: "default" | "context";
+  getContextItems?: () => MentionItem[];
+}
+
+export function createMentionSuggestion(
+  qc: QueryClient,
+  options: MentionSuggestionOptions = {},
+): Omit<
+  SuggestionOptions<MentionItem>,
+  "editor"
+> {
+  // The explicit key is passed into Tiptap Suggestion and reused by the
+  // shared popup controller when it dispatches exitSuggestion(view, pluginKey).
+  const pluginKey = new PluginKey("mentionSuggestion");
+
+  function buildSyncItems(query: string): MentionItem[] {
+    // Read workspace id imperatively because this runs in TipTap factory scope
+    // (outside React render). getCurrentWsId() is the non-React singleton set
+    // by the URL-driven workspace layout.
+    const wsId = getCurrentWsId();
+    if (!wsId) return [];
+
+    const members: MemberWithUser[] = qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
+    const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];
+    const squads: Squad[] = qc.getQueryData(workspaceKeys.squads(wsId)) ?? [];
+    const listQueries = qc.getQueriesData<ListIssuesCache>({ queryKey: issueKeys.list(wsId) });
+    const cachedResponse = listQueries[0]?.[1];
+    const cachedIssues: Issue[] = cachedResponse ? flattenIssueBuckets(cachedResponse) : [];
+
+    // Read current user identity imperatively — this factory runs outside
+    // React render so we can't useAuthStore() as a hook here. The Proxy in
+    // packages/core/auth/index.ts forwards `.getState()` to the registered
+    // store. Used to gate personal agents in the @mention list so members
+    // don't see (or auto-complete) agents they couldn't assign anyway.
+    const userId = useAuthStore.getState().user?.id ?? null;
+    const myRole =
+      members.find((m) => m.user_id === userId)?.role ?? null;
+
+    const q = query.toLowerCase();
+
+    const allItem: MentionItem[] =
+      "all members".includes(q) || "all".includes(q)
+        ? [{ id: "all", label: "All members", type: "all" as const }]
+        : [];
+
+    const memberItems: MentionItem[] = members
+      .filter((m) => m.name.toLowerCase().includes(q) || matchesPinyin(m.name, q))
+      .map((m) => ({
+        id: m.user_id,
+        label: m.name,
+        type: "member" as const,
+      }));
+
+    const agentItems: MentionItem[] = agents
+      .filter(
+        (a) =>
+          !a.archived_at &&
+          (a.name.toLowerCase().includes(q) || matchesPinyin(a.name, q)) &&
+          canAssignAgentToIssue(a, { userId, role: myRole }).allowed,
+      )
+      .map((a) => ({
+        id: a.id,
+        label: a.name,
+        type: "agent" as const,
+        disabledReason: isAgentRuntimeBound(a)
+          ? undefined
+          : ("agent_runtime_required" as const),
+      }));
+    const activeAgentRuntimeBinding = new Map(
+      agents
+        .filter((agent) => !agent.archived_at)
+        .map((agent) => [agent.id, isAgentRuntimeBound(agent)]),
+    );
+
+    const squadItems: MentionItem[] = squads
+      .filter(
+        (s) =>
+          !s.archived_at &&
+          (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)),
+      )
+      .map((s) => ({
+        id: s.id,
+        label: s.name,
+        type: "squad" as const,
+        disabledReason:
+          activeAgentRuntimeBinding.get(s.leader_id) === false
+            ? ("agent_runtime_required" as const)
+            : undefined,
+      }));
+
+    // Members and agents share a single ranked list — recently mentioned
+    // targets come first regardless of type, with an alphabetical fallback
+    // for everyone the user hasn't mentioned yet on this device.
+    const recency = getRecencyMap(wsId);
+    const userItems = sortUserItemsByRecency(
+      [...memberItems, ...agentItems, ...squadItems],
+      recency,
+    );
+
+    // Cached issues give an instant first paint; MentionList adds server
+    // matches for done/cancelled and any other issues not in this cache.
+    const issueItems: MentionItem[] = cachedIssues
+      .filter(
+        (i) =>
+          i.identifier.toLowerCase().includes(q) ||
+          i.title.toLowerCase().includes(q),
+      )
+      .map(issueToMention);
+
+    return [...allItem, ...userItems, ...issueItems];
+  }
+
+  return {
+    pluginKey,
+    allowSpaces: true,
+    // Only open over an `@` the user actually typed. Tiptap matches on document
+    // content alone, so without this a pasted, dropped, undone or server-loaded
+    // `@` opens the picker just as readily (MUL-5429).
+    shouldShow: ({ editor, range }) => isTriggerArmedAt(editor, range.from),
+    items: ({ query }) => {
+      if (options.mode === "context") {
+        const normalizedQuery = query.trim();
+        const contextItems = (options.getContextItems?.() ?? []).filter((item) => matchesMentionQuery(item, query));
+        if (!normalizedQuery) return contextItems;
+        return mergeMentionItems(contextItems, buildSyncItems(query));
+      }
+      return buildSyncItems(query);
+    },
+
+    render: createSuggestionPopupRender<MentionItem, MentionItem, MentionListRef, MentionListProps>({
+      pluginKey,
+      component: MentionList,
+      getProps: (props) => ({
+        items: props.items,
+        query: props.query,
+        command: props.command,
+        includeProjectSearch: options.mode === "context",
+      }),
+      onKeyDown: (ref, props) => ref?.onKeyDown(props) ?? false,
+    }),
+  };
+}

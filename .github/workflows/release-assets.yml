@@ -38,6 +38,20 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
+      - name: Install workflow dependencies
+        working-directory: apps/codex-workflow-surface
+        run: npm ci
+
+      - name: Verify release wiring
+        run: node scripts/release/verify-release-workflow.js
+
+      - name: Test Multica notice staging
+        run: node --test scripts/release/stage-multica-notices.test.mjs
+
+      - name: Type-check Manager
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run check
+
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
@@ -50,7 +64,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-          Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
+
+      - name: Stage Multica notices
+        run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
 
       - name: Stage Leila resources
         shell: pwsh
@@ -96,7 +112,7 @@ jobs:
 
       - name: Build Windows MSI
         working-directory: apps/claude-codex-pro-manager
-        run: npm exec tauri build -- --bundles msi --config '{"bundle":{"active":true}}'
+        run: npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json
 
       - name: Stage Windows MSI
         shell: pwsh
@@ -161,6 +177,20 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
+      - name: Install workflow dependencies
+        working-directory: apps/codex-workflow-surface
+        run: npm ci
+
+      - name: Verify release wiring
+        run: node scripts/release/verify-release-workflow.js
+
+      - name: Test Multica notice staging
+        run: node --test scripts/release/stage-multica-notices.test.mjs
+
+      - name: Type-check Manager
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run check
+
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
@@ -190,7 +220,7 @@ jobs:
           node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); if(m.version!=="1.0.7") throw new Error(`Unexpected Leila version: ${m.version}`)' "$app/Contents/Resources/leila/assets/manifest.json"
           plutil -lint "$app/Contents/Info.plist" >/dev/null
           codesign --verify --strict "$app"
-          for runtime in claude-codex-pro claude-codex-pro-mcp; do
+          for runtime in claude-codex-pro; do
             test -x "$app/Contents/MacOS/$runtime"
             codesign --verify --strict "$app/Contents/MacOS/$runtime"
           done

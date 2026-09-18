@@ -7,6 +7,7 @@ CCP 注入层删除会话成功后只在删除当前打开会话时刷新页面�
 ## 目标
 
 - 删除成功后统一刷新 Codex 页面，让原生列表从持久化数据重新读取。
+- 即使 Codex 进程在刷新后从旧的内存索引重新投影会话，也不再显示已删除会话。
 - 保留删除后的即时 DOM 移除、删除备份、撤销提示和现有删除桥接协议。
 
 ## 非目标
@@ -20,10 +21,16 @@ CCP 注入层删除会话成功后只在删除当前打开会话时刷新页面�
 1. `removeDeletedRow()` 在释放焦点并移除行后，无条件调用 `window.location.reload()`。
 2. 删除成功流程调用更新后的 `removeDeletedRow(row, button)`。
 3. 不保留仅针对当前会话的刷新条件。
+4. 删除成功后按会话 ID 保存本地 tombstone；每次会话列表扫描过滤 tombstone 对应的旧行。
+5. 撤销成功后清除对应 tombstone 并刷新列表。
+6. 侧栏虚拟列表复用 DOM 行并更新会话 ID 属性时，观察器必须重新执行 tombstone 过滤。
+7. 本地会话可用性以 Codex SQLite 的 `threads` 记录、非空 `rollout_path` 和实际存在的 rollout 文件共同判定。
+8. 可用性查询覆盖当前 Codex home 下发现的多个 SQLite 数据库，并兼容旧版 `state_5.sqlite`。
+9. 可用性查询失败或超时时保留原列表，不因桥接暂时不可用而误隐藏会话。
 
 ## 技术约束
 
-- 修改范围限于 `assets/inject/renderer-inject.js`、`crates/claude-codex-pro-core/tests/cdp_bridge.rs` 及本任务规格/验收文档。
+- 修改范围限于注入脚本、会话数据适配器、桥接路由、启动器数据服务、相关测试及本任务规格/验收文档。
 - 注入脚本通过 `include_str!` 编译进应用，交付前必须重新构建 release 产物才能生效。
 
 ## 交付范围

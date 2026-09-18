@@ -1,0 +1,181 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "resource": "issues",
+      "id": "c34fbc68-85aa-4705-a7e0-233d83b2cb55",
+      "detail": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 1,
+        "hostSynced": true,
+        "heading": null,
+        "sidebar": {
+          "x": 8,
+          "y": 208,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": false,
+        "detailMatches": true
+      },
+      "clicked": true,
+      "list": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 0,
+        "hostSynced": true,
+        "heading": {
+          "x": 316,
+          "y": 252.671875,
+          "width": 56,
+          "height": 20
+        },
+        "sidebar": {
+          "x": 8,
+          "y": 208,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": true
+      },
+      "returnButton": {
+        "x": 292,
+        "y": 45.5,
+        "width": 28,
+        "height": 28
+      }
+    },
+    {
+      "resource": "autopilots",
+      "id": "4d5353d3-e415-4252-ad53-3cb9e2a7bac4",
+      "detail": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 1,
+        "hostSynced": true,
+        "heading": {
+          "x": 394,
+          "y": 49.5,
+          "width": 186.109375,
+          "height": 20
+        },
+        "sidebar": {
+          "x": 8,
+          "y": 239,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": false,
+        "detailMatches": true
+      },
+      "clicked": true,
+      "list": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 0,
+        "hostSynced": true,
+        "heading": {
+          "x": 316,
+          "y": 49.5,
+          "width": 42,
+          "height": 20
+        },
+        "sidebar": {
+          "x": 8,
+          "y": 239,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": true
+      },
+      "returnButton": {
+        "x": 292,
+        "y": 45.5,
+        "width": 28,
+        "height": 28
+      }
+    },
+    {
+      "resource": "agents",
+      "id": "b9f221fe-bca3-4c08-9ee1-2cec015c013c",
+      "detail": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 1,
+        "hostSynced": true,
+        "heading": {
+          "x": 372,
+          "y": 94,
+          "width": 198.4375,
+          "height": 32
+        },
+        "sidebar": {
+          "x": 8,
+          "y": 270,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": false,
+        "detailMatches": true
+      },
+      "clicked": true,
+      "list": {
+        "surface": {
+          "x": 276,
+          "y": 36,
+          "width": 1004,
+          "height": 731
+        },
+        "alerts": 0,
+        "backCount": 0,
+        "hostSynced": true,
+        "heading": {
+          "x": 316,
+          "y": 49.5,
+          "width": 42,
+          "height": 20
+        },
+        "sidebar": {
+          "x": 8,
+          "y": 270,
+          "width": 250,
+          "height": 30
+        },
+        "headingMatches": true
+      },
+      "returnButton": {
+        "x": 300,
+        "y": 48,
+        "width": 28,
+        "height": 28
+      }
+    }
+  ],
+  "stage": "complete"
+}

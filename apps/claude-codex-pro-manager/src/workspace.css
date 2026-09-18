@@ -1626,9 +1626,6 @@ body {
 .log-lines,
 .relay-file-textarea,
 .context-toml-editor,
-.memory-manual-document,
-.memory-manual-editor,
-.memory-new-project-prompt pre,
 .claude-session-context-message pre,
 .mono {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -1639,9 +1636,7 @@ body {
 .preview-box pre,
 .plugin-preview pre,
 .log-view,
-.log-lines,
-.memory-manual-document,
-.memory-new-project-prompt pre {
+.log-lines {
   overflow: auto;
   border: 1px solid var(--workspace-border);
   border-radius: var(--workspace-control-radius);
@@ -1658,9 +1653,7 @@ body {
 .log-view,
 .log-lines,
 .relay-file-textarea,
-.context-toml-editor,
-.memory-manual-document,
-.memory-manual-editor {
+.context-toml-editor {
   background: var(--workspace-surface);
 }
 
@@ -1670,10 +1663,7 @@ body {
 .ops-filter-row,
 .supplier-toolbar,
 .supplier-editor-toolbar,
-.script-row-actions,
-.memory-manual-toolbar,
-.memory-source-toolbar,
-.memory-outcome-toolbar {
+.script-row-actions {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -2433,7 +2423,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   color: hsl(var(--muted-foreground));
 }
 
-/* Sessions and memory */
+/* Sessions */
 .session-management-wide-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2608,165 +2598,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   border: 1px solid var(--workspace-border);
   border-left: 3px solid var(--workspace-blue);
   border-radius: var(--workspace-control-radius, 6px);
-}
-
-.memory-start-grid,
-.memory-breakdown-grid,
-.memory-layer-grid,
-.memory-tool-grid,
-.memory-assist-columns,
-.memory-assist-transfer,
-.memory-manual-layout {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  align-items: start;
-}
-
-.memory-outcome-stats,
-.memory-stat-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.memory-start-card,
-.memory-outcome-item,
-.memory-recall-card,
-.memory-breakdown-list,
-.memory-tool-card,
-.memory-manual-toc,
-.memory-project-list,
-.memory-diagnostics,
-.memory-new-project-preview,
-.memory-new-project-prompt,
-.memory-assist-row,
-.memory-lesson-card {
-  min-width: 0;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
-  background: var(--workspace-surface);
-  color: var(--workspace-text);
-  box-shadow: none;
-}
-
-.memory-start-card,
-.memory-outcome-item,
-.memory-recall-card,
-.memory-breakdown-list,
-.memory-tool-card,
-.memory-new-project-prompt,
-.memory-assist-row {
-  padding: 11px 12px;
-}
-
-.memory-start-card:hover,
-.memory-outcome-item:hover,
-.memory-recall-card:hover,
-.memory-assist-row:hover {
-  border-color: var(--workspace-border-strong);
-  background: var(--workspace-surface-subtle);
-}
-
-.memory-outcome-item p,
-.memory-recall-card p,
-.memory-assist-row p,
-.memory-tool-card strong {
-  color: var(--workspace-text);
-}
-
-.memory-outcome-item span,
-.memory-outcome-item em,
-.memory-recall-card span,
-.memory-assist-row span,
-.memory-assist-row em,
-.memory-tool-card span,
-.memory-start-updated {
-  color: var(--workspace-text-secondary);
-  font-size: 11px;
-}
-
-.memory-trend-chart {
-  min-height: 190px;
-  overflow-x: auto;
-  border: 1px solid var(--workspace-border);
-  border-radius: var(--workspace-radius);
-  background: var(--workspace-surface);
-  padding: 14px;
-}
-
-.memory-trend-bars .capture {
-  background: var(--workspace-blue);
-}
-
-.memory-trend-bars .learned {
-  background: var(--workspace-success);
-}
-
-.memory-trend-bars .recall {
-  background: var(--workspace-warning);
-}
-
-.memory-trend-legend span:nth-child(1)::before {
-  background: var(--workspace-blue);
-}
-
-.memory-trend-legend span:nth-child(2)::before {
-  background: var(--workspace-success);
-}
-
-.memory-trend-legend span:nth-child(3)::before {
-  background: var(--workspace-warning);
-}
-
-.memory-new-project-preview {
-  overflow: hidden;
-  background: var(--workspace-surface-subtle);
-  padding: 12px;
-}
-
-.memory-guide-stats,
-.memory-new-project-preview > section {
-  border-color: var(--workspace-border);
-  border-radius: var(--workspace-control-radius);
-  background: var(--workspace-surface);
-}
-
-.memory-project-list > summary,
-.memory-diagnostics > summary {
-  min-height: 44px;
-  color: var(--workspace-text);
-  padding: 11px 12px;
-}
-
-.memory-project-list[open] > summary,
-.memory-diagnostics[open] > summary {
-  border-bottom: 1px solid var(--workspace-border);
-}
-
-.memory-diagnostics-body,
-.memory-project-list > .memory-assist-list {
-  background: var(--workspace-surface-subtle);
-  padding: 12px;
-}
-
-.memory-manual-document,
-.memory-manual-editor {
-  min-height: 360px;
-}
-
-.memory-tier-badge,
-.memory-archive-toggle {
-  color: var(--workspace-text-secondary);
-}
-
-.memory-strength-bar {
-  overflow: hidden;
-  background: var(--workspace-surface-muted);
-}
-
-.memory-strength-fill {
-  background: var(--workspace-blue);
 }
 
 /* Plugins, tools, maintenance, and settings */
@@ -3071,8 +2902,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   padding: 10px;
 }
 
-.script-market-grid,
-.memory-tool-grid {
+.script-market-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -3729,8 +3559,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .log-lines,
   .relay-file-textarea,
   .context-toml-editor,
-  .memory-manual-document,
-  .memory-manual-editor,
   .supplier-ccswitch-editor,
   .supplier-ccswitch-form-card,
   .codex-session-browser,
@@ -3795,9 +3623,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 
   .ops-matrix,
   .card-grid,
-  .health-grid,
-  .memory-outcome-stats,
-  .memory-stat-grid {
+  .health-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3869,14 +3695,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   .ops-overview-grid,
   .ops-tools-command-deck,
   .ops-tools-columns,
-  .repository-status-grid,
-  .memory-start-grid,
-  .memory-breakdown-grid,
-  .memory-layer-grid,
-  .memory-tool-grid,
-  .memory-assist-columns,
-  .memory-assist-transfer,
-  .memory-manual-layout {
+  .repository-status-grid {
     grid-template-columns: 1fr;
   }
 
@@ -7199,8 +7018,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 @media (forced-colors: active) {
   .ops-runtime-dot,
-  .ops-status-row::before,
-  .memory-trend-bars i {
+  .ops-status-row::before {
     border: 1px solid currentColor;
   }
 
@@ -7304,11 +7122,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .session-history-card,
   .session-codex-card,
   .session-claude-card,
-  .memory-start-card,
-  .memory-outcome-item,
-  .memory-recall-card,
-  .memory-tool-card,
-  .memory-assist-row,
   .plugin-hub-detail,
   .plugin-hub-row,
   .ops-setting-card,
@@ -7352,11 +7165,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .ops-shell :is(
   .supplier-card,
-  .memory-start-card,
-  .memory-outcome-item,
-  .memory-recall-card,
-  .memory-tool-card,
-  .memory-assist-row,
   .plugin-hub-row,
   .ops-setting-card,
   .codex-theme-card,
@@ -7376,10 +7184,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .ops-shell :is(
   .supplier-card,
-  .memory-start-card,
-  .memory-recall-card,
-  .memory-tool-card,
-  .memory-assist-row,
   .plugin-hub-row,
   .ops-setting-card,
   .codex-theme-card,
@@ -7501,10 +7305,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 @media (prefers-reduced-motion: reduce) {
   .ops-shell :is(
     .supplier-card,
-    .memory-start-card,
-    .memory-recall-card,
-    .memory-tool-card,
-    .memory-assist-row,
     .plugin-hub-row,
     .ops-setting-card,
     .codex-theme-card,
@@ -7521,10 +7321,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 
   .ops-shell :is(
     .supplier-card,
-    .memory-start-card,
-    .memory-recall-card,
-    .memory-tool-card,
-    .memory-assist-row,
     .plugin-hub-row,
     .ops-setting-card,
     .codex-theme-card,
@@ -7852,7 +7648,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 .script-market-card,
 .session-row,
 .codex-session-row,
-.memory-assist-row,
 .ops-setting-card,
 .context-manager-card,
 .context-entry-row,
@@ -7883,7 +7678,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .script-market-card,
   .session-row,
   .codex-session-row,
-  .memory-assist-row,
   .ops-setting-card,
   .context-manager-card,
   .context-entry-row,
@@ -7913,9 +7707,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .relay-file-textarea,
   .context-editor-textarea,
   .context-toml-editor,
-  .memory-manual-document,
-  .memory-manual-editor,
-  .memory-new-project-prompt pre,
   .supplier-ccswitch-editor,
   .supplier-ccswitch-form-card,
   .codex-session-browser,
@@ -8390,7 +8181,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 }
 
 .overview-panel-heading small,
-.overview-panel-heading > div > span:not(.overview-timeline-legend) {
+.overview-panel-heading > div > span {
   color: var(--workspace-text-tertiary);
   font-size: 10px;
   line-height: 14px;
@@ -8539,9 +8330,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   white-space: nowrap;
 }
 
-.overview-provider-status i,
-.overview-timeline-legend i,
-.overview-timeline-event i {
+.overview-provider-status i {
   width: 6px;
   height: 6px;
   flex: 0 0 6px;
@@ -8879,14 +8668,13 @@ html.dark > body > .supplier-model-dropdown-menu,
 }
 
 .overview-advice,
-.overview-memory-control,
 .overview-announcement-link {
   border: 1px solid var(--workspace-border);
   border-radius: 7px;
   background-color: rgb(255 255 255 / 0.045);
 }
 
-.ops-shell.light :is(.overview-advice, .overview-memory-control, .overview-announcement-link, .overview-inspector-metrics > span) {
+.ops-shell.light :is(.overview-advice, .overview-announcement-link, .overview-inspector-metrics > span) {
   background-color: rgb(255 255 255 / 0.48);
 }
 
@@ -8936,48 +8724,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   height: 4px;
   border-radius: 50%;
   background: var(--workspace-success);
-}
-
-.overview-memory-control {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 10px;
-}
-
-.overview-memory-control > div {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.overview-memory-control svg {
-  width: 16px;
-  height: 16px;
-  color: var(--workspace-success);
-}
-
-.overview-memory-control span {
-  display: grid;
-  min-width: 0;
-}
-
-.overview-memory-control strong {
-  color: var(--workspace-text);
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.overview-memory-control small {
-  overflow: hidden;
-  color: var(--workspace-text-tertiary);
-  font-size: 8px;
-  line-height: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .overview-quick-actions {
@@ -9086,110 +8832,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 .overview-timeline {
   min-width: 0;
   overflow: hidden;
-}
-
-.overview-timeline-legend {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--workspace-text-tertiary);
-  font-size: 8px;
-  white-space: nowrap;
-}
-
-.overview-timeline-legend i {
-  margin-left: 5px;
-}
-
-.overview-timeline-legend i.ok,
-.overview-timeline-event.ok i {
-  background: var(--workspace-success);
-}
-
-.overview-timeline-legend i.warning,
-.overview-timeline-event.warning i {
-  background: var(--workspace-warning);
-}
-
-.overview-timeline-legend i.failed,
-.overview-timeline-event.failed i {
-  background: var(--workspace-danger);
-}
-
-.overview-timeline-body {
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.overview-timeline-row {
-  display: grid;
-  min-width: 650px;
-  grid-template-columns: 132px minmax(0, 1fr);
-  min-height: 35px;
-  border-bottom: 1px solid var(--workspace-border);
-}
-
-.overview-timeline-row > strong {
-  display: flex;
-  align-items: center;
-  border-right: 1px solid var(--workspace-border);
-  color: var(--workspace-text-secondary);
-  padding: 0 13px;
-  font-size: 9px;
-  font-weight: 650;
-}
-
-.overview-timeline-track {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  overflow: hidden;
-  padding: 4px 10px;
-}
-
-.overview-timeline-event {
-  display: inline-grid;
-  min-width: 132px;
-  max-width: 240px;
-  grid-template-columns: 6px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  border: 1px solid var(--workspace-border);
-  border-radius: 5px;
-  background: rgb(255 255 255 / 0.04);
-  color: var(--workspace-text-secondary);
-  padding: 3px 7px;
-}
-
-.overview-timeline-event b,
-.overview-timeline-event time {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-timeline-event b {
-  font-size: 8px;
-  font-weight: 620;
-}
-
-.overview-timeline-event time {
-  color: var(--workspace-text-tertiary);
-  font: 7px/10px ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-
-.overview-timeline-empty {
-  color: var(--workspace-text-tertiary);
-  font-size: 8px;
-}
-
-.overview-timeline-note {
-  margin: 6px 12px 0;
-  color: var(--workspace-text-tertiary);
-  font-size: 8px;
-  line-height: 12px;
 }
 
 @media (max-width: 1280px) {
@@ -9987,7 +9629,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 .overview-inspector-metrics > span,
 .overview-advice,
-.overview-memory-control,
 .overview-announcement-link {
   background-color: rgb(255 255 255 / 0.05);
   background-image: linear-gradient(128deg, rgb(255 255 255 / 0.08), transparent 46%);
@@ -9996,7 +9637,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
 
-.ops-shell.light :is(.overview-inspector-metrics > span, .overview-advice, .overview-memory-control, .overview-announcement-link) {
+.ops-shell.light :is(.overview-inspector-metrics > span, .overview-advice, .overview-announcement-link) {
   background-color: rgb(255 255 255 / 0.7);
   background-image: linear-gradient(128deg, rgb(255 255 255 / 0.76), transparent 50%);
 }
@@ -10025,151 +9666,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   background-color: rgb(250 253 251 / 0.8);
 }
 
-.overview-timeline-body {
-  display: grid;
-  height: calc(100% - 46px);
-  min-height: 0;
-  grid-template-columns: 170px minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.overview-timeline-labels {
-  display: grid;
-  grid-template-rows: 32px repeat(4, 40px) minmax(0, 1fr);
-  border-right: 1px solid var(--workspace-border);
-  padding: 0 14px;
-}
-
-.overview-timeline-labels::before {
-  content: "";
-}
-
-.overview-timeline-labels strong {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--workspace-text-secondary);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.overview-timeline-labels strong i {
-  width: 5px;
-  height: 5px;
-  flex: 0 0 5px;
-  border-radius: 50%;
-  background: var(--workspace-text-tertiary);
-}
-
-.overview-timeline-chart {
-  position: relative;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.overview-timeline-axis {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  height: 32px;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  border-bottom: 1px solid var(--workspace-border);
-}
-
-.overview-timeline-axis time {
-  display: grid;
-  place-items: center;
-  border-right: 1px solid var(--workspace-border);
-  color: var(--workspace-text-tertiary);
-  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
-}
-
-.overview-timeline-grid {
-  position: absolute;
-  z-index: 0;
-  inset: 32px 0 0;
-  background-image: linear-gradient(90deg, var(--workspace-border) 1px, transparent 1px);
-  background-size: 12.5% 100%;
-}
-
-.overview-timeline-track {
-  position: relative;
-  z-index: 2;
-  display: block;
-  height: 40px;
-  overflow: visible;
-  padding: 0;
-}
-
-.overview-timeline-event {
-  position: absolute;
-  top: 7px;
-  display: grid;
-  width: clamp(150px, 34%, 340px);
-  min-width: 0;
-  max-width: none;
-  height: 26px;
-  grid-template-columns: 6px minmax(0, 1fr) auto;
-  gap: 7px;
-  border-color: rgb(225 243 255 / 0.28);
-  background: rgb(255 255 255 / 0.055);
-  padding: 3px 9px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
-}
-
-.overview-timeline-event.warning {
-  border-color: rgb(245 158 11 / 0.38);
-  color: var(--workspace-warning);
-}
-
-.overview-timeline-event.failed {
-  border-color: rgb(239 68 68 / 0.42);
-  color: var(--workspace-danger);
-}
-
-.overview-timeline-event b {
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.overview-timeline-event time {
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.overview-timeline-empty {
-  position: absolute;
-  top: 13px;
-  left: 14px;
-  font-size: 11px;
-}
-
-.overview-timeline-now {
-  position: absolute;
-  z-index: 3;
-  top: 32px;
-  bottom: 0;
-  left: 82%;
-  width: 1px;
-  border-left: 1px solid var(--workspace-success);
-  color: var(--workspace-success);
-  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
-  padding-top: 3px;
-  transform: translateX(-50%);
-}
-
-.overview-timeline-note {
-  position: absolute;
-  z-index: 3;
-  right: 10px;
-  bottom: 5px;
-  margin: 0;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.overview-timeline .overview-panel-heading small,
-.overview-timeline-legend {
+.overview-timeline .overview-panel-heading small {
   font-size: 11px;
   line-height: 15px;
 }
@@ -10338,35 +9835,6 @@ html.dark > body > .supplier-model-dropdown-menu,
     line-height: 27px;
   }
 
-  .overview-timeline-body {
-    grid-template-columns: 178px minmax(0, 1fr);
-  }
-
-  .overview-timeline-labels {
-    grid-template-rows: 34px repeat(4, 42px) minmax(0, 1fr);
-    padding-inline: 16px;
-  }
-
-  .overview-timeline-axis {
-    height: 34px;
-  }
-
-  .overview-timeline-grid {
-    inset-block-start: 34px;
-  }
-
-  .overview-timeline-track {
-    height: 42px;
-  }
-
-  .overview-timeline-event {
-    top: 8px;
-    height: 26px;
-  }
-
-  .overview-timeline-now {
-    top: 34px;
-  }
 }
 
 @media (min-width: 2400px) and (min-height: 1350px) {
@@ -10532,11 +10000,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 .ops-panel,
 .panel,
 .supplier-card,
-.memory-start-card,
-.memory-outcome-item,
-.memory-recall-card,
-.memory-tool-card,
-.memory-assist-row,
 .plugin-hub-detail,
 .plugin-hub-row {
   border-color: var(--agent-glass-edge-soft);
@@ -10555,11 +10018,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .ops-panel,
   .panel,
   .supplier-card,
-  .memory-start-card,
-  .memory-outcome-item,
-  .memory-recall-card,
-  .memory-tool-card,
-  .memory-assist-row,
   .plugin-hub-detail,
   .plugin-hub-row
 ) {

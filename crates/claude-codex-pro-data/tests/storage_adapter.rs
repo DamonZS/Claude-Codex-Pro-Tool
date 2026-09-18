@@ -441,6 +441,51 @@ fn list_local_sessions_reads_codex_threads_ordered_by_update_time() {
 }
 
 #[test]
+fn available_session_ids_requires_thread_and_rollout_file() {
+    let tmp = tempdir().unwrap();
+    let db_path = tmp.path().join("state_5.sqlite");
+    let rollout_path = tmp.path().join("valid.jsonl");
+    fs::write(&rollout_path, "{}\n").unwrap();
+    let db = Connection::open(&db_path).unwrap();
+    db.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT)",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES ('valid', ?1, 'Valid')",
+        [&rollout_path.to_string_lossy().to_string()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES ('missing-file', ?1, 'Missing file')",
+        [&tmp
+            .path()
+            .join("missing.jsonl")
+            .to_string_lossy()
+            .to_string()],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES ('empty-path', '', 'Empty path')",
+        [],
+    )
+    .unwrap();
+    drop(db);
+
+    let adapter = SQLiteStorageAdapter::new(&db_path, BackupStore::new(tmp.path().join("backups")));
+    let requested = ["valid", "missing-file", "unknown", "empty-path"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    assert_eq!(
+        adapter.available_session_ids(&requested).unwrap(),
+        ["valid".to_string()].into_iter().collect()
+    );
+}
+
+#[test]
 fn list_local_sessions_reads_codex_automation_runs_schema() {
     let tmp = tempdir().unwrap();
     let db_path = tmp.path().join("codex-dev.db");

@@ -55,7 +55,11 @@ pub fn run() {
             // the manager. This is deliberately separate from user-configured
             // Multica sidecars below.
             tauri::async_runtime::spawn(async {
-                match claude_codex_pro_core::launcher::ensure_detached_helper(commands::DEFAULT_HELPER_PORT).await {
+                match claude_codex_pro_core::launcher::ensure_detached_helper(
+                    commands::DEFAULT_HELPER_PORT,
+                )
+                .await
+                {
                     Ok(()) => {
                         let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
                             "manager.helper.detached_ready",
@@ -146,26 +150,6 @@ pub fn run() {
             commands::load_codex_session_context,
             commands::list_claude_sessions,
             commands::load_claude_session_context,
-            commands::load_memory_assist_status,
-            commands::migrate_memory_assist_data_dir,
-            commands::load_memory_outcome_dashboard,
-            commands::load_memory_new_project_guide,
-            commands::query_memory_assist,
-            commands::list_memory_assist_items,
-            commands::learn_memory_assist_item,
-            commands::update_memory_assist_item,
-            commands::delete_memory_assist_item,
-            commands::archive_memory_assist_item,
-            commands::restore_memory_assist_item,
-            commands::create_memory_assist_candidate,
-            commands::list_memory_assist_candidates,
-            commands::approve_memory_assist_candidate,
-            commands::reject_memory_assist_candidate,
-            commands::load_memory_assist_session,
-            commands::run_memory_assist_selfcheck,
-            commands::export_memory_assist,
-            commands::import_memory_assist,
-            commands::register_memory_mcp_server,
             commands::list_zed_remote_projects,
             commands::open_zed_remote,
             commands::forget_zed_remote_project,
@@ -244,6 +228,7 @@ pub fn run() {
             commands::enable_watcher,
             commands::disable_watcher,
             commands::read_latest_logs,
+            commands::read_request_timeline,
             commands::copy_diagnostics,
             commands::reset_settings,
             commands::reset_image_overlay_settings,

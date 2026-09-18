@@ -9,8 +9,6 @@ import type {
   CodexPluginMarketplaceStatusResult,
   LocalSession,
   LocalSessionProjectGroup,
-  MemorySelfCheckResult,
-  MemoryStatusResult,
   OverviewResult,
   StatusChip,
 } from "@/types";
@@ -210,31 +208,6 @@ export function claudeOverviewStatus(claudeDesktop: ClaudeDesktopResult | null, 
   return { status, items };
 }
 
-export function memoryOverviewStatus(memoryAssist: MemoryStatusResult | null, settings: BackendSettings | null) {
-  const memory = memoryAssist?.memory;
-  const enabled = memory?.enabled ?? Boolean(settings?.memoryAssistEnabled);
-  const injectEnabled = memory?.injectEnabled ?? Boolean(settings?.memoryAssistInjectEnabled);
-  const autoSuggest = memory?.autoSuggestEnabled ?? Boolean(settings?.memoryAssistAutoSuggestEnabled);
-  const healthy = memory?.status === "ok";
-  const hasDb = Boolean(memory?.dbPath);
-  const runtimeStatus = memory?.runtimeStatus ?? "not_checked";
-  const codexInjected = Boolean(memory?.codexInjected);
-  const listening = Boolean(memory?.active);
-  const items: StatusChip[] = [
-    { label: enabled ? "开关已开启" : "开关已关闭", tone: enabled ? "ok" : "muted" },
-    { label: healthy ? "运行正常" : memoryAssist ? "运行异常" : "未检测", tone: healthy ? "ok" : memoryAssist ? "warn" : "muted" },
-    { label: codexInjected ? "Codex 已注入" : injectEnabled ? "等待 Codex 注入" : "注入已关闭", tone: codexInjected ? "ok" : enabled && injectEnabled ? "warn" : "muted" },
-    { label: listening ? "对话监控运行中" : codexInjected && autoSuggest ? "等待会话变化" : autoSuggest ? "等待 Codex 注入" : "对话监控关闭", tone: listening || (codexInjected && autoSuggest) ? "ok" : enabled && autoSuggest ? "warn" : "muted" },
-    { label: hasDb ? "数据库在线" : "数据库未检测", tone: hasDb ? "ok" : enabled ? "warn" : "muted" },
-  ];
-  const status = items.some((item) => item.tone === "warn")
-    ? "failed"
-    : enabled && healthy && (codexInjected || runtimeStatus === "disabled")
-      ? "running"
-      : "not_checked";
-  return { status, items };
-}
-
 export function codexLaunchRequestFromOverview(overview: OverviewResult | null) {
   return {
     appPath: overview?.codex_app.path || overview?.latest_launch?.codex_app || "",
@@ -271,16 +244,6 @@ export function waitForPaint() {
   return new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
   });
-}
-
-export function memoryRefineSummary(result: MemorySelfCheckResult): string {
-  const history = result.report.checks.find((check) => check.name === "history");
-  const historyMessage = history?.message || "未返回历史扫描结果。";
-  const failedChecks = result.report.checks.filter((check) => !statusOk(check.status));
-  const failedSummary = failedChecks.length
-    ? ` 需关注：${failedChecks.map((check) => `${check.name}:${check.status}`).join(" / ")}。`
-    : "";
-  return `使用 Codex 本地 SQLite、rollout 会话文件和 memory_assist.sqlite 遍历工作区与会话。结果：${historyMessage}.${failedSummary}`;
 }
 
 export function buttonLogLabel(button: HTMLButtonElement): string {

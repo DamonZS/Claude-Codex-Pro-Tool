@@ -3,19 +3,15 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::codex_execution::{
-    CodexExecutionHandle, CodexExecutionService, CodexExecutionState, CodexExecutionStatus,
-    CodexThreadRequest,
-};
-use crate::memory_assist::{
-    MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryItemRequest,
-    MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
+    CodexExecutionHandle, CodexExecutionService, CodexExecutionStatus,
+    CodexPageHostRequestTransport, CodexThreadRequest,
 };
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
+use crate::multica_builder::{BuilderRequest, MulticaBuilderStore};
 use crate::multica_execution::{
     SkillBindingScope, SkillBindingSelection, SkillBindings, SkillReference, SkillResolutionAudit,
 };
@@ -25,11 +21,12 @@ use crate::multica_execution_store::{
     MulticaExecutionCommandState, MulticaExecutionKind, MulticaExecutionStore, QueueTransition,
 };
 use crate::multica_skill_trust::review_local_skill;
+use crate::multica_webhooks::{MulticaWebhookStore, WebhookTarget};
 use crate::multica_workspace::{
     LocalMulticaWorkspaceStore, LocalWorkspaceEntityDelete, LocalWorkspaceEntityUpsert,
-    LocalWorkspaceIssueMove, MulticaAgentCreateCommand, MulticaSkillBindingCommand,
-    MulticaSkillBindingRemoveCommand, MulticaSkillBindingsQuery, MulticaWorkspaceQuery,
-    MulticaWorkspaceResourceKey,
+    LocalWorkspaceIssueMove, LocalWorkspaceIssueStatusReorder, MulticaAgentCreateCommand,
+    MulticaSkillBindingCommand, MulticaSkillBindingRemoveCommand, MulticaSkillBindingsQuery,
+    MulticaWorkspaceQuery, MulticaWorkspaceResourceKey, WorkspaceCommand,
 };
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -155,6 +152,24 @@ pub trait BridgeRuntimeService: Send + Sync {
     async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
         anyhow::bail!("multica_workspace_unavailable")
     }
+    async fn multica_builder(&self, _request: BuilderRequest) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_builder_unavailable")
+    }
+    async fn multica_native_domain(
+        &self,
+        _request: MulticaNativeDomainRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_native_domain_unavailable")
+    }
+    async fn multica_webhooks(&self, _request: MulticaWebhookRequest) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_webhooks_unavailable")
+    }
+    async fn multica_workspace_reorder_statuses(
+        &self,
+        _request: MulticaStatusReorderRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
     async fn multica_workspace_query(
         &self,
         _query: MulticaWorkspaceQuery,
@@ -178,6 +193,12 @@ pub trait BridgeRuntimeService: Send + Sync {
         _request: MulticaWorkspaceDeleteRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_workspace_mutation_unavailable")
+    }
+    async fn multica_workspace_command(
+        &self,
+        _request: MulticaWorkspaceCommandRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_workspace_command_unavailable")
     }
     async fn multica_agent_create(
         &self,
@@ -325,46 +346,20 @@ pub trait BridgeRuntimeService: Send + Sync {
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_autopilot_unavailable")
     }
+    async fn multica_autopilot_tick(&self) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_autopilot_unavailable")
+    }
     async fn multica_autopilot_transition(
         &self,
         _request: MulticaAutopilotTransitionRequest,
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_autopilot_unavailable")
     }
-    async fn memory_status(&self) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
-    async fn memory_session(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
-    async fn memory_search(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线", "results": []}))
-    }
-    async fn memory_learn(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
-    async fn memory_candidates(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线", "candidates": []}))
-    }
-    async fn memory_capture(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆采集尚未接线"}))
-    }
-    async fn memory_resolve_workspace(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆 workspace 解析尚未接线"}))
-    }
-    async fn memory_approve(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
-    async fn memory_reject(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
-    async fn memory_selfcheck(&self, _payload: Value) -> anyhow::Result<Value> {
-        Ok(json!({"status": "failed", "message": "盘古记忆尚未接线"}))
-    }
 }
 
 #[async_trait]
 pub trait BridgeDataService: Send + Sync {
+    async fn session_availability(&self, session_ids: Vec<String>) -> anyhow::Result<Vec<String>>;
     async fn delete(&self, session: SessionRef) -> anyhow::Result<DeleteResult>;
     async fn undo(&self, undo_token: String) -> anyhow::Result<DeleteResult>;
     async fn export_markdown(&self, session: SessionRef) -> anyhow::Result<ExportResult>;
@@ -401,6 +396,28 @@ pub async fn handle_bridge_request(
         );
     }
     let result = match path {
+        "/session-availability" => {
+            let session_ids = payload
+                .get("session_ids")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            ctx.data
+                .session_availability(session_ids)
+                .await
+                .map(|available| {
+                    json!({
+                        "status": "ok",
+                        "available_session_ids": available
+                    })
+                })
+        }
         "/settings/get" => settings_value(&ctx, ctx.settings.get_settings().await).await,
         "/settings/set" => {
             settings_value(&ctx, ctx.settings.set_settings(payload.clone()).await).await
@@ -436,6 +453,60 @@ pub async fn handle_bridge_request(
         "/user-scripts/reload" => ctx.runtime.reload_user_scripts().await,
         "/devtools/open" => ctx.runtime.open_devtools().await,
         "/manager/open" => ctx.runtime.open_manager().await,
+        "/multica/agents/env"
+        | "/multica/issues/limit-usage"
+        | "/multica/autopilots/usage"
+        | "/multica/issues/preview-trigger"
+        | "/multica/quick-actions/render"
+        | "/multica/quick-actions/run" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_native_domain(parse_multica_native_domain(path, &payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/builder" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ensure_multica_payload_size(&payload)?;
+                let request = serde_json::from_value::<BuilderRequest>(payload.clone())
+                    .map_err(|_| anyhow::anyhow!("builder_request_invalid"))?;
+                ctx.runtime.multica_builder(request).await
+            }
+            .await
+        }
+        "/multica/webhooks"
+        | "/multica/webhooks/provision"
+        | "/multica/webhooks/trigger"
+        | "/multica/webhooks/rotate"
+        | "/multica/webhooks/deliveries"
+        | "/multica/webhooks/delivery"
+        | "/multica/webhooks/replay"
+        | "/multica/webhooks/revoke" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                let request = parse_multica_webhook(path, &payload)?;
+                ctx.runtime.multica_webhooks(request).await
+            }
+            .await
+        }
+        "/multica/workspace/reorder-statuses" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ensure_multica_payload_size(&payload)?;
+                let request =
+                    serde_json::from_value::<MulticaStatusReorderRequest>(payload.clone())
+                        .map_err(|_| {
+                            anyhow::anyhow!("multica_workspace_issue_status_reorder_invalid")
+                        })?;
+                ctx.runtime
+                    .multica_workspace_reorder_statuses(request)
+                    .await
+            }
+            .await
+        }
         "/multica/workspace/bootstrap" => {
             async {
                 ensure_multica_workspace_enabled(&ctx).await?;
@@ -459,6 +530,16 @@ pub async fn handle_bridge_request(
                 ctx.runtime
                     .multica_workspace_upsert(parse_multica_workspace_upsert(&payload)?)
                     .await
+            }
+            .await
+        }
+        "/multica/workspace/command" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                let request: MulticaWorkspaceCommandRequest =
+                    serde_json::from_value(payload.clone())
+                        .map_err(|_| anyhow::anyhow!("multica_workspace_command_invalid"))?;
+                ctx.runtime.multica_workspace_command(request).await
             }
             .await
         }
@@ -682,9 +763,29 @@ pub async fn handle_bridge_request(
         }
         "/multica/autopilots/trigger" => {
             async {
+                ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_autopilot_trigger(parse_multica_autopilot_trigger(&payload)?)
                     .await
+            }
+            .await
+        }
+        "/multica/autopilots/cron-preview" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                let request: MulticaCronPreviewRequest = serde_json::from_value(payload.clone())
+                    .map_err(|_| anyhow::anyhow!("autopilot_cron_preview_payload_invalid"))?;
+                autopilot_cron_preview(request, unix_now_ms())
+            }
+            .await
+        }
+        "/multica/autopilots/tick" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                if payload.as_object().is_none_or(|object| !object.is_empty()) {
+                    anyhow::bail!("autopilot_tick_payload_invalid");
+                }
+                ctx.runtime.multica_autopilot_tick().await
             }
             .await
         }
@@ -741,43 +842,6 @@ pub async fn handle_bridge_request(
             ctx.runtime.upstream_worktree_prepare(payload.clone()).await
         }
         "/upstream-worktree/create" => ctx.runtime.upstream_worktree_create(payload.clone()).await,
-        "/memory/status" => ctx.runtime.memory_status().await,
-        "/memory/session" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_session(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/search" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_search(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/learn" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_learn(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/candidates" => match ensure_memory_candidates_allowed(&ctx, &payload).await {
-            Ok(()) => ctx.runtime.memory_candidates(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/capture" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_capture(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/resolve-workspace" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_resolve_workspace(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/approve" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_approve(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/reject" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_reject(payload.clone()).await,
-            Err(err) => Err(err),
-        },
-        "/memory/selfcheck" => match ensure_memory_enabled(&ctx).await {
-            Ok(()) => ctx.runtime.memory_selfcheck(payload.clone()).await,
-            Err(err) => Err(err),
-        },
         "/delete" => result_value(ctx.data.delete(session_from_payload(&payload)).await),
         "/undo" => {
             let undo_token = payload
@@ -863,15 +927,6 @@ pub async fn handle_bridge_request(
     response
 }
 
-async fn ensure_memory_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
-    let settings = ctx.settings.get_settings().await?;
-    if settings.memory_assist_enabled {
-        Ok(())
-    } else {
-        anyhow::bail!("盘古记忆已禁用")
-    }
-}
-
 async fn ensure_multica_workspace_enabled(ctx: &BridgeContext) -> anyhow::Result<()> {
     if ctx.settings.get_settings().await?.multica_workspace_enabled {
         Ok(())
@@ -881,6 +936,158 @@ async fn ensure_multica_workspace_enabled(ctx: &BridgeContext) -> anyhow::Result
 }
 
 const MAX_MULTICA_BRIDGE_PAYLOAD_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    tag = "operation",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum MulticaNativeDomainRequest {
+    GetEnv {
+        agent_id: String,
+    },
+    SetEnv {
+        agent_id: String,
+        custom_env: std::collections::BTreeMap<String, String>,
+        expected_revision: u64,
+        command_id: String,
+        command_signature: String,
+    },
+    IssueUsage,
+    AutopilotUsage,
+    Preview {
+        issue_ids: Vec<String>,
+        is_create: bool,
+        #[serde(default)]
+        assignee_type: Option<String>,
+        #[serde(default)]
+        assignee_id: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    },
+    Render {
+        issue_id: String,
+        quick_action_id: String,
+    },
+    Run {
+        issue_id: String,
+        quick_action_id: String,
+        expected_issue_revision: u64,
+        expected_action_revision: u64,
+        command_id: String,
+        command_signature: String,
+    },
+}
+
+fn parse_multica_native_domain(
+    path: &str,
+    payload: &Value,
+) -> anyhow::Result<MulticaNativeDomainRequest> {
+    ensure_multica_payload_size(payload)?;
+    let mut value = payload.clone();
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("multica_native_request_invalid"))?;
+    let operation = match path {
+        "/multica/agents/env" => match object
+            .remove("operation")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref()
+        {
+            Some("get") => "get_env",
+            Some("set") => "set_env",
+            _ => anyhow::bail!("multica_native_request_invalid"),
+        },
+        other => {
+            if object.contains_key("operation") {
+                anyhow::bail!("multica_native_request_invalid");
+            }
+            match other {
+                "/multica/issues/limit-usage" => "issue_usage",
+                "/multica/autopilots/usage" => "autopilot_usage",
+                "/multica/issues/preview-trigger" => "preview",
+                "/multica/quick-actions/render" => "render",
+                "/multica/quick-actions/run" => "run",
+                _ => anyhow::bail!("multica_native_request_invalid"),
+            }
+        }
+    };
+    object.insert("operation".into(), json!(operation));
+    serde_json::from_value(value).map_err(|_| anyhow::anyhow!("multica_native_request_invalid"))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaStatusReorderRequest {
+    pub category: String,
+    pub ids: Vec<String>,
+    pub expected_revisions: std::collections::BTreeMap<String, u64>,
+    pub command_id: String,
+    pub command_signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    tag = "operation",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum MulticaWebhookRequest {
+    Provision {
+        autopilot_id: String,
+        trigger_id: String,
+        command_id: String,
+    },
+    Trigger {
+        autopilot_id: String,
+        trigger_id: String,
+    },
+    Rotate {
+        autopilot_id: String,
+        trigger_id: String,
+        expected_revision: u64,
+        command_id: String,
+        #[serde(default)]
+        command_signature: Option<String>,
+    },
+    Revoke {
+        autopilot_id: String,
+        trigger_id: String,
+        expected_revision: u64,
+    },
+    Deliveries {
+        autopilot_id: String,
+        limit: usize,
+        offset: usize,
+    },
+    Delivery {
+        autopilot_id: String,
+        delivery_id: String,
+    },
+    Replay {
+        autopilot_id: String,
+        delivery_id: String,
+        command_id: String,
+    },
+}
+
+fn parse_multica_webhook(path: &str, payload: &Value) -> anyhow::Result<MulticaWebhookRequest> {
+    ensure_multica_payload_size(payload)?;
+    let mut payload = payload.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("webhook_request_invalid"))?;
+    if let Some(operation) = path.strip_prefix("/multica/webhooks/") {
+        if object.contains_key("operation") {
+            anyhow::bail!("webhook_request_invalid");
+        }
+        object.insert("operation".into(), json!(operation));
+    }
+    serde_json::from_value(payload).map_err(|_| anyhow::anyhow!("webhook_request_invalid"))
+}
 
 fn ensure_multica_payload_size(payload: &Value) -> anyhow::Result<()> {
     let bytes =
@@ -915,9 +1122,17 @@ pub struct MulticaWorkspaceUpsertRequest {
     pub entity: Value,
     #[serde(default)]
     pub expected_revision: Option<u64>,
+    #[serde(default)]
+    pub suppress_run: bool,
+    #[serde(default)]
+    pub handoff_note: Option<String>,
+    #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub command_signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaWorkspaceMoveIssueRequest {
     pub issue_id: String,
@@ -934,6 +1149,10 @@ pub struct MulticaWorkspaceMoveIssueRequest {
     pub before_id: Option<String>,
     pub after_id: Option<String>,
     pub expected_revision: u64,
+    #[serde(default, skip_serializing)]
+    pub command_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub command_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -942,6 +1161,32 @@ pub struct MulticaWorkspaceDeleteRequest {
     pub resource: MulticaWorkspaceResourceKey,
     pub entity_id: String,
     pub expected_revision: u64,
+    #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub command_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MulticaWorkspaceCommandRequest {
+    pub command_id: String,
+    pub command_signature: String,
+}
+
+fn workspace_command(
+    id: Option<String>,
+    signature: Option<String>,
+    operation: String,
+    payload: Value,
+) -> anyhow::Result<Option<WorkspaceCommand>> {
+    match (id, signature) {
+        (None, None) => Ok(None),
+        (Some(id), Some(signature)) => Ok(Some(WorkspaceCommand::new(
+            id, signature, operation, payload,
+        )?)),
+        _ => anyhow::bail!("multica_workspace_command_invalid"),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -950,6 +1195,10 @@ pub struct MulticaAgentCreateRequest {
     pub entity: Value,
     #[serde(default)]
     pub skills: Vec<SkillReference>,
+    #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub command_signature: Option<String>,
 }
 
 fn parse_multica_agent_create(payload: &Value) -> anyhow::Result<MulticaAgentCreateRequest> {
@@ -977,6 +1226,11 @@ fn parse_multica_workspace_upsert(
     if !request.entity.is_object() {
         anyhow::bail!("multica_workspace_entity_invalid");
     }
+    crate::multica_workspace::issue_run_controls::IssueRunControls {
+        suppress_run: request.suppress_run,
+        handoff_note: request.handoff_note.clone(),
+    }
+    .validate(request.resource, &request.entity)?;
     Ok(request)
 }
 
@@ -992,8 +1246,19 @@ fn parse_multica_workspace_move_issue(
             anyhow::bail!("multica_workspace_move_invalid");
         }
     }
-    let request: MulticaWorkspaceMoveIssueRequest = serde_json::from_value(payload.clone())
+    let mut request: MulticaWorkspaceMoveIssueRequest = serde_json::from_value(payload.clone())
         .map_err(|_| anyhow::anyhow!("multica_workspace_move_invalid"))?;
+    // Serde's nested Option treats null like a missing field by default.
+    for (key, field) in [
+        ("assigneeType", &mut request.assignee_type),
+        ("assigneeId", &mut request.assignee_id),
+        ("parentIssueId", &mut request.parent_issue_id),
+        ("projectId", &mut request.project_id),
+    ] {
+        if object.get(key).is_some_and(Value::is_null) {
+            *field = Some(None);
+        }
+    }
     validate_multica_execution_id(&request.issue_id)
         .map_err(|_| anyhow::anyhow!("multica_workspace_move_invalid"))?;
     if request.expected_revision == 0 {
@@ -1040,12 +1305,17 @@ fn validate_mutable_workspace_resource(
             | MulticaWorkspaceResourceKey::Comments
             | MulticaWorkspaceResourceKey::Labels
             | MulticaWorkspaceResourceKey::Subscribers
+            | MulticaWorkspaceResourceKey::Reactions
+            | MulticaWorkspaceResourceKey::Properties
+            | MulticaWorkspaceResourceKey::IssueViewPreferences
+            | MulticaWorkspaceResourceKey::QuickActions
             | MulticaWorkspaceResourceKey::Projects
             | MulticaWorkspaceResourceKey::ProjectResources
             | MulticaWorkspaceResourceKey::Agents
             | MulticaWorkspaceResourceKey::Squads
             | MulticaWorkspaceResourceKey::Autopilots
             | MulticaWorkspaceResourceKey::IssueViews
+            | MulticaWorkspaceResourceKey::IssueStatuses
     ) {
         Ok(())
     } else {
@@ -1089,7 +1359,7 @@ pub struct MulticaExecutionBindingRequest {
     pub binding_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaExecutionContinueRequest {
     pub binding_id: String,
@@ -1102,7 +1372,7 @@ pub struct MulticaExecutionContinueRequest {
     pub expected_revision: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaExecutionCancelRequest {
     pub binding_id: String,
@@ -1177,13 +1447,15 @@ pub struct MulticaAutopilotRunRequest {
     pub run_id: String,
 }
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaAutopilotTriggerRequest {
     pub autopilot_id: String,
     #[serde(default)]
     pub trigger_id: Option<String>,
     #[serde(default = "default_manual_source")]
     pub source: String,
+    #[serde(default)]
+    pub occurrence_id: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1204,6 +1476,35 @@ pub struct MulticaAutopilotTransitionRequest {
 fn default_manual_source() -> String {
     "manual".into()
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MulticaCronPreviewRequest {
+    expr: String,
+    tz: String,
+}
+
+fn autopilot_cron_preview(
+    request: MulticaCronPreviewRequest,
+    now_ms: u64,
+) -> anyhow::Result<Value> {
+    let mut after_ms = now_ms;
+    let mut next_runs = Vec::with_capacity(5);
+    for _ in 0..5 {
+        after_ms = crate::multica_execution_store::next_autopilot_occurrence(
+            &request.expr,
+            &request.tz,
+            after_ms,
+        )?;
+        let next = i64::try_from(after_ms)
+            .ok()
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .ok_or_else(|| anyhow::anyhow!("autopilot_schedule_time_invalid"))?;
+        next_runs.push(next.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    Ok(json!({"status":"ok", "next_runs":next_runs}))
+}
+
 fn parse_multica_autopilot_runs(payload: &Value) -> anyhow::Result<MulticaAutopilotRunsRequest> {
     Ok(serde_json::from_value(payload.clone())?)
 }
@@ -1213,7 +1514,23 @@ fn parse_multica_autopilot_run(payload: &Value) -> anyhow::Result<MulticaAutopil
 fn parse_multica_autopilot_trigger(
     payload: &Value,
 ) -> anyhow::Result<MulticaAutopilotTriggerRequest> {
-    Ok(serde_json::from_value(payload.clone())?)
+    let request: MulticaAutopilotTriggerRequest = serde_json::from_value(payload.clone())?;
+    validate_multica_execution_id(&request.autopilot_id)?;
+    if let Some(id) = request.trigger_id.as_deref() {
+        validate_multica_execution_id(id)?;
+    }
+    if let Some(id) = request.occurrence_id.as_deref() {
+        validate_multica_execution_id(id)?;
+    }
+    if !matches!(request.source.as_str(), "manual" | "webhook" | "api") {
+        anyhow::bail!("autopilot_run_source_invalid");
+    }
+    if request.source != "manual"
+        && (request.trigger_id.is_none() || request.occurrence_id.is_none())
+    {
+        anyhow::bail!("autopilot_occurrence_required");
+    }
+    Ok(request)
 }
 fn parse_multica_autopilot_transition(
     payload: &Value,
@@ -1555,27 +1872,6 @@ fn validate_skill_binding_scope(value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn ensure_memory_candidates_allowed(
-    ctx: &BridgeContext,
-    payload: &Value,
-) -> anyhow::Result<()> {
-    ensure_memory_enabled(ctx).await?;
-    let creates_candidate = payload
-        .get("text")
-        .and_then(Value::as_str)
-        .map(|text| !text.trim().is_empty())
-        .unwrap_or(false);
-    if !creates_candidate {
-        return Ok(());
-    }
-    let settings = ctx.settings.get_settings().await?;
-    if settings.memory_assist_auto_suggest_enabled {
-        Ok(())
-    } else {
-        anyhow::bail!("盘古记忆自动学习已禁用")
-    }
-}
-
 #[derive(Default)]
 pub struct CoreSettingsService {
     store: SettingsStore,
@@ -1626,10 +1922,14 @@ pub struct CoreRuntimeService {
     user_script_evaluator: Option<UserScriptEvaluator>,
     devtools_opener: Option<DevtoolsOpener>,
     devtools_target_id: Option<String>,
-    memory_store: MemoryAssistStore,
     codex_execution: Option<Arc<dyn CodexExecutionService>>,
+    codex_page_transport: Option<Arc<dyn CodexPageHostRequestTransport>>,
+    multica_builder_store: MulticaBuilderStore,
+    multica_webhook_store: MulticaWebhookStore,
     multica_execution_store: MulticaExecutionStore,
     multica_workspace_store: LocalMulticaWorkspaceStore,
+    autopilot_trigger_lock: Arc<tokio::sync::Mutex<()>>,
+    workspace_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CoreRuntimeService {
@@ -1642,10 +1942,14 @@ impl CoreRuntimeService {
             user_script_evaluator: None,
             devtools_opener: None,
             devtools_target_id: None,
-            memory_store: MemoryAssistStore::default(),
             codex_execution: None,
+            codex_page_transport: None,
+            multica_builder_store: MulticaBuilderStore::default(),
+            multica_webhook_store: MulticaWebhookStore::default(),
             multica_execution_store: MulticaExecutionStore::default(),
             multica_workspace_store: LocalMulticaWorkspaceStore::default(),
+            autopilot_trigger_lock: Arc::new(tokio::sync::Mutex::new(())),
+            workspace_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -1674,16 +1978,30 @@ impl CoreRuntimeService {
         self
     }
 
-    pub fn with_memory_store(mut self, memory_store: MemoryAssistStore) -> Self {
-        self.memory_store = memory_store;
-        self
-    }
-
     /// Attach the current Codex page's native execution adapter used by the
     /// Multica workspace. The bridge never registers or starts a Codex
     /// runtime; production callers must provide the already-open page host.
     pub fn with_codex_execution_service(mut self, service: Arc<dyn CodexExecutionService>) -> Self {
         self.codex_execution = Some(service);
+        self
+    }
+
+    /// Must be the same current-page transport backing the execution service.
+    pub fn with_codex_page_transport(
+        mut self,
+        transport: Arc<dyn CodexPageHostRequestTransport>,
+    ) -> Self {
+        self.codex_page_transport = Some(transport);
+        self
+    }
+
+    pub fn with_multica_builder_store(mut self, store: MulticaBuilderStore) -> Self {
+        self.multica_builder_store = store;
+        self
+    }
+
+    pub fn with_multica_webhook_store(mut self, store: MulticaWebhookStore) -> Self {
+        self.multica_webhook_store = store;
         self
     }
 
@@ -1693,6 +2011,10 @@ impl CoreRuntimeService {
     }
 
     pub fn with_multica_workspace_store(mut self, store: LocalMulticaWorkspaceStore) -> Self {
+        self.multica_builder_store =
+            MulticaBuilderStore::new(store.path().with_file_name("builder.json"));
+        self.multica_webhook_store =
+            MulticaWebhookStore::new(store.path().with_file_name("webhooks.json"));
         self.multica_workspace_store = store;
         self
     }
@@ -1707,6 +2029,312 @@ impl CoreRuntimeService {
 
 #[async_trait]
 impl BridgeRuntimeService for CoreRuntimeService {
+    async fn multica_native_domain(
+        &self,
+        request: MulticaNativeDomainRequest,
+    ) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        match request {
+            MulticaNativeDomainRequest::GetEnv { agent_id } => {
+                self.multica_workspace_store
+                    .require_agent_owner(&workspace_id, &agent_id)?;
+                let agent = self.workspace_entity(
+                    &workspace_id,
+                    MulticaWorkspaceResourceKey::Agents,
+                    &agent_id,
+                )?;
+                Ok(
+                    json!({"agent_id":agent_id,"custom_env":agent.get("custom_env").cloned().unwrap_or_else(||json!({})),"revision":agent["revision"],"execution_supported":false}),
+                )
+            }
+            MulticaNativeDomainRequest::SetEnv {
+                agent_id,
+                custom_env,
+                expected_revision,
+                command_id,
+                command_signature,
+            } => {
+                let _guard = self.workspace_mutation_lock.lock().await;
+                self.multica_workspace_store
+                    .require_agent_owner(&workspace_id, &agent_id)?;
+                if !custom_env.is_empty() {
+                    anyhow::bail!("execution_agent_environment_unsupported");
+                }
+                let receipt = WorkspaceCommand::new(
+                    command_id,
+                    command_signature,
+                    format!("agent-env:{agent_id}"),
+                    json!({"agentId":agent_id,"customEnv":custom_env,"expectedRevision":expected_revision}),
+                )?;
+                if let Some(result) = self
+                    .multica_workspace_store
+                    .replay_command(&workspace_id, &receipt)?
+                {
+                    if result.get("custom_env").is_some() {
+                        return Ok(result);
+                    }
+                    return self.multica_workspace_store.complete_command(
+                        &workspace_id,
+                        Some(&receipt),
+                        environment_result(&result["entity"]),
+                    );
+                }
+                let mut agent = self.workspace_entity(
+                    &workspace_id,
+                    MulticaWorkspaceResourceKey::Agents,
+                    &agent_id,
+                )?;
+                agent["custom_env"] = json!(custom_env);
+                let saved = self.multica_workspace_store.upsert_with_command(
+                    &workspace_id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Agents,
+                        entity: agent,
+                        expected_revision: Some(expected_revision),
+                    },
+                    unix_now_ms(),
+                    Some(&receipt),
+                )?;
+                self.multica_workspace_store.complete_command(
+                    &workspace_id,
+                    Some(&receipt),
+                    environment_result(&saved),
+                )
+            }
+            MulticaNativeDomainRequest::IssueUsage => {
+                Ok(crate::multica_workspace::native_domain::issue_limit_usage())
+            }
+            MulticaNativeDomainRequest::AutopilotUsage => {
+                Ok(crate::multica_workspace::native_domain::autopilot_usage())
+            }
+            MulticaNativeDomainRequest::Preview {
+                issue_ids,
+                is_create,
+                assignee_type,
+                assignee_id,
+                status,
+            } => crate::multica_workspace::native_domain::preview_issue_trigger(
+                &self.multica_workspace_store,
+                &self.multica_execution_store,
+                &workspace_id,
+                &crate::multica_workspace::native_domain::IssueTriggerPreviewRequest {
+                    issue_ids,
+                    is_create,
+                    assignee_type,
+                    assignee_id,
+                    status,
+                },
+            ),
+            MulticaNativeDomainRequest::Render {
+                issue_id,
+                quick_action_id,
+            } => crate::multica_workspace::native_domain::render_quick_action(
+                &self.multica_workspace_store,
+                &workspace_id,
+                &crate::multica_workspace::native_domain::QuickActionRenderRequest {
+                    issue_id,
+                    quick_action_id,
+                },
+            ),
+            MulticaNativeDomainRequest::Run {
+                issue_id,
+                quick_action_id,
+                expected_issue_revision,
+                expected_action_revision,
+                command_id,
+                command_signature,
+            } => {
+                let _guard = self.workspace_mutation_lock.lock().await;
+                crate::multica_workspace::native_domain::run_quick_action(
+                    &self.multica_workspace_store,
+                    &self.multica_execution_store,
+                    self,
+                    &workspace_id,
+                    &crate::multica_workspace::native_domain::QuickActionRunRequest {
+                        issue_id,
+                        quick_action_id,
+                        expected_issue_revision,
+                        expected_action_revision,
+                        command_id,
+                        command_signature,
+                    },
+                    unix_now_ms(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn multica_builder(&self, request: BuilderRequest) -> anyhow::Result<Value> {
+        let service = self.codex_execution_service()?;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        self.multica_builder_store
+            .handle(
+                service.as_ref(),
+                self.codex_page_transport.as_deref(),
+                &workspace_id,
+                &format!("{workspace_id}-user"),
+                request,
+                unix_now_ms(),
+            )
+            .await
+    }
+
+    async fn multica_workspace_reorder_statuses(
+        &self,
+        request: MulticaStatusReorderRequest,
+    ) -> anyhow::Result<Value> {
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let reorder = LocalWorkspaceIssueStatusReorder {
+            category: request.category,
+            ordered_ids: request.ids,
+            expected_revisions: request.expected_revisions,
+        };
+        let receipt = WorkspaceCommand::new(
+            request.command_id,
+            request.command_signature,
+            format!("reorder-statuses:{}", reorder.category),
+            serde_json::to_value(&reorder)?,
+        )?;
+        let statuses = self.multica_workspace_store.reorder_issue_statuses(
+            &workspace_id,
+            &reorder,
+            unix_now_ms(),
+            Some(&receipt),
+        )?;
+        self.multica_workspace_store.complete_command(
+            &workspace_id,
+            Some(&receipt),
+            json!({"status":"ok","statuses":statuses}),
+        )
+    }
+
+    async fn multica_webhooks(&self, request: MulticaWebhookRequest) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let autopilot_id = match &request {
+            MulticaWebhookRequest::Provision { autopilot_id, .. }
+            | MulticaWebhookRequest::Trigger { autopilot_id, .. }
+            | MulticaWebhookRequest::Rotate { autopilot_id, .. }
+            | MulticaWebhookRequest::Revoke { autopilot_id, .. }
+            | MulticaWebhookRequest::Deliveries { autopilot_id, .. }
+            | MulticaWebhookRequest::Delivery { autopilot_id, .. }
+            | MulticaWebhookRequest::Replay { autopilot_id, .. } => autopilot_id,
+        };
+        let autopilot = self.webhook_autopilot(&workspace_id, autopilot_id)?;
+        let user_id = format!("{workspace_id}-user");
+        let creator = autopilot
+            .get("created_by_id")
+            .or_else(|| autopilot.get("createdById"))
+            .and_then(Value::as_str)
+            .unwrap_or(&user_id)
+            == user_id;
+        let collaborator = autopilot["collaborators"].as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["user_id"] == user_id || item["userId"] == user_id)
+        });
+        let manage = matches!(
+            &request,
+            MulticaWebhookRequest::Provision { .. }
+                | MulticaWebhookRequest::Rotate { .. }
+                | MulticaWebhookRequest::Revoke { .. }
+        );
+        if !creator && (manage || !collaborator) {
+            anyhow::bail!("webhook_access_denied");
+        }
+        match request {
+            MulticaWebhookRequest::Provision {
+                trigger_id,
+                command_id,
+                ..
+            } => {
+                let target = WebhookTarget::from_autopilot(&workspace_id, &autopilot, &trigger_id)?;
+                self.multica_webhook_store
+                    .provision(&target, &command_id, unix_now_ms())
+            }
+            MulticaWebhookRequest::Trigger { trigger_id, .. } => {
+                let target = WebhookTarget::from_autopilot(&workspace_id, &autopilot, &trigger_id)?;
+                self.multica_webhook_store.trigger(&target)
+            }
+            MulticaWebhookRequest::Rotate {
+                trigger_id,
+                expected_revision,
+                command_id,
+                command_signature,
+                ..
+            } => {
+                let target = WebhookTarget::from_autopilot(&workspace_id, &autopilot, &trigger_id)?;
+                match command_signature {
+                    Some(signature) => self.multica_webhook_store.rotate_with_signature(
+                        &target,
+                        expected_revision,
+                        &command_id,
+                        &signature,
+                        unix_now_ms(),
+                    ),
+                    None => self.multica_webhook_store.rotate(
+                        &target,
+                        expected_revision,
+                        &command_id,
+                        unix_now_ms(),
+                    ),
+                }
+            }
+            MulticaWebhookRequest::Revoke {
+                trigger_id,
+                expected_revision,
+                ..
+            } => {
+                let target = WebhookTarget::from_autopilot(&workspace_id, &autopilot, &trigger_id)?;
+                self.multica_webhook_store
+                    .revoke(&target, expected_revision)?;
+                Ok(json!({"status":"ok"}))
+            }
+            MulticaWebhookRequest::Deliveries {
+                autopilot_id,
+                limit,
+                offset,
+            } => self
+                .multica_webhook_store
+                .list(&workspace_id, &autopilot_id, limit, offset),
+            MulticaWebhookRequest::Delivery {
+                autopilot_id,
+                delivery_id,
+            } => self
+                .multica_webhook_store
+                .get(&workspace_id, &autopilot_id, &delivery_id),
+            MulticaWebhookRequest::Replay {
+                autopilot_id,
+                delivery_id,
+                command_id,
+            } => {
+                let delivery =
+                    self.multica_webhook_store
+                        .get(&workspace_id, &autopilot_id, &delivery_id)?;
+                let trigger_id = delivery["trigger_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("webhook_store_invalid"))?;
+                let target = WebhookTarget::from_autopilot(&workspace_id, &autopilot, trigger_id)?;
+                let replay = self.multica_webhook_store.replay(
+                    &target,
+                    &delivery_id,
+                    &command_id,
+                    unix_now_ms(),
+                )?;
+                let id = replay["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("webhook_store_invalid"))?;
+                self.multica_webhook_store.enqueue(
+                    &self.multica_execution_store,
+                    &target,
+                    id,
+                    unix_now_ms(),
+                )
+            }
+        }
+    }
+
     async fn user_script_inventory(&self) -> anyhow::Result<Value> {
         match &self.user_scripts {
             Some(user_scripts) => user_scripts.inventory(),
@@ -1945,11 +2573,37 @@ impl BridgeRuntimeService for CoreRuntimeService {
         &self,
         request: MulticaWorkspaceUpsertRequest,
     ) -> anyhow::Result<Value> {
-        let workspace_id = crate::multica_workspace::workspace_bootstrap()
-            .await?
-            .workspace
-            .id;
-        let entity = self.multica_workspace_store.upsert(
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let controls = crate::multica_workspace::issue_run_controls::IssueRunControls {
+            suppress_run: request.suppress_run,
+            handoff_note: request.handoff_note.clone(),
+        };
+        controls.validate(request.resource, &request.entity)?;
+        let command = workspace_command(
+            request.command_id,
+            request.command_signature,
+            format!(
+                "upsert:{:?}:{}",
+                request.resource,
+                request
+                    .entity
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ),
+            json!({"entity":request.entity,"expectedRevision":request.expected_revision,
+                "suppressRun":request.suppress_run,"handoffNote":request.handoff_note}),
+        )?;
+        if let Some(command) = &command {
+            if let Some(result) = self
+                .multica_workspace_store
+                .replay_command(&workspace_id, command)?
+            {
+                return Ok(result);
+            }
+        }
+        let entity = self.multica_workspace_store.upsert_with_run_controls(
             &workspace_id,
             LocalWorkspaceEntityUpsert {
                 resource: request.resource,
@@ -1957,108 +2611,108 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 expected_revision: request.expected_revision,
             },
             unix_now_ms(),
+            command.as_ref(),
+            Some((&controls, &self.multica_execution_store)),
         )?;
         let queue = if request.resource == MulticaWorkspaceResourceKey::Issues
-            && entity.get("assignee_type").and_then(Value::as_str) == Some("agent")
+            && self
+                .multica_workspace_store
+                .issue_run_eligible(&workspace_id, &entity)?
         {
-            let agent_id = entity
-                .get("assignee_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.trim().is_empty());
-            if let Some(agent_id) = agent_id {
-                let issue_id = entity
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("multica_workspace_entity_invalid"))?;
-                let key = format!("issue-assignment:{workspace_id}:{issue_id}:{agent_id}");
-                let reservation =
-                    self.multica_execution_store
-                        .reserve_execution(ExecutionReservation {
-                            workspace_id: workspace_id.clone(),
-                            issue_id: Some(issue_id.to_string()),
-                            agent_id: Some(agent_id.to_string()),
-                            execution_kind: MulticaExecutionKind::Thread,
-                            parent_thread_id: None,
-                            parent_attempt_id: None,
-                            idempotency_key: key,
-                            now_ms: unix_now_ms(),
-                        })?;
-                let auto_dispatch = self
-                    .dispatch_pending_assignment(
-                        &reservation.binding.binding_id,
-                        reservation.binding.revision,
-                        &format!("auto-{}", reservation.binding.binding_id),
-                    )
-                    .await;
-                let dispatched = match auto_dispatch {
-                    Ok(value) => Some(value),
-                    Err(error) => Some(json!({
-                        "status": "queued",
-                        "diagnostic": stable_execution_error_code(&error),
-                    })),
-                };
-                Some(json!({
-                    "binding_id": reservation.binding.binding_id,
-                    "status": dispatched
-                        .as_ref()
-                        .and_then(|value| value.get("binding"))
-                        .and_then(|binding| binding.get("state"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("queued"),
-                    "replay": reservation.replay,
-                    "dispatch": dispatched,
-                }))
-            } else {
-                None
-            }
+            self.queue_issue_assignment(&workspace_id, &entity).await?
         } else {
             None
         };
-        Ok(json!({"status": "ok", "entity": entity, "queue": queue}))
+        self.multica_workspace_store.complete_command(
+            &workspace_id,
+            command.as_ref(),
+            json!({"status": "ok", "entity": entity, "queue": queue}),
+        )
     }
 
     async fn multica_workspace_move_issue(
         &self,
         request: MulticaWorkspaceMoveIssueRequest,
     ) -> anyhow::Result<Value> {
-        let workspace_id = crate::multica_workspace::workspace_bootstrap()
-            .await?
-            .workspace
-            .id;
-        let entity = self.multica_workspace_store.move_issue(
-            &workspace_id,
-            LocalWorkspaceIssueMove {
-                issue_id: request.issue_id,
-                status: request.status,
-                assignee_type: request.assignee_type,
-                assignee_id: request.assignee_id,
-                parent_issue_id: request.parent_issue_id,
-                project_id: request.project_id,
-                before_id: request.before_id,
-                after_id: request.after_id,
-                expected_revision: request.expected_revision,
-            },
-            unix_now_ms(),
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let command = workspace_command(
+            request.command_id.clone(),
+            request.command_signature.clone(),
+            format!("move:{}", request.issue_id),
+            serde_json::to_value(&request)?,
         )?;
-        Ok(json!({"status": "ok", "entity": entity}))
+        if let Some(command) = &command {
+            if let Some(result) = self
+                .multica_workspace_store
+                .replay_command(&workspace_id, command)?
+            {
+                return Ok(result);
+            }
+        }
+        let entity = self
+            .multica_workspace_store
+            .move_issue_with_execution_store(
+                &workspace_id,
+                LocalWorkspaceIssueMove {
+                    issue_id: request.issue_id,
+                    status: request.status,
+                    assignee_type: request.assignee_type,
+                    assignee_id: request.assignee_id,
+                    parent_issue_id: request.parent_issue_id,
+                    project_id: request.project_id,
+                    before_id: request.before_id,
+                    after_id: request.after_id,
+                    expected_revision: request.expected_revision,
+                },
+                unix_now_ms(),
+                command.as_ref(),
+                Some(&self.multica_execution_store),
+            )?;
+        let queue = if self
+            .multica_workspace_store
+            .issue_run_eligible(&workspace_id, &entity)?
+        {
+            self.queue_issue_assignment(&workspace_id, &entity).await?
+        } else {
+            None
+        };
+        self.multica_workspace_store.complete_command(
+            &workspace_id,
+            command.as_ref(),
+            json!({"status": "ok", "entity": entity, "queue": queue}),
+        )
     }
 
     async fn multica_workspace_delete(
         &self,
         request: MulticaWorkspaceDeleteRequest,
     ) -> anyhow::Result<Value> {
-        let workspace_id = crate::multica_workspace::workspace_bootstrap()
-            .await?
-            .workspace
-            .id;
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let command = workspace_command(
+            request.command_id,
+            request.command_signature,
+            format!("delete:{:?}:{}", request.resource, request.entity_id),
+            json!({"entityId":request.entity_id,"expectedRevision":request.expected_revision}),
+        )?;
+        if let Some(command) = &command {
+            if let Some(result) = self
+                .multica_workspace_store
+                .replay_command(&workspace_id, command)?
+            {
+                return Ok(result);
+            }
+        }
         let entity_id = request.entity_id;
-        let deleted = self.multica_workspace_store.delete(
+        let deleted = self.multica_workspace_store.delete_with_command(
             &workspace_id,
             LocalWorkspaceEntityDelete {
                 resource: request.resource,
                 entity_id: entity_id.clone(),
                 expected_revision: request.expected_revision,
             },
+            command.as_ref(),
         )?;
         if deleted && request.resource == MulticaWorkspaceResourceKey::Issues {
             self.multica_execution_store.cancel_active_for_issue(
@@ -2068,25 +2722,106 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 unix_now_ms(),
             )?;
         }
-        Ok(json!({"status": "ok", "deleted": deleted, "entityId": entity_id}))
+        self.multica_workspace_store.complete_command(
+            &workspace_id,
+            command.as_ref(),
+            json!({"status": "ok", "deleted": deleted, "entityId": entity_id}),
+        )
+    }
+
+    async fn multica_workspace_command(
+        &self,
+        request: MulticaWorkspaceCommandRequest,
+    ) -> anyhow::Result<Value> {
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        crate::multica_workspace::recover_pending_agent_create(
+            &self.multica_workspace_store,
+            &self.multica_execution_store,
+        )?;
+        if let Some((command, mut result)) = self.multica_workspace_store.pending_command(
+            &workspace_id,
+            &request.command_id,
+            &request.command_signature,
+        )? {
+            if command.operation.starts_with("upsert:") || command.operation.starts_with("move:") {
+                let queue = if (command.operation.starts_with("upsert:Issues:")
+                    || command.operation.starts_with("move:"))
+                    && result.get("issueRunEligible") != Some(&json!(false))
+                {
+                    self.queue_issue_assignment(&workspace_id, &result["entity"])
+                        .await?
+                } else {
+                    None
+                };
+                result["queue"] = json!(queue);
+            } else if command.operation.starts_with("delete:") {
+                if command.operation.starts_with("delete:Issues:") && result["deleted"] == true {
+                    let id = result["entityId"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("multica_workspace_command_invalid"))?;
+                    self.multica_execution_store.cancel_active_for_issue(
+                        &workspace_id,
+                        id,
+                        None,
+                        unix_now_ms(),
+                    )?;
+                }
+            } else if command.operation.starts_with("quick-action:") {
+                result = crate::multica_workspace::native_domain::recover_quick_action(
+                    &self.multica_workspace_store,
+                    &self.multica_execution_store,
+                    self,
+                    &workspace_id,
+                    &command,
+                    unix_now_ms(),
+                )
+                .await?;
+            } else if command.operation.starts_with("agent-env:") {
+                result = environment_result(&result["entity"]);
+            } else if command.operation.starts_with("reorder-statuses:") {
+                // The reorder and receipt were committed by one workspace save.
+            } else {
+                anyhow::bail!("multica_workspace_command_pending");
+            }
+            self.multica_workspace_store
+                .complete_command(&workspace_id, Some(&command), result)?;
+        }
+        let result = self.multica_workspace_store.command_result(
+            &workspace_id,
+            &request.command_id,
+            &request.command_signature,
+        )?;
+        Ok(json!({"status":"ok", "found":result.is_some(), "result":result}))
     }
 
     async fn multica_agent_create(
         &self,
         request: MulticaAgentCreateRequest,
     ) -> anyhow::Result<Value> {
-        let service = self
-            .codex_execution
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))?;
-        crate::multica_workspace::create_agent_with_skill_bindings_with_codex_runtime(
+        let _guard = self.workspace_mutation_lock.lock().await;
+        let command = workspace_command(
+            request.command_id,
+            request.command_signature,
+            format!(
+                "agent-create:{}",
+                request
+                    .entity
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ),
+            json!({"entity":request.entity,"skills":request.skills}),
+        )?;
+        crate::multica_workspace::create_agent_with_skill_bindings_idempotent(
             MulticaAgentCreateCommand {
                 entity: request.entity,
                 skills: request.skills,
             },
             &self.multica_workspace_store,
             &self.multica_execution_store,
-            Arc::clone(service),
+            self.codex_execution.clone(),
+            command,
         )
         .await
     }
@@ -2187,22 +2922,23 @@ impl BridgeRuntimeService for CoreRuntimeService {
         &self,
         request: MulticaExecutionCreateRequest,
     ) -> anyhow::Result<Value> {
+        self.validate_agent_runtime_selection(&request.workspace_id, request.agent_id.as_deref())?;
         let service = self.codex_execution_service()?;
         let now_ms = unix_now_ms();
-        let reserved = self
-            .multica_execution_store
-            .reserve_execution(ExecutionReservation {
-                workspace_id: request.workspace_id.clone(),
-                issue_id: Some(request.issue_id.clone()),
-                execution_kind: request
-                    .execution_kind
-                    .unwrap_or(MulticaExecutionKind::Thread),
-                agent_id: request.agent_id.clone(),
-                parent_thread_id: request.parent_thread_id.clone(),
-                parent_attempt_id: None,
-                idempotency_key: request.idempotency_key.clone(),
-                now_ms,
-            })?;
+        let mut reserved =
+            self.multica_execution_store
+                .reserve_execution(ExecutionReservation {
+                    workspace_id: request.workspace_id.clone(),
+                    issue_id: Some(request.issue_id.clone()),
+                    execution_kind: request
+                        .execution_kind
+                        .unwrap_or(MulticaExecutionKind::Thread),
+                    agent_id: request.agent_id.clone(),
+                    parent_thread_id: request.parent_thread_id.clone(),
+                    parent_attempt_id: None,
+                    idempotency_key: request.idempotency_key.clone(),
+                    now_ms,
+                })?;
         if reserved.replay {
             if reserved.binding.codex_thread_id.is_some() {
                 let handle = execution_handle_from_binding(
@@ -2222,6 +2958,16 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 );
             }
         }
+        reserved.binding = self
+            .multica_execution_store
+            .claim_execution_lease_with_capacity(
+                &reserved.binding.binding_id,
+                reserved.binding.revision,
+                &format!("create-{}", reserved.binding.binding_id),
+                now_ms,
+                30_000,
+                self.agent_concurrency_limit(&reserved.binding)?,
+            )?;
         let (skill_request, skill_audit) =
             match resolve_execution_skills(Arc::clone(&service), request.bindings).await {
                 Ok(value) => value,
@@ -2309,24 +3055,34 @@ impl BridgeRuntimeService for CoreRuntimeService {
         lease_token: &str,
     ) -> anyhow::Result<Value> {
         let binding = self.multica_execution_store.get_execution(binding_id)?;
+        self.require_execution_agent_access(&binding)?;
         if binding.revision != expected_revision {
             anyhow::bail!("execution_revision_conflict");
         }
         if binding.state == MulticaExecutionBindingState::Dispatched {
             let handle = execution_handle_from_binding(&binding, &binding.idempotency_key)?;
+            self.multica_workspace_store.audit_issue_handoff(
+                &binding.workspace_id,
+                &binding.idempotency_key,
+                &binding.binding_id,
+                unix_now_ms(),
+            )?;
             return Ok(execution_handle_response(binding, handle));
         }
         if binding.state != MulticaExecutionBindingState::BindingPending {
             anyhow::bail!("execution_not_dispatchable");
         }
 
-        let claimed = self.multica_execution_store.claim_execution_lease(
-            binding_id,
-            expected_revision,
-            lease_token,
-            unix_now_ms(),
-            30_000,
-        )?;
+        let claimed = self
+            .multica_execution_store
+            .claim_execution_lease_with_capacity(
+                binding_id,
+                expected_revision,
+                lease_token,
+                unix_now_ms(),
+                30_000,
+                self.agent_concurrency_limit(&binding)?,
+            )?;
         let release = |revision| {
             self.multica_execution_store.release_execution_lease(
                 binding_id,
@@ -2358,9 +3114,6 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 }
                 issue
             } else {
-                // Upstream run_only tasks have no persisted Issue. Recover the
-                // task context from the linked autopilot run instead of
-                // inventing an Issue in the workspace collection.
                 // `run_only` has no Issue by design. Resolve the owning run
                 // through its persisted task binding; never invent an Issue
                 // identifier merely to satisfy the dispatch path.
@@ -2395,6 +3148,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 .into_iter()
                 .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
                 .ok_or_else(|| anyhow::anyhow!("execution_agent_unavailable"))?;
+            self.validate_agent_runtime_selection(&claimed.workspace_id, Some(agent_id))?;
             // Agent bindings are authoritative only after the current page
             // host resolves their pinned digests against its live inventory.
             // Do not silently create a thread without requested Skills when
@@ -2414,10 +3168,18 @@ impl BridgeRuntimeService for CoreRuntimeService {
                     unix_now_ms(),
                 )?;
             }
+            let mut prompt = assignment_prompt(&issue, &agent)?;
+            if let Some(note) = self
+                .multica_workspace_store
+                .issue_handoff_note(&claimed.workspace_id, &claimed.idempotency_key)?
+            {
+                prompt.push_str("\n\nHandoff note:\n");
+                prompt.push_str(&note);
+            }
             let native_request = CodexThreadRequest {
                 workspace_id: claimed.workspace_id.clone(),
                 issue_id: claimed.issue_id.clone(),
-                prompt: assignment_prompt(&issue, &agent)?,
+                prompt,
                 cwd: None,
                 skill_request,
             };
@@ -2468,6 +3230,12 @@ impl BridgeRuntimeService for CoreRuntimeService {
         match result {
             Ok((binding, handle)) => {
                 let released = release(binding.revision)?;
+                self.multica_workspace_store.audit_issue_handoff(
+                    &binding.workspace_id,
+                    &binding.idempotency_key,
+                    &binding.binding_id,
+                    unix_now_ms(),
+                )?;
                 Ok(execution_handle_response(released, handle))
             }
             Err(error) => {
@@ -2487,6 +3255,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
         let binding = self
             .multica_execution_store
             .get_execution(&request.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
         if binding.state == MulticaExecutionBindingState::Orphaned {
             anyhow::bail!("execution_thread_orphaned");
         }
@@ -2506,14 +3275,24 @@ impl BridgeRuntimeService for CoreRuntimeService {
         let binding = self
             .multica_execution_store
             .get_execution(&request.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
+        use sha2::{Digest, Sha256};
+        let request_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
+        if let Some(command) = self.multica_execution_store.replay_command_request(
+            &binding.binding_id,
+            MulticaExecutionCommandKind::Continue,
+            &request.idempotency_key,
+            &request_hash,
+        )? {
+            return execution_command_replay(command);
+        }
+        self.validate_agent_runtime_selection(&binding.workspace_id, binding.agent_id.as_deref())?;
         if binding.revision != request.expected_revision {
             anyhow::bail!("execution_revision_conflict");
         }
         if !matches!(
             binding.state,
-            MulticaExecutionBindingState::Dispatched
-                | MulticaExecutionBindingState::Running
-                | MulticaExecutionBindingState::Stale
+            MulticaExecutionBindingState::Completed | MulticaExecutionBindingState::Stale
         ) {
             anyhow::bail!("execution_not_continuable");
         }
@@ -2521,31 +3300,17 @@ impl BridgeRuntimeService for CoreRuntimeService {
             .codex_thread_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
-        let command = self.multica_execution_store.reserve_command(
+        let command = self.multica_execution_store.reserve_command_request(
             &binding.binding_id,
             MulticaExecutionCommandKind::Continue,
             &request.idempotency_key,
             request.expected_revision,
             unix_now_ms(),
+            self.agent_concurrency_limit(&binding)?,
+            &request_hash,
         )?;
         if command.replay {
-            match command.command.state {
-                MulticaExecutionCommandState::Committed => {
-                    let mut handle =
-                        execution_handle_from_binding(&binding, &request.idempotency_key)?;
-                    handle.execution_id = command.command.codex_execution_id;
-                    return Ok(execution_handle_response(binding, handle));
-                }
-                MulticaExecutionCommandState::Failed => anyhow::bail!(
-                    "{}",
-                    command
-                        .command
-                        .error_code
-                        .as_deref()
-                        .unwrap_or("codex_execution_failed")
-                ),
-                MulticaExecutionCommandState::Reserved => {}
-            }
+            return execution_command_replay(command.command);
         }
         let (skill_request, _) =
             match resolve_execution_skills(Arc::clone(&service), request.bindings).await {
@@ -2600,6 +3365,17 @@ impl BridgeRuntimeService for CoreRuntimeService {
         let binding = self
             .multica_execution_store
             .get_execution(&request.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
+        use sha2::{Digest, Sha256};
+        let request_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
+        if let Some(command) = self.multica_execution_store.replay_command_request(
+            &binding.binding_id,
+            MulticaExecutionCommandKind::Cancel,
+            &request.idempotency_key,
+            &request_hash,
+        )? {
+            return execution_command_replay(command);
+        }
         let thread_id = binding
             .codex_thread_id
             .clone()
@@ -2608,29 +3384,17 @@ impl BridgeRuntimeService for CoreRuntimeService {
             .codex_execution_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("execution_id_unavailable"))?;
-        let command = self.multica_execution_store.reserve_command(
+        let command = self.multica_execution_store.reserve_command_request(
             &binding.binding_id,
             MulticaExecutionCommandKind::Cancel,
             &request.idempotency_key,
             request.expected_revision,
             unix_now_ms(),
+            None,
+            &request_hash,
         )?;
         if command.replay {
-            match command.command.state {
-                MulticaExecutionCommandState::Committed => {
-                    let status = execution_status_from_binding(&binding)?;
-                    return Ok(execution_status_response(binding, status));
-                }
-                MulticaExecutionCommandState::Failed => anyhow::bail!(
-                    "{}",
-                    command
-                        .command
-                        .error_code
-                        .as_deref()
-                        .unwrap_or("codex_execution_failed")
-                ),
-                MulticaExecutionCommandState::Reserved => {}
-            }
+            return execution_command_replay(command.command);
         }
         let status = match service.cancel_execution(&thread_id, &execution_id).await {
             Ok(status) => status,
@@ -2661,6 +3425,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
         let binding = self
             .multica_execution_store
             .get_execution(&request.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
         let thread_id = binding
             .codex_thread_id
             .as_deref()
@@ -2702,13 +3467,19 @@ impl BridgeRuntimeService for CoreRuntimeService {
         &self,
         request: MulticaExecutionLeaseClaimRequest,
     ) -> anyhow::Result<Value> {
-        let binding = self.multica_execution_store.claim_execution_lease(
-            &request.binding_id,
-            request.expected_revision,
-            &request.lease_token,
-            unix_now_ms(),
-            request.lease_duration_ms,
-        )?;
+        let candidate = self
+            .multica_execution_store
+            .get_execution(&request.binding_id)?;
+        let binding = self
+            .multica_execution_store
+            .claim_execution_lease_with_capacity(
+                &request.binding_id,
+                request.expected_revision,
+                &request.lease_token,
+                unix_now_ms(),
+                request.lease_duration_ms,
+                self.agent_concurrency_limit(&candidate)?,
+            )?;
         Ok(json!({"status":"ok", "binding": binding}))
     }
 
@@ -2739,193 +3510,67 @@ impl BridgeRuntimeService for CoreRuntimeService {
         &self,
         request: MulticaAutopilotTriggerRequest,
     ) -> anyhow::Result<Value> {
-        let workspace_id = crate::multica_workspace::workspace_bootstrap()
-            .await?
-            .workspace
-            .id;
-        let autopilot = self
+        self.materialize_autopilot_run(request, true).await
+    }
+
+    async fn multica_autopilot_tick(&self) -> anyhow::Result<Value> {
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let mut webhook_diagnostics = self.recover_pending_webhooks(&workspace_id);
+        let autopilots = self
             .multica_workspace_store
-            .list(&workspace_id, MulticaWorkspaceResourceKey::Autopilots)?
-            .into_iter()
-            .find(|item| {
-                item.get("id").and_then(Value::as_str) == Some(request.autopilot_id.as_str())
-            })
-            .ok_or_else(|| anyhow::anyhow!("autopilot_not_found"))?;
-        let status = autopilot
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("active");
-        if status != "active" {
-            anyhow::bail!("autopilot_not_active");
-        }
-        let mode = autopilot
-            .get("execution_mode")
-            .and_then(Value::as_str)
-            .unwrap_or("create_issue");
-        if !matches!(mode, "create_issue" | "run_only") {
-            anyhow::bail!("autopilot_execution_mode_invalid");
-        }
-        let agent_id = autopilot
-            .get("assignee_id")
-            .or_else(|| autopilot.get("agent_id"))
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("autopilot_assignee_unavailable"))?;
-        let agent_exists = self
-            .multica_workspace_store
-            .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)?
-            .iter()
-            .any(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id));
-        if !agent_exists {
-            anyhow::bail!("autopilot_assignee_unavailable");
-        }
-        if let Some(trigger_id) = request.trigger_id.as_deref() {
-            if let Some(existing) = self
-                .multica_execution_store
-                .list_autopilot_runs(&request.autopilot_id)?
-                .into_iter()
-                .find(|run| {
-                    run.trigger_id.as_deref() == Some(trigger_id) && run.source == request.source
-                })
-            {
-                return Ok(json!({"status":"ok", "run": existing, "replay": true}));
-            }
-        }
-        let now = unix_now_ms();
-        let run = self.multica_execution_store.trigger_autopilot_run(
-            request.autopilot_id.clone(),
-            request.trigger_id.clone(),
-            request.source,
-            now,
-        )?;
-        let issue_id = format!("autopilot-issue-{}", run.id);
-        let binding = if mode == "create_issue" {
-            let issue = json!({
-                "id": issue_id,
-                "title": autopilot.get("title").or_else(|| autopilot.get("name")).and_then(Value::as_str).unwrap_or("工作流任务"),
-                "description": autopilot.get("description").and_then(Value::as_str).unwrap_or(""),
-                "assignee_type": "agent", "assignee_id": agent_id,
-                "origin_type": "autopilot", "origin_id": run.autopilot_id,
-                "status": "todo"
-            });
-            let saved = self.multica_workspace_store.upsert(
-                &workspace_id,
-                LocalWorkspaceEntityUpsert {
-                    resource: MulticaWorkspaceResourceKey::Issues,
-                    entity: issue,
-                    expected_revision: None,
-                },
-                now,
-            )?;
-            let id = saved.get("id").and_then(Value::as_str).unwrap_or_default();
-            let key = format!("issue-assignment:{}:{}:{}", workspace_id, id, agent_id);
-            let reserved =
-                self.multica_execution_store
-                    .reserve_execution(ExecutionReservation {
-                        workspace_id: workspace_id.clone(),
-                        issue_id: Some(id.to_string()),
-                        agent_id: Some(agent_id.to_string()),
-                        execution_kind: MulticaExecutionKind::Thread,
-                        parent_thread_id: None,
-                        parent_attempt_id: None,
-                        idempotency_key: key,
-                        now_ms: now,
-                    })?;
-            let _ =
-                self.multica_execution_store
-                    .transition_autopilot_run(AutopilotRunTransition {
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Autopilots)?;
+        let batch = self
+            .multica_execution_store
+            .tick_autopilots(&autopilots, unix_now_ms())?;
+        let mut runs = Vec::new();
+        let mut diagnostics = batch.diagnostics;
+        diagnostics.append(&mut webhook_diagnostics);
+        for run in batch.runs {
+            let result = self
+                .materialize_autopilot_run(
+                    MulticaAutopilotTriggerRequest {
                         autopilot_id: run.autopilot_id.clone(),
-                        run_id: run.id.clone(),
-                        expected_revision: run.revision,
-                        next_status: "issue_created".into(),
-                        issue_id: Some(id.to_string()),
-                        task_id: Some(reserved.binding.binding_id.clone()),
-                        failure_reason: None,
-                        reason_code: None,
-                        now_ms: now,
-                    })?;
-            reserved.binding
-        } else if mode == "run_only" {
-            let key = format!("autopilot-run:{}", run.id);
-            let reserved =
-                self.multica_execution_store
-                    .reserve_execution(ExecutionReservation {
-                        workspace_id: workspace_id.clone(),
-                        issue_id: None,
-                        agent_id: Some(agent_id.to_string()),
-                        execution_kind: MulticaExecutionKind::Thread,
-                        parent_thread_id: None,
-                        parent_attempt_id: None,
-                        idempotency_key: key,
-                        now_ms: now,
-                    })?;
-            let _ =
-                self.multica_execution_store
-                    .transition_autopilot_run(AutopilotRunTransition {
-                        autopilot_id: run.autopilot_id.clone(),
-                        run_id: run.id.clone(),
-                        expected_revision: run.revision,
-                        next_status: "running".into(),
-                        issue_id: None,
-                        task_id: Some(reserved.binding.binding_id.clone()),
-                        failure_reason: None,
-                        reason_code: None,
-                        now_ms: now,
-                    })?;
-            reserved.binding
-        } else {
-            anyhow::bail!("autopilot_execution_mode_invalid");
-        };
-        let dispatch = self
-            .dispatch_pending_assignment(
-                &binding.binding_id,
-                binding.revision,
-                &format!("auto-{}", binding.binding_id),
-            )
-            .await;
-        if let Err(error) = &dispatch {
-            let diagnostic = stable_execution_error_code(error);
-            let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
-            if diagnostic != "codex_page_host_unavailable" {
-                let _ =
-                    self.multica_execution_store
-                        .transition_autopilot_run(AutopilotRunTransition {
-                            autopilot_id: run.autopilot_id.clone(),
-                            run_id: run.id.clone(),
-                            expected_revision: current.revision,
-                            next_status: "failed".into(),
-                            issue_id: current.issue_id.clone(),
-                            task_id: current.task_id.clone(),
-                            failure_reason: Some(diagnostic.clone()),
-                            reason_code: Some(diagnostic.clone()),
-                            now_ms: unix_now_ms(),
-                        });
-                anyhow::bail!("{diagnostic}");
+                        trigger_id: run.trigger_id.clone(),
+                        source: run.source.clone(),
+                        occurrence_id: run.occurrence_id.clone(),
+                    },
+                    false,
+                )
+                .await;
+            match result {
+                Ok(value) => runs.push(value),
+                Err(error) => {
+                    let code = stable_execution_error_code(&error);
+                    // Invalid persisted definitions must not monopolize the bounded retry batch.
+                    if matches!(
+                        code.as_str(),
+                        "autopilot_assignee_unavailable"
+                            | "autopilot_execution_mode_invalid"
+                            | "autopilot_occurrence_invalid"
+                    ) {
+                        let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
+                        if current.status == "pending" && current.task_id.is_none() {
+                            self.multica_execution_store.transition_autopilot_run(
+                                AutopilotRunTransition {
+                                    autopilot_id: current.autopilot_id,
+                                    run_id: current.id,
+                                    expected_revision: current.revision,
+                                    next_status: "failed".into(),
+                                    issue_id: None,
+                                    task_id: None,
+                                    failure_reason: Some(code.clone()),
+                                    reason_code: Some(code.clone()),
+                                    now_ms: unix_now_ms(),
+                                },
+                            )?;
+                        }
+                    }
+                    diagnostics.push(json!({"autopilotId":run.autopilot_id,"triggerId":run.trigger_id,"code":code}));
+                }
             }
         }
-        if dispatch.is_ok() {
-            let current = self.multica_execution_store.get_autopilot_run(&run.id)?;
-            if current.status == "issue_created" {
-                let _ =
-                    self.multica_execution_store
-                        .transition_autopilot_run(AutopilotRunTransition {
-                            autopilot_id: run.autopilot_id.clone(),
-                            run_id: run.id.clone(),
-                            expected_revision: current.revision,
-                            next_status: "running".into(),
-                            issue_id: current.issue_id.clone(),
-                            task_id: current.task_id.clone(),
-                            failure_reason: None,
-                            reason_code: None,
-                            now_ms: unix_now_ms(),
-                        });
-            }
-        }
-        let execution = dispatch.unwrap_or_else(
-            |error| json!({"status":"queued", "diagnostic": stable_execution_error_code(&error)}),
-        );
-        let final_run = self.multica_execution_store.get_autopilot_run(&run.id)?;
-        Ok(json!({"status":"ok", "run": final_run, "execution": execution, "binding": binding}))
+        diagnostics.extend(self.recover_pending_webhooks(&workspace_id));
+        Ok(json!({"status":"ok", "runs":runs, "diagnostics":diagnostics, "hasMore":batch.has_more}))
     }
 
     async fn multica_autopilot_transition(
@@ -3000,7 +3645,6 @@ impl BridgeRuntimeService for CoreRuntimeService {
         request: MulticaTaskQueueTransitionRequest,
     ) -> anyhow::Result<Value> {
         let next_state = MulticaExecutionBindingState::from_queue_status(&request.status)?;
-        let requested_failure_reason = request.failure_reason.clone();
         let binding = self
             .multica_execution_store
             .transition_queue(QueueTransition {
@@ -3008,352 +3652,423 @@ impl BridgeRuntimeService for CoreRuntimeService {
                 expected_revision: request.expected_revision,
                 lease_token: request.lease_token,
                 next_state,
-                failure_reason: requested_failure_reason.clone(),
+                failure_reason: request.failure_reason,
                 now_ms: unix_now_ms(),
             })?;
-        if let Ok(run) = self
-            .multica_execution_store
-            .get_autopilot_run(&binding.multica_run_id)
-        {
-            let terminal = match binding.state {
-                MulticaExecutionBindingState::Completed => Some(("completed", None, None)),
-                MulticaExecutionBindingState::Failed | MulticaExecutionBindingState::Cancelled => {
-                    let reason = binding
-                        .last_error_code
-                        .clone()
-                        .or(requested_failure_reason)
-                        .or_else(|| Some(format!("task {}", request.status)));
-                    Some(("failed", reason.clone(), reason))
-                }
-                _ => None,
-            };
-            if let Some((status, failure_reason, reason_code)) = terminal {
-                let _ =
-                    self.multica_execution_store
-                        .transition_autopilot_run(AutopilotRunTransition {
-                            autopilot_id: run.autopilot_id,
-                            run_id: run.id,
-                            expected_revision: run.revision,
-                            next_status: status.into(),
-                            issue_id: run.issue_id,
-                            task_id: Some(binding.binding_id.clone()),
-                            failure_reason,
-                            reason_code,
-                            now_ms: unix_now_ms(),
-                        });
-            }
-        }
         Ok(json!({"status":"ok", "binding": binding}))
     }
-
-    async fn memory_status(&self) -> anyhow::Result<Value> {
-        let mut value = serde_json::to_value(self.memory_store.status()?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_session(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemorySessionRequest =
-            serde_json::from_value(payload).unwrap_or(MemorySessionRequest {
-                workspace: String::new(),
-                query: String::new(),
-                max_items: 5,
-            });
-        let mut value = serde_json::to_value(self.memory_store.session_summary(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_search(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryQueryRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.query(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_learn(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryItemRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.learn_item(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_candidates(&self, payload: Value) -> anyhow::Result<Value> {
-        if payload
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|text| !text.trim().is_empty())
-            .unwrap_or(false)
-        {
-            let request: MemoryCandidateRequest = serde_json::from_value(payload)?;
-            let mut value = serde_json::to_value(self.memory_store.create_candidate(request)?)?;
-            value["status"] = json!("ok");
-            return Ok(value);
-        }
-        let workspace = payload
-            .get("workspace")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let include_global = payload
-            .get("includeGlobal")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        Ok(json!({
-            "status": "ok",
-            "candidates": self.memory_store.list_candidates(workspace, include_global)?
-        }))
-    }
-
-    async fn memory_capture(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryCaptureRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.record_capture(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_resolve_workspace(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(resolve_codex_memory_workspace_response(&payload))
-    }
-
-    async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
-        let id = payload
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut value = serde_json::to_value(self.memory_store.approve_candidate(id)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_reject(&self, payload: Value) -> anyhow::Result<Value> {
-        let id = payload
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut value = serde_json::to_value(self.memory_store.reject_candidate(id)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_selfcheck(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemorySelfCheckRequest =
-            serde_json::from_value(payload).unwrap_or(MemorySelfCheckRequest { repair: false });
-        let mut value = serde_json::to_value(self.memory_store.run_selfcheck(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
 }
 
-pub fn resolve_codex_memory_workspace_response(payload: &Value) -> Value {
-    let current_workspace = payload
-        .get("workspace")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    if !current_workspace.is_empty() && !current_workspace.starts_with("codex:path:") {
-        return json!({
-            "status": "ok",
-            "resolved": false,
-            "workspace": current_workspace,
-            "source": "already_stable"
-        });
+impl CoreRuntimeService {
+    fn workspace_entity(
+        &self,
+        workspace_id: &str,
+        resource: MulticaWorkspaceResourceKey,
+        id: &str,
+    ) -> anyhow::Result<Value> {
+        self.multica_workspace_store
+            .list(workspace_id, resource)?
+            .into_iter()
+            .find(|row| row["id"] == id)
+            .ok_or_else(|| anyhow::anyhow!("multica_workspace_entity_not_found"))
     }
 
-    let project_label = payload
-        .get("projectLabel")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let thread_title = payload
-        .get("threadTitle")
-        .or_else(|| payload.get("title"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let url = payload
-        .get("url")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match resolve_codex_workspace_from_local_sessions(project_label, thread_title, url) {
-        Some((workspace, source)) => json!({
-            "status": "ok",
-            "resolved": true,
-            "workspace": workspace,
-            "source": source
-        }),
-        None => json!({
-            "status": "ok",
-            "resolved": false,
-            "workspace": current_workspace,
-            "source": "unresolved"
-        }),
-    }
-}
-
-fn resolve_codex_workspace_from_local_sessions(
-    project_label: &str,
-    thread_title: &str,
-    url: &str,
-) -> Option<(String, String)> {
-    let project_label = normalize_match_text(project_label);
-    let thread_title = normalize_match_text(thread_title);
-    let thread_id = extract_uuidish(url);
-    let codex_home = crate::codex_sqlite::default_codex_home_dir();
-    for db_path in crate::codex_sqlite::codex_session_db_paths_from_home(&codex_home) {
-        if !db_path.is_file() {
-            continue;
+    fn require_execution_agent_access(
+        &self,
+        binding: &CodexMulticaExecutionBinding,
+    ) -> anyhow::Result<()> {
+        if let Some(agent_id) = binding.agent_id.as_deref() {
+            self.multica_workspace_store
+                .require_agent_invocation(&binding.workspace_id, agent_id)?;
         }
-        let Ok(db) =
-            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            continue;
+        Ok(())
+    }
+
+    fn webhook_autopilot(&self, workspace_id: &str, autopilot_id: &str) -> anyhow::Result<Value> {
+        validate_multica_execution_id(autopilot_id)?;
+        self.multica_workspace_store
+            .list(workspace_id, MulticaWorkspaceResourceKey::Autopilots)?
+            .into_iter()
+            .find(|row| row["id"] == autopilot_id)
+            .ok_or_else(|| anyhow::anyhow!("webhook_target_not_found"))
+    }
+
+    fn recover_pending_webhooks(&self, workspace_id: &str) -> Vec<Value> {
+        let pending = match self.multica_webhook_store.pending(100) {
+            Ok(rows) => rows,
+            Err(error) => return vec![json!({"code":stable_execution_error_code(&error)})],
         };
-        if let Some(workspace) =
-            resolve_workspace_from_threads(&db, &project_label, &thread_title, &thread_id)
-        {
-            return Some((workspace, "codex_threads".to_string()));
+        let mut diagnostics = Vec::new();
+        for row in pending {
+            if row["workspace_id"] != workspace_id {
+                continue;
+            }
+            let result = (|| -> anyhow::Result<()> {
+                let autopilot = self.webhook_autopilot(
+                    workspace_id,
+                    row["autopilot_id"].as_str().unwrap_or_default(),
+                )?;
+                let target = WebhookTarget::from_autopilot(
+                    workspace_id,
+                    &autopilot,
+                    row["trigger_id"].as_str().unwrap_or_default(),
+                )?;
+                self.multica_webhook_store.enqueue(
+                    &self.multica_execution_store,
+                    &target,
+                    row["id"].as_str().unwrap_or_default(),
+                    unix_now_ms(),
+                )?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                diagnostics.push(
+                    json!({"deliveryId":row["id"],"code":stable_execution_error_code(&error)}),
+                );
+            }
         }
-        if let Some(workspace) = resolve_workspace_from_local_catalog(&db, &project_label) {
-            return Some((workspace, "codex_local_thread_catalog".to_string()));
-        }
+        diagnostics
     }
-    None
-}
 
-fn resolve_workspace_from_threads(
-    db: &Connection,
-    project_label: &str,
-    thread_title: &str,
-    thread_id: &str,
-) -> Option<String> {
-    if !sqlite_table_has_columns(db, "threads", &["id", "cwd"]).ok()? {
-        return None;
+    fn agent_concurrency_limit(
+        &self,
+        binding: &crate::multica_execution_store::CodexMulticaExecutionBinding,
+    ) -> anyhow::Result<Option<u64>> {
+        let Some(agent_id) = binding.agent_id.as_deref() else {
+            return Ok(None);
+        };
+        self.multica_workspace_store
+            .require_agent_invocation(&binding.workspace_id, agent_id)?;
+        let agent = self
+            .multica_workspace_store
+            .list(&binding.workspace_id, MulticaWorkspaceResourceKey::Agents)?
+            .into_iter()
+            .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
+            .ok_or_else(|| anyhow::anyhow!("execution_agent_unavailable"))?;
+        Ok(Some(
+            agent
+                .get("max_concurrent_tasks")
+                .and_then(Value::as_u64)
+                .unwrap_or(1),
+        ))
     }
-    let columns = sqlite_columns(db, "threads").ok()?;
-    let title_expr = if columns.iter().any(|column| column == "title") {
-        "title"
-    } else {
-        "''"
-    };
-    let updated = if columns.iter().any(|column| column == "updated_at_ms") {
-        "updated_at_ms"
-    } else if columns.iter().any(|column| column == "updated_at") {
-        "updated_at * 1000"
-    } else {
-        "0"
-    };
-    let sql = format!(
-        "SELECT id, {title_expr}, cwd FROM threads
-         WHERE COALESCE(cwd, '') <> ''
-         ORDER BY COALESCE({updated}, 0) DESC, id DESC
-         LIMIT 500"
-    );
-    let mut stmt = db.prepare(&sql).ok()?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            ))
-        })
-        .ok()?;
-    let mut fallback_by_label = None;
-    for row in rows.flatten() {
-        let (id, title, cwd) = row;
-        let cwd = cwd.trim().to_string();
-        if cwd.is_empty() {
-            continue;
+
+    fn validate_agent_runtime_selection(
+        &self,
+        workspace_id: &str,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let Some(agent_id) = agent_id else {
+            return Ok(());
+        };
+        self.multica_workspace_store
+            .require_agent_invocation(workspace_id, agent_id)?;
+        if let Some(agent) = self
+            .multica_workspace_store
+            .list(workspace_id, MulticaWorkspaceResourceKey::Agents)?
+            .into_iter()
+            .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
+        {
+            if agent["status"] == "archived"
+                || agent["archived"] == true
+                || agent
+                    .get("archived_at")
+                    .is_some_and(|value| !value.is_null())
+            {
+                anyhow::bail!("execution_agent_archived");
+            }
+            // The native selector remains authoritative; saved overrides are not silently ignored.
+            if agent
+                .get("custom_env")
+                .and_then(Value::as_object)
+                .is_some_and(|env| !env.is_empty())
+            {
+                anyhow::bail!("execution_agent_environment_unsupported");
+            }
+            if ["model", "thinking_level", "service_tier"]
+                .iter()
+                .any(|field| {
+                    agent
+                        .get(*field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.trim().is_empty())
+                })
+            {
+                anyhow::bail!("execution_agent_runtime_override_unsupported");
+            }
         }
-        let cwd_label = normalize_match_text(
-            Path::new(&cwd)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(&cwd),
+        Ok(())
+    }
+    async fn queue_issue_assignment(
+        &self,
+        workspace_id: &str,
+        entity: &Value,
+    ) -> anyhow::Result<Option<Value>> {
+        if entity.get("assignee_type").and_then(Value::as_str) != Some("agent") {
+            return Ok(None);
+        }
+        let Some(agent_id) = entity
+            .get("assignee_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let issue_id = entity
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("multica_workspace_entity_invalid"))?;
+        let reservation = self
+            .multica_execution_store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: workspace_id.to_string(),
+                issue_id: Some(issue_id.to_string()),
+                agent_id: Some(agent_id.to_string()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: format!("issue-assignment:{workspace_id}:{issue_id}:{agent_id}"),
+                now_ms: unix_now_ms(),
+            })?;
+        let dispatched = match self
+            .dispatch_pending_assignment(
+                &reservation.binding.binding_id,
+                reservation.binding.revision,
+                &format!("auto-{}", reservation.binding.binding_id),
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => json!({
+                "status": "queued",
+                "diagnostic": stable_execution_error_code(&error),
+            }),
+        };
+        Ok(Some(json!({
+            "binding_id": reservation.binding.binding_id,
+            "status": dispatched.get("binding")
+                .and_then(|binding| binding.get("state"))
+                .and_then(Value::as_str)
+                .unwrap_or("queued"),
+            "replay": reservation.replay,
+            "dispatch": dispatched,
+        })))
+    }
+
+    async fn materialize_autopilot_run(
+        &self,
+        request: MulticaAutopilotTriggerRequest,
+        dispatch_now: bool,
+    ) -> anyhow::Result<Value> {
+        let _guard = self.autopilot_trigger_lock.lock().await;
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let autopilot = self
+            .multica_workspace_store
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Autopilots)?
+            .into_iter()
+            .find(|item| {
+                item.get("id").and_then(Value::as_str) == Some(request.autopilot_id.as_str())
+            })
+            .ok_or_else(|| anyhow::anyhow!("autopilot_not_found"))?;
+        let status = autopilot
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("active");
+        if status != "active" {
+            anyhow::bail!("autopilot_not_active");
+        }
+        if !matches!(
+            request.source.as_str(),
+            "manual" | "schedule" | "webhook" | "api"
+        ) {
+            anyhow::bail!("autopilot_run_source_invalid");
+        }
+        if request.source != "manual" || request.trigger_id.is_some() {
+            let trigger = autopilot
+                .get("triggers")
+                .and_then(Value::as_array)
+                .and_then(|triggers| {
+                    triggers.iter().find(|trigger| {
+                        trigger.get("id").and_then(Value::as_str) == request.trigger_id.as_deref()
+                    })
+                })
+                .ok_or_else(|| anyhow::anyhow!("autopilot_trigger_unknown"))?;
+            if trigger.get("enabled").and_then(Value::as_bool) != Some(true) {
+                anyhow::bail!("autopilot_trigger_disabled");
+            }
+            if request.source != "manual"
+                && (trigger.get("kind").and_then(Value::as_str) != Some(request.source.as_str())
+                    || request.occurrence_id.is_none())
+            {
+                anyhow::bail!("autopilot_occurrence_invalid");
+            }
+        }
+        let mode = autopilot
+            .get("execution_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("create_issue");
+        if !matches!(mode, "create_issue" | "run_only") {
+            anyhow::bail!("autopilot_execution_mode_invalid");
+        }
+        let agent_id = autopilot
+            .get("assignee_id")
+            .or_else(|| autopilot.get("agent_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("autopilot_assignee_unavailable"))?;
+        let agent_exists = self
+            .multica_workspace_store
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)?
+            .iter()
+            .any(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id));
+        if !agent_exists {
+            anyhow::bail!("autopilot_assignee_unavailable");
+        }
+        let now = unix_now_ms();
+        let run = self.multica_execution_store.reserve_autopilot_occurrence(
+            request.autopilot_id.clone(),
+            request.trigger_id.clone(),
+            request.source,
+            Some(
+                request
+                    .occurrence_id
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            ),
+            now,
+        )?;
+        if run.task_id.is_some() || run.status != "pending" {
+            let binding = run
+                .task_id
+                .as_deref()
+                .map(|id| self.multica_execution_store.get_execution(id))
+                .transpose()?;
+            return Ok(json!({"status":"ok", "run": run, "binding": binding, "replay": true}));
+        }
+        let issue_id = format!("autopilot-issue-{}", run.id);
+        let binding = if mode == "create_issue" {
+            let issue = json!({
+                "id": issue_id,
+                "title": autopilot.get("title").or_else(|| autopilot.get("name")).and_then(Value::as_str).unwrap_or("工作流任务"),
+                "description": autopilot.get("description").and_then(Value::as_str).unwrap_or(""),
+                "assignee_type": "agent", "assignee_id": agent_id,
+                "origin_type": "autopilot", "origin_id": run.autopilot_id,
+                "status": "todo"
+            });
+            let existing = self
+                .multica_workspace_store
+                .list(&workspace_id, MulticaWorkspaceResourceKey::Issues)?
+                .into_iter()
+                .find(|issue| issue.get("id").and_then(Value::as_str) == Some(issue_id.as_str()));
+            let saved = if let Some(existing) = existing {
+                existing
+            } else {
+                self.multica_workspace_store.upsert(
+                    &workspace_id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Issues,
+                        entity: issue,
+                        expected_revision: Some(0),
+                    },
+                    now,
+                )?
+            };
+            let id = saved.get("id").and_then(Value::as_str).unwrap_or_default();
+            let key = format!("issue-assignment:{}:{}:{}", workspace_id, id, agent_id);
+            let reserved =
+                self.multica_execution_store
+                    .reserve_execution(ExecutionReservation {
+                        workspace_id: workspace_id.clone(),
+                        issue_id: Some(id.to_string()),
+                        agent_id: Some(agent_id.to_string()),
+                        execution_kind: MulticaExecutionKind::Thread,
+                        parent_thread_id: None,
+                        parent_attempt_id: None,
+                        idempotency_key: key,
+                        now_ms: now,
+                    })?;
+            let _ =
+                self.multica_execution_store
+                    .transition_autopilot_run(AutopilotRunTransition {
+                        autopilot_id: run.autopilot_id.clone(),
+                        run_id: run.id.clone(),
+                        expected_revision: run.revision,
+                        next_status: "issue_created".into(),
+                        issue_id: Some(id.to_string()),
+                        task_id: Some(reserved.binding.binding_id.clone()),
+                        failure_reason: None,
+                        reason_code: None,
+                        now_ms: now,
+                    })?;
+            reserved.binding
+        } else if mode == "run_only" {
+            let key = format!("autopilot-run:{}", run.id);
+            let reserved =
+                self.multica_execution_store
+                    .reserve_execution(ExecutionReservation {
+                        workspace_id: workspace_id.clone(),
+                        issue_id: None,
+                        agent_id: Some(agent_id.to_string()),
+                        execution_kind: MulticaExecutionKind::Thread,
+                        parent_thread_id: None,
+                        parent_attempt_id: None,
+                        idempotency_key: key,
+                        now_ms: now,
+                    })?;
+            let _ =
+                self.multica_execution_store
+                    .transition_autopilot_run(AutopilotRunTransition {
+                        autopilot_id: run.autopilot_id.clone(),
+                        run_id: run.id.clone(),
+                        expected_revision: run.revision,
+                        next_status: "pending".into(),
+                        issue_id: None,
+                        task_id: Some(reserved.binding.binding_id.clone()),
+                        failure_reason: None,
+                        reason_code: None,
+                        now_ms: now,
+                    })?;
+            reserved.binding
+        } else {
+            anyhow::bail!("autopilot_execution_mode_invalid");
+        };
+        if !dispatch_now {
+            let run = self.multica_execution_store.get_autopilot_run(&run.id)?;
+            return Ok(
+                json!({"status":"ok", "run":run, "binding":binding, "execution":{"status":"queued"}}),
+            );
+        }
+        drop(_guard);
+        let dispatch = self
+            .dispatch_pending_assignment(
+                &binding.binding_id,
+                binding.revision,
+                &format!("auto-{}", binding.binding_id),
+            )
+            .await;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&binding.binding_id)?;
+        if let Err(error) = &dispatch {
+            if binding.state.is_terminal() {
+                anyhow::bail!("{}", stable_execution_error_code(error));
+            }
+        }
+        let execution = dispatch.unwrap_or_else(
+            |error| json!({"status":"queued", "diagnostic": stable_execution_error_code(&error)}),
         );
-        let normalized_title = normalize_match_text(&title);
-        if !thread_id.is_empty() && normalize_match_text(&id).contains(thread_id) {
-            return Some(cwd);
-        }
-        if !thread_title.is_empty()
-            && (!normalized_title.is_empty()
-                && (normalized_title.contains(&thread_title)
-                    || thread_title.contains(&normalized_title)))
-        {
-            return Some(cwd);
-        }
-        if !project_label.is_empty()
-            && !cwd_label.is_empty()
-            && (cwd_label == project_label
-                || cwd_label.contains(project_label)
-                || project_label.contains(&cwd_label))
-        {
-            fallback_by_label.get_or_insert(cwd);
-        }
+        let final_run = self.multica_execution_store.get_autopilot_run(&run.id)?;
+        Ok(json!({"status":"ok", "run": final_run, "execution": execution, "binding": binding}))
     }
-    fallback_by_label
-}
-
-fn resolve_workspace_from_local_catalog(db: &Connection, project_label: &str) -> Option<String> {
-    if project_label.is_empty()
-        || !sqlite_table_has_columns(db, "local_thread_catalog", &["path"]).ok()?
-    {
-        return None;
-    }
-    let mut stmt = db
-        .prepare("SELECT path FROM local_thread_catalog WHERE COALESCE(path, '') <> '' LIMIT 500")
-        .ok()?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, Option<String>>(0))
-        .ok()?;
-    for path in rows.flatten().flatten() {
-        let label = normalize_match_text(
-            Path::new(&path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(&path),
-        );
-        if label == project_label || label.contains(project_label) || project_label.contains(&label)
-        {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn sqlite_table_has_columns(
-    db: &Connection,
-    table: &str,
-    required: &[&str],
-) -> rusqlite::Result<bool> {
-    let columns = sqlite_columns(db, table)?;
-    Ok(required
-        .iter()
-        .all(|required| columns.iter().any(|column| column == required)))
-}
-
-fn sqlite_columns(db: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = db.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    rows.collect()
-}
-
-fn normalize_match_text(text: &str) -> String {
-    text.chars()
-        .filter(|ch| ch.is_alphanumeric())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect()
-}
-
-fn extract_uuidish(text: &str) -> String {
-    text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-'))
-        .find(|part| part.len() >= 16 && part.contains('-'))
-        .map(normalize_match_text)
-        .unwrap_or_default()
 }
 
 struct UnavailableDataService;
 
 #[async_trait]
 impl BridgeDataService for UnavailableDataService {
+    async fn session_availability(&self, _session_ids: Vec<String>) -> anyhow::Result<Vec<String>> {
+        anyhow::bail!("Session availability service is not wired in core launcher hooks")
+    }
+
     async fn delete(&self, session: SessionRef) -> anyhow::Result<DeleteResult> {
         Ok(DeleteResult {
             status: DeleteStatus::Failed,
@@ -3456,33 +4171,7 @@ async fn resolve_execution_skills(
 }
 
 fn assignment_prompt(issue: &Value, agent: &Value) -> anyhow::Result<String> {
-    let title = issue
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("execution_issue_title_unavailable"))?;
-    let description = issue
-        .get("description")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let instructions = agent
-        .get("instructions")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    let mut prompt = format!("任务标题：\n{title}");
-    if let Some(description) = description {
-        prompt.push_str("\n\n任务描述：\n");
-        prompt.push_str(description);
-    }
-    if let Some(instructions) = instructions {
-        prompt.push_str("\n\n智能体指令：\n");
-        prompt.push_str(instructions);
-    }
-    Ok(prompt)
+    crate::multica_workspace::issue_run_controls::assignment_prompt(issue, agent)
 }
 
 /// Build an execution selection exclusively from bindings persisted for one
@@ -3525,38 +4214,22 @@ fn execution_handle_from_binding(
     })
 }
 
-fn execution_status_from_binding(
-    binding: &CodexMulticaExecutionBinding,
-) -> anyhow::Result<CodexExecutionStatus> {
-    let state = match binding.state {
-        MulticaExecutionBindingState::BindingPending => CodexExecutionState::Queued,
-        MulticaExecutionBindingState::Dispatched => CodexExecutionState::Queued,
-        MulticaExecutionBindingState::Running => CodexExecutionState::Running,
-        MulticaExecutionBindingState::Completed => CodexExecutionState::Completed,
-        MulticaExecutionBindingState::Failed => CodexExecutionState::Failed,
-        MulticaExecutionBindingState::Cancelled => CodexExecutionState::Cancelled,
-        MulticaExecutionBindingState::CancelPending => CodexExecutionState::CancelPending,
-        MulticaExecutionBindingState::WaitingLocalDirectory
-        | MulticaExecutionBindingState::Stale
-        | MulticaExecutionBindingState::Orphaned
-        | MulticaExecutionBindingState::Reconciling => CodexExecutionState::Unknown,
-    };
-    Ok(CodexExecutionStatus {
-        runtime_id: binding
-            .codex_runtime_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("execution_runtime_id_unavailable"))?,
-        thread_id: binding
-            .codex_thread_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?,
-        execution_id: binding
-            .codex_execution_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("execution_id_unavailable"))?,
-        state,
-        diagnostic: None,
-    })
+fn execution_command_replay(
+    command: crate::multica_execution_store::CodexMulticaExecutionCommand,
+) -> anyhow::Result<Value> {
+    match command.state {
+        MulticaExecutionCommandState::Committed => command
+            .result
+            .ok_or_else(|| anyhow::anyhow!("execution_command_result_unavailable")),
+        MulticaExecutionCommandState::Failed => anyhow::bail!(
+            "{}",
+            command
+                .error_code
+                .as_deref()
+                .unwrap_or("codex_execution_failed")
+        ),
+        MulticaExecutionCommandState::Reserved => anyhow::bail!("execution_command_in_progress"),
+    }
 }
 
 fn execution_handle_response(
@@ -3592,6 +4265,11 @@ fn stable_execution_error_code(error: &anyhow::Error) -> String {
     } else {
         "codex_execution_failed".to_string()
     }
+}
+
+fn environment_result(agent: &Value) -> Value {
+    json!({"agent_id":agent["id"], "custom_env":agent.get("custom_env").cloned().unwrap_or_else(||json!({})),
+        "revision":agent["revision"], "execution_supported":false})
 }
 
 fn unix_now_ms() -> u64 {
@@ -3831,11 +4509,13 @@ mod tests {
             request: CodexThreadRequest,
             idempotency_key: &str,
         ) -> anyhow::Result<CodexExecutionHandle> {
-            self.requests.lock().unwrap().push(request);
+            let mut requests = self.requests.lock().unwrap();
+            requests.push(request);
+            let sequence = requests.len();
             Ok(CodexExecutionHandle {
                 runtime_id: "codex-current-page".to_string(),
-                thread_id: "native-thread-1".to_string(),
-                execution_id: Some("native-turn-1".to_string()),
+                thread_id: format!("native-thread-{sequence}"),
+                execution_id: Some(format!("native-turn-{sequence}")),
                 parent_thread_id: None,
                 idempotency_key: idempotency_key.to_string(),
             })
@@ -3884,10 +4564,16 @@ mod tests {
 
         async fn execution_status(
             &self,
-            _thread_id: &str,
-            _execution_id: &str,
+            thread_id: &str,
+            execution_id: &str,
         ) -> anyhow::Result<CodexExecutionStatus> {
-            bail!("unused")
+            Ok(CodexExecutionStatus {
+                runtime_id: "codex-current-page".into(),
+                thread_id: thread_id.into(),
+                execution_id: execution_id.into(),
+                state: crate::codex_execution::CodexExecutionState::Completed,
+                diagnostic: None,
+            })
         }
 
         async fn subscribe_events(
@@ -3943,6 +4629,463 @@ mod tests {
         (dir, executions, workspace, workspace_id)
     }
 
+    fn autopilot_fixture(
+        mode: &str,
+    ) -> (
+        tempfile::TempDir,
+        MulticaExecutionStore,
+        LocalMulticaWorkspaceStore,
+        serde_json::Value,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let autopilot = json!({
+            "id":"auto-a", "title":"Scheduled task", "status":"active",
+            "execution_mode":mode, "assignee_id":"agent-a",
+            "triggers":[
+                {"id":"schedule-a","kind":"schedule","enabled":true,"cron_expression":"* * * * *","timezone":"UTC"},
+                {"id":"webhook-a","kind":"webhook","enabled":true},
+                {"id":"api-a","kind":"api","enabled":true},
+                {"id":"disabled-a","kind":"api","enabled":false}
+            ]
+        });
+        for (resource, entity) in [
+            (
+                MulticaWorkspaceResourceKey::Agents,
+                json!({"id":"agent-a","name":"Worker"}),
+            ),
+            (MulticaWorkspaceResourceKey::Autopilots, autopilot.clone()),
+        ] {
+            workspace
+                .upsert(
+                    &workspace_id,
+                    LocalWorkspaceEntityUpsert {
+                        resource,
+                        entity,
+                        expected_revision: Some(0),
+                    },
+                    1,
+                )
+                .unwrap();
+        }
+        let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        (dir, executions, workspace, autopilot)
+    }
+
+    #[tokio::test]
+    async fn webhook_rotate_route_replays_after_refresh_and_preserves_cas() {
+        let (dir, _, workspace, _) = autopilot_fixture("run_only");
+        let path = dir.path().join("webhooks.json");
+        let runtime = || {
+            CoreRuntimeService::new(0, StatusStore::default())
+                .with_multica_workspace_store(workspace.clone())
+                .with_multica_webhook_store(super::MulticaWebhookStore::new(path.clone()))
+        };
+        let provision = super::parse_multica_webhook(
+            "/multica/webhooks/provision",
+            &json!({"autopilotId":"auto-a","triggerId":"webhook-a","commandId":"provision"}),
+        )
+        .unwrap();
+        runtime().multica_webhooks(provision).await.unwrap();
+        let mut payload = json!({
+            "autopilotId":"auto-a","triggerId":"webhook-a","commandId":"rotate",
+            "expectedRevision":1,"commandSignature":"a".repeat(64)
+        });
+        let parse = |value: &serde_json::Value| {
+            super::parse_multica_webhook("/multica/webhooks/rotate", value).unwrap()
+        };
+        let first = runtime().multica_webhooks(parse(&payload)).await.unwrap();
+        assert_eq!(first["credential_revision"], 2);
+        let token = first["webhook_token"].as_str().unwrap();
+        payload["expectedRevision"] = json!(2);
+        let replay = runtime().multica_webhooks(parse(&payload)).await.unwrap();
+        assert_eq!(replay["credential_revision"], 2);
+        assert_eq!(replay["credential_replay"], true);
+        assert!(replay["webhook_token"].is_null());
+
+        payload["commandSignature"] = json!("b".repeat(64));
+        let error = runtime()
+            .multica_webhooks(parse(&payload))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "webhook_command_conflict");
+        assert!(
+            !super::failed_from_error(&payload, error)
+                .to_string()
+                .contains(token)
+        );
+        payload["commandId"] = json!("new-command");
+        payload["expectedRevision"] = json!(1);
+        assert_eq!(
+            runtime()
+                .multica_webhooks(parse(&payload))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "webhook_revision_conflict"
+        );
+        payload["commandSignature"] = json!("invalid");
+        assert_eq!(
+            runtime()
+                .multica_webhooks(parse(&payload))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "webhook_command_signature_invalid"
+        );
+        payload.as_object_mut().unwrap().remove("commandSignature");
+        payload["expectedRevision"] = json!(2);
+        let legacy = runtime().multica_webhooks(parse(&payload)).await.unwrap();
+        assert_eq!(legacy["credential_revision"], 3);
+        payload["token"] = json!("unexpected");
+        assert!(super::parse_multica_webhook("/multica/webhooks/rotate", &payload).is_err());
+        assert!(!std::fs::read_to_string(path).unwrap().contains(token));
+    }
+
+    #[tokio::test]
+    async fn autopilot_tick_queues_run_only_then_dispatches_and_completes() {
+        let (_dir, executions, workspace, autopilot) = autopilot_fixture("run_only");
+        let minute = super::unix_now_ms() / 60_000 * 60_000;
+        executions
+            .tick_autopilots(&[autopilot], minute - 60_000)
+            .unwrap();
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace.clone());
+        let response = runtime.multica_autopilot_tick().await.unwrap();
+        assert_eq!(response["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(response["runs"][0]["execution"]["status"], "queued");
+        assert_eq!(response["runs"][0]["run"]["status"], "pending");
+        assert!(
+            workspace
+                .list(
+                    &crate::multica_workspace::local_workspace_id(),
+                    MulticaWorkspaceResourceKey::Issues
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let run = executions.list_autopilot_runs("auto-a").unwrap().remove(0);
+        let binding = executions
+            .get_execution(run.task_id.as_deref().unwrap())
+            .unwrap();
+        assert!(binding.issue_id.is_none());
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = runtime.with_codex_execution_service(host.clone());
+        runtime
+            .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                binding_id: binding.binding_id.clone(),
+                expected_revision: binding.revision,
+                lease_token: "scheduler-test".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            executions.get_autopilot_run(&run.id).unwrap().status,
+            "running"
+        );
+        runtime
+            .multica_execution_status(super::MulticaExecutionBindingRequest {
+                binding_id: binding.binding_id,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            executions.get_autopilot_run(&run.id).unwrap().status,
+            "completed"
+        );
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+        assert!(
+            runtime.multica_autopilot_tick().await.unwrap()["runs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn autopilot_tick_recovers_partial_issue_without_calling_host_or_overwriting_it() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("create_issue");
+        let run = executions
+            .reserve_autopilot_occurrence(
+                "auto-a".into(),
+                Some("api-a".into()),
+                "api".into(),
+                Some("delivery-a".into()),
+                1,
+            )
+            .unwrap();
+        let issue_id = format!("autopilot-issue-{}", run.id);
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        workspace.upsert(&workspace_id, LocalWorkspaceEntityUpsert {
+            resource:MulticaWorkspaceResourceKey::Issues,
+            entity:json!({"id":issue_id,"title":"Edited after reservation","assignee_type":"agent","assignee_id":"agent-a"}),
+            expected_revision:Some(0),
+        }, 2).unwrap();
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace.clone())
+            .with_codex_execution_service(host.clone());
+        let response = runtime.multica_autopilot_tick().await.unwrap();
+        assert_eq!(response["runs"][0]["run"]["id"], run.id);
+        assert_eq!(response["runs"][0]["execution"]["status"], "queued");
+        assert!(host.requests.lock().unwrap().is_empty());
+        assert!(
+            runtime.multica_autopilot_tick().await.unwrap()["runs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(executions.list_autopilot_runs("auto-a").unwrap().len(), 1);
+        let issues = workspace
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Issues)
+            .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0]["title"], "Edited after reservation");
+    }
+
+    #[tokio::test]
+    async fn autopilot_manual_run_only_occurrences_do_not_share_retry_budget() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace)
+            .with_codex_execution_service(host.clone());
+        for index in 0..4 {
+            // The original UI sends manual + occurrenceId, with no triggerId.
+            let request = super::parse_multica_autopilot_trigger(&json!({
+                "autopilotId":"auto-a", "source":"manual", "occurrenceId":format!("manual-{index}")
+            }))
+            .unwrap();
+            let response = runtime
+                .multica_autopilot_trigger(request.clone())
+                .await
+                .unwrap();
+            assert_eq!(response["run"]["status"], "running");
+            assert!(response["run"]["issue_id"].is_null());
+            let run = executions
+                .get_autopilot_run(response["run"]["id"].as_str().unwrap())
+                .unwrap();
+            let binding = executions
+                .get_execution(run.task_id.as_deref().unwrap())
+                .unwrap();
+            assert!(binding.issue_id.is_none());
+            runtime
+                .multica_execution_status(super::MulticaExecutionBindingRequest {
+                    binding_id: binding.binding_id,
+                })
+                .await
+                .unwrap();
+            let replay = runtime.multica_autopilot_trigger(request).await.unwrap();
+            assert_eq!(replay["run"]["id"], response["run"]["id"]);
+            assert_eq!(host.requests.lock().unwrap().len(), index + 1);
+        }
+        assert_eq!(executions.list_autopilot_runs("auto-a").unwrap().len(), 4);
+        assert!(
+            executions
+                .load()
+                .unwrap()
+                .execution_bindings
+                .iter()
+                .all(|binding| binding.attempt_no == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn autopilot_delivery_retries_create_one_native_thread_and_issue() {
+        for source in ["webhook", "api"] {
+            let (_dir, executions, workspace, _) = autopilot_fixture("create_issue");
+            let host = Arc::new(RecordingCodexHost::default());
+            let runtime = CoreRuntimeService::new(0, StatusStore::default())
+                .with_multica_execution_store(executions.clone())
+                .with_multica_workspace_store(workspace.clone())
+                .with_codex_execution_service(host.clone());
+            let request = super::MulticaAutopilotTriggerRequest {
+                autopilot_id: "auto-a".into(),
+                trigger_id: Some(format!("{source}-a")),
+                source: source.into(),
+                occurrence_id: Some("delivery-a".into()),
+            };
+            let (first, second, third) = tokio::join!(
+                runtime.multica_autopilot_trigger(request.clone()),
+                runtime.multica_autopilot_trigger(request.clone()),
+                runtime.multica_autopilot_trigger(request.clone()),
+            );
+            let first = first.unwrap();
+            assert_eq!(second.unwrap()["run"]["id"], first["run"]["id"]);
+            assert_eq!(third.unwrap()["run"]["id"], first["run"]["id"]);
+            assert_eq!(first["run"]["status"], "running");
+            assert_eq!(host.requests.lock().unwrap().len(), 1);
+            assert_eq!(executions.list_autopilot_runs("auto-a").unwrap().len(), 1);
+            assert_eq!(
+                workspace
+                    .list(
+                        &crate::multica_workspace::local_workspace_id(),
+                        MulticaWorkspaceResourceKey::Issues
+                    )
+                    .unwrap()
+                    .len(),
+                1
+            );
+            let next = runtime
+                .multica_autopilot_trigger(super::MulticaAutopilotTriggerRequest {
+                    occurrence_id: Some("delivery-b".into()),
+                    ..request
+                })
+                .await
+                .unwrap();
+            assert_eq!(host.requests.lock().unwrap().len(), 1);
+            let first_run = executions
+                .get_autopilot_run(first["run"]["id"].as_str().unwrap())
+                .unwrap();
+            runtime
+                .multica_execution_status(super::MulticaExecutionBindingRequest {
+                    binding_id: first_run.task_id.unwrap(),
+                })
+                .await
+                .unwrap();
+            let next_run = executions
+                .get_autopilot_run(next["run"]["id"].as_str().unwrap())
+                .unwrap();
+            let pending = executions
+                .get_execution(&next_run.task_id.unwrap())
+                .unwrap();
+            assert_eq!(pending.state, MulticaExecutionBindingState::BindingPending);
+            runtime
+                .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                    binding_id: pending.binding_id,
+                    expected_revision: pending.revision,
+                    lease_token: "next-slot".into(),
+                })
+                .await
+                .unwrap();
+            assert_eq!(host.requests.lock().unwrap().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn autopilot_rejects_unknown_disabled_and_mismatched_triggers_before_reservation() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace);
+        for (trigger, code) in [
+            ("missing", "autopilot_trigger_unknown"),
+            ("disabled-a", "autopilot_trigger_disabled"),
+            ("webhook-a", "autopilot_occurrence_invalid"),
+        ] {
+            let error = runtime
+                .multica_autopilot_trigger(super::MulticaAutopilotTriggerRequest {
+                    autopilot_id: "auto-a".into(),
+                    trigger_id: Some(trigger.into()),
+                    source: "api".into(),
+                    occurrence_id: Some("delivery-a".into()),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), code);
+        }
+        assert!(executions.list_autopilot_runs("auto-a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn autopilot_trigger_parser_limits_ingress_to_delivery_identity() {
+        let valid = json!({"autopilotId":"auto-a","triggerId":"api-a","source":"api","occurrenceId":"delivery-a"});
+        assert!(super::parse_multica_autopilot_trigger(&valid).is_ok());
+        for field in ["url", "headers", "payload", "nowMs"] {
+            let mut value = valid.clone();
+            value[field] = json!("unexpected");
+            assert!(super::parse_multica_autopilot_trigger(&value).is_err());
+        }
+        let mut value = valid.clone();
+        value["source"] = json!("schedule");
+        assert!(super::parse_multica_autopilot_trigger(&value).is_err());
+        value = valid;
+        value.as_object_mut().unwrap().remove("occurrenceId");
+        assert!(super::parse_multica_autopilot_trigger(&value).is_err());
+    }
+
+    #[test]
+    fn autopilot_cron_preview_returns_five_utc_instants_with_strict_limits() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-09-18T00:00:00Z")
+            .unwrap()
+            .timestamp_millis() as u64;
+        let response = super::autopilot_cron_preview(
+            super::MulticaCronPreviewRequest {
+                expr: "0 9 * * *".into(),
+                tz: "Asia/Shanghai".into(),
+            },
+            at,
+        )
+        .unwrap();
+        assert_eq!(response["next_runs"].as_array().unwrap().len(), 5);
+        assert_eq!(response["next_runs"][0], "2026-09-18T01:00:00Z");
+        assert_eq!(response["next_runs"][4], "2026-09-22T01:00:00Z");
+        for (expr, tz, code) in [
+            (" ".repeat(257), "UTC".into(), "autopilot_cron_invalid"),
+            ("61 * * * *".into(), "UTC".into(), "autopilot_cron_invalid"),
+            (
+                "* * * * *".into(),
+                "x".repeat(129),
+                "autopilot_timezone_invalid",
+            ),
+            (
+                "* * * * *".into(),
+                "Unknown/Zone".into(),
+                "autopilot_timezone_invalid",
+            ),
+        ] {
+            let error =
+                super::autopilot_cron_preview(super::MulticaCronPreviewRequest { expr, tz }, at)
+                    .unwrap_err();
+            assert_eq!(error.to_string(), code);
+        }
+    }
+
+    #[tokio::test]
+    async fn autopilot_tick_finishes_invalid_unlinked_runs_instead_of_retrying_forever() {
+        let (_dir, executions, workspace, mut autopilot) = autopilot_fixture("run_only");
+        autopilot["assignee_id"] = json!("missing-agent");
+        workspace
+            .upsert(
+                &crate::multica_workspace::local_workspace_id(),
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Autopilots,
+                    entity: autopilot,
+                    expected_revision: Some(1),
+                },
+                2,
+            )
+            .unwrap();
+        let run = executions
+            .reserve_autopilot_occurrence(
+                "auto-a".into(),
+                Some("api-a".into()),
+                "api".into(),
+                Some("delivery-a".into()),
+                1,
+            )
+            .unwrap();
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_execution_store(executions.clone())
+            .with_multica_workspace_store(workspace);
+        let response = runtime.multica_autopilot_tick().await.unwrap();
+        assert_eq!(
+            response["diagnostics"][0]["code"],
+            "autopilot_assignee_unavailable"
+        );
+        assert_eq!(
+            executions.get_autopilot_run(&run.id).unwrap().status,
+            "failed"
+        );
+        let retry = runtime.multica_autopilot_tick().await.unwrap();
+        assert!(retry["diagnostics"].as_array().unwrap().is_empty());
+        assert!(retry["runs"].as_array().unwrap().is_empty());
+    }
+
     fn queued_assignment(
         store: &MulticaExecutionStore,
         workspace_id: &str,
@@ -3960,6 +5103,430 @@ mod tests {
             })
             .unwrap()
             .binding
+    }
+
+    #[tokio::test]
+    async fn issue_run_controls_suppress_replay_and_preserve_handoff_until_dispatch() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let offline = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_workspace_store(workspace.clone())
+            .with_multica_execution_store(executions.clone());
+        let suppressed = json!({"resource":"issues","entity":{"id":"suppressed","title":"Saved only","assignee_type":"agent","assignee_id":"agent-a"},"expectedRevision":0,"suppressRun":true,"handoffNote":"Discarded","commandId":"suppressed-command","commandSignature":"a".repeat(64)});
+        let result = offline
+            .multica_workspace_upsert(super::parse_multica_workspace_upsert(&suppressed).unwrap())
+            .await
+            .unwrap();
+        assert!(result["queue"].is_null());
+        assert!(executions.load().unwrap().execution_bindings.is_empty());
+        let mut changed = suppressed.clone();
+        changed["suppressRun"] = json!(false);
+        assert_eq!(
+            offline
+                .multica_workspace_upsert(super::parse_multica_workspace_upsert(&changed).unwrap())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_idempotency_conflict"
+        );
+        assert_eq!(
+            offline
+                .multica_workspace_upsert(
+                    super::parse_multica_workspace_upsert(&suppressed).unwrap()
+                )
+                .await
+                .unwrap(),
+            result
+        );
+        let pending = json!({"resource":"issues","entity":{"id":"handoff","title":"Run with context","assignee_type":"agent","assignee_id":"agent-a"},"expectedRevision":0,"handoffNote":"Remember the selected approach","commandId":"handoff-command","commandSignature":"b".repeat(64)});
+        let queued = offline
+            .multica_workspace_upsert(super::parse_multica_workspace_upsert(&pending).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(queued["queue"]["status"], "queued");
+        let host = Arc::new(RecordingCodexHost::default());
+        let online = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_workspace_store(LocalMulticaWorkspaceStore::new(
+                workspace.path().to_path_buf(),
+            ))
+            .with_multica_execution_store(executions.clone())
+            .with_codex_execution_service(host.clone());
+        let binding = executions.load().unwrap().execution_bindings[0].clone();
+        online
+            .dispatch_pending_assignment(&binding.binding_id, binding.revision, "handoff-lease")
+            .await
+            .unwrap();
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            host.requests.lock().unwrap()[0]
+                .prompt
+                .matches("Remember the selected approach")
+                .count(),
+            1
+        );
+        let mut edit = pending.clone();
+        edit["entity"] = queued["entity"].clone();
+        edit["entity"]["title"] = json!("Edited only");
+        edit["expectedRevision"] = json!(1);
+        edit["commandId"] = json!("edit-command");
+        edit["handoffNote"] = json!("Do not inject this edit");
+        let edited = online
+            .multica_workspace_upsert(super::parse_multica_workspace_upsert(&edit).unwrap())
+            .await
+            .unwrap();
+        assert!(edited["queue"].is_null());
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            workspace
+                .list(&workspace_id, MulticaWorkspaceResourceKey::Activities)
+                .unwrap()
+                .iter()
+                .filter(|v| v["type"] == "handoff_note")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn issue_run_controls_backlog_and_invalid_controls_do_not_dispatch() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let host = Arc::new(RecordingCodexHost::default());
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_workspace_store(workspace.clone())
+            .with_multica_execution_store(executions.clone())
+            .with_codex_execution_service(host.clone());
+        let payload = json!({"resource":"issues","entity":{"id":"backlog-issue","title":"Later","status":"backlog","assignee_type":"agent","assignee_id":"agent-a"},"expectedRevision":0});
+        let saved = runtime
+            .multica_workspace_upsert(super::parse_multica_workspace_upsert(&payload).unwrap())
+            .await
+            .unwrap();
+        assert!(saved["queue"].is_null());
+        assert!(host.requests.lock().unwrap().is_empty());
+        for (field, value) in [("suppressRun", json!("yes")), ("handoffNote", json!(42))] {
+            let mut invalid = payload.clone();
+            invalid[field] = value;
+            assert!(super::parse_multica_workspace_upsert(&invalid).is_err());
+        }
+        let mut invalid = payload.clone();
+        invalid["entity"]["suppress_run"] = json!(true);
+        assert!(super::parse_multica_workspace_upsert(&invalid).is_err());
+        let moved = runtime.multica_workspace_move_issue(super::parse_multica_workspace_move_issue(&json!({"issueId":"backlog-issue","status":"todo","expectedRevision":1,"beforeId":null,"afterId":null})).unwrap()).await.unwrap();
+        assert!(moved["queue"].is_object());
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn issue_run_controls_pending_suppressed_receipt_recovers_without_dispatch() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let entity = json!({"id":"pending-suppressed","title":"Only save","assignee_type":"agent","assignee_id":"agent-a"});
+        let command = crate::multica_workspace::WorkspaceCommand::new(
+            "pending-suppressed".into(),
+            "f".repeat(64),
+            "upsert:Issues:pending-suppressed".into(),
+            json!({"entity":entity,"expectedRevision":0,"suppressRun":true,"handoffNote":null}),
+        )
+        .unwrap();
+        workspace
+            .upsert_with_run_controls(
+                &workspace_id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity,
+                    expected_revision: Some(0),
+                },
+                1,
+                Some(&command),
+                Some((
+                    &crate::multica_workspace::issue_run_controls::IssueRunControls {
+                        suppress_run: true,
+                        handoff_note: None,
+                    },
+                    &executions,
+                )),
+            )
+            .unwrap();
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_workspace_store(workspace.clone())
+            .with_multica_execution_store(executions.clone());
+        let response = runtime
+            .multica_workspace_command(super::MulticaWorkspaceCommandRequest {
+                command_id: command.id,
+                command_signature: command.signature,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response["found"], true);
+        assert!(response["result"]["queue"].is_null());
+        assert_eq!(response["result"]["entity"]["revision"], 1);
+        assert!(executions.load().unwrap().execution_bindings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn workspace_commands_replay_after_runtime_recreation_and_reject_changed_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let runtime = || {
+            CoreRuntimeService::new(0, StatusStore::default())
+                .with_multica_workspace_store(LocalMulticaWorkspaceStore::new(
+                    store.path().to_path_buf(),
+                ))
+                .with_multica_execution_store(MulticaExecutionStore::new(
+                    dir.path().join("executions.json"),
+                ))
+        };
+        let create = json!({"resource":"issues","entity":{"id":"durable-issue","title":"Original"},"expectedRevision":0,"commandId":"create-a","commandSignature":"a".repeat(64)});
+        let saved = runtime()
+            .multica_workspace_upsert(serde_json::from_value(create.clone()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime()
+                .multica_workspace_upsert(serde_json::from_value(create.clone()).unwrap())
+                .await
+                .unwrap(),
+            saved
+        );
+        let mut changed = create.clone();
+        changed["entity"]["title"] = json!("Changed under same claimed signature");
+        assert_eq!(
+            runtime()
+                .multica_workspace_upsert(serde_json::from_value(changed).unwrap())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_idempotency_conflict"
+        );
+        let update = json!({"resource":"issues","entity":{"id":"durable-issue","title":"Updated"},"expectedRevision":1,"commandId":"update-a","commandSignature":"b".repeat(64)});
+        let updated = runtime()
+            .multica_workspace_upsert(serde_json::from_value(update.clone()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(updated["entity"]["revision"], 2);
+        assert_eq!(
+            runtime()
+                .multica_workspace_upsert(serde_json::from_value(update).unwrap())
+                .await
+                .unwrap(),
+            updated
+        );
+        let delete = json!({"resource":"issues","entityId":"durable-issue","expectedRevision":2,"commandId":"delete-a","commandSignature":"c".repeat(64)});
+        let deleted = runtime()
+            .multica_workspace_delete(serde_json::from_value(delete.clone()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert_eq!(
+            runtime()
+                .multica_workspace_delete(serde_json::from_value(delete.clone()).unwrap())
+                .await
+                .unwrap(),
+            deleted
+        );
+        let mut changed = delete;
+        changed["entityId"] = json!("other-issue");
+        assert_eq!(
+            runtime()
+                .multica_workspace_delete(serde_json::from_value(changed).unwrap())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_idempotency_conflict"
+        );
+        assert_eq!(
+            runtime()
+                .multica_workspace_upsert(serde_json::from_value(create).unwrap())
+                .await
+                .unwrap(),
+            saved
+        );
+        assert!(
+            store
+                .list(
+                    &crate::multica_workspace::local_workspace_id(),
+                    MulticaWorkspaceResourceKey::Issues
+                )
+                .unwrap()
+                .is_empty()
+        );
+        let lookup = runtime()
+            .multica_workspace_command(super::MulticaWorkspaceCommandRequest {
+                command_id: "delete-a".into(),
+                command_signature: "c".repeat(64),
+            })
+            .await
+            .unwrap();
+        assert_eq!(lookup["found"], true);
+        assert_eq!(lookup["result"], deleted);
+    }
+
+    #[tokio::test]
+    async fn workspace_agent_create_replay_is_durable_and_binds_acl_and_skills_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = || {
+            CoreRuntimeService::new(0, StatusStore::default())
+                .with_multica_workspace_store(LocalMulticaWorkspaceStore::new(
+                    dir.path().join("workspace.json"),
+                ))
+                .with_multica_execution_store(MulticaExecutionStore::new(
+                    dir.path().join("executions.json"),
+                ))
+        };
+        let request = json!({"entity":{"id":"durable-agent","name":"Worker","permission_mode":"private","invocation_targets":[]},"skills":[],"commandId":"agent-command","commandSignature":"d".repeat(64)});
+        let first = runtime()
+            .multica_agent_create(serde_json::from_value(request.clone()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime()
+                .multica_agent_create(serde_json::from_value(request.clone()).unwrap())
+                .await
+                .unwrap(),
+            first
+        );
+        let mut changed = request.clone();
+        changed["entity"]["permission_mode"] = json!("public_to");
+        changed["entity"]["invocation_targets"] = json!([{"target_type":"workspace"}]);
+        assert_eq!(
+            runtime()
+                .multica_agent_create(serde_json::from_value(changed).unwrap())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_idempotency_conflict"
+        );
+        let mut changed = request;
+        changed["skills"] = json!([{"id":"different-skill"}]);
+        assert_eq!(
+            runtime()
+                .multica_agent_create(serde_json::from_value(changed).unwrap())
+                .await
+                .unwrap_err()
+                .to_string(),
+            "multica_workspace_idempotency_conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_command_lookup_recovers_committed_entity_without_reapplying_it() {
+        let (_dir, executions, workspace, _) = autopilot_fixture("run_only");
+        let workspace_id = crate::multica_workspace::local_workspace_id();
+        let entity = json!({"id":"recovery-issue","title":"Recover assignment","assignee_type":"agent","assignee_id":"agent-a"});
+        let command = crate::multica_workspace::WorkspaceCommand::new(
+            "recover-command".into(),
+            "e".repeat(64),
+            "upsert:Issues:recovery-issue".into(),
+            json!({"entity":entity,"expectedRevision":0}),
+        )
+        .unwrap();
+        workspace
+            .upsert_with_command(
+                &workspace_id,
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Issues,
+                    entity,
+                    expected_revision: Some(0),
+                },
+                1,
+                Some(&command),
+            )
+            .unwrap();
+        let runtime = CoreRuntimeService::new(0, StatusStore::default())
+            .with_multica_workspace_store(workspace.clone())
+            .with_multica_execution_store(executions.clone());
+        let request = super::MulticaWorkspaceCommandRequest {
+            command_id: command.id,
+            command_signature: command.signature,
+        };
+        let first = runtime
+            .multica_workspace_command(request.clone())
+            .await
+            .unwrap();
+        assert_eq!(first["found"], true);
+        assert_eq!(first["result"]["entity"]["revision"], 1);
+        assert_eq!(first["result"]["queue"]["status"], "queued");
+        assert_eq!(
+            runtime.multica_workspace_command(request).await.unwrap(),
+            first
+        );
+        assert_eq!(executions.load().unwrap().execution_bindings.len(), 1);
+        assert_eq!(
+            workspace
+                .list(&workspace_id, MulticaWorkspaceResourceKey::Issues)
+                .unwrap()[0]["revision"],
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_nondefault_runtime_fields_fail_before_native_dispatch() {
+        for field in ["model", "thinking_level", "service_tier"] {
+            let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
+            let mut agent = workspace
+                .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)
+                .unwrap()
+                .remove(0);
+            agent[field] = json!("nondefault");
+            workspace
+                .upsert(
+                    &workspace_id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Agents,
+                        entity: agent,
+                        expected_revision: Some(1),
+                    },
+                    4,
+                )
+                .unwrap();
+            let queued = queued_assignment(&executions, &workspace_id);
+            let host = Arc::new(RecordingCodexHost::default());
+            let runtime = CoreRuntimeService::new(0, StatusStore::default())
+                .with_codex_execution_service(host.clone())
+                .with_multica_workspace_store(workspace)
+                .with_multica_execution_store(executions.clone());
+            let error = runtime
+                .multica_execution_dispatch(MulticaExecutionDispatchRequest {
+                    binding_id: queued.binding_id.clone(),
+                    expected_revision: queued.revision,
+                    lease_token: "override-check".into(),
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "execution_agent_runtime_override_unsupported"
+            );
+            assert!(host.requests.lock().unwrap().is_empty());
+            assert_eq!(
+                executions.get_execution(&queued.binding_id).unwrap().state,
+                MulticaExecutionBindingState::BindingPending
+            );
+        }
+    }
+
+    #[test]
+    fn workflow_mutation_parser_preserves_clear_fields_and_custom_status_writes() {
+        let omitted = super::parse_multica_workspace_move_issue(&json!({
+            "issueId":"issue-a", "beforeId":null, "afterId":null, "expectedRevision":1,
+        }))
+        .unwrap();
+        assert_eq!(omitted.assignee_id, None);
+        let cleared = super::parse_multica_workspace_move_issue(&json!({
+            "issueId":"issue-a", "beforeId":null, "afterId":null, "expectedRevision":1,
+            "assigneeType":null, "assigneeId":null, "parentIssueId":null, "projectId":null,
+        }))
+        .unwrap();
+        assert_eq!(cleared.assignee_type, Some(None));
+        assert_eq!(cleared.assignee_id, Some(None));
+        assert_eq!(cleared.parent_issue_id, Some(None));
+        assert_eq!(cleared.project_id, Some(None));
+        assert!(
+            super::parse_multica_workspace_upsert(&json!({
+                "resource":"issue_statuses", "expectedRevision":0,
+                "entity":{"id":"status-a", "key":"triage", "name":"Triage", "category":"todo"},
+            }))
+            .is_ok()
+        );
     }
 
     #[test]
@@ -4086,6 +5653,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn moved_issue_assignment_dispatches_once_and_survives_host_unavailability() {
+        for online in [true, false] {
+            let (_dir, executions, workspace, _) = autopilot_fixture("create_issue");
+            let workspace_id = crate::multica_workspace::local_workspace_id();
+            let saved = workspace
+                .upsert(
+                    &workspace_id,
+                    LocalWorkspaceEntityUpsert {
+                        resource: MulticaWorkspaceResourceKey::Issues,
+                        entity: json!({"id":"move-issue", "title":"Move task", "status":"todo"}),
+                        expected_revision: Some(0),
+                    },
+                    2,
+                )
+                .unwrap();
+            let host = Arc::new(RecordingCodexHost::default());
+            let mut runtime = CoreRuntimeService::new(0, StatusStore::default())
+                .with_multica_execution_store(executions.clone())
+                .with_multica_workspace_store(workspace.clone());
+            if online {
+                runtime = runtime.with_codex_execution_service(host.clone());
+            }
+            let mut revision = saved["revision"].as_u64().unwrap();
+            let mut first_binding = None;
+            for index in 0..2 {
+                let request = serde_json::from_value(json!({
+                    "issueId":"move-issue", "assigneeType":"agent", "assigneeId":"agent-a",
+                    "beforeId":null, "afterId":null, "expectedRevision":revision,
+                }))
+                .unwrap();
+                let response = runtime.multica_workspace_move_issue(request).await.unwrap();
+                revision = response["entity"]["revision"].as_u64().unwrap();
+                if index == 1 {
+                    // Repeating an unchanged assignment is an ordinary edit.
+                    assert!(response.get("queue").is_none_or(|queue| queue.is_null()));
+                    continue;
+                }
+                let binding = response["queue"]["binding_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                assert_eq!(
+                    response["queue"]["status"],
+                    if online { "dispatched" } else { "queued" }
+                );
+                if let Some(first) = &first_binding {
+                    assert_eq!(&binding, first);
+                } else {
+                    first_binding = Some(binding);
+                }
+            }
+            assert_eq!(executions.load().unwrap().execution_bindings.len(), 1);
+            assert_eq!(host.requests.lock().unwrap().len(), usize::from(online));
+            let stale = serde_json::from_value(json!({
+                "issueId":"move-issue", "assigneeType":"agent", "assigneeId":"agent-a",
+                "beforeId":null, "afterId":null, "expectedRevision":1,
+            }))
+            .unwrap();
+            assert!(runtime.multica_workspace_move_issue(stale).await.is_err());
+            assert_eq!(host.requests.lock().unwrap().len(), usize::from(online));
+        }
+    }
+
+    #[tokio::test]
     async fn queued_subagent_assignment_forks_the_persisted_parent_thread() {
         let (_dir, executions, workspace, workspace_id) = dispatch_fixture();
         let queued = executions
@@ -4153,6 +5784,8 @@ mod tests {
             .with_multica_workspace_store(workspace.clone());
         let error = runtime
             .multica_agent_create(MulticaAgentCreateRequest {
+                command_id: None,
+                command_signature: None,
                 entity: json!({"id": "agent-a", "name": "Agent A"}),
                 skills: vec![SkillReference {
                     id: "codex:untrusted".to_string(),
@@ -4202,6 +5835,8 @@ mod tests {
             .with_multica_workspace_store(workspace.clone());
         let response = runtime
             .multica_agent_create(MulticaAgentCreateRequest {
+                command_id: None,
+                command_signature: None,
                 entity: json!({"id": "agent-a", "name": "Agent A"}),
                 skills: Vec::new(),
             })

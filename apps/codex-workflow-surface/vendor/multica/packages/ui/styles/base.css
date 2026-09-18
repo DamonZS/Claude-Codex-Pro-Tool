@@ -1,0 +1,381 @@
+/* =============================================================================
+ * Multica shared base styles — imported by all apps
+ * ============================================================================= */
+
+/* The chat launcher overlays the dashboard's bottom-right corner on every
+ * workspace page, so anything that runs to that corner has to stop short of
+ * it. Named rather than spelled out at each site: the intent is legible, every
+ * site that yields to the launcher is findable by these classes, and the
+ * distance stays derived from the launcher's own geometry.
+ *
+ * Which one to reach for depends on how the site approaches the corner:
+ *  - a full-width bar arrives from the left     -> pe-chat-launcher
+ *  - scrollable content ends there              -> pb-chat-launcher
+ *  - a centred overlay grows into it            -> above-chat-launcher
+ *
+ * A centred toolbar (`left-1/2 -translate-x-1/2`) cannot use the padding
+ * variants: inline padding widens it symmetrically, so it reaches just as far
+ * right as before. It has to clear the launcher vertically instead. On a wide
+ * viewport a centred toolbar never gets near the corner, so its clearance is
+ * usually applied under a `max-md:` variant. */
+@utility pe-chat-launcher {
+  padding-inline-end: var(--chat-launcher-clearance);
+}
+
+@utility pb-chat-launcher {
+  padding-bottom: var(--chat-launcher-clearance);
+}
+
+@utility above-chat-launcher {
+  bottom: calc(var(--chat-launcher-clearance) + var(--chat-launcher-inset));
+}
+
+/* Shiki dual themes: CSS-only light/dark switching via CSS variables */
+/* @see https://shiki.style/guide/dual-themes */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+}
+
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+/* Multica icon: entrance spin animation */
+@keyframes entrance-spin {
+  0% { transform: rotate(0deg); opacity: 0; }
+  50% { opacity: 1; }
+  100% { transform: rotate(360deg); opacity: 1; }
+}
+
+.animate-entrance-spin {
+  animation: entrance-spin 0.6s ease-out forwards;
+}
+
+/* Onboarding: step / phase entry — 400ms fade.
+ * Applied on mount so every new step (and intra-step phase switch, via
+ * key=phase remount) plays once. `both` fill-mode commits the `from`
+ * styles pre-animation to avoid a single-frame flash at natural state
+ * before the animation grabs.
+ *
+ * Earlier iteration also included a 4px translateY rise. Removed because
+ * the transform on h-full step roots was getting counted into the
+ * parent's scrollable overflow (web onboarding page + desktop
+ * WindowOverlay both wrap with overflow-y-auto), producing a brief
+ * scrollbar flash on each step entry. Pure opacity has no such side
+ * effect. */
+@keyframes onboarding-enter {
+  from { opacity: 0; }
+}
+
+.animate-onboarding-enter {
+  animation: onboarding-enter 0.4s ease both;
+}
+
+/* Welcome-after-onboarding Modal: emoji pops in with two quick scale
+ * bounces so the celebration registers visually without being
+ * disruptive. ~700ms total. */
+@keyframes welcome-emoji-pop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  35%  { transform: scale(1.25); opacity: 1; }
+  55%  { transform: scale(0.92); }
+  75%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.animate-welcome-emoji-pop {
+  animation: welcome-emoji-pop 0.7s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Onboarding completion: success badge spring-pop.
+ * Lands with a subtle overshoot (scale 1.12 → 1) so the circle feels
+ * physical rather than linearly interpolated. Paired with the drawn
+ * checkmark below which kicks in after the badge has settled. */
+@keyframes completion-badge {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-completion-badge {
+  animation: completion-badge 500ms cubic-bezier(0.5, 1.5, 0.4, 1) both;
+}
+
+/* Onboarding completion: SVG checkmark drawn by animating
+ * stroke-dashoffset from 1 → 0. Requires the target <path> to declare
+ * `pathLength={1}` and `strokeDasharray={1}` so the stroke length is
+ * normalized and the animation is geometry-agnostic. */
+@keyframes completion-check {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+.animate-completion-check {
+  animation: completion-check 400ms ease-out 350ms both;
+}
+
+/* Chat FAB: gentle color + border tint while a chat task is running.
+ * Keeps the ring at the same thickness — only hue shifts towards brand
+ * at half-cycle, no outer glow. */
+@keyframes chat-impulse {
+  0%, 100% {
+    color: var(--muted-foreground);
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent);
+  }
+  50% {
+    color: var(--brand);
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 40%, transparent);
+  }
+}
+
+.animate-chat-impulse {
+  animation: chat-impulse 1.6s ease-in-out infinite;
+}
+
+/* ChatGPT-style "thinking" shimmer for inline text — a soft light sweep
+ * runs across the glyphs, signalling "the agent is doing something" without
+ * a separate spinner. Pure CSS: linear-gradient clipped to the text shape,
+ * the gradient slid across via background-position. Uses the same muted →
+ * foreground tokens chat copy normally uses, so the effect adapts to light
+ * and dark mode without per-mode overrides.
+ *
+ * Apply to a <span> wrapping the label only — not the whole pill, since
+ * the timer counter and Cancel button shouldn't shimmer. */
+@keyframes chat-text-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-chat-text-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: chat-text-shimmer 2.5s linear infinite;
+}
+
+/* Navigation progress bar: 2px brand-colored indeterminate sweep with a
+ * right-edge glow that shows across the top of the dashboard while a
+ * transition-wrapped push/replace is committing. Driven by useIsNavigating();
+ * independent of the actual network, so it disappears the moment React commits
+ * the new route. */
+@keyframes nav-progress-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-nav-progress-sweep {
+  animation: nav-progress-sweep 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Border beam: a brand-tinted highlight sweeps continuously around the
+ * element's rounded border, drawing the eye to a CTA that would otherwise
+ * blend into the chrome (e.g. the "switch to agent" affordance in manual
+ * create). Built with a conic-gradient on a ::before whose mask carves out a
+ * 1px ring; an animated @property angle drives the rotation so only the
+ * gradient repaints, not layout. The ring respects `border-radius: inherit`,
+ * so any rounded host picks up the right curvature for free. Pair with a
+ * subtle background tint on the host so the highlight has something to ride
+ * on at low contrast. */
+@property --border-beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes border-beam-rotate {
+  to { --border-beam-angle: 360deg; }
+}
+
+.border-beam {
+  position: relative;
+}
+
+.border-beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--border-beam-angle),
+    transparent 0deg,
+    transparent 220deg,
+    #ffbe7b 245deg,
+    #ff777f 270deg,
+    #ff8ab4 295deg,
+    #a07cfe 320deg,
+    #5b9dff 345deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: border-beam-rotate 3.2s linear infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .border-beam::before {
+    animation: none;
+    background: linear-gradient(
+      90deg,
+      #ffbe7b,
+      #ff777f,
+      #ff8ab4,
+      #a07cfe,
+      #5b9dff
+    );
+  }
+}
+
+/* Sidebar: open triggers (dropdown/popover) get active background */
+[data-sidebar="menu-button"][data-popup-open] {
+  background-color: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+
+/* Sidebar resizing follows the same cursor contract as
+ * react-resizable-panels: the resize cursor survives leaving the narrow rail
+ * and wins over descendants with their own cursor declarations. Live width is
+ * written directly to the two layout shells, so their toggle transitions must
+ * stay disabled until the gesture finishes. */
+html[data-sidebar-resizing="true"],
+html[data-sidebar-resizing="true"] * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+
+/* Row drag-and-drop shares the same cursor contract: while a dnd-kit drag
+ * is active the grabbing cursor must survive the pointer leaving the drag
+ * handle and win over descendants' own cursor declarations (including the
+ * preflight `cursor: pointer` on buttons the pointer crosses mid-drag). */
+html[data-dnd-dragging="true"],
+html[data-dnd-dragging="true"] * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+[data-sidebar-resizing="true"] [data-slot="sidebar-gap"],
+[data-sidebar-resizing="true"] [data-slot="sidebar-container"] {
+  transition: none !important;
+}
+
+[data-sidebar-resizing="true"] [data-sidebar="rail"]::after {
+  background-color: var(--sidebar-border);
+}
+
+/* Right detail sidebars use react-resizable-panels, which sizes panels by
+ * updating the outer panel's flex-grow. Animate that property for button
+ * toggles only; mount-time layout restoration and resize sync should snap
+ * directly to the final state. */
+[data-right-sidebar-panel][data-right-sidebar-motion="enabled"] {
+  transition-property: flex-grow;
+  transition-duration: 220ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-group]:has(> [data-separator="active"]) > [data-right-sidebar-panel] {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-entrance-spin,
+  .animate-onboarding-enter,
+  .animate-welcome-emoji-pop,
+  .animate-completion-badge,
+  .animate-completion-check,
+  .animate-chat-impulse,
+  .animate-chat-text-shimmer,
+  .animate-nav-progress-sweep {
+    animation: none;
+  }
+
+  [data-right-sidebar-panel] {
+    transition: none;
+  }
+}
+
+/* Sonner toast: align icon to first line of text, not vertically centered */
+[data-sonner-toast] {
+  align-items: flex-start !important;
+}
+
+[data-sonner-toast] [data-icon] {
+  margin-top: 2.5px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+  *::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    /* Auto-insert 1/4em space between CJK ideographs and Latin letters/numerals.
+     * Native CSS text-autospace (Chrome 119+, Electron recent versions).
+     * Progressive enhancement: browsers that don't support it simply ignore the rule. */
+    text-autospace: ideograph-alpha ideograph-numeric;
+    /* `style` keyword = allow style synthesis, forbid weight synthesis.
+     *
+     * Weight OFF: every face we load has real weights — Inter, Source Serif 4
+     * and Geist Mono are all variable (100-900) on both platforms, and landing's
+     * 400-only Instrument Serif is never set to another weight. Synthesis can
+     * only make those worse, and on the CJK tail of `--font-sans` it is actively
+     * harmful: `font-bold` against PingFang SC (which stops at Semibold) makes
+     * Chromium smear a fake 700, and the added stroke weight closes up the
+     * counters of dense Han glyphs. Forbidding it picks real Semibold instead.
+     *
+     * Style ON, deliberately: `auto` only synthesizes when no real italic face
+     * matches, so now that Inter Italic is loaded on both platforms the real face
+     * already wins for all Latin UI text and markdown <em>. What is left
+     * synthesizing is exactly the two stacks that ship no italic at all — the CJK
+     * fallbacks and Geist Mono — and there `font-style: italic` has no other
+     * visual carrier. Forbidding it would silently flatten every Chinese <em>,
+     * every editor italic mark, and every hljs comment to upright. */
+    font-synthesis: style;
+  }
+
+  @media (max-width: 767px), (pointer: coarse) {
+    input:not([type="button"]):not([type="checkbox"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="image"]):not([type="radio"]):not([type="range"]):not([type="reset"]):not([type="submit"]),
+    textarea,
+    select,
+    [contenteditable]:not([contenteditable="false"]) {
+      /* iOS Safari zooms the page when focused editable text is below 16px. */
+      font-size: 16px !important;
+    }
+  }
+}
+
+/* In-page find (Cmd/Ctrl+F on the issue detail page). Matches are painted with
+ * the CSS Custom Highlight API — ranges only, no DOM mutation — so the tint
+ * layers cleanly over React-rendered markdown and the contenteditable
+ * title/description editors. `multica-find-active` is registered with a higher
+ * priority so the current match paints on top of the dimmer all-matches tint. */
+::highlight(multica-find) {
+  background-color: var(--find-match);
+  color: var(--find-match-foreground);
+}
+::highlight(multica-find-active) {
+  background-color: var(--find-match-active);
+  color: var(--find-match-foreground);
+}

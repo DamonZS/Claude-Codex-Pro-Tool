@@ -1,5 +1,5 @@
 use claude_codex_pro_core::install::{
-    InstallOptions, MCP_BINARY, SILENT_BINARY, app_bundle_names, build_macos_app_bundle,
+    InstallOptions, SILENT_BINARY, app_bundle_names, build_macos_app_bundle,
     build_windows_entrypoint_plan, companion_binary_path_from_exe, default_install_root_strategy,
     is_macos_app_translocation_path, macos_bundle_companion_path_from_exe, shortcut_names,
 };
@@ -98,13 +98,6 @@ fn companion_binary_path_resolves_runtime_inside_unified_bundle() {
         std::path::PathBuf::from(
             "/Applications/Claude Codex Pro.app/Contents/MacOS/claude-codex-pro"
         )
-    );
-
-    assert_eq!(
-        macos_bundle_companion_path_from_exe(manager_exe, MCP_BINARY),
-        Some(std::path::PathBuf::from(
-            "/Applications/Claude Codex Pro.app/Contents/MacOS/claude-codex-pro-mcp"
-        ))
     );
 }
 

@@ -29,39 +29,6 @@ type PreviewPluginItem = {
   requirements: string[];
 };
 
-type PreviewMemoryItem = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  sourceSessionId: string;
-  createdAt: number;
-  updatedAt: number;
-  lastAccessedAt: number;
-  accessCount: number;
-  tier: string;
-  strength: number;
-  archivedAt: number;
-  retention: number;
-  exempt: boolean;
-};
-
-type PreviewMemoryCandidate = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  reason: string;
-  sourceSessionId: string;
-  status: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
 const now = () => Date.now();
 
 /**
@@ -139,13 +106,6 @@ function previewSettings() {
     codexAppImageOverlayOpacity: 70,
     codexGoalsEnabled: true,
     multicaWorkspaceEnabled: true,
-    memoryAssistEnabled: true,
-    memoryAssistInjectEnabled: true,
-    memoryAssistAutoSuggestEnabled: true,
-    memoryAssistLlmSummaryEnabled: false,
-    memoryAssistMcpEnabled: false,
-    memoryAssistMaxInjectedItems: 5,
-    memoryAssistWorkspaceMode: "project_plus_global",
     launchMode: "patch",
     relayBaseUrl: "",
     relayApiKey: "",
@@ -454,72 +414,6 @@ function previewCodexPluginMarketplace(message = "预览模式 Codex OpenAI 插�
 function previewPluginItem(id?: unknown) {
   const requested = typeof id === "string" ? id : "official-files";
   return previewPluginItems().find((item) => item.id === requested) ?? previewPluginItems()[0];
-}
-
-function previewMemoryItems(): PreviewMemoryItem[] {
-  const stamp = now();
-  return [
-    {
-      id: "preview-memory-1",
-      text: "大改前先备份到 F:\\项目代码备份\\Claude-Codex-Pro-Tool-backup。",
-      workspace: "global",
-      category: "project",
-      tags: ["backup"],
-      source: "manager",
-      sourceSessionId: "",
-      createdAt: stamp,
-      updatedAt: stamp,
-      lastAccessedAt: stamp,
-      accessCount: 5,
-      tier: "active",
-      strength: 1.0,
-      archivedAt: 0,
-      retention: 1.0,
-      exempt: true,
-    },
-  ];
-}
-
-function previewMemoryCandidates(): PreviewMemoryCandidate[] {
-  const stamp = now();
-  return [
-    {
-      id: "preview-candidate-1",
-      text: "新版前端采用 Linear 风格深色运维控制台。",
-      workspace: "global",
-      category: "ui",
-      tags: ["linear"],
-      source: "preview",
-      reason: "用户明确选择此设计方向",
-      sourceSessionId: "",
-      status: "pending",
-      createdAt: stamp,
-      updatedAt: stamp,
-    },
-  ];
-}
-
-function previewMemoryStatus(message = "预览模式盘古记忆状态。") {
-  return ok(message, {
-    memory: {
-      status: "ok",
-      dbPath: "~\\.claude-codex-pro\\memory_assist.sqlite",
-      totalItems: 12,
-      pendingCandidates: 3,
-      workspaces: [{ workspace: "global", itemCount: 4, pendingCount: 1 }],
-      latestBackupPath: "~\\.claude-codex-pro\\backups\\memory-preview.json",
-      enabled: true,
-      injectEnabled: true,
-      autoSuggestEnabled: true,
-      runtimeStatus: "ok",
-      runtimeMessage: "预览模式：盘古记忆正在监听 Codex 对话。",
-      codexInjected: true,
-      claudeInjected: false,
-      codexWorkspace: "preview-project",
-      active: true,
-      activeSource: "stream",
-    },
-  });
 }
 
 function previewScriptMarket(message = "预览模式脚本市场。") {
@@ -1199,176 +1093,6 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       },
     });
   }
-  if (command === "load_memory_assist_status") {
-    return previewMemoryStatus();
-  }
-  if (command === "list_memory_assist_items") {
-    return ok("预览模式记忆列表。", { items: previewMemoryItems() });
-  }
-  if (command === "list_memory_assist_candidates") {
-    return ok("预览模式待确认记忆。", { candidates: previewMemoryCandidates() });
-  }
-  if (command === "load_memory_outcome_dashboard") {
-    const stamp = Math.floor(Date.now() / 1000);
-    const request = (_args?.request ?? {}) as { workspace?: string; rangeDays?: number };
-    return ok("预览模式记忆成果看板。", {
-      dashboard: {
-        workspace: request.workspace || "preview-project",
-        rangeDays: request.rangeDays || 30,
-        todayCaptures: 6,
-        todayLearned: 3,
-        pendingCandidates: 1,
-        todayRecalls: 4,
-        trend: [
-          { date: "2026-07-08", captures: 2, learned: 1, recalls: 0 },
-          { date: "2026-07-09", captures: 3, learned: 1, recalls: 2 },
-          { date: "2026-07-10", captures: 4, learned: 2, recalls: 1 },
-          { date: "2026-07-11", captures: 3, learned: 2, recalls: 3 },
-          { date: "2026-07-12", captures: 6, learned: 3, recalls: 4 },
-        ],
-        workspaceBreakdown: [{ key: "当前项目", count: 8 }, { key: "global", count: 4 }],
-        categoryBreakdown: [{ key: "项目规则", count: 5 }, { key: "经验教训", count: 4 }, { key: "安全规则", count: 3 }],
-        recentRecalls: [{
-          id: "preview-recall-1",
-          eventType: "search",
-          workspace: "preview-project",
-          agent: "manager",
-          memoryId: "preview-handoff-1",
-          querySummary: "发布前如何验证",
-          sourceSessionId: null,
-          metadata: {},
-          createdAt: stamp,
-          memory: { ...previewMemoryItems()[0], id: "preview-handoff-1", workspace: "preview-project", text: "发布前必须运行真实测试，并记录可复核的输出。", category: "project-rule" },
-        }],
-        handoffItems: [
-          { ...previewMemoryItems()[0], id: "preview-handoff-1", workspace: "preview-project", text: "发布前必须运行真实测试，并记录可复核的输出。", category: "project-rule", updatedAt: stamp },
-          { ...previewMemoryItems()[0], id: "preview-handoff-2", workspace: "preview-project", text: "优先做最小必要修改，避免无关重构。", category: "lesson-learned", updatedAt: stamp - 1800 },
-          { ...previewMemoryItems()[0], id: "preview-handoff-3", workspace: "preview-project", text: "先建立可复现步骤，再根据证据定位根因。", category: "lesson-learned", updatedAt: stamp - 3600 },
-        ],
-      },
-    });
-  }
-  if (command === "load_memory_new_project_guide") {
-    const generatedAt = Math.floor(Date.now() / 1000);
-    const pitfalls = [
-      { text: "不要在没有复现问题时直接扩大修改范围。", sourceCount: 3, category: "lesson-learned" },
-      { text: "不要在验证失败后继续宣称任务已经完成。", sourceCount: 2, category: "safety-rule" },
-    ];
-    const bestPractices = [
-      { text: "实施前先总结目标、禁区、验收标准和关键风险。", sourceCount: 4, category: "project-rule" },
-      { text: "完成后运行真实测试并报告可复核证据。", sourceCount: 5, category: "lesson-manual" },
-    ];
-    return ok("预览模式新项目启动指南。", {
-      guide: {
-        generatedAt,
-        sourceItemCount: 9,
-        sourceWorkspaceCount: 3,
-        pitfalls,
-        bestPractices,
-        prompt: [
-          "你正在启动一个新项目，请先阅读项目说明、相关规格、验收标准和源码，再开始实施。",
-          "实施前总结当前目标、预计改动、禁止改动区域、验收标准与关键风险。",
-          "坚持最小必要修改，不做无关重构，不擅自改变架构或生产配置。",
-          "遇到不确定行为时，先建立可复现的验证方式。",
-          "完成后列出真实运行的测试、构建或检查证据，不编造结果。",
-          "历史经验仅作为参考，必须按新项目自身规则调整，不能机械照搬旧项目细节。",
-          "",
-          "优先避坑：",
-          ...pitfalls.map((item) => `- ${item.text}（类别：${item.category}；唯一来源记忆：${item.sourceCount} 条）`),
-          "",
-          "优秀处理方式：",
-          ...bestPractices.map((item) => `- ${item.text}（类别：${item.category}；唯一来源记忆：${item.sourceCount} 条）`),
-        ].join("\n"),
-      },
-    });
-  }
-  if (command === "learn_memory_assist_item") {
-    const request = (_args?.request ?? {}) as { text?: string; workspace?: string; category?: string; source?: string };
-    const stamp = now();
-    return ok("预览模式已模拟保存记忆。", {
-      item: {
-        id: `preview-memory-${stamp}`,
-        text: request.text || "预览记忆",
-        workspace: request.workspace || "global",
-        category: request.category || "manual",
-        tags: [],
-        source: request.source || "manager",
-        sourceSessionId: "",
-        createdAt: stamp,
-        updatedAt: stamp,
-        lastAccessedAt: stamp,
-        accessCount: 0,
-      },
-    });
-  }
-  if (command === "query_memory_assist") {
-    const request = (_args?.request ?? {}) as { query?: string; workspace?: string };
-    return ok("预览模式已模拟搜索记忆。", {
-      memory: {
-        query: request.query || "",
-        workspace: request.workspace || "__all__",
-        results: previewMemoryItems().map((item) => ({ item, score: 0.92, matchedKeywords: ["preview", "backup"] })),
-      },
-    });
-  }
-  if (command === "update_memory_assist_item") {
-    const request = (_args?.request ?? {}) as { id?: string; item?: Partial<PreviewMemoryItem> };
-    const stamp = now();
-    return ok("预览模式已模拟更新记忆。", {
-      item: {
-        ...previewMemoryItems()[0],
-        ...request.item,
-        id: request.id || request.item?.id || "preview-memory-1",
-        updatedAt: stamp,
-        lastAccessedAt: stamp,
-      },
-    });
-  }
-  if (command === "delete_memory_assist_item") {
-    return ok("预览模式已模拟删除记忆。", { item: previewMemoryItems()[0] });
-  }
-  if (command === "archive_memory_assist_item") {
-    return ok("预览模式已模拟归档记忆。", {
-      item: { ...previewMemoryItems()[0], tier: "archived", archivedAt: Math.floor(Date.now() / 1000), retention: 0.05 },
-    });
-  }
-  if (command === "restore_memory_assist_item") {
-    return ok("预览模式已模拟恢复记忆。", {
-      item: { ...previewMemoryItems()[0], tier: "active", archivedAt: 0, retention: 1, strength: 1 },
-    });
-  }
-  if (command === "approve_memory_assist_candidate") {
-    return ok("预览模式已模拟确认待确认记忆。", { item: { ...previewMemoryItems()[0], id: "approved-preview-memory" } });
-  }
-  if (command === "reject_memory_assist_candidate") {
-    return ok("预览模式已模拟忽略待确认记忆。", { candidate: { ...previewMemoryCandidates()[0], status: "rejected" } });
-  }
-  if (command === "run_memory_assist_selfcheck") {
-    return ok("预览模式已模拟盘古记忆自检。", {
-      report: {
-        status: "ok",
-        repaired: false,
-        backupPath: "~\\.claude-codex-pro\\backups\\memory-selfcheck-preview.json",
-        checks: [
-          { name: "sqlite", status: "ok", message: "预览数据库可打开。" },
-          { name: "schema", status: "ok", message: "预览表结构完整。" },
-        ],
-      },
-    });
-  }
-  if (command === "export_memory_assist") {
-    return ok("预览模式已生成记忆导出包。", {
-      data: {
-        schemaVersion: "memory-assist/v1",
-        exportedAt: now(),
-        items: previewMemoryItems(),
-        candidates: previewMemoryCandidates(),
-      },
-    });
-  }
-  if (command === "import_memory_assist") {
-    return previewMemoryStatus("预览模式已模拟导入记忆。");
-  }
   if (command === "list_local_sessions") {
     return ok("预览模式会话列表。", {
       dbPath: "~\\.codex\\sessions.db",
@@ -1617,6 +1341,13 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     return ok("预览模式 Watcher 状态。", {
       enabled,
       disabled_flag: enabled ? "" : "~\\.claude-codex-pro\\watcher.disabled",
+    });
+  }
+  if (command === "read_request_timeline") {
+    return ok("预览模式未连接本地请求记录。", {
+      records: [],
+      warnings: ["预览模式：未连接本地请求记录。"],
+      observed_at_ms: now(),
     });
   }
   if (command === "read_latest_logs") {

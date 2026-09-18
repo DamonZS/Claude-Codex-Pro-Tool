@@ -1,0 +1,19 @@
+{
+  "ok": false,
+  "stage": "view_preferences",
+  "checks": [
+    "number_property_created",
+    "property_edit_reload",
+    "issue_value_set_reload_edit",
+    "archive_preserves_value_readonly_clear"
+  ],
+  "cleanup": [
+    "fixture_issue_deleted",
+    "fixture_property_archived"
+  ],
+  "failure": "bridge_status\n\n'failed' !== 'ok'\n",
+  "ids": {
+    "property": "9cf24916-15b6-455f-ae1d-45eace5c5ecf",
+    "issue": "ccp-acceptance-property-mu77kmnw"
+  }
+}

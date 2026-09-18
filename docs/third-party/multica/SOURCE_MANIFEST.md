@@ -1,38 +1,67 @@
 # Multica Source Manifest
 
-## Locked upstream source
+## Locked Source
 
 - Upstream: <https://github.com/multica-ai/multica>
-- Remote: `https://github.com/multica-ai/multica.git`
-- Reviewed commit: `9fce92f427694d7d303258aa281b05c902a95ba9`
-- Reviewed branch: `main`
-- Review date: `2026-09-04`
-- `LICENSE` SHA-256: `7505297A2A4BF866354D482699DB44EF8B50E8893674E674C5844D3F75DA4464`
-- `NOTICE` SHA-256: `431EC97BF0002E9ADDDB31431750C2000A5895586FE1EE56A4D1D02B5DD8B71C`
+- Revision: `9fce92f427694d7d303258aa281b05c902a95ba9`
+- Original review: 2026-09-04; closure port: 2026-09-18.
+- Audit input: clean `.upstream-multica` Git checkout at that revision.
+- Pinned Git LICENSE SHA-256: `0e42d37bb02dc61f270c5a0528d489da76e5a578b209856f2e95ee4d60aacdbe`
+- Pinned Git NOTICE SHA-256: `763619b43ae4f18c43bef5284c04a5739f84cd9f935c0123cf67834541ec3d9a`
+- The existing documentation copies use CRLF; their LF-normalized text equals
+  the pinned Git files. Vendor files and the embedded dialog use Git bytes.
 
-## Current tracked material
+## Included Source
 
-| CCP path | Upstream path | Status | Modification notice |
-| --- | --- | --- | --- |
-| `docs/third-party/multica/LICENSE` | `LICENSE` | Exact copy | None |
-| `docs/third-party/multica/NOTICE` | `NOTICE` | Exact copy | None |
-| `apps/codex-workflow-surface/vendor/multica/packages/core/` | `packages/core/` (`080b3e46b90508077db4e41a5349b4246dbc83d8`) | Derived build snapshot | `tsconfig.json` extends the derived bundle root instead of the unavailable upstream monorepo preset; source/runtime code remains unchanged. |
-| `apps/codex-workflow-surface/vendor/multica/packages/ui/` | `packages/ui/` (`e8097a7c25b2084cc549ef5627fa17661c713c72`) | Derived build snapshot | `tsconfig.json` extends the derived bundle root instead of the unavailable upstream monorepo preset; source/runtime code remains unchanged. |
-| `apps/codex-workflow-surface/vendor/multica/packages/views/` | `packages/views/` (`e161cf9594aff8259e89f4a9eb89606308d3343b`) | Derived build snapshot | `tsconfig.json` extends the derived bundle root instead of the unavailable upstream monorepo preset; source/runtime code remains unchanged. |
-| `apps/codex-workflow-surface/vendor/multica/packages/tsconfig/` | `packages/tsconfig/` (`92ee3e5aaa8f7dda0243ffa8b647cf0075796ad6`) | Exact source-tree copy | None |
+The authoritative per-file inventory is
+`apps/codex-workflow-surface/vendor/multica/source-files.json`. Every row records
+the upstream path, original SHA-256, destination, derived SHA-256 and modifications.
+The current closure contains 824 files. npm package resolution is recorded in
+`apps/codex-workflow-surface/package-lock.json`.
+`apps/codex-workflow-surface/vendor/.gitattributes` preserves vendored bytes across
+Windows Git checkouts, so automatic newline conversion does not invalidate hashes.
+The committed closure is the build input, not `D:/Project/multica` or the audit
+checkout. It includes MyIssuesPage, AutopilotsPage, AgentsPage, their detail and
+creation routes, shared UI/core imports, locale resources, styles and local assets.
+The original PropertiesTab and its settings layout/color picker closure are included
+for the secondary property catalog route inside My Issues.
+Upstream apps, server, daemon, CLI and test suites are excluded.
 
-The local `.upstream-multica/` checkout is an ignored audit input, not a
-build or release dependency. The vendored source is the release input; it is
-currently an unmodified snapshot and is not yet mounted into Codex until the
-typed Runtime Adapter and the package build closure are complete.
+`apps/codex-workflow-surface/scripts/vendor-upstream.mjs` regenerates that inventory
+and closure from pinned Git objects, follows TypeScript imports and CSS imports,
+and applies the modifications listed below. Tests verify derived hashes and that
+the three top-level original pages remain byte-identical to the pinned source.
 
-## Rules for the first UI port
+## CCP Modifications
 
-Before adding a derived file, append one row recording its exact upstream
-path, source SHA-256, destination path, and the functional modifications made
-for the Codex Runtime Adapter. Retain the upstream copyright header where one
-exists and add a conspicuous CCP modification notice in the derived file.
+- PropertiesTab accepts an explicit local catalog capability and explanatory copy
+  from Core bootstrap, while preserving its original role gate when that prop is
+  absent. It exposes catalog query failure/retry with two locale additions. Local
+  member identity is unchanged; the three top-level page files remain original.
 
-The derived UI must retain the Multica product name, logo, copyright and
-attribution required by the upstream license. Every release containing a
-derived file must ship this directory's complete `LICENSE` and `NOTICE`.
+- API-client HTTP calls use the CCP local transport; no ambient auth headers,
+  cookies or arbitrary remote URLs cross that boundary.
+- Socket construction is blocked; the local host supplies invalidation/events.
+- The realtime context is exported for that local provider, without upstream WS
+  authentication or connection effects.
+- Base UI and direct body portals target the workflow's Shadow DOM container.
+- Durable UI storage keys are prefixed with `ccp.workflow.`.
+- IssueDetailRoute forwards the host's existing leading-action slot to the detail,
+  loading skeleton and not-found state so embedded task pages have a return path.
+- Quick-create modal and runtime gate accept Core's verified native task-host
+  capability instead of requiring a Multica daemon CLI version. Other runtimes
+  retain the original version checks; no CLI version is synthesized.
+- Shared model discovery reads the native runtime's authoritative-selector
+  metadata and uses the existing runtime-managed state without daemon discovery
+  or invented model IDs. Other runtimes retain the daemon discovery path.
+- Upstream CSS token defaults apply to `:host` and the workflow surface.
+- Runtime mirrors the host theme inside the shadow boundary; dark variants and
+  tokens apply to both page content and contained portals.
+- Host mount, navigation, auth bootstrap, error boundary, styles and attribution
+  are CCP code outside the vendor directory, documented in the package UPSTREAM.md.
+
+Modified upstream files retain source text/copyright and carry CCP notices. Exact
+LICENSE and NOTICE copies exist both here and inside the vendor closure. The UI
+retains Multica name, original icon, copyright and a locally embedded full-license
+dialog. Installer inclusion is owned by the parent packaging workflow; this manifest
+does not certify installer execution, commercial permission or live UI acceptance.

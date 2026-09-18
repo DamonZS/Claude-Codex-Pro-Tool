@@ -27,6 +27,11 @@ const PACKAGED_CDP_READY_DELAY: std::time::Duration = std::time::Duration::from_
 const BRIDGE_WATCHDOG_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(7);
 const BRIDGE_WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(11);
 static DETACHED_HELPER_PORT: OnceLock<u16> = OnceLock::new();
+const HELPER_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
+const HELPER_STATUS_REQUEST: &[u8] = b"POST /backend/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}";
+const MAX_HELPER_STATUS_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
+const PORT_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexLaunch {
@@ -110,7 +115,6 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_image_overlay_enabled
         || settings.codex_goals_enabled
         || settings.multica_workspace_enabled
-        || (settings.memory_assist_enabled && settings.memory_assist_inject_enabled)
 }
 
 #[derive(Clone)]
@@ -264,7 +268,7 @@ pub async fn launch_and_inject(options: LaunchOptions) -> anyhow::Result<LaunchH
 
 pub async fn ensure_detached_helper(helper_port: u16) -> anyhow::Result<()> {
     if DETACHED_HELPER_PORT.get().copied() == Some(helper_port)
-        && helper_backend_online_blocking(helper_port)
+        && helper_backend_online(helper_port).await
     {
         return Ok(());
     }
@@ -273,14 +277,20 @@ pub async fn ensure_detached_helper(helper_port: u16) -> anyhow::Result<()> {
         let listener = match tokio::net::TcpListener::bind(("127.0.0.1", helper_port)).await {
             Ok(listener) => listener,
             Err(error) if error.kind() == ErrorKind::AddrInUse => {
-                if helper_backend_online_blocking(helper_port) {
+                if helper_backend_online(helper_port).await {
                     let _ = crate::diagnostic_log::append_diagnostic_log(
                         "helper.detached_already_bound",
                         serde_json::json!({ "helper_port": helper_port, "verified": true }),
                     );
                     return Ok(());
                 }
-                if !recovered_once && recover_detached_helper_port_conflict(helper_port).await? {
+                if !recovered_once
+                    && recover_detached_helper_port_conflict(helper_port)
+                        .await
+                        .with_context(|| {
+                            format!("127.0.0.1:{helper_port} did not answer Claude Codex Pro backend status; port ownership lookup failed")
+                        })?
+                {
                     recovered_once = true;
                     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                     continue;
@@ -329,7 +339,7 @@ async fn recover_detached_helper_port_conflict(helper_port: u16) -> anyhow::Resu
     #[cfg(windows)]
     {
         let current_process_id = std::process::id();
-        let listening_processes = windows_processes_listening_on_port(helper_port)?;
+        let listening_processes = windows_processes_listening_on_port(helper_port).await?;
         let mut terminated_any = false;
         for process_id in listening_processes {
             if process_id == current_process_id {
@@ -361,8 +371,9 @@ async fn detached_helper_port_conflict_details(helper_port: u16) -> serde_json::
     #[cfg(windows)]
     {
         let current_process_id = std::process::id();
-        let listening_processes =
-            windows_processes_listening_on_port(helper_port).unwrap_or_default();
+        let listening_processes = windows_processes_listening_on_port(helper_port)
+            .await
+            .unwrap_or_default();
         let processes = crate::windows_integration::enumerate_processes();
         let conflict_processes: Vec<_> = listening_processes
             .into_iter()
@@ -392,7 +403,7 @@ async fn detached_helper_port_conflict_details(helper_port: u16) -> serde_json::
 }
 
 #[cfg(windows)]
-fn windows_processes_listening_on_port(helper_port: u16) -> anyhow::Result<Vec<u32>> {
+async fn windows_processes_listening_on_port(helper_port: u16) -> anyhow::Result<Vec<u32>> {
     let script = format!(
         r#"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -404,7 +415,7 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   ConvertTo-Json -Depth 3 -Compress
 "#
     );
-    let Some(value) = powershell_json(&script)? else {
+    let Some(value) = powershell_json(&script).await? else {
         return Ok(Vec::new());
     };
     Ok(match value {
@@ -427,7 +438,9 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 }
 
 #[cfg(windows)]
-fn windows_listening_loopback_ports_for_processes(process_ids: &[u32]) -> anyhow::Result<Vec<u16>> {
+async fn windows_listening_loopback_ports_for_processes(
+    process_ids: &[u32],
+) -> anyhow::Result<Vec<u16>> {
     if process_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -448,7 +461,7 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   ConvertTo-Json -Depth 3 -Compress
 "#
     );
-    let Some(value) = powershell_json(&script)? else {
+    let Some(value) = powershell_json(&script).await? else {
         return Ok(Vec::new());
     };
     let values = match value {
@@ -487,15 +500,14 @@ fn windows_process_is_claude_codex_pro(
 }
 
 #[cfg(windows)]
-fn powershell_json(script: &str) -> anyhow::Result<Option<serde_json::Value>> {
-    let mut command = std::process::Command::new("powershell.exe");
-    command.args(["-NoProfile", "-Command", script]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(crate::windows_create_no_window());
-    }
-    let output = command.output()?;
+async fn powershell_json(script: &str) -> anyhow::Result<Option<serde_json::Value>> {
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    command.creation_flags(crate::windows_create_no_window());
+    command.kill_on_drop(true);
+    let output = tokio::time::timeout(PORT_QUERY_TIMEOUT, command.output())
+        .await
+        .context("helper port ownership query timed out")??;
     if !output.status.success() {
         return Ok(None);
     }
@@ -516,43 +528,36 @@ pub fn protocol_proxy_backend_online(port: u16) -> bool {
 }
 
 fn helper_backend_online_blocking(port: u16) -> bool {
+    let deadline = std::time::Instant::now() + HELPER_PROBE_TIMEOUT;
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) =
         TcpStream::connect_timeout(&address, std::time::Duration::from_millis(250))
     else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(500)));
-    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
-    let request = b"POST /backend/status HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}";
-    if stream.write_all(request).is_err() {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero()
+        || stream.set_write_timeout(Some(remaining)).is_err()
+        || stream.write_all(HELPER_STATUS_REQUEST).is_err()
+    {
         return false;
     }
-    helper_status_response_is_ok(&mut stream)
+    helper_status_response_is_ok(&mut stream, deadline)
 }
 
-fn helper_status_response_is_ok(stream: &mut TcpStream) -> bool {
-    const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+fn helper_status_response_is_ok(stream: &mut TcpStream, deadline: std::time::Instant) -> bool {
     let mut response = Vec::with_capacity(4096);
     let mut buffer = [0_u8; 4096];
-    while response.len() < MAX_RESPONSE_BYTES {
+    while response.len() < MAX_HELPER_STATUS_BYTES {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() || stream.set_read_timeout(Some(remaining)).is_err() {
+            return false;
+        }
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(read) => {
                 response.extend_from_slice(&buffer[..read]);
-                let response_is_ok = response.starts_with(b"HTTP/1.1 200")
-                    && [
-                        b"\"status\":\"ok\"".as_slice(),
-                        b"\"transport\":\"http-helper\"".as_slice(),
-                        b"\"version\":".as_slice(),
-                    ]
-                    .into_iter()
-                    .all(|marker| {
-                        response
-                            .windows(marker.len())
-                            .any(|window| window == marker)
-                    });
-                if response_is_ok {
+                if helper_status_bytes_are_ok(&response) {
                     return true;
                 }
             }
@@ -563,6 +568,43 @@ fn helper_status_response_is_ok(stream: &mut TcpStream) -> bool {
         }
     }
     false
+}
+
+fn helper_status_bytes_are_ok(response: &[u8]) -> bool {
+    response.starts_with(b"HTTP/1.1 200")
+        && [
+            b"\"status\":\"ok\"".as_slice(),
+            b"\"transport\":\"http-helper\"".as_slice(),
+            b"\"version\":".as_slice(),
+        ]
+        .into_iter()
+        .all(|marker| {
+            response
+                .windows(marker.len())
+                .any(|window| window == marker)
+        })
+}
+
+async fn helper_backend_online(port: u16) -> bool {
+    tokio::time::timeout(HELPER_PROBE_TIMEOUT, async {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        stream.write_all(HELPER_STATUS_REQUEST).await?;
+        let mut response = Vec::with_capacity(4096);
+        let mut buffer = [0_u8; 4096];
+        while response.len() < MAX_HELPER_STATUS_BYTES {
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&buffer[..read]);
+            if helper_status_bytes_are_ok(&response) {
+                return Ok::<_, std::io::Error>(true);
+            }
+        }
+        Ok(false)
+    })
+    .await
+    .is_ok_and(|result| result.unwrap_or(false))
 }
 
 pub async fn launch_and_inject_with_hooks<H>(
@@ -784,7 +826,7 @@ impl LaunchHooks for DefaultLaunchHooks {
         // The manager may already own the persistent detached helper on the
         // reserved port. Reuse that healthy listener instead of failing the
         // Codex launch on a second bind attempt.
-        if helper_backend_online_blocking(helper_port) {
+        if helper_backend_online(helper_port).await {
             let _ = crate::diagnostic_log::append_diagnostic_log(
                 "helper.reused_existing_listener",
                 serde_json::json!({ "helper_port": helper_port }),
@@ -1101,11 +1143,47 @@ impl LaunchHooks for DefaultLaunchHooks {
     }
 }
 
+#[cfg(test)]
+#[path = "multica_webhooks_http_tests.rs"]
+mod multica_webhooks_http_tests;
+
 async fn handle_helper_connection(
-    mut stream: tokio::net::TcpStream,
+    stream: tokio::net::TcpStream,
     remote_addr: Option<SocketAddr>,
 ) -> anyhow::Result<()> {
-    let request_bytes = read_http_request(&mut stream).await?;
+    handle_helper_connection_with_webhooks(
+        stream,
+        remote_addr,
+        crate::multica_webhooks::http::WebhookIngress::default(),
+    )
+    .await
+}
+
+async fn handle_helper_connection_with_webhooks(
+    mut stream: tokio::net::TcpStream,
+    remote_addr: Option<SocketAddr>,
+    webhooks: crate::multica_webhooks::http::WebhookIngress,
+) -> anyhow::Result<()> {
+    use crate::multica_webhooks::http;
+    let request_bytes = match read_http_request(&mut stream).await {
+        Ok(bytes) => bytes,
+        Err(error) => match error.downcast::<http::IngressError>() {
+            Ok(error) => return http::write_response(&mut stream, Err(error)).await,
+            Err(error) => return Err(error),
+        },
+    };
+    // Handle even malformed webhook paths before lossy decoding and request logs.
+    if http::is_candidate(&request_bytes) {
+        let response = tokio::task::spawn_blocking(move || webhooks.receive(&request_bytes))
+            .await
+            .unwrap_or_else(|_| {
+                Err(http::IngressError {
+                    status: "503 Service Unavailable",
+                    code: "webhook_ingress_unavailable",
+                })
+            });
+        return http::write_response(&mut stream, response).await;
+    }
     let request = String::from_utf8_lossy(&request_bytes);
     let request_line = request.lines().next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
@@ -1617,6 +1695,8 @@ async fn handle_protocol_proxy_connection(
     path: &str,
     remote_addr_text: Option<String>,
 ) -> anyhow::Result<()> {
+    let mut telemetry =
+        crate::request_telemetry::RequestObservation::capture("codex", "responses", request_body);
     let request_json = serde_json::from_str::<serde_json::Value>(request_body).ok();
     let upstream = match crate::protocol_proxy::open_responses_proxy_request(request_body).await {
         Ok(upstream) => upstream,
@@ -1644,10 +1724,21 @@ async fn handle_protocol_proxy_connection(
         }
     };
 
+    telemetry.upstream(
+        upstream.status_code,
+        upstream.is_stream,
+        if upstream.requires_response_conversion {
+            "chat_completions"
+        } else {
+            "responses"
+        },
+        Some(&upstream.provider_id),
+        upstream.request_model.as_deref(),
+    );
     if !upstream.is_success() {
         let status = upstream.status();
         let upstream_content_type = upstream.content_type.clone();
-        let upstream_body = upstream.response.bytes().await?.to_vec();
+        let upstream_body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
         let error = crate::protocol_proxy::responses_error_from_upstream(
             upstream.status_code,
             &upstream_content_type,
@@ -1678,12 +1769,14 @@ async fn handle_protocol_proxy_connection(
         while let Some(chunk) = bytes_stream.next().await {
             match chunk {
                 Ok(bytes) => {
+                    telemetry.push_bytes(&bytes);
                     let converted = converter.push_bytes(&bytes);
                     if !converted.is_empty() {
                         stream.write_all(&converted).await?;
                     }
                 }
                 Err(error) => {
+                    telemetry.fail(crate::request_telemetry::RequestFailure::Stream);
                     let failed = converter.fail(
                         format!("Stream error: {error}"),
                         Some("stream_error".to_string()),
@@ -1711,16 +1804,21 @@ async fn handle_protocol_proxy_connection(
             remote_addr_text,
         );
         stream.shutdown().await?;
+        telemetry.finish();
         return Ok(());
     }
 
-    let upstream_body = upstream.response.bytes().await?;
-    let chat_json: serde_json::Value = serde_json::from_slice(&upstream_body)?;
+    let upstream_body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
+    let chat_json: serde_json::Value =
+        serde_json::from_slice(&upstream_body).inspect_err(|_| {
+            telemetry.fail(crate::request_telemetry::RequestFailure::InvalidResponse);
+        })?;
     let response_json = if let Some(request_json) = request_json.as_ref() {
-        crate::protocol_proxy::chat_completion_to_response_with_request(chat_json, request_json)?
+        crate::protocol_proxy::chat_completion_to_response_with_request(chat_json, request_json)
     } else {
-        crate::protocol_proxy::chat_completion_to_response(chat_json)?
-    };
+        crate::protocol_proxy::chat_completion_to_response(chat_json)
+    }
+    .inspect_err(|_| telemetry.fail(crate::request_telemetry::RequestFailure::InvalidResponse))?;
     let body = serde_json::to_vec(&response_json)?;
     write_http_response(stream, "200 OK", "application/json; charset=utf-8", &body).await?;
     log_helper_response(
@@ -1731,6 +1829,7 @@ async fn handle_protocol_proxy_connection(
         remote_addr_text,
     );
     stream.shutdown().await?;
+    telemetry.finish();
     Ok(())
 }
 
@@ -1741,6 +1840,11 @@ async fn handle_chat_completions_proxy_connection(
     path: &str,
     remote_addr_text: Option<String>,
 ) -> anyhow::Result<()> {
+    let mut telemetry = crate::request_telemetry::RequestObservation::capture(
+        "codex",
+        "chat_completions",
+        request_body,
+    );
     let upstream =
         match crate::protocol_proxy::open_chat_completions_proxy_request(request_body).await {
             Ok(upstream) => upstream,
@@ -1768,6 +1872,13 @@ async fn handle_chat_completions_proxy_connection(
             }
         };
 
+    telemetry.upstream(
+        upstream.status_code,
+        upstream.is_stream,
+        "chat_completions",
+        Some(&upstream.provider_id),
+        upstream.request_model.as_deref(),
+    );
     let status = upstream.status();
     let is_success = upstream.is_success();
     let content_type = if upstream.content_type.is_empty() {
@@ -1780,7 +1891,11 @@ async fn handle_chat_completions_proxy_connection(
         write_http_stream_headers(stream, &status, &content_type).await?;
         let mut bytes_stream = upstream.response.bytes_stream();
         while let Some(chunk) = bytes_stream.next().await {
-            stream.write_all(&chunk?).await?;
+            let chunk = chunk.inspect_err(|_| {
+                telemetry.fail(crate::request_telemetry::RequestFailure::Stream)
+            })?;
+            telemetry.push_bytes(&chunk);
+            stream.write_all(&chunk).await?;
         }
         log_helper_response(
             "helper.chat_completions_proxy_stream_ok",
@@ -1790,10 +1905,11 @@ async fn handle_chat_completions_proxy_connection(
             remote_addr_text,
         );
         stream.shutdown().await?;
+        telemetry.finish();
         return Ok(());
     }
 
-    let body = upstream.response.bytes().await?.to_vec();
+    let body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
     write_http_response(stream, &status, &content_type, &body).await?;
     log_helper_response(
         if is_success {
@@ -1807,7 +1923,23 @@ async fn handle_chat_completions_proxy_connection(
         remote_addr_text,
     );
     stream.shutdown().await?;
+    telemetry.finish();
     Ok(())
+}
+
+async fn read_observed_proxy_body(
+    response: reqwest::Response,
+    telemetry: &mut crate::request_telemetry::RequestObservation,
+) -> anyhow::Result<Vec<u8>> {
+    let mut chunks = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk
+            .inspect_err(|_| telemetry.fail(crate::request_telemetry::RequestFailure::Stream))?;
+        telemetry.push_bytes(&chunk);
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 const CLAUDE_SSE_DIAGNOSTIC_ACTION_LIMIT: usize = 16;
@@ -2199,6 +2331,8 @@ async fn handle_claude_desktop_messages_proxy_connection(
         return Ok(());
     }
 
+    let mut telemetry =
+        crate::request_telemetry::RequestObservation::capture("claude", "messages", request_body);
     let upstream =
         match crate::protocol_proxy::open_claude_desktop_messages_proxy_request_with_metadata(
             request_body,
@@ -2234,6 +2368,13 @@ async fn handle_claude_desktop_messages_proxy_connection(
             }
         };
 
+    telemetry.upstream(
+        upstream.status_code,
+        upstream.is_stream,
+        "messages",
+        Some(&upstream.provider_id),
+        upstream.request_model.as_deref(),
+    );
     let status = upstream.status();
     let is_success = upstream.is_success();
     let content_type = if upstream.content_type.is_empty() {
@@ -2250,6 +2391,7 @@ async fn handle_claude_desktop_messages_proxy_connection(
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
+                    telemetry.fail(crate::request_telemetry::RequestFailure::Stream);
                     lifecycle_guard.stream_read_failed = true;
                     let _ = lifecycle_guard.finish();
                     log_claude_messages_stream_result(
@@ -2263,6 +2405,7 @@ async fn handle_claude_desktop_messages_proxy_connection(
                     return Err(error.into());
                 }
             };
+            telemetry.push_bytes(&chunk);
             let output = lifecycle_guard.push_bytes(&chunk);
             if !output.is_empty() {
                 stream.write_all(&output).await?;
@@ -2280,10 +2423,11 @@ async fn handle_claude_desktop_messages_proxy_connection(
             &lifecycle_guard,
         );
         stream.shutdown().await?;
+        telemetry.finish();
         return Ok(());
     }
 
-    let body = upstream.response.bytes().await?.to_vec();
+    let body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
     if !is_success {
         log_claude_desktop_upstream_error_body(
             method,
@@ -2307,6 +2451,7 @@ async fn handle_claude_desktop_messages_proxy_connection(
         remote_addr_text,
     );
     stream.shutdown().await?;
+    telemetry.finish();
     Ok(())
 }
 
@@ -2498,25 +2643,47 @@ mod computer_use_tests {
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Vec<u8>> {
+    use crate::multica_webhooks::http;
     let mut buffer = Vec::new();
     let mut chunk = vec![0_u8; 4096];
     let mut header_end = None;
     let mut content_length = 0_usize;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
 
     loop {
-        let read = stream.read(&mut chunk).await?;
+        let read = if http::is_candidate(&buffer) {
+            tokio::time::timeout_at(deadline, stream.read(&mut chunk))
+                .await
+                .map_err(|_| http::timeout())??
+        } else {
+            stream.read(&mut chunk).await?
+        };
         if read == 0 {
+            if http::is_candidate(&buffer) {
+                anyhow::bail!(http::incomplete());
+            }
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
         if header_end.is_none() {
             header_end = find_header_end(&buffer);
             if let Some(end) = header_end {
-                content_length = content_length_from_headers(&buffer[..end]).unwrap_or(0);
+                content_length = if http::is_candidate(&buffer) {
+                    http::parse_head(&buffer[..end])?.content_length
+                } else {
+                    content_length_from_headers(&buffer[..end]).unwrap_or(0)
+                };
+            } else if http::is_candidate(&buffer)
+                && buffer.len() > crate::multica_webhooks::MAX_WEBHOOK_HEADER_BYTES
+            {
+                anyhow::bail!(http::too_large());
             }
         }
         if let Some(end) = header_end {
             if buffer.len() >= end + 4 + content_length {
+                if http::is_candidate(&buffer) && buffer.len() != end + 4 + content_length {
+                    anyhow::bail!(http::incomplete());
+                }
                 break;
             }
         }
@@ -2703,7 +2870,9 @@ async fn discover_existing_codex_cdp_port(requested: u16) -> Option<u16> {
             .map(|process| process.process_id)
             .collect::<Vec<_>>();
         candidate_ports.extend(
-            windows_listening_loopback_ports_for_processes(&process_ids).unwrap_or_default(),
+            windows_listening_loopback_ports_for_processes(&process_ids)
+                .await
+                .unwrap_or_default(),
         );
     }
 
@@ -2964,10 +3133,14 @@ async fn try_inject(debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
     let settings = SettingsStore::default().load().unwrap_or_default();
     let script = crate::assets::injection_script_with_settings(helper_port, &settings);
     let websocket_state = Arc::new(std::sync::Mutex::new(Some(websocket_url.to_string())));
-    let (codex_execution, _) =
+    let (codex_execution, page_transport) =
         crate::codex_execution::codex_page_execution_service(websocket_state)?;
     let runtime = crate::routes::CoreRuntimeService::new(debug_port, StatusStore::default())
-        .with_codex_execution_service(codex_execution);
+        .with_multica_webhook_store(
+            crate::multica_webhooks::MulticaWebhookStore::default().with_helper_port(helper_port),
+        )
+        .with_codex_execution_service(codex_execution)
+        .with_codex_page_transport(Arc::new(page_transport));
     let ctx = crate::routes::BridgeContext::core(Arc::new(runtime));
     crate::bridge::install_bridge(
         websocket_url,
@@ -3453,6 +3626,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn injection_attaches_the_execution_factory_transport_for_builder_reads() {
+        let source = include_str!("launcher.rs");
+        let injection = source
+            .split("async fn try_inject(")
+            .nth(1)
+            .unwrap()
+            .split("pub fn build_macos_open_command(")
+            .next()
+            .unwrap();
+        assert_eq!(
+            injection.matches("codex_page_execution_service(").count(),
+            1
+        );
+        assert!(injection.contains("let (codex_execution, page_transport) ="));
+        assert!(injection.contains(".with_codex_execution_service(codex_execution)"));
+        assert!(injection.contains(".with_codex_page_transport(Arc::new(page_transport))"));
+        assert!(injection.contains("MulticaWebhookStore::default().with_helper_port(helper_port)"));
+        assert!(!injection.contains("CodexPageHostTransport::new"));
+    }
+
+    #[test]
     fn upstream_error_preview_removes_tokens_and_url_queries() {
         let preview = sanitized_error_preview(
             "channel failed at https://api.example/v1/messages?token=query-secret Bearer sk-secret-value token=plain-secret",
@@ -3488,6 +3682,100 @@ mod tests {
 
         assert!(protocol_proxy_backend_online(port));
         server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn helper_probes_bound_silent_and_trickling_peers() {
+        for blocking in [false, true] {
+            for trickle in [false, true] {
+                let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                    .await
+                    .unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let peer = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    // A finite fixture also bounds the pre-fix slow-peer failure.
+                    for _ in 0..25 {
+                        if trickle && stream.write_all(b" ").await.is_err() {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                });
+                let started = std::time::Instant::now();
+                let online = if blocking {
+                    tokio::task::spawn_blocking(move || protocol_proxy_backend_online(port))
+                        .await
+                        .unwrap()
+                } else {
+                    helper_backend_online(port).await
+                };
+                let elapsed = started.elapsed();
+                peer.abort();
+                let _ = peer.await;
+                assert!(!online, "blocking={blocking}, trickle={trickle}");
+                assert!(
+                    elapsed < std::time::Duration::from_millis(1500),
+                    "probe exceeded total deadline: {elapsed:?}, blocking={blocking}, trickle={trickle}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn helper_probe_preserves_status_identity_checks() {
+        for response in [
+            b"HTTP/1.1 200 OK\r\n\r\n{\"status\":\"ok\",\"version\":\"test\"}".as_slice(),
+            b"HTTP/1.1 403 Forbidden\r\n\r\n{\"status\":\"ok\",\"transport\":\"http-helper\",\"version\":\"test\"}".as_slice(),
+        ] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let peer = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                stream.write_all(response).await.unwrap();
+            });
+            assert!(!helper_backend_online(port).await);
+            peer.await.unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn helper_port_query_times_out_without_blocking_runtime_or_leaking_child() {
+        let temp = tempfile::tempdir().unwrap();
+        let pid_path = temp.path().join("query.pid");
+        let script = format!(
+            "$PID | Set-Content -LiteralPath '{}'; Start-Sleep -Seconds 30",
+            pid_path.to_string_lossy().replace('\'', "''")
+        );
+        let heartbeat = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+        let started = std::time::Instant::now();
+        let result = powershell_json(&script).await;
+        let progressed = heartbeat.is_finished();
+        heartbeat.await.unwrap();
+        assert!(
+            progressed,
+            "ownership lookup blocked the current-thread runtime"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(6));
+        assert!(result.unwrap_err().to_string().contains("query timed out"));
+        let pid: u32 = std::fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while crate::windows_integration::enumerate_processes()
+                .iter()
+                .any(|process| process.process_id == pid)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("timed-out ownership query left a child process running");
     }
 
     fn cdp_target(

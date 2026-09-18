@@ -6,6 +6,15 @@ Unicode true
 !endif
 !define ROOT "..\..\.."
 
+!if /FileExists "${ROOT}\dist\windows\app\resources\third-party\multica\LICENSE"
+!else
+  !error "Stage the complete Multica LICENSE before packaging"
+!endif
+!if /FileExists "${ROOT}\dist\windows\app\resources\third-party\multica\NOTICE"
+!else
+  !error "Stage the complete Multica NOTICE before packaging"
+!endif
+
 Name "Claude Codex Pro"
 OutFile "${ROOT}\dist\windows\claude-codex-pro-${VERSION}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Claude Codex Pro"
@@ -32,13 +41,11 @@ Section "Install"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-mcp.exe /F'
-  Pop $0
 
   File "${ROOT}\dist\windows\app\claude-codex-pro.exe"
-  File "${ROOT}\dist\windows\app\claude-codex-pro-mcp.exe"
   File /r "${ROOT}\dist\windows\app\resources"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
+  Delete /REBOOTOK "$INSTDIR\claude-codex-pro-mcp.exe"
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
@@ -70,8 +77,6 @@ Section "Uninstall"
   Pop $0
   nsExec::ExecToLog 'taskkill /IM claude-codex-pro-manager.exe /F'
   Pop $0
-  nsExec::ExecToLog 'taskkill /IM claude-codex-pro-mcp.exe /F'
-  Pop $0
 
   Delete "$DESKTOP\Claude Codex Pro.lnk"
   Delete "$DESKTOP\Claude Codex Pro 管理工具.lnk"
@@ -82,7 +87,7 @@ Section "Uninstall"
 
   Delete "$INSTDIR\claude-codex-pro.exe"
   Delete "$INSTDIR\claude-codex-pro-manager.exe"
-  Delete "$INSTDIR\claude-codex-pro-mcp.exe"
+  Delete /REBOOTOK "$INSTDIR\claude-codex-pro-mcp.exe"
   RMDir /r "$INSTDIR\resources"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

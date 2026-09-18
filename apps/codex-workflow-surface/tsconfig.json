@@ -16,15 +16,16 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
+    "types": ["vite/client", "node"],
     "paths": {
-      "@multica/core": ["D:/Project/multica/packages/core/index.ts"],
-      "@multica/core/*": ["D:/Project/multica/packages/core/*"],
-      "@multica/ui": ["D:/Project/multica/packages/ui/index.ts"],
-      "@multica/ui/*": ["D:/Project/multica/packages/ui/*"],
-      "@multica/views": ["D:/Project/multica/packages/views/index.ts"],
-      "@multica/views/*": ["D:/Project/multica/packages/views/*"]
+      "@multica/core": ["vendor/multica/packages/core/index.ts"],
+      "@multica/core/*": ["vendor/multica/packages/core/*"],
+      "@multica/ui/i18n-types": ["vendor/multica/packages/ui/types/i18next.ts"],
+      "@multica/ui/*": ["vendor/multica/packages/ui/*"],
+      "@multica/views/*": ["vendor/multica/packages/views/*"],
+      "@ccp/workflow-host": ["src/upstream-host.ts"]
     }
   },
-  "include": ["src", "D:/Project/multica/packages/core", "D:/Project/multica/packages/ui", "D:/Project/multica/packages/views"],
-  "exclude": ["D:/Project/multica/packages/**/*.test.ts", "D:/Project/multica/packages/**/*.test.tsx"]
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
 }

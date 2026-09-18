@@ -149,7 +149,7 @@ fn multica_workspace_bridge_failure_keeps_sidebar_navigation_neutral() {
     );
     assert!(availability.contains("The sidebar is a navigation affordance"));
     assert!(availability.contains("entry.setAttribute(\"aria-label\", \"我的任务\")"));
-    assert!(availability.contains("entry.setAttribute(\"data-state\", multicaWorkspaceState.opened ? \"active\" : \"inactive\")"));
+    assert!(availability.contains("entry.setAttribute(\"data-state\", multicaWorkspaceState.opened && multicaWorkspaceState.route === \"my-issues\" ? \"active\" : \"inactive\")"));
     assert!(!availability.contains("entry.dataset.ccpMulticaAvailability = \"unavailable\""));
     assert!(!availability.contains("我的任务，未连接，点击重试"));
     assert!(!availability.contains("无任务"));

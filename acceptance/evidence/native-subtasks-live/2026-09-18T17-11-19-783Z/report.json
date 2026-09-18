@@ -1,0 +1,181 @@
+{
+  "parentId": "01a0b2ac-7535-7481-a638-70d793805812",
+  "subjects": [
+    {
+      "id": "01a0b405-80ed-7662-b24d-5c22329d64ac",
+      "name": "Descartes"
+    },
+    {
+      "id": "01a0b405-81bf-7401-a1c2-18c0dddc5ff7",
+      "name": "Tesla"
+    },
+    {
+      "id": "01a0b405-8314-7503-8170-ff860eb0aa6c",
+      "name": "Faraday"
+    },
+    {
+      "id": "01a0b405-8422-7582-b796-4cff65cd2e8a",
+      "name": "Mendel"
+    }
+  ],
+  "checks": [
+    {
+      "step": "list",
+      "bridge": true,
+      "generation": 21,
+      "heading": "我的任务",
+      "region": {
+        "x": 276,
+        "y": 72,
+        "width": 1004,
+        "height": 304.78125
+      },
+      "alerts": 0,
+      "expanded": "true",
+      "rows": [
+        {
+          "id": "01a0b405-80ed-7662-b24d-5c22329d64ac",
+          "name": "Descartes",
+          "status": "状态待确认",
+          "updatedAt": "2026-09-18T16:53:30.784Z",
+          "rect": {
+            "x": 292,
+            "y": 130.984375,
+            "width": 962,
+            "height": 24.796875
+          }
+        },
+        {
+          "id": "01a0b405-81bf-7401-a1c2-18c0dddc5ff7",
+          "name": "Tesla",
+          "status": "状态待确认",
+          "updatedAt": "2026-09-18T16:45:18.772Z",
+          "rect": {
+            "x": 292,
+            "y": 155.78125,
+            "width": 962,
+            "height": 24.796875
+          }
+        },
+        {
+          "id": "01a0b405-8314-7503-8170-ff860eb0aa6c",
+          "name": "Faraday",
+          "status": "状态待确认",
+          "updatedAt": "2026-09-18T16:58:43.845Z",
+          "rect": {
+            "x": 292,
+            "y": 106.1875,
+            "width": 962,
+            "height": 24.796875
+          }
+        },
+        {
+          "id": "01a0b405-8422-7582-b796-4cff65cd2e8a",
+          "name": "Mendel",
+          "status": "状态待确认",
+          "updatedAt": "2026-09-18T16:42:51.959Z",
+          "rect": {
+            "x": 292,
+            "y": 180.578125,
+            "width": 962,
+            "height": 24.796875
+          }
+        }
+      ]
+    },
+    {
+      "step": "row",
+      "id": "01a0b405-80ed-7662-b24d-5c22329d64ac",
+      "name": "Descartes",
+      "status": "状态待确认",
+      "updatedAt": "2026-09-18T16:53:30.784Z",
+      "rect": {
+        "x": 292,
+        "y": 130.984375,
+        "width": 962,
+        "height": 24.796875
+      },
+      "region": {
+        "x": 276,
+        "y": 72,
+        "width": 1004,
+        "height": 304.78125
+      }
+    },
+    {
+      "step": "row",
+      "id": "01a0b405-81bf-7401-a1c2-18c0dddc5ff7",
+      "name": "Tesla",
+      "status": "状态待确认",
+      "updatedAt": "2026-09-18T16:45:18.772Z",
+      "rect": {
+        "x": 292,
+        "y": 155.78125,
+        "width": 962,
+        "height": 24.796875
+      },
+      "region": {
+        "x": 276,
+        "y": 72,
+        "width": 1004,
+        "height": 304.78125
+      }
+    },
+    {
+      "step": "row",
+      "id": "01a0b405-8314-7503-8170-ff860eb0aa6c",
+      "name": "Faraday",
+      "status": "状态待确认",
+      "updatedAt": "2026-09-18T16:58:43.845Z",
+      "rect": {
+        "x": 292,
+        "y": 106.1875,
+        "width": 962,
+        "height": 24.796875
+      },
+      "region": {
+        "x": 276,
+        "y": 72,
+        "width": 1004,
+        "height": 304.78125
+      }
+    },
+    {
+      "step": "row",
+      "id": "01a0b405-8422-7582-b796-4cff65cd2e8a",
+      "name": "Mendel",
+      "status": "状态待确认",
+      "updatedAt": "2026-09-18T16:42:51.959Z",
+      "rect": {
+        "x": 292,
+        "y": 180.578125,
+        "width": 962,
+        "height": 24.796875
+      },
+      "region": {
+        "x": 276,
+        "y": 72,
+        "width": 1004,
+        "height": 304.78125
+      }
+    },
+    {
+      "step": "child",
+      "id": "01a0b405-80ed-7662-b24d-5c22329d64ac",
+      "active": true,
+      "sidebarActive": false,
+      "nativeTabId": "background-agent:01a0b405-80ed-7662-b24d-5c22329d64ac",
+      "overlayVisible": false
+    },
+    {
+      "step": "parent",
+      "id": "01a0b2ac-7535-7481-a638-70d793805812",
+      "active": true,
+      "sidebarActive": true,
+      "nativeTabId": null,
+      "overlayVisible": false
+    }
+  ],
+  "restored": true,
+  "ok": true
+}

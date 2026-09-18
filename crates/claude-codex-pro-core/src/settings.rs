@@ -514,39 +514,6 @@ pub struct BackendSettings {
     pub codex_app_image_overlay_opacity: u8,
     #[serde(rename = "codexGoalsEnabled", default)]
     pub codex_goals_enabled: bool,
-    #[serde(rename = "memoryAssistEnabled", default = "default_true")]
-    pub memory_assist_enabled: bool,
-    #[serde(rename = "memoryAssistInjectEnabled", default = "default_true")]
-    pub memory_assist_inject_enabled: bool,
-    #[serde(rename = "memoryAssistAutoSuggestEnabled", default = "default_true")]
-    pub memory_assist_auto_suggest_enabled: bool,
-    /// Phase 3 module C: opt-in gate for sending memory text to the active relay
-    /// profile to generate a consolidation summary. Defaults to false because it
-    /// transmits local memory content (which may include project detail) to an
-    /// external endpoint; when off, consolidation uses the local rule-based
-    /// summarizer only.
-    #[serde(rename = "memoryAssistLlmSummaryEnabled", default)]
-    pub memory_assist_llm_summary_enabled: bool,
-    /// Phase 4 module D: opt-in gate for the MCP server that exposes Pangu memory
-    /// to external agents (Claude Code / Cursor / Codex CLI) over stdio. Defaults
-    /// to false because it makes local memory readable/writable by any agent that
-    /// spawns the server; when off, the MCP server refuses to serve. Individual
-    /// tools additionally re-check `memoryAssistEnabled` at call time. See ADR 0002.
-    #[serde(rename = "memoryAssistMcpEnabled", default)]
-    pub memory_assist_mcp_enabled: bool,
-    #[serde(
-        rename = "memoryAssistMaxInjectedItems",
-        default = "default_memory_assist_max_injected_items",
-        deserialize_with = "deserialize_memory_assist_max_injected_items"
-    )]
-    pub memory_assist_max_injected_items: u8,
-    #[serde(
-        rename = "memoryAssistWorkspaceMode",
-        default = "default_memory_assist_workspace_mode"
-    )]
-    pub memory_assist_workspace_mode: String,
-    #[serde(rename = "memoryAssistDataDir", default)]
-    pub memory_assist_data_dir: String,
     #[serde(rename = "launchMode", default)]
     pub launch_mode: LaunchMode,
     #[serde(rename = "relayBaseUrl", default = "default_relay_base_url")]
@@ -622,14 +589,6 @@ impl Default for BackendSettings {
             codex_app_image_overlay_path: String::new(),
             codex_app_image_overlay_opacity: default_image_overlay_opacity(),
             codex_goals_enabled: false,
-            memory_assist_enabled: true,
-            memory_assist_inject_enabled: true,
-            memory_assist_auto_suggest_enabled: true,
-            memory_assist_max_injected_items: default_memory_assist_max_injected_items(),
-            memory_assist_workspace_mode: default_memory_assist_workspace_mode(),
-            memory_assist_data_dir: String::new(),
-            memory_assist_llm_summary_enabled: false,
-            memory_assist_mcp_enabled: false,
             launch_mode: LaunchMode::Patch,
             relay_base_url: default_relay_base_url(),
             relay_api_key: String::new(),
@@ -948,20 +907,8 @@ fn default_image_overlay_opacity() -> u8 {
     35
 }
 
-fn default_memory_assist_max_injected_items() -> u8 {
-    5
-}
-
-pub fn default_memory_assist_workspace_mode() -> String {
-    "project_plus_global".to_string()
-}
-
 fn clamp_image_overlay_opacity(value: u8) -> u8 {
     value.clamp(1, 100)
-}
-
-fn clamp_memory_assist_max_injected_items(value: u8) -> u8 {
-    value.clamp(1, 20)
 }
 
 pub fn default_true() -> bool {
@@ -1005,15 +952,6 @@ where
     Ok(Option::<u8>::deserialize(deserializer)?
         .map(clamp_image_overlay_opacity)
         .unwrap_or_else(default_image_overlay_opacity))
-}
-
-fn deserialize_memory_assist_max_injected_items<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<u8>::deserialize(deserializer)?
-        .map(clamp_memory_assist_max_injected_items)
-        .unwrap_or_else(default_memory_assist_max_injected_items))
 }
 
 fn deserialize_profile_api_key<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -1222,17 +1160,6 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "claudeAppChineseOverlayEnabled");
     merge_bool_setting(target, source, "codexAppServiceTierControls");
     merge_bool_setting(target, source, "codexAppImageOverlayEnabled");
-    merge_bool_setting(target, source, "memoryAssistEnabled");
-    merge_bool_setting(target, source, "memoryAssistInjectEnabled");
-    merge_bool_setting(target, source, "memoryAssistAutoSuggestEnabled");
-    merge_bool_setting(target, source, "memoryAssistLlmSummaryEnabled");
-    if let Some(value) = source.get("memoryAssistDataDir").and_then(Value::as_str) {
-        target.insert(
-            "memoryAssistDataDir".to_string(),
-            Value::String(value.trim().to_string()),
-        );
-    }
-    merge_bool_setting(target, source, "memoryAssistMcpEnabled");
     if let Some(value) = source
         .get("codexAppImageOverlayPath")
         .and_then(Value::as_str)
@@ -1254,31 +1181,6 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     }
     if let Some(value) = source.get("codexGoalsEnabled").and_then(Value::as_bool) {
         target.insert("codexGoalsEnabled".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = source
-        .get("memoryAssistMaxInjectedItems")
-        .and_then(Value::as_u64)
-        .and_then(|value| u8::try_from(value).ok())
-    {
-        target.insert(
-            "memoryAssistMaxInjectedItems".to_string(),
-            Value::Number(serde_json::Number::from(
-                clamp_memory_assist_max_injected_items(value),
-            )),
-        );
-    }
-    if let Some(value) = source
-        .get("memoryAssistWorkspaceMode")
-        .and_then(Value::as_str)
-    {
-        target.insert(
-            "memoryAssistWorkspaceMode".to_string(),
-            Value::String(if value.trim().is_empty() {
-                default_memory_assist_workspace_mode()
-            } else {
-                value.trim().to_string()
-            }),
-        );
     }
     if let Some(value) = source.get("launchMode").and_then(Value::as_str) {
         if matches!(value, "patch" | "relay") {
@@ -1902,11 +1804,6 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
     }
     settings.codex_app_image_overlay_opacity =
         clamp_image_overlay_opacity(settings.codex_app_image_overlay_opacity);
-    settings.memory_assist_max_injected_items =
-        clamp_memory_assist_max_injected_items(settings.memory_assist_max_injected_items);
-    if settings.memory_assist_workspace_mode.trim().is_empty() {
-        settings.memory_assist_workspace_mode = default_memory_assist_workspace_mode();
-    }
     settings
 }
 
@@ -2236,11 +2133,6 @@ mod tests {
         assert!(settings.codex_app_plugin_marketplace_unlock);
         assert!(settings.codex_app_force_plugin_install);
         assert!(!settings.codex_goals_enabled);
-        assert!(settings.memory_assist_enabled);
-        assert!(settings.memory_assist_inject_enabled);
-        assert!(settings.memory_assist_auto_suggest_enabled);
-        assert_eq!(settings.memory_assist_max_injected_items, 5);
-        assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
         assert!(settings.codex_app_path.is_empty());
         assert!(settings.codex_extra_args.is_empty());
         assert_eq!(
@@ -2709,31 +2601,14 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
     }
 
     #[test]
-    fn legacy_settings_default_memory_assist_fields() {
-        let settings: BackendSettings = serde_json::from_value(json!({
-            "codexAppPath": "C:\\Portable\\Codex\\app",
-            "memoryAssistMaxInjectedItems": 99
-        }))
-        .unwrap();
-
-        assert!(settings.memory_assist_enabled);
-        assert!(settings.memory_assist_inject_enabled);
-        assert!(settings.memory_assist_auto_suggest_enabled);
-        // LLM summarization sends memory content to an external relay, so it must
-        // stay off unless the user explicitly opts in.
-        assert!(!settings.memory_assist_llm_summary_enabled);
-        // The MCP server exposes memory to external agents, so it must default off.
-        assert!(!settings.memory_assist_mcp_enabled);
-        assert_eq!(settings.memory_assist_max_injected_items, 20);
-        assert_eq!(settings.memory_assist_workspace_mode, "project_plus_global");
-        // Upgraded installations without the new field start enabled.
-        assert!(settings.multica_workspace_enabled);
+    fn legacy_settings_preserve_multica_workspace_default_and_opt_out() {
+        let defaults: BackendSettings = serde_json::from_value(json!({})).unwrap();
+        assert!(defaults.multica_workspace_enabled);
 
         let disabled: BackendSettings = serde_json::from_value(json!({
             "multicaWorkspaceEnabled": false
         }))
         .unwrap();
-        // An explicit user choice must survive deserialization unchanged.
         assert!(!disabled.multica_workspace_enabled);
     }
 
@@ -3545,38 +3420,6 @@ experimental_bearer_token = "sk-existing"
     }
 
     #[test]
-    fn settings_store_update_persists_memory_assist_settings() {
-        let dir = temp_dir();
-        let store = SettingsStore::new(dir.join("settings.json"));
-
-        let updated = store
-            .update(json!({
-                "memoryAssistEnabled": false,
-                "memoryAssistInjectEnabled": false,
-                "memoryAssistAutoSuggestEnabled": false,
-                "memoryAssistMaxInjectedItems": 8,
-                "memoryAssistWorkspaceMode": "global_only"
-            }))
-            .unwrap();
-
-        assert!(!updated.memory_assist_enabled);
-        assert!(!updated.memory_assist_inject_enabled);
-        assert!(!updated.memory_assist_auto_suggest_enabled);
-        assert_eq!(updated.memory_assist_max_injected_items, 8);
-        assert_eq!(updated.memory_assist_workspace_mode, "global_only");
-        assert_eq!(store.load().unwrap(), updated);
-
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(saved["memoryAssistEnabled"], json!(false));
-        assert_eq!(saved["memoryAssistInjectEnabled"], json!(false));
-        assert_eq!(saved["memoryAssistAutoSuggestEnabled"], json!(false));
-        assert_eq!(saved["memoryAssistMaxInjectedItems"], json!(8));
-        assert_eq!(saved["memoryAssistWorkspaceMode"], json!("global_only"));
-    }
-
-    #[test]
     fn settings_store_update_persists_launch_mode() {
         let dir = temp_dir();
         let store = SettingsStore::new(dir.join("settings.json"));
@@ -4108,7 +3951,7 @@ experimental_bearer_token = "sk-existing"
         });
         let second_update = std::thread::spawn(move || {
             second
-                .update(json!({"memoryAssistDataDir": "D:/CCP Data"}))
+                .update(json!({"relayBaseUrl": "https://relay.example"}))
                 .unwrap();
         });
         first_update.join().unwrap();
@@ -4116,7 +3959,7 @@ experimental_bearer_token = "sk-existing"
 
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["providerSyncEnabled"], true);
-        assert_eq!(saved["memoryAssistDataDir"], "D:/CCP Data");
+        assert_eq!(saved["relayBaseUrl"], "https://relay.example");
         assert_eq!(saved["futureField"], "preserved");
     }
 
@@ -4354,23 +4197,5 @@ experimental_bearer_token = "sk-existing"
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-    }
-
-    #[test]
-    fn memory_assist_data_dir_round_trips_through_incremental_update() {
-        let dir = temp_dir();
-        let path = dir.join("settings.json");
-        let store = SettingsStore::new(path.clone());
-        std::fs::write(&path, r#"{"futureField":"preserved"}"#).unwrap();
-
-        let updated = store
-            .update(serde_json::json!({"memoryAssistDataDir": "D:/CCP Data"}))
-            .unwrap();
-
-        assert_eq!(updated.memory_assist_data_dir, "D:/CCP Data");
-        let raw: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(raw["memoryAssistDataDir"], "D:/CCP Data");
-        assert_eq!(raw["futureField"], "preserved");
     }
 }

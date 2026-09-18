@@ -52,7 +52,6 @@
   const upstreamBranchOptionAttribute = "data-codex-upstream-branch-option";
   const upstreamBranchSelectionKey = "codexUpstreamBranchSelection";
   const upstreamProjectContextKey = "codexUpstreamProjectContext";
-  const codexMemoryProjectContextKey = "claudeCodexProMemoryProjectContext";
   const zedRemoteOpenVersion = "1";
   const zedRemoteOpenInMenuVersion = "1";
   const zedRemoteOpenInMenuActivationWindowMs = 600;
@@ -71,7 +70,7 @@
   const codexDeleteStyleVersion = "14";
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
-  const claudeCodexProMenuVersion = "12";
+  const claudeCodexProMenuVersion = "13";
   const claudeCodexProTriggerVersion = "6";
   const claudeCodexProModalTheme = "pangu-control-deck";
   const codexDeleteVersion = "7";
@@ -86,9 +85,6 @@
   const codexThreadServiceTierVersion = "1";
   const codexServiceTierBadgeClass = "codex-service-tier-badge";
   const codexServiceTierBadgeVersion = "3";
-  const codexMemoryBadgeId = "codex-memory-assist-badge";
-  const codexMemoryPanelId = "codex-memory-assist-panel";
-  const codexMemoryAssistVersion = "1";
   let claudeCodexProVersion = window.__CLAUDE_CODEX_PRO_VERSION__ || "unknown";
   window.__CLAUDE_CODEX_PRO_MODAL_THEME__ = claudeCodexProModalTheme;
   const claudeCodexProBuild = window.__CLAUDE_CODEX_PRO_BUILD__ || "unknown";
@@ -99,6 +95,8 @@
   const claudeCodexProSettingsKey = "claudeCodexProSettings";
   const codexThreadScrollKey = "codexThreadScroll";
   const codexThreadServiceTierKey = "codexThreadServiceTierOverrides";
+  const codexDeletedSessionsKey = "codexDeletedSessions";
+  const codexDeletedSessionsMaxEntries = 256;
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
@@ -689,6 +687,8 @@
       }
       .claude-codex-pro-window-status-title {
         margin-right: 2px;
+        white-space: nowrap;
+        flex-shrink: 0;
         color: inherit;
         font-weight: 650;
       }
@@ -1114,124 +1114,6 @@
       .${codexServiceTierBadgeClass}[data-tier="failed"] { border-color: rgba(248,113,113,.42); background: rgba(248,113,113,.12); color: #fca5a5; }
       .${codexServiceTierBadgeClass}[data-tier="unsupported"] { border-color: rgba(251,191,36,.48); background: rgba(251,191,36,.13); color: #fbbf24; }
       .${codexServiceTierBadgeClass}[data-disabled="true"] { cursor: not-allowed; opacity: .78; }
-      #${codexMemoryBadgeId} {
-        position: fixed;
-        top: var(--codex-memory-badge-top, 8px);
-        left: var(--codex-memory-badge-left, 44px);
-        right: var(--codex-memory-badge-right, auto);
-        transform: none;
-        z-index: 2147483002;
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        max-width: min(520px, calc(100vw - 32px));
-        height: 30px;
-        box-sizing: border-box;
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-        color: #a9a4a9;
-        box-shadow: none;
-        font: 600 12px/1 system-ui, sans-serif;
-        padding: 0 4px;
-        cursor: pointer;
-        backdrop-filter: none;
-      }
-      #${codexMemoryBadgeId}[data-status="ok"] { border-color: rgba(16,185,129,.44); color: #a9a4a9; }
-      #${codexMemoryBadgeId}[data-status="failed"] { border-color: rgba(248,113,113,.5); color: #a9a4a9; }
-      #${codexMemoryBadgeId}[data-status="disabled"] { opacity: .75; cursor: default; }
-      #${codexMemoryBadgeId} .codex-memory-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: #60a5fa;
-        box-shadow: 0 0 10px rgba(96,165,250,.75);
-      }
-      #${codexMemoryBadgeId}[data-status="ok"] .codex-memory-dot { background: #34d399; box-shadow: 0 0 10px rgba(52,211,153,.75); }
-      #${codexMemoryBadgeId}[data-status="failed"] .codex-memory-dot { background: #f87171; box-shadow: 0 0 10px rgba(248,113,113,.75); }
-      .codex-memory-count { color: inherit; font-weight: 700; }
-      #${codexMemoryPanelId} {
-        position: fixed;
-        top: 50px;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 2147483003;
-        width: min(520px, calc(100vw - 32px));
-        max-height: min(620px, calc(100vh - 72px));
-        overflow: hidden;
-        border: 1px solid rgba(15,23,42,.14);
-        border-radius: 10px;
-        background: #ffffff;
-        color: #111827;
-        box-shadow: 0 20px 70px rgba(15,23,42,.28);
-        font: 13px system-ui, sans-serif;
-      }
-      #${codexMemoryPanelId}[hidden] { display: none !important; }
-      .codex-memory-panel-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        border-bottom: 1px solid #e5e7eb;
-        padding: 12px 14px;
-      }
-      .codex-memory-panel-header strong { display: block; font-size: 14px; }
-      .codex-memory-panel-header span { display: block; margin-top: 2px; color: #6b7280; font-size: 12px; }
-      .codex-memory-panel-close { border: 0; background: transparent; color: #6b7280; font-size: 18px; cursor: pointer; }
-      .codex-memory-panel-body { display: grid; gap: 10px; max-height: min(520px, calc(100vh - 150px)); overflow-y: auto; padding: 12px 14px 14px; }
-      .codex-memory-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-      .codex-memory-actions button {
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        background: #f8fafc;
-        color: #111827;
-        font: 12px system-ui, sans-serif;
-        padding: 6px 9px;
-        cursor: pointer;
-      }
-      .codex-memory-actions button[data-primary="true"] { border-color: #2563eb; background: #2563eb; color: #ffffff; }
-      .codex-memory-panel-body textarea,
-      .codex-memory-panel-body input {
-        width: 100%;
-        box-sizing: border-box;
-        border: 1px solid #d1d5db;
-        border-radius: 6px;
-        background: #ffffff;
-        color: #111827;
-        font: 13px system-ui, sans-serif;
-        padding: 8px 9px;
-      }
-      .codex-memory-panel-body textarea { min-height: 78px; resize: vertical; }
-      .codex-memory-list { display: grid; gap: 8px; }
-      .codex-memory-card { border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb; padding: 9px; }
-      .codex-memory-card strong { display: block; margin-bottom: 4px; color: #374151; font-size: 12px; }
-      .codex-memory-card p { margin: 0; color: #111827; line-height: 1.45; white-space: pre-wrap; }
-      .codex-memory-card small { display: block; margin-top: 6px; color: #6b7280; }
-      .codex-memory-message { min-height: 18px; color: #6b7280; font-size: 12px; }
-      .codex-memory-message[data-status="ok"] { color: #059669; }
-      .codex-memory-message[data-status="failed"] { color: #dc2626; }
-      html.dark #${codexMemoryPanelId},
-      html[data-theme="dark"] #${codexMemoryPanelId},
-      :root[data-theme="dark"] #${codexMemoryPanelId} {
-        border-color: rgba(255,255,255,.12);
-        background: #27272a;
-        color: #f4f4f5;
-      }
-      html.dark .codex-memory-panel-header,
-      html[data-theme="dark"] .codex-memory-panel-header,
-      :root[data-theme="dark"] .codex-memory-panel-header { border-bottom-color: rgba(255,255,255,.1); }
-      html.dark .codex-memory-panel-header span,
-      html[data-theme="dark"] .codex-memory-panel-header span,
-      :root[data-theme="dark"] .codex-memory-panel-header span { color: #a1a1aa; }
-      html.dark .codex-memory-card,
-      html[data-theme="dark"] .codex-memory-card,
-      :root[data-theme="dark"] .codex-memory-card {
-        border-color: rgba(255,255,255,.1);
-        background: #18181b;
-      }
-      html.dark .codex-memory-card p,
-      html[data-theme="dark"] .codex-memory-card p,
-      :root[data-theme="dark"] .codex-memory-card p { color: #f4f4f5; }
       .claude-codex-pro-about { color: #64748b; line-height: 1.5; }
       .claude-codex-pro-tabs { display: flex; gap: 8px; padding: 0 20px 6px; flex: 0 0 auto; }
       .claude-codex-pro-tab-button { border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; color: #334155; font: 12px system-ui, sans-serif; padding: 5px 10px; }
@@ -1391,7 +1273,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, memoryAssistEnabled: true, memoryAssistInjectEnabled: true, memoryAssistAutoSuggestEnabled: true, memoryAssistMaxInjectedItems: 5, multicaWorkspaceEnabled: true };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, multicaWorkspaceEnabled: true };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -1408,9 +1290,6 @@
     upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
     serviceTierControls: "codexAppServiceTierControls",
-    memoryAssistEnabled: "memoryAssistEnabled",
-    memoryAssistInjectEnabled: "memoryAssistInjectEnabled",
-    memoryAssistAutoSuggestEnabled: "memoryAssistAutoSuggestEnabled",
     multicaWorkspaceEnabled: "multicaWorkspaceEnabled",
   };
 
@@ -1421,10 +1300,6 @@
         settings[localKey] = claudeCodexProBackendSettings[backendKey];
       }
     });
-    const maxInjectedItems = Number(claudeCodexProBackendSettings.memoryAssistMaxInjectedItems);
-    if (Number.isFinite(maxInjectedItems)) {
-      settings.memoryAssistMaxInjectedItems = Math.max(1, Math.min(20, Math.round(maxInjectedItems)));
-    }
     return settings;
   }
 
@@ -1451,9 +1326,6 @@
       "upstreamWorktreeCreate",
       "nativeMenuPlacement",
       "serviceTierControls",
-      "memoryAssistEnabled",
-      "memoryAssistInjectEnabled",
-      "memoryAssistAutoSuggestEnabled",
       "multicaWorkspaceEnabled",
     ].some((key) => settings[key] === true);
   }
@@ -1482,9 +1354,6 @@
         nativeMenuPlacement: false,
         chineseOverlayEnabled: false,
         serviceTierControls: false,
-        memoryAssistEnabled: false,
-        memoryAssistInjectEnabled: false,
-        memoryAssistAutoSuggestEnabled: false,
       };
     }
     if (relayPatchDisabled) {
@@ -1716,9 +1585,8 @@
     const hasScopeNode = typeof appScope.node === "function" ||
       (!!appScope.node && typeof appScope.node === "object");
     const hasQueryClient = !!appScope.queryClient && typeof appScope.queryClient === "object";
-    // Codex changed the React scope shape across releases.  FRt only needs
-    // one live scope handle; requiring all legacy fields made the native Host
-    // appear unavailable even though the page-owned client was present.
+    // Scope shapes differ across releases; the versioned accessor below
+    // validates the actual page-owned manager rather than fabricating one.
     return hasScopeGetter || hasScopeNode || hasQueryClient;
   }
 
@@ -1775,13 +1643,18 @@
   }
 
   async function codexPageHostClientFromAppInitial() {
+    // Audited OpenAI.Codex 26.915.3509.0: Jpn (internal tp) gets AppServerManager from
+    // appScope.get and returns manager.forHost(hostId). Minified exports are
+    // version-specific; an unknown asset must not invoke a guessed factory.
+    const assetName = codexAppAssetUrl("app-initial-").split("?")[0].split("/").pop();
+    if (assetName !== "app-initial-f61fcec072b5.js") throw new Error("codex_page_host_version_unsupported");
     const module = await loadCodexAppModule("app-initial-");
     const appScope = codexPageHostAppScopeFromReactRoot();
     if (!appScope) throw new Error("codex_page_host_app_scope_unavailable");
-    if (typeof module?.FRt !== "function") throw new Error("codex_page_host_factory_unavailable");
+    if (typeof module?.Jpn !== "function") throw new Error("codex_page_host_factory_unavailable");
     const hostId = codexPageHostIdFromActiveThread() ||
       String(appScope.currentHostId || appScope.hostId || "local");
-    const client = await Promise.resolve(module.FRt(appScope, hostId));
+    const client = await Promise.resolve(module.Jpn(appScope, hostId));
     if (!client || typeof client.sendRequest !== "function") {
       throw new Error("codex_page_host_client_unavailable");
     }
@@ -1797,12 +1670,12 @@
         provider: "codex",
         protocolVersion: "current-page",
         serverInfo: { provider: "codex" },
-        // `skills/list` proves inventory only.  Do not infer subagent or task
-        // execution support from a page-owned client that has no live
-        // initialize capability response; the Rust adapter will keep those
-        // operations unsupported until the primary host reports them.
         capabilities: [],
-        pageHostProbe: { skillsList: true, nativeTaskHost: false },
+        pageHostProbe: {
+          asset: assetName,
+          methods: ["thread/start", "thread/read", "turn/start", "turn/interrupt", "skills/list"],
+          skillInput: true,
+        },
       },
     };
   }
@@ -1813,6 +1686,13 @@
     }
     if (!codexPageHostClientPromise) {
       codexPageHostClientPromise = Promise.resolve().then(async () => {
+        if (codexAppAssetUrl("app-initial-").split("?")[0].endsWith("/app-initial-f61fcec072b5.js")) {
+          const selected = await codexPageHostClientFromAppInitial();
+          if (!codexPageHostStillCurrent()) throw new Error("codex_page_host_generation_stale");
+          codexPageHostClient = selected.client;
+          codexPageHostInitializeResponse = selected.initializeResponse;
+          return selected;
+        }
         let primaryError = null;
         try {
           const module = await loadCodexAppModule("app-server-manager-signals-");
@@ -2585,9 +2465,6 @@
     loadBackendSettings().then((loaded) => {
       if (loaded) {
         scan();
-        codexMemoryUpdateBadge();
-        void codexMemoryLoadSession(true);
-        void codexMemoryMaybeSuggestCandidate();
         return;
       }
       if (attempt < 60) {
@@ -3123,7 +3000,7 @@
     trigger.title = `CCP ${claudeCodexProVersion}`;
     const hasRenderableStatusLabel = !!trigger.querySelector("[data-codex-backend-indicator]")
       && Array.from(trigger.querySelectorAll(".claude-codex-pro-window-status-title"))
-        .some((node) => String(node.textContent || "").trim().startsWith("CCP"));
+        .some((node) => String(node.textContent || "").trim() === `CCP ${claudeCodexProVersion}`);
     if (trigger.dataset.claudeCodexProTriggerLabel === "ccp-status-v2" && hasRenderableStatusLabel) return;
     trigger.dataset.claudeCodexProTriggerLabel = "ccp-status-v2";
     trigger.textContent = "";
@@ -3387,9 +3264,9 @@
           <div class="claude-codex-pro-panel" data-claude-codex-pro-panel="home">
             <div class="claude-codex-pro-deck-hero">
               <div class="claude-codex-pro-deck-hero-label">CCP / LOCAL OPERATIONS</div>
-              <h2>把模型、记忆与工作流留在你的控制范围内</h2>
+              <h2>把模型与工作流留在你的控制范围内</h2>
               <p>这是 CCP 的本地能力控制面：集中查看桥接状态，按需启用增强，并保留可审查、可修复与可回退的操作路径。</p>
-              <div class="claude-codex-pro-deck-capabilities" aria-label="核心能力"><span>本机运行</span><span>模型桥接</span><span>盘古记忆</span><span>可审查回退</span></div>
+              <div class="claude-codex-pro-deck-capabilities" aria-label="核心能力"><span>本机运行</span><span>模型桥接</span><span>可审查回退</span></div>
             </div>
             <div class="claude-codex-pro-deck-section-title">模型与插件通道</div>
             <div class="claude-codex-pro-row">
@@ -3727,7 +3604,7 @@
 
   function codexWindowControlsOverlayAnchor(headerRect) {
     const windowControlsOverlay = navigator.windowControlsOverlay;
-    if (!windowControlsOverlay?.getTitlebarAreaRect) return null;
+    if (!windowControlsOverlay?.getTitlebarAreaRect || windowControlsOverlay.visible === false) return null;
     let overlayRect = null;
     try {
       overlayRect = windowControlsOverlay.getTitlebarAreaRect();
@@ -3812,19 +3689,27 @@
 
   function updateFloatingClaudeCodexProMenuPosition(menu) {
     if (!menu?.classList?.contains(claudeCodexProMenuFloatingClass)) return;
-    // Windows title-bar controls are outside the WebView. Anchor the injected
-    // marker to the title-bar row, immediately left of native minimize.
+    // Native Windows controls may be outside the DOM. WCO and DOM rectangles
+    // use CSS pixels, as does the measured version text (including at zoom).
     if (/Windows/i.test(navigator.userAgent || "")) {
-      const menuWidth = menu.getBoundingClientRect().width || 168;
-      const memoryBadge = document.getElementById(codexMemoryBadgeId);
-      const memoryRect = memoryBadge?.getBoundingClientRect?.();
-      const left = memoryRect && memoryRect.width > 0
-        ? memoryRect.left - menuWidth - 8
-        : window.innerWidth - menuWidth - 260;
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", "4px");
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${Math.max(8, left)}px`);
-      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "24px");
-      updateCodexMemoryBadgePosition();
+      const titlebarRect = { left: 0, right: window.innerWidth, width: window.innerWidth, top: 0, bottom: 48 };
+      const anchor = findCodexStatusRightAnchor(null, titlebarRect);
+      const title = menu.querySelector(".claude-codex-pro-window-status-title");
+      if (!anchor || !title) {
+        setCssPropIfChanged(menu, "visibility", "hidden");
+        return;
+      }
+      const menuRect = menu.getBoundingClientRect();
+      const versionRange = document.createRange();
+      versionRange.selectNodeContents(title);
+      const versionRect = versionRange.getBoundingClientRect();
+      // Measure through the final digit, not the padded trigger's outer edge.
+      const gap = Math.max(8, menuRect.right - versionRect.right);
+      const left = anchor.rect.left - gap - (versionRect.right - menuRect.left);
+      setCssPropIfChanged(menu, "visibility", versionRect.width > 0 && left >= 8 ? "visible" : "hidden");
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-top", `${anchor.rect.top}px`);
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${left}px`);
+      setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", `${anchor.rect.height}px`);
       return;
     }
     const header = document.querySelector(selectors.appHeader) || document.querySelector("header");
@@ -3855,48 +3740,6 @@
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-left", `${fallbackLeft}px`);
       setCssPropIfChanged(menu, "--claude-codex-pro-menu-height", "30px");
     }
-    updateCodexMemoryBadgePosition();
-  }
-
-  function updateCodexMemoryBadgePosition() {
-    const badge = document.getElementById(codexMemoryBadgeId);
-    if (!badge) return;
-    const minimize = Array.from(document.querySelectorAll("button, [role=button]"))
-      .find((node) => /minimi[sz]e|最小化/i.test(`${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.textContent || ""}`));
-    const minimizeRect = minimize?.getBoundingClientRect?.();
-    if (minimizeRect && minimizeRect.width > 0 && minimizeRect.height > 0) {
-      const badgeWidth = badge.getBoundingClientRect().width || 150;
-      badge.style.setProperty("--codex-memory-badge-left", `${Math.max(8, minimizeRect.left - badgeWidth - 8)}px`);
-      badge.style.setProperty("--codex-memory-badge-right", "auto");
-      badge.style.setProperty("--codex-memory-badge-top", `${minimizeRect.top}px`);
-      badge.style.height = `${minimizeRect.height}px`;
-      return;
-    }
-    // Windows title-bar controls are outside the WebView DOM. Keep the
-    // injection marker in the title-bar row, immediately left of minimize.
-    if (/Windows/i.test(navigator.userAgent || "")) {
-      badge.style.setProperty("--codex-memory-badge-left", "auto");
-      badge.style.setProperty("--codex-memory-badge-right", "104px");
-      badge.style.setProperty("--codex-memory-badge-top", "4px");
-      badge.style.height = "24px";
-      return;
-    }
-    const statusMenu = document.getElementById(claudeCodexProMenuId);
-    const statusRect = statusMenu?.getBoundingClientRect?.();
-    if (statusRect && statusRect.width > 0 && statusRect.height > 0) {
-      const badgeWidth = badge.getBoundingClientRect().width || 150;
-      const left = Math.max(8, statusRect.left - badgeWidth - 8);
-      badge.style.setProperty("--codex-memory-badge-left", `${left}px`);
-      badge.style.setProperty("--codex-memory-badge-right", "auto");
-      badge.style.setProperty("--codex-memory-badge-top", `${statusRect.top}px`);
-      badge.style.height = `${statusRect.height}px`;
-      return;
-    }
-    const badgeWidth = badge.getBoundingClientRect().width || 150;
-    badge.style.setProperty("--codex-memory-badge-left", `${Math.max(8, window.innerWidth - badgeWidth - 192)}px`);
-    badge.style.setProperty("--codex-memory-badge-right", "auto");
-    badge.style.setProperty("--codex-memory-badge-top", "8px");
-    badge.style.height = "30px";
   }
 
   function installClaudeCodexProMenu() {
@@ -3934,6 +3777,9 @@
     menu.appendChild(trigger);
     menu.className = claudeCodexProMenuFloatingClass;
     document.documentElement.appendChild(menu);
+    window.__claudeCodexProMenuResizeObserver?.disconnect();
+    window.__claudeCodexProMenuResizeObserver = new ResizeObserver(() => updateFloatingClaudeCodexProMenuPosition(menu));
+    window.__claudeCodexProMenuResizeObserver.observe(menu);
     updateFloatingClaudeCodexProMenuPosition(menu);
     removeDuplicateClaudeCodexProMenus(menu);
   }
@@ -4700,6 +4546,10 @@
     host: null,
     shadow: null,
     root: null,
+    upstreamSurface: null,
+    upstreamRuntime: null,
+    upstreamPath: undefined,
+    upstreamBridge: null,
     main: null,
     mainSnapshot: null,
     mainResizeObserver: null,
@@ -5130,6 +4980,8 @@
       .ccp-multica-button[data-variant="danger"] { border-color: color-mix(in srgb, #e17d83 58%, transparent); color: #e17d83; }
       .ccp-multica-button:focus-visible, .ccp-multica-module-item:focus-visible, .ccp-multica-filter:focus-visible, .ccp-multica-icon-button:focus-visible, .ccp-multica-card:focus-visible { box-shadow: 0 0 0 2px #4fb995; outline: none; }
       .ccp-multica-content { box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; padding: 16px 18px 24px; }
+      .ccp-multica-content[data-upstream="true"] { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+      .ccp-upstream-workflow-container { width: 100%; height: 100%; min-width: 0; min-height: 0; flex: 1; }
       .ccp-multica-content[data-route="my-issues"] { display: flex; overflow: hidden; padding: 0; background: var(--ccp-multica-bg, #181b1a); color: var(--ccp-multica-fg, #f2f5f3); }
       .ccp-multica-content-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
       .ccp-multica-content-title { min-width: 0; flex: 1; margin: 0; font-size: 15px; font-weight: 620; letter-spacing: 0; }
@@ -5316,6 +5168,10 @@
       @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
     `;
     shadow.appendChild(style);
+    const upstreamStyle = multicaWorkspaceEl("style");
+    upstreamStyle.dataset.ccpWorkflowStyles = "true";
+    upstreamStyle.textContent = window.__CODEX_WORKFLOW_STYLES__ || "";
+    shadow.appendChild(upstreamStyle);
     const shell = multicaWorkspaceEl("section", "ccp-multica-shell");
     shell.setAttribute("role", "region");
     shell.setAttribute("aria-label", "我的任务");
@@ -5346,6 +5202,7 @@
     const module = multicaWorkspaceModules.find((candidate) => candidate.key === route);
     if (!module) return;
     multicaWorkspaceState.route = module.key;
+    multicaWorkspaceState.upstreamPath = undefined;
     multicaWorkspaceState.moduleMenuOpen = false;
     multicaWorkspaceState.querySeq += 1;
     multicaWorkspaceCancelQuery();
@@ -5358,7 +5215,7 @@
       entry?.setAttribute?.("data-state", selected ? "active" : "inactive");
     });
     multicaWorkspaceRenderContent();
-    if (module.key !== "settings") void multicaWorkspaceQuery(module, false);
+    if (!["settings", "my-issues", "autopilots", "agents"].includes(module.key)) void multicaWorkspaceQuery(module, false);
   }
 
   function multicaWorkspaceAppendModuleMenu(parent) {
@@ -5495,6 +5352,7 @@
           multicaWorkspaceSelectRoute(module.key);
         } else {
           multicaWorkspaceState.route = module.key;
+          multicaWorkspaceState.upstreamPath = undefined;
           void multicaWorkspaceOpen();
         }
       };
@@ -5533,7 +5391,7 @@
     delete entry.dataset.ccpMulticaAvailability;
     entry.setAttribute("aria-label", "我的任务");
     entry.removeAttribute("aria-description");
-    entry.setAttribute("data-state", multicaWorkspaceState.opened ? "active" : "inactive");
+    entry.setAttribute("data-state", multicaWorkspaceState.opened && multicaWorkspaceState.route === "my-issues" ? "active" : "inactive");
     entry.title = "我的任务";
     if (badge) {
       badge.textContent = "";
@@ -5577,6 +5435,7 @@
     // leaving Codex on a blank native surface.
     multicaWorkspaceState.opened = true;
     multicaWorkspaceState.opening = false;
+    removeConversationTimeline();
     multicaWorkspaceRestoreMain();
     if (multicaWorkspaceState.host) {
       multicaWorkspaceState.host.style.display = "block";
@@ -6681,7 +6540,8 @@
   // the backend perform the revision/CAS write; a transient disconnect never
   // fabricates a terminal state in the local workflow projection.
   async function multicaWorkspaceSyncExecutionStatuses(force = false) {
-    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled()) return;
+    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled() ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
     const now = Date.now();
     if (!force && now < multicaWorkspaceState.executionPollAt) return;
     multicaWorkspaceState.executionPollAt = now + multicaWorkspaceExecutionPollIntervalMs;
@@ -6694,6 +6554,7 @@
       })
       .slice(0, 24);
     for (const binding of active) {
+      if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
       const bindingId = multicaWorkspaceExecutionBindingId(binding);
       if (!bindingId || multicaWorkspaceState.executionBusy.has(`status:${bindingId}`)) continue;
       multicaWorkspaceState.executionBusy.add(`status:${bindingId}`);
@@ -6715,7 +6576,8 @@
   // claims queue rows, not arbitrary Issue cards; the backend-created binding,
   // its CAS revision, and the persisted Agent assignment are required.
   async function multicaWorkspaceDispatchQueuedAssignments(force = false) {
-    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled()) return;
+    if (!multicaWorkspaceState.workspaceId || !multicaWorkspaceFeatureEnabled() ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
     const now = Date.now();
     if (!force && now < multicaWorkspaceState.queueDispatchAt) return;
     multicaWorkspaceState.queueDispatchAt = now + multicaWorkspaceQueueDispatchIntervalMs;
@@ -6725,14 +6587,14 @@
         if (multicaWorkspaceExecutionState(binding) !== "binding_pending" &&
             multicaWorkspaceExecutionState(binding) !== "queued") return false;
         const bindingId = multicaWorkspaceExecutionBindingId(binding);
-        const issueId = String(multicaWorkspaceObjectValue(binding, "issueId", "issue_id") || "").trim();
         const agentId = String(multicaWorkspaceObjectValue(binding, "agentId", "agent_id") || "").trim();
-        return !!bindingId && !!issueId && !!agentId &&
+        return !!bindingId && !!agentId &&
           !String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim() &&
           !String(multicaWorkspaceObjectValue(binding, "codexExecutionId", "codex_execution_id") || "").trim();
       })
       .slice(0, 8);
     for (const binding of queued) {
+      if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
       const bindingId = multicaWorkspaceExecutionBindingId(binding);
       if (multicaWorkspaceState.executionBusy.has(`dispatch:${bindingId}`)) continue;
       const revision = multicaWorkspaceEntityRevision(binding);
@@ -6848,14 +6710,74 @@
     return active?.getAttribute?.("data-app-action-sidebar-thread-id") || "";
   }
 
+  function multicaWorkspaceNativeSubagentOpener(threadId) {
+    // Read the mounted native control contract, without changing React state.
+    // Codex's multi-agent links call canOpen(id) and then open(id, displayName).
+    const seen = new Set();
+    const buttons = Array.from(document.querySelectorAll?.('[data-testid="multi-agent-action-rows"] button') || []).slice(0, 200);
+    for (const button of buttons) {
+      for (let fiber = reactFiberFrom(button), depth = 0; fiber && depth < 16; fiber = fiber.return, depth += 1) {
+        const opener = fiber.memoizedProps?.backgroundAgentOpener;
+        if (!opener || seen.has(opener)) continue;
+        seen.add(opener);
+        if (typeof opener.canOpen === "function" && typeof opener.open === "function" && opener.canOpen(threadId) === true) return opener;
+      }
+    }
+    return null;
+  }
+
+  function multicaWorkspaceNativeSubagentIsActive(threadId) {
+    const tabs = Array.from(document.querySelectorAll?.('[role="tab"][aria-selected="true"]') || []).slice(0, 16);
+    for (const tab of tabs) {
+      if (!tab.isConnected || !tab.getClientRects?.().length) continue;
+      const tabId = tab.closest?.("[data-tab-id]")?.getAttribute("data-tab-id");
+      if (tabId === `background-agent:${threadId}`) return true;
+      if (!tabId?.startsWith("subagents:")) continue;
+      for (let fiber = reactFiberFrom(tab), depth = 0; fiber && depth < 16; fiber = fiber.return, depth += 1) {
+        const nativeTab = fiber.memoizedProps?.tab;
+        if (nativeTab?.tabId === tabId && nativeTab.durableRoute?.kind === "subagents" &&
+            nativeTab.props?.requestedConversationId === threadId && nativeTab.props?.isLoading === false) return true;
+      }
+    }
+    return false;
+  }
+
   async function multicaWorkspaceActivateNativeThread(threadId) {
-    const row = multicaWorkspaceNativeThreadRow(threadId);
-    if (!row) throw new Error("未在 Codex 侧栏找到该对话");
-    const clickTarget = row.matches?.('button, a[href], [role="button"], [role="link"]')
-      ? row
-      : row.closest?.('button, a[href], [role="button"], [role="link"]') || row;
     multicaWorkspaceState.nativeThreadActivation = true;
     try {
+      let row = multicaWorkspaceNativeThreadRow(threadId);
+      let thread;
+      if (!row) {
+        const response = await codexPageHostRequest("thread/read", { threadId, includeTurns: false });
+        thread = response?.thread;
+        if (!thread || !multicaWorkspaceThreadIdMatches(thread.id, threadId)) throw new Error("Codex 对话读取结果不匹配");
+        const target = nativeProjectTargets().find((project) => normalizeWorkspacePath(project.path) === normalizeWorkspacePath(thread.cwd));
+        if (target?.row?.getAttribute("data-app-action-sidebar-project-collapsed") === "true") {
+          target.row.click();
+        }
+        const deadline = Date.now() + 3000;
+        while (!row && Date.now() < deadline) {
+          row = multicaWorkspaceNativeThreadRow(threadId);
+          if (!row) await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+      }
+      if (!row) {
+        const opener = multicaWorkspaceNativeSubagentOpener(threadId);
+        if (!opener) throw new Error("未找到该对话的 Codex 原生打开入口");
+        opener.open(threadId, thread?.agentNickname || threadId);
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          if (multicaWorkspaceNativeSubagentIsActive(threadId)) {
+            multicaWorkspaceHide();
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        throw new Error("Codex 未激活目标子会话");
+      }
+      const clickTarget = row.matches?.('button, a[href], [role="button"], [role="link"]')
+        ? row
+        : row.closest?.('button, a[href], [role="button"], [role="link"]') || row;
       clickTarget.click?.();
       const deadline = Date.now() + 3000;
       while (Date.now() < deadline) {
@@ -8382,10 +8304,121 @@
     }
   }
 
+  function multicaWorkspaceUnmountUpstreamSurface() {
+    const state = multicaWorkspaceState;
+    if (state.upstreamSurface) {
+      try { state.upstreamRuntime?.unmount(state.upstreamSurface); } catch (_) {}
+      state.upstreamSurface.remove();
+    }
+    state.upstreamSurface = null;
+    state.upstreamRuntime = null;
+  }
+
+  function multicaWorkspaceRenderUpstreamSurface(content, module) {
+    const state = multicaWorkspaceState;
+    const runtime = window.__CODEX_WORKFLOW_SURFACE__;
+    content.dataset.route = module.key;
+    content.dataset.upstream = "true";
+    const bootstrap = state.bootstrap;
+    if (!runtime?.mount || !bootstrap?.workspace?.id) {
+      multicaWorkspaceUnmountUpstreamSurface();
+      content.replaceChildren();
+      const message = !runtime?.mount ? "工作流资源未加载，请更新 CCP 后重新注入" : state.bootstrapError || "正在连接本地工作区…";
+      const notice = multicaWorkspaceEl("div", "ccp-multica-state", message);
+      notice.setAttribute("role", state.bootstrapError || !runtime?.mount ? "alert" : "status");
+      if (state.bootstrapError) {
+        const retry = multicaWorkspaceEl("button", "ccp-multica-button", "重试");
+        retry.type = "button";
+        retry.addEventListener("click", () => void multicaWorkspaceLoadBootstrap(true));
+        notice.appendChild(retry);
+      }
+      content.appendChild(notice);
+      return;
+    }
+    if (!state.upstreamBridge) {
+      const paths = new Set([
+        "/multica/workspace/bootstrap", "/multica/workspace/query", "/multica/workspace/upsert", "/multica/workspace/command",
+        "/multica/workspace/delete", "/multica/workspace/move-issue", "/multica/agents/create",
+        "/multica/workspace/reorder-statuses", "/multica/builder",
+        "/multica/webhooks/provision", "/multica/webhooks/trigger", "/multica/webhooks/rotate",
+        "/multica/webhooks/deliveries", "/multica/webhooks/delivery", "/multica/webhooks/replay", "/multica/webhooks/revoke",
+        "/multica/agents/env", "/multica/issues/limit-usage", "/multica/autopilots/usage",
+        "/multica/issues/preview-trigger", "/multica/quick-actions/render", "/multica/quick-actions/run",
+        "/multica/skills/resolve", "/multica/skills/review", "/multica/skills/bind",
+        "/multica/skills/unbind", "/multica/skills/bindings", "/multica/skills/bindings/replace",
+        "/multica/executions/create", "/multica/executions/dispatch", "/multica/executions/open",
+        "/multica/executions/continue", "/multica/executions/cancel", "/multica/executions/status",
+        "/multica/executions/list", "/multica/executions/messages/list", "/multica/tasks/queue/transition",
+        "/multica/autopilots/runs", "/multica/autopilots/run", "/multica/autopilots/trigger",
+        "/multica/autopilots/tick", "/multica/autopilots/cron-preview",
+      ]);
+      state.upstreamBridge = Object.freeze({
+        postJson: async (path, payload) => {
+          if (!paths.has(path) || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+            throw new Error("workflow_request_invalid");
+          }
+          if (!multicaWorkspaceFeatureEnabled() || window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) {
+            throw new Error("workflow_generation_stale");
+          }
+          return multicaWorkspaceRequest(path, payload, 30000).promise;
+        },
+        openThread: async (threadId) => {
+          if (!multicaWorkspaceFeatureEnabled() || window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) {
+            throw new Error("workflow_generation_stale");
+          }
+          return multicaWorkspaceActivateNativeThread(threadId);
+        },
+      });
+    }
+    window.__CODEX_WORKFLOW_BRIDGE__ = state.upstreamBridge;
+    if (!state.upstreamSurface || state.upstreamRuntime !== runtime) {
+      multicaWorkspaceUnmountUpstreamSurface();
+      content.replaceChildren();
+      state.upstreamSurface = multicaWorkspaceEl("div", "ccp-upstream-workflow-container");
+      state.upstreamRuntime = runtime;
+      content.appendChild(state.upstreamSurface);
+    }
+    try {
+      runtime.mount(state.upstreamSurface, {
+        route: module.key,
+        path: state.upstreamPath,
+        workspaceId: bootstrap.workspace.id,
+        workspaceSlug: bootstrap.workspace.slug || bootstrap.workspace.id,
+        onNavigate: (route, path) => {
+          if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration ||
+              state.upstreamRuntime !== runtime || !state.upstreamSurface) return;
+          state.route = route;
+          state.upstreamPath = path;
+          state.entries.forEach((entry, entryRoute) => {
+            const selected = state.opened && entryRoute === route;
+            entry?.setAttribute?.("aria-current", selected ? "page" : "false");
+            entry?.setAttribute?.("data-state", selected ? "active" : "inactive");
+          });
+        },
+      });
+    } catch (_) {
+      multicaWorkspaceUnmountUpstreamSurface();
+      content.replaceChildren();
+      const notice = multicaWorkspaceEl("div", "ccp-multica-state", "工作流页面加载失败");
+      notice.setAttribute("role", "alert");
+      const retry = multicaWorkspaceEl("button", "ccp-multica-button", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => multicaWorkspaceRenderContent());
+      notice.appendChild(retry);
+      content.appendChild(notice);
+    }
+  }
+
   function multicaWorkspaceRenderContent() {
     const content = multicaWorkspaceState.root?.content;
     if (!content) return;
     const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
+    if (["my-issues", "autopilots", "agents"].includes(module.key)) {
+      multicaWorkspaceRenderUpstreamSurface(content, module);
+      return;
+    }
+    multicaWorkspaceUnmountUpstreamSurface();
+    delete content.dataset.upstream;
     let error = multicaWorkspaceState.errors.get(module.key);
     let collection = multicaWorkspacePermissionError(error)
       ? null
@@ -8751,6 +8784,10 @@
         window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return false;
     if (!bootstrapReady) return false;
     const module = moduleForMulticaWorkspace(multicaWorkspaceState.route);
+    if (["my-issues", "autopilots", "agents"].includes(module.key)) {
+      multicaWorkspaceRenderContent();
+      return true;
+    }
     if (module.key === "settings") return true;
     return multicaWorkspaceQuery(module, force, timeoutMs);
   }
@@ -8832,7 +8869,8 @@
   }
 
   async function multicaWorkspaceBackgroundSync() {
-    if (multicaWorkspaceState.backgroundBusy || !multicaWorkspaceFeatureEnabled()) return;
+    if (multicaWorkspaceState.backgroundBusy || !multicaWorkspaceFeatureEnabled() ||
+        window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
     multicaWorkspaceState.backgroundBusy = true;
     try {
       if (!multicaWorkspaceState.workspaceId && !multicaWorkspaceState.bootstrapLoading) {
@@ -8840,12 +8878,23 @@
       }
       if (!multicaWorkspaceState.workspaceId || multicaWorkspaceState.queryRequest) return;
       for (const route of ["issues", "my-issues"]) {
-        if (multicaWorkspaceState.queryRequest) return;
+        if (multicaWorkspaceState.queryRequest ||
+            window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
         await multicaWorkspaceQuery(moduleForMulticaWorkspace(route), true, multicaWorkspaceBackgroundTimeoutMs);
       }
+      if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
+      try {
+        await multicaWorkspaceCall("/multica/autopilots/tick", {}, 30000);
+      } catch (error) {
+        multicaWorkspaceState.executionsError = multicaWorkspaceErrorMessage(error);
+      }
+      if (window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
       if (!multicaWorkspaceState.executionsLoading) await multicaWorkspaceLoadExecutions(true);
       await multicaWorkspaceDispatchQueuedAssignments();
       await multicaWorkspaceSyncExecutionStatuses();
+      if (window.__claudeCodexProMulticaWorkspaceGeneration === claudeCodexProMulticaWorkspaceGeneration && multicaWorkspaceState.upstreamSurface) {
+        multicaWorkspaceState.upstreamRuntime?.invalidate?.(multicaWorkspaceState.upstreamSurface);
+      }
     } finally {
       multicaWorkspaceState.backgroundBusy = false;
     }
@@ -8856,7 +8905,13 @@
     multicaWorkspaceState.backgroundStarted = true;
     const tick = async () => {
       multicaWorkspaceState.backgroundTimer = null;
-      await multicaWorkspaceBackgroundSync();
+      try {
+        await multicaWorkspaceBackgroundSync();
+      } catch (_) {
+        if (window.__claudeCodexProMulticaWorkspaceGeneration === claudeCodexProMulticaWorkspaceGeneration) {
+          multicaWorkspaceState.executionsError = "后台同步中断，正在重试";
+        }
+      }
       if (!multicaWorkspaceState.backgroundStarted ||
           window.__claudeCodexProMulticaWorkspaceGeneration !== claudeCodexProMulticaWorkspaceGeneration) return;
       multicaWorkspaceState.backgroundTimer = setTimeout(tick, multicaWorkspaceBackgroundIntervalMs);
@@ -8962,6 +9017,11 @@
   }
 
   function cleanupMulticaWorkspace() {
+    multicaWorkspaceUnmountUpstreamSurface();
+    if (window.__CODEX_WORKFLOW_BRIDGE__ === multicaWorkspaceState.upstreamBridge) {
+      delete window.__CODEX_WORKFLOW_BRIDGE__;
+    }
+    multicaWorkspaceState.upstreamBridge = null;
     if (multicaWorkspaceState.anchorTimer) clearTimeout(multicaWorkspaceState.anchorTimer);
     multicaWorkspaceState.anchorTimer = null;
     multicaWorkspaceStopBackgroundSync();
@@ -9187,17 +9247,21 @@
 
   let cachedSessionRows = [];
   let cachedSessionRowsAt = 0;
+  const unavailableSessionIds = new Set();
+  let sessionAvailabilityInFlight = false;
+  let sessionAvailabilitySignature = "";
+  let sessionAvailabilityFetchedAt = 0;
 
   function sessionRows(forceRefresh = false) {
     const now = Date.now();
     if (!forceRefresh && now - cachedSessionRowsAt < 150) {
       cachedSessionRows = cachedSessionRows.filter((row) => row.isConnected);
-      if (cachedSessionRows.length > 0) return cachedSessionRows;
+      if (cachedSessionRows.length > 0) return filterDeletedSessionRows(cachedSessionRows);
     }
 
     cachedSessionRows = Array.from(document.querySelectorAll(selectors.sidebarThread));
     cachedSessionRowsAt = now;
-    return cachedSessionRows;
+    return filterDeletedSessionRows(cachedSessionRows);
   }
 
   function archivePageHintVisible() {
@@ -9249,6 +9313,85 @@
     const rawTitle = (titleNode?.textContent || (titleNode ? "" : (row.textContent || "Untitled session")));
     const title = (titleNode ? rawTitle : rawTitle.replace(/\s*(导出|删除|移动|移出项目)(\s*(导出|删除|移动|移出项目))*$/g, "")).trim().slice(0, 160);
     return { session_id: sessionId, title };
+  }
+
+  function readDeletedSessionIds() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(codexDeletedSessionsKey) || "[]");
+      return new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string" && id.trim()) : []);
+    } catch (_) {
+      return new Set();
+    }
+  }
+
+  function writeDeletedSessionIds(ids) {
+    try {
+      localStorage.setItem(codexDeletedSessionsKey, JSON.stringify(Array.from(ids).slice(-codexDeletedSessionsMaxEntries)));
+    } catch (_) {}
+  }
+
+  function markDeletedSession(sessionId) {
+    const ids = readDeletedSessionIds();
+    threadIdVariants(sessionId).forEach((id) => ids.add(id));
+    writeDeletedSessionIds(ids);
+  }
+
+  function clearDeletedSession(sessionId) {
+    const ids = readDeletedSessionIds();
+    threadIdVariants(sessionId).forEach((id) => ids.delete(id));
+    writeDeletedSessionIds(ids);
+  }
+
+  function filterDeletedSessionRows(rows) {
+    const deletedIds = readDeletedSessionIds();
+    return rows.filter((row) => {
+      const sessionId = sessionRefFromRow(row).session_id;
+      const deleted = threadIdVariants(sessionId).some((id) => deletedIds.has(id) || unavailableSessionIds.has(id));
+      if (deleted) {
+        row.dataset.codexDeletedSession = "true";
+        row.style.setProperty("display", "none", "important");
+        removeActionGroups(row);
+        return false;
+      }
+      if (row.dataset.codexDeletedSession === "true") {
+        delete row.dataset.codexDeletedSession;
+        row.style.removeProperty("display");
+      }
+      return true;
+    });
+  }
+
+  function sessionAvailabilityCheckable(row, sessionId) {
+    if (!sessionId || /^(remote|cloud):/i.test(sessionId)) return false;
+    const projectId = row.closest?.("[data-app-action-sidebar-project-list-id]")?.getAttribute?.("data-app-action-sidebar-project-list-id") || "";
+    return !/^remote-ssh-/i.test(projectId);
+  }
+
+  function refreshSessionAvailability(rows) {
+    if (sessionAvailabilityInFlight) return;
+    const checkableIds = uniqueValues(rows
+      .map((row) => ({ row, id: sessionRefFromRow(row).session_id }))
+      .filter(({ row, id }) => sessionAvailabilityCheckable(row, id))
+      .map(({ id }) => id));
+    if (!checkableIds.length) return;
+    const signature = checkableIds.map(projectMoveSessionKey).join("|");
+    if (signature === sessionAvailabilitySignature && Date.now() - sessionAvailabilityFetchedAt < 30000) return;
+    sessionAvailabilityInFlight = true;
+    postJson("/session-availability", { session_ids: checkableIds }).then((result) => {
+      if (result?.status !== "ok" || !Array.isArray(result.available_session_ids)) return;
+      const available = new Set(result.available_session_ids.flatMap(threadIdVariants));
+      checkableIds.forEach((id) => {
+        const variants = threadIdVariants(id);
+        if (variants.some((variant) => available.has(variant))) {
+          variants.forEach((variant) => unavailableSessionIds.delete(variant));
+        } else {
+          variants.forEach((variant) => unavailableSessionIds.add(variant));
+        }
+      });
+      filterDeletedSessionRows(rows);
+      sessionAvailabilitySignature = signature;
+      sessionAvailabilityFetchedAt = Date.now();
+    }).finally(() => { sessionAvailabilityInFlight = false; });
   }
 
   function claudeCodexProDiagnosticPayload(event, detail) {
@@ -10929,7 +11072,7 @@
     return result;
   }
 
-  function showToast(message, undoToken) {
+  function showToast(message, undoToken, sessionId) {
     document.querySelectorAll(".codex-delete-toast").forEach((node) => node.remove());
     const toast = document.createElement("div");
     toast.className = "codex-delete-toast";
@@ -10940,6 +11083,10 @@
       undo.addEventListener("click", async () => {
         const result = await postJson("/undo", { undo_token: undoToken });
         toast.textContent = result.message || "撤销完成";
+        if (result?.status === "undone") {
+          clearDeletedSession(sessionId);
+          window.location.reload();
+        }
         setTimeout(() => toast.remove(), 5000);
       });
       toast.appendChild(undo);
@@ -11059,34 +11206,6 @@
       }));
     } catch {
     }
-  }
-
-  function readCodexMemoryProjectContext() {
-    try {
-      const context = JSON.parse(sessionStorage.getItem(codexMemoryProjectContextKey) || "null");
-      if (!context || typeof context !== "object") return null;
-      if (typeof context.at === "number" && Date.now() - context.at > upstreamProjectContextTtlMs) return null;
-      if (!context.repoPath && !context.projectId) return null;
-      return context;
-    } catch {
-      return null;
-    }
-  }
-
-  function rememberCodexMemoryProjectContext(context) {
-    if (!context?.repoPath && !context?.projectId) return context || null;
-    const next = {
-      repoPath: context.repoPath || "",
-      projectId: context.projectId || "",
-      label: context.label || "",
-      at: Date.now(),
-    };
-    try {
-      sessionStorage.setItem(codexMemoryProjectContextKey, JSON.stringify(next));
-      writeUpstreamProjectContext(next);
-    } catch {
-    }
-    return next;
   }
 
   function projectContextFromStartButton(button) {
@@ -11969,8 +12088,9 @@
           }),
         ]);
         if (result?.status === "server_deleted" || result?.status === "local_deleted") {
+          markDeletedSession(ref.session_id);
           removeDeletedRow(row, button);
-          showToast(result.message || "删除成功", result.undo_token);
+          showToast(result.message || "删除成功", result.undo_token, ref.session_id);
         } else {
           showToast(result?.message || "删除失败", null);
         }
@@ -12744,7 +12864,7 @@
   }
 
   function refreshConversationTimeline() {
-    if (!claudeCodexProSettings().conversationTimeline) {
+    if (multicaWorkspaceState.opened || !claudeCodexProSettings().conversationTimeline) {
       removeConversationTimeline();
       return;
     }
@@ -13849,7 +13969,9 @@
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
     }
-    sessionRows().forEach(tryAttachButton);
+    const rows = sessionRows();
+    void refreshSessionAvailability(rows);
+    rows.forEach(tryAttachButton);
     syncActionGroupsLayout();
     updateDeleteButtonOffsets();
     scheduleProjectMoveProjection();
@@ -13858,9 +13980,6 @@
     refreshConversationTimeline();
     refreshConversationView();
     installCodexServiceTierBadge();
-    codexMemoryUpdateBadge();
-    void codexMemoryLoadSession();
-    void codexMemoryMaybeSuggestCandidate();
     scheduleThreadScrollSync();
   }
 
@@ -13878,159 +13997,7 @@
     requestAnimationFrame(() => runScanStep(scanDeferred));
   }
 
-  const codexMemoryState = {
-    status: "loading",
-    workspace: "codex",
-    totalItems: 0,
-    pendingCandidates: 0,
-    injectedItems: [],
-    injectSummaryCachePath: "",
-    summary: "正在读取盘古记忆…",
-    lastLoadedAt: 0,
-    lastSuggestionHash: "",
-    lastSuggestionAt: 0,
-    lastAutoSuggestDiagnosticHash: "",
-    lastAutoSuggestDiagnosticAt: 0,
-    activeUntil: 0,
-    activeSource: "idle",
-  };
-  let codexMemoryLastHeartbeatAt = 0;
-
-  function codexMemoryHeartbeat(force = false) {
-    const now = Date.now();
-    if (!force && now - codexMemoryLastHeartbeatAt < 10000) return;
-    codexMemoryLastHeartbeatAt = now;
-    sendClaudeCodexProDiagnostic("memory_runtime", {
-      runtime: window.__claudeCodexProMemoryAssistRuntime || null,
-    });
-  }
-
-  if (window.__claudeCodexProMemoryHeartbeatTimer) {
-    clearInterval(window.__claudeCodexProMemoryHeartbeatTimer);
-  }
-  window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval(() => {
-    try {
-      codexMemoryExposeRuntime();
-    } catch (_) {}
-  }, 10000);
-
-  function codexMemoryPulseActivity(source = "stream", durationMs = 3200) {
-    codexMemoryState.activeUntil = Date.now() + durationMs;
-    codexMemoryState.activeSource = source || "stream";
-    codexMemoryExposeRuntime();
-    codexMemoryHeartbeat(true);
-    codexMemoryUpdateBadge();
-  }
-
-  function codexMemoryExposeRuntime() {
-    const settings = claudeCodexProSettings();
-    const active = Date.now() < Number(codexMemoryState.activeUntil || 0);
-    window.__claudeCodexProMemoryAssistRuntime = {
-      enabled: !!settings.memoryAssistEnabled,
-      injected: !!settings.memoryAssistEnabled && !!settings.memoryAssistInjectEnabled,
-      status: codexMemoryState.status,
-      active,
-      workspace: codexMemoryState.workspace,
-      totalItems: Number(codexMemoryState.totalItems || 0),
-      pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
-      injectSummaryCachePath: codexMemoryState.injectSummaryCachePath || "",
-      summary: codexMemoryState.summary || "",
-      source: active ? (codexMemoryState.activeSource || "stream") : "idle",
-    };
-    codexMemoryHeartbeat();
-  }
-
-  function codexMemoryWorkspace() {
-    const project = currentProjectContext?.();
-    if (project?.repoPath || project?.projectId) {
-      const remembered = rememberCodexMemoryProjectContext(project);
-      if (remembered?.repoPath) return `codex:repo:${remembered.repoPath}`;
-      if (remembered?.projectId) return `codex:project:${remembered.projectId}`;
-    }
-    const cachedProject = readCodexMemoryProjectContext();
-    if (cachedProject?.repoPath) return `codex:repo:${cachedProject.repoPath}`;
-    if (cachedProject?.projectId) return `codex:project:${cachedProject.projectId}`;
-    const pathParts = String(location.pathname || "").split("/").filter(Boolean);
-    const thread = pathParts.find((part) => /^[a-z0-9][a-z0-9_-]{7,}$/i.test(part)) || "";
-    if (thread) return `codex:thread:${thread.slice(0, 80)}`;
-    const pathKey = `${location.origin || ""}${location.pathname || ""}`;
-    if (pathKey.trim()) return `codex:path:${codexMemoryHash(pathKey).slice(0, 16)}`;
-    return "codex";
-  }
-
-  function codexMemoryWorkspaceIsPathFallback(workspace) {
-    return /^codex:path:/i.test(String(workspace || ""));
-  }
-
-  function codexMemoryVisibleThreadTitle() {
-    const candidates = [
-      document.querySelector('[data-testid="thread-title"]'),
-      document.querySelector('[data-thread-title]'),
-      document.querySelector("main h1"),
-      document.querySelector("header h1"),
-      document.querySelector('[role="main"] h1'),
-    ].filter(Boolean);
-    for (const node of candidates) {
-      const text = normalizedElementText(node);
-      if (text) return text;
-    }
-    return String(document.title || "").replace(/\s+-\s+Codex.*$/i, "").trim();
-  }
-
-  function codexMemoryVisibleProjectLabel() {
-    const project = currentProjectContext?.();
-    if (project?.label) return project.label;
-    const rows = [...document.querySelectorAll("aside *, nav *")]
-      .filter((node) => node instanceof HTMLElement && visibleElement(node))
-      .map((node) => normalizedElementText(node))
-      .filter((text) => text && text.length <= 80);
-    const title = codexMemoryVisibleThreadTitle();
-    const titleIndex = rows.findIndex((text) => title && (text === title || title.includes(text) || text.includes(title)));
-    if (titleIndex > 0) {
-      for (let index = titleIndex - 1; index >= 0; index -= 1) {
-        const text = rows[index];
-        if (/^(项目|搜索|新对话|已安排|插件|设置|账户)$/i.test(text)) continue;
-        if (/^\d+\s*(分钟|小时|天|周|月|年|min|hour|day|week)/i.test(text)) continue;
-        if (text !== title) return text;
-      }
-    }
-    const expanded = visibleProjectRows?.().find((row) => row.getAttribute("data-app-action-sidebar-project-collapsed") === "false");
-    return normalizeProjectLabel(expanded?.getAttribute?.("data-app-action-sidebar-project-label") || normalizedElementText(expanded));
-  }
-
-  async function codexMemoryResolvedWorkspace() {
-    const workspace = codexMemoryWorkspace();
-    if (!codexMemoryWorkspaceIsPathFallback(workspace)) {
-      codexMemoryState.workspace = workspace;
-      return workspace;
-    }
-    try {
-      const result = await postJson("/memory/resolve-workspace", {
-        workspace,
-        url: location.href,
-        title: document.title || "",
-        threadTitle: codexMemoryVisibleThreadTitle(),
-        projectLabel: codexMemoryVisibleProjectLabel(),
-      });
-      const resolved = String(result?.workspace || "").trim();
-      if (result?.status === "ok" && result?.resolved && resolved && !codexMemoryWorkspaceIsPathFallback(resolved)) {
-        const context = resolved.startsWith("codex:repo:")
-          ? { repoPath: resolved.slice("codex:repo:".length), projectId: "", label: "", at: Date.now() }
-          : { repoPath: resolved, projectId: "", label: "", at: Date.now() };
-        rememberCodexMemoryProjectContext(context);
-        codexMemoryState.workspace = resolved.startsWith("codex:") ? resolved : `codex:repo:${resolved}`;
-        return codexMemoryState.workspace;
-      }
-    } catch (error) {
-      codexMemoryAutoSuggestDiagnostic("workspace_resolve_failed", {
-        message: String(error?.message || error).slice(0, 240),
-      });
-    }
-    codexMemoryState.workspace = workspace;
-    return workspace;
-  }
-
-  function codexMemoryConversationRoot() {
+  function codexConversationRoot() {
     return document.querySelector(".thread-scroll-container")
       || document.querySelector('[data-testid="conversation"]')
       || document.querySelector('main [data-testid="conversation-turn"]')?.closest("main")
@@ -14075,7 +14042,7 @@
         || element.closest('[data-message-author-role="assistant"]')
         || element;
     }
-    const conversationRoot = codexMemoryConversationRoot();
+    const conversationRoot = codexConversationRoot();
     let current = element;
     for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
       const text = codexInternalMessageLeakText(current);
@@ -14118,7 +14085,7 @@
     return [...candidates].filter(Boolean);
   }
 
-  function codexHideInternalMessageLeaks(root = codexMemoryConversationRoot()) {
+  function codexHideInternalMessageLeaks(root = codexConversationRoot()) {
     // Use the document boundary: leaked envelopes can be mounted outside the
     // conversation root by transient Codex overlays/portals.
     const scanRoot = document.body || root || document.documentElement;
@@ -14136,655 +14103,8 @@
     return hidden.size;
   }
 
-  function codexMemoryNodeIsInsideConversation(node) {
-    if (!node || isExtensionUiNode(node)) return false;
-    if (node.closest?.('[data-app-action-sidebar-thread-id], [data-app-action-sidebar-section-heading], nav, aside, header, [role="navigation"], [aria-label*="sidebar" i], [aria-label*="侧边" i]')) return false;
-    const root = codexMemoryConversationRoot();
-    return !!root && root.contains(node);
-  }
-
-  function codexMemoryMessageTarget(node) {
-    return node?.closest?.('[data-testid="conversation-turn"]') || node;
-  }
-
-  function codexMemoryUserMessageCandidates(root) {
-    if (!root) return [];
-    const explicitCandidates = Array.from(root.querySelectorAll([
-      '[data-message-author-role="user"]',
-      '[data-testid="conversation-turn"][data-message-author-role="user"]',
-      '[data-testid="conversation-turn"] [data-message-author-role="user"]',
-      '[class*="user-message"]',
-      '[class*="UserMessage"]',
-    ].join(", ")));
-    const codexUserBubbles = Array.from(root.querySelectorAll(".group.flex.w-full.flex-col.items-end.justify-end.gap-1")).flatMap((group) => {
-      return Array.from(group.children).filter((child) => nodeOrAncestorLooksLikeCodexUserBubble(child));
-    });
-    return [...explicitCandidates, ...codexUserBubbles];
-  }
-
-  function codexMemoryAssistantMessageCandidates(root) {
-    if (!root) return [];
-    return Array.from(root.querySelectorAll([
-      '[data-message-author-role="assistant"]',
-      '[data-testid="conversation-turn"][data-message-author-role="assistant"]',
-      '[data-testid="conversation-turn"] [data-message-author-role="assistant"]',
-    ].join(", ")));
-  }
-
-  function codexMemoryOrderedMessageCandidates(root, role = "") {
-    const candidates = role === "user"
-      ? codexMemoryUserMessageCandidates(root)
-      : role === "assistant"
-        ? codexMemoryAssistantMessageCandidates(root)
-        : [...codexMemoryUserMessageCandidates(root), ...codexMemoryAssistantMessageCandidates(root)];
-    return candidates.sort((left, right) => {
-      if (left === right) return 0;
-      const position = left.compareDocumentPosition?.(right) || 0;
-      if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-      if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-      return 0;
-    });
-  }
-
-  function codexMemoryMessageText(node) {
-    const textNode = node.querySelector?.(".prose, [data-message-content], [data-testid='message-content']") || node;
-    const clone = textNode.cloneNode?.(true);
-    if (clone?.querySelectorAll) {
-      clone.querySelectorAll("button, svg, [aria-hidden='true'], .sr-only, textarea, input").forEach((child) => child.remove());
-    }
-    return codexMemoryNormalizeMessageText((clone?.textContent || textNode.textContent || ""));
-  }
-
-  function codexMemoryNormalizeMessageText(text) {
-    return String(text || "")
-      .replace(/\s+/g, " ")
-      .replace(/^(user|assistant|codex|你|我|用户|助手)\s*[:：]\s*/i, "")
-      .trim();
-  }
-
-  function codexMemoryConversationMessages(role = "") {
-    const root = codexMemoryConversationRoot();
-    if (!root) return [];
-    const seen = new Set();
-    return codexMemoryOrderedMessageCandidates(root, role)
-      .filter((node) => codexMemoryNodeIsInsideConversation(node))
-      .map((node) => {
-        const target = codexMemoryMessageTarget(node);
-        const text = codexMemoryMessageText(node);
-        const key = `${role || target.getAttribute?.("data-message-author-role") || ""}:${text}`;
-        if (!text || seen.has(key)) return "";
-        seen.add(key);
-        return text;
-      })
-      .filter((text) => text.length >= 2 && text.length <= 4000);
-  }
-
-  function codexMemoryCurrentText() {
-    const selection = String(window.getSelection?.() || "").trim();
-    if (selection && document.activeElement?.closest?.("main, [role='main'], .thread-scroll-container")) return selection;
-    const composer = document.querySelector("textarea, [contenteditable='true']");
-    const composerText = composer?.value || composer?.textContent || "";
-    if (String(composerText).trim()) return String(composerText).trim();
-    const messages = codexMemoryConversationMessages();
-    return messages.slice(-2).join("\n\n").trim();
-  }
-
-  function codexMemoryLatestUserText() {
-    const texts = codexMemoryConversationMessages("user")
-      .filter((text) => text.length >= 8 && text.length <= 2400);
-    return texts[texts.length - 1] || "";
-  }
-
-  function codexMemorySuggestionFromText(rawText) {
-    const text = String(rawText || "").replace(/\s+/g, " ").trim();
-    if (!text || text.length < 8) return null;
-    if (codexMemoryLooksLikeChatter(text) || codexMemoryLooksLikeTitleOnly(text)) return null;
-    const patterns = [
-      { re: /(?:\u76d8\u53e4\u8bb0\u5fc6|\u8bb0\u5fc6).*(?:\u662f\u5426|\u6709\u6ca1\u6709|\u6ca1\u6709|\u539f\u56e0|\u4fee\u590d|\u8bb0\u5f55|\u5019\u9009|\u76d1\u542c|\u5bf9\u8bdd|\u4f1a\u8bdd)|(?:\u8fd9\u6761\u5bf9\u8bdd|\u5f53\u524d\u5bf9\u8bdd|\u672c\u6761\u5bf9\u8bdd).*(?:\u8bb0\u5fc6|\u8bb0\u5f55|\u5019\u9009|\u76d8\u53e4)|(?:pangu|memory).*(?:candidate|record|remember|debug|fix|session)/i, reason: "memory self-check phrase" },
-      { re: /(?:帮我|请|以后)?记住[:：]?\s*(.+)$/i, reason: "explicit remember phrase" },
-      { re: /(?:以后都这样|以后按这个|以后统一|以后默认)[:：]?\s*(.+)$/i, reason: "future preference phrase" },
-      { re: /(?:这个项目约定|项目约定|仓库约定|本项目约定)[:：]?\s*(.+)$/i, reason: "project convention phrase" },
-      { re: /(?:以后.*(?:先|必须|不要|不能|需要).*)$/i, reason: "future rule phrase" },
-      { re: /(?:我(?:喜欢|偏好|习惯)|我的(?:偏好|习惯)|默认用|统一用|优先用)[:：]?\s*(.+)$/i, reason: "user preference phrase" },
-      { re: /(?:这个项目|本项目|当前项目|这个仓库|本仓库).*(?:必须|不要|不能|需要|保持|禁止|默认|统一|优先|遵守|保留|删除|改成|修复).*/i, reason: "project requirement phrase" },
-      { re: /(?:注意|记得|以后注意)[:：]?\s*(?:要|必须|不要|不能|需要|保持|保留|避免|先|优先).*/i, reason: "attention rule phrase" },
-      { re: /(?:UI|界面|前端|布局|样式|主题|按钮|开关|卡片|页面).*(?:改成|保持|删除|不要|不能|需要|对齐|一致|修复).*/i, reason: "ui workflow requirement" },
-      { re: /(?:构建|测试|验证|提交|仓库|插件|skill|mcp|codex|claude).*(?:必须|不要|不能|需要|保持|默认|自动|修复|删除|改成).*/i, reason: "workflow requirement" },
-    ];
-    for (const pattern of patterns) {
-      const match = text.match(pattern.re);
-      const candidate = (match?.[1] || match?.[0] || "").trim();
-      if (candidate.length >= 6) {
-        return {
-          text: candidate.slice(0, 2000),
-          reason: pattern.reason,
-        };
-      }
-    }
-    if (codexMemoryLooksLearnableText(text)) {
-      return {
-        text: text.slice(0, 2000),
-        reason: "learnable user instruction",
-      };
-    }
-    return null;
-  }
-
-  function codexMemoryLooksLearnableText(text) {
-    const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    if (normalized.length < 16 || normalized.length > 2400) return false;
-    if (codexMemoryLooksMemorySelfCheckText(normalized)) return true;
-    const ruleWords = /(?:必须|不要|不能|需要|保持|保留|删除|改成|修复|默认|统一|优先|禁止|避免|先|always|never|must|should|prefer|default|keep|remove|fix)/i;
-    if (!ruleWords.test(normalized)) return false;
-    const contextWords = /(?:这个项目|本项目|当前项目|这个仓库|本仓库|UI|界面|前端|布局|样式|主题|按钮|开关|卡片|页面|构建|测试|验证|提交|仓库|插件|skill|mcp|codex|claude|manager|workflow)/i;
-    const userPreference = /(?:我(?:喜欢|偏好|习惯)|我的(?:偏好|习惯)|按我|给我|以后|注意|记得)/i;
-    return contextWords.test(normalized) || userPreference.test(normalized);
-  }
-
-  function codexMemoryLooksMemorySelfCheckText(text) {
-    const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    return /(?:\u76d8\u53e4\u8bb0\u5fc6|\u8bb0\u5fc6).*(?:\u662f\u5426|\u6709\u6ca1\u6709|\u6ca1\u6709|\u539f\u56e0|\u4fee\u590d|\u8bb0\u5f55|\u5019\u9009|\u76d1\u542c|\u5bf9\u8bdd|\u4f1a\u8bdd)|(?:\u8fd9\u6761\u5bf9\u8bdd|\u5f53\u524d\u5bf9\u8bdd|\u672c\u6761\u5bf9\u8bdd).*(?:\u8bb0\u5fc6|\u8bb0\u5f55|\u5019\u9009|\u76d8\u53e4)|(?:pangu|memory).*(?:candidate|record|remember|debug|fix|session)/i.test(normalized);
-  }
-
-  function codexMemoryLooksLikeChatter(text) {
-    const normalized = String(text || "").replace(/[。！？!?.,，\s]/g, "").toLowerCase();
-    if (!normalized) return true;
-    const chatter = new Set([
-      "你好",
-      "您好",
-      "嗨",
-      "hi",
-      "hello",
-      "hey",
-      "谢谢",
-      "感谢",
-      "好的",
-      "好",
-      "可以",
-      "继续",
-      "再来",
-    ]);
-    return chatter.has(normalized);
-  }
-
-  function codexMemoryLooksLikeTitleOnly(text) {
-    const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    if (/^codex[:：].{1,40}$/i.test(normalized)) return true;
-    if (/^(new chat|new conversation|untitled|无标题|新建对话)$/i.test(normalized)) return true;
-    return normalized.length < 10 && !/[，。；：,.!?！？]/.test(normalized);
-  }
-
-  function codexMemoryHash(text) {
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return String(hash >>> 0);
-  }
-
-  function codexMemoryAutoSuggestDiagnostic(reason, detail = {}) {
-    const payload = {
-      reason,
-      workspace: codexMemoryState.workspace || codexMemoryWorkspace(),
-      ...detail,
-    };
-    const hash = codexMemoryHash(JSON.stringify(payload));
-    const now = Date.now();
-    if (hash === codexMemoryState.lastAutoSuggestDiagnosticHash && now - codexMemoryState.lastAutoSuggestDiagnosticAt < 60000) return;
-    codexMemoryState.lastAutoSuggestDiagnosticHash = hash;
-    codexMemoryState.lastAutoSuggestDiagnosticAt = now;
-    sendClaudeCodexProDiagnostic("memory_auto_suggest", payload);
-  }
-
-  const codexMemoryCaptureTtlMs = 30 * 60 * 1000;
-  const codexMemoryCaptureMaxEntries = 128;
-  const codexMemoryCaptureRecent = new Map();
-  const codexMemoryCaptureInFlight = new Map();
-
-  function codexMemoryCaptureFingerprint(payload) {
-    return JSON.stringify({
-      workspace: payload.workspace,
-      text: payload.text,
-      candidateTriggered: payload.candidateTriggered,
-      candidateReason: payload.candidateReason,
-      skipReason: payload.skipReason,
-    });
-  }
-
-  function codexMemoryPruneCaptureHistory(now = Date.now()) {
-    for (const [fingerprint, entry] of codexMemoryCaptureRecent) {
-      if (now - Number(entry?.completedAt || 0) >= codexMemoryCaptureTtlMs) {
-        codexMemoryCaptureRecent.delete(fingerprint);
-      }
-    }
-    while (codexMemoryCaptureRecent.size > codexMemoryCaptureMaxEntries) {
-      const oldest = codexMemoryCaptureRecent.keys().next().value;
-      if (oldest === undefined) break;
-      codexMemoryCaptureRecent.delete(oldest);
-    }
-  }
-
-  function codexMemoryRememberCapture(fingerprint, result) {
-    codexMemoryPruneCaptureHistory();
-    codexMemoryCaptureRecent.delete(fingerprint);
-    codexMemoryCaptureRecent.set(fingerprint, {
-      completedAt: Date.now(),
-      result,
-    });
-    codexMemoryPruneCaptureHistory();
-  }
-
-  async function codexMemoryRecordCapture(text, detail = {}) {
-    const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    if (!normalized) return null;
-    try {
-      const workspace = await codexMemoryResolvedWorkspace();
-      const payload = {
-        workspace,
-        text: normalized.slice(0, 4000),
-        source: "codex-dom-capture",
-        sourceSessionId: location.href,
-        candidateTriggered: !!detail.candidateTriggered,
-        candidateReason: detail.candidateReason || "",
-        skipReason: detail.skipReason || "",
-      };
-      const fingerprint = codexMemoryCaptureFingerprint(payload);
-      codexMemoryPruneCaptureHistory();
-      const recent = codexMemoryCaptureRecent.get(fingerprint);
-      if (recent) return recent.result;
-      const inFlight = codexMemoryCaptureInFlight.get(fingerprint);
-      if (inFlight) return inFlight;
-
-      let request;
-      request = Promise.resolve()
-        .then(async () => {
-          const result = await postJson("/memory/capture", payload);
-          if (result?.status !== "ok") throw new Error(result?.message || "capture failed");
-          codexMemoryRememberCapture(fingerprint, result);
-          return result;
-        })
-        .catch((error) => {
-          codexMemoryCaptureRecent.delete(fingerprint);
-          codexMemoryAutoSuggestDiagnostic("database_failed", {
-            operation: "capture",
-            message: String(error?.message || error).slice(0, 240),
-            textLength: normalized.length,
-          });
-          return null;
-        })
-        .finally(() => {
-          if (codexMemoryCaptureInFlight.get(fingerprint) === request) {
-            codexMemoryCaptureInFlight.delete(fingerprint);
-          }
-        });
-      codexMemoryCaptureInFlight.set(fingerprint, request);
-      return request;
-    } catch (error) {
-      codexMemoryAutoSuggestDiagnostic("database_failed", {
-        operation: "capture",
-        message: String(error?.message || error).slice(0, 240),
-        textLength: normalized.length,
-      });
-      return null;
-    }
-  }
-
-  function codexMemorySetMessage(message, status = "") {
-    const panel = document.getElementById(codexMemoryPanelId);
-    const node = panel?.querySelector("[data-codex-memory-message]");
-    if (!node) return;
-    node.textContent = message || "";
-    node.dataset.status = status;
-  }
-
-  function codexMemoryRenderList(items, emptyText = "暂无匹配记忆。") {
-    const panel = document.getElementById(codexMemoryPanelId);
-    const list = panel?.querySelector("[data-codex-memory-list]");
-    if (!list) return;
-    const rows = (items || []).map((entry) => entry.item || entry).filter(Boolean);
-    list.innerHTML = rows.length ? rows.slice(0, 12).map((item) => `
-      <div class="codex-memory-card">
-        <strong>${escapeHtml(item.category || "general")} · ${escapeHtml(item.workspace || "")}</strong>
-        <p>${escapeHtml(item.text || "")}</p>
-        <small>${escapeHtml((item.tags || []).join(", "))}</small>
-      </div>
-    `).join("") : `<div class="codex-memory-card"><p>${escapeHtml(emptyText)}</p></div>`;
-  }
-
-  function codexMemoryUpdateBadge() {
-    const settings = claudeCodexProSettings();
-    const badge = document.getElementById(codexMemoryBadgeId);
-    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled) {
-      badge?.remove();
-      document.getElementById(codexMemoryPanelId)?.remove();
-      window.__claudeCodexProMemoryAssistRuntime = {
-        enabled: !!settings.memoryAssistEnabled,
-        injected: false,
-        status: "disabled",
-        active: false,
-        workspace: codexMemoryState.workspace,
-        totalItems: Number(codexMemoryState.totalItems || 0),
-        pendingCandidates: Number(codexMemoryState.pendingCandidates || 0),
-        injectSummaryCachePath: codexMemoryState.injectSummaryCachePath || "",
-        summary: "盘古记忆当前未注入。",
-        source: "idle",
-      };
-      codexMemoryHeartbeat(true);
-      return;
-    }
-    const node = badge || document.createElement("button");
-    node.id = codexMemoryBadgeId;
-    node.type = "button";
-    node.dataset.codexMemoryAssistVersion = codexMemoryAssistVersion;
-    node.dataset.status = codexMemoryState.status;
-    node.dataset.active = Date.now() < Number(codexMemoryState.activeUntil || 0) ? "true" : "false";
-    node.innerHTML = `
-      <span class="codex-memory-dot"></span>
-      <span>盘古记忆</span>
-      <span class="codex-memory-count">${codexMemoryState.totalItems || 0}</span>
-      ${codexMemoryState.pendingCandidates ? `<span>待确认 ${codexMemoryState.pendingCandidates}</span>` : ""}
-    `;
-    node.title = codexMemoryState.summary || "盘古记忆";
-    if (!badge) {
-      node.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        codexMemoryTogglePanel();
-      });
-      document.documentElement.appendChild(node);
-    }
-    codexMemoryExposeRuntime();
-    codexMemoryHeartbeat();
-    updateCodexMemoryBadgePosition();
-  }
-
-  async function codexMemoryLoadSession(force = false) {
-    const settings = claudeCodexProSettings();
-    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled) {
-      codexMemoryUpdateBadge();
-      return;
-    }
-    const now = Date.now();
-    if (!force && now - codexMemoryState.lastLoadedAt < 5000) {
-      codexMemoryUpdateBadge();
-      return;
-    }
-    codexMemoryPulseActivity("session");
-    codexMemoryState.lastLoadedAt = now;
-    codexMemoryState.workspace = await codexMemoryResolvedWorkspace();
-    const query = codexMemoryCurrentText();
-    try {
-      const result = await postJson("/memory/session", {
-        workspace: codexMemoryState.workspace,
-        query: query.slice(0, 1600),
-        maxItems: settings.memoryAssistMaxInjectedItems || 5,
-      });
-      if (result?.status !== "ok") throw new Error(result?.message || "memory session failed");
-      codexMemoryState.status = "ok";
-      codexMemoryState.totalItems = Number(result.totalItems || 0);
-      codexMemoryState.pendingCandidates = Number(result.pendingCandidates || 0);
-      codexMemoryState.injectSummaryCachePath = String(result.injectSummaryCachePath || "");
-      codexMemoryState.injectedItems = Array.isArray(result.injectedItems) ? result.injectedItems : [];
-      codexMemoryState.summary = result.summary || "盘古记忆已启用。";
-      codexMemoryRenderList(codexMemoryState.injectedItems);
-    } catch (error) {
-      codexMemoryState.status = "failed";
-      codexMemoryState.summary = `盘古记忆不可用：${error?.message || error}`;
-    }
-    codexMemoryExposeRuntime();
-    codexMemoryUpdateBadge();
-  }
-
-  async function codexMemoryMaybeSuggestCandidate(force = false) {
-    const settings = claudeCodexProSettings();
-    if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled || !settings.memoryAssistAutoSuggestEnabled) return;
-    const latestUserText = codexMemoryLatestUserText();
-    if (!latestUserText) {
-      codexMemoryAutoSuggestDiagnostic("no_latest_user_text", { force: !!force });
-      return;
-    }
-    const suggestion = codexMemorySuggestionFromText(latestUserText);
-    if (!suggestion) {
-      await codexMemoryRecordCapture(latestUserText, {
-        candidateTriggered: false,
-        skipReason: "not_learnable",
-      });
-      codexMemoryAutoSuggestDiagnostic("not_learnable", {
-        textLength: latestUserText.length,
-        memorySelfCheck: codexMemoryLooksMemorySelfCheckText(latestUserText),
-        force: !!force,
-      });
-      return;
-    }
-    const workspace = await codexMemoryResolvedWorkspace();
-    const hash = codexMemoryHash(`${workspace}\n${suggestion.text}`);
-    const now = Date.now();
-    if (!force && hash === codexMemoryState.lastSuggestionHash && now - codexMemoryState.lastSuggestionAt < 120000) {
-      await codexMemoryRecordCapture(latestUserText, {
-        candidateTriggered: false,
-        candidateReason: suggestion.reason,
-        skipReason: "duplicate_recent_memory",
-      });
-      codexMemoryAutoSuggestDiagnostic("duplicate_recent_memory", {
-        reason: suggestion.reason,
-        textLength: suggestion.text.length,
-      });
-      return;
-    }
-    codexMemoryState.lastSuggestionHash = hash;
-    codexMemoryState.lastSuggestionAt = now;
-    codexMemoryPulseActivity("candidate");
-    try {
-      const result = await postJson("/memory/learn", {
-        workspace,
-        text: suggestion.text,
-        category: "preference",
-        source: "codex-dom-auto",
-        sourceSessionId: location.href,
-      });
-      if (result?.status === "ok") {
-        await codexMemoryRecordCapture(latestUserText, {
-          candidateTriggered: true,
-          candidateReason: `auto_learned: ${suggestion.reason}`,
-          skipReason: "",
-        });
-        codexMemoryAutoSuggestDiagnostic("memory_auto_learned", {
-          reason: suggestion.reason,
-          textLength: suggestion.text.length,
-          itemId: result.id || "",
-        });
-        await codexMemoryLoadSession(true);
-        codexMemoryState.summary = "已自动写入长期记忆。";
-        codexMemoryExposeRuntime();
-        codexMemoryUpdateBadge();
-      } else {
-        throw new Error(result?.message || "learn failed");
-      }
-    } catch (error) {
-      await codexMemoryRecordCapture(latestUserText, {
-        candidateTriggered: false,
-        candidateReason: suggestion.reason,
-        skipReason: "learn_failed",
-      });
-      codexMemoryAutoSuggestDiagnostic("learn_failed", {
-        reason: suggestion.reason,
-        message: String(error?.message || error).slice(0, 240),
-      });
-      // Auto learning is opportunistic; the visible badge/session loader reports hard failures.
-    }
-  }
-
-  function codexMemoryEnsurePanel() {
-    let panel = document.getElementById(codexMemoryPanelId);
-    if (panel) return panel;
-    panel = document.createElement("div");
-    panel.id = codexMemoryPanelId;
-    panel.hidden = true;
-    panel.innerHTML = `
-      <div class="codex-memory-panel-header">
-        <div>
-          <strong>盘古记忆</strong>
-          <span data-codex-memory-summary>${escapeHtml(codexMemoryState.summary || "")}</span>
-        </div>
-        <button type="button" class="codex-memory-panel-close" data-codex-memory-close="true">×</button>
-      </div>
-      <div class="codex-memory-panel-body">
-        <textarea data-codex-memory-input placeholder="选中文本或填写要长期记住的内容"></textarea>
-        <div class="codex-memory-actions">
-          <button type="button" data-primary="true" data-codex-memory-learn="true">记住</button>
-          <button type="button" data-codex-memory-search="true">搜索</button>
-          <button type="button" data-codex-memory-candidates="true">待确认</button>
-          <button type="button" data-codex-memory-refresh="true">刷新</button>
-          <button type="button" data-codex-memory-manager="true">管理工具</button>
-        </div>
-        <div class="codex-memory-message" data-codex-memory-message></div>
-        <div class="codex-memory-list" data-codex-memory-list></div>
-      </div>
-    `;
-    panel.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target?.closest?.("[data-codex-memory-close]")) {
-        panel.hidden = true;
-        return;
-      }
-      if (target?.closest?.("[data-codex-memory-refresh]")) {
-        void codexMemoryLoadSession(true);
-        return;
-      }
-      if (target?.closest?.("[data-codex-memory-manager]")) {
-        void postJson("/manager/open", {});
-        return;
-      }
-      if (target?.closest?.("[data-codex-memory-learn]")) {
-        void codexMemoryLearnFromPanel();
-        return;
-      }
-      if (target?.closest?.("[data-codex-memory-search]")) {
-        void codexMemorySearchFromPanel();
-        return;
-      }
-      if (target?.closest?.("[data-codex-memory-candidates]")) {
-        void codexMemoryLoadCandidates();
-      }
-    });
-    document.documentElement.appendChild(panel);
-    return panel;
-  }
-
-  function codexMemoryTogglePanel() {
-    const panel = codexMemoryEnsurePanel();
-    const input = panel.querySelector("[data-codex-memory-input]");
-    const selected = codexMemoryCurrentText();
-    if (input && selected && !input.value) input.value = selected.slice(0, 4000);
-    panel.querySelector("[data-codex-memory-summary]").textContent = codexMemoryState.summary || "";
-    panel.hidden = !panel.hidden;
-    codexMemoryPulseActivity("panel");
-    codexMemoryRenderList(codexMemoryState.injectedItems);
-  }
-
-  async function codexMemoryLearnFromPanel() {
-    const panel = codexMemoryEnsurePanel();
-    const input = panel.querySelector("[data-codex-memory-input]");
-    const text = String(input?.value || codexMemoryCurrentText()).trim();
-    if (!text) {
-      codexMemorySetMessage("没有可保存的内容。", "failed");
-      return;
-    }
-    codexMemorySetMessage("正在保存记忆…", "");
-    codexMemoryPulseActivity("learn");
-    try {
-      const workspace = await codexMemoryResolvedWorkspace();
-      const result = await postJson("/memory/learn", {
-        workspace,
-        text,
-        category: "codex",
-        source: "codex-dom",
-        sourceSessionId: location.href,
-      });
-      if (result?.status !== "ok") throw new Error(result?.message || "learn failed");
-      codexMemorySetMessage("记忆已保存。", "ok");
-      if (input) input.value = "";
-      await codexMemoryLoadSession(true);
-    } catch (error) {
-      codexMemorySetMessage(`保存失败：${error?.message || error}`, "failed");
-    }
-  }
-
-  async function codexMemorySearchFromPanel() {
-    const panel = codexMemoryEnsurePanel();
-    const input = panel.querySelector("[data-codex-memory-input]");
-    const query = String(input?.value || codexMemoryCurrentText()).trim();
-    codexMemorySetMessage("正在检索记忆…", "");
-    codexMemoryPulseActivity("search");
-    try {
-      const workspace = await codexMemoryResolvedWorkspace();
-      const result = await postJson("/memory/search", {
-        workspace,
-        query,
-        includeGlobal: true,
-        limit: 12,
-      });
-      if (result?.status !== "ok") throw new Error(result?.message || "search failed");
-      codexMemoryRenderList(result.results || []);
-      codexMemorySetMessage(`检索完成：${(result.results || []).length} 条。`, "ok");
-    } catch (error) {
-      codexMemorySetMessage(`检索失败：${error?.message || error}`, "failed");
-    }
-  }
-
-  async function codexMemoryLoadCandidates() {
-    codexMemorySetMessage("正在读取待确认记忆…", "");
-    codexMemoryPulseActivity("candidate-list");
-    try {
-      const workspace = await codexMemoryResolvedWorkspace();
-      const result = await postJson("/memory/candidates", {
-        workspace,
-        includeGlobal: true,
-      });
-      if (result?.status !== "ok") throw new Error(result?.message || "candidates failed");
-      const candidates = result.candidates || [];
-      const panel = codexMemoryEnsurePanel();
-      const list = panel.querySelector("[data-codex-memory-list]");
-      list.innerHTML = candidates.length ? candidates.map((candidate) => `
-        <div class="codex-memory-card" data-codex-memory-candidate="${escapeHtml(candidate.id)}">
-          <strong>${escapeHtml(candidate.category || "general")} · ${escapeHtml(candidate.workspace || "")}</strong>
-          <p>${escapeHtml(candidate.text || "")}</p>
-          <small>${escapeHtml(candidate.reason || "待确认")}</small>
-          <div class="codex-memory-actions">
-            <button type="button" data-codex-memory-approve="${escapeHtml(candidate.id)}">确认</button>
-            <button type="button" data-codex-memory-reject="${escapeHtml(candidate.id)}">忽略</button>
-          </div>
-        </div>
-      `).join("") : `<div class="codex-memory-card"><p>暂无待确认记忆。</p></div>`;
-      list.querySelectorAll("[data-codex-memory-approve]").forEach((button) => {
-        button.addEventListener("click", () => void codexMemoryReviewCandidate(button.getAttribute("data-codex-memory-approve"), true));
-      });
-      list.querySelectorAll("[data-codex-memory-reject]").forEach((button) => {
-        button.addEventListener("click", () => void codexMemoryReviewCandidate(button.getAttribute("data-codex-memory-reject"), false));
-      });
-      codexMemorySetMessage(`待确认：${candidates.length} 条。`, "ok");
-    } catch (error) {
-      codexMemorySetMessage(`读取失败：${error?.message || error}`, "failed");
-    }
-  }
-
-  async function codexMemoryReviewCandidate(id, approve) {
-    if (!id) return;
-    codexMemoryPulseActivity(approve ? "approve" : "reject");
-    try {
-      const result = await postJson(approve ? "/memory/approve" : "/memory/reject", { id });
-      if (result?.status !== "ok") throw new Error(result?.message || "review failed");
-      codexMemorySetMessage(approve ? "已确认写入长期记忆。" : "已忽略。", "ok");
-      await codexMemoryLoadCandidates();
-      await codexMemoryLoadSession(true);
-    } catch (error) {
-      codexMemorySetMessage(`操作失败：${error?.message || error}`, "failed");
-    }
-  }
-
   function isExtensionUiNode(node) {
-    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .claude-codex-pro-modal-overlay, .${projectMoveOverlayClass}, .${timelineClass}, .codex-conversation-timeline, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #claude-codex-pro-menu, #${codexMemoryBadgeId}, #${codexMemoryPanelId}, #ccp-multica-workspace-root, [data-ccp-multica-nav="true"]`);
+    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .claude-codex-pro-modal-overlay, .${projectMoveOverlayClass}, .${timelineClass}, .codex-conversation-timeline, .${codexServiceTierBadgeClass}, .codex-zed-remote-button, .codex-zed-remote-toast, #claude-codex-pro-menu, #ccp-multica-workspace-root, [data-ccp-multica-nav="true"]`);
   }
 
   function scanRelevantSelector() {
@@ -14901,7 +14221,7 @@
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["class", "aria-label", "title", "hidden"],
+    attributeFilter: ["class", "aria-label", "title", "hidden", "data-app-action-sidebar-thread-id"],
     characterData: true,
   });
   // Mark completion only after the renderer has installed its current closure.

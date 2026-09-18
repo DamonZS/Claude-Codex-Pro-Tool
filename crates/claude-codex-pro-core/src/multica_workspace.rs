@@ -31,6 +31,13 @@ use crate::multica_skill_trust::{
 use crate::settings::SettingsStore;
 use crate::unified_tool_inventory::UnifiedToolInventoryRoots;
 
+pub mod issue_run_controls;
+mod metadata;
+#[path = "multica_native_domain.rs"]
+pub mod native_domain;
+mod native_subtasks;
+pub use metadata::LocalWorkspaceIssueStatusReorder;
+
 const MAX_COLLECTION_ITEMS: usize = 100;
 const DEFAULT_COLLECTION_LIMIT: u16 = 50;
 const LOCAL_CONTROL_PLANE_EMPTY: &str = "local_control_plane_empty";
@@ -64,14 +71,18 @@ pub enum MulticaWorkspaceResourceKey {
     AgentTaskQueue,
     IssueViews,
     IssueStatuses,
+    Properties,
+    IssueViewPreferences,
+    QuickActions,
     CodexNativeEvents,
     CodexNativeInbox,
     CodexNativeAutomations,
     CodexNativeChatSessions,
+    CodexNativeAgents,
 }
 
 impl MulticaWorkspaceResourceKey {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 27] = [
         Self::MyTasks,
         Self::Issues,
         Self::Comments,
@@ -91,10 +102,14 @@ impl MulticaWorkspaceResourceKey {
         Self::AgentTaskQueue,
         Self::IssueViews,
         Self::IssueStatuses,
+        Self::Properties,
+        Self::IssueViewPreferences,
+        Self::QuickActions,
         Self::CodexNativeEvents,
         Self::CodexNativeInbox,
         Self::CodexNativeAutomations,
         Self::CodexNativeChatSessions,
+        Self::CodexNativeAgents,
     ];
 
     fn key(self) -> &'static str {
@@ -118,10 +133,14 @@ impl MulticaWorkspaceResourceKey {
             Self::AgentTaskQueue => "agent_task_queue",
             Self::IssueViews => "issue_views",
             Self::IssueStatuses => "issue_statuses",
+            Self::Properties => "properties",
+            Self::IssueViewPreferences => "issue_view_preferences",
+            Self::QuickActions => "quick_actions",
             Self::CodexNativeEvents => "codex_native_events",
             Self::CodexNativeInbox => "codex_native_inbox",
             Self::CodexNativeAutomations => "codex_native_automations",
             Self::CodexNativeChatSessions => "codex_native_chat_sessions",
+            Self::CodexNativeAgents => "codex_native_agents",
         }
     }
 }
@@ -200,9 +219,17 @@ pub struct MulticaWorkspaceBootstrap {
     pub fetched_at_ms: u64,
     pub workspace: MulticaWorkspaceIdentity,
     pub user: Value,
+    #[serde(default)]
+    pub permissions: MulticaWorkspacePermissions,
     pub runtime: MulticaCodexRuntimeSummary,
     pub modules: Vec<String>,
     pub collections: BTreeMap<String, MulticaWorkspaceCollection>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MulticaWorkspacePermissions {
+    pub manage_property_catalog: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +278,74 @@ struct AgentCreateJournal {
     workspace_id: String,
     entity: Value,
     bindings: Vec<AgentCreateJournalBinding>,
+    #[serde(default)]
+    command: Option<WorkspaceCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceCommand {
+    pub id: String,
+    pub signature: String,
+    pub operation: String,
+    pub payload_hash: String,
+}
+
+impl WorkspaceCommand {
+    pub fn new(
+        id: String,
+        signature: String,
+        operation: String,
+        mut payload: Value,
+    ) -> anyhow::Result<Self> {
+        if let Some(entity) = payload.get_mut("entity").and_then(Value::as_object_mut) {
+            for field in [
+                "revision",
+                "created_at",
+                "updated_at",
+                "created_at_ms",
+                "updated_at_ms",
+                "workspace_id",
+                "workspaceId",
+            ] {
+                entity.remove(field);
+            }
+        }
+        fn canonical(value: Value) -> Value {
+            match value {
+                Value::Object(object) => Value::Object(
+                    object
+                        .into_iter()
+                        .map(|(key, value)| (key, canonical(value)))
+                        .collect::<BTreeMap<_, _>>()
+                        .into_iter()
+                        .collect(),
+                ),
+                Value::Array(values) => Value::Array(values.into_iter().map(canonical).collect()),
+                value => value,
+            }
+        }
+        let payload_hash = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&canonical(payload))?)
+        );
+        let command = Self {
+            id,
+            signature,
+            operation,
+            payload_hash,
+        };
+        validate_workspace_command(&command)?;
+        Ok(command)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkspaceCommandReceipt {
+    command: WorkspaceCommand,
+    result: Value,
+    complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,6 +417,16 @@ pub struct LocalMulticaWorkspaceState {
     pub issue_views: Vec<Value>,
     #[serde(default)]
     pub issue_statuses: Vec<Value>,
+    #[serde(default)]
+    pub properties: Vec<Value>,
+    #[serde(default)]
+    pub issue_view_preferences: Vec<Value>,
+    #[serde(default)]
+    pub quick_actions: Vec<Value>,
+    #[serde(default)]
+    issue_run_intents: Vec<issue_run_controls::IssueRunIntent>,
+    #[serde(default)]
+    command_receipts: Vec<WorkspaceCommandReceipt>,
 }
 
 impl LocalMulticaWorkspaceState {
@@ -342,6 +447,11 @@ impl LocalMulticaWorkspaceState {
             autopilots: Vec::new(),
             issue_views: Vec::new(),
             issue_statuses: default_issue_statuses(workspace_id),
+            properties: Vec::new(),
+            issue_view_preferences: Vec::new(),
+            quick_actions: Vec::new(),
+            issue_run_intents: Vec::new(),
+            command_receipts: Vec::new(),
         }
     }
 
@@ -362,6 +472,9 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Autopilots => Ok(&self.autopilots),
             MulticaWorkspaceResourceKey::IssueViews => Ok(&self.issue_views),
             MulticaWorkspaceResourceKey::IssueStatuses => Ok(&self.issue_statuses),
+            MulticaWorkspaceResourceKey::Properties => Ok(&self.properties),
+            MulticaWorkspaceResourceKey::IssueViewPreferences => Ok(&self.issue_view_preferences),
+            MulticaWorkspaceResourceKey::QuickActions => Ok(&self.quick_actions),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -388,6 +501,11 @@ impl LocalMulticaWorkspaceState {
             MulticaWorkspaceResourceKey::Autopilots => Ok(&mut self.autopilots),
             MulticaWorkspaceResourceKey::IssueViews => Ok(&mut self.issue_views),
             MulticaWorkspaceResourceKey::IssueStatuses => Ok(&mut self.issue_statuses),
+            MulticaWorkspaceResourceKey::Properties => Ok(&mut self.properties),
+            MulticaWorkspaceResourceKey::IssueViewPreferences => {
+                Ok(&mut self.issue_view_preferences)
+            }
+            MulticaWorkspaceResourceKey::QuickActions => Ok(&mut self.quick_actions),
             _ => bail!("multica_workspace_resource_not_persisted"),
         }
     }
@@ -444,7 +562,10 @@ impl LocalMulticaWorkspaceStore {
         workspace_id: &str,
         resource: MulticaWorkspaceResourceKey,
     ) -> anyhow::Result<Vec<Value>> {
-        Ok(self.load(workspace_id)?.collection(resource)?.clone())
+        let state = self.load(workspace_id)?;
+        let mut items = state.collection(resource)?.clone();
+        metadata::project_collection(&state, resource, &mut items);
+        Ok(items)
     }
 
     pub fn upsert(
@@ -453,7 +574,34 @@ impl LocalMulticaWorkspaceStore {
         command: LocalWorkspaceEntityUpsert,
         updated_at_ms: u64,
     ) -> anyhow::Result<Value> {
+        self.upsert_with_command(workspace_id, command, updated_at_ms, None)
+    }
+
+    pub fn upsert_with_command(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceEntityUpsert,
+        updated_at_ms: u64,
+        receipt: Option<&WorkspaceCommand>,
+    ) -> anyhow::Result<Value> {
+        self.upsert_with_run_controls(workspace_id, command, updated_at_ms, receipt, None)
+    }
+
+    pub fn upsert_with_run_controls(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceEntityUpsert,
+        updated_at_ms: u64,
+        receipt: Option<&WorkspaceCommand>,
+        run_controls: Option<(
+            &issue_run_controls::IssueRunControls,
+            &MulticaExecutionStore,
+        )>,
+    ) -> anyhow::Result<Value> {
         validate_local_workspace_id(workspace_id)?;
+        if let Some((controls, _)) = run_controls {
+            controls.validate(command.resource, &command.entity)?;
+        }
         let mut entity = command
             .entity
             .as_object()
@@ -468,6 +616,9 @@ impl LocalMulticaWorkspaceStore {
         entity.remove("workspaceId");
         let _guard = local_workspace_store_lock(&self.path)?;
         let mut state = load_local_workspace_state(&self.path, workspace_id)?;
+        if let Some(result) = replay_workspace_command(&state, receipt)? {
+            return Ok(result["entity"].clone());
+        }
         let (existing_index, existing) = {
             let entities = state.collection(command.resource)?;
             let index = entities.iter().position(|candidate| {
@@ -498,6 +649,53 @@ impl LocalMulticaWorkspaceStore {
             1
         };
 
+        metadata::prepare_write(
+            &state,
+            command.resource,
+            existing.as_ref(),
+            &mut entity,
+            command.expected_revision,
+            updated_at_ms,
+        )?;
+        if command.resource == MulticaWorkspaceResourceKey::Agents {
+            let caller = format!("{workspace_id}-user");
+            let owner = existing
+                .as_ref()
+                .and_then(|value| value.get("owner_id"))
+                .and_then(Value::as_str)
+                .unwrap_or(&caller);
+            if let Some(existing) = existing.as_ref() {
+                if owner != caller
+                    && ["permission_mode", "invocation_targets", "visibility"]
+                        .iter()
+                        .any(|field| entity.get(*field) != existing.get(*field))
+                {
+                    bail!("multica_workspace_agent_access_owner_required");
+                }
+                if entity
+                    .get("owner_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id != owner)
+                {
+                    bail!("multica_workspace_agent_owner_invalid");
+                }
+            }
+            entity.insert("owner_id".into(), json!(owner));
+            validate_agent_access(&entity, workspace_id)?;
+            // Legacy execution enums remain on disk; they never configure native permissions.
+            let legacy_mode = entity
+                .get("permission_mode")
+                .filter(|value| {
+                    value.as_str().is_some_and(|mode| {
+                        matches!(mode, "default" | "accept_edits" | "full_access" | "plan")
+                    })
+                })
+                .cloned();
+            project_agent_access(&mut entity, workspace_id);
+            if let Some(mode) = legacy_mode {
+                entity.insert("permission_mode".into(), mode);
+            }
+        }
         entity.insert("workspace_id".to_string(), json!(workspace_id));
         entity.insert("revision".to_string(), json!(revision));
         entity.insert("updated_at_ms".to_string(), json!(updated_at_ms));
@@ -517,7 +715,21 @@ impl LocalMulticaWorkspaceStore {
         }
         if command.resource == MulticaWorkspaceResourceKey::Issues {
             validate_issue_status_write(&state, existing.as_ref(), &value)?;
+            metadata::validate_issue_properties(&state, existing.as_ref(), &value)?;
         }
+        let run_eligible = if let Some((controls, executions)) =
+            run_controls.filter(|_| command.resource == MulticaWorkspaceResourceKey::Issues)
+        {
+            issue_run_controls::prepare_intent(
+                &mut state,
+                existing.as_ref(),
+                &value,
+                controls,
+                executions,
+            )?
+        } else {
+            false
+        };
         let entities = state.collection_mut(command.resource)?;
         if let Some(index) = existing_index {
             entities[index] = value.clone();
@@ -525,6 +737,11 @@ impl LocalMulticaWorkspaceStore {
             entities.push(value.clone());
         }
         validate_local_workspace_state(&state)?;
+        let mut result = json!({"status":"ok", "entity":value});
+        if run_controls.is_some() {
+            result["issueRunEligible"] = json!(run_eligible);
+        }
+        record_workspace_command(&mut state, receipt, result, false)?;
         save_local_workspace_state_locked(&self.path, &state)?;
         Ok(value)
     }
@@ -534,17 +751,41 @@ impl LocalMulticaWorkspaceStore {
         workspace_id: &str,
         command: LocalWorkspaceEntityDelete,
     ) -> anyhow::Result<bool> {
+        self.delete_with_command(workspace_id, command, None)
+    }
+
+    pub fn delete_with_command(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceEntityDelete,
+        receipt: Option<&WorkspaceCommand>,
+    ) -> anyhow::Result<bool> {
         validate_local_workspace_id(workspace_id)?;
         validate_local_entity_id(&command.entity_id)?;
+        if command.resource == MulticaWorkspaceResourceKey::Properties {
+            bail!("multica_workspace_property_archive_required");
+        }
         if command.resource == MulticaWorkspaceResourceKey::IssueStatuses {
             bail!("multica_workspace_issue_status_archive_required");
         }
         let _guard = local_workspace_store_lock(&self.path)?;
         let mut state = load_local_workspace_state(&self.path, workspace_id)?;
+        if let Some(result) = replay_workspace_command(&state, receipt)? {
+            return result["deleted"]
+                .as_bool()
+                .ok_or_else(|| anyhow!("multica_workspace_command_invalid"));
+        }
         let entities = state.collection_mut(command.resource)?;
         let Some(index) = entities.iter().position(|candidate| {
             candidate.get("id").and_then(Value::as_str) == Some(command.entity_id.as_str())
         }) else {
+            record_workspace_command(
+                &mut state,
+                receipt,
+                json!({"status":"ok", "deleted":false,"entityId":command.entity_id}),
+                false,
+            )?;
+            save_local_workspace_state_locked(&self.path, &state)?;
             return Ok(false);
         };
         let current_revision = entities[index]
@@ -554,9 +795,94 @@ impl LocalMulticaWorkspaceStore {
         if current_revision != command.expected_revision {
             bail!("multica_workspace_revision_conflict");
         }
-        entities.remove(index);
+        let deleting = entities[index].clone();
+        metadata::validate_delete(&state, command.resource, &deleting)?;
+        state.collection_mut(command.resource)?.remove(index);
+        record_workspace_command(
+            &mut state,
+            receipt,
+            json!({"status":"ok", "deleted":true,"entityId":command.entity_id}),
+            false,
+        )?;
         save_local_workspace_state_locked(&self.path, &state)?;
         Ok(true)
+    }
+
+    pub fn command_result(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        signature: &str,
+    ) -> anyhow::Result<Option<Value>> {
+        WorkspaceCommand::new(id.into(), signature.into(), "lookup".into(), Value::Null)?;
+        let state = self.load(workspace_id)?;
+        let Some(receipt) = state
+            .command_receipts
+            .iter()
+            .find(|receipt| receipt.command.id == id)
+        else {
+            return Ok(None);
+        };
+        if receipt.command.signature != signature {
+            bail!("multica_workspace_idempotency_conflict");
+        }
+        Ok(receipt.complete.then(|| receipt.result.clone()))
+    }
+
+    pub fn replay_command(
+        &self,
+        workspace_id: &str,
+        command: &WorkspaceCommand,
+    ) -> anyhow::Result<Option<Value>> {
+        let state = self.load(workspace_id)?;
+        replay_workspace_command(&state, Some(command))?;
+        Ok(state
+            .command_receipts
+            .iter()
+            .find(|receipt| receipt.command.id == command.id && receipt.complete)
+            .map(|receipt| receipt.result.clone()))
+    }
+
+    pub fn pending_command(
+        &self,
+        workspace_id: &str,
+        id: &str,
+        signature: &str,
+    ) -> anyhow::Result<Option<(WorkspaceCommand, Value)>> {
+        self.command_result(workspace_id, id, signature)?;
+        Ok(self
+            .load(workspace_id)?
+            .command_receipts
+            .into_iter()
+            .find(|receipt| receipt.command.id == id && !receipt.complete)
+            .map(|receipt| (receipt.command, receipt.result)))
+    }
+
+    pub fn complete_command(
+        &self,
+        workspace_id: &str,
+        command: Option<&WorkspaceCommand>,
+        result: Value,
+    ) -> anyhow::Result<Value> {
+        let Some(command) = command else {
+            return Ok(result);
+        };
+        let _guard = local_workspace_store_lock(&self.path)?;
+        let mut state = load_local_workspace_state(&self.path, workspace_id)?;
+        replay_workspace_command(&state, Some(command))?
+            .ok_or_else(|| anyhow!("multica_workspace_command_unknown"))?;
+        let receipt = state
+            .command_receipts
+            .iter_mut()
+            .find(|receipt| receipt.command.id == command.id)
+            .unwrap();
+        if receipt.complete {
+            return Ok(receipt.result.clone());
+        }
+        receipt.result = result.clone();
+        receipt.complete = true;
+        save_local_workspace_state_locked(&self.path, &state)?;
+        Ok(result)
     }
 
     pub fn move_issue(
@@ -564,6 +890,27 @@ impl LocalMulticaWorkspaceStore {
         workspace_id: &str,
         command: LocalWorkspaceIssueMove,
         updated_at_ms: u64,
+    ) -> anyhow::Result<Value> {
+        self.move_issue_with_command(workspace_id, command, updated_at_ms, None)
+    }
+
+    pub fn move_issue_with_command(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceIssueMove,
+        updated_at_ms: u64,
+        receipt: Option<&WorkspaceCommand>,
+    ) -> anyhow::Result<Value> {
+        self.move_issue_with_execution_store(workspace_id, command, updated_at_ms, receipt, None)
+    }
+
+    pub fn move_issue_with_execution_store(
+        &self,
+        workspace_id: &str,
+        command: LocalWorkspaceIssueMove,
+        updated_at_ms: u64,
+        receipt: Option<&WorkspaceCommand>,
+        executions: Option<&MulticaExecutionStore>,
     ) -> anyhow::Result<Value> {
         validate_local_workspace_id(workspace_id)?;
         validate_local_entity_id(&command.issue_id)?;
@@ -581,6 +928,9 @@ impl LocalMulticaWorkspaceStore {
 
         let _guard = local_workspace_store_lock(&self.path)?;
         let mut state = load_local_workspace_state(&self.path, workspace_id)?;
+        if let Some(result) = replay_workspace_command(&state, receipt)? {
+            return Ok(result["entity"].clone());
+        }
         let index = state
             .collection(MulticaWorkspaceResourceKey::Issues)?
             .iter()
@@ -695,12 +1045,36 @@ impl LocalMulticaWorkspaceStore {
             json!(current_revision.saturating_add(1)),
         );
         value.insert("updated_at_ms".to_string(), json!(updated_at_ms));
+        metadata::prepare_write(
+            &state,
+            MulticaWorkspaceResourceKey::Issues,
+            Some(&existing),
+            &mut value,
+            Some(command.expected_revision),
+            updated_at_ms,
+        )?;
         let value = Value::Object(value);
         validate_local_entity(&value, workspace_id, MulticaWorkspaceResourceKey::Issues)?;
         validate_issue_status_write(&state, Some(&existing), &value)?;
+        let run_eligible = if let Some(executions) = executions {
+            issue_run_controls::prepare_intent(
+                &mut state,
+                Some(&existing),
+                &value,
+                &issue_run_controls::IssueRunControls::default(),
+                executions,
+            )?
+        } else {
+            false
+        };
         let issues = state.collection_mut(MulticaWorkspaceResourceKey::Issues)?;
         issues[index] = value.clone();
         validate_local_workspace_state(&state)?;
+        let mut result = json!({"status":"ok", "entity":value});
+        if executions.is_some() {
+            result["issueRunEligible"] = json!(run_eligible);
+        }
+        record_workspace_command(&mut state, receipt, result, false)?;
         save_local_workspace_state_locked(&self.path, &state)?;
         Ok(value)
     }
@@ -806,6 +1180,11 @@ async fn local_workspace_bootstrap(
         fetched_at_ms: now_ms(),
         workspace: workspace.clone(),
         user: local_user_projection(&workspace),
+        // Local catalog mutations share the workspace/upsert enablement gate.
+        // This is a local capability, not an upstream membership role.
+        permissions: MulticaWorkspacePermissions {
+            manage_property_catalog: enabled,
+        },
         runtime: runtime_summary,
         modules: MulticaWorkspaceResourceKey::ALL
             .into_iter()
@@ -1731,6 +2110,10 @@ pub async fn resolve_skill_bindings_with_codex_runtime(
 pub async fn upsert_skill_binding(command: MulticaSkillBindingCommand) -> anyhow::Result<Value> {
     validate_binding_scope_id(&command.scope_id)?;
     let workspace_id = local_workspace_id();
+    if command.scope_kind == SkillBindingScope::Agent {
+        LocalMulticaWorkspaceStore::default()
+            .require_agent_owner(&workspace_id, &command.scope_id)?;
+    }
     let trust_snapshot = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
     let trust = trust_snapshot
         .get(&command.skill_ref.id)
@@ -1800,6 +2183,10 @@ pub async fn remove_skill_binding(
     command: MulticaSkillBindingRemoveCommand,
 ) -> anyhow::Result<Value> {
     validate_binding_scope_id(&command.scope_id)?;
+    if command.scope_kind == SkillBindingScope::Agent {
+        LocalMulticaWorkspaceStore::default()
+            .require_agent_owner(&local_workspace_id(), &command.scope_id)?;
+    }
     let removed = MulticaExecutionStore::default().remove_binding(
         &local_workspace_id(),
         command.scope_kind,
@@ -1815,11 +2202,19 @@ pub async fn list_skill_bindings(query: MulticaSkillBindingsQuery) -> anyhow::Re
         validate_binding_scope_id(scope_id)?;
     }
     let workspace_id = local_workspace_id();
-    let bindings = MulticaExecutionStore::default().list_bindings(
+    let mut bindings = MulticaExecutionStore::default().list_bindings(
         &workspace_id,
         query.scope_kind,
         query.scope_id.as_deref(),
     )?;
+    let visible_agents = LocalMulticaWorkspaceStore::default()
+        .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)?
+        .into_iter()
+        .filter_map(|agent| agent["id"].as_str().map(str::to_owned))
+        .collect::<BTreeSet<_>>();
+    bindings.retain(|binding| {
+        binding.scope_kind != SkillBindingScope::Agent || visible_agents.contains(&binding.scope_id)
+    });
     Ok(json!({"status": "ok", "workspaceId": workspace_id, "bindings": bindings}))
 }
 
@@ -1831,6 +2226,10 @@ pub async fn replace_skill_bindings(
         bail!("skill_bindings_too_large");
     }
     let workspace_id = local_workspace_id();
+    if command.scope_kind == SkillBindingScope::Agent {
+        LocalMulticaWorkspaceStore::default()
+            .require_agent_owner(&workspace_id, &command.scope_id)?;
+    }
     let trust_snapshot = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
     let mut seen = std::collections::BTreeSet::new();
     let mut inputs = Vec::with_capacity(command.skills.len());
@@ -1935,17 +2334,50 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
     command: MulticaAgentCreateCommand,
     workspace_store: &LocalMulticaWorkspaceStore,
     execution_store: &MulticaExecutionStore,
-    runtime: Arc<dyn CodexExecutionService>,
+    runtime: Option<Arc<dyn CodexExecutionService>>,
 ) -> anyhow::Result<Value> {
-    let capabilities = runtime.capabilities().await?;
-    if !capabilities.skills_supported || !capabilities.skills_inventory_supported {
-        bail!("runtime_skills_unsupported");
+    create_agent_with_skill_bindings_idempotent(
+        command,
+        workspace_store,
+        execution_store,
+        runtime,
+        None,
+    )
+    .await
+}
+
+pub async fn create_agent_with_skill_bindings_idempotent(
+    command: MulticaAgentCreateCommand,
+    workspace_store: &LocalMulticaWorkspaceStore,
+    execution_store: &MulticaExecutionStore,
+    runtime: Option<Arc<dyn CodexExecutionService>>,
+    receipt: Option<WorkspaceCommand>,
+) -> anyhow::Result<Value> {
+    let workspace_id = local_workspace_id();
+    recover_pending_agent_create(workspace_store, execution_store)?;
+    if let Some(receipt) = &receipt {
+        if let Some(result) = workspace_store.replay_command(&workspace_id, receipt)? {
+            return Ok(result);
+        }
     }
     if command.skills.len() > 512 {
         bail!("skill_bindings_too_large");
     }
-    let skills = runtime.list_skills().await?;
-    let trust_snapshot = read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default());
+    // Defining an Agent without Skills is a local CRUD operation. Only an
+    // actual Skill selection requires a connected, executable inventory.
+    let (skills, trust_snapshot) = if command.skills.is_empty() {
+        (Vec::new(), Default::default())
+    } else {
+        let runtime = runtime.ok_or_else(|| anyhow!(CODEX_PAGE_HOST_UNAVAILABLE))?;
+        let capabilities = runtime.capabilities().await?;
+        if !capabilities.skills_supported || !capabilities.skills_inventory_supported {
+            bail!("runtime_skills_unsupported");
+        }
+        (
+            runtime.list_skills().await?,
+            read_local_skill_trust_snapshot(&UnifiedToolInventoryRoots::default()),
+        )
+    };
     let mut seen = BTreeSet::new();
     let mut selected = Vec::with_capacity(command.skills.len());
     for reference in command.skills {
@@ -1987,8 +2419,6 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
         ));
     }
 
-    let workspace_id = local_workspace_id();
-    recover_pending_agent_create(workspace_store, execution_store)?;
     let entity_id = command
         .entity
         .get("id")
@@ -2004,6 +2434,7 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
     let journal = AgentCreateJournal {
         workspace_id: workspace_id.clone(),
         entity: command.entity.clone(),
+        command: receipt.clone(),
         bindings: selected
             .iter()
             .map(
@@ -2016,7 +2447,7 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
             .collect(),
     };
     save_agent_create_journal(workspace_store, &journal)?;
-    let agent = match workspace_store.upsert(
+    let agent = match workspace_store.upsert_with_command(
         &workspace_id,
         LocalWorkspaceEntityUpsert {
             resource: MulticaWorkspaceResourceKey::Agents,
@@ -2024,6 +2455,7 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
             expected_revision: Some(0),
         },
         now_ms(),
+        receipt.as_ref(),
     ) {
         Ok(agent) => agent,
         Err(error) => {
@@ -2063,8 +2495,13 @@ pub async fn create_agent_with_skill_bindings_with_codex_runtime(
         expected_revision: Some(0),
         now_ms: now_ms(),
     })?;
+    let result = workspace_store.complete_command(
+        &workspace_id,
+        receipt.as_ref(),
+        json!({"status": "ok", "workspaceId": workspace_id, "agent": agent, "bindings": bindings}),
+    )?;
     remove_agent_create_journal(workspace_store)?;
-    Ok(json!({"status": "ok", "workspaceId": workspace_id, "agent": agent, "bindings": bindings}))
+    Ok(result)
 }
 
 fn agent_create_journal_path(store: &LocalMulticaWorkspaceStore) -> PathBuf {
@@ -2092,7 +2529,7 @@ fn remove_agent_create_journal(store: &LocalMulticaWorkspaceStore) -> anyhow::Re
 /// Finalize a previously prepared dual-store creation. This is deliberately
 /// idempotent: after an interrupted write it converges to Agent + all recorded
 /// bindings, never reports an absent binding as configured.
-fn recover_pending_agent_create(
+pub(crate) fn recover_pending_agent_create(
     workspace_store: &LocalMulticaWorkspaceStore,
     execution_store: &MulticaExecutionStore,
 ) -> anyhow::Result<()> {
@@ -2104,6 +2541,14 @@ fn recover_pending_agent_create(
     };
     let journal: AgentCreateJournal = serde_json::from_slice(&bytes)
         .map_err(|_| anyhow!("agent_skill_create_journal_invalid"))?;
+    if let Some(command) = &journal.command {
+        if workspace_store
+            .replay_command(&journal.workspace_id, command)?
+            .is_some()
+        {
+            return remove_agent_create_journal(workspace_store);
+        }
+    }
     let agent_id = journal
         .entity
         .get("id")
@@ -2114,7 +2559,7 @@ fn recover_pending_agent_create(
         .iter()
         .any(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id));
     if !exists {
-        workspace_store.upsert(
+        workspace_store.upsert_with_command(
             &journal.workspace_id,
             LocalWorkspaceEntityUpsert {
                 resource: MulticaWorkspaceResourceKey::Agents,
@@ -2122,6 +2567,7 @@ fn recover_pending_agent_create(
                 expected_revision: Some(0),
             },
             now_ms(),
+            journal.command.as_ref(),
         )?;
     }
     let inputs = journal
@@ -2145,14 +2591,22 @@ fn recover_pending_agent_create(
             now_ms: now_ms(),
         })
         .collect();
-    execution_store.replace_bindings(SkillBindingReplaceAll {
-        workspace_id: journal.workspace_id,
+    let bindings = execution_store.replace_bindings(SkillBindingReplaceAll {
+        workspace_id: journal.workspace_id.clone(),
         scope_kind: SkillBindingScope::Agent,
         scope_id: agent_id.to_string(),
         bindings: inputs,
         expected_revision: None,
         now_ms: now_ms(),
     })?;
+    if journal.command.is_some() {
+        let agent = workspace_store
+            .list(&journal.workspace_id, MulticaWorkspaceResourceKey::Agents)?
+            .into_iter()
+            .find(|agent| agent.get("id").and_then(Value::as_str) == Some(agent_id))
+            .ok_or_else(|| anyhow!("agent_skill_create_journal_invalid"))?;
+        workspace_store.complete_command(&journal.workspace_id, journal.command.as_ref(), json!({"status":"ok", "workspaceId":journal.workspace_id,"agent":agent,"bindings":bindings}))?;
+    }
     remove_agent_create_journal(workspace_store)
 }
 
@@ -2198,6 +2652,11 @@ fn query_local_collection(
                 query.offset,
             ))
         }
+        MulticaWorkspaceResourceKey::CodexNativeAgents => native_subtasks::query(
+            workspace,
+            query,
+            &crate::codex_sqlite::default_codex_home_dir(),
+        ),
         MulticaWorkspaceResourceKey::Settings => Ok(settings_collection(workspace, enabled)),
         MulticaWorkspaceResourceKey::AgentTaskQueue => {
             agent_task_queue_collection(workspace, execution_store, query.limit, query.offset)
@@ -2255,6 +2714,9 @@ fn query_local_collection(
         | MulticaWorkspaceResourceKey::Activities
         | MulticaWorkspaceResourceKey::Projects
         | MulticaWorkspaceResourceKey::ProjectResources
+        | MulticaWorkspaceResourceKey::Properties
+        | MulticaWorkspaceResourceKey::IssueViewPreferences
+        | MulticaWorkspaceResourceKey::QuickActions
         | MulticaWorkspaceResourceKey::Autopilots
         | MulticaWorkspaceResourceKey::Squads => local_entity_collection(
             workspace,
@@ -2307,6 +2769,7 @@ fn agent_collection_with_bindings(
             Value::String("codex_execution_store".to_string()),
         );
         object.insert("skills_read_only".to_string(), Value::Bool(true));
+        project_agent_access(object, &workspace.id);
     }
     let items = paginate(&agents, limit, offset);
     let mut value = collection(
@@ -2872,6 +3335,8 @@ fn settings_collection(
             "managed": false,
             "control_plane": "embedded",
             "execution_source": "codex_page_host",
+            "catalog_write_policy": "local_device_user",
+            "can_manage_properties": enabled,
         })],
         1,
         1,
@@ -3067,11 +3532,80 @@ fn save_local_workspace_state_locked(
         .map_err(|_| anyhow!("multica_workspace_store_write_failed"))
 }
 
+fn validate_workspace_command(command: &WorkspaceCommand) -> anyhow::Result<()> {
+    validate_local_entity_id(&command.id)?;
+    if command.signature.len() != 64
+        || !command.signature.bytes().all(|b| b.is_ascii_hexdigit())
+        || command.operation.is_empty()
+        || command.operation.len() > 512
+        || command.payload_hash.len() != 64
+        || !command.payload_hash.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        bail!("multica_workspace_command_invalid");
+    }
+    Ok(())
+}
+
+fn replay_workspace_command(
+    state: &LocalMulticaWorkspaceState,
+    command: Option<&WorkspaceCommand>,
+) -> anyhow::Result<Option<Value>> {
+    let Some(command) = command else {
+        return Ok(None);
+    };
+    validate_workspace_command(command)?;
+    if let Some(receipt) = state
+        .command_receipts
+        .iter()
+        .find(|receipt| receipt.command.id == command.id)
+    {
+        if receipt.command.signature != command.signature
+            || receipt.command.operation != command.operation
+            || receipt.command.payload_hash != command.payload_hash
+        {
+            bail!("multica_workspace_idempotency_conflict");
+        }
+        return Ok(Some(receipt.result.clone()));
+    }
+    if state.command_receipts.len() >= 1024 {
+        bail!("multica_workspace_command_window_full");
+    }
+    Ok(None)
+}
+
+fn record_workspace_command(
+    state: &mut LocalMulticaWorkspaceState,
+    command: Option<&WorkspaceCommand>,
+    result: Value,
+    complete: bool,
+) -> anyhow::Result<()> {
+    if let Some(command) = command {
+        if replay_workspace_command(state, Some(command))?.is_none() {
+            state.command_receipts.push(WorkspaceCommandReceipt {
+                command: command.clone(),
+                result,
+                complete,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow::Result<()> {
     if state.version != LOCAL_WORKSPACE_STORE_VERSION {
         bail!("multica_workspace_store_invalid");
     }
     validate_local_workspace_id(&state.workspace_id)?;
+    if state.command_receipts.len() > 1024 {
+        bail!("multica_workspace_store_invalid");
+    }
+    let mut commands = BTreeSet::new();
+    for receipt in &state.command_receipts {
+        validate_workspace_command(&receipt.command)?;
+        if !commands.insert(&receipt.command.id) {
+            bail!("multica_workspace_store_invalid");
+        }
+    }
     for (resource, entities) in [
         (MulticaWorkspaceResourceKey::Issues, &state.issues),
         (MulticaWorkspaceResourceKey::Comments, &state.comments),
@@ -3088,6 +3622,15 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
         (MulticaWorkspaceResourceKey::Squads, &state.squads),
         (MulticaWorkspaceResourceKey::Autopilots, &state.autopilots),
         (MulticaWorkspaceResourceKey::IssueViews, &state.issue_views),
+        (MulticaWorkspaceResourceKey::Properties, &state.properties),
+        (
+            MulticaWorkspaceResourceKey::IssueViewPreferences,
+            &state.issue_view_preferences,
+        ),
+        (
+            MulticaWorkspaceResourceKey::QuickActions,
+            &state.quick_actions,
+        ),
         (
             MulticaWorkspaceResourceKey::IssueStatuses,
             &state.issue_statuses,
@@ -3111,6 +3654,7 @@ fn validate_local_workspace_state(state: &LocalMulticaWorkspaceState) -> anyhow:
             }
         }
     }
+    metadata::validate_unique_preferences(state)?;
     let mut status_keys = BTreeSet::new();
     for status in &state.issue_statuses {
         let key = issue_status_key(status)
@@ -3446,10 +3990,138 @@ fn validate_local_entity(
     Ok(())
 }
 
+fn validate_agent_access(
+    object: &serde_json::Map<String, Value>,
+    workspace_id: &str,
+) -> anyhow::Result<()> {
+    if let Some(mode) = object.get("permission_mode") {
+        if !matches!(
+            mode.as_str(),
+            Some("private" | "public_to" | "default" | "accept_edits" | "full_access" | "plan")
+        ) {
+            bail!("multica_workspace_agent_permission_invalid");
+        }
+    }
+    if let Some(visibility) = object.get("visibility") {
+        if !matches!(visibility.as_str(), Some("private" | "workspace")) {
+            bail!("multica_workspace_agent_permission_invalid");
+        }
+    }
+    if let Some(owner) = object.get("owner_id").filter(|value| !value.is_null()) {
+        validate_local_entity_id(
+            owner
+                .as_str()
+                .ok_or_else(|| anyhow!("multica_workspace_agent_owner_invalid"))?,
+        )
+        .map_err(|_| anyhow!("multica_workspace_agent_owner_invalid"))?;
+    }
+    let targets = match object.get("invocation_targets") {
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| anyhow!("multica_workspace_agent_invocation_target_invalid"))?
+            .as_slice(),
+        None => &[],
+    };
+    if targets.len() > 256
+        || (object.get("permission_mode").and_then(Value::as_str) == Some("private")
+            && !targets.is_empty())
+        || (object.get("permission_mode").and_then(Value::as_str) == Some("public_to")
+            && targets.is_empty())
+    {
+        bail!("multica_workspace_agent_invocation_target_invalid");
+    }
+    let mut seen = BTreeSet::new();
+    for target in targets {
+        let target = target
+            .as_object()
+            .ok_or_else(|| anyhow!("multica_workspace_agent_invocation_target_invalid"))?;
+        if target
+            .keys()
+            .any(|key| !matches!(key.as_str(), "target_type" | "target_id"))
+        {
+            bail!("multica_workspace_agent_invocation_target_invalid");
+        }
+        let kind = target
+            .get("target_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let id = target.get("target_id").filter(|value| !value.is_null());
+        let id = match kind {
+            "workspace" => {
+                if id.is_some_and(|id| id.as_str() != Some(workspace_id)) {
+                    bail!("multica_workspace_agent_invocation_target_invalid");
+                }
+                workspace_id
+            }
+            "member" | "team" => {
+                let id = id
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("multica_workspace_agent_invocation_target_invalid"))?;
+                validate_local_entity_id(id)
+                    .map_err(|_| anyhow!("multica_workspace_agent_invocation_target_invalid"))?;
+                id
+            }
+            _ => bail!("multica_workspace_agent_invocation_target_invalid"),
+        };
+        if !seen.insert((kind, id)) {
+            bail!("multica_workspace_agent_invocation_target_invalid");
+        }
+    }
+    Ok(())
+}
+
+fn project_agent_access(object: &mut serde_json::Map<String, Value>, workspace_id: &str) {
+    let explicit = matches!(
+        object.get("permission_mode").and_then(Value::as_str),
+        Some("private" | "public_to")
+    );
+    let public = if explicit {
+        object.get("permission_mode").and_then(Value::as_str) == Some("public_to")
+    } else {
+        object.get("visibility").and_then(Value::as_str) == Some("workspace")
+    };
+    let targets = if public && explicit {
+        object
+            .get("invocation_targets")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    } else if public {
+        json!([{"target_type":"workspace","target_id":null}])
+    } else {
+        json!([])
+    };
+    let mut targets = targets.as_array().cloned().unwrap_or_default();
+    for target in &mut targets {
+        if target.get("target_type").and_then(Value::as_str) == Some("workspace") {
+            target["target_id"] = Value::Null;
+        }
+    }
+    let workspace_visible = targets
+        .iter()
+        .any(|target| target.get("target_type").and_then(Value::as_str) == Some("workspace"));
+    object.insert(
+        "permission_mode".into(),
+        json!(if public { "public_to" } else { "private" }),
+    );
+    object.insert(
+        "visibility".into(),
+        json!(if workspace_visible {
+            "workspace"
+        } else {
+            "private"
+        }),
+    );
+    object.insert("invocation_targets".into(), json!(targets));
+    if object.get("owner_id").is_none_or(Value::is_null) {
+        object.insert("owner_id".into(), json!(format!("{workspace_id}-user")));
+    }
+}
+
 fn validate_entity_contract(
     object: &serde_json::Map<String, Value>,
     resource: MulticaWorkspaceResourceKey,
 ) -> anyhow::Result<()> {
+    metadata::validate_contract(object, resource)?;
     let bounded_arrays = [
         "resources",
         "members",
@@ -3684,14 +4356,13 @@ fn validate_entity_contract(
         {
             bail!("multica_workspace_agent_runtime_invalid");
         }
-        if let Some(permission) = object.get("permission_mode").and_then(Value::as_str)
-            && !matches!(
-                permission,
-                "default" | "accept_edits" | "full_access" | "plan"
-            )
-        {
-            bail!("multica_workspace_agent_permission_invalid");
-        }
+        validate_agent_access(
+            object,
+            object
+                .get("workspace_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )?;
         if let Some(value) = object.get("max_concurrent_tasks") {
             let Some(value) = value.as_u64() else {
                 bail!("multica_workspace_agent_concurrency_invalid");
@@ -3760,7 +4431,7 @@ fn validate_entity_contract(
             .unwrap_or("comment");
         if !matches!(
             comment_type,
-            "comment" | "status_change" | "progress_update"
+            "comment" | "status_change" | "progress_update" | "quick_action"
         ) {
             bail!("multica_workspace_comment_type_invalid");
         }
@@ -3873,6 +4544,20 @@ fn validate_entity_contract(
                         .is_none()
                 {
                     bail!("multica_workspace_autopilot_trigger_invalid");
+                }
+                if kind == "schedule" {
+                    crate::multica_execution_store::next_autopilot_occurrence(
+                        trigger
+                            .get("cron_expression")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        trigger
+                            .get("timezone")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("UTC"),
+                        now_ms(),
+                    )?;
                 }
             }
         }
@@ -4107,7 +4792,7 @@ fn local_workspace_identity() -> MulticaWorkspaceIdentity {
     }
 }
 
-fn local_workspace_id() -> String {
+pub(crate) fn local_workspace_id() -> String {
     local_workspace_id_for_path(&crate::paths::default_multica_state_dir())
 }
 
@@ -4212,6 +4897,7 @@ mod tests {
         let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
         let execution = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let journal = AgentCreateJournal {
+            command: None,
             workspace_id: "local-test".to_string(),
             entity: json!({"id": "agent-a", "name": "Recovered agent"}),
             bindings: vec![AgentCreateJournalBinding {
@@ -4459,10 +5145,14 @@ mod tests {
                 "agent_task_queue",
                 "issue_views",
                 "issue_statuses",
+                "properties",
+                "issue_view_preferences",
+                "quick_actions",
                 "codex_native_events",
                 "codex_native_inbox",
                 "codex_native_automations",
                 "codex_native_chat_sessions",
+                "codex_native_agents",
             ]
         );
     }
@@ -5379,6 +6069,47 @@ mod tests {
         assert_eq!(error.to_string(), CODEX_PAGE_HOST_UNAVAILABLE);
     }
 
+    #[tokio::test]
+    async fn agent_without_skills_can_be_created_offline_but_skill_selection_requires_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let execution = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let command = MulticaAgentCreateCommand {
+            entity: json!({"id": "agent-offline", "name": "Offline agent", "instructions": "Review the task"}),
+            skills: vec![],
+        };
+        let result = create_agent_with_skill_bindings_with_codex_runtime(
+            command, &workspace, &execution, None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["agent"]["id"], "agent-offline");
+        assert_eq!(result["bindings"], json!([]));
+        let command = MulticaAgentCreateCommand {
+            entity: json!({"id": "agent-with-skill", "name": "Skill agent"}),
+            skills: vec![SkillReference {
+                id: "codex:review".into(),
+                manifest_digest: None,
+            }],
+        };
+        assert_eq!(
+            create_agent_with_skill_bindings_with_codex_runtime(
+                command, &workspace, &execution, None
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+            CODEX_PAGE_HOST_UNAVAILABLE
+        );
+        assert_eq!(
+            workspace
+                .list(&local_workspace_id(), MulticaWorkspaceResourceKey::Agents)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     #[test]
     fn project_path_match_is_case_and_separator_insensitive() {
         let roots = vec![r"C:\Work\Repo".to_string()];
@@ -5555,6 +6286,161 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "multica_workspace_comment_parent_issue_mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn upstream_agent_create_dto_accepts_access_modes_without_native_permission_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_store = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
+        let executions = MulticaExecutionStore::new(dir.path().join("executions.json"));
+        let workspace_id = local_workspace_id();
+        for (id, mode, targets, visibility) in [
+            ("private-agent", "private", json!([]), "private"),
+            (
+                "public-agent",
+                "public_to",
+                json!([{"target_type":"workspace"}]),
+                "workspace",
+            ),
+            (
+                "member-agent",
+                "public_to",
+                json!([{"target_type":"member","target_id":format!("{workspace_id}-user")}]),
+                "private",
+            ),
+        ] {
+            let dto = json!({
+                "id":id,"name":"Manual upstream agent","description":"Review changes",
+                "instructions":"Inspect and summarize","runtime_id":"codex-current-page",
+                "permission_mode":mode,"invocation_targets":targets,
+                "conversation_starters":[{"label":"Review","prompt":"Review this change"}],
+                "max_concurrent_tasks":1,"model":"","thinking_level":"","service_tier":"",
+                "owner_id":"renderer-supplied-owner"
+            });
+            let response = create_agent_with_skill_bindings_with_codex_runtime(
+                MulticaAgentCreateCommand {
+                    entity: dto,
+                    skills: vec![],
+                },
+                &workspace_store,
+                &executions,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response["agent"]["permission_mode"], mode);
+            assert_eq!(response["agent"]["visibility"], visibility);
+            assert_eq!(
+                response["agent"]["owner_id"],
+                format!("{workspace_id}-user")
+            );
+            assert!(response["agent"].get("approvalPolicy").is_none());
+            assert!(response["agent"].get("sandboxPolicy").is_none());
+        }
+        let agents = workspace_store
+            .list(&workspace_id, MulticaWorkspaceResourceKey::Agents)
+            .unwrap();
+        assert_eq!(agents.len(), 3);
+        assert_eq!(
+            agents
+                .iter()
+                .find(|agent| agent["id"] == "public-agent")
+                .unwrap()["invocation_targets"],
+            json!([{"target_type":"workspace","target_id":null}])
+        );
+    }
+
+    #[test]
+    fn agent_access_validates_targets_and_projects_legacy_without_rewriting_storage() {
+        let mut legacy = json!({"id":"agent-a","name":"Legacy","workspace_id":"local-test","revision":1,"permission_mode":"full_access"});
+        validate_local_entity(&legacy, "local-test", MulticaWorkspaceResourceKey::Agents).unwrap();
+        let saved = legacy.clone();
+        project_agent_access(legacy.as_object_mut().unwrap(), "local-test");
+        assert_eq!(legacy["permission_mode"], "private");
+        assert_eq!(legacy["owner_id"], "local-test-user");
+        assert_eq!(saved["permission_mode"], "full_access");
+        for targets in [
+            json!([{"target_type":"member"}]),
+            json!([{"target_type":"workspace","target_id":"other-workspace"}]),
+            json!([{"target_type":"workspace","unexpected":true}]),
+            json!([{"target_type":"workspace"},{"target_type":"workspace","target_id":null}]),
+            json!([{"target_type":"unknown"}]),
+        ] {
+            legacy["permission_mode"] = json!("public_to");
+            legacy["invocation_targets"] = targets;
+            assert_eq!(
+                validate_local_entity(&legacy, "local-test", MulticaWorkspaceResourceKey::Agents)
+                    .unwrap_err()
+                    .to_string(),
+                "multica_workspace_agent_invocation_target_invalid"
+            );
+        }
+        legacy["permission_mode"] = json!("private");
+        legacy["invocation_targets"] = json!([{"target_type":"workspace"}]);
+        assert!(
+            validate_local_entity(&legacy, "local-test", MulticaWorkspaceResourceKey::Agents)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn durable_workspace_command_recovers_entity_commit_and_ignores_only_server_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        let store = LocalMulticaWorkspaceStore::new(path.clone());
+        let payload = json!({"entity":{"id":"issue-a","title":"Original","created_at":"old"},"expectedRevision":0});
+        let command = WorkspaceCommand::new(
+            "command-a".into(),
+            "a".repeat(64),
+            "upsert:issues:issue-a".into(),
+            payload.clone(),
+        )
+        .unwrap();
+        let input = LocalWorkspaceEntityUpsert {
+            resource: MulticaWorkspaceResourceKey::Issues,
+            entity: payload["entity"].clone(),
+            expected_revision: Some(0),
+        };
+        let saved = store
+            .upsert_with_command("local-test", input.clone(), 1, Some(&command))
+            .unwrap();
+        let restored = LocalMulticaWorkspaceStore::new(path);
+        assert!(
+            restored
+                .command_result("local-test", &command.id, &command.signature)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            restored
+                .upsert_with_command("local-test", input, 999, Some(&command))
+                .unwrap(),
+            saved
+        );
+        let mut metadata_changed = payload;
+        metadata_changed["entity"]["created_at"] = json!("new");
+        let retry = WorkspaceCommand::new(
+            command.id.clone(),
+            command.signature.clone(),
+            command.operation.clone(),
+            metadata_changed,
+        )
+        .unwrap();
+        assert_eq!(retry.payload_hash, command.payload_hash);
+        let result = json!({"status":"ok","entity":saved,"queue":null});
+        restored
+            .complete_command("local-test", Some(&command), result.clone())
+            .unwrap();
+        assert_eq!(
+            restored.replay_command("local-test", &retry).unwrap(),
+            Some(result)
+        );
+        assert_eq!(
+            restored
+                .list("local-test", MulticaWorkspaceResourceKey::Issues)
+                .unwrap()[0]["revision"],
+            1
         );
     }
 

@@ -163,14 +163,6 @@ export type BackendSettings = {
   codexAppImageOverlayPath: string;
   codexAppImageOverlayOpacity: number;
   codexGoalsEnabled: boolean;
-  memoryAssistEnabled: boolean;
-  memoryAssistInjectEnabled: boolean;
-  memoryAssistAutoSuggestEnabled: boolean;
-  memoryAssistLlmSummaryEnabled: boolean;
-  memoryAssistMcpEnabled: boolean;
-  memoryAssistMaxInjectedItems: number;
-  memoryAssistWorkspaceMode: string;
-  memoryAssistDataDir: string;
   launchMode: "patch" | "relay";
   relayBaseUrl: string;
   relayApiKey: string;
@@ -344,18 +336,6 @@ export type UnifiedToolInventory = {
 export type UnifiedToolInventoryResult = CommandResult<{
   inventory: UnifiedToolInventory;
 }>;
-
-// 阶段4 模块D：一键注册盘古记忆 MCP 到 Claude Desktop 与 Codex 两端的返回。
-export type MemoryMcpRegisterPayload = {
-  mcpBinaryPath: string;
-  mcpBinaryExists: boolean;
-  claudeDesktopConfigPath: string;
-  claudeDesktopRegistered: boolean;
-  codexConfigPath: string;
-  codexRegistered: boolean;
-  mcpEnabled: boolean;
-  errors: string[];
-};
 
 export type SupplierPreset = {
   id: string;
@@ -769,160 +749,6 @@ export type ClaudeSessionProjectGroup = {
   sessions: ClaudeSession[];
 };
 
-export type MemoryItem = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  sourceSessionId: string;
-  createdAt: number;
-  updatedAt: number;
-  lastAccessedAt: number;
-  accessCount: number;
-  // Tiering (phase 2): "active" or "archived"; archived is a soft, recoverable state.
-  tier: string;
-  // Stored base strength, boosted on each access.
-  strength: number;
-  // Unix seconds when archived (0 = active).
-  archivedAt: number;
-  // Read-time Ebbinghaus-decayed retention in 0..1 (exempt items report 1.0).
-  retention: number;
-  // Read-time flag: exempt from decay (manual / safety-rule / project-rule).
-  exempt: boolean;
-};
-
-export type MemoryItemEditRequest = Pick<MemoryItem, "text" | "workspace" | "category" | "tags" | "source" | "sourceSessionId">;
-
-export type MemoryCandidate = {
-  id: string;
-  text: string;
-  workspace: string;
-  category: string;
-  tags: string[];
-  source: string;
-  reason: string;
-  sourceSessionId: string;
-  status: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-export type MemoryStatusResult = CommandResult<{
-  memory: {
-    status: string;
-    enabled: boolean;
-    injectEnabled: boolean;
-    autoSuggestEnabled: boolean;
-    runtimeStatus: string;
-    runtimeMessage: string;
-    codexInjected: boolean;
-    claudeInjected: boolean;
-    codexWorkspace: string;
-    active: boolean;
-    activeSource: string;
-    dbPath: string;
-    injectSummaryCachePath?: string | null;
-    totalItems: number;
-    pendingCandidates: number;
-    totalCaptures: number;
-    captureProgress: {
-      firstBaselineAt: number;
-      lastScanAt: number;
-      totalSources: number;
-      codexSources: number;
-      claudeSources: number;
-      totalContextCount: number;
-      newContextCount: number;
-      skippedUnchangedSessions: number;
-    };
-    workspaces: Array<{ workspace: string; itemCount: number; pendingCount: number; captureCount: number; sessionCount: number; latestCaptureAt: number }>;
-    latestBackupPath: string | null;
-  };
-}>;
-
-export type MemoryItemsResult = CommandResult<{ items: MemoryItem[] }>;
-export type MemoryItemResult = CommandResult<{ item: MemoryItem }>;
-export type MemoryCandidateResult = CommandResult<{ candidate: MemoryCandidate }>;
-export type MemoryCandidatesResult = CommandResult<{ candidates: MemoryCandidate[] }>;
-export type MemoryActivityEvent = {
-  id: string;
-  eventType: string;
-  workspace: string;
-  agent: string;
-  memoryId: string | null;
-  querySummary: string;
-  sourceSessionId: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: number;
-  memory: MemoryItem | null;
-};
-export type MemoryOutcomeDashboard = {
-  workspace: string;
-  rangeDays: number;
-  todayCaptures: number;
-  todayLearned: number;
-  pendingCandidates: number;
-  todayRecalls: number;
-  trend: Array<{ date: string; captures: number; learned: number; recalls: number }>;
-  workspaceBreakdown: Array<{ key: string; count: number }>;
-  categoryBreakdown: Array<{ key: string; count: number }>;
-  recentRecalls: MemoryActivityEvent[];
-  handoffItems: MemoryItem[];
-};
-export type MemoryOutcomeDashboardResult = CommandResult<{ dashboard: MemoryOutcomeDashboard }>;
-export type MemoryNewProjectExperience = {
-  text: string;
-  sourceCount: number;
-  category: string;
-};
-export type MemoryNewProjectGuide = {
-  generatedAt: number;
-  sourceItemCount: number;
-  sourceWorkspaceCount: number;
-  pitfalls: MemoryNewProjectExperience[];
-  bestPractices: MemoryNewProjectExperience[];
-  prompt: string;
-};
-export type MemoryNewProjectGuideResult = CommandResult<{ guide: MemoryNewProjectGuide }>;
-export type MemoryQueryResult = CommandResult<{
-  memory: {
-    query: string;
-    workspace: string;
-    results: Array<{
-      item: MemoryItem;
-      score: number;
-      matchedKeywords: string[];
-    }>;
-  };
-}>;
-export type MemoryExport = {
-  schemaVersion: string;
-  exportedAt: number;
-  items: MemoryItem[];
-  candidates: MemoryCandidate[];
-};
-export type MemoryExportResult = CommandResult<{ data: MemoryExport }>;
-export type MemorySelfCheckResult = CommandResult<{
-  report: {
-    status: string;
-    repaired: boolean;
-    backupPath: string | null;
-    checks: Array<{ name: string; status: string; message: string }>;
-  };
-}>;
-
-export type MemoryAssistMigrationResult = {
-  sourceDir: string;
-  targetDir: string;
-  dbPath: string;
-  migrated: boolean;
-  sourceRetained: boolean;
-  restartRequired: boolean;
-  migratedFiles: string[];
-};
-
 export type ProviderSyncResult = CommandResult<{
   syncStatus?: string;
   targetProvider?: string;
@@ -1170,11 +996,46 @@ export type ClaudeDesktopLocalBundleResult = CommandResult<{
   orgPluginStatus: ClaudeDesktopOrgPluginStatusResult["orgPluginStatus"];
 }>;
 
+export type RequestRecord = {
+  id: string;
+  timestamp_ms: number;
+  source: string;
+  agent: string;
+  provider: string | null;
+  model: string | null;
+  protocol: string | null;
+  upstream_protocol: string | null;
+  status: string;
+  http_status: number | null;
+  duration_ms: number | null;
+  first_byte_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_tokens: number | null;
+  cache_creation_tokens: number | null;
+  reasoning_tokens: number | null;
+  total_tokens: number | null;
+  streaming: boolean;
+};
+
+export type RequestTimelineResult = CommandResult<{
+  records: RequestRecord[];
+  warnings: string[];
+  observed_at_ms: number;
+}>;
+
 export type LogsResult = CommandResult<{
   path: string;
   text: string;
   lines: number;
 }>;
+
+export type TimelineLogsState = {
+  logs: LogsResult | null;
+  loading: boolean;
+  error: string | null;
+  updatedAtMs: number | null;
+};
 
 export type WatcherPayload = {
   enabled: boolean;
@@ -1395,7 +1256,6 @@ export type Route =
   | "prompts"
   | "tools"
   | "sessions"
-  | "memory"
   | "multica"
   | "maintenance"
   | "settings"

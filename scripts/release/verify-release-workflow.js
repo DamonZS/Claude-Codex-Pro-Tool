@@ -4,17 +4,74 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const auto = fs.readFileSync(".github/workflows/auto-release-installers.yml", "utf8");
-const manual = fs.readFileSync(".github/workflows/release-assets.yml", "utf8");
+const auto = fs.readFileSync(".github/workflows/auto-release-installers.yml", "utf8").replaceAll("\r\n", "\n");
+const manual = fs.readFileSync(".github/workflows/release-assets.yml", "utf8").replaceAll("\r\n", "\n");
 
 function mustContain(source, needle, label) {
   assert.ok(source.includes(needle), `${label} missing: ${needle}`);
 }
 
 const windowsInstaller = fs.readFileSync("scripts/installer/windows/ClaudeCodexPro.nsi", "utf8");
-const macosPackager = fs.readFileSync("scripts/installer/macos/package-dmg.sh", "utf8");
+const macosPackager = fs.readFileSync("scripts/installer/macos/package-dmg.sh", "utf8").replaceAll("\r\n", "\n");
 const multicaCore = fs.readFileSync("crates/claude-codex-pro-core/src/multica.rs", "utf8");
 const multicaStager = fs.readFileSync("scripts/release/stage-multica-runtime.mjs", "utf8");
+const pr = fs.readFileSync(".github/workflows/pr-build.yml", "utf8").replaceAll("\r\n", "\n");
+const manager = JSON.parse(fs.readFileSync("apps/claude-codex-pro-manager/package.json", "utf8"));
+const tauri = JSON.parse(fs.readFileSync("apps/claude-codex-pro-manager/src-tauri/tauri.conf.json", "utf8"));
+const msi = JSON.parse(fs.readFileSync("scripts/installer/windows/tauri-msi.conf.json", "utf8"));
+
+assert.equal(manager.scripts["workflow:test"], "node --test " + ["mount", "native-open", "page-host", "background"]
+  .map((name) => `../../scripts/test-workflow-${name}.cjs`).join(" "));
+assert.equal(manager.scripts["workflow:build"], "npm run workflow:test && " + ["check", "test", "build"]
+  .map((command) => `npm --prefix ../codex-workflow-surface run ${command}`).join(" && ") + " && node ../../scripts/test-workflow-artifact.cjs");
+assert.equal(manager.scripts["vite:build"], "npm run workflow:build && vite build");
+assert.equal(manager.scripts["vite:dev"], "vite --host 127.0.0.1 --port 1420");
+assert.equal(manager.scripts.dev, "npm run workflow:build && tauri dev");
+assert.equal(manager.scripts.build, "tauri build");
+assert.equal(tauri.build.beforeDevCommand, "npm run vite:dev");
+assert.equal(tauri.build.beforeBuildCommand, "npm run vite:build");
+for (const command of ["dev", "build", "vite:dev", "vite:build", "workflow:test", "workflow:build"]) {
+  for (const hook of ["pre", "post"]) {
+    assert.equal(manager.scripts[`${hook}${command}`], undefined, `Unexpected recursive/build hook: ${hook}${command}`);
+  }
+}
+
+for (const [label, source] of [["auto", auto], ["manual", manual], ["PR", pr]]) {
+  const buildJobs = source.split(/(?=^  [a-z][a-z0-9-]*:\s*$)/m).filter((job) => job.includes("cargo build"));
+  assert.equal(buildJobs.length, 2, `${label} Windows and macOS build jobs`);
+  for (const job of buildJobs) {
+    const install = job.indexOf("working-directory: apps/codex-workflow-surface\n        run: npm ci");
+    const verify = job.indexOf("run: node scripts/release/verify-release-workflow.js");
+    const check = job.indexOf("working-directory: apps/claude-codex-pro-manager\n        run: npm run check");
+    const build = job.indexOf("run: npm run vite:build");
+    const cargo = job.indexOf("cargo build");
+    assert.ok(install >= 0 && install < verify && verify < check && check < build && build < cargo,
+      `${label} must install, verify, type-check Manager and build workflow inputs before compiling core`);
+  }
+  const stage = source.indexOf("run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica");
+  assert.ok(stage >= 0 && stage < source.indexOf("- name: Build Windows installer"), `${label} notices before Windows packaging`);
+  if (label !== "PR") {
+    mustContain(source, "--bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json", `${label} MSI notices`);
+  }
+}
+
+const coreTests = pr.indexOf("run: cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open");
+assert.ok(pr.indexOf("run: npm run vite:build") < coreTests && coreTests < pr.indexOf("run: cargo build --release"),
+  "PR must build workflow inputs before the targeted core tests and release build");
+
+assert.equal(msi.bundle.active, true);
+assert.equal(msi.bundle.resources["resources/leila/assets/"], "resources/leila/assets/", "MSI must retain Leila resources");
+for (const file of ["LICENSE", "NOTICE"]) {
+  const source = `../../../docs/third-party/multica/${file}`;
+  assert.equal(msi.bundle.resources[source], `resources/third-party/multica/${file}`, `MSI ${file} mapping`);
+  assert.ok(fs.statSync(path.resolve("apps/claude-codex-pro-manager/src-tauri", source)).size > 0, `MSI ${file} source`);
+  mustContain(windowsInstaller, `!if /FileExists "\${ROOT}\\dist\\windows\\app\\resources\\third-party\\multica\\${file}"`, `NSIS ${file} gate`);
+}
+const macosNoticeStage = 'node "$ROOT/scripts/release/stage-multica-notices.mjs" "$app_dir/Contents/Resources/third-party/multica"';
+mustContain(macosPackager, `${macosNoticeStage}\n`, "macOS notice staging");
+mustContain(macosPackager, `${macosNoticeStage} --verify`, "macOS notice verification");
+assert.ok(macosPackager.indexOf(macosNoticeStage) < macosPackager.indexOf('codesign --force --sign - "$app_dir"'),
+  "macOS notices must be included before bundle signing");
 
 function mustNotContain(source, needle, label) {
   assert.ok(!source.includes(needle), `${label} must not contain: ${needle}`);
@@ -54,22 +111,23 @@ for (const forbidden of ["settings.json", "relayProfiles", "memory_assist.sqlite
 
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro.exe"', "Windows installer app source");
 mustNotContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer legacy manager source");
-mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-mcp.exe"', "Windows installer MCP source");
-mustContain(windowsInstaller, 'Delete "$INSTDIR\\claude-codex-pro-mcp.exe"', "Windows installer MCP uninstall");
+const retiredMcp = "claude-codex-pro-mcp";
+const retiredMcpCleanup = `Delete /REBOOTOK "$INSTDIR\\${retiredMcp}.exe"`;
+assert.equal(windowsInstaller.split(retiredMcpCleanup).length - 1, 2, "Windows upgrade and uninstall must remove the retired MCP executable");
+mustNotContain(windowsInstaller.replaceAll(retiredMcpCleanup, ""), retiredMcp, "Windows retired MCP packaging");
+for (const [label, source] of [["auto workflow", auto], ["manual workflow", manual], ["PR workflow", fs.readFileSync(".github/workflows/pr-build.yml", "utf8")], ["macOS packager", macosPackager]]) {
+  mustNotContain(source, retiredMcp, label);
+}
 mustContain(macosPackager, "create_app \"Claude Codex Pro\"", "macOS app bundle");
 mustNotContain(macosPackager, "create_app \"Claude Codex Pro Manager\"", "macOS legacy manager bundle");
-mustContain(macosPackager, 'install_app_runtime "claude-codex-pro-mcp"', "macOS MCP source");
-mustContain(macosPackager, 'local destination="$STAGE/Claude Codex Pro.app/Contents/MacOS/$runtime_name"', "macOS MCP destination");
-mustContain(macosPackager, 'sign_and_verify_binary "MCP runtime" "$mcp_runtime"', "macOS MCP signing and immediate verification");
 mustContain(macosPackager, 'sign_and_verify_binary "main executable" "$main_executable"', "macOS main executable signing and immediate verification");
 mustContain(macosPackager, 'codesign --force --sign - "$app_dir"', "macOS app bundle signing");
 mustContain(macosPackager, 'codesign --verify --deep --strict --verbose=4 "$app_dir"', "macOS deep app bundle verification");
 mustNotContain(macosPackager, 'codesign --force --deep --sign - "$app_dir"', "macOS deprecated deep app bundle signing");
 
 for (const [label, source] of [["auto", auto], ["manual", manual]]) {
-  mustContain(source, "Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/", `${label} Windows MCP staging`);
   mustContain(source, 'app="dist/macos/stage/Claude Codex Pro.app"', `${label} macOS app verification`);
-  mustContain(source, "for runtime in claude-codex-pro claude-codex-pro-mcp", `${label} macOS runtime verification`);
+  mustContain(source, "for runtime in claude-codex-pro", `${label} macOS runtime verification`);
   mustNotContain(source, "target/release/claude-codex-pro-manager", `${label} legacy manager staging`);
   mustNotContain(source, "Claude Codex Pro Manager.app", `${label} legacy manager app`);
   mustContain(source, "windows-x64-setup.exe", label);
@@ -137,7 +195,7 @@ mustContain(auto, "uses: actions/download-artifact@v5", "auto workflow artifacts
 mustContain(auto, "name: windows-x64-release-assets", "auto Windows workflow artifact");
 mustContain(auto, "name: macos-${{ matrix.arch }}-release-assets", "auto macOS workflow artifact");
 mustContain(auto, "gh release upload \"$TAG\" release-assets/* --clobber --repo \"$REPO\"", "auto release upload from publish job");
-mustContain(auto, "Expected 6 build assets before latest.json", "auto release asset count guard");
+mustContain(auto, "Expected 7 build assets before latest.json", "auto release asset count guard");
 mustNotContain(auto, "gh release upload $env:TAG $asset.FullName $zip.FullName --clobber", "Windows job direct release upload");
 
 mustContain(windowsInstaller, 'File /r "${ROOT}\\dist\\windows\\app\\resources"', "Windows installer Multica resources");

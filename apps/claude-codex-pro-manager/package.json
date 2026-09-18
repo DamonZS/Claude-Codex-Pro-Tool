@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "npm run workflow:build && tauri dev",
     "build": "tauri build",
     "check": "tsc --noEmit -p tsconfig.json",
+    "workflow:test": "node --test ../../scripts/test-workflow-mount.cjs ../../scripts/test-workflow-native-open.cjs ../../scripts/test-workflow-page-host.cjs ../../scripts/test-workflow-background.cjs",
+    "workflow:build": "npm run workflow:test && npm --prefix ../codex-workflow-surface run check && npm --prefix ../codex-workflow-surface run test && npm --prefix ../codex-workflow-surface run build && node ../../scripts/test-workflow-artifact.cjs",
     "vite:dev": "vite --host 127.0.0.1 --port 1420",
-    "vite:build": "vite build"
+    "vite:build": "npm run workflow:build && vite build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

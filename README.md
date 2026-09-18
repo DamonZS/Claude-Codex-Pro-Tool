@@ -18,7 +18,7 @@
 
 **面向 Windows 与 macOS 的 Codex App、Claude Desktop 和 Claude Code 本地 AI 运维控制台。**
 
-Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换、本地代理和路由、Codex 增强、Claude Desktop 集成、MCP / Skills / 插件、会话修复、长期记忆、Codex 主题与系统提示词集中到一个 Rust + Tauri 桌面应用中。它只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
+Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换、本地代理和路由、Codex 增强、Claude Desktop 集成、MCP / Skills / 插件、会话修复、Codex 主题与系统提示词集中到一个 Rust + Tauri 桌面应用中。它只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
 
 项目仓库唯一地址：
 
@@ -32,7 +32,7 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 - **Codex 与 Claude 增强**：启动、重启、状态监控、Claude 一键汉化、Codex 注入、主题和客户端维护。
 - **模型与协议兼容**：支持 OpenAI Responses、Chat Completions、Anthropic Messages 及兼容渠道的模型映射。
 - **Agent 扩展中心**：集中管理 Codex / Claude 插件、Skills、MCP、脚本和依赖状态。
-- **会话与长期记忆**：修复和迁移本地会话，通过盘古记忆提供项目接续、跨 Agent 召回与证据记录。
+- **会话管理**：修复和迁移本地会话，管理会话历史与导出。
 - **系统提示词**：管理 Markdown 指令模板、外部同步、启用模式、配置备份和 DeepSeek 组合使用教程。
 
 **快速导航：** [下载](#下载) · [界面预览](#管理工具界面) · [功能总览](#功能总览) · [常见问题](#常见问题) · [构建与开发](#构建与开发)
@@ -47,7 +47,7 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 
 ## 核心原则
 
-- 本地优先：配置、记忆、插件记录、日志和备份都优先落在本机。
+- 本地优先：配置、插件记录、日志和备份都优先落在本机。
 - 可审查：安装插件、写入 MCP、信任 hooks、修改配置前展示命令或 diff。
 - 可回退：写入关键配置前尽量备份，Claude 中文资源补丁提供还原入口。
 - 不静默信任第三方：Ponytail / Codex hooks 需要单独审查和信任。
@@ -55,7 +55,7 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 
 ## 工作流集成说明
 
-Codex 内嵌的“我的任务”工作流由本仓库的本地控制面和 Codex 页面 Host 适配层提供。它不复制或启动外部 Web/UI、服务端、守护进程或 CLI，也不会注册第二个 Codex Runtime。上游依赖的版本、许可和 NOTICE 记录集中保存在 [`docs/multica-attribution.md`](docs/multica-attribution.md)，仅用于合规追溯，不作为产品界面或功能名称展示。
+Codex 内嵌工作流移植 Multica 上游的“我的任务”“自动化”“智能体”三个页面，使用本仓库内的上游源码、本地控制面和当前 Codex 页面 Host 适配层。任务与自动化执行、智能体调度仅通过 Codex 原生 task/thread/subagent 完成，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
 
 ## 下载
 
@@ -68,7 +68,7 @@ Codex 内嵌的“我的任务”工作流由本仓库的本地控制面和 Code
 安装后有两个入口：
 
 - `Claude Codex Pro`：统一桌面程序；默认打开管理工具，内部以 `--launcher` 启动独立后台进程并加载 Codex 增强能力。
-- `Claude Codex Pro 管理工具`：运维控制台，用来管理 Codex、Claude、供应商、插件、脚本、记忆、日志、安装维护和更新。
+- `Claude Codex Pro 管理工具`：运维控制台，用来管理 Codex、Claude、供应商、插件、脚本、日志、安装维护和更新。
 
 Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
 
@@ -83,7 +83,7 @@ Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包�
   </tr>
   <tr>
     <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词" width="100%"></a><br><sub>系统提示词</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话与记忆" width="100%"></a><br><sub>会话与记忆</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话管理" width="100%"></a><br><sub>会话管理</sub></td>
     <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="插件、Skills 与 MCP" width="100%"></a><br><sub>插件、Skills 与 MCP</sub></td>
     <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="维护与诊断" width="100%"></a><br><sub>维护与诊断</sub></td>
   </tr>
@@ -244,32 +244,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 注册到 `~/.codex/config.toml` 的 `[marketplaces.openai-curated]`。
 - 出错时展示具体失败原因，不把坏仓库注册成成功。
 
-### 9. 盘古记忆
-
-盘古记忆使用 SQLite，不引入云端 embedding 或外部向量库。
-
-支持：
-
-- 手动写入长期记忆。
-- 自动生成待确认记忆。
-- 用户确认后再进入长期记忆。
-- 工作区隔离。
-- `global` 全局记忆。
-- 当前工作区 + 全局混合查询。
-- 关键词归一化和轻量相似度排序。
-- 命中后更新访问次数和最后访问时间。
-- 密钥脱敏，避免 API key、Bearer token、`sk-` 类内容原文入库。
-- 自检和修复。
-- 导出 JSON。
-- 导入 JSON，支持合并或替换。
-
-默认数据库：
-
-```text
-~/.claude-codex-pro/memory_assist.sqlite
-```
-
-### 10. 脚本市场与用户脚本
+### 9. 脚本市场与用户脚本
 
 - 刷新脚本市场。
 - 下载并安装脚本。
@@ -279,7 +254,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 构建已启用脚本 bundle。
 - 通过 Codex 注入脚本扩展前端能力。
 
-### 11. Zed Remote
+### 10. Zed Remote
 
 - 识别 Zed 安装路径。
 - 解析 SSH host、user、port。
@@ -289,7 +264,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 支持默认打开、复用窗口、新窗口、追加到当前窗口等策略。
 - 支持忘记远程项目。
 
-### 12. Upstream Worktree
+### 11. Upstream Worktree
 
 - 读取 Git remote、branch、worktree 列表。
 - 从最新远程跟踪分支创建 worktree。
@@ -297,7 +272,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 校验分支名和 base branch。
 - 避免从过期本地 HEAD 派生任务分支。
 
-### 13. Watcher 与自恢复
+### 12. Watcher 与自恢复
 
 - Windows 下可安装 watcher。
 - 检测 Codex 进程与 CDP 端口状态。
@@ -305,7 +280,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 支持启用、禁用、安装、卸载。
 - 支持停止 launcher / Codex 相关进程。
 
-### 14. 安装维护与更新
+### 13. 安装维护与更新
 
 - 安装入口。
 - 卸载入口。
@@ -319,7 +294,7 @@ Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配�
 - 重置设置。
 - 重置图片覆盖设置。
 
-### 15. 自动构建与 Release
+### 14. 自动构建与 Release
 
 - `Auto release installers`：main push 或手动触发后自动计算 `V0.01` 系列版本、创建 tag、构建 Windows 安装包、macOS x64 DMG、macOS arm64 DMG，并上传 `latest.json`。
 - `PR build artifacts`：用于 PR 和日常构建校验。
@@ -338,7 +313,7 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - 客户端与增强：Codex / Claude 启动维护、注入、汉化、脚本和本机状态。
 - 主题中心：Codex 主题预览、导入、应用、回滚和恢复默认。
 - 系统提示词：Markdown 指令模板、同步、启用方式和使用教程。
-- 会话与记忆：历史会话修复、Codex / Claude 会话管理、盘古记忆和召回证据。
+- 会话管理：历史会话修复、Codex / Claude 会话管理。
 - 插件、Skills 与 MCP：多 Agent 扩展资产、来源、依赖、风险和安装状态。
 - 维护与诊断：日志、Watcher、安装入口、路径检测、修复与更新。
 - 设置：运行开关、启动参数、增强矩阵、本地路径和外观偏好。
@@ -363,7 +338,6 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Claude Desktop MCP 配置：Windows 通常为 `%APPDATA%\Claude\claude_desktop_config.json`
 - Claude Desktop 3P 配置：Windows 通常为 `%LOCALAPPDATA%\Claude-3p`
 - Claude Codex Pro 状态：`~/.claude-codex-pro/`
-- 记忆数据库：`~/.claude-codex-pro/memory_assist.sqlite`
 - Provider Sync 备份：`~/.codex/backups_state/provider-sync`
 
 ## 常见问题
@@ -451,12 +425,13 @@ rustup target add aarch64-apple-darwin
 ### 安装依赖
 
 ```bash
-cd apps/claude-codex-pro-manager
-npm install --package-lock=false
-cd ../..
+npm --prefix apps/codex-workflow-surface install --package-lock=false
+npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 ```
 
-如果希望严格使用 lockfile，也可以把第一条命令换成 `npm ci`。CI 目前使用 `npm install --package-lock=false`。
+两个包分别安装依赖；存在匹配的 lockfile 时可使用 `npm ci`。CI 目前使用 `npm install --package-lock=false`。
+
+管理器的 `vite:build` 和 `dev` 会先运行仓库内 workflow 包的 `check`、`test`、`build`，再启动 Vite 构建或 Tauri；`build` 经 Tauri 的 `beforeBuildCommand` 走 `vite:build`。纯浏览器预览的 `vite:dev` 保持独立。普通构建不自动联网安装依赖。workflow 使用仓库内 vendored 源码，不依赖外部 Multica checkout。直接运行 Cargo 编译或测试前，先运行管理器的 `vite:build`，生成 core 通过 `include_str!` 嵌入的 `apps/codex-workflow-surface/dist/codex-workflow-surface.js` 和 `.css`。
 
 ### 本地开发启动
 
@@ -485,6 +460,8 @@ npm run vite:dev
 提交前建议运行：
 
 ```bash
+node scripts/release/verify-release-workflow.js
+node --test scripts/release/stage-multica-notices.test.mjs
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
 cargo fmt --check
@@ -496,7 +473,6 @@ cargo build --release
 
 ```bash
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml plugin_hub -- --nocapture
-cargo test -p claude-codex-pro-core --manifest-path Cargo.toml memory_assist -- --nocapture
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml relay_config -- --nocapture
 cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem -- --nocapture
 ```
@@ -512,14 +488,12 @@ cargo build --release
 
 ```text
 target/release/claude-codex-pro.exe
-target/release/claude-codex-pro-mcp.exe
 ```
 
 macOS 或 Linux 上没有 `.exe` 后缀：
 
 ```text
 target/release/claude-codex-pro
-target/release/claude-codex-pro-mcp
 ```
 
 也可以在管理工具目录运行：
@@ -534,6 +508,7 @@ npm run build
 ### Windows 安装包
 
 ```powershell
+npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
@@ -542,7 +517,7 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
+node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -558,11 +533,14 @@ Pop-Location
 dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe
 ```
 
+ZIP/NSIS 的暂存目录包含 `resources/third-party/multica/LICENSE` 与 `NOTICE`，内容与 `docs/third-party/multica/` 原文逐字节一致。MSI 使用 `scripts/installer/windows/tauri-msi.conf.json` 映射相同许可文件并保留 Leila 资源；在管理器目录运行 `npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json`。许可文件随包提供不替代上游商业许可要求。
+
 ### macOS DMG
 
 Apple Silicon：
 
 ```bash
+npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add aarch64-apple-darwin
@@ -573,6 +551,7 @@ BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/mac
 Intel Mac：
 
 ```bash
+npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add x86_64-apple-darwin
@@ -588,6 +567,8 @@ dist/macos/claude-codex-pro-0.12-macos-x64.dmg
 ```
 
 本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证。因此本地 DMG 可能被 Gatekeeper 提示，需要按上文 macOS 常见问题手动允许。
+
+DMG 脚本在签名前将完整 Multica `LICENSE` / `NOTICE` 放入 `.app/Contents/Resources/third-party/multica/`，并在签名后校验原文一致；macOS ZIP 从同一 `.app` 暂存目录打包。
 
 ## GitHub Actions
 

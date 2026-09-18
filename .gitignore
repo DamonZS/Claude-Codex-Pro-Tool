@@ -43,5 +43,4 @@ Thumbs.db
 /claude-dev-launcher.bat
 /package.json
 
-# Upstream Multica is consumed from external D:/Project/multica; never vendor it here.
-/apps/codex-workflow-surface/vendor/
+# Only the pinned workflow UI dependency closure is vendored in the surface package.

@@ -2,7 +2,7 @@
 
 ## 项目目的
 
-Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控制台。它把 Codex 增强、供应商/Profile 切换、插件与 Skill 管理、记忆辅助、启动器维护、更新工具和 Release 打包整合在一个 Rust + Tauri + React 工作区中。
+Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控制台。它把 Codex 增强、供应商/Profile 切换、插件与 Skill 管理、启动器维护、更新工具和 Release 打包整合在一个 Rust + Tauri + React 工作区中。
 
 本项目采用 Harness Engineering 工作方式。AI 编码代理必须基于清晰上下文、明确规格、可验证验收标准和真实验证证据工作，不得一边猜需求一边修改代码。
 
@@ -12,8 +12,7 @@ Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控�
 
 - `apps/claude-codex-pro-launcher/`：Rust 静默启动器应用及启动器测试。
 - `apps/claude-codex-pro-manager/`：Tauri 管理工具。React/Vite 前端位于 `src/`；Tauri Rust 后端位于 `src-tauri/`。
-- `apps/claude-codex-pro-mcp/`：MCP 相关应用代码。
-- `crates/claude-codex-pro-core/`：核心 Rust 逻辑，包括启动器集成、Claude Desktop 集成、供应商配置、插件中心、记忆辅助、更新/安装流程和桥接逻辑。
+- `crates/claude-codex-pro-core/`：核心 Rust 逻辑，包括启动器集成、Claude Desktop 集成、供应商配置、插件中心、更新/安装流程和桥接逻辑。
 - `crates/claude-codex-pro-data/`：Codex 会话、导出和 Provider Sync 的数据访问逻辑。
 - `assets/inject/`：注入到 Codex 与 Claude 包装窗口的 JavaScript 资源。
 - `scripts/`：安装器、发布和维护脚本。
@@ -30,7 +29,7 @@ Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控�
 
 四个包构成清晰的单向分层，`core` 是被所有业务层依赖的逻辑地基（高扇入，不反向依赖业务层）：
 
-- `claude-codex-pro-core`（约 2400 符号，**core 层**）：全项目逻辑地基。启动器集成、Claude Desktop 集成、供应商/中转配置、插件中心、记忆辅助、更新/安装、代理与桥接。
+- `claude-codex-pro-core`（约 2400 符号，**core 层**）：全项目逻辑地基。启动器集成、Claude Desktop 集成、供应商/中转配置、插件中心、更新/安装、代理与桥接。
 - `claude-codex-pro-manager`（约 726 符号）：Tauri 管理工具。前端 React（`src/`）+ 后端命令层（`src-tauri/`）。大量调用 core（约 309 次跨层调用，是主动脉）。
 - `claude-codex-pro-data`（约 171 符号）：Codex 会话、导出、Provider Sync 的数据访问。
 - `claude-codex-pro-launcher`（约 95 符号）：Rust 静默启动器。
@@ -44,7 +43,6 @@ Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控�
 - **命令返回包装**：`src-tauri/src/commands.rs` 的 `ok`（扇入约 185）/ `failed`（约 105），是所有 Tauri 命令的返回构造器，面向用户的提示文案集中于此。
 - **Claude 本机汉化补丁**：core 的 `install_patch_at*` / `run_claude_zh_patch_elevated` 等，涉及提权写文件，属安全敏感区。
 - **插件中心**：core 的 `fetch_catalog` / `preview_for_item` / `install_ponytail_claude_desktop_org_plugin`。
-- **盘古记忆**：core 的 `learn_item` / `create_candidate` / `session_summary` / `record_capture`；数据入口 `MemoryAssistStore::open`（扇入约 75）。
 - **代理与桥接**：core 的 `handle_protocol_proxy_connection` / `handle_helper_connection`。
 - **供应商/中转协议转换**：core 的 `responses_to_chat_completions` / `ccswitch_codex_profile_from_settings`。
 - **设置数据**：core 的 `SettingsStore::load`（扇入约 53）是配置读取高频点。
@@ -222,7 +220,6 @@ cargo build --release
 
 ```bash
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml plugin_hub -- --nocapture
-cargo test -p claude-codex-pro-core --manifest-path Cargo.toml memory_assist -- --nocapture
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml relay_config -- --nocapture
 cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem -- --nocapture
 ```

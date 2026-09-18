@@ -1,0 +1,37 @@
+{
+  "title": "Search",
+  "description": "Search pages, issues, projects, and members",
+  "placeholder": "Type a command or search...",
+  "groups": {
+    "pages": "Pages",
+    "commands": "Commands",
+    "members": "Members",
+    "projects": "Projects",
+    "issues": "Issues",
+    "cancelled": "Cancelled",
+    "recent": "Recent"
+  },
+  "commands": {
+    "current_theme_aria": "Current theme",
+    "new_issue": "New Issue",
+    "new_project": "New Project",
+    "copy_issue_link": "Copy Issue Link",
+    "copy_identifier": "Copy Identifier ({{identifier}})",
+    "fold_all_comments": "Fold All Comments",
+    "unfold_all_comments": "Unfold All Comments",
+    "switch_to_light": "Switch to Light Theme",
+    "switch_to_dark": "Switch to Dark Theme",
+    "use_system_theme": "Use System Theme"
+  },
+  "toast": {
+    "link_copied": "Link copied",
+    "copied_identifier": "Copied {{identifier}}"
+  },
+  "empty": {
+    "no_results": "No results found.",
+    "type_to_search": "Type to search issues and projects"
+  },
+  "trigger": {
+    "label": "Search..."
+  }
+}

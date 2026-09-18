@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "stage": "create_property",
+  "checks": [],
+  "cleanup": [],
+  "failure": "page_step_failed",
+  "ids": {}
+}

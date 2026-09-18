@@ -18,7 +18,7 @@
 
 **A local AI operations console for Codex App, Claude Desktop, and Claude Code on Windows and macOS.**
 
-Claude Codex Pro Tool (CCP) combines third-party API providers, model and protocol conversion, local proxy routing, Codex enhancements, Claude Desktop integration, MCP servers, Skills, plugins, session repair, long-term memory, Codex themes, and system prompts in one Rust + Tauri desktop app. It manages local configuration and third-party APIs; it does not take over official accounts, subscriptions, or payments.
+Claude Codex Pro Tool (CCP) combines third-party API providers, model and protocol conversion, local proxy routing, Codex enhancements, Claude Desktop integration, MCP servers, Skills, plugins, session repair, Codex themes, and system prompts in one Rust + Tauri desktop app. It manages local configuration and third-party APIs; it does not take over official accounts, subscriptions, or payments.
 
 Canonical repository:
 
@@ -32,7 +32,7 @@ Canonical repository:
 - **Codex and Claude enhancements:** launch, restart, monitor, localize Claude, inject Codex enhancements, apply themes, and maintain client installations.
 - **Model and protocol compatibility:** support OpenAI Responses, Chat Completions, Anthropic Messages, and model mapping for compatible providers.
 - **Agent extension center:** manage Codex and Claude plugins, Skills, MCP servers, scripts, dependencies, and installation state.
-- **Sessions and long-term memory:** repair and migrate local sessions, then use Pangu Memory for project handoff, cross-agent recall, and recall evidence.
+- **Session management:** repair and migrate local sessions, manage session history, and export sessions.
 - **System prompts:** manage Markdown instruction templates, remote synchronization, activation modes, configuration backups, and the CCP + DeepSeek usage guide.
 
 **Quick links:** [Download](#download) · [Screenshots](#manager-interface) · [Features](#feature-overview) · [FAQ](#faq) · [Build](#build-and-development)
@@ -47,7 +47,7 @@ Canonical repository:
 
 ## Core Principles
 
-- Local first: configuration, memory, plugin records, logs, and backups are stored locally whenever possible.
+- Local first: configuration, plugin records, logs, and backups are stored locally whenever possible.
 - Reviewable: commands or diffs are shown before installing plugins, writing MCP configuration, trusting hooks, or changing important settings.
 - Recoverable: critical configuration is backed up when practical, and the Claude Chinese resource patch includes a restore path.
 - No silent trust: third-party Ponytail or Codex hooks require separate review and explicit trust.
@@ -55,8 +55,7 @@ Canonical repository:
 
 ## Multica Workspace Attribution
 
-The embedded Codex workspace is **Built on Multica**; the upstream project is
-[`multica-ai/multica`](https://github.com/multica-ai/multica). CCP implements its own local control plane and current-page Codex Host adapter. It does not copy the Multica Web UI, package or start the Multica server/daemon/CLI, or register a second Codex runtime. See [`docs/multica-attribution.md`](docs/multica-attribution.md) for the reviewed revision, license, NOTICE, and integration boundary.
+The embedded Codex workspace ports the upstream Multica **My Issues**, **Autopilots**, and **Agents** pages using upstream source vendored in this repository, CCP's local control plane, and the current-page Codex Host adapter. Task and automation execution and agent dispatch use only native Codex task/thread/subagent capabilities; the integration does not start the Multica server/daemon/CLI or register a second Codex runtime or model executor. The derived UI retains the Multica product name, logo, copyright, and attribution; the complete [`LICENSE`](docs/third-party/multica/LICENSE) and [`NOTICE`](docs/third-party/multica/NOTICE) accompany distributions. See [`docs/multica-attribution.md`](docs/multica-attribution.md) and [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md) for the upstream revision, provenance, and integration boundary. Retaining branding and attribution does not replace upstream commercial licensing requirements.
 
 ## Download
 
@@ -69,7 +68,7 @@ Download the latest release from [GitHub Releases](https://github.com/DamonZS/Cl
 The installer provides two entry points:
 
 - `Claude Codex Pro`: the unified desktop program; it opens the manager by default and uses `--launcher` for the independent background process that starts Codex and loads enhancements.
-- `Claude Codex Pro Manager`: the operations console for Codex, Claude, providers, plugins, scripts, memory, logs, installation maintenance, and updates.
+- `Claude Codex Pro Manager`: the operations console for Codex, Claude, providers, plugins, scripts, logs, installation maintenance, and updates.
 
 The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG contains `Claude Codex Pro.app` and `Claude Codex Pro 管理工具.app`.
 
@@ -84,7 +83,7 @@ The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG co
   </tr>
   <tr>
     <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="Codex system prompt manager" width="100%"></a><br><sub>System Prompts</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="Sessions and long-term memory" width="100%"></a><br><sub>Sessions &amp; Memory</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="Session management" width="100%"></a><br><sub>Sessions</sub></td>
     <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="Plugins Skills and MCP manager" width="100%"></a><br><sub>Plugins, Skills &amp; MCP</sub></td>
     <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="Maintenance and diagnostics" width="100%"></a><br><sub>Maintenance &amp; Diagnostics</sub></td>
   </tr>
@@ -250,32 +249,7 @@ The local Claude Desktop plugin-bundle flow does not require signing in through 
 - Register `[marketplaces.openai-curated]` in `~/.codex/config.toml`.
 - Report the exact failure instead of registering a damaged repository as successful.
 
-### 9. Pangu Memory
-
-Pangu Memory uses SQLite and does not require cloud embeddings or an external vector database.
-
-Capabilities include:
-
-- Manually writing long-term memories.
-- Automatically producing memories that require confirmation.
-- Moving a memory into long-term storage only after confirmation.
-- Workspace isolation.
-- Global memories under `global`.
-- Combined current-workspace and global queries.
-- Keyword normalization and lightweight similarity ranking.
-- Updating access count and last-access time after a hit.
-- Redacting secrets so API keys, Bearer tokens, and `sk-` values are not stored as plaintext.
-- Self-check and repair.
-- JSON export.
-- JSON import with merge or replace modes.
-
-Default database:
-
-```text
-~/.claude-codex-pro/memory_assist.sqlite
-```
-
-### 10. Script Market and User Scripts
+### 9. Script Market and User Scripts
 
 - Refresh the script market.
 - Download and install scripts.
@@ -285,7 +259,7 @@ Default database:
 - Build a bundle from enabled scripts.
 - Extend the frontend through the Codex injection script.
 
-### 11. Zed Remote
+### 10. Zed Remote
 
 - Detect the Zed installation path.
 - Parse SSH host, user, and port.
@@ -295,7 +269,7 @@ Default database:
 - Support default open, window reuse, new window, and append-to-current-window strategies.
 - Forget remote projects.
 
-### 12. Upstream Worktree
+### 11. Upstream Worktree
 
 - Read Git remotes, branches, and worktrees.
 - Create a worktree from the latest remote-tracking branch.
@@ -303,7 +277,7 @@ Default database:
 - Validate branch names and base branches.
 - Avoid deriving task branches from a stale local HEAD.
 
-### 13. Watcher and Self-Recovery
+### 12. Watcher and Self-Recovery
 
 - Install the watcher on Windows.
 - Monitor the Codex process and CDP port.
@@ -311,7 +285,7 @@ Default database:
 - Enable, disable, install, or uninstall the watcher.
 - Stop launcher or Codex-related processes when requested.
 
-### 14. Installation Maintenance and Updates
+### 13. Installation Maintenance and Updates
 
 - Installation and uninstallation entry points.
 - Shortcut repair.
@@ -324,7 +298,7 @@ Default database:
 - Settings reset.
 - Image-overlay settings reset.
 
-### 15. Automated Builds and Releases
+### 14. Automated Builds and Releases
 
 - `Auto release installers`: after a push to `main` or a manual trigger, calculate the next `V0.01`-series version, create the tag, build the Windows installer, macOS x64 DMG, and macOS arm64 DMG, then upload `latest.json`.
 - `PR build artifacts`: build verification artifacts for pull requests and routine validation.
@@ -343,7 +317,7 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Clients and Enhancements: Codex and Claude launch maintenance, injection, localization, scripts, and local state.
 - Theme Center: preview, import, apply, roll back, and restore Codex themes.
 - System Prompts: Markdown instruction templates, synchronization, activation modes, and usage guidance.
-- Sessions and Memory: history repair, Codex and Claude sessions, Pangu Memory, and recall evidence.
+- Sessions: history repair and Codex and Claude session management.
 - Plugins, Skills, and MCP: multi-agent extension assets, sources, dependencies, risk, and installation state.
 - Maintenance and Diagnostics: logs, Watcher, installation entry points, path detection, repair, and updates.
 - Settings: runtime switches, launch arguments, enhancement matrix, local paths, and appearance preferences.
@@ -368,7 +342,6 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Claude Desktop MCP configuration on Windows: usually `%APPDATA%\Claude\claude_desktop_config.json`
 - Claude Desktop 3P configuration on Windows: usually `%LOCALAPPDATA%\Claude-3p`
 - Claude Codex Pro state: `~/.claude-codex-pro/`
-- Pangu Memory database: `~/.claude-codex-pro/memory_assist.sqlite`
 - Provider Sync backups: `~/.codex/backups_state/provider-sync`
 
 ## FAQ
@@ -498,7 +471,6 @@ Common targeted Rust checks:
 
 ```bash
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml plugin_hub -- --nocapture
-cargo test -p claude-codex-pro-core --manifest-path Cargo.toml memory_assist -- --nocapture
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml relay_config -- --nocapture
 cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem -- --nocapture
 ```
@@ -514,14 +486,12 @@ Primary outputs:
 
 ```text
 target/release/claude-codex-pro.exe
-target/release/claude-codex-pro-mcp.exe
 ```
 
 On macOS or Linux, the files do not have an `.exe` suffix:
 
 ```text
 target/release/claude-codex-pro
-target/release/claude-codex-pro-mcp
 ```
 
 You can also build from the manager directory:
@@ -544,7 +514,6 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"

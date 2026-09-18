@@ -1,0 +1,63 @@
+{
+  "nav": {
+    "inbox": "收件箱",
+    "chat": "聊天",
+    "my_issues": "我的任务",
+    "issues": "任务",
+    "projects": "项目",
+    "autopilots": "自动化",
+    "agents": "智能体",
+    "squads": "小队",
+    "usage": "统计",
+    "runtimes": "运行时",
+    "skills": "Skills",
+    "settings": "设置"
+  },
+  "tab": {
+    "issue": "任务",
+    "project": "项目",
+    "autopilot": "自动化",
+    "agent": "智能体",
+    "member": "成员",
+    "squad": "小队",
+    "skill": "Skill",
+    "machine": "机器",
+    "runtime": "运行时",
+    "attachment": "附件",
+    "create_agent": "创建智能体",
+    "unknown": "未知页面"
+  },
+  "help": {
+    "trigger": "帮助",
+    "download_desktop": "桌面端",
+    "docs": "文档",
+    "changelog": "更新日志",
+    "discord": "Discord",
+    "feedback": "反馈",
+    "server_version": "服务器版本 {{version}}"
+  },
+  "workspace_loader": {
+    "loading_workspace": "正在加载工作区...",
+    "loading_named_prefix": "正在加载"
+  },
+  "sidebar": {
+    "unpin_tooltip": "取消固定",
+    "workspaces_label": "工作区",
+    "create_workspace": "创建工作区",
+    "pending_invitations_label": "待处理的邀请",
+    "invitation_workspace_fallback": "工作区",
+    "invitation_join": "加入",
+    "invitation_decline": "拒绝",
+    "log_out": "退出登录",
+    "new_issue": "新建任务",
+    "new_issue_shortcut": "C",
+    "pinned_label": "固定",
+    "workspace_group": "工作区",
+    "configure_group": "配置",
+    "unread_overflow": "99+",
+    "discord_card": {
+      "title": "加入 Discord",
+      "dismiss": "关闭"
+    }
+  }
+}

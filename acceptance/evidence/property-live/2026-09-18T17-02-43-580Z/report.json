@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "stage": "archive_property",
+  "checks": [
+    "number_property_created",
+    "property_edit_reload",
+    "issue_value_set_reload_edit"
+  ],
+  "cleanup": [
+    "fixture_issue_deleted",
+    "fixture_property_archived"
+  ],
+  "failure": "control_missing",
+  "ids": {
+    "property": "b4aa8f90-d966-4e7a-bb16-edae5750721a",
+    "issue": "ccp-acceptance-property-mu77ihsl"
+  }
+}

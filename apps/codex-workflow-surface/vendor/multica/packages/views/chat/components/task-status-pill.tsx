@@ -1,0 +1,226 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { cn } from "@multica/ui/lib/utils";
+import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
+import type { AgentAvailability } from "@multica/core/agents";
+import type { ChatPendingTask, TaskMessagePayload } from "@multica/core/types";
+import { formatElapsedSecs } from "../lib/format";
+import { useT } from "../../i18n";
+
+interface Props {
+  /** Server-authoritative pending-task snapshot (`created_at` anchors the timer). */
+  pendingTask: ChatPendingTask;
+  /** Live task-message stream — the latest non-error entry decides the running-stage label. */
+  taskMessages: readonly TaskMessagePayload[];
+  /** Resolved presence; pass `undefined` to suppress availability hints. */
+  availability: AgentAvailability | undefined;
+}
+
+interface Stage {
+  label: string;
+  static?: boolean;
+}
+
+type StageKey =
+  | "offline"
+  | "reconnecting"
+  | "retrying"
+  | "queued"
+  | "waiting_local_directory"
+  | "starting_up"
+  | "thinking"
+  | "typing";
+
+type ToolKey =
+  | "running_command"
+  | "reading_files"
+  | "searching_code"
+  | "making_edits"
+  | "searching_web"
+  | "fallback";
+
+// Tool slug → translation key. Unknown tools fall back to "Working".
+const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
+  bash: "running_command",
+  exec: "running_command",
+  read: "reading_files",
+  glob: "reading_files",
+  grep: "searching_code",
+  write: "making_edits",
+  edit: "making_edits",
+  multi_edit: "making_edits",
+  multiedit: "making_edits",
+  web_search: "searching_web",
+  websearch: "searching_web",
+};
+
+// Pure stage decision returning translation keys. The hook below maps these
+// keys into localized labels — keeping the decision pure makes it easy to
+// follow the priority rules without translation noise.
+export function pickStageKeys(
+  status: string | undefined,
+  taskMessages: readonly TaskMessagePayload[],
+  availability: AgentAvailability | undefined,
+): {
+  stageKey: StageKey;
+  toolKey?: ToolKey;
+  static?: boolean;
+  needsWaitReason?: boolean;
+} {
+  // A deferred chat task is an older turn waiting for its retry backoff, not
+  // active model work. Keep this ahead of availability hints so the specific
+  // retry state never degrades to a misleading queued/thinking label.
+  if (status === "deferred") return { stageKey: "retrying" };
+  if (
+    (status === "queued" || status === "dispatched") &&
+    availability === "offline"
+  ) {
+    return { stageKey: "offline", static: true };
+  }
+  if (
+    (status === "queued" || status === "dispatched") &&
+    availability === "unstable"
+  ) {
+    return { stageKey: "reconnecting" };
+  }
+  // Daemon-emitted hold state for the local_directory flow: the project is
+  // pinned to a path that another task currently owns. The daemon publishes
+  // this status string when it dequeues a task but can't acquire the path
+  // lock; the renderer surfaces a dedicated label so the user understands
+  // why a queued task isn't moving.
+  if (status === "waiting_local_directory") {
+    return {
+      stageKey: "waiting_local_directory",
+      static: true,
+      needsWaitReason: true,
+    };
+  }
+  if (status === "queued") return { stageKey: "queued" };
+  if (status === "dispatched") return { stageKey: "starting_up" };
+
+  // running: latest meaningful message decides the label.
+  let latest: TaskMessagePayload | null = null;
+  for (let i = taskMessages.length - 1; i >= 0; i--) {
+    const m = taskMessages[i];
+    if (m && m.type !== "error" && m.type !== "tool_result") {
+      latest = m;
+      break;
+    }
+  }
+
+  if (!latest) return { stageKey: "thinking" };
+  if (latest.type === "thinking") return { stageKey: "thinking" };
+  if (latest.type === "text") return { stageKey: "typing" };
+  if (latest.type === "tool_use") {
+    const tool = (latest.tool ?? "").toLowerCase();
+    const toolKey = TOOL_KEY_BY_SLUG[tool] ?? "fallback";
+    // tool_use is technically still "thinking + tool" — surface the tool
+    // label in the toolKey channel; main stage label uses the tool one.
+    return { stageKey: "thinking", toolKey };
+  }
+  return { stageKey: "thinking" };
+}
+
+export function effectiveTaskStatus(
+  status: string | undefined,
+  taskMessages: readonly TaskMessagePayload[],
+): string | undefined {
+  // A retry keeps the task's earlier stream history. Deferred is the newer,
+  // server-authoritative state and must win over that stale running evidence.
+  if (status === "deferred") return status;
+  return taskMessages.length > 0 ? "running" : status;
+}
+
+function useResolveStage(): (
+  status: string | undefined,
+  taskMessages: readonly TaskMessagePayload[],
+  availability: AgentAvailability | undefined,
+  waitReason?: string,
+) => Stage {
+  const { t } = useT("chat");
+  return (status, taskMessages, availability, waitReason) => {
+    const decision = pickStageKeys(status, taskMessages, availability);
+    if (decision.toolKey) {
+      return {
+        label: t(($) => $.status_pill.tools[decision.toolKey!]),
+      };
+    }
+    // A parked task that names what it is parked on turns an unexplained wait
+    // into an actionable one: the user can see it is a sibling task, not a
+    // hung agent, and decide whether cancelling is worth it. Older servers send
+    // no reason, so the bare label has to stay reachable.
+    const reason = waitReason?.trim();
+    if (decision.needsWaitReason && reason) {
+      return {
+        label: t(($) => $.status_pill.stages.waiting_local_directory_reason, {
+          reason,
+        }),
+        static: decision.static,
+      };
+    }
+    return {
+      label: t(($) => $.status_pill.stages[decision.stageKey]),
+      static: decision.static,
+    };
+  };
+}
+
+export function TaskStatusPill({
+  pendingTask,
+  taskMessages,
+  availability,
+}: Props) {
+  const resolveStage = useResolveStage();
+  // Anchor: locked on first render. Once set we never reassign — otherwise
+  // the timer would visibly snap backwards when an optimistic-seeded
+  // `Date.now()` anchor is later replaced by a server-side created_at that
+  // happened a few hundred ms earlier. Monotonic elapsed > strict accuracy.
+  const anchorRef = useRef<number | null>(null);
+  if (anchorRef.current === null) {
+    if (pendingTask.created_at) {
+      const t = Date.parse(pendingTask.created_at);
+      anchorRef.current = Number.isFinite(t) ? t : Date.now();
+    } else {
+      anchorRef.current = Date.now();
+    }
+  }
+  const anchor = anchorRef.current;
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Effective status — streamed messages prove a task has started, except
+  // when the server has since moved that same task into retry backoff.
+  const status = effectiveTaskStatus(pendingTask.status, taskMessages);
+  const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
+  // Read the reason only when the effective status is still the waiting one:
+  // streamed messages can promote a cached waiting task to "running" locally
+  // before the next server payload clears the stored text.
+  const stage = resolveStage(
+    status,
+    taskMessages,
+    availability,
+    status === "waiting_local_directory" ? pendingTask.wait_reason : undefined,
+  );
+
+  return (
+    <div
+      className="flex items-center gap-1.5 px-1 text-caption text-muted-foreground"
+      aria-live="polite"
+    >
+      {!stage.static && (
+        <UnicodeSpinner name="breathe" className="opacity-70" />
+      )}
+      <span className="truncate">
+        <span className={cn(!stage.static && "animate-chat-text-shimmer")}>
+          {stage.label}
+        </span>
+        <span className="opacity-70 tabular-nums"> · {formatElapsedSecs(elapsedSecs)}</span>
+      </span>
+    </div>
+  );
+}

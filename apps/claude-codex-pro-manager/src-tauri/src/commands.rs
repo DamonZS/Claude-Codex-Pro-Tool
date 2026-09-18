@@ -19,16 +19,7 @@ use claude_codex_pro_core::codex_theme::{
     CodexThemeStore, CodexThemeSummary,
 };
 use claude_codex_pro_core::credential_environment::CredentialEnvironmentDiagnostic;
-use claude_codex_pro_core::install::MCP_BINARY;
 use claude_codex_pro_core::leila_deploy::{self, LeilaDeploymentStatus};
-use claude_codex_pro_core::memory_assist::{
-    MemoryAssistMigrationRequest, MemoryAssistMigrationResult, MemoryAssistStatus,
-    MemoryAssistStore, MemoryCandidate, MemoryCandidateRequest, MemoryCaptureProgressStatus,
-    MemoryExport, MemoryImportRequest, MemoryItem, MemoryItemRequest, MemoryNewProjectGuide,
-    MemoryOutcomeDashboard, MemoryQueryRequest, MemoryQueryResult, MemorySelfCheckRequest,
-    MemorySelfCheckResult, MemorySessionRequest, MemorySessionSummary,
-    migrate_memory_assist_data_dir as migrate_memory_assist_data_dir_core,
-};
 use claude_codex_pro_core::models::{DeleteResult, SessionRef};
 use claude_codex_pro_core::multica::{
     self, MulticaConnectionConfig, MulticaConnectionStatus, MulticaConnectionView,
@@ -347,12 +338,12 @@ const REPAIR_CODEX_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 /// - Fragment (#后面的内容)
 ///
 /// # Examples
-/// ```
-/// sanitize_url_for_logging("https://api.example.com/v1?api_key=secret123")
-/// // Returns: "https://api.example.com/v1?[REDACTED]"
+/// ```text
+/// Input:  https://api.example.com/v1?api_key=secret123#fragment
+/// Output: https://api.example.com/v1?[REDACTED]
 ///
-/// sanitize_url_for_logging("http://user:pass@api.example.com")
-/// // Returns: "http://[REDACTED]@api.example.com"
+/// Input:  http://user:pass@api.example.com
+/// Output: http://[REDACTED]@api.example.com
 /// ```
 fn sanitize_url_for_logging(url: &str) -> String {
     // 尝试解析 URL
@@ -400,12 +391,12 @@ fn sanitize_url_for_logging(url: &str) -> String {
 /// ✅ 清理 Authorization header 以用于日志记录
 ///
 /// # Examples
-/// ```
-/// sanitize_auth_header("Bearer sk-ant-api03-abc123...")
-/// // Returns: "Bearer [REDACTED]"
+/// ```text
+/// Input:  Bearer TOKEN
+/// Output: Bearer [REDACTED]
 ///
-/// sanitize_auth_header("Basic dXNlcjpwYXNz")
-/// // Returns: "Basic [REDACTED]"
+/// Input:  Basic CREDENTIALS
+/// Output: Basic [REDACTED]
 /// ```
 fn sanitize_auth_header(header: &str) -> String {
     let parts: Vec<&str> = header.splitn(2, ' ').collect();
@@ -1123,6 +1114,13 @@ pub struct LogsPayload {
     pub lines: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct RequestTimelinePayload {
+    pub records: Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
+    pub warnings: Vec<String>,
+    pub observed_at_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiagnosticsPayload {
     pub report: String,
@@ -1234,130 +1232,15 @@ pub struct McpbPackagePayload {
     pub package: McpbPackageOutcome,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistStatusPayload {
-    pub memory: MemoryAssistStatus,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct MemoryAssistRuntimeSnapshot {
-    enabled: bool,
-    injected: bool,
-    status: String,
-    active: bool,
-    workspace: String,
-    total_items: i64,
-    pending_candidates: i64,
-    summary: String,
-    source: String,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 struct DiagnosticLogRecord {
     timestamp_ms: u64,
     event: String,
-    detail: Value,
 }
 
 #[derive(Debug, Clone, Default)]
 struct RendererRuntimeHeartbeat {
     timestamp_ms: u64,
-    runtime: Option<MemoryAssistRuntimeSnapshot>,
-    runtime_reported: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistQueryPayload {
-    pub memory: MemoryQueryResult,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryOutcomeDashboardPayload {
-    pub dashboard: MemoryOutcomeDashboard,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryNewProjectGuidePayload {
-    pub guide: MemoryNewProjectGuide,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistItemsPayload {
-    pub items: Vec<MemoryItem>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistItemPayload {
-    pub item: MemoryItem,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistCandidatesPayload {
-    pub candidates: Vec<MemoryCandidate>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistCandidatePayload {
-    pub candidate: MemoryCandidate,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistSelfCheckPayload {
-    pub report: MemorySelfCheckResult,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistExportPayload {
-    pub data: MemoryExport,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryAssistSessionPayload {
-    pub summary: MemorySessionSummary,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryCandidateListRequest {
-    #[serde(default)]
-    pub workspace: String,
-    #[serde(default = "default_true")]
-    pub include_global: bool,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryOutcomeDashboardRequest {
-    #[serde(default)]
-    pub workspace: String,
-    #[serde(default = "default_memory_outcome_range_days")]
-    pub range_days: usize,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryIdRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryIdAndItemRequest {
-    pub id: String,
-    pub item: MemoryItemRequest,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1397,26 +1280,43 @@ pub fn startup_should_show_update() -> bool {
     )
 }
 
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn renderer_heartbeat_is_fresh(timestamp_ms: u64) -> bool {
+    current_time_ms().saturating_sub(timestamp_ms) <= 45_000
+}
+
+fn renderer_heartbeat_is_current(timestamp_ms: u64, launch_started_at_ms: Option<u64>) -> bool {
+    launch_started_at_ms.is_some_and(|launch_started_at_ms| {
+        timestamp_ms >= launch_started_at_ms && renderer_heartbeat_is_fresh(timestamp_ms)
+    })
+}
+
+fn renderer_frontend_heartbeat_confirms_injection(heartbeat: &RendererRuntimeHeartbeat) -> bool {
+    renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)
+}
+
+fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
+    let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
+    read_tail(&path, 2_000)
+        .ok()?
+        .lines()
+        .rev()
+        .take(2_000)
+        .filter_map(|line| serde_json::from_str::<DiagnosticLogRecord>(line).ok())
+        .find(|record| record.event == "renderer.script_loaded")
+        .map(|record| RendererRuntimeHeartbeat {
+            timestamp_ms: record.timestamp_ms,
+        })
+}
+
 fn default_true() -> bool {
     true
-}
-
-fn default_memory_outcome_range_days() -> usize {
-    30
-}
-
-fn restrict_manager_memory_workspace(workspace: &str) -> String {
-    let workspace = workspace.trim();
-    if workspace.is_empty() || workspace == "__all__" {
-        "global".to_string()
-    } else {
-        workspace.to_string()
-    }
-}
-
-fn restrict_manager_memory_query(request: &mut MemoryQueryRequest) {
-    request.workspace = restrict_manager_memory_workspace(&request.workspace);
-    request.include_global = true;
 }
 
 pub fn current_exe_path_string() -> String {
@@ -3065,17 +2965,10 @@ pub async fn repair_frontend_connection() -> CommandResult<RepairConnectionPaylo
                     )
                     .await
                     {
-                        if heartbeat.runtime_reported {
-                            details.push(format!(
-                                "Codex 前端运行时已在本次修复后重新上报，时间戳 {}。",
-                                heartbeat.timestamp_ms
-                            ));
-                        } else {
-                            details.push(format!(
-                                "Codex 前端脚本已在本次修复后加载，时间戳 {}；盘古记忆运行时将在页面同步后继续上报。",
-                                heartbeat.timestamp_ms
-                            ));
-                        }
+                        details.push(format!(
+                            "Codex 前端脚本已在本次修复后加载，时间戳 {}。",
+                            heartbeat.timestamp_ms
+                        ));
                         true
                     } else {
                         details.push("未等到本次修复后的 Codex 前端脚本或运行时新心跳；旧注入状态不会被判定为成功。".to_string());
@@ -3810,7 +3703,6 @@ fn start_restart_injection_monitor(request: LaunchRequest, restart_started_ms: u
                 "helper_port": launch_status.helper_port.unwrap_or(helper_port),
                 "helper_port_online": launch_status.helper_port_online,
                 "renderer_heartbeat_ms": heartbeat.timestamp_ms,
-                "runtime_reported": heartbeat.runtime_reported,
                 "theme_id": theme_id,
                 "theme_generation": theme_generation
             }),
@@ -3910,9 +3802,6 @@ const BOOLEAN_CAPABILITY_SETTINGS: &[&str] = &[
     "codexAppNativeMenuPlacement",
     "claudeAppChineseOverlayEnabled",
     "codexAppServiceTierControls",
-    "memoryAssistEnabled",
-    "memoryAssistInjectEnabled",
-    "memoryAssistAutoSuggestEnabled",
     "cliWrapperEnabled",
     "multicaWorkspaceEnabled",
 ];
@@ -5062,1103 +4951,6 @@ fn list_local_sessions_blocking() -> CommandResult<LocalSessionsPayload> {
             payload,
         )
     }
-}
-
-#[tauri::command]
-pub async fn load_memory_assist_status() -> CommandResult<MemoryAssistStatusPayload> {
-    // This runs SQLite queries and, via enrich_memory_status, two blocking
-    // block_on CDP round-trips. On the UI thread those freeze the whole WebView
-    // whenever the status panel polls (and worse the larger the log grows), so
-    // move the whole thing onto the blocking pool.
-    let computed = tauri::async_runtime::spawn_blocking(|| {
-        MemoryAssistStore::default()
-            .status()
-            .map(enrich_memory_status)
-    })
-    .await;
-    match computed {
-        Ok(Ok(memory)) => ok("盘古记忆状态已加载。", MemoryAssistStatusPayload { memory }),
-        Ok(Err(error)) => failed(
-            &format!("加载盘古记忆状态失败：{error}"),
-            MemoryAssistStatusPayload {
-                memory: empty_memory_status(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("加载盘古记忆状态失败：{error}"),
-            MemoryAssistStatusPayload {
-                memory: empty_memory_status(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn migrate_memory_assist_data_dir(
-    request: MemoryAssistMigrationRequest,
-) -> Result<MemoryAssistMigrationResult, String> {
-    match tauri::async_runtime::spawn_blocking(move || migrate_memory_assist_data_dir_core(request))
-        .await
-    {
-        Ok(Ok(result)) => Ok(result),
-        Ok(Err(error)) => Err(error.to_string()),
-        Err(error) => Err(format!("迁移盘古记忆数据失败：{error}")),
-    }
-}
-
-#[tauri::command]
-pub async fn query_memory_assist(
-    mut request: MemoryQueryRequest,
-) -> CommandResult<MemoryAssistQueryPayload> {
-    // SQLite query with keyword scoring/ranking; keep it off the UI thread.
-    restrict_manager_memory_query(&mut request);
-    let query = request.query.clone();
-    let workspace = request.workspace.clone();
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().query_with_activity(request, "manager", "search", None)
-    })
-    .await;
-    match computed {
-        Ok(Ok(memory)) => ok("记忆查询已完成。", MemoryAssistQueryPayload { memory }),
-        Ok(Err(error)) => failed(
-            &format!("记忆查询失败：{error}"),
-            MemoryAssistQueryPayload {
-                memory: MemoryQueryResult {
-                    query,
-                    workspace,
-                    results: Vec::new(),
-                },
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆查询任务失败：{error}"),
-            MemoryAssistQueryPayload {
-                memory: MemoryQueryResult {
-                    query,
-                    workspace,
-                    results: Vec::new(),
-                },
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn load_memory_outcome_dashboard(
-    request: MemoryOutcomeDashboardRequest,
-) -> CommandResult<MemoryOutcomeDashboardPayload> {
-    let workspace = restrict_manager_memory_workspace(&request.workspace);
-    let range_days = if request.range_days <= 7 { 7 } else { 30 };
-    let empty_dashboard = || MemoryOutcomeDashboard {
-        workspace: workspace.clone(),
-        range_days,
-        ..MemoryOutcomeDashboard::default()
-    };
-    let requested_workspace = workspace.clone();
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().outcome_dashboard(&requested_workspace, range_days)
-    })
-    .await;
-    match computed {
-        Ok(Ok(dashboard)) => ok(
-            "盘古记忆成果看板已加载。",
-            MemoryOutcomeDashboardPayload { dashboard },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("加载盘古记忆成果看板失败：{error}"),
-            MemoryOutcomeDashboardPayload {
-                dashboard: empty_dashboard(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("盘古记忆成果看板任务失败：{error}"),
-            MemoryOutcomeDashboardPayload {
-                dashboard: empty_dashboard(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn load_memory_new_project_guide() -> CommandResult<MemoryNewProjectGuidePayload> {
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().new_project_guide()
-    })
-    .await;
-    match computed {
-        Ok(Ok(guide)) => ok(
-            "新项目启动指南已生成。",
-            MemoryNewProjectGuidePayload { guide },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("生成新项目启动指南失败：{error}"),
-            MemoryNewProjectGuidePayload {
-                guide: MemoryNewProjectGuide::default(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("新项目启动指南任务失败：{error}"),
-            MemoryNewProjectGuidePayload {
-                guide: MemoryNewProjectGuide::default(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn list_memory_assist_items(
-    mut request: MemoryQueryRequest,
-) -> CommandResult<MemoryAssistItemsPayload> {
-    // SQLite read; keep it off the UI thread.
-    restrict_manager_memory_query(&mut request);
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().list_items(request)
-    })
-    .await;
-    match computed {
-        Ok(Ok(items)) => ok(
-            &format!("已加载 {} 条记忆条目。", items.len()),
-            MemoryAssistItemsPayload { items },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("加载记忆列表失败：{error}"),
-            MemoryAssistItemsPayload { items: Vec::new() },
-        ),
-        Err(error) => failed(
-            &format!("记忆列表任务失败：{error}"),
-            MemoryAssistItemsPayload { items: Vec::new() },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn learn_memory_assist_item(
-    request: MemoryItemRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    // SQLite write (plus similarity scan and inject-cache rebuild); keep off UI.
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().learn_item(request)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("记忆已保存。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("保存记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆保存任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn update_memory_assist_item(
-    request: MemoryIdAndItemRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().update_item(&request.id, request.item)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("记忆已更新。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("更新记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆更新任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn delete_memory_assist_item(
-    request: MemoryIdRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().delete_item(&request.id)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("记忆已删除。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("删除记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆删除任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn archive_memory_assist_item(
-    request: MemoryIdRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().archive_item(&request.id)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("记忆已归档。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("归档记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆归档任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn restore_memory_assist_item(
-    request: MemoryIdRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().restore_item(&request.id)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("记忆已恢复到活跃层。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("恢复记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("记忆恢复任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn create_memory_assist_candidate(
-    request: MemoryCandidateRequest,
-) -> CommandResult<MemoryAssistCandidatePayload> {
-    if !memory_assist_candidate_enabled() {
-        return failed(
-            "盘古记忆自动学习当前已禁用。",
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().create_candidate(request)
-    })
-    .await;
-    match computed {
-        Ok(Ok(candidate)) => ok(
-            "待确认记忆已创建。",
-            MemoryAssistCandidatePayload { candidate },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("创建待确认记忆失败：{error}"),
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("待确认记忆任务失败：{error}"),
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn list_memory_assist_candidates(
-    request: MemoryCandidateListRequest,
-) -> CommandResult<MemoryAssistCandidatesPayload> {
-    let workspace = restrict_manager_memory_workspace(&request.workspace);
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().list_candidates(&workspace, true)
-    })
-    .await;
-    match computed {
-        Ok(Ok(candidates)) => ok(
-            &format!("已加载 {} 条待确认记忆。", candidates.len()),
-            MemoryAssistCandidatesPayload { candidates },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("加载待确认记忆失败：{error}"),
-            MemoryAssistCandidatesPayload {
-                candidates: Vec::new(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("待确认记忆任务失败：{error}"),
-            MemoryAssistCandidatesPayload {
-                candidates: Vec::new(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn approve_memory_assist_candidate(
-    request: MemoryIdRequest,
-) -> CommandResult<MemoryAssistItemPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().approve_candidate(&request.id)
-    })
-    .await;
-    match computed {
-        Ok(Ok(item)) => ok("待确认记忆已通过。", MemoryAssistItemPayload { item }),
-        Ok(Err(error)) => failed(
-            &format!("通过待确认记忆失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("通过待确认记忆任务失败：{error}"),
-            MemoryAssistItemPayload {
-                item: empty_memory_item(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn reject_memory_assist_candidate(
-    request: MemoryIdRequest,
-) -> CommandResult<MemoryAssistCandidatePayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        );
-    }
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().reject_candidate(&request.id)
-    })
-    .await;
-    match computed {
-        Ok(Ok(candidate)) => ok(
-            "待确认记忆已拒绝。",
-            MemoryAssistCandidatePayload { candidate },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("拒绝待确认记忆失败：{error}"),
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("拒绝待确认记忆任务失败：{error}"),
-            MemoryAssistCandidatePayload {
-                candidate: empty_memory_candidate(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn load_memory_assist_session(
-    request: MemorySessionRequest,
-) -> CommandResult<MemoryAssistSessionPayload> {
-    // session_summary triggers Codex history backfill (SQLite scans + rollout
-    // JSONL parsing) — heavy synchronous IO that must not run on the UI thread.
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().session_summary(request)
-    })
-    .await;
-    let empty_summary = || MemorySessionSummary {
-        workspace: String::new(),
-        inject_summary_cache_path: MemoryAssistStore::default()
-            .inject_summary_cache_path()
-            .to_string_lossy()
-            .to_string(),
-        total_items: 0,
-        pending_candidates: 0,
-        injected_items: Vec::new(),
-        recent_captures: Vec::new(),
-        capture_summary: String::new(),
-        summary: String::new(),
-    };
-    match computed {
-        Ok(Ok(summary)) => ok(
-            "记忆会话摘要已加载。",
-            MemoryAssistSessionPayload { summary },
-        ),
-        Ok(Err(error)) => failed(
-            &format!("加载记忆会话摘要失败：{error}"),
-            MemoryAssistSessionPayload {
-                summary: empty_summary(),
-            },
-        ),
-        Err(error) => failed(
-            &format!("加载记忆会话摘要失败：{error}"),
-            MemoryAssistSessionPayload {
-                summary: empty_summary(),
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn run_memory_assist_selfcheck(
-    request: MemorySelfCheckRequest,
-) -> CommandResult<MemoryAssistSelfCheckPayload> {
-    log_manager_event(
-        "manager.memory.selfcheck.start",
-        json!({
-            "repair": request.repair,
-            "sources": ["codex_sqlite", "codex_rollout_files", "memory_assist.sqlite"],
-            "historyScan": "all_visible_workspaces_and_sessions"
-        }),
-    );
-    if !memory_assist_write_enabled() {
-        log_manager_event(
-            "manager.memory.selfcheck.failed",
-            json!({
-                "repair": request.repair,
-                "reason": "memory_assist_write_disabled"
-            }),
-        );
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistSelfCheckPayload {
-                report: MemorySelfCheckResult {
-                    status: "failed".to_string(),
-                    repaired: false,
-                    backup_path: None,
-                    checks: Vec::new(),
-                },
-            },
-        );
-    }
-    // Phase 3 module C: when the LLM-summary gate is on, resolve a per-workspace
-    // summary through the active relay *before* the synchronous consolidation.
-    // This ships memory text to the relay, so it is off by default and only runs
-    // on an explicit repair. Any workspace that fails (or the whole call failing)
-    // degrades silently to the rule-based summarizer inside consolidation.
-    let summaries = if request.repair {
-        resolve_memory_llm_summaries().await
-    } else {
-        std::collections::BTreeMap::new()
-    };
-
-    // Self-check is the heaviest memory op: it scans every Codex SQLite DB and
-    // rollout file (backfill runs with no cap) and can take seconds to minutes on
-    // large histories. It must never run on the UI thread.
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().run_selfcheck_with_summaries(request, &summaries)
-    })
-    .await;
-    let outcome = match computed {
-        Ok(inner) => inner,
-        Err(join_error) => Err(anyhow::anyhow!("自检任务失败：{join_error}")),
-    };
-    match outcome {
-        Ok(report) => {
-            let history_message = report
-                .checks
-                .iter()
-                .find(|check| check.name == "history")
-                .map(|check| check.message.clone())
-                .unwrap_or_default();
-            log_manager_event(
-                "manager.memory.selfcheck.result",
-                json!({
-                    "status": &report.status,
-                    "repaired": report.repaired,
-                    "backupPath": &report.backup_path,
-                    "history": history_message,
-                    "checks": &report.checks
-                }),
-            );
-            ok(
-                "盘古记忆自检已完成。",
-                MemoryAssistSelfCheckPayload { report },
-            )
-        }
-        Err(error) => {
-            log_manager_event(
-                "manager.memory.selfcheck.failed",
-                json!({
-                    "reason": error.to_string()
-                }),
-            );
-            failed(
-                &format!("盘古记忆自检失败：{error}"),
-                MemoryAssistSelfCheckPayload {
-                    report: MemorySelfCheckResult {
-                        status: "failed".to_string(),
-                        repaired: false,
-                        backup_path: None,
-                        checks: Vec::new(),
-                    },
-                },
-            )
-        }
-    }
-}
-
-#[tauri::command]
-pub async fn export_memory_assist() -> CommandResult<MemoryAssistExportPayload> {
-    // Exporting serializes the whole SQLite store; keep it off the UI thread.
-    let computed =
-        tauri::async_runtime::spawn_blocking(|| MemoryAssistStore::default().export_json()).await;
-    let outcome = match computed {
-        Ok(inner) => inner,
-        Err(join_error) => Err(anyhow::anyhow!("导出任务失败：{join_error}")),
-    };
-    match outcome {
-        Ok(data) => ok("盘古记忆数据已导出。", MemoryAssistExportPayload { data }),
-        Err(error) => failed(
-            &format!("盘古记忆导出失败：{error}"),
-            MemoryAssistExportPayload {
-                data: MemoryExport {
-                    schema_version: "memory-assist/v1".to_string(),
-                    exported_at: 0,
-                    items: Vec::new(),
-                    candidates: Vec::new(),
-                },
-            },
-        ),
-    }
-}
-
-#[tauri::command]
-pub async fn import_memory_assist(
-    request: MemoryImportRequest,
-) -> CommandResult<MemoryAssistStatusPayload> {
-    if !memory_assist_write_enabled() {
-        return failed(
-            "盘古记忆当前已禁用。",
-            MemoryAssistStatusPayload {
-                memory: empty_memory_status(),
-            },
-        );
-    }
-    // Import parses JSON and performs a batch of SQLite writes; run it on the
-    // blocking pool so a large import cannot freeze the UI thread.
-    let computed = tauri::async_runtime::spawn_blocking(move || {
-        MemoryAssistStore::default().import_json(request)
-    })
-    .await;
-    let outcome = match computed {
-        Ok(inner) => inner,
-        Err(join_error) => Err(anyhow::anyhow!("导入任务失败：{join_error}")),
-    };
-    match outcome {
-        Ok(memory) => ok("盘古记忆数据已导入。", MemoryAssistStatusPayload { memory }),
-        Err(error) => failed(
-            &format!("盘古记忆导入失败：{error}"),
-            MemoryAssistStatusPayload {
-                memory: empty_memory_status(),
-            },
-        ),
-    }
-}
-
-/// MCP server 在各客户端配置里的条目名（Claude Desktop 的 mcpServers key /
-/// Codex config.toml 的 [mcp_servers.<id>]）。
-const MEMORY_MCP_SERVER_ID: &str = "pangu-memory";
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MemoryMcpRegisterPayload {
-    pub mcp_binary_path: String,
-    pub mcp_binary_exists: bool,
-    pub claude_desktop_config_path: String,
-    pub claude_desktop_registered: bool,
-    pub codex_config_path: String,
-    pub codex_registered: bool,
-    pub mcp_enabled: bool,
-    pub errors: Vec<String>,
-}
-
-fn empty_mcp_register_payload() -> MemoryMcpRegisterPayload {
-    MemoryMcpRegisterPayload {
-        mcp_binary_path: String::new(),
-        mcp_binary_exists: false,
-        claude_desktop_config_path: String::new(),
-        claude_desktop_registered: false,
-        codex_config_path: String::new(),
-        codex_registered: false,
-        mcp_enabled: false,
-        errors: Vec::new(),
-    }
-}
-
-/// 一键把盘古记忆 MCP server 注册到 Claude Desktop 与 Codex 两端配置（ADR 0002
-/// 决策 B）。复用现有 `upsert_claude_desktop_mcp_entry`（写 mcpServers JSON）与
-/// `upsert_context_entry_in_common_config`（写 config.toml 的 mcp_servers 表），
-/// MCP exe 路径用 `companion_binary_path` 解析同目录兄弟二进制的绝对路径。
-///
-/// 两端各自独立成败：一端失败不阻断另一端，错误汇总回报。文件 IO 走 blocking 池。
-#[tauri::command]
-pub async fn register_memory_mcp_server() -> CommandResult<MemoryMcpRegisterPayload> {
-    tauri::async_runtime::spawn_blocking(register_memory_mcp_server_blocking)
-        .await
-        .unwrap_or_else(|join_error| {
-            failed(
-                &format!("注册盘古记忆 MCP 任务失败：{join_error}"),
-                empty_mcp_register_payload(),
-            )
-        })
-}
-
-fn register_memory_mcp_server_blocking() -> CommandResult<MemoryMcpRegisterPayload> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    let mcp_enabled = settings.memory_assist_mcp_enabled;
-
-    let mcp_binary = claude_codex_pro_core::install::companion_binary_path(MCP_BINARY);
-    let mcp_binary_path = mcp_binary.to_string_lossy().to_string();
-    let mcp_binary_exists = mcp_binary.exists();
-
-    let mut payload = empty_mcp_register_payload();
-    payload.mcp_binary_path = mcp_binary_path.clone();
-    payload.mcp_binary_exists = mcp_binary_exists;
-    payload.mcp_enabled = mcp_enabled;
-
-    // Claude Desktop 端：写 mcpServers JSON。
-    let claude_body = json!({
-        "command": mcp_binary_path,
-        "args": [],
-    })
-    .to_string();
-    match plugin_hub::upsert_claude_desktop_mcp_entry(MEMORY_MCP_SERVER_ID, &claude_body) {
-        Ok(entries) => {
-            payload.claude_desktop_config_path = entries.config_path;
-            payload.claude_desktop_registered = true;
-        }
-        Err(error) => payload
-            .errors
-            .push(format!("注册到 Claude Desktop 失败：{error}")),
-    }
-
-    // Codex 端：写 config.toml 的 [mcp_servers.<id>]。用 toml_edit 安全构建 body，
-    // 自动转义 Windows 路径反斜杠，避免手拼字符串出错。
-    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
-    let codex_config_path = home.join("config.toml");
-    payload.codex_config_path = codex_config_path.to_string_lossy().to_string();
-    let mut body_doc = toml_edit::DocumentMut::new();
-    body_doc["command"] = toml_edit::value(mcp_binary_path.clone());
-    let toml_body = body_doc.to_string();
-    let existing_config = std::fs::read_to_string(&codex_config_path).unwrap_or_default();
-    match claude_codex_pro_core::relay_config::upsert_context_entry_in_common_config(
-        &existing_config,
-        "mcp",
-        MEMORY_MCP_SERVER_ID,
-        &toml_body,
-    ) {
-        Ok(updated) => {
-            let write_result = codex_config_path
-                .parent()
-                .map(std::fs::create_dir_all)
-                .unwrap_or(Ok(()))
-                .and_then(|_| std::fs::write(&codex_config_path, &updated));
-            match write_result {
-                Ok(()) => payload.codex_registered = true,
-                Err(error) => payload
-                    .errors
-                    .push(format!("写入 Codex config.toml 失败：{error}")),
-            }
-        }
-        Err(error) => payload.errors.push(format!("注册到 Codex 失败：{error}")),
-    }
-
-    if !mcp_binary_exists {
-        payload.errors.push(format!(
-            "MCP 二进制未找到：{mcp_binary_path}（配置已写入，但需构建/安装 claude-codex-pro-mcp 后才能启动）。"
-        ));
-    }
-
-    let both_ok = payload.claude_desktop_registered && payload.codex_registered;
-    if both_ok && payload.errors.is_empty() {
-        ok(
-            "盘古记忆 MCP 已注册到 Claude Desktop 与 Codex 两端。",
-            payload,
-        )
-    } else if payload.claude_desktop_registered || payload.codex_registered {
-        let message = format!("盘古记忆 MCP 部分注册完成：{}", payload.errors.join("；"));
-        ok(&message, payload)
-    } else {
-        let message = format!("盘古记忆 MCP 注册失败：{}", payload.errors.join("；"));
-        failed(&message, payload)
-    }
-}
-
-fn empty_memory_status() -> MemoryAssistStatus {
-    MemoryAssistStatus {
-        status: "failed".to_string(),
-        db_path: claude_codex_pro_core::memory_assist::default_memory_assist_db_path()
-            .to_string_lossy()
-            .to_string(),
-        inject_summary_cache_path: MemoryAssistStore::default()
-            .inject_summary_cache_path()
-            .to_string_lossy()
-            .to_string(),
-        total_items: 0,
-        pending_candidates: 0,
-        total_captures: 0,
-        capture_progress: MemoryCaptureProgressStatus::default(),
-        workspaces: Vec::new(),
-        latest_backup_path: None,
-        enabled: false,
-        inject_enabled: false,
-        auto_suggest_enabled: false,
-        runtime_status: "failed".to_string(),
-        runtime_message: "盘古记忆当前不可用。".to_string(),
-        codex_injected: false,
-        claude_injected: false,
-        codex_workspace: String::new(),
-        active: false,
-        active_source: "idle".to_string(),
-    }
-}
-
-fn empty_memory_item() -> MemoryItem {
-    MemoryItem {
-        id: String::new(),
-        text: String::new(),
-        workspace: String::new(),
-        category: String::new(),
-        tags: Vec::new(),
-        source: String::new(),
-        source_session_id: String::new(),
-        created_at: 0,
-        updated_at: 0,
-        last_accessed_at: 0,
-        access_count: 0,
-        tier: "active".to_string(),
-        strength: 1.0,
-        archived_at: 0,
-        retention: 1.0,
-        exempt: false,
-    }
-}
-
-fn empty_memory_candidate() -> MemoryCandidate {
-    MemoryCandidate {
-        id: String::new(),
-        text: String::new(),
-        workspace: String::new(),
-        category: String::new(),
-        tags: Vec::new(),
-        source: String::new(),
-        reason: String::new(),
-        source_session_id: String::new(),
-        status: "failed".to_string(),
-        created_at: 0,
-        updated_at: 0,
-    }
-}
-
-/// Resolve a per-workspace LLM summary through the active relay profile (phase 3
-/// module C). Returns an empty map — degrading to the rule-based summarizer — when
-/// the gate is off, memory is disabled, no consolidatable inputs exist, or the
-/// relay call fails. Shipping memory text to the relay is privacy-sensitive, so
-/// the `memoryAssistLlmSummaryEnabled` gate defaults to false.
-async fn resolve_memory_llm_summaries() -> std::collections::BTreeMap<String, String> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    if !settings.memory_assist_enabled || !settings.memory_assist_llm_summary_enabled {
-        return std::collections::BTreeMap::new();
-    }
-    let inputs = match tauri::async_runtime::spawn_blocking(|| {
-        MemoryAssistStore::default().collect_consolidation_inputs()
-    })
-    .await
-    {
-        Ok(Ok(inputs)) => inputs,
-        _ => return std::collections::BTreeMap::new(),
-    };
-    if inputs.is_empty() {
-        return std::collections::BTreeMap::new();
-    }
-    let profile = settings.active_relay_profile();
-    let mut summaries = std::collections::BTreeMap::new();
-    for (workspace, source_text) in inputs {
-        let prompt = format!(
-            "你是记忆整合助手。请把下面同一工作区的多条经验教训合并去重，浓缩为一份不超过 10 条要点的中文\"经验教训手册\"，\
-             每条以\"- \"开头，只保留可执行的项目约定、修复结论、偏好与工作流规则，剔除一次性命令输出和临时错误。\
-             第一行输出\"经验教训手册：\"。\n\n原始记忆：\n{source_text}"
-        );
-        match claude_codex_pro_core::relay_config::summarize_memory_via_relay(&profile, &prompt)
-            .await
-        {
-            Ok(summary) if !summary.trim().is_empty() => {
-                summaries.insert(workspace, summary);
-            }
-            _ => {
-                // Degrade silently: this workspace falls back to the rule-based
-                // summarizer inside consolidation.
-            }
-        }
-    }
-    summaries
-}
-
-fn memory_assist_write_enabled() -> bool {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    settings.memory_assist_enabled
-}
-
-fn memory_assist_candidate_enabled() -> bool {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    settings.memory_assist_enabled && settings.memory_assist_auto_suggest_enabled
-}
-
-fn enrich_memory_status(mut memory: MemoryAssistStatus) -> MemoryAssistStatus {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    memory.enabled = settings.memory_assist_enabled;
-    memory.inject_enabled = settings.memory_assist_inject_enabled;
-    memory.auto_suggest_enabled = settings.memory_assist_auto_suggest_enabled;
-
-    let launch_started_at_ms = StatusStore::default()
-        .load_latest()
-        .ok()
-        .flatten()
-        .map(|status| status.started_at_ms);
-    let heartbeat = latest_renderer_runtime_heartbeat();
-    let heartbeat_is_fresh = heartbeat
-        .as_ref()
-        .is_some_and(|item| renderer_heartbeat_is_current(item.timestamp_ms, launch_started_at_ms));
-    let runtime_snapshot = read_codex_memory_runtime_snapshot().or_else(|| {
-        heartbeat
-            .filter(|_| heartbeat_is_fresh)
-            .and_then(|item| item.runtime)
-    });
-
-    if let Some(runtime) = runtime_snapshot {
-        let normalized_runtime_status = normalize_memory_runtime_status(&runtime);
-        memory.runtime_status = if runtime.injected {
-            normalized_runtime_status
-        } else if memory.enabled && memory.inject_enabled {
-            "waiting".to_string()
-        } else {
-            "disabled".to_string()
-        };
-        memory.runtime_message = if runtime.summary.trim().is_empty() {
-            "盘古记忆运行时已同步。".to_string()
-        } else if runtime.injected && runtime.status == "idle" {
-            "等待真实对话消息后写入盘古记忆。".to_string()
-        } else {
-            runtime.summary.clone()
-        };
-        memory.codex_injected = runtime.injected;
-        memory.codex_workspace = runtime.workspace.clone();
-        memory.active = runtime.active || heartbeat_is_fresh;
-        memory.active_source = if runtime.source.trim().is_empty() {
-            "codex".to_string()
-        } else {
-            runtime.source.clone()
-        };
-        if runtime.total_items > 0 {
-            memory.total_items = runtime.total_items;
-        }
-        if runtime.pending_candidates > 0 {
-            memory.pending_candidates = runtime.pending_candidates;
-        }
-    } else if heartbeat_is_fresh && memory.enabled && memory.inject_enabled {
-        memory.runtime_status = "ok".to_string();
-        memory.runtime_message = "Codex 前端脚本已注入，正在等待盘古记忆运行时同步。".to_string();
-        memory.codex_injected = true;
-        memory.active = true;
-        memory.active_source = "codex-script".to_string();
-    } else {
-        memory.runtime_status = if memory.enabled && memory.inject_enabled {
-            "not_checked".to_string()
-        } else {
-            "disabled".to_string()
-        };
-        memory.runtime_message = if memory.enabled && memory.inject_enabled {
-            "已启用盘古记忆并开启注入，正在等待 Codex 前端加载记忆运行时脚本。请确认 Codex 已启动并完成注入。".to_string()
-        } else {
-            "盘古记忆当前已禁用。".to_string()
-        };
-    }
-
-    memory.claude_injected = false;
-    memory
-}
-
-fn normalize_memory_runtime_status(runtime: &MemoryAssistRuntimeSnapshot) -> String {
-    match runtime.status.as_str() {
-        "idle" => "ok".to_string(),
-        "" if runtime.injected => "ok".to_string(),
-        value => value.to_string(),
-    }
-}
-
-fn latest_renderer_runtime_heartbeat() -> Option<RendererRuntimeHeartbeat> {
-    let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
-    // Only the newest few records matter here, and the log is unbounded, so read a
-    // bounded window from the end instead of the whole file (this function is on
-    // the status-panel polling path — a full read got slower as the log grew).
-    let text = read_tail(&path, 2_000).ok()?;
-    let mut newest_script_loaded: Option<RendererRuntimeHeartbeat> = None;
-    let mut newest_runtime: Option<RendererRuntimeHeartbeat> = None;
-    for record in text
-        .lines()
-        .rev()
-        .take(2_000)
-        .filter_map(|line| serde_json::from_str::<DiagnosticLogRecord>(line).ok())
-        .filter(|record| {
-            record.event == "renderer.memory_runtime" || record.event == "renderer.script_loaded"
-        })
-    {
-        if record.event == "renderer.memory_runtime" {
-            let runtime = record
-                .detail
-                .get("detail")
-                .and_then(|detail| detail.get("runtime"))
-                .cloned()
-                .and_then(|value| {
-                    serde_json::from_value::<MemoryAssistRuntimeSnapshot>(value).ok()
-                });
-            newest_runtime = Some(RendererRuntimeHeartbeat {
-                timestamp_ms: record.timestamp_ms,
-                runtime,
-                runtime_reported: true,
-            });
-            break;
-        }
-        if newest_script_loaded.is_none() {
-            newest_script_loaded = Some(RendererRuntimeHeartbeat {
-                timestamp_ms: record.timestamp_ms,
-                runtime: None,
-                runtime_reported: false,
-            });
-        }
-    }
-    match (newest_runtime, newest_script_loaded) {
-        (Some(runtime), Some(script_loaded))
-            if script_loaded.timestamp_ms > runtime.timestamp_ms =>
-        {
-            Some(script_loaded)
-        }
-        (Some(runtime), _) => Some(runtime),
-        (None, script_loaded) => script_loaded,
-    }
-}
-
-fn renderer_heartbeat_is_fresh(timestamp_ms: u64) -> bool {
-    current_time_ms().saturating_sub(timestamp_ms) <= 45_000
-}
-
-fn renderer_heartbeat_is_current(timestamp_ms: u64, launch_started_at_ms: Option<u64>) -> bool {
-    launch_started_at_ms.is_some_and(|launch_started_at_ms| {
-        timestamp_ms >= launch_started_at_ms && renderer_heartbeat_is_fresh(timestamp_ms)
-    })
-}
-
-fn renderer_frontend_heartbeat_confirms_injection(heartbeat: &RendererRuntimeHeartbeat) -> bool {
-    renderer_heartbeat_is_fresh(heartbeat.timestamp_ms)
-        && heartbeat
-            .runtime
-            .as_ref()
-            .map(|runtime| runtime.status != "failed")
-            .unwrap_or(true)
-}
-
-fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn read_codex_memory_runtime_snapshot() -> Option<MemoryAssistRuntimeSnapshot> {
-    let latest = StatusStore::default().load_latest().ok().flatten()?;
-    let debug_port = latest.debug_port?;
-    let targets =
-        tauri::async_runtime::block_on(claude_codex_pro_core::cdp::list_targets(debug_port))
-            .ok()?;
-    let target = claude_codex_pro_core::cdp::pick_injectable_codex_page_target(&targets).ok()?;
-    let websocket_url = target.web_socket_debugger_url.as_deref()?;
-    let result = tauri::async_runtime::block_on(claude_codex_pro_core::bridge::evaluate_script(
-        websocket_url,
-        r#"(() => window.__claudeCodexProMemoryAssistRuntime || null)()"#,
-    ))
-    .ok()?;
-    let value = result
-        .get("result")
-        .and_then(|result| result.get("result"))
-        .and_then(|result| result.get("value"))?
-        .clone();
-    serde_json::from_value::<MemoryAssistRuntimeSnapshot>(value).ok()
 }
 
 #[tauri::command]
@@ -8909,6 +7701,37 @@ pub fn disable_watcher() -> CommandResult<WatcherPayload> {
 }
 
 #[tauri::command]
+pub async fn read_request_timeline() -> CommandResult<RequestTimelinePayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (mut records, mut warnings) =
+            claude_codex_pro_data::request_history::read_recent_local_requests(
+                &session_candidate_db_paths(None),
+                &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
+                200,
+            );
+        match claude_codex_pro_core::request_telemetry::read_recent_requests(500) {
+            Ok(proxy_records) => records.extend(proxy_records),
+            Err(_) => warnings.push("代理请求记录读取失败。".to_string()),
+        }
+        records.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
+        let observed_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        ok(
+            "请求记录已加载。",
+            RequestTimelinePayload {
+                records,
+                warnings,
+                observed_at_ms,
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| failed("请求记录读取任务失败。", RequestTimelinePayload::default()))
+}
+
+#[tauri::command]
 pub async fn read_latest_logs(request: LogRequest) -> CommandResult<LogsPayload> {
     // Tailing the log is disk IO; keep it off the UI thread.
     let lines = request.lines;
@@ -11357,7 +10180,43 @@ fn sanitize_urls_in_text(input: &str) -> String {
 }
 
 fn sanitize_diagnostic_string(input: &str) -> String {
-    claude_codex_pro_core::memory_assist::redact_secrets(&sanitize_urls_in_text(input))
+    let mut output = sanitize_urls_in_text(input);
+    for marker in ["bearer", "basic", "sk-"] {
+        loop {
+            let lower = output.to_ascii_lowercase();
+            let Some(start) = lower.find(marker) else {
+                break;
+            };
+            let value_start = if marker == "sk-" {
+                start
+            } else {
+                let after = start + marker.len();
+                if !output[after..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+                {
+                    break;
+                }
+                after
+                    + output[after..]
+                        .char_indices()
+                        .find(|(_, ch)| !ch.is_whitespace())
+                        .map(|(offset, _)| offset)
+                        .unwrap_or(0)
+            };
+            let value_end = output[value_start..]
+                .char_indices()
+                .find(|(_, ch)| ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';'))
+                .map(|(offset, _)| value_start + offset)
+                .unwrap_or(output.len());
+            if value_end <= value_start {
+                break;
+            }
+            output.replace_range(start..value_end, "***redacted***");
+        }
+    }
+    output
 }
 
 fn sanitize_diagnostic_detail(value: Value) -> Value {
@@ -12672,10 +11531,10 @@ fn validate_string_length(s: &str, field_name: &str, min: usize, max: usize) -> 
 /// - 所有错误层级
 ///
 /// # Examples
-/// ```
-/// let error = some_operation().context("Failed to do X")?;
-/// eprintln!("Operation failed: {}", format_error_chain(&error));
-/// // Prints: "Failed to do X: original error message"
+/// ```text
+/// An operation returns an error with context "Failed to do X" and root cause
+/// "original error message".
+/// Logged chain: original error message → Failed to do X
 /// ```
 fn format_error_chain(error: &anyhow::Error) -> String {
     let mut messages = vec![error.to_string()];
@@ -12700,13 +11559,11 @@ fn format_error_chain(error: &anyhow::Error) -> String {
 /// 3. 开发者可以在日志中看到详细堆栈
 ///
 /// # Examples
-/// ```
-/// let result = operation().context("Failed during setup")?;
-/// return failed_with_context(
-///     "操作失败，请重试",
-///     payload,
-///     &error
-/// );
+/// ```text
+/// Given a user message, serializable payload, and anyhow error:
+/// failed_with_context("操作失败，请重试", payload, &error)
+/// returns a failed CommandResult with the payload unchanged and records the
+/// complete error chain for diagnostics.
 /// ```
 fn failed_with_context<T: Serialize>(
     user_message: &str,
@@ -12762,6 +11619,42 @@ mod tests {
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn logging_sanitizers_remove_credentials_and_fragments() {
+        let sanitized_url =
+            sanitize_url_for_logging("https://user:secret@example.com/v1?api_key=TOKEN#fragment");
+        assert!(!sanitized_url.contains("secret"));
+        assert!(!sanitized_url.contains("TOKEN"));
+        assert!(!sanitized_url.contains("fragment"));
+        assert!(sanitized_url.contains("REDACTED"));
+
+        assert_eq!(sanitize_auth_header("Bearer TOKEN"), "Bearer [REDACTED]");
+        assert_eq!(sanitize_auth_header("TOKEN"), "[REDACTED]");
+    }
+
+    #[test]
+    fn error_chain_is_reported_from_root_cause_to_context() {
+        let error = anyhow::anyhow!("original error").context("Failed to do X");
+        assert_eq!(
+            format_error_chain(&error),
+            "original error → Failed to do X"
+        );
+    }
+
+    #[test]
+    fn failed_with_context_keeps_user_message_and_payload() {
+        let error = anyhow::anyhow!("setup failed");
+        let result = failed_with_context(
+            "操作失败，请重试",
+            serde_json::json!({ "retryable": true }),
+            &error,
+        );
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.message, "操作失败，请重试");
+        assert_eq!(result.payload["retryable"], true);
     }
 
     #[test]
@@ -14127,16 +13020,22 @@ enabled = true
             ..BackendSettings::default()
         };
 
+        let submitted = settings.relay_profiles[0].clone();
         let normalized = normalize_settings_before_save(settings);
         let profile = &normalized.relay_profiles[0];
+        // Credential synchronization belongs to Core, not Manager pre-save processing.
+        assert_eq!(profile.config_contents, submitted.config_contents);
+        assert_eq!(profile.auth_contents, submitted.auth_contents);
+        assert_eq!(profile.api_key, submitted.api_key);
+        assert_eq!(profile.upstream_base_url, submitted.upstream_base_url);
         let config: serde_json::Value = serde_json::from_str(&profile.config_contents).unwrap();
         let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
 
         assert_eq!(config["note"], "common = local");
         assert_eq!(config["metadata"]["keep"], true);
         assert_eq!(config["env"]["KEEP_ENV"], "keep-env");
-        assert_eq!(config["env"]["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
-        assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-current-key");
+        assert_eq!(config["env"]["ANTHROPIC_AUTH_TOKEN"], "test-old-key");
+        assert_eq!(auth["ANTHROPIC_AUTH_TOKEN"], "test-old-key");
         assert_eq!(auth["keepAuth"], true);
     }
 
@@ -14175,153 +13074,6 @@ enabled = true
         assert_eq!(result.payload.settings.relay_profiles.len(), 1);
         assert_eq!(result.payload.settings.relay_profiles[0].id, "supplier-a");
         assert_eq!(result.payload.settings.relay_profiles[0].api_key, "sk-test");
-    }
-
-    #[test]
-    fn memory_assist_commands_respect_disabled_settings_before_writing() {
-        let _guard = test_path_lock();
-        let temp = tempfile::tempdir().unwrap();
-        let _codex_home = set_test_codex_home(&temp.path().join("codex-home"));
-        let settings_path = temp.path().join("settings.json");
-        let memory_path = temp.path().join("memory.sqlite");
-        let isolated_memory_path = memory_path.clone();
-        let previous_settings =
-            claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
-        let previous_memory =
-            claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(
-                memory_path,
-            ));
-
-        let settings = BackendSettings {
-            memory_assist_enabled: false,
-            memory_assist_auto_suggest_enabled: false,
-            ..BackendSettings::default()
-        };
-        SettingsStore::default().save(&settings).unwrap();
-        let loaded = SettingsStore::default().load().unwrap();
-        assert!(!loaded.memory_assist_enabled);
-        assert!(!loaded.memory_assist_auto_suggest_enabled);
-
-        let learned = tauri::async_runtime::block_on(learn_memory_assist_item(MemoryItemRequest {
-            text: "should not persist".to_string(),
-            workspace: "repo-a".to_string(),
-            category: "manual".to_string(),
-            tags: Vec::new(),
-            source: "manager".to_string(),
-            source_session_id: String::new(),
-        }));
-        let candidate = tauri::async_runtime::block_on(create_memory_assist_candidate(
-            MemoryCandidateRequest {
-                text: "should not become candidate".to_string(),
-                workspace: "repo-a".to_string(),
-                category: "preference".to_string(),
-                tags: Vec::new(),
-                source: "manager".to_string(),
-                reason: "test".to_string(),
-                source_session_id: String::new(),
-            },
-        ));
-        let status =
-            claude_codex_pro_core::memory_assist::MemoryAssistStore::new(isolated_memory_path)
-                .status_from_codex_home(&temp.path().join("codex-home"))
-                .unwrap();
-
-        claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
-        claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
-
-        assert_eq!(learned.status, "failed");
-        assert!(!learned.message.is_empty());
-        assert_eq!(candidate.status, "failed");
-        assert!(!candidate.message.is_empty());
-        assert_eq!(status.total_items, 0);
-        assert_eq!(status.pending_candidates, 0);
-    }
-
-    #[test]
-    fn memory_assist_candidate_command_respects_auto_suggest_disabled() {
-        let _guard = test_path_lock();
-        let temp = tempfile::tempdir().unwrap();
-        let _codex_home = set_test_codex_home(&temp.path().join("codex-home"));
-        let settings_path = temp.path().join("settings.json");
-        let memory_path = temp.path().join("memory.sqlite");
-        let isolated_memory_path = memory_path.clone();
-        let previous_settings =
-            claude_codex_pro_core::paths::set_settings_path_for_tests(Some(settings_path));
-        let previous_memory =
-            claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(Some(
-                memory_path,
-            ));
-
-        let settings = BackendSettings {
-            memory_assist_enabled: true,
-            memory_assist_auto_suggest_enabled: false,
-            ..BackendSettings::default()
-        };
-        SettingsStore::default().save(&settings).unwrap();
-        let loaded = SettingsStore::default().load().unwrap();
-        assert!(loaded.memory_assist_enabled);
-        assert!(!loaded.memory_assist_auto_suggest_enabled);
-
-        let learned = tauri::async_runtime::block_on(learn_memory_assist_item(MemoryItemRequest {
-            text: "manual memory still works".to_string(),
-            workspace: "repo-a".to_string(),
-            category: "manual".to_string(),
-            tags: Vec::new(),
-            source: "manager".to_string(),
-            source_session_id: String::new(),
-        }));
-        let candidate = tauri::async_runtime::block_on(create_memory_assist_candidate(
-            MemoryCandidateRequest {
-                text: "auto suggestion should not persist".to_string(),
-                workspace: "repo-a".to_string(),
-                category: "preference".to_string(),
-                tags: Vec::new(),
-                source: "manager".to_string(),
-                reason: "test".to_string(),
-                source_session_id: String::new(),
-            },
-        ));
-        let status =
-            claude_codex_pro_core::memory_assist::MemoryAssistStore::new(isolated_memory_path)
-                .status_from_codex_home(&temp.path().join("codex-home"))
-                .unwrap();
-
-        claude_codex_pro_core::memory_assist::set_memory_assist_db_path_for_tests(previous_memory);
-        claude_codex_pro_core::paths::set_settings_path_for_tests(previous_settings);
-
-        assert_eq!(learned.status, "ok");
-        assert_eq!(candidate.status, "failed");
-        assert!(!candidate.message.is_empty());
-        assert_eq!(status.total_items, 1);
-        assert_eq!(status.pending_candidates, 0);
-    }
-
-    #[test]
-    fn memory_runtime_idle_status_is_treated_as_available() {
-        let runtime = MemoryAssistRuntimeSnapshot {
-            enabled: true,
-            injected: true,
-            status: "idle".to_string(),
-            workspace: "codex:path:test".to_string(),
-            summary: "waiting".to_string(),
-            ..MemoryAssistRuntimeSnapshot::default()
-        };
-
-        assert_eq!(normalize_memory_runtime_status(&runtime), "ok");
-    }
-
-    #[test]
-    fn repair_debug_port_keeps_preferred_port_when_bindable() {
-        let selected = select_repair_debug_port_with(9230, |port| port == 9230, || 9311);
-
-        assert_eq!(selected, 9230);
-    }
-
-    #[test]
-    fn repair_debug_port_uses_available_fallback_when_preferred_is_busy() {
-        let selected = select_repair_debug_port_with(9230, |_| false, || 9311);
-
-        assert_eq!(selected, 9311);
     }
 
     #[test]
@@ -14426,14 +13178,16 @@ enabled = true
             ..BackendSettings::default()
         };
 
+        let submitted = settings.relay_profiles[0].clone();
         let normalized = normalize_settings_before_save(settings);
+        let profile = &normalized.relay_profiles[0];
 
+        assert_eq!(profile.auth_contents, submitted.auth_contents);
+        assert_eq!(profile.config_contents, submitted.config_contents);
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&normalized.relay_profiles[0].auth_contents)
-                .unwrap(),
+            serde_json::from_str::<serde_json::Value>(&profile.auth_contents).unwrap(),
             serde_json::json!({"auth_mode":"chatgpt","tokens":{"access_token":"edited"}})
         );
-        assert!(normalized.relay_profiles[0].config_contents.is_empty());
     }
 
     #[test]

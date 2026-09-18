@@ -48,8 +48,6 @@ import {
   CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_SOURCE,
   CODEX_THIRD_PARTY_PLUGIN_MARKETPLACE_NAME,
   CODEX_THIRD_PARTY_PLUGIN_REPOSITORY_URL,
-  MEMORY_ALL_WORKSPACES,
-  MEMORY_GLOBAL_WORKSPACE,
   PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX,
   PONYTAIL_REPOSITORY_URL,
   SUPPLIER_DRAG_MIME_TYPE,
@@ -69,8 +67,6 @@ import {
   formatSessionRelativeTime,
   groupLocalSessionsByProject,
   localSessionProjectLabel,
-  memoryOverviewStatus,
-  memoryRefineSummary,
   pathTail,
   pluginRepositoryRepairPromptKey,
   pluginRepositoryRepairPromptMessage,
@@ -150,7 +146,6 @@ import {
   AboutScreen,
   MaintenanceScreen,
   OverviewScreen,
-  MemoryScreen,
   SessionManagementScreen,
   SettingsScreen,
   SupplierScreen,
@@ -214,24 +209,10 @@ import type {
   LocalSessionProjectGroup,
   LocalSessionsResult,
   LogsResult,
+  RequestTimelineResult,
+  TimelineLogsState,
   MaintenanceCheckResult,
   McpbPackageResult,
-  MemoryCandidate,
-  MemoryCandidateResult,
-  MemoryCandidatesResult,
-  MemoryExport,
-  MemoryExportResult,
-  MemoryItem,
-  MemoryItemEditRequest,
-  MemoryItemResult,
-  MemoryItemsResult,
-  MemoryMcpRegisterPayload,
-  MemoryAssistMigrationResult,
-  MemoryNewProjectGuideResult,
-  MemoryOutcomeDashboardResult,
-  MemoryQueryResult,
-  MemorySelfCheckResult,
-  MemoryStatusResult,
   MulticaConnectionConfig,
   MulticaConnectionsResult,
   MulticaConnectionStatus,
@@ -326,16 +307,11 @@ export function App() {
   const [multicaManagedRuntime, setMulticaManagedRuntime] = useState<MulticaManagedRuntimePayload | null>(null);
   const [multicaManagedRuntimeLoading, setMulticaManagedRuntimeLoading] = useState(false);
   const [multicaManagedRuntimeError, setMulticaManagedRuntimeError] = useState<string | null>(null);
-  const [memoryAssist, setMemoryAssist] = useState<MemoryStatusResult | null>(null);
-  const [memoryItems, setMemoryItems] = useState<MemoryItemsResult | null>(null);
-  const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidatesResult | null>(null);
-  const [memoryOutcomeDashboard, setMemoryOutcomeDashboard] = useState<MemoryOutcomeDashboardResult | null>(null);
-  const [memoryNewProjectGuide, setMemoryNewProjectGuide] = useState<MemoryNewProjectGuideResult | null>(null);
-  const [memorySelfCheck, setMemorySelfCheck] = useState<MemorySelfCheckResult | null>(null);
-  const [memorySearch, setMemorySearch] = useState<MemoryQueryResult | null>(null);
-  const [memoryExport, setMemoryExport] = useState<MemoryExportResult | null>(null);
   const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
+  const [requestTimeline, setRequestTimeline] = useState<RequestTimelineResult | null>(null);
+  const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
+  const requestTimelineInFlight = useRef(false);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
   const [codexContextEntries, setCodexContextEntries] = useState<ContextEntriesResult | null>(null);
@@ -361,7 +337,6 @@ export function App() {
   const claudeSessionContextEpochRef = useRef(0);
   const codexSessionContextEpochRef = useRef(0);
   const settingsDraftRevisionRef = useRef(0);
-  const memorySearchRequestRef = useRef(0);
   const updateDownloadActiveRef = useRef(false);
   const updateCheckEpochRef = useRef(0);
   const startupUpdateCheckStartedRef = useRef(false);
@@ -1106,83 +1081,36 @@ export function App() {
     setClaudeSessionContextLoading(false);
   };
 
-  const refreshMemoryAssistStatus = async (silent = false) => {
-    const status = await run(() => call<MemoryStatusResult>("load_memory_assist_status"), "盘古记忆", { trackBusy: !silent, notify: !silent });
-    if (status) {
-      setMemoryAssist(status);
-      if (!silent) notifyIfNeedsAttention({ title: "盘古记忆", message: status.message, status: status.status });
+  const refreshRequestTimeline = async () => {
+    if (requestTimelineInFlight.current) return null;
+    requestTimelineInFlight.current = true;
+    setTimelineLogs((previous) => ({ ...previous, loading: true, error: null }));
+    try {
+      const [result, latestLogs] = await Promise.allSettled([
+        call<RequestTimelineResult>("read_request_timeline"),
+        call<LogsResult>("read_latest_logs", { request: { lines: 240 } })
+          .then((logs) => ({ logs, updatedAtMs: Date.now() })),
+      ]);
+      if (result.status === "fulfilled") {
+        setRequestTimeline(result.value);
+      } else {
+        setRequestTimeline((previous) => ({
+          records: previous?.records ?? [],
+          observed_at_ms: previous?.observed_at_ms ?? 0,
+          warnings: previous?.warnings ?? [],
+          status: "failed",
+          message: "请求记录刷新失败，当前保留上次结果。",
+        }));
+      }
+      if (latestLogs.status === "fulfilled" && latestLogs.value.logs.status === "ok") {
+        setTimelineLogs({ ...latestLogs.value, loading: false, error: null });
+      } else {
+        setTimelineLogs((previous) => ({ ...previous, loading: false, error: "全局运行事件刷新失败，保留上次成功读取的结果。" }));
+      }
+      return result.status === "fulfilled" ? result.value : null;
+    } finally {
+      requestTimelineInFlight.current = false;
     }
-    return status;
-  };
-
-  const refreshMemoryAssist = async (silent = false, includeArchived = false) => {
-    const status = await refreshMemoryAssistStatus(silent);
-    const detectedWorkspace = status?.memory.codexWorkspace?.trim();
-    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
-      ? detectedWorkspace
-      : MEMORY_GLOBAL_WORKSPACE;
-    const [items, dashboard, candidates] = await Promise.all([
-      run(() => call<MemoryItemsResult>("list_memory_assist_items", { request: { workspace, includeGlobal: true, limit: 80, includeArchived } }), "记忆列表", { trackBusy: !silent, notify: !silent }),
-      run(() => call<MemoryOutcomeDashboardResult>("load_memory_outcome_dashboard", { request: { workspace, rangeDays: 30 } }), "成果看板", { trackBusy: !silent, notify: !silent }),
-      run(() => call<MemoryCandidatesResult>("list_memory_assist_candidates", { request: { workspace, includeGlobal: true } }), "待确认记忆", { trackBusy: !silent, notify: !silent }),
-    ]);
-    if (items) setMemoryItems(items);
-    if (dashboard) setMemoryOutcomeDashboard(dashboard);
-    if (candidates) setMemoryCandidates(candidates);
-    return status;
-  };
-
-  const selectMemoryAssistDataDir = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "选择盘古记忆数据目录",
-    });
-    return typeof selected === "string" ? selected : null;
-  };
-
-  const migrateMemoryAssistDataDir = async (targetDir: string) => {
-    const result = await run(
-      () => call<MemoryAssistMigrationResult>("migrate_memory_assist_data_dir", { request: { targetDir } }),
-      "迁移盘古记忆数据",
-    );
-    if (!result) return null;
-    notifyResult({
-      title: "盘古记忆数据迁移",
-      message: result.restartRequired
-        ? "迁移完成，原数据已保留。请重启 Codex、Launcher 和 MCP，使所有进程切换到新目录。"
-        : "目标目录与当前目录相同，无需迁移数据。",
-      status: "ok",
-    });
-    await Promise.all([refreshSettings(true), refreshMemoryAssist(true)]);
-    return result;
-  };
-
-  const refreshMemoryOutcomeDashboard = async (rangeDays = 30, silent = false) => {
-    const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
-    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
-      ? detectedWorkspace
-      : MEMORY_GLOBAL_WORKSPACE;
-    const dashboard = await run(
-      () => call<MemoryOutcomeDashboardResult>("load_memory_outcome_dashboard", { request: { workspace, rangeDays } }),
-      "成果看板",
-      { trackBusy: !silent, notify: !silent },
-    );
-    if (dashboard) setMemoryOutcomeDashboard(dashboard);
-    return dashboard;
-  };
-
-  const loadMemoryNewProjectGuide = async () => {
-    const guide = await run(
-      () => call<MemoryNewProjectGuideResult>("load_memory_new_project_guide"),
-      "新项目启动指南",
-    );
-    if (guide && statusOk(guide.status)) {
-      setMemoryNewProjectGuide(guide);
-    } else if (guide) {
-      notifyResult({ title: "新项目启动指南", message: guide.message, status: guide.status });
-    }
-    return guide;
   };
 
   const refreshLogs = async (silent = false) => {
@@ -2234,9 +2162,9 @@ export function App() {
     if (result) {
       const details = result.details?.length ? `\n${result.details.join("\n")}` : "";
       setNotice({ title: "修复前端连接", message: `${result.message}${details}`, status: result.status });
-      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeZhPatch(true), refreshMemoryAssist(true)]);
+      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshClaudeZhPatch(true)]);
       window.setTimeout(() => {
-        void Promise.all([refreshOverview(true), refreshMemoryAssist(true)]);
+        void refreshOverview(true);
       }, 3500);
     }
   };
@@ -2262,11 +2190,6 @@ export function App() {
   const goPluginHub = async () => {
     setRoute("tools");
     await refreshRoute("tools");
-  };
-
-  const goMemoryAssist = async () => {
-    setRoute("sessions");
-    await refreshRoute("sessions");
   };
 
   const goSupplierProfile = async (profileId?: string | null) => {
@@ -2346,166 +2269,6 @@ export function App() {
         }
         await refreshClaudeSessions(true);
       }
-    }
-  };
-
-  const learnMemoryAssistItem = async (text: string, category = "manual") => {
-    const result = await run(
-      () => call<MemoryItemResult>("learn_memory_assist_item", { request: { text, category, workspace: MEMORY_GLOBAL_WORKSPACE, source: "manager" } }),
-      "保存记忆",
-    );
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-    return result?.status === "ok";
-  };
-
-  const updateMemoryAssistItem = async (id: string, item: MemoryItemEditRequest) => {
-    const result = await run(
-      () => call<MemoryItemResult>("update_memory_assist_item", { request: { id, item } }),
-      "更新记忆",
-    );
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-    return result?.status === "ok";
-  };
-
-  const searchMemoryAssist = async (query: string, includeArchived = false) => {
-    const requestId = ++memorySearchRequestRef.current;
-    const detectedWorkspace = memoryAssist?.memory.codexWorkspace?.trim();
-    const workspace = detectedWorkspace && detectedWorkspace !== MEMORY_ALL_WORKSPACES
-      ? detectedWorkspace
-      : MEMORY_GLOBAL_WORKSPACE;
-    const result = await run(
-      () => call<MemoryQueryResult>("query_memory_assist", { request: { query, workspace, includeGlobal: true, limit: 12, includeArchived } }),
-      "搜索记忆",
-    );
-    if (result && requestId === memorySearchRequestRef.current) {
-      setMemorySearch(result);
-      notifyResult({ title: "记忆搜索", message: result.message, status: result.status });
-    }
-  };
-
-  const deleteMemoryAssistItem = async (id: string) => {
-    if (!window.confirm("确认删除这条经验教训？")) return;
-    const result = await run(() => call<MemoryItemResult>("delete_memory_assist_item", { request: { id } }), "删除经验教训");
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const archiveMemoryAssistItem = async (id: string) => {
-    const result = await run(() => call<MemoryItemResult>("archive_memory_assist_item", { request: { id } }), "归档记忆");
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const restoreMemoryAssistItem = async (id: string) => {
-    const result = await run(() => call<MemoryItemResult>("restore_memory_assist_item", { request: { id } }), "恢复记忆");
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const approveMemoryAssistCandidate = async (id: string) => {
-    const result = await run(() => call<MemoryItemResult>("approve_memory_assist_candidate", { request: { id } }), "确认候选记忆");
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const rejectMemoryAssistCandidate = async (id: string) => {
-    const result = await run(() => call<MemoryCandidateResult>("reject_memory_assist_candidate", { request: { id } }), "忽略候选记忆");
-    if (result) {
-      notifyResult({ title: "盘古记忆", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const exportMemoryAssist = async () => {
-    const result = await run(() => call<MemoryExportResult>("export_memory_assist"), "导出记忆");
-    if (result) {
-      setMemoryExport(result);
-      notifyResult({ title: "记忆导出", message: result.message, status: result.status });
-    }
-  };
-
-  const importMemoryAssist = async (jsonText: string, replaceExisting: boolean) => {
-    let data: MemoryExport;
-    try {
-      data = JSON.parse(jsonText) as MemoryExport;
-    } catch (error) {
-      setNotice({ title: "记忆导入", message: `JSON 解析失败：${stringifyError(error)}`, status: "failed" });
-      return;
-    }
-    if (!data || data.schemaVersion !== "memory-assist/v1" || !Array.isArray(data.items) || !Array.isArray(data.candidates)) {
-      setNotice({ title: "记忆导入", message: "导入内容不是 memory-assist/v1 导出包。", status: "failed" });
-      return;
-    }
-    const action = replaceExisting ? "替换现有记忆库" : "合并到现有记忆库";
-    if (!window.confirm(`确认导入记忆数据？\n\n${action}\n经验教训：${data.items.length} 条\n候选缓存：${data.candidates.length} 条`)) return;
-    const result = await run(
-      () => call<MemoryStatusResult>("import_memory_assist", { request: { data, replaceExisting } }),
-      "导入记忆",
-    );
-    if (result) {
-      setMemoryAssist(result);
-      notifyResult({ title: "记忆导入", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const runMemoryAssistSelfcheck = async () => {
-    const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "盘古记忆自检");
-    if (result) {
-      setMemorySelfCheck(result);
-      notifyResult({ title: "盘古记忆自检", message: result.message, status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const refineLongTermMemory = async () => {
-    setNotice({
-      title: "提炼经验教训",
-      message: "正在使用 Codex 本地 SQLite、rollout 会话文件和 memory_assist.sqlite 遍历工作区与会话...",
-      status: "running",
-    });
-    await waitForPaint();
-    void writeUiEvent("memory.refine_long_term.click", {
-      sources: ["codex_sqlite", "codex_rollout_files", "memory_assist.sqlite"],
-      mode: "repair_selfcheck_full_history",
-    });
-    const result = await run(() => call<MemorySelfCheckResult>("run_memory_assist_selfcheck", { request: { repair: true } }), "提炼经验教训");
-    if (result) {
-      setMemorySelfCheck(result);
-      setNotice({ title: "提炼经验教训", message: memoryRefineSummary(result), status: result.status });
-      await refreshMemoryAssist(true);
-    }
-  };
-
-  const registerMemoryMcpServer = async () => {
-    setNotice({
-      title: "注册盘古记忆 MCP",
-      message: "正在把盘古记忆 MCP server 写入 Claude Desktop 与 Codex 配置...",
-      status: "running",
-    });
-    await waitForPaint();
-    void writeUiEvent("memory.register_mcp.click", { targets: ["claude_desktop", "codex"] });
-    const result = await run(
-      () => call<CommandResult<MemoryMcpRegisterPayload>>("register_memory_mcp_server"),
-      "注册盘古记忆 MCP",
-    );
-    if (result) {
-      notifyResult({ title: "注册盘古记忆 MCP", message: result.message, status: result.status });
-      await refreshSettings(true);
     }
   };
 
@@ -2810,10 +2573,7 @@ export function App() {
       // user enters the dedicated client/tool surfaces or triggers an action.
       await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
-        void refreshMemoryAssistStatus(true);
-      }, 250);
-      afterFirstPaintIfFresh(() => {
-        void refreshLogs(true);
+        void refreshRequestTimeline();
       }, 900);
     } else if (target === "settings") {
       await refreshSettings(true);
@@ -2852,11 +2612,6 @@ export function App() {
         refreshClaudeSessions(true),
         refreshSettings(true),
       ]);
-      afterFirstPaintIfFresh(() => {
-        void Promise.all([refreshOverview(true), refreshClaude(true)]);
-      }, 250);
-    } else if (target === "memory") {
-      await Promise.all([refreshMemoryAssist(true), refreshSettings(true)]);
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
@@ -2967,8 +2722,7 @@ export function App() {
       rollbackLeila,
       openExternalUrl,
       goPluginHub,
-      goMemoryAssist,
-      goSupplierProfile,
+       goSupplierProfile,
       previewPlugin,
       installPlugin,
       uninstallPlugin,
@@ -3025,22 +2779,6 @@ export function App() {
       loadEarlierClaudeSessionContext,
       closeClaudeSessionContext,
       deleteClaudeSession,
-      refreshMemoryAssist,
-      refreshMemoryOutcomeDashboard,
-      loadMemoryNewProjectGuide,
-      learnMemoryAssistItem,
-      updateMemoryAssistItem,
-      searchMemoryAssist,
-      deleteMemoryAssistItem,
-      archiveMemoryAssistItem,
-      restoreMemoryAssistItem,
-      approveMemoryAssistCandidate,
-      rejectMemoryAssistCandidate,
-      runMemoryAssistSelfcheck,
-      refineLongTermMemory,
-      registerMemoryMcpServer,
-      exportMemoryAssist,
-      importMemoryAssist,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
@@ -3066,6 +2804,7 @@ export function App() {
       resetSettings,
       resetImageOverlaySettings,
       refreshLogs,
+      refreshRequestTimeline,
       refreshWatcher,
       checkUpdate,
       performUpdate,
@@ -3118,8 +2857,7 @@ export function App() {
       rollbackLeila: (...args) => actionsRef.current!.rollbackLeila(...args),
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
-      goMemoryAssist: (...args) => actionsRef.current!.goMemoryAssist(...args),
-      goSupplierProfile: (...args) => actionsRef.current!.goSupplierProfile(...args),
+       goSupplierProfile: (...args) => actionsRef.current!.goSupplierProfile(...args),
       previewPlugin: (...args) => actionsRef.current!.previewPlugin(...args),
       installPlugin: (...args) => actionsRef.current!.installPlugin(...args),
       uninstallPlugin: (...args) => actionsRef.current!.uninstallPlugin(...args),
@@ -3176,22 +2914,6 @@ export function App() {
       loadEarlierClaudeSessionContext: (...args) => actionsRef.current!.loadEarlierClaudeSessionContext(...args),
       closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
-      refreshMemoryAssist: (...args) => actionsRef.current!.refreshMemoryAssist(...args),
-      refreshMemoryOutcomeDashboard: (...args) => actionsRef.current!.refreshMemoryOutcomeDashboard(...args),
-      loadMemoryNewProjectGuide: (...args) => actionsRef.current!.loadMemoryNewProjectGuide(...args),
-      learnMemoryAssistItem: (...args) => actionsRef.current!.learnMemoryAssistItem(...args),
-      updateMemoryAssistItem: (...args) => actionsRef.current!.updateMemoryAssistItem(...args),
-      searchMemoryAssist: (...args) => actionsRef.current!.searchMemoryAssist(...args),
-      deleteMemoryAssistItem: (...args) => actionsRef.current!.deleteMemoryAssistItem(...args),
-      archiveMemoryAssistItem: (...args) => actionsRef.current!.archiveMemoryAssistItem(...args),
-      restoreMemoryAssistItem: (...args) => actionsRef.current!.restoreMemoryAssistItem(...args),
-      approveMemoryAssistCandidate: (...args) => actionsRef.current!.approveMemoryAssistCandidate(...args),
-      rejectMemoryAssistCandidate: (...args) => actionsRef.current!.rejectMemoryAssistCandidate(...args),
-      runMemoryAssistSelfcheck: (...args) => actionsRef.current!.runMemoryAssistSelfcheck(...args),
-      refineLongTermMemory: (...args) => actionsRef.current!.refineLongTermMemory(...args),
-      registerMemoryMcpServer: (...args) => actionsRef.current!.registerMemoryMcpServer(...args),
-      exportMemoryAssist: (...args) => actionsRef.current!.exportMemoryAssist(...args),
-      importMemoryAssist: (...args) => actionsRef.current!.importMemoryAssist(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
@@ -3217,6 +2939,7 @@ export function App() {
       resetSettings: (...args) => actionsRef.current!.resetSettings(...args),
       resetImageOverlaySettings: (...args) => actionsRef.current!.resetImageOverlaySettings(...args),
       refreshLogs: (...args) => actionsRef.current!.refreshLogs(...args),
+      refreshRequestTimeline: (...args) => actionsRef.current!.refreshRequestTimeline(...args),
       refreshWatcher: (...args) => actionsRef.current!.refreshWatcher(...args),
       checkUpdate: (...args) => actionsRef.current!.checkUpdate(...args),
       performUpdate: (...args) => actionsRef.current!.performUpdate(...args),
@@ -3229,6 +2952,15 @@ export function App() {
       refreshUnifiedToolInventory: (...args) => actionsRef.current!.refreshUnifiedToolInventory(...args),
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
   }), []);
+
+  useEffect(() => {
+    if (route !== "overview") return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void actions.refreshRequestTimeline();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [route, actions]);
 
   const shellSettings = settingsDraft ?? settings?.settings ?? null;
   const shellActiveProfileId = agentScope === "claude"
@@ -3284,7 +3016,7 @@ export function App() {
         supplierOptions={shellSupplierOptions}
         updateInfo={updateInfo}
       >
-          {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} logs={logs} memoryAssist={memoryAssist} memoryItems={memoryItems} onAgentScopeChange={setAgentScope} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} timelineLogs={timelineLogs} requestTimeline={requestTimeline} onAgentScopeChange={setAgentScope} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -3344,22 +3076,6 @@ export function App() {
               localSessions={localSessions}
               providerSync={providerSync}
               settings={settings}
-            />
-          ) : null}
-          {route === "memory" ? (
-            <MemoryScreen
-              actions={actions}
-              candidates={memoryCandidates}
-              dashboard={memoryOutcomeDashboard}
-              newProjectGuide={memoryNewProjectGuide}
-              exported={memoryExport}
-              items={memoryItems}
-              search={memorySearch}
-              selfCheck={memorySelfCheck}
-              migrateDataDir={migrateMemoryAssistDataDir}
-              selectDataDir={selectMemoryAssistDataDir}
-              settings={settings}
-              status={memoryAssist}
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}

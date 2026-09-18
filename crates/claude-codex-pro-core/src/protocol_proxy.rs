@@ -444,7 +444,10 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
     // 收集 call_ids
     let mut known_call_ids = BTreeSet::new();
     for item in items.iter() {
-        if matches!(item.get("type").and_then(Value::as_str), Some("function_call") | Some("custom_tool_call")) {
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call") | Some("custom_tool_call")
+        ) {
             if let Some(call_id) = item
                 .get("call_id")
                 .or_else(|| item.get("id"))
@@ -461,11 +464,18 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
 
     // 补全工具输出
     for item in items.iter_mut() {
-        if !matches!(item.get("type").and_then(Value::as_str), Some("function_call_output") | Some("custom_tool_call_output")) {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call_output") | Some("custom_tool_call_output")
+        ) {
             continue;
         }
 
-        if item.get("call_id").and_then(Value::as_str).is_some_and(|v| !v.is_empty()) {
+        if item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.is_empty())
+        {
             continue;
         }
 
@@ -555,6 +565,8 @@ pub struct ProxyHttpResponse {
 
 pub struct UpstreamProxyResponse {
     pub status_code: u16,
+    pub provider_id: String,
+    pub request_model: Option<String>,
     pub content_type: String,
     pub is_stream: bool,
     pub requires_response_conversion: bool,
@@ -1018,6 +1030,11 @@ async fn open_responses_proxy_request_with_relay(
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
         requires_response_conversion: relay.protocol == RelayProtocol::ChatCompletions,
+        provider_id: relay.id.clone(),
+        request_model: upstream_request
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         response: upstream,
     })
 }
@@ -1062,6 +1079,8 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
         is_stream: false,
         content_type,
         requires_response_conversion: false,
+        provider_id: relay.id.clone(),
+        request_model: None,
         response: upstream,
     })
 }
@@ -1334,6 +1353,8 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
         requires_response_conversion: false,
+        provider_id: relay.id.clone(),
+        request_model: Some(upstream_model),
         response: upstream,
     })
 }
@@ -1647,6 +1668,11 @@ pub async fn open_chat_completions_proxy_request(
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
         requires_response_conversion: false,
+        provider_id: relay.id.clone(),
+        request_model: request_json
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         response: upstream,
     })
 }

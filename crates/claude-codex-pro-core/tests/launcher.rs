@@ -722,7 +722,13 @@ async fn detached_helper_rejects_unverified_port_conflict() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
 
-    let error = ensure_detached_helper(port).await.unwrap_err();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        ensure_detached_helper(port),
+    )
+    .await
+    .expect("helper conflict checks must have bounded waits")
+    .unwrap_err();
 
     assert!(
         error
@@ -739,8 +745,19 @@ async fn detached_helper_accepts_status_after_port_was_previously_busy() {
     drop(listener);
 
     ensure_detached_helper(port).await.unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ensure_detached_helper(port),
+    )
+    .await
+    .expect("detached helper reuse must yield to its same-runtime server")
+    .unwrap();
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap();
     let response = client
         .post(format!("http://127.0.0.1:{port}/backend/status"))
         .json(&serde_json::json!({}))
@@ -750,6 +767,22 @@ async fn detached_helper_accepts_status_after_port_was_previously_busy() {
     assert!(response.status().is_success());
     let payload: serde_json::Value = response.json().await.unwrap();
     assert_eq!(payload["transport"], "http-helper");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn default_helper_reuses_listener_on_same_runtime() {
+    let hooks = DefaultLaunchHooks::default();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    hooks.start_helper(port).await.unwrap();
+    let reused =
+        tokio::time::timeout(std::time::Duration::from_secs(2), hooks.start_helper(port)).await;
+    hooks.shutdown_helper(port).await;
+    reused
+        .expect("helper reuse must yield to its same-runtime server")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -945,8 +978,6 @@ fn settings_with_all_codex_frontend_injection_disabled() -> BackendSettings {
         codex_app_image_overlay_enabled: false,
         codex_goals_enabled: false,
         multica_workspace_enabled: false,
-        memory_assist_enabled: false,
-        memory_assist_inject_enabled: false,
         ..BackendSettings::default()
     }
 }
@@ -1060,8 +1091,6 @@ async fn launch_lifecycle_injects_when_only_multica_workspace_is_enabled() {
         codex_app_service_tier_controls: false,
         codex_app_image_overlay_enabled: false,
         codex_goals_enabled: false,
-        memory_assist_enabled: false,
-        memory_assist_inject_enabled: false,
         multica_workspace_enabled: true,
         ..BackendSettings::default()
     });

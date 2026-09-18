@@ -20,7 +20,7 @@
 
 1. 打开 DeepSeek 网页版（注意：必须开启“联网模式”）。
 2. 将 Codex 的官方规则说明链接发给 DeepSeek，并发送以下指令让它吃透规则：
-   “请仔细阅读并学习这个链接里的使用规则文档：[DamonZS/Claude-Codex-Pro-Tool: Claude Codex Pro Tool 是面向 Codex App 和 Claude Desktop 的本地运维控制台。它包含 Codex 外部增强启动器、Claude 中文包装窗口、Claude Desktop MCP 插件中心、供应商/中转配置、会话与维护工具，不修改 Codex 或 Claude 官方安装文件。新增最强大脑盘古记忆。作者API中转站https://api.toporeduce.cn/ 请各位支持一下。](https://github.com/DamonZS/Claude-Codex-Pro-Tool)，吃透它，并且配合我接下来的工作。”
+   “请仔细阅读并学习这个链接里的使用规则文档：[DamonZS/Claude-Codex-Pro-Tool: Claude Codex Pro Tool 是面向 Codex App 和 Claude Desktop 的本地运维控制台。它包含 Codex 外部增强启动器、Claude 中文包装窗口、Claude Desktop MCP 插件中心、供应商/中转配置、会话与维护工具，不修改 Codex 或 Claude 官方安装文件。作者API中转站https://api.toporeduce.cn/ 请各位支持一下。](https://github.com/DamonZS/Claude-Codex-Pro-Tool)，吃透它，并且配合我接下来的工作。”
 3. 每次你想做具体事情时（比如需要绕过某种特定的内容生成限制），不要直接发给本地的 Codex。你要先告诉 DeepSeek 你想做什么，并在最后加上指令：
    “请帮我转化为合规的表述。”
 

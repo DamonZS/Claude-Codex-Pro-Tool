@@ -54,6 +54,25 @@ pub struct CodexMulticaAutopilotRun {
     pub created_at_ms: u64,
     #[serde(default)]
     pub revision: u64,
+    #[serde(default)]
+    pub occurrence_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutopilotScheduleCursor {
+    pub autopilot_id: String,
+    pub trigger_id: String,
+    pub cron_expression: String,
+    pub timezone: String,
+    pub after_ms: u64,
+    pub enabled: bool,
+}
+
+pub struct AutopilotTickBatch {
+    pub runs: Vec<CodexMulticaAutopilotRun>,
+    pub diagnostics: Vec<serde_json::Value>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,7 +176,7 @@ impl MulticaExecutionBindingState {
 }
 
 impl MulticaExecutionBindingState {
-    fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 }
@@ -264,7 +283,13 @@ pub struct CodexMulticaExecutionCommand {
     pub kind: MulticaExecutionCommandKind,
     pub state: MulticaExecutionCommandState,
     #[serde(default)]
+    pub request_hash: Option<String>,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+    #[serde(default)]
     pub codex_execution_id: Option<String>,
+    #[serde(default)]
+    pub previous_execution_id: Option<String>,
     #[serde(default)]
     pub error_code: Option<String>,
     pub revision: u64,
@@ -322,6 +347,8 @@ pub struct MulticaExecutionState {
     pub task_messages: Vec<CodexMulticaTaskMessage>,
     #[serde(default)]
     pub autopilot_runs: Vec<CodexMulticaAutopilotRun>,
+    #[serde(default)]
+    pub autopilot_schedule_cursors: Vec<AutopilotScheduleCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,33 +463,182 @@ impl MulticaExecutionStore {
         source: String,
         now_ms: u64,
     ) -> anyhow::Result<CodexMulticaAutopilotRun> {
+        self.reserve_autopilot_occurrence(autopilot_id, trigger_id, source, None, now_ms)
+    }
+
+    pub fn reserve_autopilot_occurrence(
+        &self,
+        autopilot_id: String,
+        trigger_id: Option<String>,
+        source: String,
+        occurrence_id: Option<String>,
+        now_ms: u64,
+    ) -> anyhow::Result<CodexMulticaAutopilotRun> {
         validate_id(&autopilot_id, "autopilot_id")?;
+        if let Some(id) = trigger_id.as_deref() {
+            validate_id(id, "trigger_id")?;
+        }
+        if let Some(id) = occurrence_id.as_deref() {
+            validate_id(id, "occurrence_id")?;
+        }
         if !matches!(source.as_str(), "manual" | "schedule" | "webhook" | "api") {
             bail!("autopilot_run_source_invalid");
         }
         let _guard = store_lock(&self.path)?;
         let mut state = load_state(&self.path)?;
-        if state.autopilot_runs.len() >= MAX_AUTOPILOT_RUNS {
-            bail!("autopilot_runs_too_large");
-        }
-        let run = CodexMulticaAutopilotRun {
-            id: format!("autopilot-run-{now_ms}-{}", state.autopilot_runs.len()),
+        let run = reserve_autopilot_run_in_state(
+            &mut state,
             autopilot_id,
             trigger_id,
             source,
-            status: "pending".into(),
-            issue_id: None,
-            task_id: None,
-            triggered_at_ms: now_ms,
-            completed_at_ms: None,
-            failure_reason: None,
-            reason_code: None,
-            created_at_ms: now_ms,
-            revision: 1,
-        };
-        state.autopilot_runs.push(run.clone());
+            occurrence_id,
+            now_ms,
+        )?;
         save_state_locked(&self.path, &state)?;
         Ok(run)
+    }
+
+    /// Reserve due occurrences and advance their cursors in the same atomic
+    /// write. Pending records survive a crash before queue materialization.
+    pub fn tick_autopilots(
+        &self,
+        autopilots: &[serde_json::Value],
+        now_ms: u64,
+    ) -> anyhow::Result<AutopilotTickBatch> {
+        const LIMIT: usize = 16;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let mut diagnostics = Vec::new();
+        let mut cursors = Vec::new();
+        let mut candidates = Vec::new();
+        for autopilot in autopilots {
+            let Some(autopilot_id) = autopilot.get("id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            for trigger in autopilot
+                .get("triggers")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if trigger.get("kind").and_then(serde_json::Value::as_str) != Some("schedule") {
+                    continue;
+                }
+                if cursors.len() >= 512 {
+                    bail!("autopilot_schedules_too_large");
+                }
+                let trigger_id = trigger
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                validate_id(autopilot_id, "autopilot_id")?;
+                validate_id(trigger_id, "trigger_id")?;
+                let expression = trigger
+                    .get("cron_expression")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let timezone = trigger
+                    .get("timezone")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("UTC");
+                let enabled = autopilot
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("active")
+                    == "active"
+                    && trigger.get("enabled").and_then(serde_json::Value::as_bool) == Some(true);
+                let previous = state.autopilot_schedule_cursors.iter().find(|cursor| {
+                    cursor.autopilot_id == autopilot_id && cursor.trigger_id == trigger_id
+                });
+                let after_ms = previous
+                    .filter(|cursor| {
+                        cursor.enabled
+                            && enabled
+                            && cursor.cron_expression == expression
+                            && cursor.timezone == timezone
+                    })
+                    .map(|cursor| cursor.after_ms)
+                    .unwrap_or(now_ms);
+                let mut cursor = AutopilotScheduleCursor {
+                    autopilot_id: autopilot_id.into(),
+                    trigger_id: trigger_id.into(),
+                    cron_expression: expression.into(),
+                    timezone: timezone.into(),
+                    after_ms,
+                    enabled,
+                };
+                if enabled {
+                    match next_autopilot_occurrence(expression, timezone, after_ms) {
+                        Ok(next) if next <= now_ms => candidates.push((next, cursors.len())),
+                        Ok(_) => cursor.after_ms = now_ms.max(after_ms),
+                        Err(error) => diagnostics.push(serde_json::json!({"autopilotId":autopilot_id,"triggerId":trigger_id,"code":error.to_string()})),
+                    }
+                }
+                cursors.push(cursor);
+            }
+        }
+        let mut reserved = Vec::new();
+        while reserved.len() < LIMIT && !candidates.is_empty() {
+            candidates.sort_unstable();
+            let (at, index) = candidates.remove(0);
+            let cursor = &mut cursors[index];
+            let run = reserve_autopilot_run_in_state(
+                &mut state,
+                cursor.autopilot_id.clone(),
+                Some(cursor.trigger_id.clone()),
+                "schedule".into(),
+                Some(format!("scheduled:{at}")),
+                at,
+            )?;
+            reserved.push(run);
+            cursor.after_ms = at;
+            match next_autopilot_occurrence(&cursor.cron_expression, &cursor.timezone, at) {
+                Ok(next) if next <= now_ms => candidates.push((next, index)),
+                Ok(_) => cursor.after_ms = now_ms,
+                Err(error) => diagnostics.push(serde_json::json!({"autopilotId":cursor.autopilot_id,"triggerId":cursor.trigger_id,"code":error.to_string()})),
+            }
+        }
+        state.autopilot_schedule_cursors = cursors;
+        // Include durable runs left between reservation and task linking.
+        let mut runs = state
+            .autopilot_runs
+            .iter()
+            .filter(|run| {
+                run.status == "pending"
+                    && run.task_id.is_none()
+                    && autopilots.iter().any(|a| {
+                        a.get("id").and_then(serde_json::Value::as_str)
+                            == Some(run.autopilot_id.as_str())
+                            && a.get("status")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("active")
+                                == "active"
+                            && (run.source == "manual"
+                                || a.get("triggers")
+                                    .and_then(serde_json::Value::as_array)
+                                    .into_iter()
+                                    .flatten()
+                                    .any(|t| {
+                                        t.get("id").and_then(serde_json::Value::as_str)
+                                            == run.trigger_id.as_deref()
+                                            && t.get("enabled").and_then(serde_json::Value::as_bool)
+                                                == Some(true)
+                                    }))
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        runs.sort_by_key(|run| run.triggered_at_ms);
+        let has_more = !candidates.is_empty() || runs.len() > LIMIT;
+        runs.truncate(LIMIT);
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(AutopilotTickBatch {
+            runs,
+            diagnostics,
+            has_more,
+        })
     }
 
     pub fn transition_autopilot_run(
@@ -485,7 +661,7 @@ impl MulticaExecutionStore {
             (run.status.as_str(), input.next_status.as_str()),
             (
                 "pending",
-                "issue_created" | "running" | "skipped" | "failed"
+                "pending" | "issue_created" | "running" | "skipped" | "failed"
             ) | ("issue_created", "running" | "failed")
                 | ("running", "completed" | "failed")
         );
@@ -812,7 +988,11 @@ impl MulticaExecutionStore {
             .execution_bindings
             .iter()
             .filter(|binding| {
-                binding.workspace_id == input.workspace_id && binding.issue_id == input.issue_id
+                binding.workspace_id == input.workspace_id
+                    && binding.issue_id == input.issue_id
+                    // Independent run-only occurrences have no shared issue retry budget.
+                    && (input.issue_id.is_some()
+                        || input.parent_attempt_id.as_deref() == Some(binding.binding_id.as_str()))
             })
             .map(|binding| binding.attempt_no)
             .max()
@@ -853,7 +1033,10 @@ impl MulticaExecutionStore {
             binding_id: binding.binding_id.clone(),
             kind: MulticaExecutionCommandKind::Create,
             state: MulticaExecutionCommandState::Reserved,
+            request_hash: None,
+            result: None,
             codex_execution_id: None,
+            previous_execution_id: None,
             error_code: None,
             revision: 1,
             created_at_ms: input.now_ms,
@@ -929,6 +1112,7 @@ impl MulticaExecutionStore {
             handle.execution_id.clone(),
             now_ms,
         )?;
+        sync_autopilot_run_from_binding(&mut state, &result, now_ms);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok(result)
@@ -968,6 +1152,7 @@ impl MulticaExecutionStore {
         binding.completed_at_ms = Some(now_ms);
         let result = binding.clone();
         fail_command_in_state(&mut state, &result.idempotency_key, error_code, now_ms)?;
+        sync_autopilot_run_from_binding(&mut state, &result, now_ms);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok(result)
@@ -1055,6 +1240,93 @@ impl MulticaExecutionStore {
         expected_binding_revision: u64,
         now_ms: u64,
     ) -> anyhow::Result<ExecutionCommandReservationResult> {
+        self.reserve_command_with_capacity(
+            binding_id,
+            kind,
+            command_id,
+            expected_binding_revision,
+            now_ms,
+            None,
+        )
+    }
+
+    pub fn reserve_command_with_capacity(
+        &self,
+        binding_id: &str,
+        kind: MulticaExecutionCommandKind,
+        command_id: &str,
+        expected_binding_revision: u64,
+        now_ms: u64,
+        agent_limit: Option<u64>,
+    ) -> anyhow::Result<ExecutionCommandReservationResult> {
+        self.reserve_command_inner(
+            binding_id,
+            kind,
+            command_id,
+            expected_binding_revision,
+            now_ms,
+            agent_limit,
+            None,
+        )
+    }
+
+    pub fn replay_command_request(
+        &self,
+        binding_id: &str,
+        kind: MulticaExecutionCommandKind,
+        command_id: &str,
+        request_hash: &str,
+    ) -> anyhow::Result<Option<CodexMulticaExecutionCommand>> {
+        let existing = self
+            .load()?
+            .execution_commands
+            .into_iter()
+            .find(|command| command.command_id == command_id);
+        if let Some(command) = &existing {
+            if command.binding_id != binding_id
+                || command.kind != kind
+                || command.request_hash.as_deref() != Some(request_hash)
+            {
+                bail!("execution_command_idempotency_conflict");
+            }
+        }
+        Ok(existing)
+    }
+
+    pub fn reserve_command_request(
+        &self,
+        binding_id: &str,
+        kind: MulticaExecutionCommandKind,
+        command_id: &str,
+        expected_binding_revision: u64,
+        now_ms: u64,
+        agent_limit: Option<u64>,
+        request_hash: &str,
+    ) -> anyhow::Result<ExecutionCommandReservationResult> {
+        if request_hash.len() != 64 || !request_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("execution_command_hash_invalid");
+        }
+        self.reserve_command_inner(
+            binding_id,
+            kind,
+            command_id,
+            expected_binding_revision,
+            now_ms,
+            agent_limit,
+            Some(request_hash),
+        )
+    }
+
+    fn reserve_command_inner(
+        &self,
+        binding_id: &str,
+        kind: MulticaExecutionCommandKind,
+        command_id: &str,
+        expected_binding_revision: u64,
+        now_ms: u64,
+        agent_limit: Option<u64>,
+        request_hash: Option<&str>,
+    ) -> anyhow::Result<ExecutionCommandReservationResult> {
         validate_id(binding_id, "binding_id")?;
         validate_id(command_id, "command_id")?;
         let _guard = store_lock(&self.path)?;
@@ -1064,7 +1336,10 @@ impl MulticaExecutionStore {
             .iter()
             .find(|command| command.command_id == command_id)
         {
-            if existing.binding_id == binding_id && existing.kind == kind {
+            if existing.binding_id == binding_id
+                && existing.kind == kind
+                && existing.request_hash.as_deref() == request_hash
+            {
                 return Ok(ExecutionCommandReservationResult {
                     command: existing.clone(),
                     replay: true,
@@ -1080,6 +1355,31 @@ impl MulticaExecutionStore {
         if binding.revision != expected_binding_revision {
             bail!("execution_revision_conflict");
         }
+        if request_hash.is_some()
+            && kind == MulticaExecutionCommandKind::Continue
+            && !matches!(
+                binding.state,
+                MulticaExecutionBindingState::Completed | MulticaExecutionBindingState::Stale
+            )
+        {
+            bail!("execution_not_continuable");
+        }
+        if matches!(
+            kind,
+            MulticaExecutionCommandKind::Continue | MulticaExecutionCommandKind::Cancel
+        ) && state.execution_commands.iter().any(|command| {
+            command.binding_id == binding_id
+                && matches!(
+                    command.kind,
+                    MulticaExecutionCommandKind::Continue | MulticaExecutionCommandKind::Cancel
+                )
+                && command.state == MulticaExecutionCommandState::Reserved
+        }) {
+            bail!("execution_command_in_progress");
+        }
+        if kind == MulticaExecutionCommandKind::Continue {
+            check_agent_capacity(&state, binding, agent_limit)?;
+        }
         if state.execution_commands.len() >= MAX_EXECUTION_COMMANDS {
             bail!("execution_commands_too_large");
         }
@@ -1088,7 +1388,10 @@ impl MulticaExecutionStore {
             binding_id: binding_id.to_string(),
             kind,
             state: MulticaExecutionCommandState::Reserved,
+            request_hash: request_hash.map(str::to_owned),
+            result: None,
             codex_execution_id: None,
+            previous_execution_id: binding.codex_execution_id.clone(),
             error_code: None,
             revision: 1,
             created_at_ms: now_ms,
@@ -1146,13 +1449,24 @@ impl MulticaExecutionStore {
             bail!("execution_command_conflict");
         }
         let binding = &state.execution_bindings[binding_index];
-        if binding.revision != expected_binding_revision {
+        // Polling the previous turn may advance the revision while the native
+        // continuation is in flight. Never merge across a different turn/cancel.
+        let previous_turn_polled = command_before.previous_execution_id.is_some()
+            && binding.codex_execution_id == command_before.previous_execution_id
+            && matches!(
+                binding.state,
+                MulticaExecutionBindingState::Dispatched
+                    | MulticaExecutionBindingState::Running
+                    | MulticaExecutionBindingState::Completed
+                    | MulticaExecutionBindingState::Failed
+            );
+        if binding.revision != expected_binding_revision && !previous_turn_polled {
             bail!("execution_revision_conflict");
         }
         if binding.codex_thread_id.as_deref() != Some(handle.thread_id.as_str()) {
             bail!("execution_thread_conflict");
         }
-        let command =
+        let mut command =
             commit_command_in_state(&mut state, command_id, handle.execution_id.clone(), now_ms)?;
         let binding = &mut state.execution_bindings[binding_index];
         binding.codex_runtime_id = Some(handle.runtime_id.clone());
@@ -1164,6 +1478,14 @@ impl MulticaExecutionStore {
         binding.completed_at_ms = None;
         binding.last_error_code = None;
         let binding = binding.clone();
+        let result = serde_json::json!({"status":"ok","binding":binding,"handle":handle});
+        command.result = Some(result.clone());
+        state
+            .execution_commands
+            .iter_mut()
+            .find(|entry| entry.command_id == command_id)
+            .unwrap()
+            .result = Some(result);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok((command, binding))
@@ -1208,7 +1530,7 @@ impl MulticaExecutionStore {
         if binding.codex_thread_id.as_deref() != Some(status.thread_id.as_str()) {
             bail!("execution_thread_conflict");
         }
-        let command = commit_command_in_state(
+        let mut command = commit_command_in_state(
             &mut state,
             command_id,
             Some(status.execution_id.clone()),
@@ -1225,6 +1547,15 @@ impl MulticaExecutionStore {
             binding.completed_at_ms = Some(now_ms);
         }
         let binding = binding.clone();
+        sync_autopilot_run_from_binding(&mut state, &binding, now_ms);
+        let result = serde_json::json!({"status":"ok","binding":binding,"executionStatus":status});
+        command.result = Some(result.clone());
+        state
+            .execution_commands
+            .iter_mut()
+            .find(|entry| entry.command_id == command_id)
+            .unwrap()
+            .result = Some(result);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok((command, binding))
@@ -1267,15 +1598,31 @@ impl MulticaExecutionStore {
         if binding.codex_thread_id.as_deref() != Some(status.thread_id.as_str()) {
             bail!("execution_thread_conflict");
         }
-        binding.codex_execution_id = Some(status.execution_id.clone());
+        if binding.codex_execution_id.as_deref() != Some(status.execution_id.as_str()) {
+            bail!("execution_turn_conflict");
+        }
+        if binding.codex_runtime_id.as_deref() != Some(status.runtime_id.as_str()) {
+            bail!("execution_runtime_conflict");
+        }
+        if status.state == CodexExecutionState::Unknown || binding.state.is_terminal() {
+            return Ok(binding.clone());
+        }
         binding.state = binding_state_from_codex(&status.state);
+        binding.last_error_code = match status.state {
+            CodexExecutionState::Failed => Some("codex_turn_failed".to_string()),
+            CodexExecutionState::Cancelled => Some("codex_turn_cancelled".to_string()),
+            _ => None,
+        };
         binding.codex_revision = binding.codex_revision.saturating_add(1);
         binding.revision = binding.revision.saturating_add(1);
         binding.updated_at_ms = now_ms;
         if binding.state.is_terminal() {
             binding.completed_at_ms = Some(now_ms);
+            binding.lease_token = None;
+            binding.lease_expires_at_ms = None;
         }
         let result = binding.clone();
+        sync_autopilot_run_from_binding(&mut state, &result, now_ms);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok(result)
@@ -1330,6 +1677,7 @@ impl MulticaExecutionStore {
         }
         binding.revision = binding.revision.saturating_add(1);
         let result = binding.clone();
+        sync_autopilot_run_from_binding(&mut state, &result, input.now_ms);
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok(result)
@@ -1345,6 +1693,25 @@ impl MulticaExecutionStore {
         now_ms: u64,
         lease_duration_ms: u64,
     ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        self.claim_execution_lease_with_capacity(
+            binding_id,
+            expected_revision,
+            lease_token,
+            now_ms,
+            lease_duration_ms,
+            None,
+        )
+    }
+
+    pub fn claim_execution_lease_with_capacity(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        now_ms: u64,
+        lease_duration_ms: u64,
+        agent_limit: Option<u64>,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
         validate_id(binding_id, "binding_id")?;
         validate_id(lease_token, "lease_token")?;
         if lease_duration_ms == 0 || lease_duration_ms > 86_400_000 {
@@ -1352,6 +1719,12 @@ impl MulticaExecutionStore {
         }
         let _guard = store_lock(&self.path)?;
         let mut state = load_state(&self.path)?;
+        let candidate = state
+            .execution_bindings
+            .iter()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        check_agent_capacity(&state, candidate, agent_limit)?;
         let binding = state
             .execution_bindings
             .iter_mut()
@@ -1568,14 +1941,144 @@ impl Drop for StoreGuard {
     }
 }
 
+pub(crate) fn next_autopilot_occurrence(
+    expression: &str,
+    timezone: &str,
+    after_ms: u64,
+) -> anyhow::Result<u64> {
+    use std::str::FromStr;
+    if expression.len() > 256 || expression.split_whitespace().count() != 5 {
+        bail!("autopilot_cron_invalid");
+    }
+    if timezone.is_empty() || timezone.len() > 128 {
+        bail!("autopilot_timezone_invalid");
+    }
+    // Upstream uses five fields. Croner inserts seconds=0 and an unrestricted
+    // year; keep the existing rejection of explicit seconds/year fields.
+    let cron = croner::parser::CronParser::builder()
+        .seconds(croner::parser::Seconds::Disallowed)
+        .year(croner::parser::Year::Disallowed)
+        .build()
+        .parse(expression)
+        .map_err(|_| anyhow!("autopilot_cron_invalid"))?;
+    let timezone =
+        chrono_tz::Tz::from_str(timezone).map_err(|_| anyhow!("autopilot_timezone_invalid"))?;
+    let after = i64::try_from(after_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .ok_or_else(|| anyhow!("autopilot_schedule_time_invalid"))?
+        .with_timezone(&timezone);
+    let next = cron
+        .find_next_occurrence(&after, false)
+        .map_err(|_| anyhow!("autopilot_schedule_exhausted"))?;
+    u64::try_from(next.timestamp_millis()).map_err(|_| anyhow!("autopilot_schedule_time_invalid"))
+}
+
+fn reserve_autopilot_run_in_state(
+    state: &mut MulticaExecutionState,
+    autopilot_id: String,
+    trigger_id: Option<String>,
+    source: String,
+    occurrence_id: Option<String>,
+    now_ms: u64,
+) -> anyhow::Result<CodexMulticaAutopilotRun> {
+    if occurrence_id.is_some() {
+        if let Some(run) = state.autopilot_runs.iter().find(|run| {
+            run.autopilot_id == autopilot_id
+                && run.trigger_id == trigger_id
+                && run.source == source
+                && run.occurrence_id == occurrence_id
+        }) {
+            return Ok(run.clone());
+        }
+    }
+    if state.autopilot_runs.len() >= MAX_AUTOPILOT_RUNS {
+        bail!("autopilot_runs_too_large");
+    }
+    let run = CodexMulticaAutopilotRun {
+        id: format!("autopilot-run-{now_ms}-{}", state.autopilot_runs.len()),
+        autopilot_id,
+        trigger_id,
+        source,
+        occurrence_id,
+        status: "pending".into(),
+        issue_id: None,
+        task_id: None,
+        triggered_at_ms: now_ms,
+        completed_at_ms: None,
+        failure_reason: None,
+        reason_code: None,
+        created_at_ms: now_ms,
+        revision: 1,
+    };
+    state.autopilot_runs.push(run.clone());
+    Ok(run)
+}
+
+fn check_agent_capacity(
+    state: &MulticaExecutionState,
+    candidate: &CodexMulticaExecutionBinding,
+    limit: Option<u64>,
+) -> anyhow::Result<()> {
+    let Some(limit) = limit else {
+        return Ok(());
+    };
+    if !(1..=50).contains(&limit) {
+        bail!("execution_agent_concurrency_invalid");
+    }
+    if candidate.agent_id.is_none() {
+        return Ok(());
+    }
+    let active = state
+        .execution_bindings
+        .iter()
+        .filter(|binding| {
+            binding.binding_id != candidate.binding_id
+                && binding.workspace_id == candidate.workspace_id
+                && binding.agent_id == candidate.agent_id
+                && ((!binding.state.is_terminal()
+                    && (binding.state != MulticaExecutionBindingState::BindingPending
+                        || binding.lease_token.is_some()))
+                    || state.execution_commands.iter().any(|command| {
+                        command.binding_id == binding.binding_id
+                            && command.kind == MulticaExecutionCommandKind::Continue
+                            && command.state == MulticaExecutionCommandState::Reserved
+                    }))
+        })
+        .count();
+    if active as u64 >= limit {
+        bail!("execution_agent_concurrency_limit");
+    }
+    Ok(())
+}
+
 fn validate_state(state: &MulticaExecutionState) -> anyhow::Result<()> {
     if state.version != STORE_VERSION
         || state.skill_bindings.len() > MAX_BINDINGS
         || state.attempt_skill_snapshots.len() > MAX_SNAPSHOTS
         || state.execution_bindings.len() > MAX_EXECUTION_BINDINGS
         || state.execution_commands.len() > MAX_EXECUTION_COMMANDS
+        || state.autopilot_runs.len() > MAX_AUTOPILOT_RUNS
+        || state.autopilot_schedule_cursors.len() > 512
     {
         bail!("multica_execution_store_invalid");
+    }
+    let mut occurrences = BTreeSet::new();
+    for run in &state.autopilot_runs {
+        if let Some(id) = run.occurrence_id.as_deref() {
+            validate_id(id, "occurrence_id")?;
+            if !occurrences.insert((&run.autopilot_id, &run.trigger_id, &run.source, id)) {
+                bail!("autopilot_occurrence_conflict");
+            }
+        }
+    }
+    let mut cursors = BTreeSet::new();
+    for cursor in &state.autopilot_schedule_cursors {
+        validate_id(&cursor.autopilot_id, "autopilot_id")?;
+        validate_id(&cursor.trigger_id, "trigger_id")?;
+        if !cursors.insert((&cursor.autopilot_id, &cursor.trigger_id)) {
+            bail!("autopilot_schedule_cursor_conflict");
+        }
     }
     let mut binding_keys = BTreeSet::new();
     for binding in &state.skill_bindings {
@@ -1752,6 +2255,13 @@ fn validate_execution_command(command: &CodexMulticaExecutionCommand) -> anyhow:
     if command.revision == 0 {
         bail!("execution_command_invalid");
     }
+    if command
+        .request_hash
+        .as_ref()
+        .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        bail!("execution_command_hash_invalid");
+    }
     if let Some(id) = command.codex_execution_id.as_deref() {
         validate_id(id, "execution_id")?;
     }
@@ -1852,6 +2362,40 @@ fn fail_command_in_state(
     command.revision = command.revision.saturating_add(1);
     command.updated_at_ms = now_ms;
     Ok(command.clone())
+}
+
+// Runs link to queue bindings by task_id. multica_run_id is the execution
+// reservation ID, not necessarily the separate Autopilot run record ID.
+fn sync_autopilot_run_from_binding(
+    state: &mut MulticaExecutionState,
+    binding: &CodexMulticaExecutionBinding,
+    now_ms: u64,
+) {
+    let (status, reason) = match binding.state {
+        MulticaExecutionBindingState::Dispatched | MulticaExecutionBindingState::Running => {
+            ("running", None)
+        }
+        MulticaExecutionBindingState::Completed => ("completed", None),
+        MulticaExecutionBindingState::Failed => ("failed", Some("codex_turn_failed")),
+        MulticaExecutionBindingState::Cancelled => ("failed", Some("codex_turn_cancelled")),
+        _ => return,
+    };
+    for run in &mut state.autopilot_runs {
+        if run.task_id.as_deref() != Some(binding.binding_id.as_str())
+            || matches!(run.status.as_str(), "completed" | "failed" | "skipped")
+            || run.status == status
+        {
+            continue;
+        }
+        run.status = status.to_string();
+        let reason = binding.last_error_code.as_deref().or(reason);
+        run.failure_reason = reason.map(str::to_string);
+        run.reason_code = reason.map(str::to_string);
+        if binding.state.is_terminal() {
+            run.completed_at_ms = Some(now_ms);
+        }
+        run.revision = run.revision.saturating_add(1);
+    }
 }
 
 fn binding_state_from_codex(state: &CodexExecutionState) -> MulticaExecutionBindingState {
@@ -2272,6 +2816,38 @@ mod tests {
     }
 
     #[test]
+    fn independent_run_only_reservations_reset_attempts_but_explicit_retries_increment() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reservation = |key: &str, parent: Option<String>| ExecutionReservation {
+            workspace_id: "workspace-a".into(),
+            issue_id: None,
+            agent_id: Some("agent-a".into()),
+            execution_kind: MulticaExecutionKind::Thread,
+            parent_thread_id: None,
+            parent_attempt_id: parent,
+            idempotency_key: key.into(),
+            now_ms: 1,
+        };
+        let first = store
+            .reserve_execution(reservation("independent-0", None))
+            .unwrap();
+        for index in 1..4 {
+            let request = reservation(&format!("independent-{index}"), None);
+            let binding = store.reserve_execution(request.clone()).unwrap().binding;
+            assert_eq!(binding.attempt_no, 1);
+            assert!(store.reserve_execution(request).unwrap().replay);
+        }
+        let retry = store
+            .reserve_execution(reservation(
+                "explicit-retry",
+                Some(first.binding.binding_id),
+            ))
+            .unwrap();
+        assert_eq!(retry.binding.attempt_no, 2);
+    }
+
+    #[test]
     fn run_only_reservation_persists_null_issue_id() {
         let dir = tempfile::tempdir().unwrap();
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
@@ -2290,6 +2866,99 @@ mod tests {
         assert_eq!(result.binding.issue_id, None);
         let encoded = std::fs::read_to_string(store.path()).unwrap();
         assert!(encoded.contains("\"issueId\": null"));
+    }
+
+    #[test]
+    fn execution_command_request_hash_conflicts_and_legacy_receipts_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let binding = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: Some("issue-a".into()),
+                agent_id: None,
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "create-hash".into(),
+                now_ms: 1,
+            })
+            .unwrap()
+            .binding;
+        let hash = "a".repeat(64);
+        let kind = MulticaExecutionCommandKind::Cancel;
+        store
+            .reserve_command_request(
+                &binding.binding_id,
+                kind,
+                "cancel-hash",
+                binding.revision,
+                2,
+                None,
+                &hash,
+            )
+            .unwrap();
+        let reopened = MulticaExecutionStore::new(store.path().to_path_buf());
+        assert!(
+            reopened
+                .reserve_command_request(
+                    &binding.binding_id,
+                    kind,
+                    "cancel-hash",
+                    0,
+                    3,
+                    None,
+                    &hash
+                )
+                .unwrap()
+                .replay
+        );
+        assert_eq!(
+            reopened
+                .reserve_command_request(
+                    &binding.binding_id,
+                    kind,
+                    "cancel-hash",
+                    binding.revision,
+                    3,
+                    None,
+                    &"b".repeat(64)
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_command_idempotency_conflict"
+        );
+        assert_eq!(
+            reopened
+                .replay_command_request(
+                    &binding.binding_id,
+                    MulticaExecutionCommandKind::Continue,
+                    "cancel-hash",
+                    &hash
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_command_idempotency_conflict"
+        );
+        assert_eq!(
+            reopened
+                .replay_command_request("other-binding", kind, "cancel-hash", &hash)
+                .unwrap_err()
+                .to_string(),
+            "execution_command_idempotency_conflict"
+        );
+        assert_eq!(
+            reopened
+                .replay_command_request(
+                    &binding.binding_id,
+                    MulticaExecutionCommandKind::Create,
+                    "create-hash",
+                    &hash
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_command_idempotency_conflict"
+        );
     }
 
     #[test]
@@ -2328,6 +2997,32 @@ mod tests {
             )
             .unwrap();
         assert!(!command.replay);
+        assert_eq!(
+            store
+                .reserve_command(
+                    &binding.binding_id,
+                    MulticaExecutionCommandKind::Cancel,
+                    "concurrent-cancel",
+                    binding.revision,
+                    4
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_command_in_progress"
+        );
+        assert_eq!(
+            store
+                .reserve_command(
+                    &binding.binding_id,
+                    MulticaExecutionCommandKind::Continue,
+                    "concurrent-continue",
+                    binding.revision,
+                    4
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_command_in_progress"
+        );
         assert!(
             store
                 .reserve_command(
@@ -2340,6 +3035,21 @@ mod tests {
                 .unwrap()
                 .replay
         );
+        let polled = store
+            .record_status(
+                &binding.binding_id,
+                binding.revision,
+                &CodexExecutionStatus {
+                    runtime_id: handle.runtime_id.clone(),
+                    thread_id: handle.thread_id.clone(),
+                    execution_id: "turn-a".into(),
+                    state: CodexExecutionState::Completed,
+                    diagnostic: None,
+                },
+                4,
+            )
+            .unwrap();
+        assert!(polled.revision > binding.revision);
         let continued = CodexExecutionHandle {
             execution_id: Some("turn-b".to_string()),
             idempotency_key: "continue-a".to_string(),
@@ -2509,6 +3219,212 @@ mod tests {
     }
 
     #[test]
+    fn completed_binding_continuation_retains_thread_and_reacquires_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reserved = store
+            .reserve_execution(ExecutionReservation {
+                workspace_id: "workspace-a".into(),
+                issue_id: Some("issue-a".into()),
+                agent_id: Some("agent-a".into()),
+                execution_kind: MulticaExecutionKind::Thread,
+                parent_thread_id: None,
+                parent_attempt_id: None,
+                idempotency_key: "completed-create".into(),
+                now_ms: 1,
+            })
+            .unwrap()
+            .binding;
+        let mut handle = CodexExecutionHandle {
+            runtime_id: "codex-current-page".into(),
+            thread_id: "thread-a".into(),
+            execution_id: Some("turn-a".into()),
+            parent_thread_id: None,
+            idempotency_key: "completed-create".into(),
+        };
+        let binding = store
+            .commit_execution(&reserved.binding_id, reserved.revision, &handle, 2)
+            .unwrap();
+        let completed = store
+            .record_status(
+                &binding.binding_id,
+                binding.revision,
+                &CodexExecutionStatus {
+                    runtime_id: handle.runtime_id.clone(),
+                    thread_id: handle.thread_id.clone(),
+                    execution_id: "turn-a".into(),
+                    state: CodexExecutionState::Completed,
+                    diagnostic: None,
+                },
+                3,
+            )
+            .unwrap();
+        store
+            .reserve_command_with_capacity(
+                &completed.binding_id,
+                MulticaExecutionCommandKind::Continue,
+                "completed-continue",
+                completed.revision,
+                4,
+                Some(1),
+            )
+            .unwrap();
+        handle.execution_id = Some("turn-b".into());
+        handle.idempotency_key = "completed-continue".into();
+        let (_, continued) = store
+            .commit_continue("completed-continue", completed.revision, &handle, 5)
+            .unwrap();
+        assert_eq!(continued.codex_thread_id, completed.codex_thread_id);
+        assert_eq!(continued.codex_execution_id.as_deref(), Some("turn-b"));
+        assert_eq!(continued.state, MulticaExecutionBindingState::Dispatched);
+        assert!(continued.completed_at_ms.is_none());
+        let reopened = MulticaExecutionStore::new(store.path().to_path_buf());
+        assert!(
+            reopened
+                .reserve_command_with_capacity(
+                    &continued.binding_id,
+                    MulticaExecutionCommandKind::Continue,
+                    "completed-continue",
+                    completed.revision,
+                    6,
+                    Some(1)
+                )
+                .unwrap()
+                .replay
+        );
+    }
+
+    #[test]
+    fn agent_capacity_counts_leases_and_continuations_across_store_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let reserve = |id: &str, agent: &str| {
+            store
+                .reserve_execution(ExecutionReservation {
+                    workspace_id: "workspace-a".into(),
+                    issue_id: Some(id.into()),
+                    agent_id: Some(agent.into()),
+                    execution_kind: MulticaExecutionKind::Thread,
+                    parent_thread_id: None,
+                    parent_attempt_id: None,
+                    idempotency_key: id.into(),
+                    now_ms: 1,
+                })
+                .unwrap()
+                .binding
+        };
+        let first = reserve("capacity-first", "agent-a");
+        let second = reserve("capacity-second", "agent-a");
+        let unrelated = reserve("capacity-other", "agent-b");
+        let first = store
+            .claim_execution_lease_with_capacity(
+                &first.binding_id,
+                first.revision,
+                "lease-a",
+                2,
+                100,
+                Some(1),
+            )
+            .unwrap();
+        let reopened = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        assert_eq!(
+            reopened
+                .claim_execution_lease_with_capacity(
+                    &second.binding_id,
+                    second.revision,
+                    "after-expiry",
+                    103,
+                    100,
+                    Some(1)
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_agent_concurrency_limit"
+        );
+        assert_eq!(
+            reopened
+                .claim_execution_lease_with_capacity(
+                    &second.binding_id,
+                    second.revision,
+                    "lease-b",
+                    3,
+                    100,
+                    Some(1)
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_agent_concurrency_limit"
+        );
+        assert!(
+            reopened
+                .claim_execution_lease_with_capacity(
+                    &unrelated.binding_id,
+                    unrelated.revision,
+                    "lease-c",
+                    3,
+                    100,
+                    Some(1)
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            reopened
+                .reserve_command_with_capacity(
+                    &second.binding_id,
+                    MulticaExecutionCommandKind::Continue,
+                    "continue-b",
+                    second.revision,
+                    3,
+                    Some(1)
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_agent_concurrency_limit"
+        );
+        store
+            .release_execution_lease(&first.binding_id, first.revision, "lease-a", 4)
+            .unwrap();
+        let continuation = reopened
+            .reserve_command_with_capacity(
+                &second.binding_id,
+                MulticaExecutionCommandKind::Continue,
+                "continue-b",
+                second.revision,
+                5,
+                Some(1),
+            )
+            .unwrap();
+        assert!(!continuation.replay);
+        let first = reopened.get_execution(&first.binding_id).unwrap();
+        assert_eq!(
+            store
+                .claim_execution_lease_with_capacity(
+                    &first.binding_id,
+                    first.revision,
+                    "lease-d",
+                    6,
+                    100,
+                    Some(1)
+                )
+                .unwrap_err()
+                .to_string(),
+            "execution_agent_concurrency_limit"
+        );
+        assert!(
+            store
+                .claim_execution_lease_with_capacity(
+                    &first.binding_id,
+                    first.revision,
+                    "lease-d",
+                    6,
+                    100,
+                    Some(2)
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn task_messages_are_ordered_idempotent_and_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
@@ -2568,5 +3484,378 @@ mod tests {
                 .to_string(),
             "autopilot_run_source_invalid"
         );
+    }
+
+    #[test]
+    fn native_status_syncs_the_linked_autopilot_and_preserves_terminal_outcomes() {
+        for (native_state, expected_run) in [
+            (CodexExecutionState::Completed, "completed"),
+            (CodexExecutionState::Failed, "failed"),
+            (CodexExecutionState::Cancelled, "failed"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+            let run = store
+                .trigger_autopilot_run("auto-1".into(), None, "manual".into(), 1)
+                .unwrap();
+            let reserved = store
+                .reserve_execution(ExecutionReservation {
+                    workspace_id: "workspace-a".into(),
+                    issue_id: None,
+                    agent_id: Some("agent-a".into()),
+                    execution_kind: MulticaExecutionKind::Thread,
+                    parent_thread_id: None,
+                    parent_attempt_id: None,
+                    idempotency_key: "create-a".into(),
+                    now_ms: 2,
+                })
+                .unwrap();
+            let handle = CodexExecutionHandle {
+                runtime_id: "codex-current-page".into(),
+                thread_id: "thread-a".into(),
+                execution_id: Some("turn-a".into()),
+                parent_thread_id: None,
+                idempotency_key: "create-a".into(),
+            };
+            let binding = store
+                .commit_execution(
+                    &reserved.binding.binding_id,
+                    reserved.binding.revision,
+                    &handle,
+                    3,
+                )
+                .unwrap();
+            assert_ne!(binding.multica_run_id, run.id);
+            store
+                .transition_autopilot_run(AutopilotRunTransition {
+                    autopilot_id: run.autopilot_id,
+                    run_id: run.id.clone(),
+                    expected_revision: run.revision,
+                    next_status: "running".into(),
+                    issue_id: None,
+                    task_id: Some(binding.binding_id.clone()),
+                    failure_reason: None,
+                    reason_code: None,
+                    now_ms: 4,
+                })
+                .unwrap();
+            let mut status = CodexExecutionStatus {
+                runtime_id: handle.runtime_id,
+                thread_id: handle.thread_id,
+                execution_id: "turn-other".into(),
+                state: native_state,
+                diagnostic: None,
+            };
+            assert_eq!(
+                store
+                    .record_status(&binding.binding_id, binding.revision, &status, 5)
+                    .unwrap_err()
+                    .to_string(),
+                "execution_turn_conflict"
+            );
+            status.execution_id = "turn-a".into();
+            let unknown = CodexExecutionStatus {
+                state: CodexExecutionState::Unknown,
+                ..status.clone()
+            };
+            assert_eq!(
+                store
+                    .record_status(&binding.binding_id, binding.revision, &unknown, 5)
+                    .unwrap(),
+                binding
+            );
+            let completed = store
+                .record_status(&binding.binding_id, binding.revision, &status, 6)
+                .unwrap();
+            let final_run = store.get_autopilot_run(&run.id).unwrap();
+            assert_eq!(final_run.status, expected_run);
+            assert_eq!(final_run.completed_at_ms, Some(6));
+            assert_eq!(final_run.reason_code.is_some(), expected_run == "failed");
+            status.state = CodexExecutionState::Running;
+            assert_eq!(
+                store
+                    .record_status(&binding.binding_id, completed.revision, &status, 7)
+                    .unwrap(),
+                completed
+            );
+            status.state = CodexExecutionState::Unknown;
+            assert_eq!(
+                store
+                    .record_status(&binding.binding_id, completed.revision, &status, 8)
+                    .unwrap(),
+                completed
+            );
+            assert_eq!(store.get_autopilot_run(&run.id).unwrap(), final_run);
+        }
+    }
+
+    #[test]
+    fn run_only_task_link_stays_pending_until_dispatch_and_remains_cas_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let run = store
+            .trigger_autopilot_run("auto-1".into(), None, "manual".into(), 1)
+            .unwrap();
+        let link = AutopilotRunTransition {
+            autopilot_id: run.autopilot_id.clone(),
+            run_id: run.id.clone(),
+            expected_revision: run.revision,
+            next_status: "pending".into(),
+            issue_id: None,
+            task_id: Some("binding-a".into()),
+            failure_reason: None,
+            reason_code: None,
+            now_ms: 2,
+        };
+        let pending = store.transition_autopilot_run(link.clone()).unwrap();
+        assert_eq!(pending.status, "pending");
+        assert_eq!(pending.issue_id, None);
+        assert_eq!(pending.completed_at_ms, None);
+        assert_eq!(
+            store.get_autopilot_run_by_task_id("binding-a").unwrap(),
+            pending
+        );
+        assert_eq!(
+            store
+                .transition_autopilot_run(link.clone())
+                .unwrap_err()
+                .to_string(),
+            "autopilot_run_revision_conflict"
+        );
+        let running = store
+            .transition_autopilot_run(AutopilotRunTransition {
+                expected_revision: pending.revision,
+                next_status: "running".into(),
+                now_ms: 3,
+                ..link
+            })
+            .unwrap();
+        assert_eq!(running.status, "running");
+        assert_eq!(running.task_id.as_deref(), Some("binding-a"));
+    }
+
+    fn scheduled_autopilot() -> serde_json::Value {
+        serde_json::json!({"id":"auto-1","status":"active","triggers":[{
+            "id":"trigger-1","kind":"schedule","enabled":true,
+            "cron_expression":"* * * * *","timezone":"UTC"
+        }]})
+    }
+
+    #[test]
+    fn scheduler_reserves_each_due_occurrence_once_and_recovers_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let autopilots = [scheduled_autopilot()];
+        assert!(
+            store
+                .tick_autopilots(&autopilots, 0)
+                .unwrap()
+                .runs
+                .is_empty()
+        );
+        let first = store.tick_autopilots(&autopilots, 60_000).unwrap();
+        assert_eq!(first.runs.len(), 1);
+        assert_eq!(
+            first.runs[0].occurrence_id.as_deref(),
+            Some("scheduled:60000")
+        );
+        assert_eq!(first.runs[0].trigger_id.as_deref(), Some("trigger-1"));
+        let restored = MulticaExecutionStore::new(store.path().to_owned());
+        assert_eq!(
+            restored.tick_autopilots(&autopilots, 60_000).unwrap().runs,
+            first.runs
+        );
+        let second = restored.tick_autopilots(&autopilots, 120_000).unwrap();
+        assert_eq!(second.runs.len(), 2);
+        assert_ne!(second.runs[0].id, second.runs[1].id);
+        assert_eq!(restored.load().unwrap().autopilot_runs.len(), 2);
+        assert_eq!(
+            restored.load().unwrap().autopilot_schedule_cursors[0].after_ms,
+            120_000
+        );
+    }
+
+    #[test]
+    fn scheduler_bounds_catchup_and_skips_paused_time_and_changed_schedules() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let mut autopilot = scheduled_autopilot();
+        store.tick_autopilots(&[autopilot.clone()], 0).unwrap();
+        let batch = store
+            .tick_autopilots(&[autopilot.clone()], 60_000 * 100)
+            .unwrap();
+        assert_eq!(batch.runs.len(), 16);
+        assert!(batch.has_more);
+        assert_eq!(store.load().unwrap().autopilot_runs.len(), 16);
+        autopilot["status"] = serde_json::json!("paused");
+        assert!(
+            store
+                .tick_autopilots(&[autopilot.clone()], 60_000 * 101)
+                .unwrap()
+                .runs
+                .is_empty()
+        );
+        autopilot["status"] = serde_json::json!("active");
+        store
+            .tick_autopilots(&[autopilot.clone()], 60_000 * 102)
+            .unwrap();
+        assert_eq!(store.load().unwrap().autopilot_runs.len(), 16);
+        autopilot["triggers"][0]["cron_expression"] = serde_json::json!("*/5 * * * *");
+        store
+            .tick_autopilots(&[autopilot.clone()], 60_000 * 103)
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().autopilot_schedule_cursors[0].after_ms,
+            60_000 * 103
+        );
+        store.tick_autopilots(&[autopilot], 60_000 * 105).unwrap();
+        assert_eq!(store.load().unwrap().autopilot_runs.len(), 17);
+    }
+
+    #[test]
+    fn scheduler_uses_iana_timezone_and_cron_library_validation() {
+        let at = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .timestamp_millis() as u64
+        };
+        assert_eq!(
+            next_autopilot_occurrence("0 9 * * *", "Asia/Shanghai", at("2026-09-18T00:00:00Z"))
+                .unwrap(),
+            at("2026-09-18T01:00:00Z")
+        );
+        // Croner runs fixed times in the DST gap at the first real instant after it.
+        assert_eq!(
+            next_autopilot_occurrence("30 2 * * *", "America/New_York", at("2026-03-08T05:00:00Z"))
+                .unwrap(),
+            at("2026-03-08T07:00:00Z")
+        );
+        assert_eq!(
+            next_autopilot_occurrence("61 * * * *", "UTC", 0)
+                .unwrap_err()
+                .to_string(),
+            "autopilot_cron_invalid"
+        );
+        assert_eq!(
+            next_autopilot_occurrence("* * * * *", "Unknown/Zone", 0)
+                .unwrap_err()
+                .to_string(),
+            "autopilot_timezone_invalid"
+        );
+        assert!(next_autopilot_occurrence("* * * * * *", "UTC", 0).is_err());
+        assert!(next_autopilot_occurrence("0 0 9 * * * 2026", "UTC", 0).is_err());
+    }
+
+    #[test]
+    fn scheduler_upstream_default_preview_has_zero_seconds_and_exclusive_boundaries() {
+        let at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .timestamp_millis() as u64
+        };
+        let mut after = at("2026-09-18T00:59:59.999Z");
+        for date in [
+            "2026-09-18",
+            "2026-09-19",
+            "2026-09-20",
+            "2026-09-21",
+            "2026-09-22",
+        ] {
+            after = next_autopilot_occurrence("0 9 * * *", "Asia/Shanghai", after).unwrap();
+            assert_eq!(after, at(&format!("{date}T01:00:00Z")));
+        }
+        assert_eq!(
+            next_autopilot_occurrence("0 9 * * *", "UTC", at("2026-09-18T00:00:00Z")).unwrap(),
+            at("2026-09-18T09:00:00Z")
+        );
+        assert_eq!(
+            next_autopilot_occurrence(" 0\t9  * * * ", "Asia/Shanghai", at("2026-09-18T01:00:00Z"))
+                .unwrap(),
+            at("2026-09-19T01:00:00Z")
+        );
+    }
+
+    #[test]
+    fn scheduler_upstream_default_shanghai_survives_reload_without_duplicate_runs() {
+        let at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .timestamp_millis() as u64
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let mut autopilot = scheduled_autopilot();
+        autopilot["triggers"][0]["cron_expression"] = serde_json::json!("0 9 * * *");
+        autopilot["triggers"][0]["timezone"] = serde_json::json!("Asia/Shanghai");
+        let autopilots = [autopilot];
+        let before = store
+            .tick_autopilots(&autopilots, at("2026-09-18T00:59:59Z"))
+            .unwrap();
+        assert!(before.runs.is_empty());
+        assert!(before.diagnostics.is_empty());
+        let due = at("2026-09-18T01:00:00Z");
+        let batch = store.tick_autopilots(&autopilots, due).unwrap();
+        assert!(batch.diagnostics.is_empty());
+        assert_eq!(batch.runs.len(), 1);
+        assert_eq!(
+            batch.runs[0].occurrence_id,
+            Some(format!("scheduled:{due}"))
+        );
+        let reloaded = MulticaExecutionStore::new(store.path().to_owned());
+        assert_eq!(
+            reloaded
+                .tick_autopilots(&autopilots, due + 1000)
+                .unwrap()
+                .runs,
+            batch.runs
+        );
+        let next = reloaded
+            .tick_autopilots(&autopilots, at("2026-09-19T01:00:00Z"))
+            .unwrap();
+        assert!(next.diagnostics.is_empty());
+        assert_eq!(next.runs.len(), 2);
+        assert_eq!(reloaded.load().unwrap().autopilot_runs.len(), 2);
+        assert_eq!(
+            reloaded.load().unwrap().autopilot_schedule_cursors[0].cron_expression,
+            "0 9 * * *"
+        );
+    }
+
+    #[test]
+    fn occurrence_reservation_is_atomic_for_duplicate_webhook_deliveries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MulticaExecutionStore::new(dir.path().join("execution.json"));
+        let handles = (0..3)
+            .map(|_| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    store
+                        .reserve_autopilot_occurrence(
+                            "auto-1".into(),
+                            Some("hook-1".into()),
+                            "webhook".into(),
+                            Some("delivery-1".into()),
+                            1,
+                        )
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let runs = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(runs.iter().all(|run| run.id == runs[0].id));
+        assert_eq!(store.load().unwrap().autopilot_runs.len(), 1);
+        let next = store
+            .reserve_autopilot_occurrence(
+                "auto-1".into(),
+                Some("hook-1".into()),
+                "webhook".into(),
+                Some("delivery-2".into()),
+                2,
+            )
+            .unwrap();
+        assert_ne!(next.id, runs[0].id);
     }
 }

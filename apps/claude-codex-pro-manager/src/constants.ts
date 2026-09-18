@@ -18,8 +18,6 @@ export const CODEX_MATT_POCOCK_SKILLS_MARKETPLACE_LOCAL_SOURCE =
 export const PLUGIN_REPOSITORY_REPAIR_PROMPT_KEY_PREFIX = "tools-plugin-repository-repair";
 export const SUPPLIER_DRAG_MIME_TYPE = "application/x-claude-codex-pro-supplier-id";
 
-export const MEMORY_ALL_WORKSPACES = "__all__";
-export const MEMORY_GLOBAL_WORKSPACE = "global";
 
 export const SUPPLIER_PRESETS: SupplierPreset[] = [
   {

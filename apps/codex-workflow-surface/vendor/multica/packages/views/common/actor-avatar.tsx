@@ -1,0 +1,349 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { AVATAR_SIZE_PX, type AvatarSize } from "@multica/ui/lib/avatar-size";
+import {
+  HoverCard,
+  HoverCardTrigger,
+  HoverCardContent,
+} from "@multica/ui/components/ui/hover-card";
+import { useActorName } from "@multica/core/workspace/hooks";
+import { useAgentPresenceDetail } from "@multica/core/agents";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
+import { AgentProfileCard } from "../agents/components/agent-profile-card";
+import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
+import { MemberProfileCard } from "../members/member-profile-card";
+import { SquadProfileCard } from "../squads/components/squad-profile-card";
+import { availabilityConfig } from "../agents/presence";
+import { useT } from "../i18n";
+import {
+  resolveClickIntent,
+  useIntentNavigate,
+  type LinkClickIntent,
+} from "../navigation";
+
+/**
+ * Selects which agent hover-card payload to render when `enableHoverCard` is
+ * on. Two surfaces, two intents:
+ * - `"profile"` (default) — static identity (description, runtime, skills,
+ *   owner). Used by 20+ "who is this agent?" surfaces (comment authors,
+ *   pickers, list rows).
+ * - `"live"` — live activity peek (workload, current issue, last activity).
+ *   Used where the user already knows the identity and wants the live state,
+ *   e.g. the squad members tab.
+ *
+ * Has no effect for non-agent actors (members always render the member card).
+ */
+export type AgentHoverCardVariant = "profile" | "live";
+
+interface ActorAvatarProps {
+  actorType: string;
+  actorId: string;
+  size?: AvatarSize;
+  className?: string;
+  /**
+   * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
+   * surfaces — comment authors, list rows, subscriber chips. Independent of
+   * `showStatusDot`: a surface can have one, both, or neither.
+   */
+  enableHoverCard?: boolean;
+  /**
+   * Overlay an agent-presence dot at the avatar's bottom-right. Use at
+   * decision moments (picker rows, current-assignee display, agent-centric
+   * surfaces). Has no effect for non-agent actors. Independent of
+   * `enableHoverCard` so picker rows can show the dot without nesting a
+   * popover inside the dropdown.
+   */
+  showStatusDot?: boolean;
+  /**
+   * When `enableHoverCard` is on for an agent, choose which payload to
+   * render. See {@link AgentHoverCardVariant}. Defaults to `"profile"` so
+   * existing call sites keep their identity-card behaviour.
+   */
+  hoverCardVariant?: AgentHoverCardVariant;
+  /**
+   * Make the avatar click through to the actor page. Defaults on for members
+   * and agents, while picker/menu controls keep their own click behavior.
+   */
+  profileLink?: boolean;
+}
+
+const FOCUSABLE_ANCESTOR_SELECTOR =
+  'a[href], button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"])';
+const PROFILE_LINK_CONTROL_SELECTOR =
+  'button, [role^="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="popover-trigger"]';
+
+export function ActorAvatar({
+  actorType,
+  actorId,
+  size,
+  className,
+  enableHoverCard,
+  showStatusDot,
+  hoverCardVariant = "profile",
+  profileLink,
+}: ActorAvatarProps) {
+  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  const paths = useWorkspacePaths();
+  const avatar = (
+    <ActorAvatarBase
+      name={getActorName(actorType, actorId)}
+      initials={getActorInitials(actorType, actorId)}
+      avatarUrl={getActorAvatarUrl(actorType, actorId)}
+      isAgent={actorType === "agent"}
+      isSystem={actorType === "system"}
+      isSquad={actorType === "squad"}
+      size={size}
+      className={className}
+    />
+  );
+
+  // Optional presence overlay. Only meaningful for agents — members have no
+  // presence backbone. Wrapping unconditionally with relative inline-flex
+  // would create extra DOM for every avatar; we only wrap when the dot is
+  // asked for.
+  const wrapDot = showStatusDot && actorType === "agent";
+  const dotted = wrapDot ? (
+    <span className="relative inline-flex">
+      {avatar}
+      <AgentStatusDot agentId={actorId} size={size} />
+    </span>
+  ) : (
+    avatar
+  );
+  const shouldLinkToProfile =
+    profileLink ??
+    (actorType === "member" || actorType === "agent" || actorType === "squad");
+  const profileHref = shouldLinkToProfile
+    ? actorType === "member"
+      ? paths.memberDetail(actorId)
+      : actorType === "agent"
+        ? paths.agentDetail(actorId)
+        : actorType === "squad"
+          ? paths.squadDetail(actorId)
+          : null
+    : null;
+  const content = profileHref ? (
+    <ActorAvatarProfileLink href={profileHref}>{dotted}</ActorAvatarProfileLink>
+  ) : (
+    dotted
+  );
+
+  if (!enableHoverCard) {
+    return content;
+  }
+  if (actorType === "agent") {
+    return (
+      <AgentAvatarHoverCard agentId={actorId} variant={hoverCardVariant}>
+        {content}
+      </AgentAvatarHoverCard>
+    );
+  }
+  if (actorType === "member") {
+    return <MemberAvatarHoverCard userId={actorId}>{content}</MemberAvatarHoverCard>;
+  }
+  if (actorType === "squad") {
+    return <SquadAvatarHoverCard squadId={actorId}>{content}</SquadAvatarHoverCard>;
+  }
+  return content;
+}
+
+/**
+ * Not an `<a>` on purpose: the avatar is often composed inside menu items,
+ * options and buttons, where it yields the click to the surrounding control.
+ * The cost is no native context menu, so modifier and middle clicks are
+ * implemented here with the same intent semantics as AppLink.
+ */
+function ActorAvatarProfileLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
+  // Web note: the trigger is a `<span role="link">`, not an anchor, so there
+  // is no native modifier-click behaviour to fall back to — useIntentNavigate
+  // opens the browser tab itself rather than letting the click navigate in
+  // place.
+  const intentNavigate = useIntentNavigate();
+
+  const insideControl = (event: React.SyntheticEvent) =>
+    !!event.currentTarget.parentElement?.closest(PROFILE_LINK_CONTROL_SELECTOR);
+
+  const open = (intent: LinkClickIntent) => intentNavigate(href, intent);
+
+  const navigate = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if (insideControl(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    open(
+      "metaKey" in event && "button" in event
+        ? resolveClickIntent(event as React.MouseEvent)
+        : "push",
+    );
+  };
+
+  return (
+    <span
+      role="link"
+      tabIndex={-1}
+      className="inline-flex cursor-pointer rounded-full"
+      onClick={navigate}
+      onAuxClick={(event) => {
+        if (event.defaultPrevented || event.button !== 1) return;
+        if (insideControl(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        open("background-tab");
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          navigate(event);
+        }
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+// Small presence indicator overlaid on the bottom-right of an agent avatar.
+// Only renders on hover-enabled surfaces so dense decorative chips (e.g. the
+// 14 px owner sub-avatar in agents-list rows) stay visually clean. The dot
+// scales with the avatar size — anything ≥24 px gets the standard 8 px dot,
+// smaller avatars use a 6 px dot so the indicator doesn't overwhelm them.
+// Exported for surfaces that render the base avatar directly (e.g. comment
+// trigger chips) but still want the standard presence dot.
+export function AgentStatusDot({ agentId, size }: { agentId: string; size?: AvatarSize }) {
+  const ws = useCurrentWorkspace();
+  const detail = useAgentPresenceDetail(ws?.id, agentId);
+  const { t } = useT("agents");
+  if (detail === "loading") return null;
+
+  const { dotClass } = availabilityConfig[detail.availability];
+  const px = size ? AVATAR_SIZE_PX[size] : 24;
+  const dotSize = px >= 24 ? "h-1.5 w-1.5" : "h-1 w-1";
+
+  return (
+    <span
+      // The dot is the only presence signal on this avatar, so the aria-label
+      // is the whole accessible payload — it has to be translated, prefix
+      // included. It used to read `Status: ${availabilityConfig[...].label}`,
+      // which was English in every locale (#7411).
+      aria-label={t(($) => $.presence_status_aria, {
+        status: t(($) => $.availability[detail.availability]),
+      })}
+      className={`absolute bottom-0 right-0 rounded-full ring-1 ring-background ${dotClass} ${dotSize}`}
+    />
+  );
+}
+
+/**
+ * Wraps an agent avatar in a hover-card. The trigger is keyboard-focusable
+ * only when no focusable ancestor (link/button) already provides a tab stop —
+ * this prevents nested tabbable descendants and keyboard-nav bloat at sites
+ * where the avatar lives inside a row link or click target.
+ */
+function AgentAvatarHoverCard({
+  agentId,
+  variant,
+  children,
+}: {
+  agentId: string;
+  variant: AgentHoverCardVariant;
+  children: React.ReactNode;
+}) {
+  const content =
+    variant === "live" ? (
+      <AgentLivePeekCard agentId={agentId} />
+    ) : (
+      <AgentProfileCard agentId={agentId} />
+    );
+  return (
+    <ActorAvatarHoverCardShell content={content}>
+      {children}
+    </ActorAvatarHoverCardShell>
+  );
+}
+
+function MemberAvatarHoverCard({
+  userId,
+  children,
+}: {
+  userId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <ActorAvatarHoverCardShell content={<MemberProfileCard userId={userId} />}>
+      {children}
+    </ActorAvatarHoverCardShell>
+  );
+}
+
+function SquadAvatarHoverCard({
+  squadId,
+  children,
+}: {
+  squadId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <ActorAvatarHoverCardShell content={<SquadProfileCard squadId={squadId} />}>
+      {children}
+    </ActorAvatarHoverCardShell>
+  );
+}
+
+// Common chrome shared between agent and member hover cards. Keeps focus
+// behaviour and width consistent so the two surfaces feel structurally
+// parallel — content varies, frame doesn't.
+//
+// Do NOT defer-mount the HoverCard on pointerenter to save per-avatar mount
+// cost (MUL-4827). Base UI drives hover through native mouseenter/mouseleave
+// listeners on the trigger element, and installs its close path *inside* the
+// mouseleave handler — so a trigger that never received a real mouseenter can
+// neither cancel a pending open nor ever hover-close. Warming on pointerenter
+// swaps the node mid-gesture and loses exactly those events, which made
+// brushed-past avatars pop open ~600ms later and stick. This is the same
+// invariant DeferredPopup documents: deferral is only sound for events that
+// END a gesture (click/Enter), and hover starts one. Mounting the root eagerly
+// costs ~0.15ms of JS per avatar and adds zero DOM while closed (the popup
+// subtree, and its queries, stay unmounted until open).
+function ActorAvatarHoverCardShell({
+  content,
+  children,
+}: {
+  content: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [standalone, setStandalone] = useState(false);
+
+  useEffect(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const ancestor = el.parentElement?.closest(FOCUSABLE_ANCESTOR_SELECTOR);
+    setStandalone(!ancestor);
+  }, []);
+
+  const tabIndex = standalone ? 0 : -1;
+  const className = standalone
+    ? "inline-flex cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    : "inline-flex cursor-pointer";
+
+  return (
+    <HoverCard>
+      <HoverCardTrigger
+        render={<span ref={triggerRef} />}
+        tabIndex={tabIndex}
+        className={className}
+      >
+        {children}
+      </HoverCardTrigger>
+      <HoverCardContent align="start" className="w-72">
+        {content}
+      </HoverCardContent>
+    </HoverCard>
+  );
+}

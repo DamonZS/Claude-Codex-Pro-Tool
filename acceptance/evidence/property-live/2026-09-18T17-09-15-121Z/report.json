@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "stage": "complete",
+  "checks": [
+    "view_drag_order_persisted",
+    "real_builtin_and_view_preferences_reload"
+  ],
+  "cleanup": [
+    "preferences_restored",
+    "fixture_view_deleted"
+  ],
+  "ids": {
+    "view": "ccp-acceptance-view-mu77qvx7"
+  }
+}

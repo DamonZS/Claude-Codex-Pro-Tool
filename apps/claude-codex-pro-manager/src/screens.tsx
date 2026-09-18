@@ -4,23 +4,17 @@ import {
   Activity,
   ArrowLeft,
   AlertTriangle,
-  Archive,
   ArchiveRestore,
   BarChart3,
   Bot,
   CheckCircle2,
-  Clock3,
   Copy,
-  Database,
   Download,
   Edit,
   ExternalLink,
   Eye,
   EyeOff,
   FileCode2,
-  FileDown,
-  FileUp,
-  FolderOpen,
   GripVertical,
   Gauge,
   Info,
@@ -29,8 +23,6 @@ import {
   MessageCircle,
   Network,
   Pencil,
-  PencilRuler,
-  Pin,
   Play,
   Plus,
   Power,
@@ -45,10 +37,10 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { RequestTimeline } from "@/components/RequestTimeline";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import claudeLogo from "@/assets/claude.svg";
 import codexLogo from "@/assets/openai.svg";
-import { MemoryActivityWave } from "@/components/MemoryActivityWave";
 import {
   AGGREGATE_STRATEGIES,
   CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE,
@@ -80,7 +72,6 @@ import {
   formatSessionRelativeTime,
   groupClaudeSessionsByProject,
   groupLocalSessionsByProject,
-  memoryOverviewStatus,
   statusFailed,
   statusOk,
 } from "@/lib/helpers";
@@ -154,17 +145,8 @@ import type {
   LocalSession,
   LocalSessionsResult,
   LogsResult,
-  MemoryCandidatesResult,
-  MemoryExportResult,
-  MemoryItem,
-  MemoryItemsResult,
-  MemoryAssistMigrationResult,
-  MemoryNewProjectExperience,
-  MemoryNewProjectGuideResult,
-  MemoryOutcomeDashboardResult,
-  MemoryQueryResult,
-  MemorySelfCheckResult,
-  MemoryStatusResult,
+  RequestTimelineResult,
+  TimelineLogsState,
   MulticaConnectionConfig,
   MulticaConnectionStatus,
   MulticaConnectionStatusResult,
@@ -213,24 +195,6 @@ const SUPPLIER_USER_AGENT_PRESETS = [
 ] as const;
 
 type OverviewAgentScope = "codex" | "claude";
-type OverviewTimelineLane = "provider" | "protocol" | "agent" | "memory";
-type OverviewTimelineTone = "ok" | "warning" | "failed";
-
-type OverviewTimelineEvent = {
-  id: string;
-  lane: OverviewTimelineLane;
-  label: string;
-  timestampMs: number;
-  tone: OverviewTimelineTone;
-};
-
-const OVERVIEW_TIMELINE_LANES: Array<{ id: OverviewTimelineLane; label: string }> = [
-  { id: "provider", label: "Provider 请求" },
-  { id: "protocol", label: "协议与代理" },
-  { id: "agent", label: "Agent 响应" },
-  { id: "memory", label: "记忆活动" },
-];
-
 function overviewProfileTarget(profile: RelayProfile): SupplierTargetApp {
   return profile.targetApp || "codex";
 }
@@ -242,127 +206,6 @@ function overviewProfileInitials(profile: RelayProfile) {
   return source.slice(0, 2).toUpperCase();
 }
 
-function normalizeOverviewTimestamp(value: unknown) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
-  return parsed < 10_000_000_000 ? parsed * 1000 : parsed;
-}
-
-function formatOverviewEventTime(timestampMs: number) {
-  if (!timestampMs) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(new Date(timestampMs));
-}
-
-function overviewEventLane(eventName: string): OverviewTimelineLane {
-  const event = eventName.toLowerCase();
-  if (event.includes("memory")) return "memory";
-  if (event.includes("provider") || event.includes("profile") || event.includes("relay_apply")) return "provider";
-  if (event.includes("proxy") || event.includes("protocol") || event.includes("responses") || event.includes("chat_completion")) return "protocol";
-  return "agent";
-}
-
-function overviewEventTone(eventName: string): OverviewTimelineTone {
-  const event = eventName.toLowerCase();
-  if (event.includes("failed") || event.includes("error") || event.includes("unauthorized")) return "failed";
-  if (event.includes("degraded") || event.includes("warning") || event.includes("retry") || event.includes("waiting")) return "warning";
-  return "ok";
-}
-
-function overviewEventLabel(eventName: string) {
-  const labels: Array<[string, string]> = [
-    ["test_relay_profile.validation_ok", "供应商连接测试通过"],
-    ["test_relay_profile.validation_failed", "供应商连接测试失败"],
-    ["fetch_relay_profile_models.ok", "供应商模型目录已刷新"],
-    ["fetch_relay_profile_models.failed", "供应商模型目录刷新失败"],
-    ["restart", "Codex 重启流程"],
-    ["frontend_runtime.online", "Codex Renderer 已连接"],
-    ["frontend_runtime", "Codex Renderer 状态更新"],
-    ["backend_status", "本地后端状态更新"],
-    ["claude_desktop", "Claude Desktop 状态更新"],
-    ["memory", "盘古记忆活动"],
-    ["update", "CCP 更新状态变化"],
-  ];
-  const normalized = eventName.toLowerCase();
-  const match = labels.find(([needle]) => normalized.includes(needle));
-  if (match) return match[1];
-  return eventName
-    .split(".")
-    .slice(-2)
-    .join(" / ")
-    .replaceAll("_", " ");
-}
-
-function buildOverviewTimeline(logs: LogsResult | null, overview: OverviewResult | null, memoryAssist: MemoryStatusResult | null) {
-  const events: OverviewTimelineEvent[] = [];
-  const lines = logs?.text.split(/\r?\n/).filter(Boolean) ?? [];
-  for (let index = lines.length - 1; index >= 0 && events.length < 10; index -= 1) {
-    try {
-      const record = JSON.parse(lines[index]) as Record<string, unknown>;
-      const eventName = typeof record.event === "string" ? record.event.trim() : "";
-      const timestampMs = normalizeOverviewTimestamp(record.timestamp_ms);
-      if (!eventName || !timestampMs) continue;
-      events.push({
-        id: `log-${timestampMs}-${index}`,
-        lane: overviewEventLane(eventName),
-        label: overviewEventLabel(eventName),
-        timestampMs,
-        tone: overviewEventTone(eventName),
-      });
-    } catch {
-      // Legacy text logs are intentionally not surfaced because they can contain URLs or request bodies.
-    }
-  }
-
-  const launch = overview?.latest_launch;
-  const launchTimestamp = normalizeOverviewTimestamp(launch?.started_at_ms);
-  if (launch && launchTimestamp) {
-    events.push({
-      id: `launch-${launchTimestamp}`,
-      lane: "agent",
-      label: statusFailed(launch.status) ? "Codex 最近启动异常" : launch.status === "degraded" ? "Codex 增强部分在线" : "Codex 已启动",
-      timestampMs: launchTimestamp,
-      tone: statusFailed(launch.status) ? "failed" : launch.status === "degraded" ? "warning" : "ok",
-    });
-  }
-  const frontendTimestamp = normalizeOverviewTimestamp(launch?.frontend_runtime_seen_at_ms);
-  if (frontendTimestamp) {
-    events.push({
-      id: `frontend-${frontendTimestamp}`,
-      lane: "agent",
-      label: "Codex Renderer 最近在线",
-      timestampMs: frontendTimestamp,
-      tone: "ok",
-    });
-  }
-  const latestCaptureAt = Math.max(0, ...(memoryAssist?.memory.workspaces.map((workspace) => workspace.latestCaptureAt || 0) ?? []));
-  const captureTimestamp = normalizeOverviewTimestamp(latestCaptureAt);
-  if (captureTimestamp) {
-    events.push({
-      id: `memory-${captureTimestamp}`,
-      lane: "memory",
-      label: "盘古记忆完成最近采集",
-      timestampMs: captureTimestamp,
-      tone: "ok",
-    });
-  }
-
-  const seen = new Set<string>();
-  return events
-    .sort((left, right) => right.timestampMs - left.timestampMs)
-    .filter((event) => {
-      const key = `${event.lane}:${event.label}:${event.timestampMs}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 10);
-}
-
 export function OverviewScreen({
   actions,
   agentScope,
@@ -372,9 +215,8 @@ export function OverviewScreen({
   claudeZhPatch,
   claudeDesktopDevMode,
   claudeDevModeBusy,
-  memoryAssist,
-  memoryItems,
-  logs,
+  timelineLogs,
+  requestTimeline,
   onAgentScopeChange,
   settings,
 }: {
@@ -386,28 +228,21 @@ export function OverviewScreen({
   claudeZhPatch: ClaudeZhPatchResult | null;
   claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
   claudeDevModeBusy: boolean;
-  memoryAssist: MemoryStatusResult | null;
-  memoryItems: MemoryItemsResult | null;
-  logs: LogsResult | null;
+  timelineLogs: TimelineLogsState;
+  requestTimeline: RequestTimelineResult | null;
   onAgentScopeChange: (scope: OverviewAgentScope) => void;
   settings: BackendSettings | null;
 }) {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const announcement = ads?.ads.find((item) => item.id === "official-toporeduce-api") ?? ads?.ads[0] ?? null;
-  const memory = memoryAssist?.memory;
   const codexStatus = codexOverviewStatus(overview);
   const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
-  const memoryStatus = memoryOverviewStatus(memoryAssist, settings);
   const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
   const devModeValue = claudeDevModeBusy
     ? "写入中..."
     : devModeConfigured
       ? "开发模式已写入"
       : "写入开发模式";
-  const memoryEnabled = memory?.enabled ?? Boolean(settings?.memoryAssistEnabled);
-  const memoryCodexInjected = Boolean(memory?.codexInjected);
-  const memoryMonitorActive = Boolean(memory?.active);
-  const memoryCaptureCount = memory?.totalCaptures ?? memory?.workspaces?.reduce((total, workspace) => total + (workspace.captureCount || 0), 0) ?? 0;
   const profiles = settings?.relayProfiles ?? [];
   const activeProfileIds = new Set([
     settings?.activeRelayId,
@@ -452,23 +287,6 @@ export function OverviewScreen({
         : codexRunning
           ? "已注入"
           : "未运行";
-  const timelineEvents = useMemo(
-    () => buildOverviewTimeline(logs, overview, memoryAssist),
-    [logs?.text, overview?.latest_launch, memoryAssist?.memory.workspaces],
-  );
-  const timelineLayout = useMemo(() => {
-    const newestTimestamp = timelineEvents[0]?.timestampMs ?? Date.now();
-    const oldestTimestamp = timelineEvents.at(-1)?.timestampMs ?? newestTimestamp - 60_000;
-    const startTimestamp = Math.min(oldestTimestamp, newestTimestamp - 60_000);
-    const duration = Math.max(1, newestTimestamp - startTimestamp);
-    return {
-      ticks: Array.from({ length: 8 }, (_, index) => startTimestamp + (duration * index) / 7),
-      eventLeft: (timestampMs: number) => {
-        const ratio = Math.max(0, Math.min(1, (timestampMs - startTimestamp) / duration));
-        return `${4 + ratio * 74}%`;
-      },
-    };
-  }, [timelineEvents]);
   const diagnostics: string[] = [];
   if (!selectedProfile) diagnostics.push("当前范围内没有可检查的供应商配置。");
   if (selectedProfile && !selectedHasCredential) diagnostics.push("当前供应商缺少可用凭据，请先进入编辑器补充 API Key。");
@@ -476,14 +294,6 @@ export function OverviewScreen({
   if (selectedProfile && !selectedIsCurrent) diagnostics.push("当前仅在检查此供应商，尚未把它设为目标 Agent 的当前配置。");
   if (selectedIsCurrent && !selectedAgentOnline) diagnostics.push(`${supplierTargetAppLabel(selectedTarget)} 尚未运行或状态未检测。`);
   if (!diagnostics.length) diagnostics.push("当前链路没有已知异常，可继续使用当前配置。");
-  const toggleMemoryAssistEnabled = async (enabled: boolean) => {
-    if (!settings) {
-      actions.showNotice({ title: "盘古记忆开关", message: "设置尚未加载，请先刷新概览。", status: "failed" });
-      return;
-    }
-    const saved = await actions.saveSettings({ ...settings, memoryAssistEnabled: enabled });
-    if (saved) await actions.refreshMemoryAssist();
-  };
   return (
     <div className="overview-control-plane">
       <div className="overview-console-layout">
@@ -503,11 +313,6 @@ export function OverviewScreen({
           <header><span>Codex 增强</span><Sparkles aria-hidden="true" /></header>
           <div className="overview-kpi-value"><strong>{codexEnhancementValue}</strong><small>增强状态</small></div>
           <p>{launch?.frontend_runtime_online ? "Renderer 与 Bridge 已连接" : "Renderer 尚未确认"}</p>
-        </section>
-        <section className="overview-kpi-card" data-tone={memoryStatus.status === "failed" ? "warning" : memoryEnabled ? "ok" : "muted"}>
-          <header><span>盘古记忆</span><Database aria-hidden="true" /></header>
-          <div className="overview-kpi-value"><strong>{memory ? memory.totalItems : "未检测"}</strong><small>{memory ? "条记忆" : "等待状态"}</small></div>
-          <p>{memory ? `${memoryCaptureCount} 次采集 · ${memory.pendingCandidates} 项待确认` : "记忆状态尚未加载"}</p>
         </section>
           </div>
 
@@ -607,10 +412,6 @@ export function OverviewScreen({
               <header><Sparkles aria-hidden="true" /><strong>运行建议</strong></header>
               <ul>{diagnostics.map((message) => <li key={message}>{message}</li>)}</ul>
             </section>
-            <section className="overview-memory-control">
-              <div><ShieldCheck aria-hidden="true" /><span><strong>盘古记忆</strong><small>{memoryMonitorActive ? "对话监控运行中" : memoryCodexInjected ? "已注入，等待会话变化" : "当前未监听"}</small></span></div>
-              <ToggleSwitch checked={memoryEnabled} disabled={!settings} onChange={(value) => void toggleMemoryAssistEnabled(value)} />
-            </section>
             <div className="overview-quick-actions" aria-label="诊断与修复">
               <button onClick={() => void actions.repairFrontendConnection()} type="button"><Wrench aria-hidden="true" />修复前端</button>
               <button onClick={() => void actions.repairBackendService()} type="button"><Wrench aria-hidden="true" />修复后端</button>
@@ -628,191 +429,14 @@ export function OverviewScreen({
           </footer>
         </aside>
 
-          <section className="overview-timeline overview-glass-panel">
-          <header className="overview-panel-heading">
-            <div><Clock3 aria-hidden="true" /><span><strong>请求与事件时间线</strong><small>最近 {timelineEvents.length} 项脱敏事件</small></span></div>
-            <span className="overview-timeline-legend"><i className="ok" />成功<i className="warning" />降级<i className="failed" />失败</span>
-          </header>
-          <div className="overview-timeline-body">
-            <div className="overview-timeline-labels">
-              {OVERVIEW_TIMELINE_LANES.map((lane) => <strong key={lane.id}><i />{lane.label}</strong>)}
-            </div>
-            <div className="overview-timeline-chart">
-              <div className="overview-timeline-axis">{timelineLayout.ticks.map((timestamp, index) => <time key={`${timestamp}-${index}`}>{formatOverviewEventTime(timestamp)}</time>)}</div>
-              <div className="overview-timeline-grid" aria-hidden="true" />
-              {OVERVIEW_TIMELINE_LANES.map((lane) => {
-                const event = timelineEvents.find((item) => item.lane === lane.id);
-                return (
-                  <div className="overview-timeline-track" key={lane.id}>
-                    {event ? (
-                      <span className={`overview-timeline-event ${event.tone}`} style={{ left: timelineLayout.eventLeft(event.timestampMs) } as CSSProperties}>
-                        <i /><b>{event.label}</b><time>{formatOverviewEventTime(event.timestampMs)}</time>
-                      </span>
-                    ) : <span className="overview-timeline-empty">暂无事件</span>}
-                  </div>
-                );
-              })}
-              <span className="overview-timeline-now" aria-hidden="true">最新</span>
-            </div>
-          </div>
-          <p className="overview-timeline-note">仅展示事件名称与时间，原始日志 detail 不进入概览。</p>
-          </section>
+          <RequestTimeline agentScope={agentScope} timelineLogs={timelineLogs} result={requestTimeline} onRefresh={actions.refreshRequestTimeline} />
         </main>
       </div>
     </div>
   );
 }
 
-// Phase 2 tiering UI: a decay strength bar (exempt items read "常驻" and show
-// full), plus an archive/restore action. Shared by the overview detail list and
-// the memory management screen so both surfaces stay consistent.
 const CONTACT_QQ_GROUP_PRIMARY_URL = "https://qm.qq.com/cgi-bin/qm/qr?k=uwNon9opx0Arfovyo5qJQQ2jUvlxSpmf&jump_from=webapi&authKey=El8Xwz9ZqefrpE4BhW9xWQsEAUFvptw74MBsRKRJTw5x5QiEPiG0fmdVIf9VuMWg";
-
-function MemoryTierControls({ actions, item }: { actions: AppActions; item: MemoryItem }) {
-  const archived = item.tier === "archived";
-  const exempt = Boolean(item.exempt);
-  // retention is 0..1; exempt items always report 1. Clamp for safety.
-  const retention = exempt ? 1 : Math.max(0, Math.min(1, item.retention ?? 1));
-  const pct = Math.round(retention * 100);
-  return (
-    <div className="memory-tier-controls">
-      {archived ? (
-        <span className="memory-tier-badge archived">已归档</span>
-      ) : exempt ? (
-        <span className="memory-tier-badge resident" title="常驻记忆，豁免遗忘衰减">
-          <Pin className="h-3 w-3" />
-          常驻
-        </span>
-      ) : (
-        <span
-          className="memory-strength-bar"
-          title={`记忆强度 ${pct}%（越低越接近归档）`}
-        >
-          <span className="memory-strength-fill" style={{ width: `${pct}%` }} />
-        </span>
-      )}
-      {archived ? (
-        <Button onClick={() => void actions.restoreMemoryAssistItem(item.id)} size="sm" variant="outline">
-          恢复
-        </Button>
-      ) : (
-        <Button onClick={() => void actions.archiveMemoryAssistItem(item.id)} size="sm" variant="outline">
-          <Archive className="h-4 w-4" />
-          归档
-        </Button>
-      )}
-    </div>
-  );
-}
-
-export function OverviewMemoryDetails({
-  actions,
-  items,
-  onClose,
-}: {
-  actions: AppActions;
-  items: MemoryItemsResult | null;
-  onClose: () => void;
-}) {
-  const [editingMemoryId, setEditingMemoryId] = useState("");
-  const [editingText, setEditingText] = useState("");
-  const [editingCategory, setEditingCategory] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
-  const allItems = items?.items ?? [];
-  const beginEditMemory = (item: MemoryItem) => {
-    setEditingMemoryId(item.id);
-    setEditingText(item.text);
-    setEditingCategory(item.category);
-  };
-  const cancelEditMemory = () => {
-    setEditingMemoryId("");
-    setEditingText("");
-    setEditingCategory("");
-  };
-  const saveEditedMemory = async (item: MemoryItem) => {
-    const text = editingText.trim();
-    if (!text) return;
-    const saved = await actions.updateMemoryAssistItem(item.id, {
-      text,
-      workspace: item.workspace,
-      category: editingCategory.trim() || item.category || "general",
-      tags: item.tags,
-      source: item.source || "manager",
-      sourceSessionId: item.sourceSessionId,
-    });
-    if (saved) cancelEditMemory();
-  };
-  return (
-    <Panel title="经验教训手册详情" detail="提炼结果会合成为一条精简手册，可在这里直接查看和编辑。">
-      <div className="overview-memory-toolbar">
-        <Button onClick={() => void actions.refineLongTermMemory()} size="sm">
-          <PencilRuler className="h-4 w-4" />
-          提炼经验教训
-        </Button>
-        <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline">
-          <RefreshCw className="h-4 w-4" />
-          刷新
-        </Button>
-        <label className="memory-archive-toggle">
-          <input
-            checked={showArchived}
-            onChange={(event) => {
-              const next = event.currentTarget.checked;
-              setShowArchived(next);
-              void actions.refreshMemoryAssist(false, next);
-            }}
-            type="checkbox"
-          />
-          <span>显示归档</span>
-        </label>
-        <Button onClick={onClose} size="sm" variant="outline">收起</Button>
-      </div>
-      <div className="overview-memory-list">
-        {allItems.length ? allItems.map((item) => {
-          const editing = editingMemoryId === item.id;
-          const archived = item.tier === "archived";
-          return (
-            <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
-              <span>{item.category} · {item.workspace}</span>
-              {editing ? (
-                <>
-                  <label className="ops-form-field">
-                    <span>分类</span>
-                    <input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} />
-                  </label>
-                  <label className="ops-form-field">
-                    <span>经验教训内容</span>
-                    <textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} />
-                  </label>
-                  <div className="action-row">
-                    <Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm">
-                      <Save className="h-4 w-4" />
-                      保存
-                    </Button>
-                    <Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p>{item.text}</p>
-                  <MemoryTierControls actions={actions} item={item} />
-                  <div className="action-row">
-                    <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
-                      <Pencil className="h-4 w-4" />
-                      编辑
-                    </Button>
-                    <Button onClick={() => void actions.deleteMemoryAssistItem(item.id)} size="sm" variant="outline">删除</Button>
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        }) : <Empty text="暂无经验教训。" />}
-      </div>
-    </Panel>
-  );
-}
-
 function SupplierModelDropdown({
   options,
   value,
@@ -2706,895 +2330,6 @@ export function ClaudePluginRepositoryPanel({
     </Panel>
   );
 }
-export function MemoryAssistPanel({
-  actions,
-  exported,
-  items,
-  search,
-  selfCheck,
-  status,
-}: {
-  actions: AppActions;
-  exported: MemoryExportResult | null;
-  items: MemoryItemsResult | null;
-  search: MemoryQueryResult | null;
-  selfCheck: MemorySelfCheckResult | null;
-  status: MemoryStatusResult | null;
-}) {
-  const [draft, setDraft] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [importText, setImportText] = useState("");
-  const [replaceExisting, setReplaceExisting] = useState(false);
-  const [editingMemoryId, setEditingMemoryId] = useState("");
-  const [editingText, setEditingText] = useState("");
-  const [editingCategory, setEditingCategory] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
-  const allItems = items?.items ?? [];
-  const matches = search?.memory.results ?? [];
-  const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
-  const dbPath = status?.memory.dbPath ?? "";
-  const beginEditMemory = (item: MemoryItem) => {
-    setEditingMemoryId(item.id);
-    setEditingText(item.text);
-    setEditingCategory(item.category);
-  };
-  const cancelEditMemory = () => {
-    setEditingMemoryId("");
-    setEditingText("");
-    setEditingCategory("");
-  };
-  const saveEditedMemory = async (item: MemoryItem) => {
-    const text = editingText.trim();
-    if (!text) return;
-    const saved = await actions.updateMemoryAssistItem(item.id, {
-      text,
-      workspace: item.workspace,
-      category: editingCategory.trim() || item.category || "general",
-      tags: item.tags,
-      source: item.source || "manager",
-      sourceSessionId: item.sourceSessionId,
-    });
-    if (saved) cancelEditMemory();
-  };
-  return (
-    <Panel title="盘古记忆" detail="本地经验教训手册、自动学习、工作区隔离和自检备份。">
-      <div className="ops-status-list">
-        <StatusRow label="记忆库" status={status?.memory.status ?? "not_checked"} value={compactPath(dbPath)} />
-        <StatusRow label="经验教训" status={(status?.memory.totalItems ?? 0) > 0 ? "ok" : "not_checked"} value={(status?.memory.totalItems ?? 0) > 0 ? "已沉淀" : "待提炼"} />
-        <StatusRow label="最近备份" status={status?.memory.latestBackupPath ? "ok" : "not_checked"} value={compactPath(status?.memory.latestBackupPath)} />
-      </div>
-      <label className="ops-form-field">
-        <span>手动经验教训</span>
-        <textarea
-          className="ops-textarea compact"
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          placeholder="输入要长期保存的项目约定、构建命令、偏好或修复结论"
-          value={draft}
-        />
-      </label>
-      <div className="action-row">
-        <Button
-          disabled={!draft.trim()}
-          onClick={() => {
-            void (async () => {
-              if (await actions.learnMemoryAssistItem(draft)) setDraft("");
-            })();
-          }}
-          size="sm"
-        >
-          <CheckCircle2 className="h-4 w-4" />
-          记住
-        </Button>
-        <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline">
-          <RefreshCw className="h-4 w-4" />
-          刷新
-        </Button>
-        <Button onClick={() => void actions.runMemoryAssistSelfcheck()} size="sm" variant="outline">
-          <ShieldCheck className="h-4 w-4" />
-          自检并备份
-        </Button>
-        <Button onClick={() => void actions.refineLongTermMemory()} size="sm" variant="outline">
-          <PencilRuler className="h-4 w-4" />
-          提炼经验教训
-        </Button>
-        <Button onClick={() => void actions.registerMemoryMcpServer()} size="sm" variant="outline">
-          <Network className="h-4 w-4" />
-          注册 MCP 到 Claude/Codex
-        </Button>
-      </div>
-      <div className="memory-assist-search">
-        <label className="ops-form-field">
-          <span>搜索记忆</span>
-          <input
-            onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived);
-            }}
-            placeholder="搜索项目约定、构建命令、历史修复结论"
-            value={searchQuery}
-          />
-        </label>
-        <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">
-          <RefreshCw className="h-4 w-4" />
-          搜索
-        </Button>
-      </div>
-      {matches.length ? (
-        <div className="memory-assist-list">
-          <strong>搜索结果：{search?.memory.query}</strong>
-          {matches.slice(0, 6).map((match) => (
-            <div className="memory-assist-row" key={match.item.id}>
-              <span>{match.item.category} · {match.item.workspace} · score {match.score.toFixed(2)}</span>
-              <p>{match.item.text}</p>
-              {match.matchedKeywords.length ? <em>命中：{match.matchedKeywords.slice(0, 8).join(" / ")}</em> : null}
-            </div>
-          ))}
-        </div>
-      ) : search ? <Empty text="没有匹配到记忆。" /> : null}
-      {selfCheck ? (
-        <div className="ops-note">
-          <ShieldCheck className="h-4 w-4" />
-          <span>{selfCheck.report.status} · {selfCheck.report.checks.map((check) => `${check.name}:${check.status}`).join(" / ")}</span>
-        </div>
-      ) : null}
-      <div className="memory-assist-list">
-          <div className="memory-list-header">
-            <strong>经验教训手册</strong>
-            <label className="memory-archive-toggle">
-              <input
-                checked={showArchived}
-                onChange={(event) => {
-                  const next = event.currentTarget.checked;
-                  setShowArchived(next);
-                  void actions.refreshMemoryAssist(false, next);
-                }}
-                type="checkbox"
-              />
-              <span>显示归档</span>
-            </label>
-          </div>
-          {allItems.length ? allItems.map((item) => {
-            const editing = editingMemoryId === item.id;
-            const archived = item.tier === "archived";
-            return (
-            <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
-              <span>{item.category} · {item.workspace}</span>
-              {editing ? (
-                <>
-                  <label className="ops-form-field">
-                    <span>分类</span>
-                    <input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} />
-                  </label>
-                  <label className="ops-form-field">
-                    <span>经验教训内容</span>
-                    <textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} />
-                  </label>
-                  <div className="action-row">
-                    <Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm">
-                      <Save className="h-4 w-4" />
-                      保存
-                    </Button>
-                    <Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p>{item.text}</p>
-                  <MemoryTierControls actions={actions} item={item} />
-                  <div className="action-row">
-                    <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
-                      <Pencil className="h-4 w-4" />
-                      编辑
-                    </Button>
-                    <Button onClick={() => void actions.deleteMemoryAssistItem(item.id)} size="sm" variant="outline">删除</Button>
-                  </div>
-                </>
-              )}
-            </div>
-            );
-          }) : <Empty text="暂无经验教训。" />}
-      </div>
-      <div className="memory-assist-transfer">
-        <div className="memory-assist-list">
-          <strong>导出</strong>
-          <div className="action-row">
-            <Button onClick={() => void actions.exportMemoryAssist()} size="sm" variant="outline">
-              <FileDown className="h-4 w-4" />
-              生成导出 JSON
-            </Button>
-          </div>
-          <textarea
-            className="ops-textarea compact mono"
-            placeholder="点击生成导出 JSON 后会显示完整迁移包。"
-            readOnly
-            value={exportJson}
-          />
-        </div>
-        <div className="memory-assist-list">
-          <strong>导入</strong>
-          <textarea
-            className="ops-textarea compact mono"
-            onChange={(event) => setImportText(event.currentTarget.value)}
-            placeholder="粘贴 memory-assist/v1 导出 JSON；导入前会再次确认。"
-            value={importText}
-          />
-          <div className="ops-toggle-line">
-            <span>替换现有记忆库</span>
-            <ToggleSwitch checked={replaceExisting} onChange={setReplaceExisting} />
-          </div>
-          <Button disabled={!importText.trim()} onClick={() => void actions.importMemoryAssist(importText, replaceExisting)} size="sm">
-            <FileUp className="h-4 w-4" />
-            导入记忆
-          </Button>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function memoryManualHeadings(markdown: string) {
-  return markdown
-    .split(/\r?\n/)
-    .map((line) => {
-      const match = /^(#{2,3})\s+(.+?)\s*$/.exec(line);
-      if (!match) return null;
-      const title = match[2].trim();
-      return { depth: match[1].length, title, anchor: title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") };
-    })
-    .filter((item): item is { depth: number; title: string; anchor: string } => Boolean(item));
-}
-
-function fallbackMemoryManual(status: MemoryStatusResult | null) {
-  const captureCount = status?.memory.totalCaptures ?? 0;
-  const itemCount = status?.memory.totalItems ?? 0;
-  const workspaceCount = status?.memory.workspaces?.length ?? 0;
-  return [
-    "# 会话经验教训注入手册",
-    "",
-    "> 用途：在新会话启动时注入由盘古核心算法提炼的经验教训。",
-    "> 来源：memory_assist.sqlite 与真实 Codex/Claude 会话采集记录。",
-    `> 更新时间：${new Date().toLocaleString()}`,
-    "> 工作区：global",
-    "",
-    "## 目录",
-    "",
-    "- [当前状态](#当前状态)",
-    "- [附录：来源摘要](#附录来源摘要)",
-    "",
-    "## 当前状态",
-    "",
-    "- 当前可用于生成手册的材料不足，等待核心算法从真实会话中提炼。",
-    "",
-    "## 附录：来源摘要",
-    "",
-    `- 来源长期记忆：${itemCount} 条`,
-    `- 来源采集记录：${captureCount} 条`,
-    `- 来源工作区：${workspaceCount} 个`,
-    "- 生成方式：fallback",
-  ].join("\n");
-}
-
-export function MemoryScreen({
-  actions,
-  candidates,
-  dashboard,
-  newProjectGuide,
-  exported,
-  items,
-  search,
-  selfCheck,
-  migrateDataDir,
-  selectDataDir,
-  settings,
-  status,
-}: {
-  actions: AppActions;
-  candidates: MemoryCandidatesResult | null;
-  dashboard: MemoryOutcomeDashboardResult | null;
-  newProjectGuide: MemoryNewProjectGuideResult | null;
-  exported: MemoryExportResult | null;
-  items: MemoryItemsResult | null;
-  search: MemoryQueryResult | null;
-  selfCheck: MemorySelfCheckResult | null;
-  migrateDataDir: (targetDir: string) => Promise<MemoryAssistMigrationResult | null>;
-  selectDataDir: () => Promise<string | null>;
-  settings: SettingsResult | null;
-  status: MemoryStatusResult | null;
-}) {
-  const [manualEditing, setManualEditing] = useState(false);
-  const [manualDraft, setManualDraft] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
-  const [showSources, setShowSources] = useState(false);
-  const [editingMemoryId, setEditingMemoryId] = useState("");
-  const [editingText, setEditingText] = useState("");
-  const [editingCategory, setEditingCategory] = useState("");
-  const [importText, setImportText] = useState("");
-  const [replaceExisting, setReplaceExisting] = useState(false);
-  const [selectedDataDir, setSelectedDataDir] = useState("");
-  const [storageMigrationBusy, setStorageMigrationBusy] = useState(false);
-
-  const allItems = items?.items ?? [];
-  const activeItems = allItems.filter((item) => item.tier !== "archived");
-  const archivedItems = allItems.filter((item) => item.tier === "archived");
-  const exemptItems = allItems.filter((item) => item.exempt);
-  const sourceItems = showArchived ? allItems : activeItems;
-  const manualItem =
-    activeItems.find((item) => item.category === "lesson-manual") ??
-    allItems.find((item) => item.category === "lesson-manual");
-  const manualText = manualItem?.text?.trim() || fallbackMemoryManual(status);
-  const headings = memoryManualHeadings(manualEditing ? manualDraft : manualText);
-  const avgStrength = allItems.length ? allItems.reduce((total, item) => total + (item.strength ?? 0), 0) / allItems.length : 0;
-  const avgRetention = allItems.length ? allItems.reduce((total, item) => total + (item.retention ?? 0), 0) / allItems.length : 0;
-  const captureProgress = status?.memory.captureProgress;
-  const latestWorkspaceCapture = Math.max(0, ...(status?.memory.workspaces ?? []).map((workspace) => workspace.latestCaptureAt || 0));
-  const latestScanAt = captureProgress?.lastScanAt || latestWorkspaceCapture;
-  const firstBaselineAt = captureProgress?.firstBaselineAt || 0;
-  const workspaceSummary = status?.memory.codexWorkspace || status?.memory.workspaces?.[0]?.workspace || "global";
-  const outcome = dashboard?.dashboard;
-  const pendingCandidates = candidates?.candidates ?? [];
-  const handoffItems = outcome?.handoffItems ?? [];
-  const continueItems = handoffItems.slice(0, 3);
-  const guide = newProjectGuide?.guide;
-  const guidePitfalls = guide?.pitfalls ?? [];
-  const guideApproaches = guide?.bestPractices ?? [];
-  const guidePrompt = guide?.prompt ?? "";
-  const guideSelectedCount = guidePitfalls.length + guideApproaches.length;
-  const projectWorkspace = outcome?.workspace || workspaceSummary;
-  const latestHandoffUpdatedAt = handoffItems.reduce((latest, item) => Math.max(latest, item.updatedAt || 0), 0);
-  const projectItems = sourceItems.filter((item) => item.workspace === projectWorkspace || item.workspace === "global");
-  const trend = outcome?.trend ?? [];
-  const trendMax = Math.max(1, ...trend.map((point) => point.captures + point.learned + point.recalls));
-  const mcpEnabled = Boolean(settings?.settings.memoryAssistMcpEnabled);
-  const memoryEnabled = status?.memory.enabled ?? Boolean(settings?.settings.memoryAssistEnabled);
-  const exportJson = exported ? JSON.stringify(exported.data, null, 2) : "";
-  const matches = search?.memory.results ?? [];
-  const selfCheckSummary = selfCheck
-    ? selfCheck.report.checks.map((check) => `${check.name}:${check.status}`).join(" / ")
-    : "等待自检";
-  const currentDbPath = status?.memory.dbPath?.trim() || "";
-  const currentDataDir = (() => {
-    const separator = Math.max(currentDbPath.lastIndexOf("/"), currentDbPath.lastIndexOf("\\"));
-    if (separator < 0) return currentDbPath || "等待状态加载";
-    if (separator === 0) return currentDbPath.slice(0, 1);
-    if (separator === 2 && /^[A-Za-z]:/.test(currentDbPath)) return currentDbPath.slice(0, 3);
-    return currentDbPath.slice(0, separator);
-  })();
-  const normalizedCurrentDataDir = currentDataDir.replace(/[\\/]+$/, "").toLocaleLowerCase();
-  const normalizedSelectedDataDir = selectedDataDir.trim().replace(/[\\/]+$/, "").toLocaleLowerCase();
-
-  const chooseDataDir = async () => {
-    const selected = await selectDataDir();
-    if (selected) setSelectedDataDir(selected);
-  };
-  const migrateData = async () => {
-    const targetDir = selectedDataDir.trim();
-    if (!targetDir || storageMigrationBusy) return;
-    setStorageMigrationBusy(true);
-    try {
-      const result = await migrateDataDir(targetDir);
-      if (result) setSelectedDataDir("");
-    } finally {
-      setStorageMigrationBusy(false);
-    }
-  };
-
-  const beginManualEdit = () => {
-    setManualDraft(manualText);
-    setManualEditing(true);
-  };
-  const saveManual = async () => {
-    const text = manualDraft.trim();
-    if (!text) return;
-    if (manualItem) {
-      const saved = await actions.updateMemoryAssistItem(manualItem.id, {
-        text,
-        workspace: manualItem.workspace,
-        category: manualItem.category,
-        tags: manualItem.tags,
-        source: manualItem.source || "manager",
-        sourceSessionId: manualItem.sourceSessionId,
-      });
-      if (saved) setManualEditing(false);
-      return;
-    }
-    const saved = await actions.learnMemoryAssistItem(text, "lesson-manual");
-    if (saved) setManualEditing(false);
-  };
-  const beginEditMemory = (item: MemoryItem) => {
-    setEditingMemoryId(item.id);
-    setEditingText(item.text);
-    setEditingCategory(item.category);
-  };
-  const cancelEditMemory = () => {
-    setEditingMemoryId("");
-    setEditingText("");
-    setEditingCategory("");
-  };
-  const saveEditedMemory = async (item: MemoryItem) => {
-    const text = editingText.trim();
-    if (!text) return;
-    const saved = await actions.updateMemoryAssistItem(item.id, {
-      text,
-      workspace: item.workspace,
-      category: editingCategory.trim() || item.category || "general",
-      tags: item.tags,
-      source: item.source || "manager",
-      sourceSessionId: item.sourceSessionId,
-    });
-    if (saved) cancelEditMemory();
-  };
-  const copyManual = async () => {
-    await navigator.clipboard?.writeText(manualEditing ? manualDraft : manualText);
-    actions.showNotice({ title: "复制注入手册", message: "已复制会话经验教训注入手册全文。", status: "ok" });
-  };
-  const copyHandoff = async () => {
-    const text = [
-      `# 项目接续：${projectWorkspace}`,
-      "",
-      ...continueItems.map((item) => `- [${item.category}] ${item.text}`),
-    ].join("\n");
-    await navigator.clipboard?.writeText(text);
-    actions.showNotice({ title: "复制项目接续", message: "已复制当前看板中的项目接续摘要。", status: "ok" });
-  };
-  const recallMethodLabel = (eventType: string) => {
-    if (eventType === "inject") return "会话注入";
-    if (eventType === "search") return "搜索命中";
-    return eventType || "召回";
-  };
-  const guideText = (item: MemoryNewProjectExperience) => `${item.text}（${item.category} · ${item.sourceCount} 条来源）`;
-  const copyNewProjectPrompt = async () => {
-    if (!guidePrompt) return;
-    await navigator.clipboard?.writeText(guidePrompt);
-    actions.showNotice({ title: "复制新项目提示词", message: "已复制完整的新项目启动提示词。", status: "ok" });
-  };
-
-  return (
-    <div className="stack memory-page">
-      <Panel title="开始工作" detail="选择继续当前项目，或按需生成一份基于既有记忆的新项目启动指南。">
-        <div className="memory-start-grid">
-          <section className="memory-start-card">
-            <div><strong>继续当前项目</strong><span>{projectWorkspace}</span></div>
-            <span className="memory-start-updated">最近更新：{latestHandoffUpdatedAt ? new Date(latestHandoffUpdatedAt * 1000).toLocaleString() : "暂无接续更新时间"}</span>
-            <div className="memory-handoff-list">
-              {continueItems.length ? continueItems.map((item) => (
-                <article className="memory-outcome-item compact" key={`handoff-${item.id}`}>
-                  <span>{item.category}</span>
-                  <p>{item.text}</p>
-                </article>
-              )) : <Empty text="当前项目尚无可用于接续的关键记录。" />}
-            </div>
-            <Button disabled={!continueItems.length} onClick={() => void copyHandoff()} size="sm" variant="outline"><Copy className="h-4 w-4" />复制项目接续</Button>
-          </section>
-          <section className="memory-start-card">
-            <div><strong>开启新项目</strong><span>跨项目经验指南</span></div>
-            <p>需要时再从已有记忆中整理避坑、优秀方式与完整提示词，不会在进入页面时自动生成。</p>
-            <Button onClick={() => void actions.loadMemoryNewProjectGuide()} size="sm">{newProjectGuide ? "重新生成预览" : "生成启动指南"}</Button>
-          </section>
-        </div>
-        {newProjectGuide ? (
-          <div className="memory-new-project-preview">
-            <div className="memory-guide-stats">
-              <InfoRow label="来源范围" value={`${guide?.sourceWorkspaceCount ?? 0} 个`} />
-              <InfoRow label="源记忆" value={`${guide?.sourceItemCount ?? 0} 条`} />
-              <InfoRow label="精选经验" value={`${guideSelectedCount} 条`} />
-              <InfoRow label="来源更新截至" value={guide?.generatedAt ? new Date(guide.generatedAt * 1000).toLocaleString() : "未记录"} />
-            </div>
-            <section><strong>避坑</strong>{guidePitfalls.length ? <ul>{guidePitfalls.map((item, index) => <li key={`pitfall-${index}`}>{guideText(item)}</li>)}</ul> : <Empty text="暂无可提炼的避坑记录。" />}</section>
-            <section><strong>优秀方式</strong>{guideApproaches.length ? <ul>{guideApproaches.map((item, index) => <li key={`approach-${index}`}>{guideText(item)}</li>)}</ul> : <Empty text="暂无可提炼的优秀方式。" />}</section>
-            <section className="memory-new-project-prompt"><div><strong>完整提示词</strong><Button disabled={!guidePrompt} onClick={() => void copyNewProjectPrompt()} size="sm" variant="outline"><Copy className="h-4 w-4" />复制提示词</Button></div>{guidePrompt ? <pre>{guidePrompt}</pre> : <Empty text="当前记忆不足，尚未生成完整提示词。" />}</section>
-          </div>
-        ) : null}
-      </Panel>
-
-      <Panel title="记忆成果" detail="今日结果、7/30 天趋势与真实召回证据均来自本地记忆库记录。">
-        <div className="memory-outcome-stats">
-          <InfoRow label="今日采集" value={`${outcome?.todayCaptures ?? 0} 条`} />
-          <InfoRow label="新增长期记忆" value={`${outcome?.todayLearned ?? 0} 条`} />
-          <InfoRow label="待确认" value={`${outcome?.pendingCandidates ?? pendingCandidates.length} 条`} />
-          <InfoRow label="真实命中" value={`${outcome?.todayRecalls ?? 0} 条`} />
-        </div>
-        <div className="memory-outcome-toolbar">
-          <span>最近 {outcome?.rangeDays ?? 30} 天</span>
-          <div className="action-row">
-            <Button onClick={() => void actions.refreshMemoryOutcomeDashboard(7)} size="sm" variant={(outcome?.rangeDays ?? 30) === 7 ? "default" : "outline"}>7 天</Button>
-            <Button onClick={() => void actions.refreshMemoryOutcomeDashboard(30)} size="sm" variant={(outcome?.rangeDays ?? 30) === 30 ? "default" : "outline"}>30 天</Button>
-          </div>
-        </div>
-        {trend.length ? (
-          <div className="memory-trend-chart" aria-label={`${outcome?.rangeDays ?? 30} 天记忆趋势`}>
-            {trend.map((point) => (
-              <div className="memory-trend-column" key={point.date} title={`${point.date}：采集 ${point.captures}，新增 ${point.learned}，召回 ${point.recalls}`}>
-                <div className="memory-trend-bars">
-                  <i className="capture" style={{ height: point.captures ? `${Math.max(3, (point.captures / trendMax) * 100)}%` : 0 }} />
-                  <i className="learned" style={{ height: point.learned ? `${Math.max(3, (point.learned / trendMax) * 100)}%` : 0 }} />
-                  <i className="recall" style={{ height: point.recalls ? `${Math.max(3, (point.recalls / trendMax) * 100)}%` : 0 }} />
-                </div>
-                <span>{point.date.slice(5)}</span>
-              </div>
-            ))}
-          </div>
-        ) : <Empty text="所选时间范围内暂无趋势记录。" />}
-        <div className="memory-trend-legend"><span>采集</span><span>新增</span><span>命中条目</span></div>
-        <div className="memory-breakdown-grid">
-          <div className="memory-breakdown-list">
-            <strong>项目分布</strong>
-            {(outcome?.workspaceBreakdown ?? []).map((item) => <span key={`workspace-${item.key}`}>{item.key}<b>{item.count}</b></span>)}
-            {outcome?.workspaceBreakdown.length ? null : <em>暂无项目分布</em>}
-          </div>
-          <div className="memory-breakdown-list">
-            <strong>类别分布</strong>
-            {(outcome?.categoryBreakdown ?? []).map((item) => <span key={`category-${item.key}`}>{item.key}<b>{item.count}</b></span>)}
-            {outcome?.categoryBreakdown.length ? null : <em>暂无类别分布</em>}
-          </div>
-        </div>
-        <h3 className="memory-outcome-subtitle">最近真实召回</h3>
-        <div className="memory-recall-list">
-          {outcome?.recentRecalls.length ? outcome.recentRecalls.map((event) => (
-            <article className="memory-recall-card" key={event.id}>
-              <div><strong>{event.agent || "unknown"}</strong><span>{recallMethodLabel(event.eventType)} · {new Date(event.createdAt * 1000).toLocaleString()}</span></div>
-              <p>查询：{event.querySummary || "未记录查询摘要"}</p>
-              <blockquote>{event.memory?.text || "命中记忆当前不可用"}</blockquote>
-            </article>
-          )) : <Empty text="尚无可验证召回记录" />}
-        </div>
-      </Panel>
-
-      <Panel title="待确认" detail="候选记忆在确认后才会进入长期记忆；忽略不会删除其他记忆。">
-        <div className="memory-outcome-list">
-          {pendingCandidates.length ? pendingCandidates.map((candidate) => (
-            <article className="memory-outcome-item" key={candidate.id}>
-              <span>{candidate.category} · {candidate.workspace} · {candidate.source}</span>
-              <p>{candidate.text}</p>
-              {candidate.reason ? <em>{candidate.reason}</em> : null}
-              <div className="action-row">
-                <Button onClick={() => void actions.approveMemoryAssistCandidate(candidate.id)} size="sm">确认记忆</Button>
-                <Button onClick={() => void actions.rejectMemoryAssistCandidate(candidate.id)} size="sm" variant="outline">忽略</Button>
-              </div>
-            </article>
-          )) : <Empty text="当前没有待确认记忆。" />}
-        </div>
-      </Panel>
-
-      <Panel title="项目记忆" detail="搜索、编辑以及归档或恢复当前项目与 global 记忆。">
-        <div className="memory-source-toolbar">
-          <label className="memory-archive-toggle">
-            <input checked={showArchived} onChange={(event) => { const next = event.currentTarget.checked; setShowArchived(next); void actions.refreshMemoryAssist(false, next); }} type="checkbox" />
-            <span>显示归档</span>
-          </label>
-          <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline"><RefreshCw className="h-4 w-4" />刷新</Button>
-        </div>
-        <div className="memory-assist-search">
-          <label className="ops-form-field">
-            <span>搜索项目记忆</span>
-            <input onChange={(event) => setSearchQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived); }} placeholder="搜索项目约定、历史修复或进度" value={searchQuery} />
-          </label>
-          <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">搜索</Button>
-        </div>
-        {matches.length ? (
-          <div className="memory-assist-list">
-            <strong>搜索结果：{search?.memory.query}</strong>
-            {matches.slice(0, 8).map((match) => <div className="memory-assist-row" key={`outcome-match-${match.item.id}`}><span>{match.item.category} · {match.item.workspace}</span><p>{match.item.text}</p></div>)}
-          </div>
-        ) : search ? <Empty text="没有匹配到项目记忆。" /> : null}
-        <details className="memory-project-list">
-          <summary>查看项目记忆（{projectItems.length}）</summary>
-          <div className="memory-assist-list">
-          {projectItems.length ? projectItems.map((item) => {
-            const editing = editingMemoryId === item.id;
-            return (
-              <article className={`memory-assist-row memory-lesson-card${item.tier === "archived" ? " memory-archived" : ""}`} key={`project-${item.id}`}>
-                <span>{item.category} · {item.workspace}</span>
-                {editing ? <><label className="ops-form-field"><span>分类</span><input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} /></label><label className="ops-form-field"><span>记忆内容</span><textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} /></label><div className="action-row"><Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm"><Save className="h-4 w-4" />保存</Button><Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button></div></> : <><p>{item.text}</p><MemoryTierControls actions={actions} item={item} /><Button onClick={() => beginEditMemory(item)} size="sm" variant="outline"><Pencil className="h-4 w-4" />编辑</Button></>}
-              </article>
-            );
-          }) : <Empty text="当前项目暂无记忆。" />}
-          </div>
-        </details>
-      </Panel>
-
-      <details className="memory-diagnostics">
-        <summary>高级诊断</summary>
-        <div className="memory-diagnostics-body">
-      <Panel title="记忆存储" detail="迁移会保留原数据；完成后需要重启正在运行的 Codex、Launcher 和 MCP。">
-        <div className="ops-status-list">
-          <StatusRow label="当前目录" status={currentDbPath ? "ok" : "not_checked"} value={currentDataDir} />
-          <StatusRow label="目标目录" status={selectedDataDir ? "running" : "not_checked"} value={selectedDataDir || "尚未选择"} />
-        </div>
-        <div className="action-row">
-          <Button disabled={storageMigrationBusy} onClick={() => void chooseDataDir()} size="sm" variant="outline">
-            <FolderOpen className="h-4 w-4" />
-            选择目录
-          </Button>
-          <Button
-            disabled={!normalizedSelectedDataDir || normalizedSelectedDataDir === normalizedCurrentDataDir || storageMigrationBusy}
-            onClick={() => void migrateData()}
-            size="sm"
-          >
-            <FileDown className="h-4 w-4" />
-            {storageMigrationBusy ? "迁移中" : "迁移数据"}
-          </Button>
-        </div>
-      </Panel>
-      <section className="memory-layer-grid" aria-label="盘古记忆三层链路状态">
-        <Panel title="历史会话采集层" detail="主路径：从 Codex / Claude 本地可解析会话源建立采集证据。">
-          <div className="ops-status-list">
-            <StatusRow label="Codex 会话源" status="running" value="session DB / rollout 文件" />
-            <StatusRow label="Claude 会话源" status="running" value="claude-code / local-agent / audit / .claude" />
-            <StatusRow label="采集记录" status={(status?.memory.totalCaptures ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalCaptures ?? 0} 条`} />
-            <StatusRow label="扫描模式" status="running" value={(status?.memory.totalCaptures ?? 0) > 0 ? "增量采集中" : "首次全量待建立"} />
-            <StatusRow label="最近扫描" status={latestWorkspaceCapture > 0 ? "ok" : "not_checked"} value={latestWorkspaceCapture ? new Date(latestWorkspaceCapture * 1000).toLocaleString() : "等待扫描"} />
-          </div>
-        </Panel>
-        <Panel title="注入实时监听层" detail="辅助路径：只负责页面实时状态、workspace/thread 与最近输入。">
-          <div className="ops-status-list">
-            <StatusRow label="Codex 注入" status={status?.memory.codexInjected ? "ok" : "not_checked"} value={status?.memory.codexInjected ? "已注入" : "等待 Codex 注入"} />
-            <StatusRow label="Codex 对话监控" status={status?.memory.active ? "running" : "not_checked"} value={status?.memory.active ? "监控中" : "等待会话变化"} />
-            <StatusRow label="当前 workspace/thread" status={workspaceSummary ? "ok" : "not_checked"} value={workspaceSummary} />
-            <StatusRow label="Claude 使用方式" status="ok" value="MCP 共享，不走前端注入" />
-          </div>
-        </Panel>
-        <Panel title="核心算法裁判层" detail="裁判路径：去重、分类、留存、归档、手册生成与自检。">
-          <div className="ops-status-list">
-            <StatusRow label="待处理候选" status={(status?.memory.pendingCandidates ?? 0) > 0 ? "running" : "ok"} value={`${status?.memory.pendingCandidates ?? 0} 条`} />
-            <StatusRow label="长期记忆" status={(status?.memory.totalItems ?? 0) > 0 ? "ok" : "not_checked"} value={`${status?.memory.totalItems ?? 0} 条`} />
-            <StatusRow label="已归档" status={archivedItems.length ? "ok" : "not_checked"} value={`${archivedItems.length} 条`} />
-            <StatusRow label="注入手册" status={manualItem ? "ok" : "not_checked"} value={manualItem ? "已进入注入缓存" : "等待提炼"} />
-            <StatusRow label="自检摘要" status={selfCheck?.report.status ?? "not_checked"} value={selfCheckSummary} />
-          </div>
-        </Panel>
-      </section>
-
-      <Panel title="增量采集状态" detail="首次建立采集进度；后续只扫描新增会话或已有会话新增上下文。">
-        <div className="memory-stat-grid">
-          <InfoRow label="首次基线" value={firstBaselineAt > 0 ? `已建立 · ${new Date(firstBaselineAt * 1000).toLocaleString()}` : "等待首次全量建立"} />
-          <InfoRow label="采集进度" value={`${captureProgress?.totalSources ?? 0} 个源已建立采集进度`} />
-          <InfoRow label="Codex 源" value={`${captureProgress?.codexSources ?? 0} 个 · session DB / rollout / 实时注入`} />
-          <InfoRow label="Claude 源" value={`${captureProgress?.claudeSources ?? 0} 个 · audit.jsonl / local_*.json / .claude/sessions`} />
-          <InfoRow label="新增上下文" value={`${captureProgress?.newContextCount ?? 0} 条 · 最近一次扫描`} />
-          <InfoRow label="跳过未变化" value={`${captureProgress?.skippedUnchangedSessions ?? 0} 个会话源 · 最近一次扫描`} />
-        </div>
-        <div className="ops-note">
-          <ShieldCheck className="h-4 w-4" />
-          <span>采集层只拿全可解析对话上下文；留存、去重、分类、归档、手册生成统一交给盘古核心算法。</span>
-        </div>
-      </Panel>
-
-      <Panel title="会话经验教训注入手册" detail="单个 Markdown 注入文档；前端只展示核心算法生成内容与目录，不写死业务章节。">
-        <div className="memory-manual-toolbar">
-          <Button onClick={() => void actions.refineLongTermMemory()} size="sm">
-            <PencilRuler className="h-4 w-4" />
-            重新提炼会话经验
-          </Button>
-          {manualEditing ? (
-            <>
-              <Button disabled={!manualDraft.trim()} onClick={() => void saveManual()} size="sm" variant="outline">
-                <Save className="h-4 w-4" />
-                保存
-              </Button>
-              <Button onClick={() => setManualEditing(false)} size="sm" variant="outline">取消</Button>
-            </>
-          ) : (
-            <Button onClick={beginManualEdit} size="sm" variant="outline">
-              <Pencil className="h-4 w-4" />
-              编辑注入手册
-            </Button>
-          )}
-          <Button onClick={() => void copyManual()} size="sm" variant="outline">
-            <Copy className="h-4 w-4" />
-            复制全文
-          </Button>
-          <Button onClick={() => setShowSources(true)} size="sm" variant="outline">查看来源条目</Button>
-        </div>
-        <div className="memory-manual-meta">
-          <InfoRow label="更新时间" value={manualItem ? new Date(manualItem.updatedAt * 1000).toLocaleString() : "fallback 预览"} />
-          <InfoRow label="来源统计" value={`长期记忆 ${status?.memory.totalItems ?? 0} 条 / 采集记录 ${status?.memory.totalCaptures ?? 0} 条 / 工作区 ${status?.memory.workspaces?.length ?? 0} 个`} />
-          <InfoRow label="同步注入缓存" value={status?.memory.injectSummaryCachePath ? compactPath(status.memory.injectSummaryCachePath) : "等待生成"} />
-          <InfoRow label="生成方式" value={manualItem?.source || "fallback"} />
-        </div>
-        <div className="memory-manual-layout">
-          <aside className="memory-manual-toc">
-            <strong>目录</strong>
-            {headings.length ? headings.map((heading) => (
-              <span className={heading.depth === 3 ? "child" : ""} key={`${heading.depth}:${heading.title}`}>{heading.title}</span>
-            )) : <em>暂无标题</em>}
-          </aside>
-          {manualEditing ? (
-            <textarea className="ops-textarea mono memory-manual-editor" onChange={(event) => setManualDraft(event.currentTarget.value)} value={manualDraft} />
-          ) : (
-            <pre className="memory-manual-document">{manualText}</pre>
-          )}
-        </div>
-        <div className="ops-note">
-          <Archive className="h-4 w-4" />
-          <span>压缩整合会将源条目软归档而非物理删除；手册使用稳定 ID 增量更新。</span>
-        </div>
-      </Panel>
-
-      <Panel title="遗忘曲线与记忆分层" detail="Ebbinghaus 衰减 + active/archive 两层；注入只看 active 层。">
-        <div className="memory-stat-grid">
-          <InfoRow label="active 记忆" value={`${activeItems.length} 条`} />
-          <InfoRow label="archived 记忆" value={`${archivedItems.length} 条`} />
-          <InfoRow label="常驻豁免" value={`${exemptItems.length} 条`} />
-          <InfoRow label="平均 strength" value={`${Math.round(avgStrength * 100)}%`} />
-          <InfoRow label="平均 retention" value={`${Math.round(avgRetention * 100)}%`} />
-          <InfoRow label="注入层" value="只使用 active 层" />
-        </div>
-        <div className="ops-note">
-          <Pin className="h-4 w-4" />
-          <span>manual / safety-rule / project-rule 等常驻记忆不受自动归档影响。归档是软标记，可恢复，不是删除。</span>
-        </div>
-        <div className="memory-tier-preview">
-          {sourceItems.slice(0, 6).map((item) => (
-            <div className={`memory-assist-row${item.tier === "archived" ? " memory-archived" : ""}`} key={`tier-${item.id}`}>
-              <span>{item.category} · {item.workspace}</span>
-              <p>{item.text}</p>
-              <MemoryTierControls actions={actions} item={item} />
-            </div>
-          ))}
-          {sourceItems.length ? null : <Empty text="暂无可展示的记忆分层条目。" />}
-        </div>
-      </Panel>
-
-      <Panel title="MCP 跨 Agent 共享" detail="Claude/Codex 通过同一份 sqlite 与 MCP 工具共享盘古记忆。">
-        <div className="memory-stat-grid">
-          <InfoRow label="MCP 开关" value={mcpEnabled ? "已开启" : "未开启"} />
-          <InfoRow label="总开关" value={memoryEnabled ? "盘古记忆已启用" : "盘古记忆未启用"} />
-          <InfoRow label="共享数据库" value={compactPath(status?.memory.dbPath)} />
-          <InfoRow label="MCP 注册状态" value={mcpEnabled ? "可注册/刷新" : "等待开启后注册"} />
-          <InfoRow label="Claude 使用方式" value="通过 MCP 共享同一份盘古记忆" />
-          <InfoRow label="Codex 使用方式" value="前端注入 + 本地会话采集 + MCP 可选" />
-        </div>
-        <div className="memory-tool-grid">
-          {[
-            ["memory_search", "检索记忆"],
-            ["memory_list", "列出记忆"],
-            ["memory_recent", "最近记忆"],
-            ["memory_learn", "写入记忆"],
-          ].map(([name, detail]) => (
-            <div className="memory-tool-card" key={name}>
-              <strong>{name}</strong>
-              <span>{detail}</span>
-            </div>
-          ))}
-        </div>
-        <div className="action-row">
-          <Button onClick={() => void actions.registerMemoryMcpServer()} size="sm">
-            <Network className="h-4 w-4" />
-            注册 MCP 到 Claude/Codex
-          </Button>
-          <Button onClick={() => void actions.refreshMemoryAssist()} size="sm" variant="outline">
-            <RefreshCw className="h-4 w-4" />
-            刷新 MCP 状态
-          </Button>
-        </div>
-      </Panel>
-
-      <Panel title="来源条目审查" detail="默认折叠；支持搜索、显示归档、编辑、删除、归档/恢复、导入导出。">
-        <div className="memory-source-toolbar">
-          <Button onClick={() => setShowSources((value) => !value)} size="sm" variant="outline">
-            {showSources ? "折叠来源条目" : "展开来源条目"}
-          </Button>
-          <label className="memory-archive-toggle">
-            <input
-              checked={showArchived}
-              onChange={(event) => {
-                const next = event.currentTarget.checked;
-                setShowArchived(next);
-                void actions.refreshMemoryAssist(false, next);
-              }}
-              type="checkbox"
-            />
-            <span>显示归档</span>
-          </label>
-          <Button onClick={() => void actions.exportMemoryAssist()} size="sm" variant="outline">
-            <FileDown className="h-4 w-4" />
-            导出
-          </Button>
-        </div>
-        {showSources ? (
-          <>
-            <div className="memory-assist-search">
-              <label className="ops-form-field">
-                <span>搜索来源条目</span>
-                <input
-                  onChange={(event) => setSearchQuery(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && searchQuery.trim()) void actions.searchMemoryAssist(searchQuery, showArchived);
-                  }}
-                  placeholder="搜索项目约定、经验教训、历史修复..."
-                  value={searchQuery}
-                />
-              </label>
-              <Button disabled={!searchQuery.trim()} onClick={() => void actions.searchMemoryAssist(searchQuery, showArchived)} size="sm" variant="outline">
-                <RefreshCw className="h-4 w-4" />
-                搜索
-              </Button>
-            </div>
-            {matches.length ? (
-              <div className="memory-assist-list">
-                <strong>搜索结果：{search?.memory.query}</strong>
-                {matches.slice(0, 8).map((match) => (
-                  <div className="memory-assist-row" key={`match-${match.item.id}`}>
-                    <span>{match.item.category} · {match.item.workspace} · score {match.score.toFixed(2)}</span>
-                    <p>{match.item.text}</p>
-                    {match.matchedKeywords.length ? <em>命中：{match.matchedKeywords.slice(0, 8).join(" / ")}</em> : null}
-                  </div>
-                ))}
-              </div>
-            ) : search ? <Empty text="没有匹配到来源条目。" /> : null}
-            <div className="memory-assist-list">
-              {sourceItems.length ? sourceItems.map((item) => {
-                const editing = editingMemoryId === item.id;
-                const archived = item.tier === "archived";
-                return (
-                  <div className={`memory-assist-row memory-lesson-card${archived ? " memory-archived" : ""}`} key={item.id}>
-                    <span>{item.category} · {item.workspace}</span>
-                    {editing ? (
-                      <>
-                        <label className="ops-form-field">
-                          <span>分类</span>
-                          <input onChange={(event) => setEditingCategory(event.currentTarget.value)} value={editingCategory} />
-                        </label>
-                        <label className="ops-form-field">
-                          <span>来源内容</span>
-                          <textarea className="ops-textarea compact" onChange={(event) => setEditingText(event.currentTarget.value)} value={editingText} />
-                        </label>
-                        <div className="action-row">
-                          <Button disabled={!editingText.trim()} onClick={() => void saveEditedMemory(item)} size="sm">
-                            <Save className="h-4 w-4" />
-                            保存
-                          </Button>
-                          <Button onClick={cancelEditMemory} size="sm" variant="outline">取消</Button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <p>{item.text}</p>
-                        <MemoryTierControls actions={actions} item={item} />
-                        <div className="action-row">
-                          <Button onClick={() => beginEditMemory(item)} size="sm" variant="outline">
-                            <Pencil className="h-4 w-4" />
-                            编辑
-                          </Button>
-                          <Button onClick={() => void actions.deleteMemoryAssistItem(item.id)} size="sm" variant="outline">
-                            <Trash2 className="h-4 w-4" />
-                            删除
-                          </Button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              }) : <Empty text="暂无来源条目。" />}
-            </div>
-            <div className="memory-assist-transfer">
-              <div className="memory-assist-list">
-                <strong>导出 JSON</strong>
-                <textarea className="ops-textarea compact mono" readOnly value={exportJson} />
-              </div>
-              <div className="memory-assist-list">
-                <strong>导入 JSON</strong>
-                <textarea className="ops-textarea compact mono" onChange={(event) => setImportText(event.currentTarget.value)} placeholder="粘贴 memory-assist/v1 导出 JSON。" value={importText} />
-                <div className="ops-toggle-line">
-                  <span>替换已有记忆</span>
-                  <ToggleSwitch checked={replaceExisting} onChange={setReplaceExisting} />
-                </div>
-                <Button disabled={!importText.trim()} onClick={() => void actions.importMemoryAssist(importText, replaceExisting)} size="sm">
-                  <FileUp className="h-4 w-4" />
-                  导入
-                </Button>
-              </div>
-            </div>
-          </>
-        ) : <Empty text="来源条目已折叠。点击展开后可审查、搜索、编辑和归档恢复。" />}
-      </Panel>
-        </div>
-      </details>
-    </div>
-  );
-}
-
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
   codexSessionContext,
@@ -4264,11 +2999,6 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["Fast 按钮", "codexAppServiceTierControls"],
     ["图片覆盖", "codexAppImageOverlayEnabled"],
     ["Codex 目标", "codexGoalsEnabled"],
-    ["盘古记忆", "memoryAssistEnabled"],
-    ["盘古记忆 DOM 标识", "memoryAssistInjectEnabled"],
-    ["自动学习", "memoryAssistAutoSuggestEnabled"],
-    ["记忆 LLM 摘要", "memoryAssistLlmSummaryEnabled"],
-    ["记忆 MCP 共享", "memoryAssistMcpEnabled"],
     ["CLI 包装器", "cliWrapperEnabled"],
     ["本地工作流", "multicaWorkspaceEnabled"],
   ] as const;

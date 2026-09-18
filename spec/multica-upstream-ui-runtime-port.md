@@ -127,3 +127,88 @@ header、命令、文件路径、环境变量或浏览器传来的权限声明�
 - 类型化 Adapter、DTO/schema、存储迁移、事件同步、权限/幂等测试。
 - Codex 注入挂载器和端到端 UI 测试。
 - 对应验收文档、构建产物、运行/回滚说明。
+
+## 2026-09-18 Implementation Alignment
+
+The user reaffirmed the full three-page upstream port, not another revision of
+the handwritten board. The current mount returns an unavailable placeholder,
+the adapter only partially implements Issues, and Vite resolves a machine-local
+checkout. These are implementation gaps, not accepted scope reductions.
+
+- Vendor the reviewed frontend dependency closure with hashes and attribution;
+  remove the absolute external build dependency and the `--noCheck` check.
+- Mount actual upstream MyIssuesPage, AutopilotsPage and AgentsPage within the
+  existing isolated Codex content host. Preserve native navigation and background
+  execution synchronization across page hides and clean up on reinjection.
+- Route upstream data operations through the local typed adapter. Editable Agent
+  definitions and native historical subagent inventory remain distinct sources.
+- Enable native lifecycle operations only from verified current-page protocol
+  evidence; never infer execution support merely from successful Skills listing.
+- Build and embed the workflow bundle in CCP. Validate the adapter, lifecycle,
+  mount, builds and distribution inputs independently; track real-window evidence
+  separately when the UI connection is unavailable.
+
+### Current Native Host Compatibility
+
+The installed Windows Codex 26.915.3509.0 asset
+`webview/assets/app-initial-f61fcec072b5.js` exports its page-owned
+AppServerManager accessor as `Jpn` (internal `tp`, verified SHA-256
+`ba7fe9c3b375d7766f9b8e9b686d1bc1987b6a45d5f42aeab9368d81f374dbf0`). It obtains the manager via
+`appScope.get` and returns `manager.forHost(hostId)`. `FRt` in this asset is a
+string predicate, not a client factory. Bind this adapter to the audited asset
+name; unknown minified exports are not guessed or executed.
+
+Use a read-only Skills inventory probe on this existing initialized client.
+Lifecycle and native Skill input support comes from the audited protocol mapping,
+not from inventory success alone. Subagent support remains independently gated.
+No test probe starts a model turn, modifies a provider, or creates a second host.
+
+### Local Command and Capacity Invariants
+
+Persist workspace mutation receipts with the same local state update. The Core
+receipt binds the command ID, original request signature, operation and actual
+payload digest; replay with different content is a conflict. Recover the pending
+assignment/Agent journal before returning a completed receipt. A browser-generated
+key is only replayable after refresh if that original key is retained.
+
+Enforce each saved Agent's `max_concurrent_tasks` (default 1) atomically under the
+execution-store lock for explicit creation, assignment dispatch, lease claims
+and continuation. Pending but unresolved native calls retain capacity even after
+their lease expires; recovery of that same binding remains possible. Different
+Continue/Cancel commands for one binding are mutually exclusive while reserved.
+Status polling for the same previous turn may advance its revision without
+discarding a successfully returned continuation. Never merge across a different
+turn or override an explicit cancellation.
+
+## Completion Pass: 2026-09-18
+
+The user requires completion of the existing full-port scope, not a partial
+handoff. The API matrix's missing Builder, webhook, property and preference
+workflows are delivery requirements. Implement persisted definitions, native
+execution bindings, validated mutations, replay and real error handling before
+marking their original controls operational. Shared controls reachable from these
+three pages are included; cloud billing, external runtimes and a second model
+executor remain excluded.
+
+- Property catalogs and per-issue values use typed validation and CAS. View
+  preferences belong to the authoritative local user and survive restart.
+- Builder sessions persist drafts and native execution history. Generation,
+  continuation and cancellation use the current page Host only.
+- Webhook provisioning, rotation, deliveries and replay use the existing helper
+  and execution queue, with bounded storage, credential validation and deduplication.
+  No additional listener, public exposure or secret-bearing logs are introduced.
+- Runtime-owned model/security/environment settings remain native-authoritative;
+  editable local metadata must not falsely claim an applied runtime override.
+- Browser-automation authentication failures are distinct from CCP runtime
+  failures. Use the working local Windows UI channel for native observation and
+  test the actual default Release. Do not change user authentication to make a
+  test tool work. Record screenshots, real bindings and unchanged user configuration.
+
+### Builder Capability and Independent Run Regression
+
+- Bootstrap the original frontend capability store from the local API config before
+  rendering the forms. Persist generated conversation starters when creating an
+  Agent from a saved Builder draft; do not discard starters to bypass a UI gate.
+- Independent run-only automation occurrences each start at attempt 1. Only an
+  explicit parent attempt shares a retry chain. Replaying an occurrence returns
+  its existing binding without consuming another attempt.

@@ -51,6 +51,7 @@ create_app() {
 
   rm -rf "$app_dir"
   mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+  node "$ROOT/scripts/release/stage-multica-notices.mjs" "$app_dir/Contents/Resources/third-party/multica"
   if [ -n "$MULTICA_RESOURCE_DIR" ]; then
     if [ ! -d "$MULTICA_RESOURCE_DIR" ]; then
       echo "error: Multica resource directory not found: $MULTICA_RESOURCE_DIR" >&2
@@ -107,20 +108,6 @@ create_app() {
 PLIST
 }
 
-install_app_runtime() {
-  local runtime_name="$1"
-  local binary_path="$BINARY_DIR/$runtime_name"
-  local destination="$STAGE/Claude Codex Pro.app/Contents/MacOS/$runtime_name"
-
-  if [ ! -x "$binary_path" ]; then
-    echo "error: runtime binary not found or not executable: $binary_path" >&2
-    return 1
-  fi
-
-  cp "$binary_path" "$destination"
-  chmod +x "$destination"
-}
-
 describe_macos_binary() {
   local label="$1"
   local binary_path="$2"
@@ -144,13 +131,10 @@ sign_app() {
   local app_dir="$1"
   local executable
   local main_executable
-  local mcp_runtime
   executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_dir/Contents/Info.plist")"
   main_executable="$app_dir/Contents/MacOS/$executable"
-  mcp_runtime="$app_dir/Contents/MacOS/claude-codex-pro-mcp"
 
   echo "codesign host architecture: $(uname -m)"
-  sign_and_verify_binary "MCP runtime" "$mcp_runtime"
   sign_and_verify_binary "main executable" "$main_executable"
   codesign --force --sign - "$app_dir"
   codesign --verify --deep --strict --verbose=4 "$app_dir"
@@ -159,6 +143,7 @@ sign_app() {
 
 verify_app() {
   local app_dir="$1"
+  node "$ROOT/scripts/release/stage-multica-notices.mjs" "$app_dir/Contents/Resources/third-party/multica" --verify
   local plist="$app_dir/Contents/Info.plist"
   local plutil_bin
   plutil_bin="$(command -v plutil || true)"
@@ -175,7 +160,7 @@ verify_app() {
     echo "error: codesign verification failed for $app_dir" >&2
     return 1
   }
-  for runtime in claude-codex-pro claude-codex-pro-mcp; do
+  for runtime in claude-codex-pro; do
     if [ -f "$app_dir/Contents/MacOS/$runtime" ]; then
       codesign --verify --strict --verbose=4 "$app_dir/Contents/MacOS/$runtime" || {
         echo "error: runtime codesign verification failed for $runtime in $app_dir" >&2
@@ -187,7 +172,7 @@ verify_app() {
 
 verify_app_runtime_before_signing() {
   local macos_dir="$STAGE/Claude Codex Pro.app/Contents/MacOS"
-  for runtime in claude-codex-pro claude-codex-pro-mcp; do
+  for runtime in claude-codex-pro; do
     if [ ! -x "$macos_dir/$runtime" ]; then
       echo "error: app bundle runtime missing or not executable: $runtime" >&2
       return 1
@@ -197,7 +182,6 @@ verify_app_runtime_before_signing() {
 
 prepare_icon
 create_app "Claude Codex Pro" "claude-codex-pro" "$BINARY_DIR/claude-codex-pro" "com.damonzs.claudecodexpro" "false"
-install_app_runtime "claude-codex-pro-mcp"
 ln -s /Applications "$STAGE/Applications"
 
 verify_app_runtime_before_signing

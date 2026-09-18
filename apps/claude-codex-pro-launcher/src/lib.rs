@@ -5,10 +5,6 @@ use claude_codex_pro_core::codex_execution::{
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
-use claude_codex_pro_core::memory_assist::{
-    MemoryAssistStore, MemoryCandidateRequest, MemoryCaptureRequest, MemoryItemRequest,
-    MemoryQueryRequest, MemorySelfCheckRequest, MemorySessionRequest,
-};
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
 use claude_codex_pro_core::routes::{
     BridgeContext, BridgeDataService, BridgeRuntimeService, CoreRuntimeService,
@@ -16,6 +12,7 @@ use claude_codex_pro_core::routes::{
 use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -587,6 +584,31 @@ impl Default for LauncherDataService {
 
 #[async_trait::async_trait]
 impl BridgeDataService for LauncherDataService {
+    async fn session_availability(&self, session_ids: Vec<String>) -> anyhow::Result<Vec<String>> {
+        let requested = session_ids
+            .into_iter()
+            .flat_map(|id| {
+                let bare = id.strip_prefix("local:").unwrap_or(&id).to_string();
+                [id, bare]
+            })
+            .collect::<HashSet<_>>();
+        let paths = self.candidate_db_paths();
+        let backup_dir = self.backup_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut available = HashSet::new();
+            for path in paths {
+                let adapter = claude_codex_pro_data::SQLiteStorageAdapter::new(
+                    path,
+                    claude_codex_pro_data::BackupStore::new(backup_dir.clone()),
+                );
+                available.extend(adapter.available_session_ids(&requested)?);
+            }
+            Ok(available.into_iter().collect())
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("session availability task failed: {error}"))?
+    }
+
     async fn delete(&self, session: SessionRef) -> anyhow::Result<DeleteResult> {
         let db_paths = self.candidate_db_paths();
         let backup_store = claude_codex_pro_data::BackupStore::new(self.backup_dir.clone());
@@ -684,8 +706,8 @@ struct LauncherRuntimeService {
     codex_execution: Arc<CodexPageExecutionClient>,
     codex_page_host: CodexPageHostTransport,
     multica_runtime: CoreRuntimeService,
+    webhook_store: Mutex<claude_codex_pro_core::multica_webhooks::MulticaWebhookStore>,
     user_scripts: UserScriptManager,
-    memory_store: MemoryAssistStore,
 }
 
 impl LauncherRuntimeService {
@@ -695,20 +717,26 @@ impl LauncherRuntimeService {
             codex_page_execution_service(Arc::clone(&websocket_url))
                 .expect("static Codex page host binding must be valid");
         let multica_runtime = CoreRuntimeService::new(debug_port, StatusStore::default())
-            .with_codex_execution_service(codex_execution.clone());
+            .with_codex_execution_service(codex_execution.clone())
+            .with_codex_page_transport(Arc::new(codex_page_host.clone()));
         Self {
             debug_port: Mutex::new(debug_port),
             websocket_url,
             codex_execution,
             codex_page_host,
             multica_runtime,
+            webhook_store: Mutex::new(Default::default()),
             user_scripts,
-            memory_store: MemoryAssistStore::default(),
         }
     }
 
     fn set_debug_port(&self, debug_port: u16) {
         *self.debug_port.lock().unwrap() = debug_port;
+    }
+
+    fn set_helper_port(&self, helper_port: u16) {
+        let mut store = self.webhook_store.lock().unwrap();
+        *store = store.clone().with_helper_port(helper_port);
     }
 
     fn set_websocket_url(&self, websocket_url: &str) {
@@ -718,6 +746,77 @@ impl LauncherRuntimeService {
 
 #[async_trait::async_trait]
 impl BridgeRuntimeService for LauncherRuntimeService {
+    async fn multica_builder(
+        &self,
+        request: claude_codex_pro_core::multica_builder::BuilderRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime.multica_builder(request).await
+    }
+
+    async fn multica_native_domain(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaNativeDomainRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime.multica_native_domain(request).await
+    }
+
+    async fn multica_workspace_reorder_statuses(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaStatusReorderRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime
+            .multica_workspace_reorder_statuses(request)
+            .await
+    }
+
+    async fn multica_agent_create(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaAgentCreateRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime.multica_agent_create(request).await
+    }
+
+    async fn multica_skill_bindings_replace(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaSkillBindingsReplaceAllRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime
+            .multica_skill_bindings_replace(request)
+            .await
+    }
+
+    async fn multica_execution_dispatch(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaExecutionDispatchRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime
+            .multica_execution_dispatch(request)
+            .await
+    }
+
+    async fn dispatch_pending_assignment(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime
+            .dispatch_pending_assignment(binding_id, expected_revision, lease_token)
+            .await
+    }
+
+    async fn multica_webhooks(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaWebhookRequest,
+    ) -> anyhow::Result<Value> {
+        let store = self.webhook_store.lock().unwrap().clone();
+        self.multica_runtime
+            .clone()
+            .with_multica_webhook_store(store)
+            .multica_webhooks(request)
+            .await
+    }
+
     async fn user_script_inventory(&self) -> anyhow::Result<Value> {
         self.user_scripts.inventory()
     }
@@ -908,6 +1007,13 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         BridgeRuntimeService::multica_workspace_delete(&self.multica_runtime, request).await
     }
 
+    async fn multica_workspace_command(
+        &self,
+        request: claude_codex_pro_core::routes::MulticaWorkspaceCommandRequest,
+    ) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_workspace_command(&self.multica_runtime, request).await
+    }
+
     async fn multica_skill_resolve(
         &self,
         selection: claude_codex_pro_core::multica_execution::SkillBindingSelection,
@@ -1083,102 +1189,8 @@ impl BridgeRuntimeService for LauncherRuntimeService {
     ) -> anyhow::Result<Value> {
         BridgeRuntimeService::multica_autopilot_transition(&self.multica_runtime, request).await
     }
-
-    async fn memory_status(&self) -> anyhow::Result<Value> {
-        let mut value = serde_json::to_value(self.memory_store.status()?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_session(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemorySessionRequest =
-            serde_json::from_value(payload).unwrap_or(MemorySessionRequest {
-                workspace: String::new(),
-                query: String::new(),
-                max_items: 5,
-            });
-        let mut value = serde_json::to_value(self.memory_store.session_summary(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_search(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryQueryRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.query(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_learn(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryItemRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.learn_item(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_candidates(&self, payload: Value) -> anyhow::Result<Value> {
-        if payload
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|text| !text.trim().is_empty())
-            .unwrap_or(false)
-        {
-            let request: MemoryCandidateRequest = serde_json::from_value(payload)?;
-            let mut value = serde_json::to_value(self.memory_store.create_candidate(request)?)?;
-            value["status"] = json!("ok");
-            return Ok(value);
-        }
-        let workspace = payload
-            .get("workspace")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let include_global = payload
-            .get("includeGlobal")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        Ok(json!({
-            "status": "ok",
-            "candidates": self.memory_store.list_candidates(workspace, include_global)?
-        }))
-    }
-
-    async fn memory_capture(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemoryCaptureRequest = serde_json::from_value(payload)?;
-        let mut value = serde_json::to_value(self.memory_store.record_capture(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_resolve_workspace(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(claude_codex_pro_core::routes::resolve_codex_memory_workspace_response(&payload))
-    }
-
-    async fn memory_approve(&self, payload: Value) -> anyhow::Result<Value> {
-        let id = payload
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut value = serde_json::to_value(self.memory_store.approve_candidate(id)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_reject(&self, payload: Value) -> anyhow::Result<Value> {
-        let id = payload
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut value = serde_json::to_value(self.memory_store.reject_candidate(id)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
-    }
-
-    async fn memory_selfcheck(&self, payload: Value) -> anyhow::Result<Value> {
-        let request: MemorySelfCheckRequest =
-            serde_json::from_value(payload).unwrap_or(MemorySelfCheckRequest { repair: false });
-        let mut value = serde_json::to_value(self.memory_store.run_selfcheck(request)?)?;
-        value["status"] = json!("ok");
-        Ok(value)
+    async fn multica_autopilot_tick(&self) -> anyhow::Result<Value> {
+        BridgeRuntimeService::multica_autopilot_tick(&self.multica_runtime).await
     }
 }
 
@@ -1280,6 +1292,7 @@ async fn try_inject_with_context(
     ctx: BridgeContext,
     runtime: Arc<LauncherRuntimeService>,
 ) -> anyhow::Result<()> {
+    runtime.set_helper_port(helper_port);
     let targets = claude_codex_pro_core::cdp::list_targets(debug_port).await?;
     let target = claude_codex_pro_core::cdp::pick_injectable_codex_page_target(&targets)?;
     let websocket_url = target
@@ -1388,6 +1401,77 @@ fn default_user_scripts_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn launcher_webhook_dto_tracks_selected_port_and_reinjection() {
+        use claude_codex_pro_core::multica_webhooks::MulticaWebhookStore;
+        use claude_codex_pro_core::multica_workspace::{
+            LocalMulticaWorkspaceStore, MulticaWorkspaceResourceKey,
+        };
+        use claude_codex_pro_core::routes::MulticaWebhookRequest;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ccp-launcher-webhook-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let workspace = LocalMulticaWorkspaceStore::new(dir.join("workspace.json"));
+        let mut runtime = LauncherRuntimeService::new(
+            0,
+            UserScriptManager::new(
+                dir.join("builtin"),
+                dir.join("user"),
+                dir.join("scripts.json"),
+            ),
+        );
+        runtime.multica_runtime = runtime
+            .multica_runtime
+            .with_multica_workspace_store(workspace);
+        runtime.webhook_store = Mutex::new(MulticaWebhookStore::new(dir.join("webhooks.json")));
+        runtime.multica_workspace_upsert(claude_codex_pro_core::routes::MulticaWorkspaceUpsertRequest {
+            resource: MulticaWorkspaceResourceKey::Autopilots,
+            entity: json!({"id":"pilot","title":"Webhook","triggers":[{"id":"hook","kind":"webhook","enabled":true}]}),
+            expected_revision: Some(0), command_id: None, command_signature: None,
+            suppress_run: false, handoff_note: None,
+        }).await.unwrap();
+        runtime.set_helper_port(43129);
+        let provision = runtime
+            .multica_webhooks(MulticaWebhookRequest::Provision {
+                autopilot_id: "pilot".into(),
+                trigger_id: "hook".into(),
+                command_id: "provision".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            provision["webhook_url"],
+            "http://127.0.0.1:43129/multica/webhooks/ingress/pilot/hook"
+        );
+        let token = provision["webhook_token"].as_str().unwrap();
+        runtime.set_helper_port(43130);
+        let read = runtime
+            .multica_webhooks(MulticaWebhookRequest::Trigger {
+                autopilot_id: "pilot".into(),
+                trigger_id: "hook".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            read["webhook_url"],
+            "http://127.0.0.1:43130/multica/webhooks/ingress/pilot/hook"
+        );
+        assert!(read["webhook_token"].is_null());
+        assert!(!read.to_string().contains(token));
+        assert!(
+            !std::fs::read_to_string(dir.join("webhooks.json"))
+                .unwrap()
+                .contains(token)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parse_launch_options_accepts_manager_forwarded_ports_and_app_path() {

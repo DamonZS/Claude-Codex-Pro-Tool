@@ -27,9 +27,26 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
+      - name: Install workflow dependencies
+        working-directory: apps/codex-workflow-surface
+        run: npm ci
+
+      - name: Verify release wiring
+        run: node scripts/release/verify-release-workflow.js
+
+      - name: Test Multica notice staging
+        run: node --test scripts/release/stage-multica-notices.test.mjs
+
+      - name: Type-check Manager
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run check
+
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
+
+      - name: Test workflow core integration
+        run: cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open
 
       - name: Build release binaries
         run: cargo build --release
@@ -39,7 +56,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-          Copy-Item target/release/claude-codex-pro-mcp.exe dist/windows/app/
+
+      - name: Stage Multica notices
+        run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
 
       - name: Stage Multica runtime
         if: ${{ false }}
@@ -119,6 +138,20 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm install --package-lock=false
 
+      - name: Install workflow dependencies
+        working-directory: apps/codex-workflow-surface
+        run: npm ci
+
+      - name: Verify release wiring
+        run: node scripts/release/verify-release-workflow.js
+
+      - name: Test Multica notice staging
+        run: node --test scripts/release/stage-multica-notices.test.mjs
+
+      - name: Type-check Manager
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run check
+
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
@@ -155,7 +188,7 @@ jobs:
           test -f "$app/Contents/PkgInfo"
           plutil -lint "$app/Contents/Info.plist" >/dev/null
           codesign -dv "$app" >/dev/null 2>&1
-          for runtime in claude-codex-pro claude-codex-pro-mcp; do
+          for runtime in claude-codex-pro; do
             test -x "$app/Contents/MacOS/$runtime"
             codesign --verify --strict "$app/Contents/MacOS/$runtime"
           done

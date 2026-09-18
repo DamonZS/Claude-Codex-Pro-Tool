@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "stage": "view_preferences",
+  "checks": [],
+  "cleanup": [
+    "preferences_restored",
+    "fixture_view_deleted"
+  ],
+  "failure": "view_switch_missing\n\nfalse !== true\n",
+  "ids": {
+    "view": "ccp-acceptance-view-mu77p2fb"
+  }
+}

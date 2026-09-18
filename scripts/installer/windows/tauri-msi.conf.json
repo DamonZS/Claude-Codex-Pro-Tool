@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "active": true,
+    "resources": {
+      "resources/leila/assets/": "resources/leila/assets/",
+      "../../../docs/third-party/multica/LICENSE": "resources/third-party/multica/LICENSE",
+      "../../../docs/third-party/multica/NOTICE": "resources/third-party/multica/NOTICE"
+    }
+  }
+}

@@ -159,7 +159,7 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("const claudeCodexProMenuVersion = \"12\""));
+    assert!(script.contains("const claudeCodexProMenuVersion = \"13\""));
     assert!(script.contains("menu.dataset.claudeCodexProMenuVersion = claudeCodexProMenuVersion;"));
     assert!(script.contains("findCodexStatusRightAnchor"));
     assert!(script.contains("codexTitlebarControlLabel"));
@@ -181,9 +181,14 @@ fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     assert!(script.contains(
         "setCssPropIfChanged(menu, \"--claude-codex-pro-menu-left\", `${fallbackLeft}px`)"
     ));
-    assert!(script.contains("statusRect.left - badgeWidth - 8"));
     assert!(script.contains("windowControlsOverlay.addEventListener(\"geometrychange\""));
     assert!(script.contains("windowControlsOverlay.removeEventListener(\"geometrychange\""));
+    assert!(script.contains("findCodexStatusRightAnchor(null, titlebarRect)"));
+    assert!(script.contains("versionRange.selectNodeContents(title)"));
+    assert!(script.contains("anchor.rect.left - gap - (versionRect.right - menuRect.left)"));
+    assert!(script.contains("window.__claudeCodexProMenuResizeObserver?.disconnect()"));
+    assert!(script.contains("window.__claudeCodexProMenuResizeObserver.observe(menu)"));
+    assert!(!script.contains("window.innerWidth - menuWidth - 260"));
     assert!(!script.contains("data-codex-frontend-indicator=\"true\""));
     assert!(script.contains("data-codex-backend-indicator=\"true\""));
     assert!(script.contains(".claude-codex-pro-window-status-dot[data-status=\"checking\"]"));
@@ -192,7 +197,6 @@ fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     assert!(script.contains("color: #a9a4a9"));
     assert!(!script.contains("--claude-codex-pro-window-text-color"));
     assert!(!script.contains("function setWindowTextColorFromAnchor"));
-    assert!(script.contains(".codex-memory-count { color: inherit; font-weight: 700; }"));
     assert!(script.contains("border: 1px solid #dce3ed"));
     assert!(script.contains("border-radius: 8px"));
     assert!(script.contains("background: #ffffff"));
@@ -200,7 +204,6 @@ fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
     assert!(script.contains("color: #64748b"));
     assert!(script.contains("background: #0f766e"));
     assert!(!script.contains("html:not(.light):not([data-theme=\"light\"]) #${claudeCodexProMenuId}.${claudeCodexProMenuFloatingClass}"));
-    assert!(script.contains("updateCodexMemoryBadgePosition"));
     assert!(script.contains("openClaudeCodexProModal()"));
     assert!(script.contains("hasRenderableStatusLabel"));
     assert!(script.contains("trigger.querySelector(\"[data-codex-backend-indicator]\")"));
@@ -209,7 +212,7 @@ fn injection_script_anchors_status_entry_to_right_titlebar_controls() {
 }
 
 #[test]
-fn injection_script_uses_compact_pangu_control_deck_layout() {
+fn injection_script_uses_compact_control_deck_layout() {
     let script = assets::injection_script(57321);
 
     assert!(script.contains("width: min(780px, calc(100vw - 72px))"));
@@ -221,14 +224,6 @@ fn injection_script_uses_compact_pangu_control_deck_layout() {
     assert!(script.contains("@media (max-width: 900px)"));
     assert!(script.contains("@media (max-width: 720px)"));
     assert!(script.contains("height: min(540px, calc(100vh - 32px))"));
-}
-
-#[test]
-fn injection_script_memory_badge_hides_workspace_label() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("codexMemoryState.pendingCandidates ? `<span>待确认 ${codexMemoryState.pendingCandidates}</span>` : \"\""));
-    assert!(!script.contains("codexMemoryState.pendingCandidates ? `待确认 ${codexMemoryState.pendingCandidates}` : codexMemoryState.workspace"));
 }
 
 #[test]
@@ -276,7 +271,7 @@ fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
     assert!(script.contains("data-codex-backend-repair"));
     assert!(script.contains("codex_native_projects"));
     assert!(script.contains("multicaWorkspaceAppendNativeProjectItem"));
-    assert!(script.contains("nativeProjectReadOnly"));
+    assert!(script.contains("isCodexNativeProjectsRoute"));
 }
 
 #[test]
@@ -287,7 +282,6 @@ fn injection_script_uses_pangu_control_deck_theme() {
     assert!(script.contains("PANGU LOCAL CONTROL DECK"));
     assert!(script.contains("盘古本地控制舱"));
     assert!(script.contains("模型桥接"));
-    assert!(script.contains("盘古记忆"));
     assert!(script.contains("模型与插件通道"));
     assert!(script.contains("会话与工作流"));
     assert!(script.contains("本地运维与诊断"));
@@ -541,14 +535,17 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("typeof appScope.get === \"function\""));
     assert!(host.contains("appScope.queryClient"));
     assert!(host.contains("return hasScopeGetter || hasScopeNode || hasQueryClient;"));
-    assert!(host.contains("module?.FRt"));
+    assert!(host.contains("module?.Jpn"));
+    assert!(host.contains("app-initial-f61fcec072b5.js"));
+    assert!(host.contains("codex_page_host_version_unsupported"));
     assert!(host.contains("function codexPageHostIdFromActiveThread()"));
     assert!(host.contains("data-app-action-sidebar-thread-host-id"));
-    assert!(host.contains("module.FRt(appScope, hostId)"));
+    assert!(host.contains("module.Jpn(appScope, hostId)"));
     assert!(host.contains("client.sendRequest(\"skills/list\", {})"));
     assert!(host.contains("skills.error"));
     assert!(host.contains("capabilities: []"));
-    assert!(host.contains("pageHostProbe: { skillsList: true, nativeTaskHost: false }"));
+    assert!(host.contains("skillInput: true"));
+    assert!(host.contains("methods: [\"thread/start\", \"thread/read\", \"turn/start\", \"turn/interrupt\", \"skills/list\"]"));
     assert!(host.contains("codexPageHostInitializeResponse = selected.initializeResponse"));
     assert!(host.contains("normalizedMethod === \"initialize\" && selected.initializeResponse"));
     assert!(host.contains("client.sendRequest(normalizedMethod, params)"));
@@ -624,7 +621,7 @@ fn codex_multica_workspace_anchors_three_workflow_routes_after_plugin() {
         "if (multicaWorkspaceState.opened) {\n          multicaWorkspaceSelectRoute(module.key);"
     ));
     assert!(script.contains(
-        "multicaWorkspaceState.route = module.key;\n          void multicaWorkspaceOpen();"
+        "multicaWorkspaceState.route = module.key;\n          multicaWorkspaceState.upstreamPath = undefined;\n          void multicaWorkspaceOpen();"
     ));
     assert!(script.contains("if (!allowedRoutes.has(route) || found.has(route))"));
     assert!(script.contains("function multicaPluginAnchorMutationNode(node)"));
@@ -805,7 +802,7 @@ fn codex_multica_projects_route_is_a_read_only_codex_projection() {
     );
     let native_branch = source_between(
         render,
-        "// The public Projects entry means Codex projects, never workspace project",
+        "// Projects is always read-only Codex native projection.",
         "multicaWorkspaceClear(content);",
     );
     let query = source_between(
@@ -826,7 +823,9 @@ fn codex_multica_projects_route_is_a_read_only_codex_projection() {
 
     assert!(workspace.contains("function multicaWorkspaceNativeProjectsCollection()"));
     assert!(workspace.contains("bootstrap?.collections?.codex_native_projects"));
-    assert!(native_branch.contains("const nativeProjectReadOnly = module.key === \"projects\""));
+    assert!(
+        native_branch.contains("const isCodexNativeProjectsRoute = module.key === \"projects\"")
+    );
     assert!(native_branch.contains("collection = multicaWorkspaceNativeProjectsCollection();"));
     assert!(native_branch.contains("error = null;"));
     assert!(native_query.contains("Native projects are supplied by bootstrap from Codex state"));
@@ -835,6 +834,21 @@ fn codex_multica_projects_route_is_a_read_only_codex_projection() {
     assert!(card.contains("nativeProjectTargets().find"));
     assert!(card.contains("if (target.row.isConnected) target.row.click();"));
     assert!(card.contains("不可作为工作流项目编辑或删除"));
+    let upstream = render
+        .find("multicaWorkspaceRenderUpstreamSurface(content, module)")
+        .unwrap();
+    let legacy_collection = render.find("let collection =").unwrap();
+    assert!(upstream < legacy_collection);
+    let sidebar = source_between(
+        workspace,
+        "const multicaWorkspaceSidebarModules",
+        "const multicaWorkspaceBoardColumns",
+    );
+    for route in ["my-issues", "autopilots", "agents"] {
+        assert!(sidebar.contains(&format!("key: \"{route}\"")));
+    }
+    assert!(!sidebar.contains("key: \"projects\""));
+    assert!(!sidebar.contains("key: \"skills\""));
 }
 
 #[test]
@@ -1471,7 +1485,9 @@ fn codex_multica_open_execution_activates_real_thread_row_before_hiding() {
     );
     assert!(activation.contains("multicaWorkspaceNativeThreadIsActive(current) &&"));
     assert!(activation.contains("multicaWorkspaceThreadIdMatches(activeThreadId, threadId)"));
-    assert_eq!(activation.matches("multicaWorkspaceHide()").count(), 1);
+    assert!(activation.contains("opener.canOpen(threadId) === true"));
+    assert!(activation.contains("if (multicaWorkspaceNativeSubagentIsActive(threadId))"));
+    assert_eq!(activation.matches("multicaWorkspaceHide()").count(), 2);
     assert!(activation.contains("throw new Error(\"Codex 未激活目标对话\")"));
     for field in [
         "result.handle",
@@ -1491,52 +1507,6 @@ fn codex_multica_open_execution_activates_real_thread_row_before_hiding() {
 }
 
 #[test]
-fn injection_script_gates_memory_auto_suggest_by_dom_injection_setting() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("function codexMemoryMaybeSuggestCandidate"));
-    assert!(
-        script.contains(
-            "if (!settings.memoryAssistEnabled || !settings.memoryAssistInjectEnabled || !settings.memoryAssistAutoSuggestEnabled) return"
-        ),
-        "auto-suggest must stop when DOM memory injection is disabled"
-    );
-}
-
-#[test]
-fn injection_script_deduplicates_memory_capture_requests() {
-    let script = assets::injection_script(57321);
-    let start = script
-        .find("const codexMemoryCaptureTtlMs")
-        .expect("memory capture deduplication state exists");
-    let end = script[start..]
-        .find("function codexMemorySetMessage")
-        .map(|offset| start + offset)
-        .expect("memory capture deduplication precedes memory UI helpers");
-    let capture_section = &script[start..end];
-
-    assert!(capture_section.contains("const codexMemoryCaptureTtlMs = 30 * 60 * 1000;"));
-    assert!(capture_section.contains("const codexMemoryCaptureMaxEntries = 128;"));
-    assert!(
-        capture_section
-            .contains("while (codexMemoryCaptureRecent.size > codexMemoryCaptureMaxEntries)")
-    );
-    assert!(capture_section.contains("workspace: payload.workspace"));
-    assert!(capture_section.contains("text: payload.text"));
-    assert!(capture_section.contains("candidateTriggered: payload.candidateTriggered"));
-    assert!(capture_section.contains("candidateReason: payload.candidateReason"));
-    assert!(capture_section.contains("skipReason: payload.skipReason"));
-    assert!(
-        capture_section.contains("const inFlight = codexMemoryCaptureInFlight.get(fingerprint);")
-    );
-    assert!(capture_section.contains("if (inFlight) return inFlight;"));
-    assert!(capture_section.contains("codexMemoryCaptureInFlight.set(fingerprint, request);"));
-    assert!(capture_section.contains("codexMemoryRememberCapture(fingerprint, result);"));
-    assert!(capture_section.contains("codexMemoryCaptureRecent.delete(fingerprint);"));
-    assert!(capture_section.contains("codexMemoryCaptureInFlight.delete(fingerprint);"));
-}
-
-#[test]
 fn injection_script_global_enhancement_toggle_does_not_hide_enabled_child_features() {
     let script = assets::injection_script(57321);
 
@@ -1545,111 +1515,6 @@ fn injection_script_global_enhancement_toggle_does_not_hide_enabled_child_featur
     assert!(script.contains(
         "claudeCodexProBackendSettings.enhancementsEnabled === false && !hasAnyCodexFrontendEnhancementEnabled(settings)"
     ));
-}
-
-#[test]
-fn injection_script_refreshes_memory_after_backend_settings_load() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("codexMemoryUpdateBadge();"));
-    assert!(script.contains("void codexMemoryLoadSession(true);"));
-    assert!(script.contains("void codexMemoryMaybeSuggestCandidate();"));
-}
-
-#[test]
-fn injection_script_replaces_stale_memory_heartbeat_on_reinject() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("clearInterval(window.__claudeCodexProMemoryHeartbeatTimer);"));
-    assert!(script.contains("window.__claudeCodexProMemoryHeartbeatTimer = window.setInterval"));
-}
-
-#[test]
-fn injection_script_memory_auto_suggest_recognizes_project_requirements() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("function codexMemoryLooksLearnableText"));
-    assert!(script.contains("project requirement phrase"));
-    assert!(script.contains("ui workflow requirement"));
-    assert!(script.contains("workflow requirement"));
-    assert!(script.contains("function codexMemoryLooksLikeChatter"));
-    assert!(script.contains("function codexMemoryLooksLikeTitleOnly"));
-    assert!(script.contains("codexMemoryLooksLikeChatter(text)"));
-    assert!(script.contains("codexMemoryLooksLikeTitleOnly(text)"));
-    assert!(script.contains("async function codexMemoryRecordCapture"));
-    assert!(script.contains("postJson(\"/memory/capture\""));
-    assert!(script.contains("skipReason: \"not_learnable\""));
-    assert!(script.contains("skipReason: \"duplicate_recent_memory\""));
-    assert!(script.contains("skipReason: \"learn_failed\""));
-    assert!(script.contains("postJson(\"/memory/learn\""));
-    assert!(script.contains("memory_auto_learned"));
-    assert!(script.contains("database_failed"));
-    assert!(script.contains("await codexMemoryLoadSession(true);"));
-    assert!(
-        !script.contains("Math.max(1, Number(codexMemoryState.pendingCandidates || 0) + 1)"),
-        "candidate count must be synchronized from backend state instead of optimistic +1"
-    );
-}
-
-#[test]
-fn injection_script_auto_suggest_only_reads_explicit_user_turns() {
-    let script = assets::injection_script(57321);
-    let start = script
-        .find("function codexMemoryLatestUserText")
-        .expect("memory latest-user function exists");
-    let end = script[start..]
-        .find("function codexMemorySuggestionFromText")
-        .map(|offset| start + offset)
-        .expect("memory suggestion function follows latest-user function");
-    let function_body = &script[start..end];
-
-    assert!(function_body.contains("codexMemoryConversationMessages(\"user\")"));
-    assert!(script.contains("[data-message-author-role=\"user\"]"));
-    assert!(script.contains("function codexMemoryUserMessageCandidates"));
-    assert!(script.contains("nodeOrAncestorLooksLikeCodexUserBubble(child)"));
-    assert!(script.contains(".group.flex.w-full.flex-col.items-end.justify-end.gap-1"));
-    assert!(
-        !function_body.contains("[data-testid=\"conversation-turn\"]"),
-        "auto-suggest fallback must not read generic conversation turns"
-    );
-    assert!(
-        !function_body.contains("main [class*=\"user\"]"),
-        "auto-suggest fallback must not infer user role from class substring"
-    );
-}
-
-#[test]
-fn injection_script_memory_session_uses_conversation_root_not_sidebar_titles() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("function codexMemoryConversationRoot"));
-    assert!(script.contains("function codexMemoryConversationMessages"));
-    assert!(script.contains("codexMemoryNodeIsInsideConversation"));
-    assert!(script.contains("[data-app-action-sidebar-thread-id]"));
-    assert!(script.contains("[role=\"navigation\"]"));
-    assert!(!script.contains("等待真实对话消息后写入盘古记忆"));
-    assert!(!script.contains("document.querySelectorAll('[data-message-author-role=\"user\"], [data-testid=\"conversation-turn\"], main .prose')"));
-    let workspace_start = script
-        .find("function codexMemoryWorkspace()")
-        .expect("memory workspace function exists");
-    let workspace_end = script[workspace_start..]
-        .find("function codexMemoryWorkspaceIsPathFallback")
-        .map(|offset| workspace_start + offset)
-        .expect("memory workspace fallback helper follows workspace function");
-    let workspace_body = &script[workspace_start..workspace_end];
-    assert!(workspace_body.contains("codex:thread:"));
-    assert!(workspace_body.contains("codex:path:"));
-    assert!(workspace_body.contains("rememberCodexMemoryProjectContext(project)"));
-    assert!(workspace_body.contains("readCodexMemoryProjectContext()"));
-    assert!(script.contains("/memory/resolve-workspace"));
-    assert!(
-        !workspace_body.contains("document.title"),
-        "memory workspace must not use conversation titles such as codex:你好"
-    );
-    assert!(
-        !workspace_body.contains("[data-thread-title]"),
-        "memory workspace must not use sidebar/thread title text"
-    );
 }
 
 #[test]
@@ -1964,6 +1829,19 @@ fn injection_script_refreshes_session_list_after_delete() {
 }
 
 #[test]
+fn injection_script_filters_deleted_sessions_after_codex_reprojects_rows() {
+    let script = assets::injection_script(57321);
+
+    assert!(script.contains("const codexDeletedSessionsKey = \"codexDeletedSessions\";"));
+    assert!(script.contains("markDeletedSession(ref.session_id);"));
+    assert!(script.contains("return filterDeletedSessionRows(cachedSessionRows);"));
+    assert!(script.contains("row.style.setProperty(\"display\", \"none\", \"important\");"));
+    assert!(script.contains("clearDeletedSession(sessionId);"));
+    assert!(script.contains("result?.status === \"undone\""));
+    assert!(script.contains("data-app-action-sidebar-thread-id"));
+}
+
+#[test]
 fn injection_script_does_not_add_delete_controls_on_archived_page() {
     let script = assets::injection_script(57321);
 
@@ -2136,8 +2014,10 @@ fn run_service_tier_contract_harness() -> serde_json::Value {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let script_path = temp.path().join("renderer-inject.js");
     let harness_path = temp.path().join("service-tier-harness.cjs");
-    std::fs::write(&script_path, assets::injection_script(57321))
-        .expect("injection script should be written");
+    // This minimal DOM fixture exercises service-tier logic only. The React
+    // workflow bundle has its own DOM tests and combined-payload asset tests.
+    std::fs::write(&script_path, assets::renderer_script())
+        .expect("renderer script should be written");
     let mut harness = std::fs::File::create(&harness_path).expect("harness should be created");
     write!(
         harness,

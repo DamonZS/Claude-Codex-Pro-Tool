@@ -1,0 +1,32 @@
+.overview-timeline.request-timeline { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.request-timeline > .overview-panel-heading { flex-shrink: 0; }
+.overview-token-usage { display: flex; flex: 0 0 32px; align-items: center; gap: 12px; overflow-x: auto; padding: 0 13px; border-bottom: 1px solid var(--workspace-border); color: var(--workspace-text-secondary); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.overview-token-usage strong, .overview-token-usage b { color: var(--workspace-text); font-weight: 650; }
+.overview-timeline-legend { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--workspace-text-tertiary); font-size: 11px; line-height: 15px; white-space: nowrap; }
+.overview-timeline-legend i, .overview-timeline-event i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--workspace-text-tertiary); }
+.overview-timeline-legend i { margin-left: 5px; }
+.overview-timeline-legend i.ok, .overview-timeline-event.ok i { background: var(--workspace-success); }
+.overview-timeline-legend i.warning, .overview-timeline-event.warning i { background: var(--workspace-warning); }
+.overview-timeline-legend i.failed, .overview-timeline-event.failed i { background: var(--workspace-danger); }
+.overview-timeline-body { display: flex; flex: 1; min-height: 0; overflow: auto; }
+.overview-timeline-labels { position: sticky; left: 0; z-index: 4; flex: 0 0 132px; align-self: flex-start; border-right: 1px solid var(--workspace-border); background: var(--workspace-surface); }
+.overview-timeline-axis-spacer { height: 32px; }
+.overview-timeline-labels strong { display: flex; height: 42px; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--workspace-border); color: var(--workspace-text-secondary); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.overview-timeline-labels strong i { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--workspace-text-tertiary); }
+.overview-timeline-chart { position: relative; flex: none; align-self: flex-start; overflow: hidden; }
+.overview-timeline-axis { position: relative; z-index: 2; height: 32px; border-bottom: 1px solid var(--workspace-border); }
+.overview-timeline-axis time { position: absolute; top: 10px; color: var(--workspace-text-tertiary); font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.overview-timeline-grid { position: absolute; z-index: 0; inset: 32px 0 0 8px; background-image: linear-gradient(90deg, var(--workspace-border) 1px, transparent 1px); }
+.overview-timeline-track { position: relative; z-index: 2; height: 42px; overflow-x: hidden; overflow-y: auto; border-bottom: 1px solid var(--workspace-border); scrollbar-width: thin; }
+.overview-timeline-track-content { position: relative; }
+.overview-timeline-event { position: absolute; display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; align-items: center; gap: 0 7px; overflow: hidden; border: 1px solid rgb(225 243 255 / 0.28); border-radius: 5px; background: var(--workspace-surface-raised); color: var(--workspace-text-secondary); padding: 2px 9px; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08); }
+.overview-timeline-event.warning { border-color: rgb(245 158 11 / 0.38); color: var(--workspace-warning); }
+.overview-timeline-event.failed { border-color: rgb(239 68 68 / 0.42); color: var(--workspace-danger); }
+.overview-timeline-event b, .overview-timeline-event time, .overview-timeline-event small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-timeline-event b { font-size: 11px; font-weight: 620; line-height: 16px; }
+.overview-timeline-event time { color: var(--workspace-text-tertiary); font: 10px/14px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.overview-timeline-event small { grid-column: 2 / -1; color: var(--workspace-text-secondary); font-size: 10px; line-height: 14px; }
+.overview-timeline-event:focus-visible { outline: 2px solid var(--workspace-success); outline-offset: -2px; }
+.overview-timeline-empty { position: absolute; top: 18px; left: 14px; color: var(--workspace-text-tertiary); font-size: 11px; }
+.overview-timeline-now { position: absolute; z-index: 1; top: 32px; bottom: 0; width: 1px; border-left: 1px solid var(--workspace-success); color: var(--workspace-success); font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; padding-top: 3px; }
+.overview-timeline-note { flex: 0 0 14px; overflow: hidden; margin: 0 12px; color: var(--workspace-text-tertiary); font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
