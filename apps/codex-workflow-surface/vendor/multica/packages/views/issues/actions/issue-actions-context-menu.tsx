@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue } from "../../../../../../src/execution-issue";
 "use client";
 
 import {
@@ -64,6 +66,7 @@ export function IssueContextMenuProvider({
 
   const openMenu = useCallback<OpenIssueContextMenu>((issue, event) => {
     event.preventDefault();
+    if (isReadonlyExecutionIssue(issue)) return;
     triggerElRef.current?.removeAttribute("data-popup-open");
     const el = event.currentTarget as HTMLElement;
     el.setAttribute("data-popup-open", "");

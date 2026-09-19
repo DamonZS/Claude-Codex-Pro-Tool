@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isExecutionIssueId } from "../../../../../../src/execution-issue";
 import {
   pointerWithin,
   closestCenter,
@@ -110,6 +112,7 @@ export function getMoveAnchors(
   ids: readonly string[],
   activeId: string,
 ): Pick<DragMoveUpdates, "before_id" | "after_id"> {
+  ids = ids.filter((id) => !isExecutionIssueId(id));
   const index = ids.indexOf(activeId);
   return {
     before_id: index > 0 ? ids[index - 1]! : null,

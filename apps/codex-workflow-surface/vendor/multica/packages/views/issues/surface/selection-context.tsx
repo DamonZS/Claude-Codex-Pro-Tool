@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isExecutionIssueId } from "../../../../../../src/execution-issue";
 "use client";
 
 import {
@@ -42,6 +44,7 @@ export function useCreateIssueSurfaceSelection(
   }
 
   const toggle = useCallback((id: string) => {
+    if (isExecutionIssueId(id)) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -53,7 +56,7 @@ export function useCreateIssueSurfaceSelection(
   const select = useCallback((ids: string[]) => {
     setSelectedIds((current) => {
       const next = new Set(current);
-      for (const id of ids) next.add(id);
+      for (const id of ids) if (!isExecutionIssueId(id)) next.add(id);
       return next;
     });
   }, []);

@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue } from "../../../../../../src/execution-issue";
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -61,7 +63,7 @@ export function BatchActionToolbar({
   // update drops a selected row from the window, batch still mutates it but
   // export omits it. Count, pickers, and every action below share this set.
   const selectedIssues = useMemo(
-    () => issues.filter((i) => selectedIds.has(i.id)),
+    () => issues.filter((i) => selectedIds.has(i.id) && !isReadonlyExecutionIssue(i)),
     [issues, selectedIds],
   );
   const count = selectedIssues.length;

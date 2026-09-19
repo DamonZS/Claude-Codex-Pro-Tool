@@ -229,6 +229,10 @@ pub struct CodexMulticaExecutionBinding {
     pub parent_thread_id: Option<String>,
     #[serde(default)]
     pub parent_attempt_id: Option<String>,
+    #[serde(default)]
+    pub native_resume: bool,
+    #[serde(default)]
+    pub native_resume_command: Option<String>,
     pub execution_kind: MulticaExecutionKind,
     pub attempt_no: u32,
     #[serde(default = "default_max_attempts")]
@@ -279,6 +283,8 @@ pub struct CodexMulticaTaskMessage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexMulticaExecutionCommand {
     pub command_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_intent_keys: Vec<String>,
     pub binding_id: String,
     pub kind: MulticaExecutionCommandKind,
     pub state: MulticaExecutionCommandState,
@@ -1011,6 +1017,8 @@ impl MulticaExecutionStore {
             codex_execution_id: None,
             parent_thread_id: input.parent_thread_id,
             parent_attempt_id: input.parent_attempt_id,
+            native_resume: false,
+            native_resume_command: None,
             execution_kind: input.execution_kind,
             attempt_no,
             max_attempts: 2,
@@ -1030,6 +1038,7 @@ impl MulticaExecutionStore {
         };
         state.execution_commands.push(CodexMulticaExecutionCommand {
             command_id: binding.idempotency_key.clone(),
+            native_intent_keys: Vec::new(),
             binding_id: binding.binding_id.clone(),
             kind: MulticaExecutionCommandKind::Create,
             state: MulticaExecutionCommandState::Reserved,
@@ -1043,6 +1052,305 @@ impl MulticaExecutionStore {
             updated_at_ms: input.now_ms,
         });
         state.execution_bindings.push(binding.clone());
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(ExecutionReservationResult {
+            binding,
+            replay: false,
+        })
+    }
+
+    pub fn native_intent_replay(
+        &self,
+        workspace_id: &str,
+        thread_id: &str,
+        command_id: &str,
+    ) -> anyhow::Result<Option<CodexMulticaExecutionBinding>> {
+        let state = self.load()?;
+        let Some(command) = state.execution_commands.iter().find(|command| {
+            command.command_id == command_id
+                || command
+                    .native_intent_keys
+                    .iter()
+                    .any(|key| key == command_id)
+        }) else {
+            return Ok(None);
+        };
+        let binding = state
+            .execution_bindings
+            .iter()
+            .find(|binding| binding.binding_id == command.binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if !binding.native_resume
+            || binding.workspace_id != workspace_id
+            || binding.codex_thread_id.as_deref() != Some(thread_id)
+        {
+            bail!("execution_command_idempotency_conflict");
+        }
+        Ok(Some(binding.clone()))
+    }
+
+    /// Keep subsequent drag keys on the same reserved continuation, including after completion.
+    pub fn remember_native_intent(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        intent_key: &str,
+    ) -> anyhow::Result<()> {
+        validate_id(intent_key, "command_id")?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter()
+            .find(|entry| entry.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != expected_revision {
+            bail!("execution_revision_conflict");
+        }
+        let command_id = binding
+            .native_resume_command
+            .as_deref()
+            .ok_or_else(|| anyhow!("execution_command_unknown"))?
+            .to_string();
+        if let Some(existing) = state.execution_commands.iter().find(|command| {
+            command.command_id == intent_key
+                || command
+                    .native_intent_keys
+                    .iter()
+                    .any(|key| key == intent_key)
+        }) {
+            if existing.command_id != command_id {
+                bail!("execution_command_idempotency_conflict");
+            }
+            return Ok(());
+        }
+        let command = state
+            .execution_commands
+            .iter_mut()
+            .find(|command| command.command_id == command_id)
+            .ok_or_else(|| anyhow!("execution_command_unknown"))?;
+        command.native_intent_keys.push(intent_key.to_string());
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)
+    }
+
+    pub fn execution_for_thread(
+        &self,
+        thread_id: &str,
+    ) -> anyhow::Result<Option<CodexMulticaExecutionBinding>> {
+        validate_id(thread_id, "thread_id")?;
+        Ok(self
+            .load()?
+            .execution_bindings
+            .into_iter()
+            .find(|binding| binding.codex_thread_id.as_deref() == Some(thread_id)))
+    }
+
+    pub fn mark_native_resume_dispatch(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        now_ms: u64,
+    ) -> anyhow::Result<CodexMulticaExecutionBinding> {
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != expected_revision
+            || binding.lease_token.as_deref() != Some(lease_token)
+        {
+            bail!("execution_revision_conflict");
+        }
+        if !binding.native_resume || binding.state != MulticaExecutionBindingState::BindingPending {
+            bail!("execution_not_dispatchable");
+        }
+        // Persist ambiguity before the native side effect. A crash/timeout never leaves
+        // a queued row eligible for an automatic second turn/start.
+        binding.state = MulticaExecutionBindingState::Reconciling;
+        binding.last_error_code = Some("native_dispatch_outcome_pending".to_string());
+        binding.revision = binding.revision.saturating_add(1);
+        binding.updated_at_ms = now_ms;
+        let result = binding.clone();
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)?;
+        Ok(result)
+    }
+
+    /// Restore queue eligibility only when the native client proves no turn request was sent.
+    pub fn restore_native_resume_after_preflight(
+        &self,
+        binding_id: &str,
+        expected_revision: u64,
+        lease_token: &str,
+        error_code: &str,
+        now_ms: u64,
+    ) -> anyhow::Result<()> {
+        validate_error_code(error_code)?;
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        let binding = state
+            .execution_bindings
+            .iter_mut()
+            .find(|binding| binding.binding_id == binding_id)
+            .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+        if binding.revision != expected_revision
+            || binding.lease_token.as_deref() != Some(lease_token)
+        {
+            bail!("execution_revision_conflict");
+        }
+        if !binding.native_resume
+            || binding.state != MulticaExecutionBindingState::Reconciling
+            || binding.native_resume_command.is_none()
+        {
+            bail!("execution_not_dispatchable");
+        }
+        binding.state = MulticaExecutionBindingState::BindingPending;
+        binding.last_error_code = Some(error_code.to_string());
+        binding.lease_token = None;
+        binding.lease_expires_at_ms = None;
+        binding.revision = binding.revision.saturating_add(1);
+        binding.updated_at_ms = now_ms;
+        validate_state(&state)?;
+        save_state_locked(&self.path, &state)
+    }
+
+    /// Adopt a real thread and reserve its continuation in one durable transaction.
+    /// The fixed instruction is supplied by Core at dispatch; no prompt is persisted.
+    pub fn queue_native_resume(
+        &self,
+        workspace_id: &str,
+        observed: &CodexExecutionStatus,
+        parent: Option<String>,
+        command_id: &str,
+        now_ms: u64,
+    ) -> anyhow::Result<ExecutionReservationResult> {
+        validate_id(workspace_id, "workspace_id")?;
+        validate_id(&observed.thread_id, "thread_id")?;
+        validate_id(command_id, "command_id")?;
+        let already_active = matches!(
+            observed.state,
+            CodexExecutionState::Running
+                | CodexExecutionState::Queued
+                | CodexExecutionState::CancelPending
+        );
+        if !matches!(
+            observed.state,
+            CodexExecutionState::Completed
+                | CodexExecutionState::Failed
+                | CodexExecutionState::Cancelled
+        ) && !already_active
+        {
+            bail!("native_thread_not_idle");
+        }
+        let _guard = store_lock(&self.path)?;
+        let mut state = load_state(&self.path)?;
+        if let Some(command) = state
+            .execution_commands
+            .iter()
+            .find(|command| command.command_id == command_id)
+        {
+            let binding = state
+                .execution_bindings
+                .iter()
+                .find(|binding| binding.binding_id == command.binding_id)
+                .ok_or_else(|| anyhow!("execution_binding_unknown"))?;
+            if !binding.native_resume
+                || binding.workspace_id != workspace_id
+                || binding.codex_thread_id.as_deref() != Some(&observed.thread_id)
+            {
+                bail!("execution_command_idempotency_conflict");
+            }
+            return Ok(ExecutionReservationResult {
+                binding: binding.clone(),
+                replay: true,
+            });
+        }
+        let index = if let Some(index) = state
+            .execution_bindings
+            .iter()
+            .position(|binding| binding.codex_thread_id.as_deref() == Some(&observed.thread_id))
+        {
+            let binding = &state.execution_bindings[index];
+            if binding.workspace_id != workspace_id {
+                bail!("workspace_mismatch");
+            }
+            if binding.native_resume_command.is_some()
+                || state.execution_commands.iter().any(|command| {
+                    command.binding_id == binding.binding_id
+                        && command.state == MulticaExecutionCommandState::Reserved
+                })
+                || !already_active
+                    && !binding.state.is_terminal()
+                    && binding.codex_execution_id.as_deref() != Some(&observed.execution_id)
+            {
+                return Ok(ExecutionReservationResult {
+                    binding: binding.clone(),
+                    replay: true,
+                });
+            }
+            index
+        } else {
+            if state.execution_bindings.len() >= MAX_EXECUTION_BINDINGS {
+                bail!("execution_bindings_too_large");
+            }
+            let binding: CodexMulticaExecutionBinding = serde_json::from_value(
+                serde_json::json!({
+                    "bindingId":stable_execution_id("native", &observed.thread_id),"workspaceId":workspace_id,
+                    "multicaRunId":stable_execution_id("native-run", command_id),"idempotencyKey":command_id,
+                    "codexRuntimeId":observed.runtime_id,"codexThreadId":observed.thread_id,"codexExecutionId":observed.execution_id,
+                    "parentThreadId":parent,"executionKind":"thread","attemptNo":1,"state":"completed","revision":1,"codexRevision":0,
+                    "retryable":false,"createdAtMs":now_ms,"updatedAtMs":now_ms,"nativeResume":true
+                }),
+            )?;
+            state.execution_bindings.push(binding);
+            state.execution_bindings.len() - 1
+        };
+        if state.execution_commands.len() >= MAX_EXECUTION_COMMANDS {
+            bail!("execution_commands_too_large");
+        }
+        let binding = &mut state.execution_bindings[index];
+        binding.native_resume = true;
+        binding.native_resume_command = (!already_active).then(|| command_id.to_string());
+        binding.state = if already_active {
+            binding_state_from_codex(&observed.state)
+        } else {
+            MulticaExecutionBindingState::BindingPending
+        };
+        binding.codex_runtime_id = Some(observed.runtime_id.clone());
+        // Queue dispatchers must not poll the previous completed turn as the queued result.
+        binding.codex_execution_id = already_active.then(|| observed.execution_id.clone());
+        binding.parent_thread_id = parent.or_else(|| binding.parent_thread_id.clone());
+        binding.completed_at_ms = None;
+        binding.updated_at_ms = now_ms;
+        binding.last_error_code = None;
+        binding.lease_token = None;
+        binding.lease_expires_at_ms = None;
+        binding.revision = binding.revision.saturating_add(1);
+        let binding = binding.clone();
+        state.execution_commands.push(CodexMulticaExecutionCommand {
+            command_id: command_id.to_string(),
+            native_intent_keys: Vec::new(),
+            binding_id: binding.binding_id.clone(),
+            kind: MulticaExecutionCommandKind::Continue,
+            state: if already_active {
+                MulticaExecutionCommandState::Committed
+            } else {
+                MulticaExecutionCommandState::Reserved
+            },
+            request_hash: None,
+            result: None,
+            codex_execution_id: already_active.then(|| observed.execution_id.clone()),
+            previous_execution_id: Some(observed.execution_id.clone()),
+            error_code: None,
+            revision: 1,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        });
         validate_state(&state)?;
         save_state_locked(&self.path, &state)?;
         Ok(ExecutionReservationResult {
@@ -1385,6 +1693,7 @@ impl MulticaExecutionStore {
         }
         let command = CodexMulticaExecutionCommand {
             command_id: command_id.to_string(),
+            native_intent_keys: Vec::new(),
             binding_id: binding_id.to_string(),
             kind,
             state: MulticaExecutionCommandState::Reserved,
@@ -1411,7 +1720,13 @@ impl MulticaExecutionStore {
         self.load()?
             .execution_commands
             .into_iter()
-            .find(|command| command.command_id == command_id)
+            .find(|command| {
+                command.command_id == command_id
+                    || command
+                        .native_intent_keys
+                        .iter()
+                        .any(|key| key == command_id)
+            })
             .ok_or_else(|| anyhow!("execution_command_unknown"))
     }
 
@@ -1473,6 +1788,7 @@ impl MulticaExecutionStore {
         binding.codex_execution_id = handle.execution_id.clone();
         binding.state = MulticaExecutionBindingState::Dispatched;
         binding.codex_revision = binding.codex_revision.saturating_add(1);
+        binding.native_resume_command = None;
         binding.revision = binding.revision.saturating_add(1);
         binding.updated_at_ms = now_ms;
         binding.completed_at_ms = None;
@@ -2160,6 +2476,12 @@ fn validate_state(state: &MulticaExecutionState) -> anyhow::Result<()> {
         validate_execution_command(command)?;
         if !command_ids.insert(command.command_id.to_ascii_lowercase()) {
             bail!("execution_command_conflict");
+        }
+        for key in &command.native_intent_keys {
+            validate_id(key, "command_id")?;
+            if !command_ids.insert(key.to_ascii_lowercase()) {
+                bail!("execution_command_conflict");
+            }
         }
         if !execution_ids.contains(&command.binding_id.to_ascii_lowercase()) {
             bail!("execution_command_binding_unknown");

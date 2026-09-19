@@ -85,3 +85,32 @@ test("scheduler outage does not block existing execution updates or query invali
   assert.deepEqual(calls, ["issues", "my-issues", "tick", "list", "dispatch", "status", "invalidate"]);
   assert.equal(context.multicaWorkspaceState.backgroundBusy, false);
 });
+
+test("queue dispatcher resumes marked native bindings and preserves ordinary assignment guards", async () => {
+  const calls = [];
+  const bindings = [
+    { bindingId: "native", nativeResume: true, codexThreadId: "child", state: "queued", revision: 2 },
+    { bindingId: "ordinary", agentId: "agent", state: "binding_pending", revision: 1 },
+    { bindingId: "unmarked", codexThreadId: "child", state: "queued", revision: 1 },
+    { bindingId: "running", nativeResume: true, codexThreadId: "child", codexExecutionId: "turn", state: "running", revision: 3 },
+  ];
+  const context = {
+    window: { __claudeCodexProMulticaWorkspaceGeneration: 1 },
+    claudeCodexProMulticaWorkspaceGeneration: 1,
+    multicaWorkspaceQueueDispatchIntervalMs: 5000,
+    multicaWorkspaceFeatureEnabled: () => true,
+    multicaWorkspaceState: { workspaceId: "ws", executions: bindings, executionBusy: new Set() },
+    multicaWorkspaceObjectValue: (o, ...keys) => keys.map(k => o[k]).find(v => v !== undefined),
+    multicaWorkspaceExecutionState: b => b.state,
+    multicaWorkspaceExecutionBindingId: b => b.bindingId,
+    multicaWorkspaceEntityRevision: b => b.revision,
+    multicaWorkspaceCall: async (route, data) => { calls.push([route, data.bindingId]); return {}; },
+    multicaWorkspaceErrorMessage: e => e.message,
+  };
+  vm.createContext(context);
+  const begin = source.indexOf("  async function multicaWorkspaceDispatchQueuedAssignments(");
+  const end = source.indexOf("  function multicaWorkspaceOpenExecutionDraft(", begin);
+  vm.runInContext(source.slice(begin, end), context);
+  await context.multicaWorkspaceDispatchQueuedAssignments(true);
+  assert.deepEqual(calls, [["/multica/executions/dispatch", "native"], ["/multica/executions/dispatch", "ordinary"]]);
+});

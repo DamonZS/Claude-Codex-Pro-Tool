@@ -1643,18 +1643,22 @@
   }
 
   async function codexPageHostClientFromAppInitial() {
-    // Audited OpenAI.Codex 26.915.3509.0: Jpn (internal tp) gets AppServerManager from
-    // appScope.get and returns manager.forHost(hostId). Minified exports are
-    // version-specific; an unknown asset must not invoke a guessed factory.
+    // Audited assets: Jpn (internal tp) and Rpn (internal ep) both get the existing
+    // AppServerManager from appScope.get and return manager.forHost(hostId).
+    // Minified exports are asset-specific; unknown assets never guess a factory.
     const assetName = codexAppAssetUrl("app-initial-").split("?")[0].split("/").pop();
-    if (assetName !== "app-initial-f61fcec072b5.js") throw new Error("codex_page_host_version_unsupported");
+    const factoryName = {
+      "app-initial-f61fcec072b5.js": "Jpn",
+      "app-initial-6c4523b43a11.js": "Rpn",
+    }[assetName];
+    if (!factoryName) throw new Error("codex_page_host_version_unsupported");
     const module = await loadCodexAppModule("app-initial-");
     const appScope = codexPageHostAppScopeFromReactRoot();
     if (!appScope) throw new Error("codex_page_host_app_scope_unavailable");
-    if (typeof module?.Jpn !== "function") throw new Error("codex_page_host_factory_unavailable");
+    if (typeof module?.[factoryName] !== "function") throw new Error("codex_page_host_factory_unavailable");
     const hostId = codexPageHostIdFromActiveThread() ||
       String(appScope.currentHostId || appScope.hostId || "local");
-    const client = await Promise.resolve(module.Jpn(appScope, hostId));
+    const client = await Promise.resolve(module[factoryName](appScope, hostId));
     if (!client || typeof client.sendRequest !== "function") {
       throw new Error("codex_page_host_client_unavailable");
     }
@@ -1686,7 +1690,7 @@
     }
     if (!codexPageHostClientPromise) {
       codexPageHostClientPromise = Promise.resolve().then(async () => {
-        if (codexAppAssetUrl("app-initial-").split("?")[0].endsWith("/app-initial-f61fcec072b5.js")) {
+        if (/\/app-initial-(?:f61fcec072b5|6c4523b43a11)\.js$/.test(codexAppAssetUrl("app-initial-").split("?")[0])) {
           const selected = await codexPageHostClientFromAppInitial();
           if (!codexPageHostStillCurrent()) throw new Error("codex_page_host_generation_stale");
           codexPageHostClient = selected.client;
@@ -6572,7 +6576,7 @@
     if (multicaWorkspaceState.opened && active.length) multicaWorkspaceRenderContent();
   }
 
-  // Retry only authoritative queued Agent bindings. The upstream queue worker
+  // Retry only authoritative queued Agent or adopted native-thread bindings. The upstream queue worker
   // claims queue rows, not arbitrary Issue cards; the backend-created binding,
   // its CAS revision, and the persisted Agent assignment are required.
   async function multicaWorkspaceDispatchQueuedAssignments(force = false) {
@@ -6588,8 +6592,11 @@
             multicaWorkspaceExecutionState(binding) !== "queued") return false;
         const bindingId = multicaWorkspaceExecutionBindingId(binding);
         const agentId = String(multicaWorkspaceObjectValue(binding, "agentId", "agent_id") || "").trim();
+        const threadId = String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim();
+        if (binding.nativeResume === true) return !!bindingId && !!threadId &&
+          !String(multicaWorkspaceObjectValue(binding, "codexExecutionId", "codex_execution_id") || "").trim();
         return !!bindingId && !!agentId &&
-          !String(multicaWorkspaceObjectValue(binding, "codexThreadId", "codex_thread_id") || "").trim() &&
+          !threadId &&
           !String(multicaWorkspaceObjectValue(binding, "codexExecutionId", "codex_execution_id") || "").trim();
       })
       .slice(0, 8);
@@ -6742,6 +6749,53 @@
     return false;
   }
 
+  function multicaWorkspaceNativeRouteScope(scopeType) {
+    // Panel state belongs to RouteScope, not the app-wide RPC scope. Read the
+    // mounted useScope ref for the active route; never create or mutate a scope.
+    const currentId = multicaWorkspaceCurrentNativeThreadId();
+    const queue = [codexPageHostReactRootFiber()], seen = new Set();
+    for (let index = 0; index < queue.length && seen.size < 20000; index += 1) {
+      const fiber = queue[index];
+      if (!fiber || seen.has(fiber)) continue;
+      seen.add(fiber);
+      for (let hook = fiber.memoizedState, count = 0; hook && count < 256; hook = hook.next, count += 1) {
+        const scope = hook.memoizedState?.current;
+        if (scope?.scope === scopeType && typeof scope.get === "function" && scope.value?.conversationId &&
+            multicaWorkspaceThreadIdMatches(fiber.memoizedProps?.conversationId, scope.value.conversationId) &&
+            (!currentId || multicaWorkspaceThreadIdMatches(currentId, scope.value.conversationId))) return scope;
+      }
+      if (fiber.child) queue.push(fiber.child);
+      if (fiber.sibling) queue.push(fiber.sibling);
+    }
+    return null;
+  }
+
+  async function multicaWorkspaceOpenNativeSubagentPanel(thread) {
+    // Audited native panel entry: t initializes the module; n verifies ancestry,
+    // hydrates existing threads and selects the requested child without a turn.
+    const asset = codexAppAssetUrl("open-local-conversation-subagents-panel-").split("?")[0].split("/").pop();
+    const parentId = thread?.parentThreadId || thread?.source?.subAgent?.thread_spawn?.parent_thread_id;
+    if (asset !== "open-local-conversation-subagents-panel-7640f0495cac.js" || !parentId || parentId === thread.id) {
+      throw new Error("codex_native_subagent_navigation_unavailable");
+    }
+    if (!codexAppAssetUrl("app-initial-").split("?")[0].endsWith("/app-initial-6c4523b43a11.js")) {
+      throw new Error("codex_native_subagent_navigation_unavailable");
+    }
+    const initial = await loadCodexAppModule("app-initial-");
+    const routeScope = initial.e6t && multicaWorkspaceNativeRouteScope(initial.e6t);
+    if (!routeScope) throw new Error("codex_native_route_scope_unavailable");
+    const module = await loadCodexAppModule("open-local-conversation-subagents-panel-");
+    if (typeof module.t !== "function" || typeof module.n !== "function") throw new Error("codex_native_subagent_navigation_unavailable");
+    module.t();
+    return module.n(routeScope, {
+      hostId: routeScope.value.hostId || codexPageHostIdFromActiveThread() || "local",
+      parentConversationId: parentId,
+      selectedConversationId: thread.id,
+      selectedDisplayName: thread.agentNickname || thread.id,
+      revealAndFocus: true,
+    });
+  }
+
   async function multicaWorkspaceActivateNativeThread(threadId) {
     multicaWorkspaceState.nativeThreadActivation = true;
     try {
@@ -6763,8 +6817,8 @@
       }
       if (!row) {
         const opener = multicaWorkspaceNativeSubagentOpener(threadId);
-        if (!opener) throw new Error("未找到该对话的 Codex 原生打开入口");
-        opener.open(threadId, thread?.agentNickname || threadId);
+        if (opener) opener.open(threadId, thread?.agentNickname || threadId);
+        else await multicaWorkspaceOpenNativeSubagentPanel(thread);
         const deadline = Date.now() + 3000;
         while (Date.now() < deadline) {
           if (multicaWorkspaceNativeSubagentIsActive(threadId)) {
@@ -8347,6 +8401,7 @@
         "/multica/skills/resolve", "/multica/skills/review", "/multica/skills/bind",
         "/multica/skills/unbind", "/multica/skills/bindings", "/multica/skills/bindings/replace",
         "/multica/executions/create", "/multica/executions/dispatch", "/multica/executions/open",
+        "/multica/native-executions/intent",
         "/multica/executions/continue", "/multica/executions/cancel", "/multica/executions/status",
         "/multica/executions/list", "/multica/executions/messages/list", "/multica/tasks/queue/transition",
         "/multica/autopilots/runs", "/multica/autopilots/run", "/multica/autopilots/trigger",

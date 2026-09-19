@@ -1,4 +1,26 @@
-import { AdapterError, identifier, integer, keys, record, text, timestamp, type JsonRecord } from "./multica-adapter-dto";
+import { AdapterError, collectionSchema, identifier, integer, keys, record, text, timestamp, type JsonRecord } from "./multica-adapter-dto";
+
+export async function readNativeExecutionRows(call: (payload: JsonRecord) => Promise<JsonRecord>): Promise<{ items: JsonRecord[]; stale: boolean }> {
+  const items: JsonRecord[] = [], ids = new Set<string>();
+  let total: number | undefined, stale = false;
+  for (let offset = 0; offset < 500; offset += 100) {
+    const parsed = collectionSchema.safeParse(await call({ resource: "codex_native_agents", limit: 100, offset }));
+    if (!parsed.success) throw new AdapterError(502, "invalid_native_execution_response");
+    const current = parsed.data;
+    if (total !== undefined && total !== current.total) throw new AdapterError(409, "query_snapshot_changed");
+    total = current.total;
+    stale ||= current.stale === true;
+    for (const item of current.items) {
+      if (typeof item.id !== "string" || !item.id || typeof item.parent_thread_id !== "string" || typeof item.status !== "string" || !(item.agent_nickname === null || typeof item.agent_nickname === "string") || !timestamp(item.updated_at_ms) || item.source !== "codex_native" || item.read_only !== true) throw new AdapterError(502, "invalid_native_execution_response");
+      if (ids.has(item.id)) throw new AdapterError(409, "query_snapshot_changed");
+      ids.add(item.id);
+      items.push(item);
+    }
+    if (items.length === Math.min(total, 500)) return { items, stale };
+    if (current.items.length !== 100 || items.length > total) throw new AdapterError(502, "incomplete_native_execution_response");
+  }
+  return { items, stale };
+}
 
 export type NativeDomainPath = "/multica/issues/limit-usage" | "/multica/autopilots/usage" | "/multica/issues/preview-trigger" | "/multica/quick-actions/render" | "/multica/quick-actions/run";
 const controls = ["command_id", "idempotency_key", "expected_revision"];

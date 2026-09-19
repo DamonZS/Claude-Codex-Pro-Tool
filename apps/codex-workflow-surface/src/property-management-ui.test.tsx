@@ -26,6 +26,7 @@ beforeEach(() => {
   window.__CODEX_WORKFLOW_BRIDGE__ = { postJson: async (path, payload) => {
     if (path === "/multica/workspace/bootstrap") return { status: "ok", workspace,
       user: { id: "local-user", kind: "local_control_plane" }, permissions: { managePropertyCatalog: permission } };
+    if (path === "/multica/executions/list") return { status: "ok", items: [], total: 0 };
     if (path === "/multica/workspace/query") {
       if (failQuery && payload.resource === "properties") return { status: "failed", code: "bridge_timeout" };
       const all = entities[String(payload.resource)] ?? [];

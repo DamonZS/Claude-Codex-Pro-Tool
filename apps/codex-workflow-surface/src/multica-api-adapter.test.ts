@@ -435,6 +435,7 @@ describe("primary flows with actual Core projection defaults", () => {
   it("maps minimal Core entities and prioritizes authoritative store timestamps", async () => {
     const stored = { revision: 1, workspace_id: "workspace-1", created_at_ms: Date.parse(date), updated_at_ms: Date.parse(date), updated_at: "2000-01-01T00:00:00Z" };
     const f = fixture({ issues: [{ ...stored, id: "issue-1", title: "Stored" }], agents: [{ ...stored, id: "agent-1", name: "Stored agent", permission_mode: "plan" }], autopilots: [{ ...stored, id: "auto-1", title: "Stored automation", assignee_id: "agent-1" }] });
+    f.executions.length = 0;
     const issueResult = await (await f.adapter.transport("/api/issues/issue-1")).json();
     expect(IssueSchema.safeParse(issueResult).success).toBe(true);
     expect(issueResult).toMatchObject({ created_at: date, updated_at: date, status: "todo", priority: "none" });
@@ -563,7 +564,7 @@ describe("bounded full-window queries", () => {
     const result = await f.adapter.transport("/api/issues?priority=high&creator_id=user-1&limit=2&offset=1&sort=position&direction=desc");
     expect(await result.json()).toMatchObject({ issues: [{ id: "issue-201" }, { id: "issue-199" }], total: 52 });
     expect(await (await f.adapter.transport("/api/issues/issue-204")).json()).toMatchObject({ id: "issue-204" });
-    expect(f.postJson.mock.calls.filter(([path]) => path.endsWith("/query")).map(([, p]) => p.offset)).toEqual([0, 100, 200, 0, 100, 200]);
+    expect(f.postJson.mock.calls.filter(([path, p]) => path.endsWith("/query") && p.resource === "issues").map(([, p]) => p.offset)).toEqual([0, 100, 200, 0, 100, 200]);
   });
   it("handles the upstream POST query twin, including present-but-empty ids", async () => {
     const f = fixture({ issues: [issue("issue-1"), issue("issue-2")] });
@@ -578,6 +579,7 @@ describe("bounded full-window queries", () => {
   });
   it("filters category, actor, labels, root, metadata and date fields", async () => {
     const f = fixture({ issues: [issue("issue-1", { status: "custom-review", status_category: "in_review", labels: [{ id: "label-1" }], metadata: { stage: "ready" } }), issue("issue-2", { parent_issue_id: "issue-1" })] });
+    f.executions.length = 0;
     const query = new URLSearchParams({ status_category: "in_review", assignee_filters: "member:user-1", label_ids: "label-1", top_level_only: "true", metadata: '{"stage":"ready"}', date_start: "2026-09-17", date_end: "2026-09-19" });
     expect(await (await f.adapter.transport(`/api/issues?${query}`)).json()).toMatchObject({ total: 1, issues: [{ id: "issue-1" }] });
   });

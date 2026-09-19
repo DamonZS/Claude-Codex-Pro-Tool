@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue } from "../../../../../../src/execution-issue";
 "use client";
 
 import { useState, type ReactElement } from "react";
@@ -32,6 +34,7 @@ export function IssueActionsDropdown({
 }: IssueActionsDropdownProps) {
   const actions = useIssueActions(issue);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
+  if (isReadonlyExecutionIssue(issue)) return null;
 
   // The outer `relative inline-flex` is the picker's anchor box: the
   // absolute, pointer-events-none span inside `triggerRender` fills it, so

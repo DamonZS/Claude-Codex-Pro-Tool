@@ -4068,15 +4068,19 @@
       "source": "packages/views/issues/actions/issue-actions-context-menu.tsx",
       "sha256": "5e521374d6115db419184000b7a56aad128a051c51dd6228e6e6e6510e0b6a61",
       "destination": "vendor/multica/packages/views/issues/actions/issue-actions-context-menu.tsx",
-      "derivedSha256": "5e521374d6115db419184000b7a56aad128a051c51dd6228e6e6e6510e0b6a61",
-      "changes": []
+      "derivedSha256": "24198b296504f092cb10340999d294e154d827c947b823af273782ed0be1986e",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/actions/issue-actions-dropdown.tsx",
       "sha256": "e40cfce59bf5a36495335d2805dd9362e405907a494c27cf2f246c5a23a10fd8",
       "destination": "vendor/multica/packages/views/issues/actions/issue-actions-dropdown.tsx",
-      "derivedSha256": "e40cfce59bf5a36495335d2805dd9362e405907a494c27cf2f246c5a23a10fd8",
-      "changes": []
+      "derivedSha256": "d888f63f616b39847872e382d9a8b8c319ff942f3a3e1b659e41b4bf7878044d",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/actions/issue-actions-menu-items.tsx",
@@ -4117,29 +4121,37 @@
       "source": "packages/views/issues/components/batch-action-toolbar.tsx",
       "sha256": "0c4495c644509f59d0b9f550c9cf257afc6a6fab2cfcfbd048675dc1f11e34e4",
       "destination": "vendor/multica/packages/views/issues/components/batch-action-toolbar.tsx",
-      "derivedSha256": "0c4495c644509f59d0b9f550c9cf257afc6a6fab2cfcfbd048675dc1f11e34e4",
-      "changes": []
+      "derivedSha256": "a73982109c42d7dce1054efc2fe3092bd61c037f31caaf660a261d4b05d808f3",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/board-card.tsx",
       "sha256": "09f5ebc8991f6710d839952cd1002776d6458e562ca44041298a9d305de7fd12",
       "destination": "vendor/multica/packages/views/issues/components/board-card.tsx",
-      "derivedSha256": "09f5ebc8991f6710d839952cd1002776d6458e562ca44041298a9d305de7fd12",
-      "changes": []
+      "derivedSha256": "a5e15ea52b861d3e0842601171f1773125acf2568b7bfa01c466be1841e4a051",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/board-column.tsx",
       "sha256": "71464fc7f6a954d9324852651a8b7dd38ce032eaf3e9726d7c75dcb2432f8d43",
       "destination": "vendor/multica/packages/views/issues/components/board-column.tsx",
-      "derivedSha256": "71464fc7f6a954d9324852651a8b7dd38ce032eaf3e9726d7c75dcb2432f8d43",
-      "changes": []
+      "derivedSha256": "c2d56132fd73f89374312747d098fba706f26946ff280e1c60ca1292b1840fdc",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/board-view.tsx",
       "sha256": "e31cf0af88324ad879b3d0763f07e15fcb5466fd04398cd594051fdc6ff839b0",
       "destination": "vendor/multica/packages/views/issues/components/board-view.tsx",
-      "derivedSha256": "e31cf0af88324ad879b3d0763f07e15fcb5466fd04398cd594051fdc6ff839b0",
-      "changes": []
+      "derivedSha256": "8517c34b43fdb8af11a694dd971dc4fa8f066f430d99398d8c39d5127d1fbc50",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/comment-card.tsx",
@@ -4308,15 +4320,19 @@
       "source": "packages/views/issues/components/list-row.tsx",
       "sha256": "0829c5d3379e6847a5516b0ed0d606f42847f0109ce67138bf0f54c80c22cf6e",
       "destination": "vendor/multica/packages/views/issues/components/list-row.tsx",
-      "derivedSha256": "0829c5d3379e6847a5516b0ed0d606f42847f0109ce67138bf0f54c80c22cf6e",
-      "changes": []
+      "derivedSha256": "b57c32dea330f30b96dbe9d4ce3fca4d08430107eeabb41bd95d42c893401447",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/list-view.tsx",
       "sha256": "7a95b95c4032c4eef4a7e2715ca553e9548ea80c37baab1ce6a02cec10bf6301",
       "destination": "vendor/multica/packages/views/issues/components/list-view.tsx",
-      "derivedSha256": "7a95b95c4032c4eef4a7e2715ca553e9548ea80c37baab1ce6a02cec10bf6301",
-      "changes": []
+      "derivedSha256": "eda23f5531c8bf4bbe6efa35e14be280b8c4774e1b6ddddb4b523ceec51c7538",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/manage-views-dialog.tsx",
@@ -4518,8 +4534,10 @@
       "source": "packages/views/issues/components/table-view.tsx",
       "sha256": "f9481811b04c92a8214a81978c9ca8afd8c6df3f49e00cb51d9d85ece6f7aa9a",
       "destination": "vendor/multica/packages/views/issues/components/table-view.tsx",
-      "derivedSha256": "f9481811b04c92a8214a81978c9ca8afd8c6df3f49e00cb51d9d85ece6f7aa9a",
-      "changes": []
+      "derivedSha256": "2f264a130e1aff08bc676c8dcb18654deb03b266c0d8755bab29f78dad498afc",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/components/task-run-labels.ts",
@@ -4714,8 +4732,10 @@
       "source": "packages/views/issues/surface/selection-context.tsx",
       "sha256": "b1bdb89a1ec9da964e029e6ae44a469a5775a85abdac35360630e377fc9e243e",
       "destination": "vendor/multica/packages/views/issues/surface/selection-context.tsx",
-      "derivedSha256": "b1bdb89a1ec9da964e029e6ae44a469a5775a85abdac35360630e377fc9e243e",
-      "changes": []
+      "derivedSha256": "3af16ca3fa297588afe57198671c47f10d6f43020fe9c9525fffb0f8e5dbe4f5",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/surface/types.ts",
@@ -4742,8 +4762,10 @@
       "source": "packages/views/issues/surface/use-issue-surface-actions.ts",
       "sha256": "bc274014c10a64ad1284fb46e67f4c32d360339e2dced9dccbb781b43389ae09",
       "destination": "vendor/multica/packages/views/issues/surface/use-issue-surface-actions.ts",
-      "derivedSha256": "bc274014c10a64ad1284fb46e67f4c32d360339e2dced9dccbb781b43389ae09",
-      "changes": []
+      "derivedSha256": "dbe28e819c4b0cc825d20c94f948270737085847aad87bf4524ddff930448bd4",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/surface/use-issue-surface-controller.ts",
@@ -4770,8 +4792,10 @@
       "source": "packages/views/issues/utils/drag-utils.ts",
       "sha256": "0424983c46d2643971ca63ddb4b4a322820c2368bfa3c538c5afd66112619539",
       "destination": "vendor/multica/packages/views/issues/utils/drag-utils.ts",
-      "derivedSha256": "0424983c46d2643971ca63ddb4b4a322820c2368bfa3c538c5afd66112619539",
-      "changes": []
+      "derivedSha256": "627b8402eaf583efcc72c26ac507c5320306f823210af990ecf5c77e330e8e61",
+      "changes": [
+        "Project execution metadata and protect readonly virtual issues"
+      ]
     },
     {
       "source": "packages/views/issues/utils/filter.ts",

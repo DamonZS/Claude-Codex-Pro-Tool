@@ -38,7 +38,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@multi
 import { Toaster } from "sonner";
 import { MulticaApiAdapter } from "./multica-api-adapter";
 import { requireWorkflowBridge } from "./runtime-bridge";
-import { NativeSubtasks } from "./native-subtasks";
+import { ExecutionBoardRefresh, ExecutionDetail } from "./native-subtasks";
+import { isExecutionIssueId } from "./execution-issue";
 import { connectWorkflowHost, disconnectWorkflowHost } from "./upstream-host";
 import { createBuilderHostSync, type BuilderHostSync } from "./builder-host-sync";
 import license from "../vendor/multica/LICENSE?raw";
@@ -159,7 +160,7 @@ function WorkflowBackButton({ slug, section, label }: { slug: string; section: "
   </Tooltip>;
 }
 
-function Page({ path, slug, openThread, managePropertyCatalog }: { path: string; slug: string; openThread?: (id: string) => Promise<unknown>; managePropertyCatalog: boolean }) {
+function Page({ path, slug, workspaceId, openThread, managePropertyCatalog }: { path: string; slug: string; workspaceId: string; openThread?: (id: string) => Promise<unknown>; managePropertyCatalog: boolean }) {
   const navigation = useNavigation();
   const segments = new URL(path, "https://workflow.invalid").pathname.slice(`/${encodeURIComponent(slug)}/`.length).split("/").map(decodeURIComponent);
   const [section, id, method, sessionId] = segments;
@@ -169,7 +170,11 @@ function Page({ path, slug, openThread, managePropertyCatalog }: { path: string;
   </div>;
   if (section === "my-issues" || (section === "issues" && !id)) return <>
     <div className="flex shrink-0 justify-end px-6 py-1"><Button variant="ghost" size="sm" onClick={() => navigation.push(`/${encodeURIComponent(slug)}/my-issues/properties`)}>管理属性</Button></div>
-    <NativeSubtasks onOpenThread={openThread} /><MyIssuesPage />
+    <ExecutionBoardRefresh workspaceId={workspaceId} /><MyIssuesPage />
+  </>;
+  if (section === "issues" && id && isExecutionIssueId(id)) return <>
+    <ExecutionBoardRefresh workspaceId={workspaceId} />
+    <ExecutionDetail key={id} id={id} workspaceId={workspaceId} onOpenThread={openThread} leadingAction={<WorkflowBackButton slug={slug} section="my-issues" label="返回我的任务" />} />
   </>;
   if (section === "issues" && id) return <IssueDetailRoute routeId={id} leadingAction={<WorkflowBackButton slug={slug} section="my-issues" label="返回我的任务" />} />;
   if (section === "autopilots") return id ? <AutopilotDetailPage autopilotId={id} leadingAction={<WorkflowBackButton slug={slug} section="autopilots" label="返回自动化" />} /> : <AutopilotsPage />;
@@ -248,7 +253,7 @@ function Surface({ session }: { session: Session }) {
                     <WorkflowBackButton slug={session.options.workspaceSlug} {...returnRoute} />}
                   {session.error ? <div role="alert" data-code={session.error}>工作流连接失败（{session.error}）。<button onClick={() => void session.bootstrap()}>重试</button></div>
                     : !session.ready ? <div role="status">正在加载…</div>
-                    : <SurfaceBoundary key={url.pathname}><Page path={path} slug={session.options.workspaceSlug} openThread={session.options.openThread} managePropertyCatalog={session.managePropertyCatalog} /><ModalRegistry /></SurfaceBoundary>}
+                    : <SurfaceBoundary key={url.pathname}><Page path={path} slug={session.options.workspaceSlug} workspaceId={session.options.workspaceId} openThread={session.options.openThread} managePropertyCatalog={session.managePropertyCatalog} /><ModalRegistry /></SurfaceBoundary>}
                 </div>
                 <Attribution />
                 <Toaster />

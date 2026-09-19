@@ -25,6 +25,18 @@ const MAX_SKILL_PATH_LENGTH: usize = 4096;
 const MAX_CAPABILITIES: usize = 128;
 const MAX_PAGE_HOST_PARAMS_BYTES: usize = 256 * 1024;
 
+/// Typed proof that continuation failed before invoking the native turn request.
+#[derive(Debug)]
+pub struct CodexContinueNotSent(pub anyhow::Error);
+
+impl std::fmt::Display for CodexContinueNotSent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for CodexContinueNotSent {}
+
 /// Methods used through the current Codex page's request client. Keep this
 /// enum closed so the renderer cannot turn the adapter into an arbitrary
 /// request proxy.
@@ -410,6 +422,13 @@ pub trait CodexExecutionService: Send + Sync {
         idempotency_key: &str,
     ) -> anyhow::Result<CodexExecutionHandle>;
     async fn open_thread(&self, thread_id: &str) -> anyhow::Result<CodexExecutionHandle>;
+    /// Read the latest native turn before an explicit same-thread continuation.
+    async fn latest_thread_status(
+        &self,
+        _thread_id: &str,
+    ) -> anyhow::Result<(CodexExecutionStatus, Option<String>)> {
+        bail!("native_thread_status_unavailable")
+    }
     async fn continue_thread(
         &self,
         thread_id: &str,
@@ -982,21 +1001,97 @@ impl CodexExecutionService for CodexPageExecutionClient {
         })
     }
 
+    async fn latest_thread_status(
+        &self,
+        thread_id: &str,
+    ) -> anyhow::Result<(CodexExecutionStatus, Option<String>)> {
+        validate_id(thread_id, "thread_id")?;
+        let generation = self.sync_generation()?;
+        self.ensure_native_task_host_at(generation).await?;
+        let response = self
+            .request_host_at(
+                generation,
+                CodexPageHostMethod::ThreadRead,
+                json!({"threadId":thread_id,"includeTurns":true}),
+            )
+            .await?;
+        if extract_thread_id(&response)? != thread_id {
+            bail!("codex_thread_id_mismatch");
+        }
+        let turns = response
+            .pointer("/thread/turns")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("native_thread_status_unavailable"))?;
+        // Any live turn prevents dispatch, even if the last array item is terminal.
+        let turn = turns
+            .iter()
+            .find(|turn| {
+                matches!(
+                    turn.get("status")
+                        .and_then(Value::as_str)
+                        .map(parse_execution_state),
+                    Some(
+                        CodexExecutionState::Running
+                            | CodexExecutionState::Queued
+                            | CodexExecutionState::CancelPending
+                    )
+                )
+            })
+            .or_else(|| turns.last())
+            .ok_or_else(|| anyhow!("native_thread_status_unavailable"))?;
+        let execution_id = turn
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("native_thread_status_unavailable"))?;
+        validate_id(execution_id, "execution_id")?;
+        Ok((
+            CodexExecutionStatus {
+                runtime_id: self.binding.runtime_id.clone(),
+                thread_id: thread_id.to_string(),
+                execution_id: execution_id.to_string(),
+                state: turn
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(parse_execution_state)
+                    .unwrap_or(CodexExecutionState::Unknown),
+                diagnostic: None,
+            },
+            response
+                .pointer("/thread/parentThreadId")
+                .or_else(|| {
+                    response.pointer("/thread/source/subAgent/thread_spawn/parent_thread_id")
+                })
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        ))
+    }
+
     async fn continue_thread(
         &self,
         thread_id: &str,
         request: CodexThreadRequest,
         idempotency_key: &str,
     ) -> anyhow::Result<CodexExecutionHandle> {
-        validate_id(thread_id, "thread_id")?;
-        request.validate()?;
-        let _guard = self.idempotency_guard("continue", idempotency_key).await?;
-        let generation = self.sync_generation()?;
-        if let Some(existing) = self.idempotent("continue", idempotency_key)? {
+        validate_id(thread_id, "thread_id").map_err(CodexContinueNotSent)?;
+        request.validate().map_err(CodexContinueNotSent)?;
+        let _guard = self
+            .idempotency_guard("continue", idempotency_key)
+            .await
+            .map_err(CodexContinueNotSent)?;
+        let generation = self.sync_generation().map_err(CodexContinueNotSent)?;
+        if let Some(existing) = self
+            .idempotent("continue", idempotency_key)
+            .map_err(CodexContinueNotSent)?
+        {
             return Ok(existing);
         }
-        let native_skills = self.resolve_request_skills_at(generation, &request).await?;
-        self.ensure_native_task_host_at(generation).await?;
+        let native_skills = self
+            .resolve_request_skills_at(generation, &request)
+            .await
+            .map_err(CodexContinueNotSent)?;
+        self.ensure_native_task_host_at(generation)
+            .await
+            .map_err(CodexContinueNotSent)?;
         let response = self
             .request_host_at(
                 generation,
@@ -1599,6 +1694,44 @@ mod tests {
             cwd: None,
             skill_request: None,
         }
+    }
+
+    #[tokio::test]
+    async fn native_continue_preflight_is_distinct_from_an_ambiguous_turn_request() {
+        let transport = FakeCodexPageHostTransport::default();
+        transport.push_response(
+            CodexPageHostMethod::Initialize,
+            Err(anyhow!("preflight_unavailable")),
+        );
+        let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
+        let error = client
+            .continue_thread("child", request("continue"), "same-key")
+            .await
+            .unwrap_err();
+        assert!(error.is::<CodexContinueNotSent>(), "{error}");
+        assert!(
+            transport
+                .calls()
+                .iter()
+                .all(|call| call.method != CodexPageHostMethod::TurnStart)
+        );
+        transport.push_response(
+            CodexPageHostMethod::TurnStart,
+            Err(anyhow!("transport_timeout")),
+        );
+        let ambiguous = client
+            .continue_thread("child", request("continue"), "same-key")
+            .await
+            .unwrap_err();
+        assert!(!ambiguous.is::<CodexContinueNotSent>());
+        assert_eq!(
+            transport
+                .calls()
+                .iter()
+                .filter(|call| call.method == CodexPageHostMethod::TurnStart)
+                .count(),
+            1
+        );
     }
 
     #[test]

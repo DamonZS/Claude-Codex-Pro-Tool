@@ -15,7 +15,7 @@ function fixture(asset = "app-initial-f61fcec072b5.js", skills = { data: [] }) {
   const client = { sendRequest: async (method, params) => { calls.push([method, params]); return skills; } };
   const context = {
     codexAppAssetUrl: () => `https://codex.invalid/assets/${asset}`,
-    loadCodexAppModule: async () => ({ Jpn: (received, host) => { assert.equal(received, scope); assert.equal(host, "local"); return client; } }),
+    loadCodexAppModule: async () => ({ [asset === "app-initial-6c4523b43a11.js" ? "Rpn" : "Jpn"]: (received, host) => { assert.equal(received, scope); assert.equal(host, "local"); return client; } }),
     codexPageHostAppScopeFromReactRoot: () => scope,
     codexPageHostIdFromActiveThread: () => "",
   };
@@ -32,6 +32,14 @@ test("audited asset uses existing page client without reinitialization or model 
   assert.equal(result.initializeResponse.pageHostProbe.skillInput, true);
   assert.ok(result.initializeResponse.pageHostProbe.methods.includes("turn/interrupt"));
   assert.equal(result.initializeResponse.capabilities.length, 0);
+});
+
+test("current audited Codex asset reuses its Rpn page client after reinjection", async () => {
+  const f = fixture("app-initial-6c4523b43a11.js");
+  const result = await f.codexPageHostClientFromAppInitial();
+  assert.equal(result.client, f.client);
+  assert.deepEqual(f.calls.map(([method]) => method), ["skills/list"]);
+  assert.equal(result.initializeResponse.pageHostProbe.asset, "app-initial-6c4523b43a11.js");
 });
 
 test("unknown assets never call a guessed minified accessor", async () => {

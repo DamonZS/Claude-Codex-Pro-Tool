@@ -248,6 +248,12 @@ pub trait BridgeRuntimeService: Send + Sync {
     ) -> anyhow::Result<Value> {
         anyhow::bail!("multica_execution_unavailable")
     }
+    async fn multica_native_execution_intent(
+        &self,
+        _request: NativeExecutionIntentRequest,
+    ) -> anyhow::Result<Value> {
+        anyhow::bail!("multica_execution_unavailable")
+    }
     async fn multica_execution_dispatch(
         &self,
         _request: MulticaExecutionDispatchRequest,
@@ -620,6 +626,15 @@ pub async fn handle_bridge_request(
                 ensure_multica_workspace_enabled(&ctx).await?;
                 ctx.runtime
                     .multica_skill_bindings_replace(parse_multica_skill_bindings_replace(&payload)?)
+                    .await
+            }
+            .await
+        }
+        "/multica/native-executions/intent" => {
+            async {
+                ensure_multica_workspace_enabled(&ctx).await?;
+                ctx.runtime
+                    .multica_native_execution_intent(parse_native_execution_intent(&payload)?)
                     .await
             }
             .await
@@ -1353,6 +1368,36 @@ pub struct MulticaExecutionDispatchRequest {
     pub lease_token: String,
 }
 
+pub const NATIVE_CONTINUE_PROMPT: &str =
+    "继续完成当前任务，检查剩余工作并完成验证；若已全部完成，简要确认结果。";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeExecutionIntentRequest {
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub intent: String,
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+fn parse_native_execution_intent(payload: &Value) -> anyhow::Result<NativeExecutionIntentRequest> {
+    let request: NativeExecutionIntentRequest = parse_multica_execution_payload(payload)?;
+    validate_multica_execution_id(&request.workspace_id)?;
+    validate_multica_execution_id(&request.thread_id)?;
+    validate_multica_execution_id(&request.idempotency_key)?;
+    if !matches!(request.intent.as_str(), "continue" | "enqueue")
+        || request
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt != NATIVE_CONTINUE_PROMPT)
+    {
+        anyhow::bail!("native_execution_intent_invalid");
+    }
+    Ok(request)
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MulticaExecutionBindingRequest {
@@ -1930,6 +1975,7 @@ pub struct CoreRuntimeService {
     multica_workspace_store: LocalMulticaWorkspaceStore,
     autopilot_trigger_lock: Arc<tokio::sync::Mutex<()>>,
     workspace_mutation_lock: Arc<tokio::sync::Mutex<()>>,
+    native_execution_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CoreRuntimeService {
@@ -1950,6 +1996,7 @@ impl CoreRuntimeService {
             multica_workspace_store: LocalMulticaWorkspaceStore::default(),
             autopilot_trigger_lock: Arc::new(tokio::sync::Mutex::new(())),
             workspace_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            native_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -3033,6 +3080,96 @@ impl BridgeRuntimeService for CoreRuntimeService {
         Ok(execution_handle_response(binding, handle))
     }
 
+    async fn multica_native_execution_intent(
+        &self,
+        request: NativeExecutionIntentRequest,
+    ) -> anyhow::Result<Value> {
+        if let Some(binding) = self.multica_execution_store.native_intent_replay(
+            &request.workspace_id,
+            &request.thread_id,
+            &request.idempotency_key,
+        )? {
+            self.require_execution_agent_access(&binding)?;
+            let command = self
+                .multica_execution_store
+                .get_command(&request.idempotency_key)?;
+            if binding.native_resume_command.as_deref() == Some(command.command_id.as_str()) {
+                return self.apply_pending_native_intent(binding, &request).await;
+            }
+            return Ok(json!({"status":"ok","binding":binding,"replay":true}));
+        }
+        let existing = self
+            .multica_execution_store
+            .execution_for_thread(&request.thread_id)?;
+        if let Some(binding) = existing.as_ref() {
+            if binding.workspace_id != request.workspace_id {
+                anyhow::bail!("workspace_mismatch");
+            }
+            self.require_execution_agent_access(binding)?;
+            if binding.native_resume && binding.native_resume_command.is_some() {
+                self.multica_execution_store.remember_native_intent(
+                    &binding.binding_id,
+                    binding.revision,
+                    &request.idempotency_key,
+                )?;
+                return self
+                    .apply_pending_native_intent(binding.clone(), &request)
+                    .await;
+            }
+        }
+        let service = self.codex_execution_service()?;
+        let (observed, parent) = service.latest_thread_status(&request.thread_id).await?;
+        if parent
+            .as_deref()
+            .or_else(|| {
+                existing
+                    .as_ref()
+                    .and_then(|binding| binding.parent_thread_id.as_deref())
+            })
+            .is_none()
+        {
+            anyhow::bail!("native_subagent_parent_unavailable");
+        }
+        use crate::codex_execution::CodexExecutionState;
+        if matches!(
+            observed.state,
+            CodexExecutionState::Running
+                | CodexExecutionState::Queued
+                | CodexExecutionState::CancelPending
+        ) {
+            let receipt = self.multica_execution_store.queue_native_resume(
+                &request.workspace_id,
+                &observed,
+                parent,
+                &request.idempotency_key,
+                unix_now_ms(),
+            )?;
+            return Ok(
+                json!({"status":"ok","alreadyActive":true,"executionStatus":observed,"binding":receipt.binding}),
+            );
+        }
+        // Existing bindings retain their invocation rules; native-only threads need no fabricated Agent.
+        let reserved = self.multica_execution_store.queue_native_resume(
+            &request.workspace_id,
+            &observed,
+            parent,
+            &request.idempotency_key,
+            unix_now_ms(),
+        )?;
+        self.require_execution_agent_access(&reserved.binding)?;
+        if reserved.binding.native_resume_command.is_some() {
+            self.multica_execution_store.remember_native_intent(
+                &reserved.binding.binding_id,
+                reserved.binding.revision,
+                &request.idempotency_key,
+            )?;
+            return self
+                .apply_pending_native_intent(reserved.binding, &request)
+                .await;
+        }
+        Ok(json!({"status":"ok","binding":reserved.binding,"replay":reserved.replay}))
+    }
+
     async fn multica_execution_dispatch(
         &self,
         request: MulticaExecutionDispatchRequest,
@@ -3056,6 +3193,11 @@ impl BridgeRuntimeService for CoreRuntimeService {
     ) -> anyhow::Result<Value> {
         let binding = self.multica_execution_store.get_execution(binding_id)?;
         self.require_execution_agent_access(&binding)?;
+        if binding.native_resume && binding.native_resume_command.is_some() {
+            return self
+                .dispatch_native_resume(binding, expected_revision, lease_token)
+                .await;
+        }
         if binding.revision != expected_revision {
             anyhow::bail!("execution_revision_conflict");
         }
@@ -3660,6 +3802,219 @@ impl BridgeRuntimeService for CoreRuntimeService {
 }
 
 impl CoreRuntimeService {
+    async fn apply_pending_native_intent(
+        &self,
+        binding: CodexMulticaExecutionBinding,
+        request: &NativeExecutionIntentRequest,
+    ) -> anyhow::Result<Value> {
+        if binding.state == MulticaExecutionBindingState::Reconciling {
+            return self.reconcile_native_resume(binding).await;
+        }
+        if request.intent == "continue"
+            && binding.state == MulticaExecutionBindingState::BindingPending
+        {
+            return self
+                .dispatch_native_resume(binding.clone(), binding.revision, &request.idempotency_key)
+                .await;
+        }
+        Ok(json!({"status":"ok","binding":binding,"replay":true}))
+    }
+
+    async fn reconcile_native_resume(
+        &self,
+        candidate: CodexMulticaExecutionBinding,
+    ) -> anyhow::Result<Value> {
+        let _guard = self.native_execution_lock.lock().await;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&candidate.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
+        if binding.state != MulticaExecutionBindingState::Reconciling {
+            return Ok(json!({"status":"ok","binding":binding,"replay":true}));
+        }
+        let command_id = binding
+            .native_resume_command
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("native_dispatch_outcome_pending"))?;
+        let command = self.multica_execution_store.get_command(command_id)?;
+        let thread_id = binding
+            .codex_thread_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("native_dispatch_outcome_pending"))?;
+        let (observed, _) = self
+            .codex_execution_service()?
+            .latest_thread_status(thread_id)
+            .await
+            .map_err(|_| anyhow::anyhow!("native_dispatch_outcome_pending"))?;
+        if observed.state == crate::codex_execution::CodexExecutionState::Unknown
+            || command.previous_execution_id.is_none()
+            || command.previous_execution_id.as_deref() == Some(observed.execution_id.as_str())
+        {
+            anyhow::bail!("native_dispatch_outcome_pending");
+        }
+        // Recovery only reads the native thread; it never retries turn/start.
+        let handle = CodexExecutionHandle {
+            runtime_id: observed.runtime_id.clone(),
+            thread_id: thread_id.to_string(),
+            execution_id: Some(observed.execution_id.clone()),
+            parent_thread_id: binding.parent_thread_id.clone(),
+            idempotency_key: command_id.to_string(),
+        };
+        let (_, committed) = self.multica_execution_store.commit_continue(
+            command_id,
+            binding.revision,
+            &handle,
+            unix_now_ms(),
+        )?;
+        let mut recovered = self.multica_execution_store.record_status(
+            &committed.binding_id,
+            committed.revision,
+            &observed,
+            unix_now_ms(),
+        )?;
+        if let Some(token) = recovered.lease_token.as_deref() {
+            recovered = self.multica_execution_store.release_execution_lease(
+                &recovered.binding_id,
+                recovered.revision,
+                token,
+                unix_now_ms(),
+            )?;
+        }
+        Ok(json!({"status":"ok","binding":recovered,"replay":true,"reconciled":true}))
+    }
+
+    async fn dispatch_native_resume(
+        &self,
+        candidate: CodexMulticaExecutionBinding,
+        expected_revision: u64,
+        lease_token: &str,
+    ) -> anyhow::Result<Value> {
+        let _guard = self.native_execution_lock.lock().await;
+        let binding = self
+            .multica_execution_store
+            .get_execution(&candidate.binding_id)?;
+        self.require_execution_agent_access(&binding)?;
+        if binding.revision != expected_revision {
+            anyhow::bail!("execution_revision_conflict");
+        }
+        if !binding.native_resume || binding.state != MulticaExecutionBindingState::BindingPending {
+            anyhow::bail!("execution_not_dispatchable");
+        }
+        let command_id = binding
+            .native_resume_command
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_command_unknown"))?;
+        let thread_id = binding
+            .codex_thread_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("execution_binding_pending"))?;
+        let service = self.codex_execution_service()?;
+        let (observed, _) = service.latest_thread_status(&thread_id).await?;
+        if observed.state == crate::codex_execution::CodexExecutionState::Unknown {
+            anyhow::bail!("native_thread_status_unavailable");
+        }
+        self.validate_agent_runtime_selection(&binding.workspace_id, binding.agent_id.as_deref())?;
+        let bindings = if let Some(agent_id) = binding.agent_id.as_deref() {
+            agent_skill_bindings(
+                &self.multica_execution_store,
+                &binding.workspace_id,
+                agent_id,
+            )?
+        } else {
+            SkillBindings::default()
+        };
+        let (skill_request, _) = resolve_execution_skills(Arc::clone(&service), bindings).await?;
+        let claimed = self
+            .multica_execution_store
+            .claim_execution_lease_with_capacity(
+                &binding.binding_id,
+                expected_revision,
+                lease_token,
+                unix_now_ms(),
+                30_000,
+                self.agent_concurrency_limit(&binding)?,
+            )?;
+        let dispatching = self.multica_execution_store.mark_native_resume_dispatch(
+            &binding.binding_id,
+            claimed.revision,
+            lease_token,
+            unix_now_ms(),
+        )?;
+        let result = async {
+            use crate::codex_execution::CodexExecutionState;
+            let already_active = matches!(
+                observed.state,
+                CodexExecutionState::Running
+                    | CodexExecutionState::Queued
+                    | CodexExecutionState::CancelPending
+            );
+            let handle = if already_active {
+                CodexExecutionHandle {
+                    runtime_id: observed.runtime_id.clone(),
+                    thread_id: thread_id.clone(),
+                    execution_id: Some(observed.execution_id.clone()),
+                    parent_thread_id: binding.parent_thread_id.clone(),
+                    idempotency_key: command_id.clone(),
+                }
+            } else {
+                service
+                    .continue_thread(
+                        &thread_id,
+                        CodexThreadRequest {
+                            workspace_id: binding.workspace_id.clone(),
+                            issue_id: binding.issue_id.clone(),
+                            prompt: NATIVE_CONTINUE_PROMPT.to_string(),
+                            cwd: None,
+                            skill_request,
+                        },
+                        &command_id,
+                    )
+                    .await?
+            };
+            let (_, committed) = self.multica_execution_store.commit_continue(
+                &command_id,
+                dispatching.revision,
+                &handle,
+                unix_now_ms(),
+            )?;
+            Ok::<_, anyhow::Error>((committed, handle, already_active))
+        }
+        .await;
+        match result {
+            Ok((committed, handle, already_active)) => {
+                let released = self.multica_execution_store.release_execution_lease(
+                    &committed.binding_id,
+                    committed.revision,
+                    lease_token,
+                    unix_now_ms(),
+                )?;
+                Ok(
+                    json!({"status":"ok","binding":released,"handle":handle,"alreadyActive":already_active}),
+                )
+            }
+            Err(error) => {
+                if error.is::<crate::codex_execution::CodexContinueNotSent>() {
+                    self.multica_execution_store
+                        .restore_native_resume_after_preflight(
+                            &dispatching.binding_id,
+                            dispatching.revision,
+                            lease_token,
+                            &stable_execution_error_code(&error),
+                            unix_now_ms(),
+                        )?;
+                    return Err(error);
+                }
+                let _ = self.multica_execution_store.release_execution_lease(
+                    &dispatching.binding_id,
+                    dispatching.revision,
+                    lease_token,
+                    unix_now_ms(),
+                );
+                Err(error)
+            }
+        }
+    }
+
     fn workspace_entity(
         &self,
         workspace_id: &str,
@@ -4459,6 +4814,7 @@ mod tests {
         requests: Mutex<Vec<CodexThreadRequest>>,
         subagent_parents: Mutex<Vec<String>>,
         skills: Vec<CodexSkill>,
+        continue_preflight_failure: Mutex<bool>,
     }
 
     impl Default for RecordingCodexHost {
@@ -4467,6 +4823,7 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
                 subagent_parents: Mutex::new(Vec::new()),
                 skills: Vec::new(),
+                continue_preflight_failure: Mutex::new(false),
             }
         }
     }
@@ -4547,11 +4904,36 @@ mod tests {
 
         async fn continue_thread(
             &self,
-            _thread_id: &str,
-            _request: CodexThreadRequest,
-            _idempotency_key: &str,
+            thread_id: &str,
+            request: CodexThreadRequest,
+            idempotency_key: &str,
         ) -> anyhow::Result<CodexExecutionHandle> {
-            bail!("unused")
+            if *self.continue_preflight_failure.lock().unwrap() {
+                return Err(
+                    crate::codex_execution::CodexContinueNotSent(anyhow::anyhow!(
+                        "preflight_unavailable"
+                    ))
+                    .into(),
+                );
+            }
+            self.requests.lock().unwrap().push(request);
+            Ok(CodexExecutionHandle {
+                runtime_id: "codex-current-page".into(),
+                thread_id: thread_id.into(),
+                execution_id: Some("next-turn".into()),
+                parent_thread_id: Some("parent".into()),
+                idempotency_key: idempotency_key.into(),
+            })
+        }
+
+        async fn latest_thread_status(
+            &self,
+            thread_id: &str,
+        ) -> anyhow::Result<(CodexExecutionStatus, Option<String>)> {
+            Ok((
+                self.execution_status(thread_id, "old-turn").await?,
+                Some("parent".into()),
+            ))
         }
 
         async fn cancel_execution(
@@ -4627,6 +5009,41 @@ mod tests {
             .unwrap();
         let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
         (dir, executions, workspace, workspace_id)
+    }
+
+    #[tokio::test]
+    async fn native_drag_definite_preflight_failure_preserves_retryable_queue() {
+        let (dir, store, workspace, workspace_id) = dispatch_fixture();
+        let host = Arc::new(RecordingCodexHost::default());
+        *host.continue_preflight_failure.lock().unwrap() = true;
+        let runtime =
+            CoreRuntimeService::new(9229, StatusStore::new(dir.path().join("status.json")))
+                .with_multica_execution_store(store.clone())
+                .with_multica_workspace_store(workspace)
+                .with_codex_execution_service(host.clone());
+        let request = || super::NativeExecutionIntentRequest {
+            workspace_id: workspace_id.clone(),
+            thread_id: "child".into(),
+            intent: "continue".into(),
+            idempotency_key: "preflight-retry".into(),
+            prompt: None,
+        };
+        assert!(
+            runtime
+                .multica_native_execution_intent(request())
+                .await
+                .is_err()
+        );
+        let pending = store.execution_for_thread("child").unwrap().unwrap();
+        assert_eq!(pending.state, MulticaExecutionBindingState::BindingPending);
+        assert!(host.requests.lock().unwrap().is_empty());
+        *host.continue_preflight_failure.lock().unwrap() = false;
+        let result = runtime
+            .multica_native_execution_intent(request())
+            .await
+            .unwrap();
+        assert_eq!(result["binding"]["codexExecutionId"], "next-turn");
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
     }
 
     fn autopilot_fixture(
@@ -5764,6 +6181,7 @@ mod tests {
         let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
         let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let host = Arc::new(RecordingCodexHost {
+            continue_preflight_failure: Mutex::new(false),
             requests: Mutex::new(Vec::new()),
             subagent_parents: Mutex::new(Vec::new()),
             skills: vec![CodexSkill {
@@ -5815,6 +6233,7 @@ mod tests {
         let workspace = LocalMulticaWorkspaceStore::new(dir.path().join("workspace.json"));
         let executions = MulticaExecutionStore::new(dir.path().join("execution.json"));
         let host = Arc::new(RecordingCodexHost {
+            continue_preflight_failure: Mutex::new(false),
             requests: Mutex::new(Vec::new()),
             subagent_parents: Mutex::new(Vec::new()),
             skills: vec![CodexSkill {

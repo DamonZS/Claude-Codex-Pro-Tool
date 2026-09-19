@@ -3039,3 +3039,560 @@ impl LaunchHooks for ContextHooks {
 
     async fn terminate_codex(&self, _launch: &CodexLaunch) {}
 }
+
+#[tokio::test]
+async fn native_drag_enqueue_continues_the_existing_thread_once() {
+    let (ctx, transport, _dir) = multica_execution_test_context();
+    transport.push_response(CodexPageHostMethod::Initialize, Ok(json!({
+        "provider":"codex", "pageHostProbe":{"methods":["thread/start","thread/read","turn/start","turn/interrupt","skills/list"],"skillInput":true}
+    })));
+    let thread = json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"old-turn","status":"completed"}]}});
+    transport.push_response(CodexPageHostMethod::ThreadRead, Ok(thread.clone()));
+    let queued = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({
+        "workspaceId":"local-test", "threadId":"native-child", "intent":"enqueue", "idempotencyKey":"native-drag-1"
+    })).await;
+    assert_eq!(queued["status"], "ok", "{queued}");
+    assert_eq!(queued["binding"]["state"], "binding_pending");
+    assert_eq!(queued["binding"]["codexThreadId"], "native-child");
+    assert!(transport.calls().iter().all(|r| !matches!(
+        r.method,
+        CodexPageHostMethod::TurnStart
+            | CodexPageHostMethod::ThreadStart
+            | CodexPageHostMethod::ThreadFork
+    )));
+    transport.push_response(CodexPageHostMethod::ThreadRead, Ok(thread));
+    transport.push_response(
+        CodexPageHostMethod::TurnStart,
+        Ok(json!({"turn":{"id":"next-turn","status":"inProgress"}})),
+    );
+    let started = handle_bridge_request(ctx.clone(), "/multica/executions/dispatch", json!({
+        "bindingId":queued["binding"]["bindingId"], "expectedRevision":queued["binding"]["revision"], "leaseToken":"native-worker-1"
+    })).await;
+    assert_eq!(started["status"], "ok", "{started}");
+    assert_eq!(started["binding"]["codexThreadId"], "native-child");
+    let calls = transport.calls();
+    let turns = calls
+        .iter()
+        .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].params["threadId"], "native-child");
+    assert_eq!(
+        turns[0].params["input"][0]["text"],
+        "继续完成当前任务，检查剩余工作并完成验证；若已全部完成，简要确认结果。"
+    );
+    let replay = handle_bridge_request(ctx, "/multica/native-executions/intent", json!({
+        "workspaceId":"local-test", "threadId":"native-child", "intent":"enqueue", "idempotencyKey":"native-drag-1"
+    })).await;
+    assert_eq!(replay["status"], "ok", "{replay}");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        1
+    );
+}
+
+fn native_thread_fixture(status: &str) -> Value {
+    json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"old-turn","status":status}]}})
+}
+fn native_host_ready(transport: &FakeCodexPageHostTransport) {
+    transport.push_response(CodexPageHostMethod::Initialize, Ok(json!({
+        "provider":"codex", "pageHostProbe":{"methods":["thread/start","thread/read","turn/start","turn/interrupt","skills/list"],"skillInput":true}
+    })));
+}
+
+#[tokio::test]
+async fn native_drag_continue_failed_and_completed_reuses_thread_and_polls_result() {
+    for state in ["completed", "failed", "interrupted"] {
+        let (ctx, transport, dir) = multica_execution_test_context();
+        native_host_ready(&transport);
+        for _ in 0..2 {
+            transport.push_response(
+                CodexPageHostMethod::ThreadRead,
+                Ok(native_thread_fixture(state)),
+            );
+        }
+        transport.push_response(
+            CodexPageHostMethod::TurnStart,
+            Ok(json!({"turn":{"id":"new-turn","status":"inProgress"}})),
+        );
+        let started = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"go-again"})).await;
+        assert_eq!(started["status"], "ok", "{started}");
+        assert_eq!(started["binding"]["state"], "dispatched");
+        assert_eq!(started["binding"]["nativeResume"], true);
+        assert_eq!(started["binding"]["codexThreadId"], "native-child");
+        assert_eq!(started["binding"]["codexExecutionId"], "new-turn");
+        transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread":{"id":"native-child","turns":[{"id":"new-turn","status":"failed"}]}})));
+        let result = handle_bridge_request(
+            ctx.clone(),
+            "/multica/executions/status",
+            json!({"bindingId":started["binding"]["bindingId"]}),
+        )
+        .await;
+        assert_eq!(result["binding"]["state"], "failed", "{result}");
+        let persisted = std::fs::read_to_string(dir.path().join("multica-execution.json")).unwrap();
+        assert!(!persisted.contains("继续完成当前任务"));
+        assert!(transport.calls().iter().all(|r| !matches!(
+            r.method,
+            CodexPageHostMethod::ThreadStart | CodexPageHostMethod::ThreadFork
+        )));
+        assert!(
+            transport
+                .calls()
+                .iter()
+                .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+                .all(|r| r.params["threadId"] == "native-child")
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_drag_concurrent_enqueue_reserves_one_binding_and_one_command() {
+    let (ctx, transport, dir) = multica_execution_test_context();
+    native_host_ready(&transport);
+    for _ in 0..2 {
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+    }
+    let (a, b) = tokio::join!(
+        handle_bridge_request(
+            ctx.clone(),
+            "/multica/native-executions/intent",
+            json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"drag-a"})
+        ),
+        handle_bridge_request(
+            ctx,
+            "/multica/native-executions/intent",
+            json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"drag-b"})
+        )
+    );
+    assert_eq!(a["status"], "ok", "{a}");
+    assert_eq!(b["status"], "ok", "{b}");
+    assert_eq!(a["binding"]["bindingId"], b["binding"]["bindingId"]);
+    assert!(a["binding"]["codexExecutionId"].is_null());
+    let state: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("multica-execution.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["executionBindings"].as_array().unwrap().len(), 1);
+    assert_eq!(state["executionCommands"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn native_drag_running_and_unknown_never_start_an_extra_turn() {
+    for status in ["inProgress", "unknown"] {
+        let (ctx, transport, dir) = multica_execution_test_context();
+        native_host_ready(&transport);
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture(status)),
+        );
+        let result = handle_bridge_request(ctx, "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"duplicate"})).await;
+        assert_eq!(
+            result["status"],
+            if status == "inProgress" {
+                "ok"
+            } else {
+                "failed"
+            },
+            "{result}"
+        );
+        if status == "inProgress" {
+            assert_eq!(result["alreadyActive"], true);
+        }
+        assert_eq!(
+            dir.path().join("multica-execution.json").exists(),
+            status == "inProgress"
+        );
+        assert_eq!(
+            transport
+                .calls()
+                .iter()
+                .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+                .count(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_drag_invalid_intents_and_custom_prompts_never_reach_native_host() {
+    for payload in [
+        json!({"workspaceId":"local-test","threadId":"native-child","intent":"done","idempotencyKey":"invalid"}),
+        json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"invalid","prompt":"replace task"}),
+    ] {
+        let (ctx, transport, _) = multica_execution_test_context();
+        let result = handle_bridge_request(ctx, "/multica/native-executions/intent", payload).await;
+        assert_eq!(result["status"], "failed");
+        assert!(transport.calls().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn native_drag_ambiguous_dispatch_is_not_automatically_retried() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    for _ in 0..2 {
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+    }
+    transport.push_response(
+        CodexPageHostMethod::TurnStart,
+        Err(anyhow::anyhow!("transport_timeout")),
+    );
+    let request = json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"timeout-drag"});
+    let failed = handle_bridge_request(
+        ctx.clone(),
+        "/multica/native-executions/intent",
+        request.clone(),
+    )
+    .await;
+    assert_eq!(failed["status"], "failed", "{failed}");
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(native_thread_fixture("completed")),
+    );
+    let replay =
+        handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", request).await;
+    assert_eq!(
+        replay["status"], "failed",
+        "ambiguous continuation must not be acknowledged as a fresh queued success: {replay}"
+    );
+    assert_eq!(replay["message"], "native_dispatch_outcome_pending");
+    let listed = handle_bridge_request(
+        ctx.clone(),
+        "/multica/executions/list",
+        json!({"workspaceId":"local-test"}),
+    )
+    .await;
+    assert_eq!(listed["items"][0]["state"], "reconciling");
+    let retry = handle_bridge_request(ctx, "/multica/executions/dispatch", json!({"bindingId":listed["items"][0]["bindingId"],"expectedRevision":listed["items"][0]["revision"],"leaseToken":"worker-retry"})).await;
+    assert_eq!(retry["status"], "failed");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn native_drag_deduplicates_two_dispatchers_and_never_targets_parent() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(native_thread_fixture("completed")),
+    );
+    let queued = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"queue-once"})).await;
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(native_thread_fixture("completed")),
+    );
+    transport.push_response(
+        CodexPageHostMethod::TurnStart,
+        Ok(json!({"turn":{"id":"new-turn","status":"inProgress"}})),
+    );
+    let payload = json!({"bindingId":queued["binding"]["bindingId"],"expectedRevision":queued["binding"]["revision"],"leaseToken":"worker-a"});
+    let (a, b) = tokio::join!(
+        handle_bridge_request(ctx.clone(), "/multica/executions/dispatch", payload.clone()),
+        handle_bridge_request(ctx, "/multica/executions/dispatch", payload)
+    );
+    assert!(a["status"] == "ok" || b["status"] == "ok");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        1
+    );
+    assert!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .all(|r| r.params["threadId"] == "native-child")
+    );
+}
+
+#[tokio::test]
+async fn native_drag_checks_live_turns_even_when_the_last_array_entry_is_completed() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"live","status":"inProgress"},{"id":"old","status":"completed"}]}})));
+    let result = handle_bridge_request(ctx, "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"no-duplicate"})).await;
+    assert_eq!(result["alreadyActive"], true, "{result}");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn native_drag_does_not_execute_a_parent_or_cross_workspace_replay() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(json!({"thread":{"id":"native-parent","turns":[{"id":"old","status":"completed"}]}})),
+    );
+    let result = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-parent","intent":"continue","idempotencyKey":"parent-no"})).await;
+    assert_eq!(result["message"], "native_subagent_parent_unavailable");
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(native_thread_fixture("completed")),
+    );
+    let queued = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"local-queue"})).await;
+    assert_eq!(queued["status"], "ok", "{queued}");
+    let denied = handle_bridge_request(ctx, "/multica/native-executions/intent", json!({"workspaceId":"another-workspace","threadId":"native-child","intent":"continue","idempotencyKey":"cross-queue"})).await;
+    assert_eq!(denied["message"], "workspace_mismatch");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn native_drag_retry_reconciles_a_lost_response_without_starting_a_second_turn() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    for _ in 0..2 {
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+    }
+    transport.push_response(
+        CodexPageHostMethod::TurnStart,
+        Err(anyhow::anyhow!("transport_timeout")),
+    );
+    let request = json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"lost-response"});
+    assert_eq!(
+        handle_bridge_request(
+            ctx.clone(),
+            "/multica/native-executions/intent",
+            request.clone()
+        )
+        .await["status"],
+        "failed"
+    );
+    transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"old-turn","status":"completed"},{"id":"actual-new-turn","status":"completed"}]}})));
+    let recovered = handle_bridge_request(ctx, "/multica/native-executions/intent", request).await;
+    assert_eq!(recovered["status"], "ok", "{recovered}");
+    assert_eq!(recovered["binding"]["codexExecutionId"], "actual-new-turn");
+    assert_eq!(recovered["binding"]["state"], "completed");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn native_drag_queued_to_running_dispatches_for_same_or_new_intent_key() {
+    for key in ["queue-key", "run-key"] {
+        let (ctx, transport, _) = multica_execution_test_context();
+        native_host_ready(&transport);
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+        let queued = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"queue-key"})).await;
+        assert_eq!(queued["binding"]["state"], "binding_pending", "{queued}");
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+        transport.push_response(
+            CodexPageHostMethod::TurnStart,
+            Ok(json!({"turn":{"id":"new-turn","status":"inProgress"}})),
+        );
+        let request = json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":key});
+        let started = handle_bridge_request(
+            ctx.clone(),
+            "/multica/native-executions/intent",
+            request.clone(),
+        )
+        .await;
+        assert_eq!(started["status"], "ok", "{started}");
+        assert_eq!(started["binding"]["state"], "dispatched", "{started}");
+        assert_eq!(
+            started["binding"]["bindingId"],
+            queued["binding"]["bindingId"]
+        );
+        assert_eq!(started["binding"]["codexExecutionId"], "new-turn");
+        let calls_before_replay = transport.calls().len();
+        assert_eq!(
+            handle_bridge_request(
+                ctx.clone(),
+                "/multica/native-executions/intent",
+                request.clone()
+            )
+            .await["status"],
+            "ok"
+        );
+        assert_eq!(transport.calls().len(), calls_before_replay);
+        transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread":{"id":"native-child","turns":[{"id":"new-turn","status":"completed"}]}})));
+        let terminal = handle_bridge_request(
+            ctx.clone(),
+            "/multica/executions/status",
+            json!({"bindingId":queued["binding"]["bindingId"]}),
+        )
+        .await;
+        assert_eq!(terminal["binding"]["state"], "completed", "{terminal}");
+        let late_replay =
+            handle_bridge_request(ctx, "/multica/native-executions/intent", request).await;
+        assert_eq!(
+            late_replay["binding"]["state"], "completed",
+            "{late_replay}"
+        );
+        assert_eq!(
+            transport
+                .calls()
+                .iter()
+                .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_drag_active_noop_key_stays_noop_after_the_turn_finishes() {
+    let (ctx, transport, _) = multica_execution_test_context();
+    native_host_ready(&transport);
+    transport.push_response(
+        CodexPageHostMethod::ThreadRead,
+        Ok(native_thread_fixture("inProgress")),
+    );
+    let request = json!({"workspaceId":"local-test","threadId":"native-child","intent":"continue","idempotencyKey":"already-running"});
+    let active = handle_bridge_request(
+        ctx.clone(),
+        "/multica/native-executions/intent",
+        request.clone(),
+    )
+    .await;
+    assert_eq!(active["alreadyActive"], true, "{active}");
+    for (workspace, thread) in [
+        ("another-workspace", "native-child"),
+        ("local-test", "another-thread"),
+    ] {
+        let rejected = handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", json!({"workspaceId":workspace,"threadId":thread,"intent":"continue","idempotencyKey":"already-running"})).await;
+        assert_eq!(
+            rejected["message"], "execution_command_idempotency_conflict",
+            "{rejected}"
+        );
+    }
+    for _ in 0..2 {
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+    }
+    let replay = handle_bridge_request(ctx, "/multica/native-executions/intent", request).await;
+    assert_eq!(replay["status"], "ok", "{replay}");
+    assert_eq!(
+        transport
+            .calls()
+            .iter()
+            .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn native_drag_enqueue_key_recovers_dispatch_timeout_with_only_thread_read() {
+    for (native_state, binding_state) in [
+        ("inProgress", "running"),
+        ("failed", "failed"),
+        ("interrupted", "cancelled"),
+        ("unknown", "reconciling"),
+    ] {
+        let (ctx, transport, _) = multica_execution_test_context();
+        native_host_ready(&transport);
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+        let request = json!({"workspaceId":"local-test","threadId":"native-child","intent":"enqueue","idempotencyKey":"queued-timeout"});
+        let queued = handle_bridge_request(
+            ctx.clone(),
+            "/multica/native-executions/intent",
+            request.clone(),
+        )
+        .await;
+        transport.push_response(
+            CodexPageHostMethod::ThreadRead,
+            Ok(native_thread_fixture("completed")),
+        );
+        transport.push_response(
+            CodexPageHostMethod::TurnStart,
+            Err(anyhow::anyhow!("transport_timeout")),
+        );
+        let failed = handle_bridge_request(ctx.clone(), "/multica/executions/dispatch", json!({"bindingId":queued["binding"]["bindingId"], "expectedRevision":queued["binding"]["revision"], "leaseToken":"queue-worker"})).await;
+        assert_eq!(failed["status"], "failed");
+        let calls_before = transport.calls().len();
+        transport.push_response(CodexPageHostMethod::ThreadRead, Ok(json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"actual-turn","status":native_state}]}})));
+        let result =
+            handle_bridge_request(ctx.clone(), "/multica/native-executions/intent", request).await;
+        assert_eq!(
+            result["status"],
+            if native_state == "unknown" {
+                "failed"
+            } else {
+                "ok"
+            },
+            "{result}"
+        );
+        let listed = handle_bridge_request(
+            ctx,
+            "/multica/executions/list",
+            json!({"workspaceId":"local-test"}),
+        )
+        .await;
+        assert_eq!(listed["items"][0]["state"], binding_state, "{listed}");
+        assert!(
+            transport.calls()[calls_before..]
+                .iter()
+                .all(|r| r.method == CodexPageHostMethod::ThreadRead)
+        );
+        assert_eq!(
+            transport
+                .calls()
+                .iter()
+                .filter(|r| r.method == CodexPageHostMethod::TurnStart)
+                .count(),
+            1
+        );
+    }
+}

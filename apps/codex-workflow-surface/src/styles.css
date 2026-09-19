@@ -46,14 +46,13 @@
 .ccp-workflow-license { width: min(720px, 90%); max-width: 90%; max-height: 85%; }
 .ccp-workflow-license pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 
-.ccp-native-subtasks { flex-shrink: 0; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
-.ccp-native-subtasks-header, .ccp-native-subtasks li { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.ccp-native-subtasks-header { justify-content: space-between; }
-.ccp-native-subtasks h2 { font-size: 13px; font-weight: 600; }
-.ccp-native-subtasks ul { max-height: 220px; overflow: auto; margin: 6px 0; }
-.ccp-native-subtasks li { padding: 4px 0; }
-.ccp-native-subtasks button { cursor: pointer; text-underline-offset: 3px; }
-.ccp-native-subtasks button:hover { text-decoration: underline; }
-.ccp-native-subtasks button:disabled { opacity: .5; cursor: default; }
-.ccp-native-subtasks time { color: var(--muted-foreground); margin-left: auto; }
-.ccp-native-subtask-name { min-width: 90px; text-align: left; font-weight: 500; }
+.ccp-execution-badge { display: inline-block; max-width: 100%; font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; }
+.ccp-execution-refresh { flex-shrink: 0; }
+.ccp-execution-refresh [role="alert"] { padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.ccp-execution-refresh button { margin-left: 12px; text-decoration: underline; cursor: pointer; }
+.ccp-execution-detail { padding: 16px 24px; overflow-wrap: anywhere; }
+.ccp-execution-detail h1 { font-size: 18px; font-weight: 600; margin: 16px 0 8px; }
+.ccp-execution-detail p, .ccp-execution-detail time { font-size: 12px; color: var(--muted-foreground); }
+.ccp-execution-detail-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.ccp-execution-detail-actions button { cursor: pointer; }
+.ccp-execution-detail-actions button:hover { text-decoration: underline; }

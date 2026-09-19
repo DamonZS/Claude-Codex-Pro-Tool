@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isExecutionIssueId } from "../../../../../../src/execution-issue";
 "use client";
 
 import { useCallback, useMemo } from "react";
@@ -57,6 +59,7 @@ export function useIssueSurfaceActions({
       updates: Partial<UpdateIssueRequest>,
       options?: IssueSurfaceMutationOptions,
     ) => {
+      if (isExecutionIssueId(issueId)) { options?.onSettled?.(); return; }
       updateIssueMutation.mutate(
         { id: issueId, ...updates },
         {
@@ -86,6 +89,7 @@ export function useIssueSurfaceActions({
       onSettled?: () => void,
     ) => {
       const { before_id, after_id, ...optimisticUpdates } = updates;
+      if (isExecutionIssueId(issueId)) { onSettled?.(); return; }
       updateIssueMutation.mutate(
         {
           id: issueId,
@@ -132,10 +136,12 @@ export function useIssueSurfaceActions({
           ...options,
         }),
       batchUpdate: async (issueIds, updates) => {
-        await batchUpdateMutation.mutateAsync({ ids: issueIds, updates });
+        const ids = issueIds.filter((id) => !isExecutionIssueId(id));
+        if (ids.length) await batchUpdateMutation.mutateAsync({ ids, updates });
       },
       batchDelete: async (issueIds) => {
-        await batchDeleteMutation.mutateAsync(issueIds);
+        const ids = issueIds.filter((id) => !isExecutionIssueId(id));
+        if (ids.length) await batchDeleteMutation.mutateAsync(ids);
       },
     }),
     [

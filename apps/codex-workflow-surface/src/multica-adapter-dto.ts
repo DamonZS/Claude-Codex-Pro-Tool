@@ -267,6 +267,9 @@ export function taskDto(source: JsonRecord): JsonRecord {
     completed_at: timestamp(source.completedAtMs), result: null, error: nullable(source.lastErrorCode),
     ...(source.lastErrorCode ? { failure_reason: text(source.lastErrorCode) } : {}), created_at: createdAt, revision: source.revision,
     attempt: source.attemptNo, binding_id: source.bindingId, thread_id: source.codexThreadId ?? null,
+    created_at_ms: source.createdAtMs, updated_at_ms: source.updatedAtMs,
+    native_resume: source.nativeResume === true,
+    execution_state: state, updated_at: timestamp(source.updatedAtMs), parent_thread_id: source.parentThreadId ?? null,
   };
 }
 

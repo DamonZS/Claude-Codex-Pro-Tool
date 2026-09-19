@@ -1,3 +1,4 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
 "use client";
 
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
@@ -181,6 +182,7 @@ export const BoardColumn = memo(function BoardColumn({
           issue.project_id ? projectMap?.get(issue.project_id) : undefined
         }
         disableSorting={!!sortLabel}
+        nativeExecutionDrag={group.status !== undefined}
       />
     </div>
   );
@@ -261,6 +263,7 @@ export const BoardColumn = memo(function BoardColumn({
         )}
         <div
           ref={mergedRef}
+          data-ccp-status-category={group.status}
           // Per-column scroll registration for the tab session memento
           // (MUL-4741): the group id is the stable memento key, so every
           // column's offset survives tab switches/reloads independently.

@@ -10,7 +10,8 @@ const end = source.indexOf("  async function multicaWorkspaceRunExecutionAction(
 assert.ok(start > 0 && end > start);
 
 function fixture({ collapsed = false, mismatch = false, subagent = false, allowed = true,
-  panelKind = "background-agent", selectedId = "thread-1", loading = false, selected = true, openerMissing = false } = {}) {
+  panelKind = "background-agent", selectedId = "thread-1", loading = false, selected = true, openerMissing = false,
+  nativePanel = false, unknownAsset = false, parentMissing = false, routeMismatch = false } = {}) {
   const calls = [];
   let visible = !collapsed && !subagent;
   let active = false;
@@ -29,7 +30,21 @@ function fixture({ collapsed = false, mismatch = false, subagent = false, allowe
   };
   const button = { fiber: { memoizedProps: { backgroundAgentOpener: opener } } };
   const state = {};
+  const scopeType = {};
+  const routeScope = { scope: scopeType, value: { hostId: "local", conversationId: "parent-1" }, get() {} };
   const context = {
+    codexAppAssetUrl: (name) => name === "app-initial-" ? "app://-/assets/app-initial-6c4523b43a11.js" : nativePanel ? `app://-/assets/open-local-conversation-subagents-panel-${unknownAsset ? "unknown" : "7640f0495cac"}.js` : "",
+    codexPageHostReactRootFiber: () => ({
+      memoizedState: { memoizedState: { current: { ...routeScope, get() { throw new Error("wrong scope"); } } } },
+      child: { memoizedProps: { conversationId: routeMismatch ? "other-parent" : "parent-1" }, memoizedState: { memoizedState: { current: routeScope } } },
+    }),
+    codexPageHostAppScopeFromReactRoot: () => ({ hostId: "local" }),
+    codexPageHostIdFromActiveThread: () => "local",
+    loadCodexAppModule: async () => ({
+      e6t: scopeType,
+      t: () => calls.push("panel-init"),
+      n: async (scope, options) => { assert.equal(scope, routeScope); calls.push(["panel-open", options]); panelActive = selected; return tabId; },
+    }),
     Date: { now: () => clock }, Promise, setTimeout: (callback, ms) => { clock += ms; queueMicrotask(callback); },
     document: { querySelectorAll: (selector) => selector.includes("multi-agent-action-rows")
       ? openerMissing ? [] : [button] : panelActive ? [tab] : [] },
@@ -43,7 +58,7 @@ function fixture({ collapsed = false, mismatch = false, subagent = false, allowe
     normalizeWorkspacePath: (value) => String(value).toLowerCase(),
     codexPageHostRequest: async (method, params) => {
       calls.push([method, params]);
-      return { thread: { id: mismatch ? "wrong-thread" : "thread-1", cwd: "D:/project" } };
+      return { thread: { id: mismatch ? "wrong-thread" : "thread-1", cwd: "D:/project", parentThreadId: parentMissing ? null : "parent-1", agentNickname: "Fixture" } };
     },
     nativeProjectTargets: () => [{
       path: "D:/project", row: {
@@ -96,6 +111,26 @@ test("loaded subagents overview confirms its requested child, not just the paren
   await f.multicaWorkspaceActivateNativeThread("thread-1");
   assert.equal(f.calls.at(-1), "hide");
 });
+
+test("unmounted transcript controls use audited native subagent panel with authoritative parent", async () => {
+  const f = fixture({ subagent: true, openerMissing: true, nativePanel: true, panelKind: "subagents" });
+  await f.multicaWorkspaceActivateNativeThread("thread-1");
+  const options = f.calls.find((call) => call[0] === "panel-open")[1];
+  assert.equal(options.parentConversationId, "parent-1");
+  assert.equal(options.selectedConversationId, "thread-1");
+  assert.equal(options.hostId, "local");
+  assert.equal(options.selectedDisplayName, "Fixture");
+  assert.equal(f.calls.at(-1), "hide");
+});
+
+for (const options of [{ unknownAsset: true }, { parentMissing: true }, { routeMismatch: true }, { loading: true }, { selectedId: "other-thread" }]) {
+  test(`native panel fallback retains errors: ${JSON.stringify(options)}`, async () => {
+    const f = fixture({ subagent: true, openerMissing: true, nativePanel: true, panelKind: "subagents", ...options });
+    await assert.rejects(f.multicaWorkspaceActivateNativeThread("thread-1"));
+    assert.equal(f.calls.includes("hide"), false);
+    if (options.unknownAsset || options.parentMissing) assert.equal(f.calls.some((call) => call[0] === "panel-open"), false);
+  });
+}
 
 for (const [name, options] of [
   ["native capability rejects the child", { allowed: false }],

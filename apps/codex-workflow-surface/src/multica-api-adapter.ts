@@ -8,7 +8,8 @@ import {
 import { filterIssues, fingerprint, involved, list, page, tableQuery, type QueryContext } from "./multica-adapter-query";
 import { MulticaBuilderAdapter } from "./multica-adapter-builder";
 import { MulticaWebhookAdapter, validateEventFilters, webhookTrigger, type WebhookPath } from "./multica-adapter-webhooks";
-import { MulticaNativeDomainAdapter, type NativeDomainPath } from "./multica-adapter-native";
+import { MulticaNativeDomainAdapter, readNativeExecutionRows, type NativeDomainPath } from "./multica-adapter-native";
+import { compareExecutionTasks, isVirtualIssue, projectExecutionBoard, setExecutionBoardStatus, type ExecutionBoard } from "./multica-execution-board";
 
 type Resource = "issues" | "comments" | "labels" | "subscribers" | "reactions" | "projects" | "agents" | "squads" | "autopilots" | "issue_views" | "issue_statuses" | "runtimes" | "skills" | "properties" | "issue_view_preferences" | "quick_actions";
 type MutableResource = "issues" | "comments" | "labels" | "agents" | "autopilots" | "issue_views" | "quick_actions";
@@ -50,6 +51,10 @@ export class MulticaApiAdapter {
   private readonly seen = new Map<string, JsonRecord>();
   private readonly commands = new Map<string, Command>();
   private readonly requestIds = new WeakMap<RequestInit, string>();
+  private completeBoard: ExecutionBoard | null = null;
+  private usableBoard: ExecutionBoard | null = null;
+  private boardUpdatedAt: number | null = null;
+  private pendingBoard: Promise<ExecutionBoard> | null = null;
   private readonly builder = new MulticaBuilderAdapter((payload, signal) => this.callValue("/multica/builder", payload, signal));
   private readonly webhooks = new MulticaWebhookAdapter((path, payload, signal) => this.call(path, payload, signal));
   private readonly nativeDomains = new MulticaNativeDomainAdapter((path, payload, signal) => this.call(path, payload, signal));
@@ -378,16 +383,20 @@ export class MulticaApiAdapter {
 
   private async executions(context: RequestContext, issueId?: string): Promise<JsonRecord[]> {
     const all: JsonRecord[] = [];
+    const ids = new Set<unknown>();
     let total: number | undefined;
     for (let offset = 0; offset < MAX_SCAN_ITEMS; offset += 100) {
       const result = await this.call("/multica/executions/list", { workspaceId: context.workspaceId, ...(issueId ? { issueId } : {}), limit: 100, offset }, context.signal);
       const parsed = collectionSchema.safeParse(result);
       if (!parsed.success) throw new AdapterError(502, "invalid_execution_response");
+      if (parsed.data.stale) throw new AdapterError(503, "execution_source_stale");
       if (total !== undefined && total !== parsed.data.total) throw new AdapterError(409, "query_snapshot_changed");
       total = parsed.data.total;
       if (total > MAX_SCAN_ITEMS) throw new AdapterError(413, "query_window_too_large");
       for (const item of parsed.data.items) {
         if (item.workspaceId !== context.workspaceId) throw new AdapterError(403, "workspace_mismatch");
+        if (ids.has(item.bindingId)) throw new AdapterError(409, "query_snapshot_changed");
+        ids.add(item.bindingId);
         all.push(this.remember("tasks", taskDto(item)));
       }
       if (all.length === total) return all;
@@ -396,8 +405,36 @@ export class MulticaApiAdapter {
     throw new AdapterError(413, "query_window_too_large");
   }
 
-  private async queryContext(context: RequestContext, needsActors = false, needsTasks = false): Promise<QueryContext> {
-    return { userId: context.userId, agents: needsActors ? await this.scan("agents", context) : [], squads: needsActors ? await this.scan("squads", context) : [], tasks: needsTasks ? await this.executions(context) : [] };
+  private async executionBoard(context: RequestContext): Promise<ExecutionBoard> {
+    if (this.pendingBoard) return this.pendingBoard;
+    this.pendingBoard = (async () => {
+      const [issues, tasks, native, agents, squads] = await Promise.allSettled([
+        this.scan("issues", context).then((items) => items.map((item) => issueDto(item, context.workspaceId))),
+        this.executions(context),
+        readNativeExecutionRows((payload) => this.call("/multica/workspace/query", payload, context.signal)),
+        this.scan("agents", context), this.scan("squads", context),
+      ]);
+      if (context.signal?.aborted) throw new AdapterError(408, "request_aborted");
+      const failure = [issues, tasks, native, agents, squads].find((source) => source.status === "rejected");
+      const stale = !!failure || native.status === "fulfilled" && native.value.stale;
+      if (stale) {
+        const diagnostic = failure?.status === "rejected" ? bridgeError(failure.reason).code : "native_execution_source_stale";
+        setExecutionBoardStatus({ stale: true, diagnostic, updatedAt: this.boardUpdatedAt });
+        if (this.completeBoard) return this.completeBoard;
+        if (failure && this.usableBoard) return this.usableBoard;
+        if (issues.status === "rejected") throw issues.reason;
+      }
+      const board = projectExecutionBoard(issues.status === "fulfilled" ? issues.value : [], tasks.status === "fulfilled" ? tasks.value : [],
+        native.status === "fulfilled" ? native.value.items : [], agents.status === "fulfilled" ? agents.value : [], squads.status === "fulfilled" ? squads.value : [], context.workspaceId, context.userId);
+      if (!stale) {
+        this.completeBoard = board;
+        this.boardUpdatedAt = Date.now();
+        setExecutionBoardStatus({ stale: false, diagnostic: null, updatedAt: this.boardUpdatedAt });
+      }
+      this.usableBoard = board;
+      return board;
+    })();
+    try { return await this.pendingBoard; } finally { this.pendingBoard = null; }
   }
 
   private async quickCreate(data: JsonRecord, context: RequestContext): Promise<Response> {
@@ -427,13 +464,12 @@ export class MulticaApiAdapter {
   }
 
   private async issueQuery(path: string, params: JsonRecord, context: RequestContext): Promise<Response> {
-    const all = (await this.scan("issues", context)).map((item) => issueDto(item, context.workspaceId));
+    const board = await this.executionBoard(context), all = board.issues;
+    const contextData: QueryContext = { userId: context.userId, agents: board.agents, squads: board.squads, tasks: board.tasks };
     if (path.startsWith("/api/issues/table/")) {
       const kind = path.slice("/api/issues/table/".length);
       if (kind !== "groups" && kind !== "rows" && kind !== "facets") unavailable();
-      const query = record(params.query), scope = record(query.scope), filters = record(query.filters);
-      const needsTasks = filters.working_only === true || Array.isArray(params.facets) && params.facets.some((f) => record(f).kind === "working_agents");
-      const queryContext = await this.queryContext(context, scope.relation === "involved" || scope.relation === "any", needsTasks);
+      const queryContext = contextData;
       if (params.group && record(params.group).kind === "property") queryContext.properties = await this.scan("properties", context);
       return response(await tableQuery(kind, params, all, queryContext));
     }
@@ -448,7 +484,6 @@ export class MulticaApiAdapter {
       }
       return response({ progress: [...parents.values()] });
     }
-    const contextData = await this.queryContext(context, !!params.involves_user_id);
     if (path === "/api/issues/search" && params.include_closed !== true && params.include_closed !== "true") params = { ...params, open_only: true };
     const filtered = filterIssues(all, params, contextData);
     if (path === "/api/issues/grouped") {
@@ -615,6 +650,11 @@ export class MulticaApiAdapter {
     if (resource && parts.length === 2) {
       if (method === "GET") {
         keys(params, []);
+        if (resource === "issues") {
+          const found = (await this.executionBoard(context)).issues.find((issue) => issue.id === id || issue.identifier === id);
+          if (!found) throw new AdapterError(404, "not_found");
+          return response(found);
+        }
         const found = this.dto(resource, await this.find(resource, id, context), context);
         if (resource === "autopilots") {
           found.triggers = await Promise.all(rows(found.triggers ?? []).map(async (trigger) => {
@@ -794,16 +834,17 @@ export class MulticaApiAdapter {
 
   private async agentActivity(path: string, params: JsonRecord, context: RequestContext): Promise<Response> {
     keys(params, path === "/api/working-agents" ? ["type", "scope", "relation", "parent"] : []);
-    const tasks = await this.executions(context);
+    const board = ["/api/agent-task-snapshot", "/api/working-agents"].includes(path) ? await this.executionBoard(context) : null;
+    const tasks = board ? board.tasks : await this.executions(context);
     if (path === "/api/agent-task-snapshot") {
       const latest = new Map<string, JsonRecord>();
-      const active = tasks.filter((t) => activeStates.includes(text(t.status)));
+      const active = tasks.filter((t) => ["queued", "running"].includes(text(t.status)));
       const activeAgents = new Set(active.map((t) => t.agent_id));
-      for (const task of tasks) if (task.agent_id && !activeAgents.has(task.agent_id) && (!latest.has(text(task.agent_id)) || text(task.created_at) > text(latest.get(text(task.agent_id))?.created_at))) latest.set(text(task.agent_id), task);
+      for (const task of tasks) if (task.agent_id && !activeAgents.has(task.agent_id) && (!latest.has(text(task.agent_id)) || compareExecutionTasks(task, latest.get(text(task.agent_id))!) > 0)) latest.set(text(task.agent_id), task);
       return response([...active, ...latest.values()]);
     }
     if (path === "/api/working-agents") {
-      const issues = await this.scan("issues", context), actors = await this.queryContext(context, true);
+      const issues = board!.issues, actors: QueryContext = { userId: context.userId, ...board! };
       const running = tasks.filter((t) => t.status === "running" && t.agent_id).filter((t) => {
         const issue = issues.find((i) => i.id === t.issue_id);
         if (params.type && params.type !== "issue") return params.type === "autopilot" ? !!t.autopilot_run_id : !!t.chat_session_id;
@@ -882,6 +923,15 @@ export class MulticaApiAdapter {
         if (Object.hasOwn(params, key)) throw new AdapterError(400, "duplicate_query_parameter");
         params[key] = value;
       }
+      const read = method === "GET" || method === "POST" && (["/api/issues/query", "/api/issues/table/groups", "/api/issues/table/rows", "/api/issues/table/facets", "/api/issues/preview-trigger"].includes(pathname) || /^\/api\/issues\/[^/]+\/quick-actions\/[^/]+\/render$/.test(pathname));
+      if (!read) {
+        const projectionId = (value: unknown) => isVirtualIssue(value) || typeof value === "string" && /^(codex-native-agent|ccp-execution-agent):/.test(value);
+        const references = (value: JsonRecord): boolean => Object.entries(value).some(([key, item]) =>
+          ["issue_id", "parent_issue_id", "before_id", "after_id", "agent_id", "assignee_id"].includes(key) && projectionId(item)
+          || key === "issue_ids" && Array.isArray(item) && item.some(projectionId)
+          || key === "updates" && !!item && typeof item === "object" && !Array.isArray(item) && references(record(item)));
+        if (segments.some(projectionId) || references(data)) throw new AdapterError(403, "read_only_projection");
+      }
       const bootstrap = await this.bootstrap(init.signal), workspace = record(bootstrap.workspace), user = record(bootstrap.user);
       if (params.workspace_id !== undefined && params.workspace_id !== workspace.id || data.workspace_id !== undefined && data.workspace_id !== workspace.id || headers.has("x-workspace-slug") && headers.get("x-workspace-slug") !== workspace.slug) throw new AdapterError(403, "workspace_mismatch");
       const provided = [data.command_id, data.idempotency_key, headers.get("idempotency-key")].filter((value) => value != null);
@@ -889,7 +939,6 @@ export class MulticaApiAdapter {
       const commandId = identifier(provided[0] ?? this.requestIds.get(init) ?? crypto.randomUUID());
       this.requestIds.set(init, commandId);
       const context: RequestContext = { workspaceId: identifier(workspace.id), userId: identifier(user.id), commandId, signal: init.signal };
-      const read = method === "GET" || method === "POST" && (["/api/issues/query", "/api/issues/table/groups", "/api/issues/table/rows", "/api/issues/table/facets", "/api/issues/preview-trigger"].includes(pathname) || /^\/api\/issues\/[^/]+\/quick-actions\/[^/]+\/render$/.test(pathname));
       if (read) return await this.route(pathname, method, params, data, context, bootstrap);
       const signature = await fingerprint({ path: pathname, method, params, data });
       context.commandSignature = signature;

@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue } from "../../../../../../src/execution-issue";
 "use client";
 
 import { memo, useState, useCallback, useMemo, useEffect, useRef } from "react";
@@ -460,7 +462,8 @@ function StatusAccordionItem({
   );
 
   const selectedCount = issueIds.filter((id) => selectedIds.has(id)).length;
-  const allSelected = issues.length > 0 && selectedCount === issues.length;
+  const selectableCount = issues.filter((issue) => !isReadonlyExecutionIssue(issue)).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
   const someSelected = selectedCount > 0;
 
   const { setNodeRef: setDroppableRef, isOver } = useDroppable({
@@ -557,6 +560,7 @@ function StatusAccordionItem({
           <input
             type="checkbox"
             checked={allSelected}
+            disabled={selectableCount === 0}
             ref={(el) => {
               if (el) el.indeterminate = someSelected && !allSelected;
             }}

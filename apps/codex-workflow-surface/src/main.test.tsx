@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runtime, type WorkflowRoute } from "./main";
 import { useModalStore } from "@multica/core/modals";
 import { configStore } from "@multica/core/config";
+import { myIssuesViewStore } from "@multica/core/issues/stores/my-issues-view-store";
+import { getIssueSurfaceViewStore } from "@multica/core/issues/stores/surface-view-store";
 
 const workspace = { id: "workspace-fixture", slug: "local-fixture", name: "Fixture workspace" };
 const timestamp = "2026-09-18T00:00:00Z";
@@ -51,6 +53,7 @@ beforeEach(() => {
         return result;
       }
       if (path === "/multica/autopilots/runs") return { status: "ok", runs: [], total: 0 };
+      if (path === "/multica/executions/list") return { status: "ok", items: entities.executions ?? [], total: entities.executions?.length ?? 0 };
       if (path === "/multica/autopilots/cron-preview") return { status: "ok", next_runs: ["2026-09-19T09:00:00Z"] };
       return { status: "failed", code: "capability_unavailable", message: "Fixture capability unavailable" };
     },
@@ -70,6 +73,7 @@ afterEach(async () => {
   delete document.documentElement.dataset.theme;
   document.documentElement.classList.remove("dark");
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function mount(route: WorkflowRoute) {
@@ -79,20 +83,178 @@ async function mount(route: WorkflowRoute) {
 }
 
 describe("actual pinned upstream pages through the local adapter", () => {
-  it("shows native child agents alongside the original My Issues page", async () => {
+  it.each(["in_progress", "todo", "done"])("drags the original native card to %s and honors real execution results", async (target) => {
+    const child = `drag-child-${target}`;
+    const origin = target === "done" ? "blocked" : "done";
+    entities.codex_native_agents = [{ id: child, parent_thread_id: "parent", agent_nickname: "Drag worker", status: target === "done" ? "failed" : "completed", updated_at_ms: 1789720000000, source: "codex_native", read_only: true }];
+    let finish!: (result: unknown) => void;
+    const original = window.__CODEX_WORKFLOW_BRIDGE__!.postJson;
+    window.__CODEX_WORKFLOW_BRIDGE__!.postJson = (path, payload) => {
+      if (path !== "/multica/native-executions/intent") return original(path, payload);
+      calls.push({ path, payload });
+      return new Promise(resolve => { finish = resolve; });
+    };
+    await mount("my-issues");
+    act(() => myIssuesViewStore.getState().setScope("all"));
+    act(() => getIssueSurfaceViewStore("my:user-fixture:all").getState().setViewMode("board"));
+    const getCard = () => container.querySelector(`[data-board-card][data-ccp-issue-id="codex-native:${child}"]`) as HTMLElement;
+    await waitFor(() => expect(getCard()).not.toBeNull());
+    const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON() {} });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-board-card")) return rect(640, 100, 280, 100);
+      const status = this.getAttribute("data-ccp-status-category");
+      if (status) return rect(status === target ? 320 : status === origin ? 640 : 0, 80, 280, 600);
+      return rect(0, 0, 1300, 800);
+    });
+    const drag = async () => {
+      fireEvent.pointerDown(getCard(), { clientX: 680, clientY: 150, button: 0, isPrimary: true });
+      fireEvent.pointerMove(document, { clientX: 670, clientY: 150 });
+      await act(async () => {});
+      fireEvent.pointerMove(document, { clientX: 400, clientY: 300 });
+      await act(async () => {});
+      fireEvent.pointerUp(document, { clientX: 400, clientY: 300 });
+    };
+    await drag();
+    const intents = () => calls.filter(call => call.path === "/multica/native-executions/intent");
+    if (target === "done") {
+      expect(intents()).toHaveLength(0);
+      expect(getCard().closest("[data-ccp-status-category]")?.getAttribute("data-ccp-status-category")).toBe("blocked");
+      expect(calls.some(call => /workspace\/upsert|executions\/create/.test(call.path))).toBe(false);
+      return;
+    }
+    await waitFor(() => expect(intents()).toHaveLength(1));
+    expect(intents()[0].payload).toMatchObject({ threadId: child, intent: target === "todo" ? "enqueue" : "continue" });
+    expect(getCard().closest("[data-ccp-status-category]")?.getAttribute("data-ccp-status-category")).toBe("done");
+    expect(within(container).getByText("正在提交执行指令…").getAttribute("role")).toBe("status");
+    await drag();
+    expect(intents()).toHaveLength(1);
+    await act(async () => finish({ status: "failed" }));
+    expect(await within(container).findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("执行指令提交失败"));
+    fireEvent.click(within(container).getByRole("button", { name: "重试执行指令" }));
+    await waitFor(() => expect(intents()).toHaveLength(2));
+    expect(intents()[1].payload).toEqual(intents()[0].payload);
+    if (target === "todo") entities.executions = [{
+      workspaceId: workspace.id, bindingId: `resume-${child}`, codexThreadId: child, nativeResume: true,
+      state: "binding_pending", revision: 1, createdAtMs: 1789830000000, updatedAtMs: 1789830000000,
+    }];
+    else entities.codex_native_agents[0].status = "inProgress";
+    await act(async () => finish({ status: "ok" }));
+    await waitFor(() => expect(getCard().closest("[data-ccp-status-category]")?.getAttribute("data-ccp-status-category")).toBe(target));
+    expect(calls.some(call => /workspace\/upsert|executions\/create/.test(call.path))).toBe(false);
+    expect(window.__CODEX_WORKFLOW_BRIDGE__!.openThread).not.toHaveBeenCalled();
+  });
+  it.each(["list", "table"] as const)("keeps virtual %s rows readonly while ordinary rows remain selectable", async (mode) => {
+    if (mode === "table") {
+      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1200);
+    }
+    entities.issues = [{ id: "ordinary", title: "Ordinary", status: "in_progress", creator_id: "user-fixture", revision: 1, created_at: timestamp, updated_at: timestamp }];
+    entities.codex_native_agents = [{ id: "child", parent_thread_id: "parent", agent_nickname: "Descartes", status: "inProgress", updated_at_ms: 1789720000000, source: "codex_native", read_only: true }];
+    await mount("my-issues");
+    act(() => myIssuesViewStore.getState().setScope("all"));
+    act(() => getIssueSurfaceViewStore("my:user-fixture:all").getState().setViewMode(mode));
+    const name = await within(container).findByRole(mode === "table" ? "button" : "link", { name: mode === "table" ? "Descartes" : /Descartes/ });
+    const virtual = name.closest('[data-ccp-issue-id="codex-native:child"]')!;
+    expect(virtual.textContent).toContain("Codex 原生");
+    if (mode === "list") expect((virtual.querySelector('input[type="checkbox"]') as HTMLInputElement).disabled).toBe(true);
+    if (mode === "table") {
+      expect(within(virtual as HTMLElement).queryByRole("button", { name: /重命名|子任务/ })).toBeNull();
+      expect(within(container).queryByRole("checkbox", { name: /codex-native:child/ })).toBeNull();
+    }
+    fireEvent.contextMenu(name);
+    expect(within(container).queryByRole("menu")).toBeNull();
+    const ordinaryBox = mode === "list" ? container.querySelector('[data-ccp-issue-id="ordinary"] input[type="checkbox"]') as HTMLInputElement
+      : within(container).getByRole("checkbox", { name: /ordinary/ }) as HTMLInputElement;
+    expect(ordinaryBox.disabled).toBe(false);
+    act(() => ordinaryBox.click());
+    await waitFor(() => expect(ordinaryBox.checked).toBe(true));
+    expect(calls.some(({ path }) => /upsert|delete|create|continue|cancel/.test(path))).toBe(false);
+  });
+
+  it("projects mixed sources into original columns, retains stale cards, and refreshes a single card and working count", async () => {
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    entities.issues = [
+      { id: "ordinary", title: "Ordinary", status: "todo", creator_id: "user-fixture", revision: 1, created_at: timestamp, updated_at: timestamp },
+      { id: "linked", title: "Linked", status: "done", creator_id: "user-fixture", revision: 1, created_at: timestamp, updated_at: timestamp },
+    ];
+    entities.agents = [{ id: "worker", name: "Worker", owner_id: "user-fixture", revision: 1 }];
+    entities.executions = [
+      { workspaceId: workspace.id, bindingId: "new", issueId: "linked", agentId: "worker", codexThreadId: "linked-thread", state: "binding_pending", createdAtMs: 200, updatedAtMs: 200, revision: 1 },
+      { workspaceId: workspace.id, bindingId: "old", issueId: "linked", agentId: "worker", state: "completed", createdAtMs: 100, updatedAtMs: 300, revision: 1 },
+      { workspaceId: workspace.id, bindingId: "solo", agentId: "worker", codexThreadId: "solo-thread", state: "running", createdAtMs: 200, updatedAtMs: 200, revision: 1 },
+    ];
+    entities.codex_native_agents = [
+      ["child", "inProgress"], ["finished", "completed"], ["unknown", "unknown"], ["linked-thread", "inProgress"], ["solo-thread", "inProgress"],
+    ].map(([id, status]) => ({ id, parent_thread_id: "parent", agent_nickname: id, status, updated_at_ms: 1789720000000, source: "codex_native", read_only: true }));
+    await mount("my-issues");
+    act(() => myIssuesViewStore.getState().setScope("all"));
+    act(() => getIssueSurfaceViewStore("my:user-fixture:all").getState().setViewMode("board"));
+    const card = (id: string) => container.querySelector(`[data-board-card][data-ccp-issue-id="${id}"]`)!;
+    const category = (id: string) => card(id)?.closest("[data-ccp-status-category]")?.getAttribute("data-ccp-status-category");
+    await waitFor(() => expect([...container.querySelectorAll("[data-board-card]")].map(el => el.getAttribute("data-ccp-issue-id")).sort()).toEqual(["ordinary", "linked", "ccp-execution:solo", "codex-native:child", "codex-native:finished", "codex-native:unknown"].sort()));
+    expect(category("ordinary")).toBe("todo"); expect(category("linked")).toBe("todo");
+    expect(category("codex-native:child")).toBe("in_progress"); expect(category("codex-native:finished")).toBe("done");
+    expect(category("codex-native:unknown")).toBe("blocked"); expect(card("codex-native:unknown").textContent).toContain("状态待确认");
+    expect(category("ccp-execution:solo")).toBe("in_progress");
+    expect(card("linked").textContent).toContain("Multica 执行");
+    await within(container).findByRole("button", { name: /2 个智能体工作中/ });
+    expect(within(container).queryByRole("alert")).toBeNull();
+    expect(card("codex-native:child").getAttribute("aria-disabled")).toBe("false");
+    expect(within(card("codex-native:child") as HTMLElement).queryByRole("button")).toBeNull();
+    fireEvent.contextMenu(card("codex-native:child"));
+    expect(within(container).queryByRole("menu")).toBeNull();
+    const original = window.__CODEX_WORKFLOW_BRIDGE__!.postJson;
+    window.__CODEX_WORKFLOW_BRIDGE__!.postJson = async (path, payload) => path === "/multica/executions/list" ? { status: "failed", code: "bridge_timeout" } : original(path, payload);
+    entities.codex_native_agents[0].status = "completed";
+    act(() => runtime.invalidate(container));
+    await within(container).findByRole("alert");
+    expect(category("codex-native:child")).toBe("in_progress");
+    expect(container.querySelectorAll("[data-board-card]")).toHaveLength(6);
+    window.__CODEX_WORKFLOW_BRIDGE__!.postJson = original;
+    await waitFor(() => expect((within(container).getByRole("button", { name: "重试" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(within(container).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(category("codex-native:child")).toBe("done"));
+    await within(container).findByRole("button", { name: /1 个智能体工作中/ });
+    expect(container.querySelectorAll('[data-board-card][data-ccp-issue-id="codex-native:child"]')).toHaveLength(1);
+    await waitFor(() => expect(within(container).queryByRole("alert")).toBeNull());
+    entities.codex_native_agents[0].status = "failed";
+    await waitFor(() => expect(category("codex-native:child")).toBe("blocked"), { timeout: 6500 });
+    expect(card("codex-native:child").textContent).toContain("失败");
+    expect(container.querySelectorAll('[data-board-card][data-ccp-issue-id="codex-native:child"]')).toHaveLength(1);
+    const reads = () => calls.filter(({ path }) => path === "/multica/executions/list").length;
+    await act(async () => { host.style.display = "none"; });
+    const beforeHide = reads();
+    const tick = intervals.mock.calls.find(([, ms]) => ms === 5000)![0] as () => void;
+    await act(async () => tick());
+    expect(reads()).toBe(beforeHide);
+    await act(async () => { host.style.display = ""; });
+    await waitFor(() => expect(reads()).toBeGreaterThan(beforeHide));
+    await act(async () => runtime.navigate(container, { route: "agents" }));
+    expect(calls.every(({ path }) => ["/multica/workspace/bootstrap", "/multica/workspace/query", "/multica/executions/list"].includes(path))).toBe(true);
+  });
+
+  it("merges native child agents into original cards and opens readonly detail", async () => {
     entities.codex_native_agents = ["Descartes", "Tesla", "Faraday", "Mendel"].map((name) => ({
       id: `native-${name}`, parent_thread_id: "native-parent", agent_nickname: name,
-      status: "running", updated_at_ms: 1789720000000, source: "codex_native", read_only: true,
+      status: "inProgress", updated_at_ms: 1789720000000, source: "codex_native", read_only: true,
     }));
     const onOpenThread = vi.fn().mockResolvedValue(true);
     await act(async () => runtime.mount(container, { ...options("my-issues"), openThread: onOpenThread }));
-    const region = await within(container).findByRole("region", { name: "Codex 原生子任务" });
+    act(() => myIssuesViewStore.getState().setScope("agents"));
+    expect(within(container).queryByRole("region", { name: "Codex 原生子任务" })).toBeNull();
     for (const name of ["Descartes", "Tesla", "Faraday", "Mendel"]) {
-      expect(await within(region).findByRole("button", { name })).toBeTruthy();
+      const card = await within(container).findByRole("link", { name: new RegExp(name) });
+      expect(card.closest("[data-board-card]")).not.toBeNull();
     }
     expect(container.querySelector("h1")?.textContent).toContain("我的任务");
-    fireEvent.click(within(region).getByRole("button", { name: "Tesla" }));
+    expect(within(container).queryByRole("alert")).toBeNull();
+    fireEvent.click(within(container).getByRole("link", { name: /Tesla/ }));
+    fireEvent.click(await within(container).findByRole("button", { name: "打开子会话" }));
     await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith("native-Tesla"));
+    fireEvent.click(within(container).getByRole("button", { name: "打开父会话" }));
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith("native-parent"));
+    fireEvent.click(within(container).getByRole("button", { name: "返回我的任务" }));
+    await within(container).findByRole("heading", { name: "我的任务" });
     expect(window.__CODEX_WORKFLOW_BRIDGE__!.openThread).not.toHaveBeenCalled();
   });
 
@@ -342,7 +504,7 @@ describe("actual pinned upstream pages through the local adapter", () => {
     const dialog = within(container).getByRole("dialog");
     fireEvent.click(within(dialog).getByText("选择智能体或小队").closest("button")!);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
-    const candidate = await within(container).findByRole("button", { name: "Schedule agent" });
+    const candidate = await within(container).findByRole("button", { name: /Schedule agent/ });
     fireEvent.click(candidate);
     fireEvent.click(within(dialog).getByText("创建自动化", { selector: "button" }));
     await waitFor(() => expect(entities.autopilots).toHaveLength(1));

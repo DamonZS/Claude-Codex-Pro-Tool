@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue, ExecutionBadge } from "../../../../../../src/execution-issue";
 "use client";
 
 import { memo, type Ref } from "react";
@@ -80,6 +82,9 @@ function ListRowContent({
     <IssueActionsContextMenu issue={issue}>
       <div
         ref={containerRef}
+        data-ccp-issue-id={issue.id}
+        data-ccp-execution-state={issue.metadata?.ccp_execution_state}
+        data-ccp-source={issue.metadata?.ccp_source}
         style={containerStyle}
         {...containerProps}
         className={`group/row flex h-9 items-center gap-2 px-4 text-body transition-colors ${
@@ -98,6 +103,7 @@ function ListRowContent({
           />
           <input
             type="checkbox"
+            disabled={isReadonlyExecutionIssue(issue)}
             checked={selected}
             onChange={() => toggle(issue.id)}
             className={`absolute inset-0 cursor-pointer accent-primary ${
@@ -117,6 +123,7 @@ function ListRowContent({
 
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="truncate">{issue.title}</span>
+            <ExecutionBadge issue={issue} />
             {/* List sections are categories, so a custom status needs to name
                 itself on the row. Silent for built-ins. (MUL-6243) */}
             <CustomStatusChip status={issue.status} className="shrink-0" />
@@ -175,7 +182,8 @@ function ListRowContent({
               actorType={issue.assignee_type!}
               actorId={issue.assignee_id!}
               size="sm"
-              enableHoverCard
+              enableHoverCard={!isReadonlyExecutionIssue(issue)}
+              profileLink={!isReadonlyExecutionIssue(issue)}
             />
           )}
         </AppLink>
@@ -234,7 +242,7 @@ export const DraggableListRow = memo(function DraggableListRow({
     id: issue.id,
     data: { status: issue.status },
     animateLayoutChanges,
-    disabled: disableSorting ? { droppable: true } : undefined,
+    disabled: isReadonlyExecutionIssue(issue) ? true : disableSorting ? { droppable: true } : undefined,
   });
 
   const style = {

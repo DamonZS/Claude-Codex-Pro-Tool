@@ -2,6 +2,9 @@
 
 对应 `spec/codex-native-subtasks-in-my-tasks.md`。
 
+> 以下为独立列表版本的历史验收记录。统一看板版本的布局、归列、刷新及实机证据
+> 以 `unified-agent-execution-board.md` 为准，旧列表脚本仅用于历史版本。
+
 - [x] 真实 parent/child 行生成唯一只读条目，普通线程不混入。
 - [x] 名称优先昵称，不展示完整任务指令；状态由最新 turn 确认，open/closed 不冒充 running/completed。
 - [x] 原有 Issue 看板、筛选、详情返回正常；区域默认可见，数据可刷新。

@@ -535,12 +535,13 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
     assert!(host.contains("typeof appScope.get === \"function\""));
     assert!(host.contains("appScope.queryClient"));
     assert!(host.contains("return hasScopeGetter || hasScopeNode || hasQueryClient;"));
-    assert!(host.contains("module?.Jpn"));
+    assert!(host.contains("module?.[factoryName]"));
     assert!(host.contains("app-initial-f61fcec072b5.js"));
+    assert!(host.contains("\"app-initial-6c4523b43a11.js\": \"Rpn\""));
     assert!(host.contains("codex_page_host_version_unsupported"));
     assert!(host.contains("function codexPageHostIdFromActiveThread()"));
     assert!(host.contains("data-app-action-sidebar-thread-host-id"));
-    assert!(host.contains("module.Jpn(appScope, hostId)"));
+    assert!(host.contains("module[factoryName](appScope, hostId)"));
     assert!(host.contains("client.sendRequest(\"skills/list\", {})"));
     assert!(host.contains("skills.error"));
     assert!(host.contains("capabilities: []"));

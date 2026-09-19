@@ -105,6 +105,110 @@ function adapt(name, data) {
   let text = data.toString();
   const changes = [];
   const imports = new Set();
+  // Unified executions stay in upstream cards, rows and tables. Keep every
+  // derived change here so a fresh vendor run preserves the readonly contract.
+  const executionImports = new Set();
+  const nativeImport = (symbols, module) => {
+    const relative = path.relative(path.dirname(path.join(destination, name)), path.join(root, `src/${module}`)).split(path.sep).join("/");
+    text = `import { ${symbols} } from "${relative}";\n${text}`;
+  };
+  const executionPatch = (before, after, ...symbols) => {
+    if (!text.includes(before)) throw new Error(`Execution UI source changed: ${name}: ${before}`);
+    text = text.replaceAll(before, after);
+    symbols.forEach((symbol) => executionImports.add(symbol));
+    if (!changes.includes("Project execution metadata and protect readonly virtual issues")) changes.push("Project execution metadata and protect readonly virtual issues");
+  };
+  if (name === "packages/views/issues/surface/selection-context.tsx") {
+    executionPatch('const toggle = useCallback((id: string) => {', 'const toggle = useCallback((id: string) => {\n    if (isExecutionIssueId(id)) return;', "isExecutionIssueId");
+    executionPatch('for (const id of ids) next.add(id);', 'for (const id of ids) if (!isExecutionIssueId(id)) next.add(id);');
+  }
+  if (name === "packages/views/issues/utils/drag-utils.ts") {
+    executionPatch('  const index = ids.indexOf(activeId);\n  return {\n    before_id:', '  ids = ids.filter((id) => !isExecutionIssueId(id));\n  const index = ids.indexOf(activeId);\n  return {\n    before_id:', "isExecutionIssueId");
+  }
+  if (name === "packages/views/issues/components/board-card.tsx") {
+    nativeImport("isNativeExecutionCard", "native-execution-actions");
+    executionPatch('  disableSorting,', '  disableSorting,\n  nativeExecutionDrag = false,');
+    executionPatch('  disableSorting?: boolean;', '  disableSorting?: boolean;\n  nativeExecutionDrag?: boolean;');
+    executionPatch('const canEdit = editable && !!surfaceActions;', 'const canEdit = editable && !!surfaceActions && !isReadonlyExecutionIssue(issue);', "isReadonlyExecutionIssue");
+    executionPatch('disabled: disableSorting ? { droppable: true } : undefined,', 'disabled: isReadonlyExecutionIssue(issue) && !(nativeExecutionDrag && isNativeExecutionCard(issue)) ? true : disableSorting ? { droppable: true } : undefined,');
+    executionPatch('data-board-card=""', 'data-board-card=""\n        data-ccp-issue-id={issue.id}\n        data-ccp-execution-state={issue.metadata?.ccp_execution_state}\n        data-ccp-source={issue.metadata?.ccp_source}');
+    executionPatch('{issue.title}\n      </p>', '{issue.title}\n      </p>\n      <ExecutionBadge issue={issue} />', "ExecutionBadge");
+    executionPatch('? getActorName(issue.assignee_type, issue.assignee_id)', '? String(issue.metadata?.ccp_agent_name ?? getActorName(issue.assignee_type, issue.assignee_id))');
+    executionPatch('        enableHoverCard', '        enableHoverCard={!isReadonlyExecutionIssue(issue)}');
+  }
+  if (name === "packages/views/issues/components/board-view.tsx") {
+    nativeImport("useNativeExecutionActions", "native-execution-actions");
+    nativeImport("NativeExecutionFeedback", "native-execution-feedback");
+    executionPatch('  const boardWsId = useWorkspaceId();', '  const boardWsId = useWorkspaceId();\n  const submitNativeIntent = useNativeExecutionActions();');
+    executionPatch('      if (!over || recentlyMovedRef.current) return;', '      if (!over || recentlyMovedRef.current) return;\n      const dragged = issueMapRef.current.get(active.id as string);\n      if (dragged && isReadonlyExecutionIssue(dragged)) return;', "isReadonlyExecutionIssue");
+    executionPatch('      // Same-column reorder (manual sort only)', `      const dragged = issueMapRef.current.get(activeId);
+      if (dragged && isReadonlyExecutionIssue(dragged)) {
+        resetColumns();
+        const target = groupMap.get(overCol);
+        if (target?.status && !issueMatchesGroup(dragged, target)) void submitNativeIntent(dragged, target.status);
+        return;
+      }
+
+      // Same-column reorder (manual sort only)`);
+    executionPatch('onMoveIssue, groupIds, groupMap, sortBy, beginSettle', 'onMoveIssue, submitNativeIntent, groupIds, groupMap, sortBy, beginSettle');
+    executionPatch('      <div\n        ref={pan.ref}', '      <NativeExecutionFeedback issues={groupedIssues} />\n      <div\n        ref={pan.ref}');
+  }
+  if (name === "packages/views/issues/components/board-column.tsx") {
+    executionPatch('ref={mergedRef}', 'ref={mergedRef}\n          data-ccp-status-category={group.status}');
+    executionPatch('disableSorting={!!sortLabel}', 'disableSorting={!!sortLabel}\n        nativeExecutionDrag={group.status !== undefined}');
+  }
+  if (name === "packages/views/issues/components/list-row.tsx") {
+    executionPatch('disabled: disableSorting ? { droppable: true } : undefined,', 'disabled: isReadonlyExecutionIssue(issue) ? true : disableSorting ? { droppable: true } : undefined,', "isReadonlyExecutionIssue");
+    executionPatch('ref={containerRef}', 'ref={containerRef}\n        data-ccp-issue-id={issue.id}\n        data-ccp-execution-state={issue.metadata?.ccp_execution_state}\n        data-ccp-source={issue.metadata?.ccp_source}');
+    executionPatch('type="checkbox"', 'type="checkbox"\n            disabled={isReadonlyExecutionIssue(issue)}');
+    executionPatch('<span className="truncate">{issue.title}</span>', '<span className="truncate">{issue.title}</span>\n            <ExecutionBadge issue={issue} />', "ExecutionBadge");
+    executionPatch('              enableHoverCard', '              enableHoverCard={!isReadonlyExecutionIssue(issue)}\n              profileLink={!isReadonlyExecutionIssue(issue)}');
+  }
+  if (name === "packages/views/issues/components/list-view.tsx") {
+    executionPatch('const allSelected = issues.length > 0 && selectedCount === issues.length;', 'const selectableCount = issues.filter((issue) => !isReadonlyExecutionIssue(issue)).length;\n  const allSelected = selectableCount > 0 && selectedCount === selectableCount;', "isReadonlyExecutionIssue");
+    executionPatch('checked={allSelected}', 'checked={allSelected}\n            disabled={selectableCount === 0}');
+  }
+  if (name === "packages/views/issues/actions/issue-actions-context-menu.tsx") {
+    executionPatch('    event.preventDefault();', '    event.preventDefault();\n    if (isReadonlyExecutionIssue(issue)) return;', "isReadonlyExecutionIssue");
+  }
+  if (name === "packages/views/issues/actions/issue-actions-dropdown.tsx") {
+    executionPatch('  const [assigneeOpen, setAssigneeOpen] = useState(false);', '  const [assigneeOpen, setAssigneeOpen] = useState(false);\n  if (isReadonlyExecutionIssue(issue)) return null;', "isReadonlyExecutionIssue");
+  }
+  if (name === "packages/views/issues/components/batch-action-toolbar.tsx") {
+    executionPatch('issues.filter((i) => selectedIds.has(i.id))', 'issues.filter((i) => selectedIds.has(i.id) && !isReadonlyExecutionIssue(i))', "isReadonlyExecutionIssue");
+  }
+  if (name === "packages/views/issues/surface/use-issue-surface-actions.ts") {
+    executionPatch('      updateIssueMutation.mutate(', '      if (isExecutionIssueId(issueId)) { options?.onSettled?.(); return; }\n      updateIssueMutation.mutate(', "isExecutionIssueId");
+    // moveIssue has its own mutation and only an onSettled callback.
+    text = text.replace('const { before_id, after_id, ...optimisticUpdates } = updates;\n      if (isExecutionIssueId(issueId)) { options?.onSettled?.(); return; }', 'const { before_id, after_id, ...optimisticUpdates } = updates;\n      if (isExecutionIssueId(issueId)) { onSettled?.(); return; }');
+    executionPatch('        await batchUpdateMutation.mutateAsync({ ids: issueIds, updates });', '        const ids = issueIds.filter((id) => !isExecutionIssueId(id));\n        if (ids.length) await batchUpdateMutation.mutateAsync({ ids, updates });');
+    executionPatch('        await batchDeleteMutation.mutateAsync(issueIds);', '        const ids = issueIds.filter((id) => !isExecutionIssueId(id));\n        if (ids.length) await batchDeleteMutation.mutateAsync(ids);');
+  }
+  if (name === "packages/views/issues/components/table-view.tsx") {
+    executionPatch('const checked = issueIds.length > 0 && selectedCount === issueIds.length;', 'const selectableIds = issueIds.filter((id) => !isExecutionIssueId(id));\n  const checked = selectableIds.length > 0 && selectedCount === selectableIds.length;', "isExecutionIssueId");
+    executionPatch('  const issue = row.original.issue;\n  return (', '  const issue = row.original.issue;\n  if (isReadonlyExecutionIssue(issue)) return null;\n  return (', "isReadonlyExecutionIssue");
+    executionPatch('  const commit = () => {\n    const title = draft.trim();', `  if (isReadonlyExecutionIssue(row.issue)) return <div className="flex min-w-0 items-center gap-1.5" data-ccp-issue-id={row.issue.id}>
+    <span className="text-caption text-muted-foreground">{row.issue.identifier}</span>
+    <button type="button" className="truncate text-left hover:underline" onClick={(event) => { event.stopPropagation(); onOpen(event); }}>{row.issue.title}</button>
+    <ExecutionBadge issue={row.issue} />
+  </div>;
+  const commit = () => {
+    const title = draft.trim();`, "ExecutionBadge");
+    executionPatch('            {row.issue.title}\n          </button>', '            {row.issue.title}\n          </button>\n          <ExecutionBadge issue={row.issue} />');
+    executionPatch('  const propertyId = propertyIdFromViewKey(key);\n  if (propertyId) {', `  const propertyId = propertyIdFromViewKey(key);
+  if (isReadonlyExecutionIssue(issue) && key !== "title") {
+    if (propertyId) return <span>{String(issue.properties?.[propertyId] ?? "—")}</span>;
+    if (key === "assignee") return <span>{String(issue.metadata?.ccp_agent_name ?? "—")}</span>;
+    if (key === "status") return <ExecutionBadge issue={issue} />;
+    if (key === "labels") return <span>{issue.labels?.map(label => label.name).join(", ") || "—"}</span>;
+    return <span>{String(issue[key as keyof Issue] ?? "—")}</span>;
+  }
+  if (propertyId) {`);
+  }
+  if (executionImports.size) {
+    const relative = path.relative(path.dirname(path.join(destination, name)), path.join(root, "src/execution-issue")).split(path.sep).join("/");
+    text = `import { ${[...executionImports].join(", ")} } from "${relative}";\n${text}`;
+  }
   if (/\.[jt]sx?$/.test(name)) {
     const ast = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
     const edits = [];

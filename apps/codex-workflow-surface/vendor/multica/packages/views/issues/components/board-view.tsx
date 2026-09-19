@@ -1,3 +1,7 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue } from "../../../../../../src/execution-issue";
+import { NativeExecutionFeedback } from "../../../../../../src/native-execution-feedback";
+import { useNativeExecutionActions } from "../../../../../../src/native-execution-actions";
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
@@ -270,6 +274,7 @@ function BoardViewImpl({
   const storeGrouping = useViewStore((s) => s.grouping);
   const sortBy = useViewStore((s) => s.sortBy);
   const boardWsId = useWorkspaceId();
+  const submitNativeIntent = useNativeExecutionActions();
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(boardWsId));
   const groupingPropertyId = propertyIdFromViewKey(storeGrouping);
   const groupingProperty = groupingPropertyId
@@ -526,6 +531,8 @@ function BoardViewImpl({
     (event: DragOverEvent) => {
       const { active, over } = event;
       if (!over || recentlyMovedRef.current) return;
+      const dragged = issueMapRef.current.get(active.id as string);
+      if (dragged && isReadonlyExecutionIssue(dragged)) return;
 
       const activeId = active.id as string;
       const overId = over.id as string;
@@ -571,6 +578,14 @@ function BoardViewImpl({
       const overCol = findColumn(cols, overId, groupIds);
       if (!activeCol || !overCol) {
         resetColumns();
+        return;
+      }
+
+      const dragged = issueMapRef.current.get(activeId);
+      if (dragged && isReadonlyExecutionIssue(dragged)) {
+        resetColumns();
+        const target = groupMap.get(overCol);
+        if (target?.status && !issueMatchesGroup(dragged, target)) void submitNativeIntent(dragged, target.status);
         return;
       }
 
@@ -665,7 +680,7 @@ function BoardViewImpl({
       );
       applyPropertyGroupValue(finalGroup, activeId);
     },
-    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue],
+    [groupedIssues, groups, grouping, groupingOptionIds, onMoveIssue, submitNativeIntent, groupIds, groupMap, sortBy, beginSettle, columnsRef, isDraggingRef, setColumns, applyPropertyGroupValue],
   );
 
   // An aborted drag (pointercancel, window resize, tab hide, Escape) fires
@@ -687,6 +702,7 @@ function BoardViewImpl({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
+      <NativeExecutionFeedback issues={groupedIssues} />
       <div
         ref={pan.ref}
         onPointerDown={pan.onPointerDown}

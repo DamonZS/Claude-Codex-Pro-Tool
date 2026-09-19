@@ -785,6 +785,15 @@ impl BridgeRuntimeService for LauncherRuntimeService {
             .await
     }
 
+    async fn multica_native_execution_intent(
+        &self,
+        request: claude_codex_pro_core::routes::NativeExecutionIntentRequest,
+    ) -> anyhow::Result<Value> {
+        self.multica_runtime
+            .multica_native_execution_intent(request)
+            .await
+    }
+
     async fn multica_execution_dispatch(
         &self,
         request: claude_codex_pro_core::routes::MulticaExecutionDispatchRequest,

@@ -1,125 +1,116 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NativeSubtasks } from "./native-subtasks";
+import { api } from "@multica/core/api";
+import type { Issue } from "@multica/core/types";
+import { ExecutionDetail } from "./native-subtasks";
+import { submitNativeExecutionIntent } from "./native-execution-actions";
+vi.mock("@multica/core/api", () => ({ api: { getIssue: vi.fn() } }));
 
-const row = (name = "Descartes", status = "running") => ({
-  id: `thread-${name}`, parent_thread_id: "parent-thread", agent_nickname: name,
-  status, edge_status: "open", updated_at_ms: 1750000000000, source: "codex_native", read_only: true,
-  title: "Private task instructions must not appear",
-});
+const issue: Issue = { id: "codex-native:child", title: "Descartes", updated_at: "2026-09-19T00:00:00Z",
+  workspace_id: "workspace", number: 1, identifier: "NATIVE-1", description: null, status: "in_progress", priority: "none",
+  assignee_type: "agent", assignee_id: "native-agent", creator_type: "member", creator_id: "user", parent_issue_id: null,
+  project_id: null, position: 0, stage: null, start_date: null, due_date: null, properties: {}, created_at: "2026-09-19T00:00:00Z",
+  metadata: { ccp_read_only: true, ccp_source: "codex-native", ccp_execution_state: "inProgress",
+    ccp_thread_id: "child", ccp_parent_thread_id: "parent", ccp_agent_name: "Descartes" },
+};
 let client: QueryClient;
-const postJson = vi.fn();
 const openThread = vi.fn();
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  postJson.mockReset().mockResolvedValue({ status: "ok", items: [row()], total: 1 });
+  vi.spyOn(api, "getIssue").mockResolvedValue(issue);
   openThread.mockReset().mockResolvedValue(true);
-  window.__CODEX_WORKFLOW_BRIDGE__ = { postJson, openThread };
+  window.__CODEX_WORKFLOW_BRIDGE__ = { postJson: vi.fn(), openThread };
 });
-afterEach(() => { cleanup(); client.clear(); delete window.__CODEX_WORKFLOW_BRIDGE__; vi.useRealTimers(); });
-const mount = () => render(<QueryClientProvider client={client}><NativeSubtasks /></QueryClientProvider>);
+afterEach(() => { cleanup(); client.clear(); delete window.__CODEX_WORKFLOW_BRIDGE__; vi.restoreAllMocks(); });
+const mount = (id = issue.id, onOpenThread?: (id: string) => Promise<unknown>) => render(
+  <QueryClientProvider client={client}><ExecutionDetail id={id} workspaceId="workspace" onOpenThread={onOpenThread} leadingAction={<button>返回我的任务</button>} /></QueryClientProvider>,
+);
 
-describe("native Codex subtasks", () => {
-  it("queries read-only metadata and opens child and parent through the native host", async () => {
-    mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Descartes" }));
-    await waitFor(() => expect(openThread).toHaveBeenLastCalledWith("thread-Descartes"));
-    fireEvent.click(screen.getByRole("button", { name: "打开 Descartes 的父会话" }));
-    await waitFor(() => expect(openThread).toHaveBeenLastCalledWith("parent-thread"));
-    expect(screen.getByText("执行中")).toBeTruthy();
-    expect(screen.queryByText(/Private task instructions/)).toBeNull();
-    expect(postJson.mock.calls).toEqual([["/multica/workspace/query", { resource: "codex_native_agents", limit: 100, offset: 0 }]]);
-  });
-
-  it("shows loading, genuine empty state and retries a failed read", async () => {
-    let resolve!: (value: unknown) => void;
-    postJson.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
-    mount();
-    expect(screen.getByText("正在读取原生子任务…")).toBeTruthy();
-    await act(async () => resolve({ status: "failed" }));
-    expect(await screen.findByRole("alert")).toBeTruthy();
-    postJson.mockResolvedValue({ status: "ok", items: [], total: 0 });
-    fireEvent.click(screen.getByRole("button", { name: "刷新子任务" }));
-    expect(await screen.findByText("暂无原生子任务")).toBeTruthy();
-  });
-
-  it("retains cached rows after a refresh failure and marks them stale", async () => {
-    mount();
-    await screen.findByRole("button", { name: "Descartes" });
-    postJson.mockRejectedValue(new Error("read failed"));
-    fireEvent.click(screen.getByRole("button", { name: "刷新子任务" }));
-    expect(await screen.findByText("子任务数据可能已过期，请刷新重试。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Descartes" })).toBeTruthy();
-  });
-
-  it("does not mistake an open edge for execution and surfaces partial reads", async () => {
-    postJson.mockResolvedValue({ status: "ok", items: [row("", "unknown")], total: 1, stale: true });
-    mount();
-    expect(await screen.findByText("状态待确认")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "thread-" })).toBeTruthy();
-    expect(screen.getByText("子任务数据可能已过期，请刷新重试。")).toBeTruthy();
-  });
-
-  it("keeps the previous complete list when a database returns only partial rows", async () => {
-    postJson.mockResolvedValueOnce({ status: "ok", items: [row("Descartes"), row("Tesla")], total: 2 });
-    mount();
-    await screen.findByRole("button", { name: "Tesla" });
-    postJson.mockResolvedValue({ status: "ok", items: [row("Descartes")], total: 1, stale: true });
-    fireEvent.click(screen.getByRole("button", { name: "刷新子任务" }));
-    expect(await screen.findByText("子任务数据可能已过期，请刷新重试。")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Tesla" })).toBeTruthy();
-    postJson.mockResolvedValue({ status: "ok", items: [row("Tesla", "completed")], total: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "刷新子任务" }));
-    expect(await screen.findByText("已完成")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Descartes" })).toBeNull();
-  });
-
-  it.each([false, { status: "failed" }, { status: "error" }, { ok: false }])("shows a native open failure: %j", async (result) => {
-    openThread.mockResolvedValue(result);
-    mount();
-    fireEvent.click(await screen.findByRole("button", { name: "Descartes" }));
-    expect(await screen.findByText("会话打开失败，请重试。")).toBeTruthy();
-  });
-
-  it("expands recent rows without creating executions", async () => {
-    postJson.mockResolvedValue({ status: "ok", items: ["Descartes", "Tesla", "Faraday", "Mendel", "Fifth"].map((n) => row(n)), total: 5 });
-    mount();
-    await screen.findByRole("button", { name: "Mendel" });
-    expect(screen.queryByRole("button", { name: "Fifth" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "展开近期 5 个子任务" }));
-    expect(screen.getByRole("button", { name: "Fifth" })).toBeTruthy();
+describe("unified execution readonly detail", () => {
+  it("shows pending and failed drag intent in detail and retries without opening either session", async () => {
+    const failed = { ...issue, id: "codex-native:detail-retry", metadata: { ...issue.metadata, ccp_thread_id: "detail-retry", ccp_execution_state: "failed" } };
+    vi.mocked(api.getIssue).mockResolvedValue(failed);
+    let finish!: (value: unknown) => void;
+    const postJson = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    window.__CODEX_WORKFLOW_BRIDGE__ = { postJson, openThread };
+    mount(failed.id);
+    await screen.findByRole("heading", { name: "Descartes" });
+    let pending!: Promise<void>;
+    act(() => { pending = submitNativeExecutionIntent(failed, "in_progress"); });
+    expect(screen.getByRole("status").textContent).toContain("正在提交执行指令");
+    await act(async () => { finish({ status: "failed" }); await pending; });
+    expect(screen.getByRole("alert").textContent).toContain("执行指令提交失败");
+    vi.mocked(api.getIssue).mockResolvedValue({ ...failed, updated_at: "2026-09-19T01:00:00Z", metadata: { ...failed.metadata, ccp_execution_state: "reconciling" } });
+    await act(async () => { await client.invalidateQueries(); });
+    await screen.findByText(/状态待确认/);
+    expect(screen.getByRole("alert").textContent).toContain("执行指令提交失败");
+    fireEvent.click(screen.getByRole("button", { name: "重试执行指令" }));
+    expect(postJson).toHaveBeenCalledTimes(2);
+    expect(postJson.mock.calls[0]).toEqual(postJson.mock.calls[1]);
+    await act(async () => { finish({ status: "failed", code: "native_dispatch_outcome_pending" }); });
+    expect(screen.getByRole("alert").textContent).toContain("执行指令提交失败");
+    vi.mocked(api.getIssue).mockResolvedValue({ ...failed, updated_at: "2026-09-19T02:00:00Z", metadata: { ...failed.metadata, ccp_execution_state: "reconciling" } });
+    await act(async () => { await client.invalidateQueries(); });
+    fireEvent.click(screen.getByRole("button", { name: "重试执行指令" }));
+    await waitFor(() => expect(postJson).toHaveBeenCalledTimes(3));
+    expect(postJson.mock.calls[2]).toEqual(postJson.mock.calls[0]);
+    await act(async () => { finish({ status: "ok" }); });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "返回我的任务" })).toBeTruthy();
     expect(openThread).not.toHaveBeenCalled();
   });
-
-  it("refreshes while mounted and stops polling when leaving My Tasks", async () => {
-    vi.useFakeTimers();
-    const view = mount();
-    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
-    expect(postJson).toHaveBeenCalledTimes(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(postJson).toHaveBeenCalledTimes(2);
-    view.unmount();
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
-    expect(postJson).toHaveBeenCalledTimes(2);
+  it("opens child and parent from the same Issue projection without an editor", async () => {
+    mount();
+    expect(await screen.findByRole("heading", { name: "Descartes" })).toBeTruthy();
+    expect(screen.getByText(/Codex 原生/)).toBeTruthy();
+    expect(screen.getByText(/执行中/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "打开子会话" }));
+    expect(openThread).toHaveBeenLastCalledWith("child");
+    fireEvent.click(screen.getByRole("button", { name: "打开父会话" }));
+    expect(openThread).toHaveBeenLastCalledWith("parent");
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(api.getIssue).toHaveBeenCalledWith("codex-native:child");
   });
-
-  it("pauses metadata reads when the native host hides the workflow and resumes on return", async () => {
-    vi.useFakeTimers();
-    const host = document.createElement("div");
-    document.body.append(host);
-    const container = document.createElement("div");
-    host.attachShadow({ mode: "open" }).append(container);
-    const view = render(<QueryClientProvider client={client}><NativeSubtasks /></QueryClientProvider>, { container });
-    try {
-      await act(async () => { await vi.advanceTimersByTimeAsync(20); });
-      expect(postJson).toHaveBeenCalledTimes(1);
-      await act(async () => { host.style.display = "none"; });
-      await act(async () => { await client.invalidateQueries(); await vi.advanceTimersByTimeAsync(15000); });
-      expect(postJson).toHaveBeenCalledTimes(1);
-      await act(async () => { host.style.display = ""; });
-      await act(async () => { await vi.advanceTimersByTimeAsync(20); });
-      expect(postJson).toHaveBeenCalledTimes(2);
-    } finally { view.unmount(); host.remove(); }
+  it("prefers the mount host callback", async () => {
+    const custom = vi.fn().mockResolvedValue(true);
+    mount(issue.id, custom);
+    fireEvent.click(await screen.findByRole("button", { name: "打开子会话" }));
+    expect(custom).toHaveBeenCalledWith("child");
+    expect(openThread).not.toHaveBeenCalled();
+  });
+  it.each([false, { status: "failed" }, { status: "error" }, { ok: false }])("keeps detail and retry after open failure %j", async (result) => {
+    openThread.mockResolvedValue(result);
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "打开子会话" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "会话打开失败，请重试。");
+    openThread.mockResolvedValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "打开子会话" }));
+    await act(async () => {});
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "返回我的任务" })).toBeTruthy();
+  });
+  it("retains return during loading and retries query failure", async () => {
+    vi.mocked(api.getIssue).mockRejectedValueOnce(new Error("private error"));
+    mount();
+    expect(screen.getByRole("button", { name: "返回我的任务" })).toBeTruthy();
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "执行详情读取失败，请重试。");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("heading", { name: "Descartes" })).toBeTruthy();
+  });
+  it("shows execution-only pending work with no fabricated thread actions", async () => {
+    vi.mocked(api.getIssue).mockResolvedValue({ ...issue, id: "ccp-execution:binding", metadata: {
+      ccp_read_only: true, ccp_source: "multica-execution", ccp_execution_state: "binding_pending", ccp_agent_name: "Worker",
+    } });
+    mount("ccp-execution:binding");
+    expect(await screen.findByText(/等待执行/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "打开子会话" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开父会话" })).toBeNull();
+  });
+  it("renders unknown state as unconfirmed instead of failure", async () => {
+    vi.mocked(api.getIssue).mockResolvedValue({ ...issue, metadata: { ...issue.metadata, ccp_execution_state: "future-state" } });
+    mount();
+    expect(await screen.findByText(/状态待确认/)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

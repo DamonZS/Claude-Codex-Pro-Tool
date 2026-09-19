@@ -1,3 +1,6 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isReadonlyExecutionIssue, ExecutionBadge } from "../../../../../../src/execution-issue";
+import { isNativeExecutionCard } from "../../../../../../src/native-execution-actions";
 "use client";
 
 import { useCallback, memo } from "react";
@@ -80,7 +83,7 @@ export const BoardCardContent = memo(function BoardCardContent({
     },
     [issue.id, surfaceActions, t],
   );
-  const canEdit = editable && !!surfaceActions;
+  const canEdit = editable && !!surfaceActions && !isReadonlyExecutionIssue(issue);
 
   const showPriority = storeProperties.priority;
   const showDescription = storeProperties.description && issue.description;
@@ -100,7 +103,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const { getActorName } = useActorName();
   const assigneeName =
     showAssigneeName && issue.assignee_type && issue.assignee_id
-      ? getActorName(issue.assignee_type, issue.assignee_id)
+      ? String(issue.metadata?.ccp_agent_name ?? getActorName(issue.assignee_type, issue.assignee_id))
       : null;
 
   const priorityLabel = t(($) => $.priority[issue.priority]);
@@ -143,7 +146,7 @@ export const BoardCardContent = memo(function BoardCardContent({
         actorType={issue.assignee_type!}
         actorId={issue.assignee_id!}
         size="sm"
-        enableHoverCard
+        enableHoverCard={!isReadonlyExecutionIssue(issue)}
         profileLink={false}
         className="shrink-0"
       />
@@ -188,6 +191,7 @@ export const BoardCardContent = memo(function BoardCardContent({
       <p className="mt-1 text-body font-medium leading-snug line-clamp-2">
         {issue.title}
       </p>
+      <ExecutionBadge issue={issue} />
 
       {showDescription && (() => {
         const preview = descriptionPreview(issue.description!);
@@ -322,11 +326,13 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({
   childProgress,
   project,
   disableSorting,
+  nativeExecutionDrag = false,
 }: {
   issue: Issue;
   childProgress?: ChildProgress;
   project?: Project;
   disableSorting?: boolean;
+  nativeExecutionDrag?: boolean;
 }) {
   const p = useWorkspacePaths();
   const {
@@ -340,7 +346,7 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({
     id: issue.id,
     data: { status: issue.status },
     animateLayoutChanges,
-    disabled: disableSorting ? { droppable: true } : undefined,
+    disabled: isReadonlyExecutionIssue(issue) && !(nativeExecutionDrag && isNativeExecutionCard(issue)) ? true : disableSorting ? { droppable: true } : undefined,
   });
 
   const style = {
@@ -354,6 +360,9 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({
         ref={setNodeRef}
         style={style}
         data-board-card=""
+        data-ccp-issue-id={issue.id}
+        data-ccp-execution-state={issue.metadata?.ccp_execution_state}
+        data-ccp-source={issue.metadata?.ccp_source}
         {...attributes}
         {...listeners}
         className={`group/card ${isDragging ? "opacity-30" : ""}`}

@@ -268,7 +268,7 @@ export async function tableQuery(kind: "groups" | "rows" | "facets", body: JsonR
   keys(pageInput, ["limit", "cursor"]);
   const limit = integer(pageInput.limit, 50, 500);
   if (!limit) throw new AdapterError(400, "invalid_limit");
-  const cursorFingerprint = await fingerprint({ query, group, group_key: body.group_key, parent_id: body.parent_id, hierarchy: body.hierarchy, revisions: all.map((i) => [i.id, i.revision]), ...(property ? { property } : {}) });
+  const cursorFingerprint = await fingerprint({ query, group, group_key: body.group_key, parent_id: body.parent_id, hierarchy: body.hierarchy, revisions: all.map((i) => [i.id, i.revision, i.status, i.updated_at, i.metadata]), ...(property ? { property } : {}) });
   const cursor = text(pageInput.cursor);
   let offset = 0;
   if (cursor) {

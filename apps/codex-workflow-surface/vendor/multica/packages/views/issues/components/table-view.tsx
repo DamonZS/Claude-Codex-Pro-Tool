@@ -1,3 +1,5 @@
+/* CCP modification: Project execution metadata and protect readonly virtual issues. Upstream attribution: vendor/multica/NOTICE. */
+import { isExecutionIssueId, isReadonlyExecutionIssue, ExecutionBadge } from "../../../../../../src/execution-issue";
 "use client";
 
 import { useStatusLabel } from "../utils/status-label";
@@ -308,7 +310,8 @@ function SelectAllCheckbox({
   const selection = useIssueSurfaceSelection();
   const ref = useRef<HTMLInputElement>(null);
   const selectedCount = issueIds.filter((id) => selection.selectedIds.has(id)).length;
-  const checked = issueIds.length > 0 && selectedCount === issueIds.length;
+  const selectableIds = issueIds.filter((id) => !isExecutionIssueId(id));
+  const checked = selectableIds.length > 0 && selectedCount === selectableIds.length;
 
   useEffect(() => {
     if (ref.current) {
@@ -666,6 +669,11 @@ export function InlineTitle({
     if (!editingRef.current) setDraft(row.issue.title);
   }, [row.issue.title]);
 
+  if (isReadonlyExecutionIssue(row.issue)) return <div className="flex min-w-0 items-center gap-1.5" data-ccp-issue-id={row.issue.id}>
+    <span className="text-caption text-muted-foreground">{row.issue.identifier}</span>
+    <button type="button" className="truncate text-left hover:underline" onClick={(event) => { event.stopPropagation(); onOpen(event); }}>{row.issue.title}</button>
+    <ExecutionBadge issue={row.issue} />
+  </div>;
   const commit = () => {
     const title = draft.trim();
     onEditingChange(false);
@@ -746,6 +754,7 @@ export function InlineTitle({
           >
             {row.issue.title}
           </button>
+          <ExecutionBadge issue={row.issue} />
           {/* Lifted out of the flex flow, the way SidebarMenuAction is. Laid
             * out inline these two reserved ~40px of the title column for
             * buttons that are invisible until hovered — and title is the
@@ -1018,6 +1027,7 @@ function IssueTableSelectCell({
   const { t } = useT("issues");
   if (row.original.kind !== "issue") return null;
   const issue = row.original.issue;
+  if (isReadonlyExecutionIssue(issue)) return null;
   return (
     <IssueCheckbox
       checked={selection.selectedIds.has(issue.id)}
@@ -1118,6 +1128,13 @@ function IssueTableBodyCell({
     meta.updateIssue(issue, updates);
 
   const propertyId = propertyIdFromViewKey(key);
+  if (isReadonlyExecutionIssue(issue) && key !== "title") {
+    if (propertyId) return <span>{String(issue.properties?.[propertyId] ?? "—")}</span>;
+    if (key === "assignee") return <span>{String(issue.metadata?.ccp_agent_name ?? "—")}</span>;
+    if (key === "status") return <ExecutionBadge issue={issue} />;
+    if (key === "labels") return <span>{issue.labels?.map(label => label.name).join(", ") || "—"}</span>;
+    return <span>{String(issue[key as keyof Issue] ?? "—")}</span>;
+  }
   if (propertyId) {
     const property = meta.propertyById.get(propertyId);
     if (!property) return null;
