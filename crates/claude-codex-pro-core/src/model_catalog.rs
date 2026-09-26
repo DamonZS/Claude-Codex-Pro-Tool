@@ -17,6 +17,7 @@ const API_KEY_ENV_KEYS: &[&str] = &[
     "CLAUDE_CODEX_PRO_API_KEY",
     "OPENAI_API_KEY",
 ];
+const DEFAULT_CODEX_CONTEXT_WINDOW: u64 = 1_000_000;
 
 /// Base URL 可能指向 Anthropic/Claude 兼容协议的子路径。模型目录通常
 /// 仍挂在供应商根路径下，因此在当前路径失败时只对这些已知后缀做根路径候选。
@@ -214,7 +215,8 @@ pub(crate) fn relay_profile_catalog_models(
                             .and_then(|text| text.parse::<u64>().ok())
                     })
                 })
-                .filter(|value| *value > 0);
+                .filter(|value| *value > 0)
+                .or(Some(DEFAULT_CODEX_CONTEXT_WINDOW));
             Some(RelayProfileCatalogModel {
                 model: model.to_string(),
                 display_name,

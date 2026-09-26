@@ -1734,122 +1734,43 @@ fn injection_script_exposes_conversation_view_width_control() {
 }
 
 #[test]
-fn injection_script_keeps_session_action_buttons_in_pr_style() {
+fn injection_script_restores_native_session_menu() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("actionButtonClass = \"codex-session-action-button\""));
-    assert!(script.contains("background: transparent;"));
-    assert!(script.contains("background: #363839;"));
-    assert!(script.contains("cursor: default;"));
-}
-
-#[test]
-fn injection_script_moves_export_and_project_move_into_more_menu() {
-    let script = assets::injection_script(57321).replace("\r\n", "\n");
-
-    assert!(script.contains("moreButtonClass = \"codex-session-more-button\""));
-    assert!(script.contains("moreMenuClass = \"codex-session-more-menu\""));
-    assert!(script.contains("configureActionButton(moreButton, \"更多操作\", \"…\")"));
-    assert!(script.contains("createSessionMoreMenuItem(\"导出\""));
-    assert!(script.contains("createSessionMoreMenuItem(\"移动\""));
-    assert!(script.contains("group.appendChild(moreButton)"));
-    assert!(script.contains("installMoreButtonEvents(row, moreButton, openMoreMenu)"));
-    assert!(script.contains("installSessionMoreMenuAutoClose(row, moreMenu)"));
-    assert!(script.contains("updateSessionMoreMenuDirection(moreButton, moreMenu)"));
-    assert!(script.contains("positionSessionMoreMenu(moreButton, moreMenu)"));
-    assert!(script.contains("document.body.appendChild(moreMenu)"));
-    assert!(script.contains("position: fixed;"));
-    assert!(script.contains("codex-session-more-menu-open-up"));
-    assert!(script.contains("transform: translateY(calc(-100% - 34px));"));
-    assert!(script.contains("positionSessionMoreMenu(moreButton, moreMenu);"));
-    assert!(script.contains("row.classList.toggle(\"codex-session-more-open\""));
-    assert!(script.contains(".${actionGroupClass} {"));
-    assert!(script.contains("position: absolute;"));
-    assert!(script.contains("pointer-events: none;"));
-    assert!(script.contains("[data-codex-delete-row=\"true\"]:hover .${actionGroupClass} {\n        opacity: 1;\n        pointer-events: auto;\n      }"));
-    assert!(script.contains("[data-codex-delete-row=\"true\"].codex-session-more-open .${actionGroupClass} {\n        opacity: 1;\n        pointer-events: auto;\n        z-index: 2147483201;"));
-    assert!(!script.contains("installActionButtonEvents(row, moreButton, openMoreMenu)"));
-    assert!(!script.contains("group.appendChild(exportButton)"));
-    assert!(!script.contains("group.appendChild(moveButton)"));
-}
-
-#[test]
-fn injection_script_restores_injected_session_delete() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("forcePluginInstall: true, sessionDelete: true, markdownExport: true"));
-    assert!(!script.contains("settings.sessionDelete = false;"));
-    assert!(!script.contains("window.__codexSessionDeleteDocumentDeleteHandler = null;"));
-
-    let attach = source_between(
-        &script,
-        "function attachButton(row) {",
-        "function tryAttachButton(row) {",
-    );
-    assert!(attach.contains("if (settings.sessionDelete) {"));
-    assert!(attach.contains("deleteButton.dataset.codexDeleteVersion = codexDeleteVersion;"));
-    assert!(attach.contains("configureSvgActionButton(deleteButton, \"删除\", trashIconSvg());"));
-    assert!(attach.contains("installActionButtonEvents(row, deleteButton, openDeleteConfirm);"));
-    assert!(attach.contains("group.appendChild(deleteButton);"));
-    assert!(attach.contains(
-        "setTimeout(() => refreshActionButton(deleteButton, row, openDeleteConfirm), 0);"
-    ));
+    assert!(script.contains("sessionDelete: false, markdownExport: false, projectMove: false"));
+    assert!(script.contains("settings.sessionDelete = false;"));
+    assert!(script.contains("settings.markdownExport = false;"));
+    assert!(script.contains("settings.projectMove = false;"));
 
     let scan = source_between(
         &script,
         "function scanLightweight() {",
         "let zedRemoteStatusPromise",
     );
-    assert!(scan.contains("    installDeleteButtonEventDelegation();"));
-    assert!(!scan.contains(".codex-delete-confirm-overlay, .codex-delete-toast"));
+    assert!(scan.contains("clearCodexSessionEnhancements();"));
+    assert!(!scan.contains("installDeleteButtonEventDelegation"));
+    assert!(!scan.contains("tryAttachButton"));
+    assert!(!scan.contains("attachArchivedPageDeleteButton"));
 
-    // 关闭 sessionDelete 时仍需移除旧版本遗留的 CCP 删除 UI。
-    assert!(script.contains(
-        "const hasUnexpectedDelete = !settings.sessionDelete && !!existingDeleteButton;"
-    ));
-    assert!(script.contains("row.dataset.codexDeleteRow = \"false\";"));
-
-    // 8ca18cd 的手势去重与版本号保持不变。
-    assert!(script.contains("const codexActionGroupVersion = \"6\";"));
-    assert!(script.contains("lastPointerActivationAt = performance.now();"));
+    assert!(script.contains("function sessionRows(forceRefresh = false)"));
+    assert!(!script.contains("return filterDeletedSessionRows(cachedSessionRows);"));
+    assert!(!scan.contains("refreshSessionAvailability"));
+    assert!(!scan.contains("exportMarkdown"));
+    assert!(script.contains("window.__codexSessionDeleteDocumentDeleteHandler = null;"));
+    assert!(script.contains("if (node.closest(`.${upstreamWorktreeDialogClass}`)) return;"));
 }
 
 #[test]
-fn injection_script_refreshes_session_list_after_delete() {
+fn injection_script_does_not_add_session_controls_on_archived_page() {
     let script = assets::injection_script(57321);
-    let remove = source_between(
+
+    let scan = source_between(
         &script,
-        "function removeDeletedRow(row, button) {",
-        "function updateDeleteButtonOffsets() {",
+        "function scanLightweight() {",
+        "let zedRemoteStatusPromise",
     );
-
-    assert!(remove.contains("row.remove();"));
-    assert!(remove.contains("window.location.reload();"));
-    assert!(!remove.contains("shouldReload"));
-    assert!(script.contains("removeDeletedRow(row, button);"));
-}
-
-#[test]
-fn injection_script_filters_deleted_sessions_after_codex_reprojects_rows() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("const codexDeletedSessionsKey = \"codexDeletedSessions\";"));
-    assert!(script.contains("markDeletedSession(ref.session_id);"));
-    assert!(script.contains("return filterDeletedSessionRows(cachedSessionRows);"));
-    assert!(script.contains("row.style.setProperty(\"display\", \"none\", \"important\");"));
-    assert!(script.contains("clearDeletedSession(sessionId);"));
-    assert!(script.contains("result?.status === \"undone\""));
-    assert!(script.contains("data-app-action-sidebar-thread-id"));
-}
-
-#[test]
-fn injection_script_does_not_add_delete_controls_on_archived_page() {
-    let script = assets::injection_script(57321);
-
-    assert!(script.contains("attachArchivedPageDeleteButton"));
-    assert!(script.contains("data-codex-archive-row-action"));
-    assert!(script.contains("dataset.codexArchiveRowAction = \"export\""));
-    assert!(!script.contains("dataset.codexArchiveRowAction = \"delete\""));
+    assert!(!scan.contains("attachArchivedPageDeleteButton"));
+    assert!(!scan.contains("installDeleteButtonEventDelegation"));
     assert!(!script.contains("installArchivedDeleteAllButton"));
     assert!(!script.contains("删除全部归档"));
 }

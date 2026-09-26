@@ -1,0 +1,11 @@
+{
+  "id": "deepseek-prompt-evaluator",
+  "title": "DeepSeek prompt-bank evaluator",
+  "version": "7698f38b",
+  "description": "Offline prompt-bank generation, analysis and regression scripts selected from deepseek-v4-pro-unrestricted. The package is installed as data and is never run by CCP.",
+  "sourceRepo": "https://github.com/0x5477/deepseek-v4-pro-unrestricted",
+  "sourceRevision": "7698f38b0ce523624e0d6d992999626592395b3f",
+  "licenseId": "MIT",
+  "licenseFile": "LICENSE",
+  "platforms": ["windows", "macos", "linux"]
+}

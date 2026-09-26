@@ -46,7 +46,7 @@
 
 部署面板位于当前状态/启用方式面板下方、分类筛选上方，展示资源版本、平台/架构、Python 版本和位数、模块状态、目标目录、部署/校验/外部修改/回滚状态、最近部署时间、结果和资源 SHA-256。
 
-操作包括“检测环境”“选择 Codex 目录”“部署 Leila”“回滚最近一次”“查看部署日志”。部署日志在面板底部以固定高度区域展开并纵向滚动，新日志追加后自动滚动到末尾；部署或回滚开始时自动展开，用户可手动收起。目标目录必须包含 `config.toml`。仅支持 Windows x64、macOS x64 和 macOS arm64。部署确认必须列出将修改的 `config.toml`、`gpt5.5-unrestricted.md`、`skills/leila-identity` 和 `skills/ac`，并说明 Python 依赖安装需要网络。
+操作包括“检测环境”“选择 Codex 目录”“部署 Leila”“回滚最近一次”。运行状态在面板底部以固定高度区域始终展开并纵向滚动，新日志追加后自动滚动到末尾。目标目录必须包含 `config.toml`。仅支持 Windows x64、macOS x64 和 macOS arm64。部署确认必须列出将修改的 `config.toml`、`gpt5.5-unrestricted.md`、`skills/leila-identity` 和 `skills/ac`，并说明 Python 依赖安装需要网络。
 
 ## 后端契约
 

@@ -3086,8 +3086,11 @@ mod tests {
     fn live_enter_desktop_devtools_sends_shortcut() {
         let result = enter_claude_desktop_devtools();
 
-        if result.status == "failed" && result.message.contains("not running") {
-            eprintln!("Claude Desktop is not running; live desktop devtools skipped.");
+        if result.status != "ok" && result.process_id.is_none() && !result.foreground_verified {
+            eprintln!(
+                "Claude Desktop live environment unavailable; skipped: {}",
+                result.message
+            );
             return;
         }
 

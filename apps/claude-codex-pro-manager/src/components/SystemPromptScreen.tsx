@@ -1,14 +1,61 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, Check, CircleHelp, CirclePlus, FileText, Github, LoaderCircle, Pencil, Plus, RefreshCw, TriangleAlert, Trash2, Upload, X } from "lucide-react";
+import { Check, FileText, Github, LoaderCircle, Pencil, Play, Plus, RefreshCw, Terminal, TriangleAlert, Trash2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { LeilaDeploymentPanel } from "@/components/LeilaDeploymentPanel";
-import guideMarkdown from "@/content/ccp-deepseek-guide.md?raw";
 import type { AppActions } from "@/lib/actions";
 import { statusOk } from "@/lib/helpers";
-import type { LeilaDeploymentStatus, SaveSystemPromptRequest, SystemPromptItem, SystemPromptMode, SystemPromptResult } from "@/types";
+import type {
+  ClientDeployResult,
+  LogsResult,
+  PromptLibraryResult,
+  PromptCompositionSource,
+  SaveSystemPromptRequest,
+  SystemPromptItem,
+  SystemPromptMode,
+  SystemPromptResult,
+} from "@/types";
 
-type Props = { actions: AppActions; leilaStatus: LeilaDeploymentStatus | null; prompts: SystemPromptResult | null };
+type Props = {
+  actions: AppActions;
+  clientDeploy: ClientDeployResult | null;
+  library: PromptLibraryResult | null;
+  prompts: SystemPromptResult | null;
+  logs: LogsResult | null;
+};
+
+function promptOperationLines(logs: LogsResult | null) {
+  const text = logs?.text ?? "";
+  return text.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    try {
+      const record = JSON.parse(line) as {
+        timestamp_ms?: number;
+        event?: string;
+        detail?: Record<string, unknown>;
+      };
+      if (record.event !== "manager.prompt_shell.step" && record.event !== "manager.leila.shell_output") return [];
+      const detail = record.detail ?? {};
+      const time = typeof record.timestamp_ms === "number"
+        ? new Date(record.timestamp_ms).toLocaleTimeString()
+        : "";
+      const content = record.event === "manager.leila.shell_output"
+        ? String(detail.line ?? "")
+        : [detail.step, detail.result].filter((value) => typeof value === "string").join(" · ");
+      return [{
+        time,
+        area: String(detail.area ?? "操作"),
+        target: String(detail.target ?? ""),
+        path: typeof detail.path === "string" ? detail.path : "",
+        content,
+        failed: String(detail.result ?? detail.level ?? "").includes("失败") || detail.level === "error",
+        succeeded: /成功|完成|已部署|已安装|通过|success|completed|installed|passed/i.test(content),
+      }];
+    } catch {
+      return /提示词|客户端|破甲|技能|工具|环境/.test(line)
+        ? [{ time: "", area: "日志", target: "", path: "", content: line, failed: false, succeeded: false }]
+        : [];
+    }
+  });
+}
 
 const EMPTY_FORM: SaveSystemPromptRequest = {
   id: "", title: "", filename: "", description: "", category: "软件开发", content: "",
@@ -50,26 +97,81 @@ function PromptCard({ actions, item, active, mode, onEdit }: {
   );
 }
 
-export function SystemPromptScreen({ actions, leilaStatus, prompts }: Props) {
-  const [mode, setMode] = useState<SystemPromptMode>("preserve");
+export function SystemPromptScreen({ actions, clientDeploy, library, logs, prompts }: Props) {
+  const [selectedTargetId, setSelectedTargetId] = useState("");
+  const [selectedVersionId, setSelectedVersionId] = useState("");
+  const [deployBusy, setDeployBusy] = useState(false);
   const [category, setCategory] = useState("全部");
   const [form, setForm] = useState<SaveSystemPromptRequest | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
-  const [guideOpen, setGuideOpen] = useState(false);
   const [syncUrl, setSyncUrl] = useState("");
   const items = prompts?.prompts ?? [];
   const categories = useMemo(() => ["全部", ...Array.from(new Set(items.map((item) => item.category))).sort((a, b) => a.localeCompare(b, "zh-CN"))], [items]);
   const filtered = category === "全部" ? items : items.filter((item) => item.category === category);
   const failed = prompts !== null && !statusOk(prompts.status);
   const activeMode = prompts?.mode;
+  const deployTargets = useMemo(
+    () => [...(clientDeploy?.targets ?? [])].sort((a, b) => Number(b.installed) - Number(a.installed)),
+    [clientDeploy],
+  );
+  const deployVersions = useMemo(
+    () => (library?.prompts ?? []).filter((entry) => !selectedTargetId || !entry.targets.length || entry.targets.includes(selectedTargetId)),
+    [library, selectedTargetId],
+  );
+  const selectedTarget = deployTargets.find((target) => target.targetId === selectedTargetId) ?? null;
+  const selectedVersion = deployVersions.find((entry) => entry.id === selectedVersionId) ?? null;
+  const libraryOffline = library !== null && library.online === false;
+  const operationLines = promptOperationLines(logs);
 
   useEffect(() => {
-    if (activeMode) setMode(activeMode);
-  }, [activeMode]);
+    if (!selectedTargetId || !deployTargets.some((target) => target.targetId === selectedTargetId)) {
+      setSelectedTargetId(deployTargets.find((target) => target.deployable)?.targetId ?? "");
+    }
+  }, [deployTargets, selectedTargetId]);
+
+  useEffect(() => {
+    if (!selectedVersionId || !deployVersions.some((entry) => entry.id === selectedVersionId)) {
+      setSelectedVersionId(deployVersions[0]?.id ?? "");
+    }
+  }, [deployVersions, selectedVersionId]);
 
   const edit = (item: SystemPromptItem) => setForm({
     id: item.id, title: item.title, filename: item.filename, description: item.description, category: item.category, content: item.content,
   });
+  const deployBundle = async () => {
+    if (!selectedTarget || !selectedTarget.deployable || !selectedVersion) {
+      return;
+    }
+    setDeployBusy(true);
+    try {
+      const content = await actions.fetchPromptContent(selectedVersion.id);
+      if (!content || !statusOk(content.status)) {
+        await actions.refreshLogs();
+        return;
+      }
+      const promptResult = await actions.deployPromptToClients([{ targetId: selectedTarget.targetId, content: content.content }]);
+      if (!promptResult) return;
+      if (promptResult.results?.some((row) => row.ok)) {
+        const skillNames = selectedVersion.skills;
+        if (skillNames.length) {
+          await actions.installSkillsToClients([selectedTarget.targetId], skillNames);
+        }
+        for (const tool of (library?.tools ?? []).filter((entry) => selectedVersion.tools.includes(entry.id))) {
+          await actions.installToolPackage(tool.id);
+        }
+      }
+      await actions.refreshLogs();
+    } finally {
+      setDeployBusy(false);
+    }
+  };
+
+  const restoreTargets = async (targetIds: string[]) => {
+    await actions.restoreClientDeploy(targetIds);
+    await actions.refreshLogs();
+  };
+
+
   const save = async () => {
     if (!form) return;
     const result = await actions.saveSystemPrompt(form);
@@ -91,29 +193,54 @@ export function SystemPromptScreen({ actions, leilaStatus, prompts }: Props) {
         </div>
       </header>
 
-      <div className="system-prompt-status-panel">
-        <div className="system-prompt-active-state">
-          <small>当前状态</small>
-          <strong className={prompts?.managed ? "is-active" : ""}>
-            <span className="system-prompt-dot" />
-            <span>{prompts?.activeTitle || (prompts?.orphanedManaged ? "CCP 托管提示词（状态未记录）" : prompts?.activePath ? "外部提示词" : "未启用提示词")}</span>
-            {prompts?.managed && activeMode ? <em>{activeMode === "preserve" ? "保留指令文件" : "替换指令文件"}</em> : null}
-          </strong>
-          <p>{prompts?.orphanedManaged ? "Codex 仍在加载 CCP 托管文件；重新启用任一模板可接管，之后停用会移除该托管配置。" : prompts?.externallyModified ? "Codex 配置已被其他程序修改，CCP 未执行覆盖。" : prompts?.managed ? `当前通过 model_instructions_file 加载（${activeMode === "preserve" ? "保留原提示词" : "替换原提示词"}）。` : prompts?.activePath || "选择下方模板后启用。"}</p>
-        </div>
-        <div className="system-prompt-mode">
-          <div><strong>启用方式 <CircleHelp aria-hidden="true" /></strong><p>点击模板开关时，使用这里选择的方式。</p></div>
-          <div className="system-prompt-segmented" role="group" aria-label="启用方式">
-            <button type="button" className={mode === "preserve" ? "is-selected" : ""} onClick={() => setMode("preserve")}><CirclePlus aria-hidden="true" />保留原提示词</button>
-            <button type="button" className={mode === "replace" ? "is-selected" : ""} onClick={() => setMode("replace")}><ArrowRightLeft aria-hidden="true" />替换原提示词</button>
+      <section aria-label="统一部署控制台" className="prompt-deploy-panel prompt-bundle-console">
+        <header className="prompt-deploy-header">
+          <div>
+            <strong>统一部署</strong>
+            <small>选择一个已安装客户端和版本；部署会按顺序写入提示词、技能与工具，并保留可还原状态。</small>
           </div>
-        </div>
-        <Button className="system-prompt-guide-button" variant="outline" onClick={() => setGuideOpen(true)}>
-          使用方式
-        </Button>
-      </div>
+          <div className="prompt-deploy-actions">
+            <Button disabled={deployBusy || !selectedTarget?.deployable || !selectedVersion} onClick={() => void deployBundle()}>
+              {deployBusy ? <LoaderCircle className="spin" aria-hidden="true" /> : <Play aria-hidden="true" />}部署
+            </Button>
+            <Button disabled={!selectedTarget?.managed} onClick={() => void restoreTargets([selectedTargetId])} variant="outline">还原当前目标</Button>
+            <Button onClick={() => void restoreTargets([])} variant="outline">一键全部还原</Button>
+            <Button onClick={() => void actions.refreshPromptLibrary(false)} variant="outline"><RefreshCw aria-hidden="true" />刷新资源</Button>
+          </div>
+        </header>
 
-      <LeilaDeploymentPanel actions={actions} status={leilaStatus} />
+        {!clientDeploy ? (
+          <div className="prompt-deploy-empty" role="status"><LoaderCircle className="spin" aria-hidden="true" /><span>正在检测本机客户端...</span><Button onClick={() => void actions.refreshClientDeployTargets(false)} variant="outline">重新检测</Button></div>
+        ) : !statusOk(clientDeploy.status) ? (
+          <div className="prompt-deploy-warning" role="alert"><TriangleAlert aria-hidden="true" /><span>{clientDeploy.message || "客户端状态加载失败。"}</span><Button onClick={() => void actions.refreshClientDeployTargets(false)} variant="outline">重试</Button></div>
+        ) : (
+          <div className="prompt-bundle-selectors">
+            <label>
+              <span>部署目标</span>
+              <select aria-label="选择部署目标" value={selectedTargetId} onChange={(event) => setSelectedTargetId(event.target.value)}>
+                <option value="">选择客户端...</option>
+                {deployTargets.map((target) => <option key={target.targetId} disabled={!target.deployable} value={target.targetId}>{target.displayName}{target.deployable ? (target.managed ? " · 已受管" : " · 已安装") : " · 未安装"}</option>)}
+              </select>
+              <small>{selectedTarget?.plannedPath ?? selectedTarget?.home ?? "未检测到数据目录"}</small>
+            </label>
+            <label>
+              <span>部署版本</span>
+              <select aria-label="选择部署版本" value={selectedVersionId} onChange={(event) => setSelectedVersionId(event.target.value)} title={selectedVersion?.description ?? ""}>
+                <option value="">选择版本...</option>
+                {deployVersions.map((entry) => <option key={entry.id} value={entry.id}>{entry.title}{entry.version ? ` · ${entry.version}` : ""}</option>)}
+              </select>
+              <small>{selectedVersion?.description || "版本简介将在这里显示。"}</small>
+            </label>
+          </div>
+        )}
+
+        {libraryOffline ? <div className="prompt-deploy-warning" role="alert"><TriangleAlert aria-hidden="true" /><span>内容库离线，无法读取版本正文和资源清单。</span></div> : null}
+
+        <section className="prompt-shell-log-panel" aria-labelledby="prompt-runtime-status-title">
+          <header className="prompt-shell-log-heading"><Terminal aria-hidden="true" /><strong id="prompt-runtime-status-title">运行状态</strong><span>{operationLines.length} 条</span></header>
+          <div className="prompt-shell-log-content"><header><code>{logs?.path ?? "操作日志尚未加载"}</code><Button variant="outline" onClick={() => void actions.refreshLogs()}><RefreshCw aria-hidden="true" />刷新</Button></header>{operationLines.length ? <pre>{operationLines.map((line, index) => <span className={line.failed ? "is-failed" : line.succeeded ? "is-ok" : ""} key={`${line.time}-${index}`}>{line.time ? `[${line.time}] ` : ""}[{line.area}{line.target ? ` / ${line.target}` : ""}] {line.content}{line.path ? ` | ${line.path}` : ""}{"\n"}</span>)}</pre> : <p>{logs ? "暂无部署步骤记录。" : "正在等待操作日志。"}</p>}</div>
+        </section>
+      </section>
 
       <div className="system-prompt-filter-row">
         <div className="system-prompt-categories" role="tablist" aria-label="提示词分类">
@@ -137,7 +264,7 @@ export function SystemPromptScreen({ actions, leilaStatus, prompts }: Props) {
         <div className="system-prompt-empty"><FileText /><strong>该分类下暂无提示词</strong><Button onClick={() => setForm({ ...EMPTY_FORM, category: category === "全部" ? "软件开发" : category })}>添加提示词</Button></div>
       ) : (
         <div className="system-prompt-grid">
-          {filtered.map((item) => <PromptCard key={item.id} actions={actions} item={item} active={prompts.activePromptId === item.id && prompts.managed} mode={mode} onEdit={edit} />)}
+          {filtered.map((item) => <PromptCard key={item.id} actions={actions} item={item} active={prompts.activePromptId === item.id && prompts.managed} mode={activeMode ?? "preserve"} onEdit={edit} />)}
         </div>
       )}
 
@@ -167,17 +294,6 @@ export function SystemPromptScreen({ actions, leilaStatus, prompts }: Props) {
         </div>
       ) : null}
 
-      {guideOpen ? (
-        <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setGuideOpen(false); }}>
-          <section className="system-prompt-modal system-prompt-guide-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title">
-            <header>
-              <div><small>CCP GUIDE</small><h2 id="prompt-guide-title">使用方式</h2></div>
-              <button type="button" title="关闭" onClick={() => setGuideOpen(false)}><X /></button>
-            </header>
-            <pre className="system-prompt-guide-content">{guideMarkdown}</pre>
-          </section>
-        </div>
-      ) : null}
     </section>
   );
 }

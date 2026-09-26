@@ -601,6 +601,130 @@ export type SystemPromptItem = {
   updatedAt: number;
 };
 
+export type ClientDeployTargetRow = {
+  targetId: string;
+  displayName: string;
+  installed: boolean;
+  home: string | null;
+  plannedPath: string | null;
+  managed: boolean;
+  baselineExists: boolean;
+  deployable: boolean;
+};
+
+export type ClientDeployResult = CommandResult<{ targets: ClientDeployTargetRow[] }>;
+
+export type PromptEntryRow = {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  version: string;
+  /// 适用目标；每个客户端内容不同，空数组表示适配全部。
+  targets: string[];
+  skills: string[];
+  tools: string[];
+  path: string;
+  sourcePath: string;
+  cachePath: string;
+};
+
+export type SkillEntryRow = {
+  name: string;
+  description: string;
+  fileCount: number;
+  sourcePath: string;
+  cachePath: string;
+  installPath: string;
+};
+
+export type InstalledSkillRow = {
+  name: string;
+  targetHome: string;
+  fileCount: number;
+  installPath: string;
+};
+
+export type ToolFileRow = { path: string; size: number; sha256: string };
+export type ToolEntryRow = {
+  id: string;
+  title: string;
+  version: string;
+  description: string;
+  sourceRepo: string;
+  sourceRevision: string;
+  licenseId: string;
+  licensePath: string;
+  platforms: string[];
+  size: number;
+  files: ToolFileRow[];
+  sourcePath: string;
+  cachePath: string;
+  installPath: string;
+};
+export type InstalledToolRow = { id: string; version: string; installedAtUnix: number; fileCount: number; installPath: string };
+
+export type PromptLibraryResult = CommandResult<{
+  online: boolean;
+  projectPath: string;
+  cachePath: string;
+  skillInstallPath: string;
+  toolInstallPath: string;
+  prompts: PromptEntryRow[];
+  skills: SkillEntryRow[];
+  installed: InstalledSkillRow[];
+  tools: ToolEntryRow[];
+  installedTools: InstalledToolRow[];
+}>;
+
+export type ClientDeployOutcomeRow = {
+  targetId: string;
+  ok: boolean;
+  message: string;
+  appliedPath: string | null;
+};
+
+export type ClientDeployActionPayload = {
+  results: ClientDeployOutcomeRow[];
+  succeeded: number;
+  failed: number;
+};
+
+export type ClientDeployActionResult = CommandResult<ClientDeployActionPayload>;
+
+export type PromptContentPayload = {
+  promptId: string;
+  content: string;
+};
+
+export type PromptContentResult = CommandResult<PromptContentPayload>;
+
+export type PromptCompositionSource = { id: string; title: string; content: string };
+export type PromptCompositionResult = CommandResult<{
+  content: string;
+  sourceIds: string[];
+  sourceTitles: string[];
+  warnings: string[];
+  sha256: string;
+  bytes: number;
+}>;
+
+export type SkillActionRow = {
+  targetId: string;
+  name: string;
+  ok: boolean;
+  message: string;
+};
+
+export type SkillActionPayload = {
+  results: SkillActionRow[];
+  succeeded: number;
+  failed: number;
+};
+
+export type SkillActionResult = CommandResult<SkillActionPayload>;
+export type ToolActionResult = CommandResult<{ id: string; version: string; installPath: string; sha256: string }>;
+
 export type SystemPromptResult = CommandResult<{
   prompts: SystemPromptItem[];
   activePromptId: string | null;

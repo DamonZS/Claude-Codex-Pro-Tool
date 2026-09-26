@@ -552,7 +552,8 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
                     model_list: "deepseek-coder\nqwen3-coder\nclaude-compatible".to_string(),
                     codex_catalog_json: r#"[
                         {"displayName":"DeepSeek V4 Flash","model":"deepseek-coder","contextWindow":128000},
-                        {"displayName":"Qwen 3 Coder","model":"qwen3-coder","contextWindow":"200000"}
+                        {"displayName":"Qwen 3 Coder","model":"qwen3-coder","contextWindow":"200000"},
+                        {"displayName":"Claude Compatible","model":"claude-compatible"}
                     ]"#
                     .to_string(),
                     ..RelayProfile::default()
@@ -596,6 +597,11 @@ async fn model_catalog_uses_active_relay_profile_model_list_for_display() {
                 "model": "qwen3-coder",
                 "display_name": "Qwen 3 Coder",
                 "context_window": 200000
+            },
+            {
+                "model": "claude-compatible",
+                "display_name": "Claude Compatible",
+                "context_window": 1000000
             }
         ])
     );

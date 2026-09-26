@@ -1273,7 +1273,7 @@
   }
 
   function defaultClaudeCodexProSettings() {
-    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: true, markdownExport: true, projectMove: true, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, multicaWorkspaceEnabled: true };
+    return { pluginEntryUnlock: true, pluginMarketplaceUnlock: true, forcePluginInstall: true, sessionDelete: false, markdownExport: false, projectMove: false, conversationTimeline: true, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, chineseOverlayEnabled: false, serviceTierControls: false, multicaWorkspaceEnabled: true };
   }
 
   const claudeCodexProBackendSettingMap = {
@@ -1305,9 +1305,13 @@
 
   function claudeCodexProConfiguredSettings() {
     try {
-      return { ...defaultClaudeCodexProSettings(), ...JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}"), ...backendClaudeCodexProSettings() };
+      const settings = { ...defaultClaudeCodexProSettings(), ...JSON.parse(localStorage.getItem(claudeCodexProSettingsKey) || "{}"), ...backendClaudeCodexProSettings() };
+      settings.sessionDelete = false;
+      settings.markdownExport = false;
+      settings.projectMove = false;
+      return settings;
     } catch {
-      return { ...defaultClaudeCodexProSettings(), ...backendClaudeCodexProSettings() };
+      return { ...defaultClaudeCodexProSettings(), ...backendClaudeCodexProSettings(), sessionDelete: false, markdownExport: false, projectMove: false };
     }
   }
 
@@ -1362,6 +1366,32 @@
       settings.forcePluginInstall = false;
     }
     return settings;
+  }
+
+  function clearCodexSessionEnhancements() {
+    clearTimeout(window.__codexProjectMoveProjectionTimer);
+    clearTimeout(window.__codexProjectMoveChatsSortTimer);
+    window.__codexProjectMoveProjectionTimer = null;
+    window.__codexProjectMoveChatsSortTimer = null;
+    document.removeEventListener("pointerup", window.__codexSessionDeleteDocumentDeleteHandler, true);
+    document.removeEventListener("click", window.__codexSessionDeleteDocumentDeleteHandler, true);
+    window.__codexSessionDeleteDocumentDeleteHandler = null;
+    document.querySelectorAll(`.${actionGroupClass}, .${moreMenuClass}, .${projectMoveOverlayClass}, .codex-delete-confirm-overlay, .codex-delete-toast, [data-codex-archive-row-action]`).forEach((node) => {
+      if (node.closest(`.${upstreamWorktreeDialogClass}`)) return;
+      node.remove();
+    });
+    document.querySelectorAll('[data-codex-delete-row], [data-codex-project-move-row], [data-codex-archive-delete-row], [data-codex-deleted-session="true"]').forEach((row) => {
+      delete row.dataset.codexDeleteRow;
+      delete row.dataset.codexProjectMoveRow;
+      delete row.dataset.codexArchiveDeleteRow;
+      delete row.dataset.codexArchiveRowActionsVersion;
+      delete row.dataset.codexDeletedSession;
+      row.style.removeProperty("display");
+      row.style.removeProperty("--codex-session-actions-right");
+      row.style.removeProperty("--codex-session-title-mask");
+      row.style.removeProperty("--codex-session-title-max-width");
+      row.classList.remove("codex-session-more-open", "codex-archive-confirm-visible");
+    });
   }
 
   function setClaudeCodexProSetting(key, value) {
@@ -3278,7 +3308,7 @@
               <div class="claude-codex-pro-status-note" data-codex-backend-status="true" data-status="checking">检查中</div>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">页面功能增强</div><div class="claude-codex-pro-row-description">关闭后停用删除、导出、移动、Timeline、插件相关和菜单位置增强。</div></div>
+              <div><div class="claude-codex-pro-row-title">页面功能增强</div><div class="claude-codex-pro-row-description">关闭后停用 Timeline、插件相关和菜单位置增强；Codex 会话列表始终保留原生行为。</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-codex-backend-setting="enhancementsEnabled"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
@@ -3317,18 +3347,6 @@
             </div>
             <div class="claude-codex-pro-deck-section-title">会话与工作流</div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">会话删除</div><div class="claude-codex-pro-row-description">在会话列表悬停显示删除按钮，并支持撤销。</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="sessionDelete"><span></span></button>
-            </div>
-            <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">Markdown 导出</div><div class="claude-codex-pro-row-description">在会话列表显示导出按钮，按本地 rollout 导出带时间戳的 Markdown。</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="markdownExport"><span></span></button>
-            </div>
-            <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">会话项目移动</div><div class="claude-codex-pro-row-description">在会话列表悬停显示移动按钮，可移动到普通对话或其他本地项目。</div></div>
-              <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="projectMove"><span></span></button>
-            </div>
-            <div class="claude-codex-pro-row">
               <div><div class="claude-codex-pro-row-title">对话 Timeline</div><div class="claude-codex-pro-row-description">在对话右侧显示用户提问时间线，悬停查看摘要，点击跳转。</div></div>
               <button type="button" class="claude-codex-pro-toggle" data-claude-codex-pro-setting="conversationTimeline"><span></span></button>
             </div>
@@ -3360,7 +3378,7 @@
               <button type="button" class="claude-codex-pro-toggle" data-codex-backend-setting="providerSyncEnabled"><span></span></button>
             </div>
             <div class="claude-codex-pro-row">
-              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留会话删除、导出、项目移动和 Timeline，仅关闭插件入口相关增强。" : "完整增强：加载插件入口、强制安装、项目路径移动等全部页面能力。"}</div></div>
+              <div><div class="claude-codex-pro-row-title">页面增强模式</div><div class="claude-codex-pro-row-description">${claudeCodexProBackendSettings.launchMode === "relay" ? "兼容增强：保留 Timeline 和其他非会话行增强，Codex 会话列表使用原生行为。" : "完整增强：加载插件入口、强制安装和其他非会话行能力。"}</div></div>
               <button type="button" class="claude-codex-pro-action-button" data-codex-backend-repair="true">修复运行</button>
             </div>
             <div class="claude-codex-pro-row">
@@ -9311,12 +9329,12 @@
     const now = Date.now();
     if (!forceRefresh && now - cachedSessionRowsAt < 150) {
       cachedSessionRows = cachedSessionRows.filter((row) => row.isConnected);
-      if (cachedSessionRows.length > 0) return filterDeletedSessionRows(cachedSessionRows);
+      if (cachedSessionRows.length > 0) return cachedSessionRows;
     }
 
     cachedSessionRows = Array.from(document.querySelectorAll(selectors.sidebarThread));
     cachedSessionRowsAt = now;
-    return filterDeletedSessionRows(cachedSessionRows);
+    return cachedSessionRows;
   }
 
   function archivePageHintVisible() {
@@ -13399,7 +13417,7 @@
     installCodexServiceTierDispatcherPatch();
     installClaudeCodexProMenu();
     scheduleBackendHeartbeat();
-    installDeleteButtonEventDelegation();
+    clearCodexSessionEnhancements();
     updateThreadScrollHandlers();
     installThreadScrollProgrammaticScrollGuard();
     installThreadScrollNavigationCapture();
@@ -14024,14 +14042,6 @@
       unblockPluginInstallButtons();
       refreshForcePluginInstallUnlockLoop();
     }
-    const rows = sessionRows();
-    void refreshSessionAvailability(rows);
-    rows.forEach(tryAttachButton);
-    syncActionGroupsLayout();
-    updateDeleteButtonOffsets();
-    scheduleProjectMoveProjection();
-    scheduleChatsSortCorrection();
-    archivedPageRows().forEach(attachArchivedPageDeleteButton);
     refreshConversationTimeline();
     refreshConversationView();
     installCodexServiceTierBadge();

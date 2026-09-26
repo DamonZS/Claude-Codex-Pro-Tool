@@ -23,11 +23,13 @@ pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 pub fn proxied_client(user_agent: &str) -> anyhow::Result<reqwest::Client> {
     let ua = normalize_user_agent(user_agent);
-    Ok(reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .user_agent(ua)
         .timeout(DEFAULT_REQUEST_TIMEOUT)
-        .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
-        .build()?)
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT);
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    Ok(builder.build()?)
 }
 
 /// Client for streaming conversation proxies (`/v1/messages`, Chat Completions

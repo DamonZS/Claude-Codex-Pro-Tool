@@ -1,6 +1,13 @@
 import { AGGREGATE_STRATEGIES } from "@/constants";
 import type { BackendSettings, RelayProfile, SupplierPreset } from "@/types";
 
+export const DEFAULT_SUPPLIER_CONTEXT_WINDOW = "1000000";
+
+function normalizedContextWindow(value: unknown) {
+  const digits = String(value ?? "").replace(/[^\d]/g, "");
+  return digits && Number.parseInt(digits, 10) > 0 ? digits : DEFAULT_SUPPLIER_CONTEXT_WINDOW;
+}
+
 export function supplierIdFromName(value: string) {
   const id = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return id || "provider";
@@ -95,7 +102,9 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
     authContents: profile.authContents ?? "",
     modelList: hasExplicitModelList ? modelList : model,
     codexCatalogJson: profile.codexCatalogJson ?? "",
-    contextWindow: profile.contextWindow ?? "",
+    contextWindow: targetApp === "codex"
+      ? normalizedContextWindow(profile.contextWindow)
+      : profile.contextWindow ?? "",
     autoCompactLimit: profile.autoCompactLimit ?? "",
     userAgent: profile.userAgent ?? "",
     notes: profile.notes ?? "",
@@ -148,6 +157,7 @@ export type SupplierCodexCatalogRow = {
 };
 
 export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCatalogRow[] {
+  const isCodex = (profile.targetApp || "codex") === "codex";
   const raw = String(profile.codexCatalogJson ?? "").trim();
   if (raw) {
     try {
@@ -165,8 +175,9 @@ export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCa
             : typeof value.display_name === "string"
               ? value.display_name.trim()
               : "";
-          const contextWindow = String(value.contextWindow ?? value.context_window ?? "")
-            .replace(/[^\d]/g, "");
+          const contextWindow = isCodex
+            ? normalizedContextWindow(value.contextWindow ?? value.context_window)
+            : String(value.contextWindow ?? value.context_window ?? "").replace(/[^\d]/g, "");
           return [{ displayName, model, contextWindow }];
         });
       }
@@ -186,7 +197,9 @@ export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCa
     return [{
       displayName: normalized,
       model: normalized,
-      contextWindow: String(profile.contextWindow || "").replace(/[^\d]/g, ""),
+      contextWindow: isCodex
+        ? normalizedContextWindow(profile.contextWindow)
+        : String(profile.contextWindow || "").replace(/[^\d]/g, ""),
     }];
   });
 }
@@ -198,13 +211,11 @@ export function supplierCodexCatalogJson(rows: SupplierCodexCatalogRow[]) {
     if (!model || seen.has(model)) return [];
     seen.add(model);
     const displayName = row.displayName.trim();
-    const contextWindow = String(row.contextWindow || "").replace(/[^\d]/g, "");
+    const contextWindow = normalizedContextWindow(row.contextWindow);
     return [{
       model,
       ...(displayName ? { displayName } : {}),
-      ...(contextWindow && Number.parseInt(contextWindow, 10) > 0
-        ? { contextWindow: Number.parseInt(contextWindow, 10) }
-        : {}),
+      contextWindow: Number.parseInt(contextWindow, 10),
     }];
   });
   return JSON.stringify(normalized, null, 2);

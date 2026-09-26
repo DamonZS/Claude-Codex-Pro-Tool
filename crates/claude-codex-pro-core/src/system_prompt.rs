@@ -10,6 +10,9 @@ const STORE_DIR: &str = "system-prompts";
 const STATE_FILE: &str = "state.json";
 const RECOVERY_STATE_FILE: &str = "state.recovery.json";
 const MANAGED_FILE: &str = "ccp-system-prompt.md";
+
+/// 系统提示词页写入 Codex 配置的受管文件名。多客户端投放据此检测冲突。
+pub const MANAGED_FILE_NAME: &str = MANAGED_FILE;
 const MAX_PROMPTS: usize = 200;
 const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 
@@ -412,6 +415,20 @@ impl SystemPromptStore {
         state.previous_instruction_present = false;
         self.write_state(&state)?;
         self.list()
+    }
+
+    /// 供多客户端投放复用：受管文件的绝对路径。
+    pub fn managed_path_display(&self) -> String {
+        self.managed_path_string()
+    }
+
+    /// 供多客户端投放复用：当前是否正由 CCP 托管，以及生效的提示词 ID。
+    pub fn managed_prompt_id(&self) -> anyhow::Result<Option<String>> {
+        let state = self.read_state()?;
+        if self.configured_instruction_path()?.as_deref() != Some(&self.managed_path_string()) {
+            return Ok(None);
+        }
+        Ok(state.active_prompt_id)
     }
 
     fn state_path(&self) -> PathBuf {

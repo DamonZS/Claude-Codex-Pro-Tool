@@ -5165,7 +5165,7 @@ mod tests {
         let (_dir, executions, workspace, autopilot) = autopilot_fixture("run_only");
         let minute = super::unix_now_ms() / 60_000 * 60_000;
         executions
-            .tick_autopilots(&[autopilot], minute - 60_000)
+            .tick_autopilots(&[autopilot.clone()], minute - 60_000)
             .unwrap();
         let runtime = CoreRuntimeService::new(0, StatusStore::default())
             .with_multica_execution_store(executions.clone())
@@ -5213,6 +5213,19 @@ mod tests {
             "completed"
         );
         assert_eq!(host.requests.lock().unwrap().len(), 1);
+        let mut autopilot = autopilot;
+        autopilot["triggers"][0]["enabled"] = json!(false);
+        workspace
+            .upsert(
+                &crate::multica_workspace::local_workspace_id(),
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Autopilots,
+                    entity: autopilot,
+                    expected_revision: Some(1),
+                },
+                2,
+            )
+            .unwrap();
         assert!(
             runtime.multica_autopilot_tick().await.unwrap()["runs"]
                 .as_array()
@@ -5223,7 +5236,19 @@ mod tests {
 
     #[tokio::test]
     async fn autopilot_tick_recovers_partial_issue_without_calling_host_or_overwriting_it() {
-        let (_dir, executions, workspace, _) = autopilot_fixture("create_issue");
+        let (_dir, executions, workspace, mut autopilot) = autopilot_fixture("create_issue");
+        autopilot["triggers"][0]["enabled"] = json!(false);
+        workspace
+            .upsert(
+                &crate::multica_workspace::local_workspace_id(),
+                LocalWorkspaceEntityUpsert {
+                    resource: MulticaWorkspaceResourceKey::Autopilots,
+                    entity: autopilot,
+                    expected_revision: Some(1),
+                },
+                2,
+            )
+            .unwrap();
         let run = executions
             .reserve_autopilot_occurrence(
                 "auto-a".into(),

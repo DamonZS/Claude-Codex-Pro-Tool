@@ -949,7 +949,7 @@ export function SupplierScreen({
     writeSupplierCodexCatalogModels([...supplierCodexCatalogModels, {
       displayName: "",
       model: "",
-      contextWindow: "",
+      contextWindow: "1000000",
       rowId: `codex-catalog-${supplierCodexCatalogRowIdRef.current += 1}`,
     }]);
   };

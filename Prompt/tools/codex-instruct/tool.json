@@ -1,0 +1,11 @@
+{
+  "id": "codex-instruct",
+  "title": "gpt-instruct Codex CLI",
+  "version": "0ad8ec58",
+  "description": "Python CLI for deploying and restoring a selected Codex instruction file with a managed config snapshot.",
+  "sourceRepo": "https://github.com/MDX-Tom/gpt-instruct",
+  "sourceRevision": "0ad8ec58e1989f4a058e01ce4e15cf226e8067bf",
+  "licenseId": "MIT",
+  "licenseFile": "LICENSE",
+  "platforms": ["windows", "macos", "linux"]
+}

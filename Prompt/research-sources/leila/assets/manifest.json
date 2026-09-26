@@ -1,0 +1,33 @@
+{
+  "version": "1.0.7",
+  "files": [
+    {
+      "path": "ac/agents/openai.yaml",
+      "sha256": "4abbccb2015ace9ea57fd7f01ae7535035f2fbaa6e6755d4afde6ff6f26e0df6"
+    },
+    {
+      "path": "ac/references/router-contract.md",
+      "sha256": "584e9c4b32f8c5759d281e410993ef5baebe857acdbe69e1ad0ef2342c15ea5d"
+    },
+    {
+      "path": "ac/references/unrestricted-lab.md",
+      "sha256": "568a4b3d0a7a65d2850c23852071aac8ac6bdf2cc238b2f16869c10f871e9f99"
+    },
+    {
+      "path": "ac/SKILL.md",
+      "sha256": "eee67e992634226f06c282f2bbe7311f9fbf2837fdc432f01554741c56c5ca4d"
+    },
+    {
+      "path": "gpt5.5-unrestricted.md",
+      "sha256": "cbb10f01d5f2b4dda59902c64c94930d9bda55afc221c6f02a9cd296971d9f0d"
+    },
+    {
+      "path": "leila-identity/agents/openai.yaml",
+      "sha256": "0cbb742da4d14075436e9e74e387f17d20410fe6ce03604f2f639208c3c5d8c5"
+    },
+    {
+      "path": "leila-identity/SKILL.md",
+      "sha256": "47634da04bb8975cdab14d9e6e154e235b6056679b5b62dad3309606cdcb3bba"
+    }
+  ]
+}

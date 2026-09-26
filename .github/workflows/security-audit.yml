@@ -10,6 +10,21 @@ on:
     - cron: '0 9 * * 1'
 
 jobs:
+  prompt-index:
+    name: Prompt Index Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verify Prompt/index.json matches Prompt/
+        run: node scripts/build-prompt-index.mjs --check
+
   cargo-audit:
     name: Cargo Audit (Dependencies)
     runs-on: ubuntu-latest

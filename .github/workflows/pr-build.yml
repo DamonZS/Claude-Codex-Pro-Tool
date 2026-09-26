@@ -8,6 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  prompt-index-check:
+    name: Prompt index check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Verify Prompt/index.json matches Prompt/
+        run: node scripts/build-prompt-index.mjs --check
+
   windows-artifacts:
     name: Windows artifacts
     runs-on: windows-latest

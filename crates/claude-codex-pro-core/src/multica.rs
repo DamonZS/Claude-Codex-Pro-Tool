@@ -7641,11 +7641,13 @@ fn find_connection(connection_id: &str) -> anyhow::Result<MulticaConnectionConfi
 }
 
 fn build_client() -> anyhow::Result<Client> {
-    Ok(Client::builder()
+    let builder = Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?)
+        .redirect(reqwest::redirect::Policy::none());
+    #[cfg(test)]
+    let builder = builder.no_proxy();
+    Ok(builder.build()?)
 }
 
 fn endpoint_url(config: &MulticaConnectionConfig, endpoint: &str) -> anyhow::Result<Url> {

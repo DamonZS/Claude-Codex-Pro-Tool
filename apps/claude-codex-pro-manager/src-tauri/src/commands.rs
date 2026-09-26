@@ -13,6 +13,7 @@ use anyhow::{Context, bail};
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
+use claude_codex_pro_core::client_deploy::DeploymentEngine;
 use claude_codex_pro_core::codex_theme::{
     CodexManagerBackgroundLibrary, CodexThemeDiyAutomaticPalette, CodexThemeDiyBackgroundPreview,
     CodexThemeDiyInput, CodexThemeList, CodexThemeManagerBackground, CodexThemeOperationResult,
@@ -33,6 +34,8 @@ use claude_codex_pro_core::plugin_hub::{
     CodexHookTrustPreview, McpbPackageOutcome, PluginHubCatalog, PluginInstallOutcome,
     PluginInstallPreview,
 };
+use claude_codex_pro_core::prompt_composer::{self, PromptSource};
+use claude_codex_pro_core::prompt_library::PromptLibrary;
 use claude_codex_pro_core::script_market::{self, MarketScript, ScriptMarketManifest};
 use claude_codex_pro_core::settings::{
     BackendSettings, RelayProfile, SettingsStore, relay_profile_resolved_api_key,
@@ -6440,6 +6443,16 @@ fn emit_leila_log(app: &tauri::AppHandle, target: &Path, line: &str) {
         },
         target_codex_home: target.to_string_lossy().to_string(),
     };
+    log_manager_event(
+        "manager.leila.shell_output",
+        json!({
+            "area": "破甲",
+            "target": "Codex",
+            "path": target,
+            "line": line,
+            "level": payload.level,
+        }),
+    );
     let _ = app.emit("leila-deploy-log", payload);
 }
 
@@ -6512,9 +6525,23 @@ pub async fn inspect_leila_status(
     target_codex_home: Option<String>,
 ) -> CommandResult<LeilaDeploymentStatus> {
     let target = leila_target(target_codex_home.as_deref());
+    log_prompt_shell_step(
+        "环境",
+        "检测破甲/Python 环境",
+        "Codex",
+        Some(&target.display().to_string()),
+        "开始",
+    );
     let resources = match leila_resources(&app) {
         Ok(resources) => resources,
         Err(error) => {
+            log_prompt_shell_step(
+                "环境",
+                "加载破甲资源",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
             return failed(
                 &format!("破甲打包资源不可用：{error}"),
                 failed_leila_status(target.clone(), None, error.to_string()).await,
@@ -6527,8 +6554,27 @@ pub async fn inspect_leila_status(
     })
     .await
     {
-        Ok(status) => ok("破甲环境和部署状态检测完成。", status),
+        Ok(status) => {
+            log_prompt_shell_step(
+                "环境",
+                "检测破甲/Python 环境",
+                "Codex",
+                Some(&target.display().to_string()),
+                "完成",
+            );
+            for line in &status.logs {
+                emit_leila_log(&app, &target, line);
+            }
+            ok("破甲环境和部署状态检测完成。", status)
+        }
         Err(error) => {
+            log_prompt_shell_step(
+                "环境",
+                "检测破甲/Python 环境",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
             let error = anyhow::anyhow!("破甲状态检测任务失败：{error}");
             failed(
                 &error.to_string(),
@@ -6615,6 +6661,13 @@ pub async fn deploy_leila(
     let operation_resources = resources.clone();
     let log_app = app.clone();
     let log_target = operation_target.clone();
+    log_prompt_shell_step(
+        "破甲",
+        "开始部署",
+        "Codex",
+        Some(&target.display().to_string()),
+        "开始",
+    );
     emit_leila_log(&app, &target, "部署任务已启动");
     match tauri::async_runtime::spawn_blocking(move || {
         leila_deploy::deploy_leila_with_logger(&operation_target, &operation_resources, |line| {
@@ -6624,6 +6677,13 @@ pub async fn deploy_leila(
     .await
     {
         Ok(Ok(status)) => {
+            log_prompt_shell_step(
+                "破甲",
+                "部署资源与配置",
+                "Codex",
+                Some(&target.display().to_string()),
+                "完成",
+            );
             let message = if status.deployed && !status.rollback_available {
                 "破甲资源和配置已匹配，本次未替换文件。"
             } else {
@@ -6631,12 +6691,29 @@ pub async fn deploy_leila(
             };
             ok(message, status)
         }
-        Ok(Err(error)) => failed(
-            &format!("破甲部署失败：{error}"),
-            failed_leila_status(target.clone(), Some(resources.clone()), error.to_string()).await,
-        ),
+        Ok(Err(error)) => {
+            log_prompt_shell_step(
+                "破甲",
+                "部署资源与配置",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
+            failed(
+                &format!("破甲部署失败：{error}"),
+                failed_leila_status(target.clone(), Some(resources.clone()), error.to_string())
+                    .await,
+            )
+        }
         Err(error) => {
             let error = anyhow::anyhow!("破甲部署任务失败：{error}");
+            log_prompt_shell_step(
+                "破甲",
+                "部署资源与配置",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
             failed(
                 &error.to_string(),
                 failed_leila_status(target.clone(), Some(resources.clone()), error.to_string())
@@ -6652,6 +6729,13 @@ pub async fn rollback_leila(
     target_codex_home: Option<String>,
 ) -> CommandResult<LeilaDeploymentStatus> {
     let target = leila_target(target_codex_home.as_deref());
+    log_prompt_shell_step(
+        "破甲",
+        "回滚最近一次部署",
+        "Codex",
+        Some(&target.display().to_string()),
+        "开始",
+    );
     let resources = leila_resources(&app).ok();
     let operation_target = target.clone();
     let operation_resources = resources.clone();
@@ -6660,13 +6744,38 @@ pub async fn rollback_leila(
     })
     .await
     {
-        Ok(Ok(status)) => ok("最近一次破甲部署已回滚。", status),
-        Ok(Err(error)) => failed(
-            &format!("破甲回滚失败：{error}"),
-            failed_leila_status(target.clone(), resources.clone(), error.to_string()).await,
-        ),
+        Ok(Ok(status)) => {
+            log_prompt_shell_step(
+                "破甲",
+                "回滚最近一次部署",
+                "Codex",
+                Some(&target.display().to_string()),
+                "完成",
+            );
+            ok("最近一次破甲部署已回滚。", status)
+        }
+        Ok(Err(error)) => {
+            log_prompt_shell_step(
+                "破甲",
+                "回滚最近一次部署",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
+            failed(
+                &format!("破甲回滚失败：{error}"),
+                failed_leila_status(target.clone(), resources.clone(), error.to_string()).await,
+            )
+        }
         Err(error) => {
             let error = anyhow::anyhow!("破甲回滚任务失败：{error}");
+            log_prompt_shell_step(
+                "破甲",
+                "回滚最近一次部署",
+                "Codex",
+                Some(&target.display().to_string()),
+                &format!("失败：{error}"),
+            );
             failed(
                 &error.to_string(),
                 failed_leila_status(target.clone(), resources.clone(), error.to_string()).await,
@@ -9631,6 +9740,19 @@ fn log_manager_event(event: &str, detail: Value) {
     let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
         event,
         sanitize_diagnostic_detail(detail),
+    );
+}
+
+fn log_prompt_shell_step(area: &str, step: &str, target: &str, path: Option<&str>, result: &str) {
+    log_manager_event(
+        "manager.prompt_shell.step",
+        json!({
+            "area": area,
+            "step": step,
+            "target": target,
+            "path": path,
+            "result": result,
+        }),
     );
 }
 
@@ -13355,5 +13477,1075 @@ model_reasoning_effort = "high"
             resolve_silent_launcher_path().unwrap(),
             std::env::current_exe().unwrap()
         );
+    }
+}
+
+// ---------------- 多客户端提示词投放 ----------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployPayload {
+    pub targets: Vec<ClientDeployTargetRow>,
+}
+
+impl ClientDeployPayload {
+    fn empty() -> Self {
+        Self {
+            targets: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployTargetRow {
+    pub target_id: String,
+    pub display_name: String,
+    pub installed: bool,
+    pub home: Option<String>,
+    pub planned_path: Option<String>,
+    pub managed: bool,
+    pub baseline_exists: bool,
+    /// 是否允许投放；豆包与未安装目标为 false。
+    pub deployable: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployOutcomeRow {
+    pub target_id: String,
+    pub ok: bool,
+    pub message: String,
+    pub applied_path: Option<String>,
+}
+
+/// 逐目标结果数组；单个失败不影响其余目标。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployActionPayload {
+    pub results: Vec<ClientDeployOutcomeRow>,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployRequest {
+    /// 逐目标投放内容；每个客户端内容不同。
+    pub assignments: Vec<ClientDeployAssignment>,
+}
+
+/// 单个目标的投放内容。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDeployAssignment {
+    pub target_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientRestoreRequest {
+    /// 为空表示还原全部受管目标。
+    #[serde(default)]
+    pub target_ids: Vec<String>,
+}
+
+#[tauri::command]
+pub fn list_client_deploy_targets() -> CommandResult<ClientDeployPayload> {
+    match DeploymentEngine::open_default().and_then(|engine| engine.statuses()) {
+        Ok(statuses) => {
+            for status in &statuses {
+                log_prompt_shell_step(
+                    "环境",
+                    "检测客户端目录",
+                    &status.target_id,
+                    status.home.as_deref().or(status.planned_path.as_deref()),
+                    if status.installed {
+                        "已检测到"
+                    } else {
+                        "未检测到"
+                    },
+                );
+            }
+            let targets = statuses
+                .into_iter()
+                .map(|status| ClientDeployTargetRow {
+                    deployable: status.installed,
+                    target_id: status.target_id,
+                    display_name: status.display_name,
+                    installed: status.installed,
+                    home: status.home,
+                    planned_path: status.planned_path,
+                    managed: status.managed,
+                    baseline_exists: status.baseline_exists,
+                })
+                .collect();
+            ok("客户端投放状态已加载。", ClientDeployPayload { targets })
+        }
+        Err(error) => failed(
+            &format!("客户端投放状态加载失败：{error}"),
+            ClientDeployPayload::empty(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn deploy_prompt_to_clients(
+    request: ClientDeployRequest,
+) -> CommandResult<ClientDeployActionPayload> {
+    let assignments: Vec<(String, String)> = request
+        .assignments
+        .into_iter()
+        .filter(|item| item.target_id != "doubao")
+        .map(|item| (item.target_id, item.content))
+        .collect();
+    if assignments.is_empty() {
+        return failed(
+            "请先为至少一个客户端选择内容。",
+            ClientDeployActionPayload {
+                results: Vec::new(),
+                succeeded: 0,
+                failed: 0,
+            },
+        );
+    }
+    match DeploymentEngine::open_default() {
+        Ok(engine) => {
+            let outcomes = engine.deploy_assignments(&assignments);
+            let results: Vec<ClientDeployOutcomeRow> = outcomes
+                .iter()
+                .map(|row| ClientDeployOutcomeRow {
+                    target_id: row.target_id.clone(),
+                    ok: row.ok,
+                    message: row.message.clone(),
+                    applied_path: row.applied_path.clone(),
+                })
+                .collect();
+            let succeeded = results.iter().filter(|row| row.ok).count();
+            let failed_count = results.len() - succeeded;
+            for row in &results {
+                let result_message = if row.ok {
+                    row.message.clone()
+                } else {
+                    format!("失败：{}", row.message)
+                };
+                log_prompt_shell_step(
+                    "提示词",
+                    "投放系统提示词",
+                    &row.target_id,
+                    row.applied_path.as_deref(),
+                    &result_message,
+                );
+            }
+            let payload = ClientDeployActionPayload {
+                results,
+                succeeded,
+                failed: failed_count,
+            };
+            if succeeded == 0 {
+                return failed("没有客户端投放成功。", payload);
+            }
+            ok(
+                &format!("已投放到 {succeeded} 个客户端，{failed_count} 个未完成。"),
+                payload,
+            )
+        }
+        Err(error) => failed(
+            &format!("投放失败：{error}"),
+            ClientDeployActionPayload {
+                results: Vec::new(),
+                succeeded: 0,
+                failed: 0,
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn restore_client_deploy(
+    request: ClientRestoreRequest,
+) -> CommandResult<ClientDeployActionPayload> {
+    let engine = match DeploymentEngine::open_default() {
+        Ok(engine) => engine,
+        Err(error) => {
+            return failed(
+                &format!("还原失败：{error}"),
+                ClientDeployActionPayload {
+                    results: Vec::new(),
+                    succeeded: 0,
+                    failed: 0,
+                },
+            );
+        }
+    };
+    let reports = if request.target_ids.is_empty() {
+        match engine.restore_all() {
+            Ok(reports) => reports,
+            Err(error) => {
+                return failed(
+                    &format!("还原失败：{error}"),
+                    ClientDeployActionPayload {
+                        results: Vec::new(),
+                        succeeded: 0,
+                        failed: 0,
+                    },
+                );
+            }
+        }
+    } else {
+        engine.restore_many(&request.target_ids)
+    };
+
+    if reports.is_empty() {
+        return ok(
+            "没有需要还原的目标。",
+            ClientDeployActionPayload {
+                results: Vec::new(),
+                succeeded: 0,
+                failed: 0,
+            },
+        );
+    }
+    let results: Vec<ClientDeployOutcomeRow> = reports
+        .iter()
+        .map(|row| ClientDeployOutcomeRow {
+            target_id: row.target_id.clone(),
+            ok: row.ok,
+            message: row.message.clone(),
+            applied_path: row
+                .restored_path
+                .clone()
+                .or_else(|| row.removed_path.clone()),
+        })
+        .collect();
+    let succeeded = results.iter().filter(|row| row.ok).count();
+    let failed_count = results.len() - succeeded;
+    for row in &results {
+        let result_message = if row.ok {
+            row.message.clone()
+        } else {
+            format!("失败：{}", row.message)
+        };
+        log_prompt_shell_step(
+            "提示词",
+            "还原系统提示词",
+            &row.target_id,
+            row.applied_path.as_deref(),
+            &result_message,
+        );
+    }
+    let payload = ClientDeployActionPayload {
+        results,
+        succeeded,
+        failed: failed_count,
+    };
+    if succeeded == 0 {
+        return failed("没有目标还原成功。", payload);
+    }
+    ok(
+        &format!("已还原 {succeeded} 个目标，{failed_count} 个未完成。"),
+        payload,
+    )
+}
+
+// ---------------- Prompt 内容库与技能 ----------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptLibraryPayload {
+    pub online: bool,
+    pub project_path: String,
+    pub cache_path: String,
+    pub skill_install_path: String,
+    pub tool_install_path: String,
+    pub prompts: Vec<PromptEntryRow>,
+    pub skills: Vec<SkillEntryRow>,
+    pub installed: Vec<InstalledSkillRow>,
+    pub tools: Vec<ToolEntryRow>,
+    pub installed_tools: Vec<InstalledToolRow>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolFileRow {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEntryRow {
+    pub id: String,
+    pub title: String,
+    pub version: String,
+    pub description: String,
+    pub source_repo: String,
+    pub source_revision: String,
+    pub license_id: String,
+    pub license_path: String,
+    pub platforms: Vec<String>,
+    pub size: u64,
+    pub files: Vec<ToolFileRow>,
+    pub source_path: String,
+    pub cache_path: String,
+    pub install_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledToolRow {
+    pub id: String,
+    pub version: String,
+    pub installed_at_unix: u64,
+    pub file_count: usize,
+    pub install_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActionPayload {
+    pub id: String,
+    pub version: String,
+    pub install_path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptEntryRow {
+    pub id: String,
+    pub title: String,
+    pub category: String,
+    pub description: String,
+    pub version: String,
+    pub targets: Vec<String>,
+    pub skills: Vec<String>,
+    pub tools: Vec<String>,
+    pub path: String,
+    pub source_path: String,
+    pub cache_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillEntryRow {
+    pub name: String,
+    pub description: String,
+    pub file_count: usize,
+    pub source_path: String,
+    pub cache_path: String,
+    pub install_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSkillRow {
+    pub name: String,
+    pub target_home: String,
+    pub file_count: usize,
+    pub install_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptContentPayload {
+    pub prompt_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCompositionRequest {
+    pub sources: Vec<PromptSource>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCompositionPayload {
+    pub content: String,
+    pub source_ids: Vec<String>,
+    pub source_titles: Vec<String>,
+    pub warnings: Vec<String>,
+    pub sha256: String,
+    pub bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillActionRow {
+    pub target_id: String,
+    pub name: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillActionPayload {
+    pub results: Vec<SkillActionRow>,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallRequest {
+    pub target_ids: Vec<String>,
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRemoveRequest {
+    pub target_ids: Vec<String>,
+    pub names: Vec<String>,
+}
+
+fn prompt_library_default() -> anyhow::Result<PromptLibrary> {
+    PromptLibrary::open_default()
+}
+
+fn empty_library_payload() -> PromptLibraryPayload {
+    let project_path = claude_codex_pro_core::prompt_library::LOCAL_PROJECT_ROOT.to_string();
+    let cache_path = claude_codex_pro_core::paths::default_app_state_dir()
+        .join("prompt-cache")
+        .display()
+        .to_string();
+    PromptLibraryPayload {
+        online: false,
+        project_path,
+        cache_path: cache_path.clone(),
+        skill_install_path: "<客户端数据目录>\\skills".to_string(),
+        tool_install_path: PathBuf::from(&cache_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("prompt-tools")
+            .display()
+            .to_string(),
+        prompts: Vec::new(),
+        skills: Vec::new(),
+        installed: Vec::new(),
+        tools: Vec::new(),
+        installed_tools: Vec::new(),
+    }
+}
+
+fn empty_skill_payload() -> SkillActionPayload {
+    SkillActionPayload {
+        results: Vec::new(),
+        succeeded: 0,
+        failed: 0,
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_prompt_index() -> CommandResult<PromptLibraryPayload> {
+    let index_path =
+        PathBuf::from(claude_codex_pro_core::prompt_library::LOCAL_PROJECT_ROOT).join("index.json");
+    log_prompt_shell_step(
+        "内容库",
+        "读取 Prompt/index.json",
+        "Prompt",
+        Some(&index_path.display().to_string()),
+        "开始",
+    );
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => {
+            log_prompt_shell_step(
+                "内容库",
+                "打开资源库",
+                "Prompt",
+                Some(&index_path.display().to_string()),
+                &format!("失败：{error}"),
+            );
+            return failed(&format!("内容库打开失败：{error}"), empty_library_payload());
+        }
+    };
+    let installed = library
+        .list_installed()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|skill| InstalledSkillRow {
+            install_path: PathBuf::from(&skill.target_home)
+                .join("skills")
+                .join(&skill.name)
+                .display()
+                .to_string(),
+            name: skill.name,
+            target_home: skill.target_home,
+            file_count: skill.files.len(),
+        })
+        .collect::<Vec<_>>();
+    let installed_tools = library
+        .list_installed_tools()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tool| InstalledToolRow {
+            install_path: library
+                .tool_install_dir()
+                .join(&tool.id)
+                .join(&tool.version)
+                .display()
+                .to_string(),
+            id: tool.id,
+            version: tool.version,
+            installed_at_unix: tool.installed_at_unix,
+            file_count: tool.files.len(),
+        })
+        .collect::<Vec<_>>();
+
+    match library.fetch_index().await {
+        Ok(index) => {
+            log_prompt_shell_step(
+                "内容库",
+                "读取 Prompt/index.json",
+                "Prompt",
+                Some(&index_path.display().to_string()),
+                "完成",
+            );
+            ok(
+                &format!(
+                    "内容库已加载：{} 个提示词，{} 个技能。",
+                    index.prompts.len(),
+                    index.skills.len()
+                ),
+                PromptLibraryPayload {
+                    online: true,
+                    project_path: library.project_dir().display().to_string(),
+                    cache_path: library.cache_dir().display().to_string(),
+                    skill_install_path: "<客户端数据目录>\\skills".to_string(),
+                    tool_install_path: library.tool_install_dir().display().to_string(),
+                    prompts: index
+                        .prompts
+                        .into_iter()
+                        .map(|entry| {
+                            let source_path =
+                                library.prompt_source_path(&entry).display().to_string();
+                            let cache_path =
+                                library.prompt_cache_path(&entry).display().to_string();
+                            PromptEntryRow {
+                                id: entry.id,
+                                title: entry.title,
+                                category: entry.category,
+                                description: entry.description,
+                                version: entry.version,
+                                targets: entry.targets,
+                                skills: entry.skills,
+                                tools: entry.tools,
+                                path: entry.path,
+                                source_path,
+                                cache_path,
+                            }
+                        })
+                        .collect(),
+                    skills: index
+                        .skills
+                        .into_iter()
+                        .map(|entry| {
+                            let source_path =
+                                library.skill_source_path(&entry).display().to_string();
+                            let cache_path = library.skill_cache_path(&entry).display().to_string();
+                            SkillEntryRow {
+                                name: entry.name,
+                                description: entry.description,
+                                file_count: entry.files.len(),
+                                source_path,
+                                cache_path,
+                                install_path: "<客户端数据目录>\\skills".to_string(),
+                            }
+                        })
+                        .collect(),
+                    installed,
+                    tools: index
+                        .tools
+                        .into_iter()
+                        .map(|entry| {
+                            let source_path =
+                                library.tool_source_path(&entry).display().to_string();
+                            let cache_path = library.tool_cache_path(&entry).display().to_string();
+                            let install_path = library
+                                .tool_install_dir()
+                                .join(&entry.id)
+                                .join(&entry.version)
+                                .display()
+                                .to_string();
+                            ToolEntryRow {
+                                id: entry.id,
+                                title: entry.title,
+                                version: entry.version,
+                                description: entry.description,
+                                source_repo: entry.source_repo,
+                                source_revision: entry.source_revision,
+                                license_id: entry.license_id,
+                                license_path: entry.license_path,
+                                platforms: entry.platforms,
+                                size: entry.size,
+                                files: entry
+                                    .files
+                                    .into_iter()
+                                    .map(|file| ToolFileRow {
+                                        path: file.path,
+                                        size: file.size,
+                                        sha256: file.sha256,
+                                    })
+                                    .collect(),
+                                source_path,
+                                cache_path,
+                                install_path,
+                            }
+                        })
+                        .collect(),
+                    installed_tools,
+                },
+            )
+        }
+        Err(error) => {
+            log_prompt_shell_step(
+                "内容库",
+                "读取 Prompt/index.json",
+                "Prompt",
+                Some(&index_path.display().to_string()),
+                &format!("离线：{error}"),
+            );
+            failed(
+                &format!("内容库离线，仅可投放本地内嵌模板：{error}"),
+                PromptLibraryPayload {
+                    online: false,
+                    project_path: library.project_dir().display().to_string(),
+                    cache_path: library.cache_dir().display().to_string(),
+                    skill_install_path: "<客户端数据目录>\\skills".to_string(),
+                    tool_install_path: library.tool_install_dir().display().to_string(),
+                    prompts: Vec::new(),
+                    skills: Vec::new(),
+                    installed,
+                    tools: Vec::new(),
+                    installed_tools,
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn install_tool_package(tool_id: String) -> CommandResult<ToolActionPayload> {
+    let empty = || ToolActionPayload {
+        id: tool_id.clone(),
+        version: String::new(),
+        install_path: String::new(),
+        sha256: String::new(),
+    };
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => return failed(&format!("内容库打开失败：{error}"), empty()),
+    };
+    let index = match library.fetch_index().await {
+        Ok(index) => index,
+        Err(error) => return failed(&format!("内容库离线：{error}"), empty()),
+    };
+    let Some(entry) = index.tools.into_iter().find(|entry| entry.id == tool_id) else {
+        return failed("内容库中没有该工具。", empty());
+    };
+    if let Err(error) = library.fetch_tool(&entry).await {
+        return failed(&format!("工具下载或校验失败：{error}"), empty());
+    }
+    match library.install_tool(&entry) {
+        Ok(outcome) => {
+            log_prompt_shell_step(
+                "工具",
+                "下载校验并安装",
+                &outcome.id,
+                Some(&outcome.install_path),
+                &outcome.message,
+            );
+            let payload = ToolActionPayload {
+                id: outcome.id,
+                version: outcome.version,
+                install_path: outcome.install_path,
+                sha256: outcome.sha256,
+            };
+            if outcome.ok {
+                ok(&outcome.message, payload)
+            } else {
+                failed(&outcome.message, payload)
+            }
+        }
+        Err(error) => {
+            log_prompt_shell_step(
+                "工具",
+                "下载校验并安装",
+                &tool_id,
+                None,
+                &format!("失败：{error}"),
+            );
+            failed(&format!("工具安装失败：{error}"), empty())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn remove_tool_package(tool_id: String, version: String) -> CommandResult<ToolActionPayload> {
+    let empty = || ToolActionPayload {
+        id: tool_id.clone(),
+        version: version.clone(),
+        install_path: String::new(),
+        sha256: String::new(),
+    };
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => return failed(&format!("内容库打开失败：{error}"), empty()),
+    };
+    match library.uninstall_tool(&tool_id, &version) {
+        Ok(outcome) => {
+            log_prompt_shell_step(
+                "工具",
+                "卸载工具包",
+                &outcome.id,
+                Some(&outcome.install_path),
+                &outcome.message,
+            );
+            let payload = ToolActionPayload {
+                id: outcome.id,
+                version: outcome.version,
+                install_path: outcome.install_path,
+                sha256: outcome.sha256,
+            };
+            if outcome.ok {
+                ok(&outcome.message, payload)
+            } else {
+                failed(&outcome.message, payload)
+            }
+        }
+        Err(error) => {
+            log_prompt_shell_step(
+                "工具",
+                "卸载工具包",
+                &tool_id,
+                None,
+                &format!("失败：{error}"),
+            );
+            failed(&format!("工具卸载失败：{error}"), empty())
+        }
+    }
+}
+
+/// 下载并缓存指定提示词，返回正文供投放使用。
+#[tauri::command]
+pub async fn fetch_prompt_content(prompt_id: String) -> CommandResult<PromptContentPayload> {
+    let empty = |id: String| PromptContentPayload {
+        prompt_id: id,
+        content: String::new(),
+    };
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => return failed(&format!("内容库打开失败：{error}"), empty(prompt_id)),
+    };
+    let index = match library.fetch_index().await {
+        Ok(index) => index,
+        Err(error) => return failed(&format!("内容库离线：{error}"), empty(prompt_id)),
+    };
+    let Some(entry) = index
+        .prompts
+        .into_iter()
+        .find(|entry| entry.id == prompt_id)
+    else {
+        let message = format!("内容库中没有提示词 {prompt_id}");
+        return failed(&message, empty(prompt_id));
+    };
+    match library.fetch_prompt(&entry).await {
+        Ok(path) => match std::fs::read_to_string(&path) {
+            Ok(content) => ok(
+                &format!("已获取 {}", entry.title),
+                PromptContentPayload {
+                    prompt_id: entry.id,
+                    content,
+                },
+            ),
+            Err(error) => failed(
+                &format!("无法读取缓存内容：{error}"),
+                PromptContentPayload {
+                    prompt_id: entry.id,
+                    content: String::new(),
+                },
+            ),
+        },
+        Err(error) => failed(
+            &format!("下载失败：{error}"),
+            PromptContentPayload {
+                prompt_id: entry.id,
+                content: String::new(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn compose_prompt_sources(
+    request: PromptCompositionRequest,
+) -> CommandResult<PromptCompositionPayload> {
+    match prompt_composer::compose(&request.sources) {
+        Ok(composition) => ok(
+            &format!("已生成组合预览：{} 字节。", composition.bytes),
+            PromptCompositionPayload {
+                content: composition.content,
+                source_ids: composition.source_ids,
+                source_titles: composition.source_titles,
+                warnings: composition.warnings,
+                sha256: composition.sha256,
+                bytes: composition.bytes,
+            },
+        ),
+        Err(error) => failed(
+            &format!("组合预览失败：{error}"),
+            PromptCompositionPayload {
+                content: String::new(),
+                source_ids: Vec::new(),
+                source_titles: Vec::new(),
+                warnings: Vec::new(),
+                sha256: String::new(),
+                bytes: 0,
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn install_skills_to_clients(
+    request: SkillInstallRequest,
+) -> CommandResult<SkillActionPayload> {
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => return failed(&format!("内容库打开失败：{error}"), empty_skill_payload()),
+    };
+    let index = match library.fetch_index().await {
+        Ok(index) => index,
+        Err(error) => return failed(&format!("内容库离线：{error}"), empty_skill_payload()),
+    };
+
+    let mut results = Vec::new();
+    for target_id in request.target_ids.iter().filter(|id| *id != "doubao") {
+        let Some((target, home)) = resolve_deploy_target(target_id) else {
+            results.push(SkillActionRow {
+                target_id: target_id.clone(),
+                name: String::new(),
+                ok: false,
+                message: "未检测到目标数据目录".to_string(),
+            });
+            continue;
+        };
+        let _ = target;
+        for name in &request.names {
+            let Some(entry) = index.skills.iter().find(|entry| &entry.name == name) else {
+                results.push(SkillActionRow {
+                    target_id: target_id.clone(),
+                    name: name.clone(),
+                    ok: false,
+                    message: "内容库中不存在该技能".to_string(),
+                });
+                continue;
+            };
+            if let Err(error) = library.fetch_skill(entry).await {
+                log_prompt_shell_step(
+                    "技能",
+                    "下载并缓存 Skill",
+                    target_id,
+                    Some(&library.skill_cache_path(entry).display().to_string()),
+                    &format!("失败：{error}"),
+                );
+                results.push(SkillActionRow {
+                    target_id: target_id.clone(),
+                    name: name.clone(),
+                    ok: false,
+                    message: format!("下载失败：{error}"),
+                });
+                continue;
+            }
+            match library.install_skill(target_id, &home, name) {
+                Ok(outcome) => {
+                    let install_path = home.join("skills").join(name).display().to_string();
+                    log_prompt_shell_step(
+                        "技能",
+                        "安装 Skill",
+                        target_id,
+                        Some(&install_path),
+                        &outcome.message,
+                    );
+                    results.push(SkillActionRow {
+                        target_id: target_id.clone(),
+                        name: name.clone(),
+                        ok: outcome.ok,
+                        message: outcome.message,
+                    });
+                }
+                Err(error) => {
+                    log_prompt_shell_step(
+                        "技能",
+                        "安装 Skill",
+                        target_id,
+                        Some(&home.join("skills").join(name).display().to_string()),
+                        &format!("失败：{error}"),
+                    );
+                    results.push(SkillActionRow {
+                        target_id: target_id.clone(),
+                        name: name.clone(),
+                        ok: false,
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    let succeeded = results.iter().filter(|row| row.ok).count();
+    let failed_count = results.len() - succeeded;
+    let payload = SkillActionPayload {
+        results,
+        succeeded,
+        failed: failed_count,
+    };
+    if succeeded == 0 {
+        return failed("没有技能安装成功。", payload);
+    }
+    ok(
+        &format!("已安装 {succeeded} 项，{failed_count} 项未完成。"),
+        payload,
+    )
+}
+
+#[tauri::command]
+pub fn remove_installed_skills(request: SkillRemoveRequest) -> CommandResult<SkillActionPayload> {
+    let library = match prompt_library_default() {
+        Ok(library) => library,
+        Err(error) => return failed(&format!("内容库打开失败：{error}"), empty_skill_payload()),
+    };
+    let mut results = Vec::new();
+    for target_id in request.target_ids.iter().filter(|id| *id != "doubao") {
+        let Some((_, home)) = resolve_deploy_target(target_id) else {
+            results.push(SkillActionRow {
+                target_id: target_id.clone(),
+                name: String::new(),
+                ok: false,
+                message: "未检测到目标数据目录".to_string(),
+            });
+            continue;
+        };
+        for name in &request.names {
+            match library.uninstall_skill(target_id, &home, name) {
+                Ok(outcome) => {
+                    let install_path = home.join("skills").join(name).display().to_string();
+                    log_prompt_shell_step(
+                        "技能",
+                        "卸载 Skill",
+                        target_id,
+                        Some(&install_path),
+                        &outcome.message,
+                    );
+                    results.push(SkillActionRow {
+                        target_id: target_id.clone(),
+                        name: name.clone(),
+                        ok: outcome.ok,
+                        message: outcome.message,
+                    });
+                }
+                Err(error) => {
+                    log_prompt_shell_step(
+                        "技能",
+                        "卸载 Skill",
+                        target_id,
+                        Some(&home.join("skills").join(name).display().to_string()),
+                        &format!("失败：{error}"),
+                    );
+                    results.push(SkillActionRow {
+                        target_id: target_id.clone(),
+                        name: name.clone(),
+                        ok: false,
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    let succeeded = results.iter().filter(|row| row.ok).count();
+    let failed_count = results.len() - succeeded;
+    let payload = SkillActionPayload {
+        results,
+        succeeded,
+        failed: failed_count,
+    };
+    if succeeded == 0 {
+        return failed("没有技能卸载成功。", payload);
+    }
+    ok(
+        &format!("已卸载 {succeeded} 项，{failed_count} 项未完成。"),
+        payload,
+    )
+}
+
+/// 解析投放目标及其已存在的数据库目录。
+fn resolve_deploy_target(
+    target_id: &str,
+) -> Option<(
+    claude_codex_pro_core::client_deploy::ClientTarget,
+    std::path::PathBuf,
+)> {
+    let target = claude_codex_pro_core::client_deploy::find_target(target_id)?;
+    let home = target
+        .home_candidates
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.is_dir())?;
+    Some((target, home))
+}
+
+/// 读取用户显式选择的本地 Markdown；CCP 不内置任何提示词正文。
+#[tauri::command]
+pub fn read_local_prompt(source_path: String) -> CommandResult<PromptContentPayload> {
+    let empty = PromptContentPayload {
+        prompt_id: source_path.clone(),
+        content: String::new(),
+    };
+    let path = std::path::PathBuf::from(source_path.trim());
+    if !path.is_file() {
+        let message = format!("文件不存在：{}", path.display());
+        return failed(&message, empty);
+    }
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            if bytes.len() > 1024 * 1024 {
+                return failed(
+                    "文件超过 1 MiB 上限。",
+                    PromptContentPayload {
+                        prompt_id: path.to_string_lossy().to_string(),
+                        content: String::new(),
+                    },
+                );
+            }
+            match String::from_utf8(bytes) {
+                Ok(content) => ok(
+                    &format!("已读取 {}", path.display()),
+                    PromptContentPayload {
+                        prompt_id: path.to_string_lossy().to_string(),
+                        content,
+                    },
+                ),
+                Err(_) => failed(
+                    "文件不是 UTF-8 文本。",
+                    PromptContentPayload {
+                        prompt_id: path.to_string_lossy().to_string(),
+                        content: String::new(),
+                    },
+                ),
+            }
+        }
+        Err(error) => failed(
+            &format!("无法读取文件：{error}"),
+            PromptContentPayload {
+                prompt_id: path.to_string_lossy().to_string(),
+                content: String::new(),
+            },
+        ),
     }
 }

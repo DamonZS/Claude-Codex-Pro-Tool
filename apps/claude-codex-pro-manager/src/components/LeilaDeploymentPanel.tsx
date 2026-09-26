@@ -6,7 +6,6 @@ import {
   PackageCheck,
   RefreshCw,
   RotateCcw,
-  ScrollText,
   ShieldCheck,
   TriangleAlert,
   Wifi,
@@ -68,7 +67,6 @@ function deploymentState(status: LeilaDeploymentStatus | null) {
 export function LeilaDeploymentPanel({ actions, status }: Props) {
   const [operation, setOperation] = useState<Operation | null>(null);
   const [confirmMode, setConfirmMode] = useState<"deploy" | "rollback" | null>(null);
-  const [logsOpen, setLogsOpen] = useState(false);
   const logViewportRef = useRef<HTMLPreElement>(null);
   const busy = operation !== null;
   const state = deploymentState(status);
@@ -78,10 +76,9 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
   const targetMissingConfig = logs.some((line) => line.includes("目标目录缺少 config.toml"));
 
   useEffect(() => {
-    if (!logsOpen) return;
     const viewport = logViewportRef.current;
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
-  }, [logs, logsOpen]);
+  }, [logs]);
 
   const runStatusAction = async (kind: "inspect" | "choose", action: () => Promise<LeilaDeploymentStatus | null>) => {
     setOperation(kind);
@@ -93,7 +90,6 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
   };
 
   const runDeploymentAction = async (kind: "deploy" | "rollback", action: () => Promise<LeilaDeploymentResult | null>) => {
-    setLogsOpen(true);
     setOperation(kind);
     try {
       await action();
@@ -162,20 +158,15 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
         <Button variant="outline" disabled={busy || !status?.rollbackAvailable} onClick={() => setConfirmMode("rollback")}>
           <RotateCcw aria-hidden="true" />回滚最近一次
         </Button>
-        <Button variant="ghost" disabled={logs.length === 0} aria-expanded={logsOpen} onClick={() => setLogsOpen((open) => !open)}>
-          <ScrollText aria-hidden="true" />{logsOpen ? "收起部署日志" : "查看部署日志"}
-        </Button>
       </footer>
 
-      {logsOpen ? (
-        <section className="leila-deployment-log-section" aria-labelledby="leila-logs-title">
-          <header>
-            <div><small>操作记录</small><strong id="leila-logs-title">部署日志</strong></div>
-            <span>{logs.length} 条</span>
-          </header>
-          <pre ref={logViewportRef} className="leila-deployment-logs" tabIndex={0}>{logs.join("\n")}</pre>
-        </section>
-      ) : null}
+      <section className="leila-deployment-log-section" aria-labelledby="leila-logs-title">
+        <header>
+          <div><small>操作记录</small><strong id="leila-logs-title">运行状态</strong></div>
+          <span>{logs.length} 条</span>
+        </header>
+        <pre ref={logViewportRef} className="leila-deployment-logs" tabIndex={0}>{logs.join("\n")}</pre>
+      </section>
 
       {confirmMode === "deploy" ? (
         <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setConfirmMode(null); }}>

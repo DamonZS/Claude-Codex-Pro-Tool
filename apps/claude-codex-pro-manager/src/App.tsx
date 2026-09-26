@@ -190,6 +190,16 @@ import type {
   SaveSystemPromptRequest,
   SystemPromptMode,
   SystemPromptResult,
+  ClientDeployResult,
+  PromptLibraryResult,
+  ClientDeployActionResult,
+  PromptContentResult,
+  PromptCompositionResult,
+  PromptCompositionSource,
+  SkillActionResult,
+  ToolActionResult,
+  LeilaDeploymentResult,
+  LeilaDeploymentStatus,
   CredentialEnvironmentResult,
   CommandResult,
   AdsResult,
@@ -200,8 +210,6 @@ import type {
   DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
   InstallEntrypointsResult,
-  LeilaDeploymentResult,
-  LeilaDeploymentStatus,
   LaunchStatus,
   LegacyRoute,
   LiveContextEntriesResult,
@@ -323,6 +331,8 @@ export function App() {
   const [codexManagerBackgrounds, setCodexManagerBackgrounds] = useState<CodexManagerBackgroundLibraryResult | null>(null);
   const [codexThemeOperation, setCodexThemeOperation] = useState<CodexThemeOperationState | null>(null);
   const [systemPrompts, setSystemPrompts] = useState<SystemPromptResult | null>(null);
+  const [clientDeployTargets, setClientDeployTargets] = useState<ClientDeployResult | null>(null);
+  const [promptLibrary, setPromptLibrary] = useState<PromptLibraryResult | null>(null);
   const [leilaStatus, setLeilaStatus] = useState<LeilaDeploymentStatus | null>(null);
   const codexMarketplaceAutoRegisterRef = useRef(false);
   const pluginRepositoryRepairPromptKeyRef = useRef<string | null>(null);
@@ -1122,6 +1132,12 @@ export function App() {
     return result;
   };
 
+  useEffect(() => {
+    if (route !== "prompts") return;
+    const timer = window.setInterval(() => void refreshLogs(true), 1200);
+    return () => window.clearInterval(timer);
+  }, [route]);
+
   const refreshWatcher = async (silent = false) => {
     const result = await run(() => call<WatcherResult>("load_watcher_state"), "Watcher", { trackBusy: !silent, notify: !silent });
     if (result) {
@@ -1328,23 +1344,16 @@ export function App() {
     let disposed = false;
     let stopListening: (() => void) | undefined;
     void listen<{ line: string; phase: string; level: string; targetCodexHome: string }>("leila-deploy-log", (event) => {
-      if (disposed) return;
+      if (disposed || !event.payload.line) return;
       const { line, targetCodexHome } = event.payload;
-      if (!line) return;
       setLeilaStatus((current) => {
-        if (!current || (targetCodexHome && current.targetCodexHome && current.targetCodexHome !== targetCodexHome)) {
-          return current;
-        }
-        const logs = current.logs ?? [];
-        return { ...current, logs: [...logs, line] };
+        if (!current || (targetCodexHome && current.targetCodexHome && current.targetCodexHome !== targetCodexHome)) return current;
+        return { ...current, logs: [...(current.logs ?? []), line] };
       });
     })
       .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-          return;
-        }
-        stopListening = unlisten;
+        if (disposed) unlisten();
+        else stopListening = unlisten;
       })
       .catch(() => {
         // Browser-only preview mode has no Tauri event runtime.
@@ -1812,6 +1821,154 @@ export function App() {
     }
   };
 
+  const refreshClientDeployTargets = async (silent = false) => {
+    const result = await run(
+      () => call<ClientDeployResult>("list_client_deploy_targets"),
+      "客户端投放状态",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (result) {
+      setClientDeployTargets(result);
+      if (!silent) notifyIfNeedsAttention({ title: "客户端投放", message: result.message, status: result.status });
+      await refreshLogs(true);
+    }
+    return result;
+  };
+
+  /// 选择一个本地 Markdown 文件并读取正文；正文由用户提供。
+  const pickMarkdownFile = async () => {
+    const picked = await open({
+      directory: false,
+      multiple: false,
+      title: "选择要投放的 Markdown 文件",
+      filters: [{ name: "Markdown", extensions: ["md", "markdown", "txt"] }],
+    });
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (!path) return null;
+    const result = await run(
+      () => call<PromptContentResult>("read_local_prompt", { sourcePath: path }),
+      "读取本地提示词",
+    );
+    if (!result || !statusOk(result.status)) return null;
+    const name = path.split(/[\\/]/).pop() ?? path;
+    return { name, content: result.content };
+  };
+
+  const deployPromptToClients = async (assignments: Array<{ targetId: string; content: string }>) => {
+    if (!assignments.length) {
+      notifyResult({ title: "批量投放", message: "请先为至少一个客户端选择内容。", status: "failed" });
+      return null;
+    }
+    const result = await run(
+      () => call<ClientDeployActionResult>("deploy_prompt_to_clients", { request: { assignments } }),
+      "批量投放提示词",
+    );
+    if (result) {
+      notifyResult({ title: "批量投放", message: result.message, status: result.status });
+      await refreshClientDeployTargets(true);
+    }
+    return result;
+  };
+
+  const restoreClientDeploy = async (targetIds: string[]) => {
+    const label = targetIds.length ? `选中的 ${targetIds.length} 个客户端` : "全部受管客户端";
+    if (!window.confirm(`确认还原${label}？CCP 只撤销自己写入的内容。`)) return null;
+    const result = await run(
+      () => call<ClientDeployActionResult>("restore_client_deploy", { request: { targetIds } }),
+      "还原客户端投放",
+    );
+    if (result) {
+      notifyResult({ title: "客户端还原", message: result.message, status: result.status });
+      await refreshClientDeployTargets(true);
+    }
+    return result;
+  };
+
+  const refreshPromptLibrary = async (silent = false) => {
+    const result = await run(
+      () => call<PromptLibraryResult>("fetch_prompt_index"),
+      "内容库",
+      { trackBusy: !silent, notify: !silent },
+    );
+    if (result) {
+      setPromptLibrary(result);
+      if (!silent) notifyIfNeedsAttention({ title: "内容库", message: result.message, status: result.status });
+      await refreshLogs(true);
+    }
+    return result;
+  };
+
+  const fetchPromptContent = async (promptId: string) => {
+    const result = await run(
+      () => call<PromptContentResult>("fetch_prompt_content", { promptId }),
+      "获取提示词内容",
+    );
+    return result;
+  };
+
+  const composePromptSources = async (sources: PromptCompositionSource[]) => {
+    const result = await run(
+      () => call<PromptCompositionResult>("compose_prompt_sources", { request: { sources } }),
+      "组合提示词预览",
+    );
+    return result;
+  };
+
+  const installSkillsToClients = async (targetIds: string[], names: string[]) => {
+    if (!targetIds.length || !names.length) {
+      notifyResult({ title: "技能安装", message: "请先勾选客户端并选择技能。", status: "failed" });
+      return null;
+    }
+    const result = await run(
+      () => call<SkillActionResult>("install_skills_to_clients", { request: { targetIds, names } }),
+      "安装技能",
+    );
+    if (result) {
+      notifyResult({ title: "技能安装", message: result.message, status: result.status });
+      await refreshPromptLibrary(true);
+    }
+    return result;
+  };
+
+  const removeInstalledSkills = async (targetIds: string[], names: string[]) => {
+    if (!targetIds.length || !names.length) return null;
+    if (!window.confirm(`确认卸载选中的 ${names.length} 个技能？`)) return null;
+    const result = await run(
+      () => call<SkillActionResult>("remove_installed_skills", { request: { targetIds, names } }),
+      "卸载技能",
+    );
+    if (result) {
+      notifyResult({ title: "技能卸载", message: result.message, status: result.status });
+      await refreshPromptLibrary(true);
+    }
+    return result;
+  };
+
+  const installToolPackage = async (toolId: string) => {
+    const result = await run(
+      () => call<ToolActionResult>("install_tool_package", { toolId }),
+      "安装工具包",
+    );
+    if (result) {
+      notifyResult({ title: "工具包", message: result.message, status: result.status });
+      await refreshPromptLibrary(true);
+    }
+    return result;
+  };
+
+  const removeToolPackage = async (toolId: string, version: string) => {
+    if (!window.confirm(`确认卸载 ${toolId} ${version}？`)) return null;
+    const result = await run(
+      () => call<ToolActionResult>("remove_tool_package", { toolId, version }),
+      "卸载工具包",
+    );
+    if (result) {
+      notifyResult({ title: "工具包", message: result.message, status: result.status });
+      await refreshPromptLibrary(true);
+    }
+    return result;
+  };
+
   const refreshSystemPrompts = async (silent = false) => {
     const result = await run(() => call<SystemPromptResult>("list_system_prompts"), "系统提示词", {
       trackBusy: !silent,
@@ -1884,6 +2041,7 @@ export function App() {
     if (result) {
       setLeilaStatus(result);
       if (!silent) notifyResult({ title: "破甲环境检测", message: result.message, status: result.status });
+      await refreshLogs(true);
     }
     return result;
   };
@@ -1895,7 +2053,7 @@ export function App() {
     );
     if (result) {
       setLeilaStatus(result);
-      notifyResult({ title: "破甲 Codex 目录", message: result.message, status: result.status });
+      await refreshLogs(true);
     }
     return result;
   };
@@ -1907,9 +2065,8 @@ export function App() {
     );
     if (result) {
       setLeilaStatus(result);
-      notifyResult({ title: "部署破甲", message: result.message, status: result.status });
+      await refreshLogs(true);
     }
-    await refreshSystemPrompts(true);
     return result;
   };
 
@@ -1920,9 +2077,8 @@ export function App() {
     );
     if (result) {
       setLeilaStatus(result);
-      notifyResult({ title: "回滚破甲", message: result.message, status: result.status });
+      await refreshLogs(true);
     }
-    await refreshSystemPrompts(true);
     return result;
   };
 
@@ -2590,7 +2746,13 @@ export function App() {
     } else if (target === "themes") {
       await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
-      requiredResults = await Promise.all([refreshSystemPrompts(true), refreshLeilaStatus(true)]);
+      requiredResults = await Promise.all([
+        refreshClientDeployTargets(true),
+        refreshPromptLibrary(true),
+        refreshLeilaStatus(true),
+        refreshSystemPrompts(true),
+        refreshLogs(true),
+      ]);
     } else if (target === "tools") {
       await refreshSettings(true);
       await refreshUnifiedToolInventory(true);
@@ -2709,6 +2871,21 @@ export function App() {
       refreshCodexManagerBackgrounds,
       applyCodexManagerBackground,
       deleteCodexManagerBackground,
+      refreshClientDeployTargets,
+      pickMarkdownFile,
+      deployPromptToClients,
+      restoreClientDeploy,
+      refreshPromptLibrary,
+      fetchPromptContent,
+      composePromptSources,
+      installSkillsToClients,
+      removeInstalledSkills,
+      installToolPackage,
+      removeToolPackage,
+      refreshLeilaStatus,
+      chooseLeilaTarget,
+      deployLeila,
+      rollbackLeila,
       refreshSystemPrompts,
       saveSystemPrompt,
       importSystemPrompt,
@@ -2716,10 +2893,6 @@ export function App() {
       enableSystemPrompt,
       disableSystemPrompt,
       syncSystemPromptUrl,
-      refreshLeilaStatus,
-      chooseLeilaTarget,
-      deployLeila,
-      rollbackLeila,
       openExternalUrl,
       goPluginHub,
        goSupplierProfile,
@@ -2844,6 +3017,21 @@ export function App() {
       refreshCodexManagerBackgrounds: (...args) => actionsRef.current!.refreshCodexManagerBackgrounds(...args),
       applyCodexManagerBackground: (...args) => actionsRef.current!.applyCodexManagerBackground(...args),
       deleteCodexManagerBackground: (...args) => actionsRef.current!.deleteCodexManagerBackground(...args),
+      refreshClientDeployTargets: (...args) => actionsRef.current!.refreshClientDeployTargets(...args),
+      pickMarkdownFile: (...args) => actionsRef.current!.pickMarkdownFile(...args),
+      deployPromptToClients: (...args) => actionsRef.current!.deployPromptToClients(...args),
+      restoreClientDeploy: (...args) => actionsRef.current!.restoreClientDeploy(...args),
+      refreshPromptLibrary: (...args) => actionsRef.current!.refreshPromptLibrary(...args),
+      fetchPromptContent: (...args) => actionsRef.current!.fetchPromptContent(...args),
+      composePromptSources: (...args) => actionsRef.current!.composePromptSources(...args),
+      installSkillsToClients: (...args) => actionsRef.current!.installSkillsToClients(...args),
+      removeInstalledSkills: (...args) => actionsRef.current!.removeInstalledSkills(...args),
+      installToolPackage: (...args) => actionsRef.current!.installToolPackage(...args),
+      removeToolPackage: (...args) => actionsRef.current!.removeToolPackage(...args),
+      refreshLeilaStatus: (...args) => actionsRef.current!.refreshLeilaStatus(...args),
+      chooseLeilaTarget: (...args) => actionsRef.current!.chooseLeilaTarget(...args),
+      deployLeila: (...args) => actionsRef.current!.deployLeila(...args),
+      rollbackLeila: (...args) => actionsRef.current!.rollbackLeila(...args),
       refreshSystemPrompts: (...args) => actionsRef.current!.refreshSystemPrompts(...args),
       saveSystemPrompt: (...args) => actionsRef.current!.saveSystemPrompt(...args),
       importSystemPrompt: (...args) => actionsRef.current!.importSystemPrompt(...args),
@@ -2851,10 +3039,6 @@ export function App() {
       enableSystemPrompt: (...args) => actionsRef.current!.enableSystemPrompt(...args),
       disableSystemPrompt: (...args) => actionsRef.current!.disableSystemPrompt(...args),
       syncSystemPromptUrl: (...args) => actionsRef.current!.syncSystemPromptUrl(...args),
-      refreshLeilaStatus: (...args) => actionsRef.current!.refreshLeilaStatus(...args),
-      chooseLeilaTarget: (...args) => actionsRef.current!.chooseLeilaTarget(...args),
-      deployLeila: (...args) => actionsRef.current!.deployLeila(...args),
-      rollbackLeila: (...args) => actionsRef.current!.rollbackLeila(...args),
       openExternalUrl: (...args) => actionsRef.current!.openExternalUrl(...args),
       goPluginHub: (...args) => actionsRef.current!.goPluginHub(...args),
        goSupplierProfile: (...args) => actionsRef.current!.goSupplierProfile(...args),
@@ -3051,7 +3235,7 @@ export function App() {
               themes={codexThemes}
             />
           ) : null}
-          {route === "prompts" ? <SystemPromptScreen actions={actions} leilaStatus={leilaStatus} prompts={systemPrompts} /> : null}
+          {route === "prompts" ? <SystemPromptScreen actions={actions} clientDeploy={clientDeployTargets} library={promptLibrary} logs={logs} prompts={systemPrompts} /> : null}
           {route === "tools" ? (
             <ToolsAndPluginsScreen
               actions={actions}
