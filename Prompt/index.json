@@ -601,17 +601,17 @@
         "macos",
         "linux"
       ],
-      "size": 37349,
+      "size": 36549,
       "files": [
         {
           "path": "tools/codex-instruct/LICENSE",
-          "size": 1116,
-          "sha256": "edb45f4cb24498171bc9a748bea6eabba5ed8176213522822128622623413eeb"
+          "size": 1094,
+          "sha256": "0323ada93559caeaa847315fd7ba5f15d6bbafec9efe346f13771ac72385d6e8"
         },
         {
           "path": "tools/codex-instruct/codex-instruct.py",
-          "size": 29831,
-          "sha256": "2bcd5e634f07fe2bcc6445d3e5c0933e1dc778678a5f521d46b29fd46185fab6"
+          "size": 29053,
+          "sha256": "69ee89d5a525b7ed75d67ff2064c00784de9e337165014e6b2bd6654de24ddfe"
         },
         {
           "path": "tools/codex-instruct/gpt-5.6-sol-v45.zip",
@@ -639,32 +639,32 @@
         "macos",
         "linux"
       ],
-      "size": 53254,
+      "size": 52195,
       "files": [
         {
           "path": "tools/deepseek-prompt-evaluator/LICENSE",
-          "size": 1084,
-          "sha256": "7078554f16d7c2c798eb7e6f395be6bc6f209c63b6678f33a46b4ccdebc62390"
+          "size": 1063,
+          "sha256": "4b908cad2e4721a92bdb0b71e76380bede4ee9a5345468d7398ff977d1ae8964"
         },
         {
           "path": "tools/deepseek-prompt-evaluator/_analyze.py",
-          "size": 759,
-          "sha256": "d085768152cc1ecb4c52ebdd6c98dd530478e6b781bdef2abfb5fa887f8457a6"
+          "size": 743,
+          "sha256": "20b3eb248b7a2170c7a7b8bd5a3736124a78d68ac33cf5d2a2797d08b96e2aad"
         },
         {
           "path": "tools/deepseek-prompt-evaluator/generate_prompt_bank.py",
-          "size": 32844,
-          "sha256": "d8c00e379adf5956fb94b0bf72e000afab7ff8d201253d0508adc51e43ef7bb5"
+          "size": 32287,
+          "sha256": "0fe6707218506e60827f402638d6ca66da94d2f293d3c41ffdf235ba252a4607"
         },
         {
           "path": "tools/deepseek-prompt-evaluator/run_prompt_bank.py",
-          "size": 14770,
-          "sha256": "4794ab3cb2dd48620bc18ddb6a874eab829ca65ffe0c612f958c655ccea57c8b"
+          "size": 14383,
+          "sha256": "6cfc689eb4e9c5b1321ba3468735fe2f97f5ae2dee28a0781a7398828380f8b8"
         },
         {
           "path": "tools/deepseek-prompt-evaluator/run_v2_test.py",
-          "size": 3797,
-          "sha256": "03571b8efd7cd5b70143e80994def55eda2b2b994fa0266e94753e083b3b80e7"
+          "size": 3719,
+          "sha256": "1bdd0af68e50c412c0f0482e1bc66db5201355f8293b9ec2c2d5df3ade938ebb"
         }
       ]
     }
