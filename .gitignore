@@ -19,6 +19,10 @@ apps/claude-codex-pro-manager/src-tauri/gen/
 docs/superpowers/
 .workbuddy/
 
+# Reproducible validation copies and UI preview exports; keep them local only.
+/docs/task-evidence/
+/docs/ui-previews/
+
 # 临时分析和修复脚本
 analyze_*.py
 fix_*.py
