@@ -1,0 +1,75 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "zed",
+  "display": {
+    "name": "Zed Agent",
+    "nameZh": "Zed Agent",
+    "icon": "other",
+    "color": "#3b82f6"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": ["macos"],
+        "base": "appData",
+        "path": "Zed"
+      },
+      {
+        "targets": ["macos", "linux"],
+        "base": "dataHome",
+        "path": "zed"
+      },
+      {
+        "targets": ["windows10", "windows11"],
+        "base": "userProfile",
+        "path": "Local/Zed/threads"
+      }
+    ]
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "zed-threads-v1",
+      "paths": [
+        {
+          "targets": ["macos"],
+          "base": "appData",
+          "path": "Zed/threads",
+          "glob": "threads.db",
+          "format": "sqlite"
+        },
+        {
+          "targets": ["windows10", "windows11"],
+          "base": "userProfile",
+          "path": "Local/Zed/threads",
+          "glob": "threads.db",
+          "format": "sqlite"
+        },
+        {
+          "targets": ["linux"],
+          "base": "dataHome",
+          "path": "zed/threads",
+          "glob": "threads.db",
+          "format": "sqlite"
+        }
+      ],
+      "maxFileSizeBytes": 536870912
+    },
+    "skills": "unsupported",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "unsupported"
+    },
+    "market": "unsupported",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model"
+  }
+}

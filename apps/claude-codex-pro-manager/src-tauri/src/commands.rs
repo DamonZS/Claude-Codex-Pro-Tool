@@ -1122,6 +1122,78 @@ pub struct RequestTimelinePayload {
     pub records: Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
     pub warnings: Vec<String>,
     pub observed_at_ms: u64,
+    pub usage_snapshot: Option<claude_codex_pro_data::local_usage::LocalUsageSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerCapabilitiesPayload {
+    pub snapshot: claude_codex_pro_data::aitracker::AitrackerSnapshot,
+    pub usage: claude_codex_pro_data::local_usage::LocalUsageSnapshot,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerSessionQueryRequest {
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub range: Option<String>,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default = "default_aitracker_page_size")]
+    pub page_size: usize,
+}
+
+fn default_aitracker_page_size() -> usize {
+    20
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerSessionsPayload {
+    pub sessions: Vec<claude_codex_pro_data::aitracker::AgentSessionSummary>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub generated_at: String,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerSessionDetailRequest {
+    pub agent: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerSessionDetailPayload {
+    pub detail: Option<claude_codex_pro_data::aitracker::AitrackerSessionDetail>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillationCreateRequest {
+    pub agent: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillationCandidateRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillationCandidatesPayload {
+    pub candidates: Vec<claude_codex_pro_data::aitracker::DistillationCandidate>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -7812,16 +7884,7 @@ pub fn disable_watcher() -> CommandResult<WatcherPayload> {
 #[tauri::command]
 pub async fn read_request_timeline() -> CommandResult<RequestTimelinePayload> {
     tauri::async_runtime::spawn_blocking(|| {
-        let (mut records, mut warnings) =
-            claude_codex_pro_data::request_history::read_recent_local_requests(
-                &session_candidate_db_paths(None),
-                &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
-                200,
-            );
-        match claude_codex_pro_core::request_telemetry::read_recent_requests(500) {
-            Ok(proxy_records) => records.extend(proxy_records),
-            Err(_) => warnings.push("代理请求记录读取失败。".to_string()),
-        }
+        let (mut records, warnings, usage) = collect_unified_usage_snapshot();
         records.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
         let observed_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -7833,11 +7896,434 @@ pub async fn read_request_timeline() -> CommandResult<RequestTimelinePayload> {
                 records,
                 warnings,
                 observed_at_ms,
+                usage_snapshot: Some(usage),
             },
         )
     })
     .await
     .unwrap_or_else(|_| failed("请求记录读取任务失败。", RequestTimelinePayload::default()))
+}
+
+fn collect_unified_usage_snapshot() -> (
+    Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
+    Vec<String>,
+    claude_codex_pro_data::local_usage::LocalUsageSnapshot,
+) {
+    let (mut records, mut warnings) =
+        claude_codex_pro_data::request_history::read_recent_local_requests(
+            &session_candidate_db_paths(None),
+            &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
+            4_096,
+        );
+    match claude_codex_pro_core::request_telemetry::read_recent_requests(500) {
+        Ok(proxy_records) => records.extend(proxy_records),
+        Err(_) => warnings.push("代理请求记录读取失败。".to_string()),
+    }
+    let user_home = claude_code_home_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut usage_events = records
+        .iter()
+        .map(claude_codex_pro_data::local_usage::event_from_request_record)
+        .collect::<Vec<_>>();
+    let mut diagnostics = Vec::new();
+    for adapter in claude_codex_pro_data::local_usage::builtin_adapters(&user_home) {
+        let (events, found_diagnostics) = claude_codex_pro_data::local_usage::scan_adapter(
+            &adapter,
+            claude_codex_pro_data::local_usage::MAX_EVENTS,
+        );
+        records.extend(
+            events
+                .iter()
+                .map(claude_codex_pro_data::local_usage::request_record_from_event),
+        );
+        usage_events.extend(events);
+        warnings.extend(
+            found_diagnostics
+                .iter()
+                .map(|diagnostic| format!("{}：{}", diagnostic.source, diagnostic.message)),
+        );
+        diagnostics.extend(found_diagnostics);
+    }
+    dedupe_unified_request_records(&mut records);
+    let mut usage = claude_codex_pro_data::local_usage::aggregate(usage_events, diagnostics);
+    usage.sessions = claude_codex_pro_data::local_usage::collect_workbuddy_sessions(&user_home);
+    (records, warnings, usage)
+}
+
+fn dedupe_unified_request_records(
+    records: &mut Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
+) {
+    let mut unique =
+        BTreeMap::<String, claude_codex_pro_core::request_telemetry::RequestRecord>::new();
+    for record in records.drain(..) {
+        let key = record.id.clone();
+        match unique.get_mut(&key) {
+            Some(previous)
+                if record.total_tokens.unwrap_or(0) > previous.total_tokens.unwrap_or(0) =>
+            {
+                *previous = record;
+            }
+            Some(_) => {}
+            None => {
+                unique.insert(key, record);
+            }
+        }
+    }
+    records.extend(unique.into_values());
+}
+
+#[tauri::command]
+pub async fn read_aitracker_capabilities() -> CommandResult<AitrackerCapabilitiesPayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let (_, _, usage) = collect_unified_usage_snapshot();
+        let mut snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+        let claude_home = claude_code_home_dir();
+        let user_home = claude_home.parent().unwrap_or(&claude_home);
+        claude_codex_pro_data::aitracker::populate_local_capabilities(
+            &mut snapshot.registry,
+            user_home,
+        );
+        ok(
+            "能力数据已加载。",
+            AitrackerCapabilitiesPayload { snapshot, usage },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "能力数据读取任务失败。",
+            AitrackerCapabilitiesPayload {
+                snapshot: claude_codex_pro_data::aitracker::AitrackerSnapshot {
+                    registry: Vec::new(),
+                    sessions: Vec::new(),
+                    tool_calls: Vec::new(),
+                    details: Vec::new(),
+                },
+                usage: claude_codex_pro_data::local_usage::aggregate(Vec::new(), Vec::new()),
+            },
+        )
+    })
+}
+
+fn distillation_store_path() -> PathBuf {
+    claude_codex_pro_core::paths::default_app_state_dir()
+        .join("aitracker")
+        .join("distillation.json")
+}
+
+static DISTILLATION_PENDING: OnceLock<
+    Mutex<Vec<claude_codex_pro_data::aitracker::DistillationCandidate>>,
+> = OnceLock::new();
+
+fn pending_distillation_candidates()
+-> &'static Mutex<Vec<claude_codex_pro_data::aitracker::DistillationCandidate>> {
+    DISTILLATION_PENDING.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn read_distillation_candidates() -> Vec<claude_codex_pro_data::aitracker::DistillationCandidate> {
+    fs::read(distillation_store_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn all_distillation_candidates() -> Vec<claude_codex_pro_data::aitracker::DistillationCandidate> {
+    let mut candidates = read_distillation_candidates();
+    let pending = pending_distillation_candidates()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    candidates.extend(pending.iter().cloned());
+    candidates
+}
+
+fn write_distillation_candidates(
+    candidates: &[claude_codex_pro_data::aitracker::DistillationCandidate],
+) -> anyhow::Result<()> {
+    let path = distillation_store_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    fs::write(&temp, serde_json::to_vec_pretty(candidates)?)?;
+    fs::rename(temp, path)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn query_aitracker_sessions(
+    request: AitrackerSessionQueryRequest,
+) -> CommandResult<AitrackerSessionsPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, _, usage) = collect_unified_usage_snapshot();
+        let (sessions, total) = claude_codex_pro_data::aitracker::query_sessions(
+            &usage,
+            request.agent.as_deref(),
+            request.status.as_deref(),
+            request.keyword.as_deref(),
+            request.range.as_deref(),
+            request.page,
+            request.page_size,
+        );
+        ok(
+            "会话已加载。",
+            AitrackerSessionsPayload {
+                sessions,
+                total,
+                page: request.page,
+                page_size: request.page_size.clamp(1, 200),
+                generated_at: usage.generated_at,
+                mode: usage.mode,
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "会话读取失败。",
+            AitrackerSessionsPayload {
+                sessions: Vec::new(),
+                total: 0,
+                page: request.page,
+                page_size: request.page_size,
+                generated_at: String::new(),
+                mode: "empty".into(),
+            },
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn read_aitracker_session_detail(
+    request: AitrackerSessionDetailRequest,
+) -> CommandResult<AitrackerSessionDetailPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, _, usage) = collect_unified_usage_snapshot();
+        let detail = claude_codex_pro_data::aitracker::session_detail(
+            &usage,
+            request.agent.trim(),
+            request.session_id.trim(),
+        );
+        if detail.is_some() {
+            ok("会话详情已加载。", AitrackerSessionDetailPayload { detail })
+        } else {
+            failed(
+                "未找到该会话。",
+                AitrackerSessionDetailPayload { detail: None },
+            )
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "会话详情读取失败。",
+            AitrackerSessionDetailPayload { detail: None },
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn list_distillation_candidates() -> CommandResult<DistillationCandidatesPayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        ok(
+            "蒸馏候选已加载。",
+            DistillationCandidatesPayload {
+                candidates: all_distillation_candidates(),
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "蒸馏候选读取失败。",
+            DistillationCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn create_distillation_candidate(
+    request: DistillationCreateRequest,
+) -> CommandResult<DistillationCandidatesPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, _, usage) = collect_unified_usage_snapshot();
+        let Some(detail) = claude_codex_pro_data::aitracker::session_detail(
+            &usage,
+            request.agent.trim(),
+            request.session_id.trim(),
+        ) else {
+            return failed(
+                "未找到可蒸馏的本地会话。",
+                DistillationCandidatesPayload {
+                    candidates: read_distillation_candidates(),
+                },
+            );
+        };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let now = now_ms.to_string();
+        let id = format!("distill-{now}-{}", detail.summary.session_id);
+        let candidate = claude_codex_pro_data::aitracker::DistillationCandidate {
+            id,
+            agent: detail.summary.agent.clone(),
+            session_id: detail.summary.session_id.clone(),
+            summary: format!(
+                "{} / {} · {} 条事件 · {} tokens",
+                detail.summary.project,
+                detail.summary.model,
+                detail.summary.events,
+                detail.summary.totals.total_tokens
+            ),
+            status: "pending".into(),
+            created_at: now,
+        };
+        let mut pending = pending_distillation_candidates()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.retain(|item| {
+            !(item.agent == candidate.agent && item.session_id == candidate.session_id)
+        });
+        pending.push(candidate);
+        drop(pending);
+        ok(
+            "蒸馏候选已创建，等待审批。",
+            DistillationCandidatesPayload {
+                candidates: all_distillation_candidates(),
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "蒸馏候选创建失败。",
+            DistillationCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn update_distillation_candidate(
+    request: DistillationCandidateRequest,
+) -> CommandResult<DistillationCandidatesPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut candidates = read_distillation_candidates();
+        let pending = pending_distillation_candidates();
+        let pending_candidate = {
+            let mut values = pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            values
+                .iter()
+                .position(|item| item.id == request.id.trim())
+                .map(|index| values.remove(index))
+        };
+        if let Some(mut candidate) = pending_candidate {
+            candidate.status = "approved".into();
+            candidates.push(candidate);
+            return match write_distillation_candidates(&candidates) {
+                Ok(()) => ok(
+                    "蒸馏候选已审批。",
+                    DistillationCandidatesPayload { candidates },
+                ),
+                Err(_) => failed(
+                    "蒸馏候选保存失败。",
+                    DistillationCandidatesPayload { candidates },
+                ),
+            };
+        }
+        let Some(candidate) = candidates
+            .iter_mut()
+            .find(|item| item.id == request.id.trim())
+        else {
+            return failed(
+                "未找到蒸馏候选。",
+                DistillationCandidatesPayload {
+                    candidates: all_distillation_candidates(),
+                },
+            );
+        };
+        candidate.status = "approved".into();
+        match write_distillation_candidates(&candidates) {
+            Ok(()) => ok(
+                "蒸馏候选已审批。",
+                DistillationCandidatesPayload { candidates },
+            ),
+            Err(_) => failed(
+                "蒸馏候选保存失败。",
+                DistillationCandidatesPayload { candidates },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "蒸馏候选更新失败。",
+            DistillationCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn cancel_distillation_candidate(
+    request: DistillationCandidateRequest,
+) -> CommandResult<DistillationCandidatesPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut candidates = read_distillation_candidates();
+        {
+            let mut pending = pending_distillation_candidates()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(index) = pending.iter().position(|item| item.id == request.id.trim()) {
+                pending.remove(index);
+                return ok(
+                    "蒸馏候选已取消。",
+                    DistillationCandidatesPayload {
+                        candidates: all_distillation_candidates(),
+                    },
+                );
+            }
+        }
+        let Some(candidate) = candidates
+            .iter_mut()
+            .find(|item| item.id == request.id.trim())
+        else {
+            return failed(
+                "未找到蒸馏候选。",
+                DistillationCandidatesPayload {
+                    candidates: all_distillation_candidates(),
+                },
+            );
+        };
+        candidate.status = "cancelled".into();
+        match write_distillation_candidates(&candidates) {
+            Ok(()) => ok(
+                "蒸馏候选已取消。",
+                DistillationCandidatesPayload { candidates },
+            ),
+            Err(_) => failed(
+                "蒸馏候选保存失败。",
+                DistillationCandidatesPayload { candidates },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "蒸馏候选取消失败。",
+            DistillationCandidatesPayload {
+                candidates: Vec::new(),
+            },
+        )
+    })
 }
 
 #[tauri::command]

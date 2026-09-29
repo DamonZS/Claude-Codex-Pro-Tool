@@ -20,6 +20,10 @@ pub struct RequestRecord {
     pub timestamp_ms: u64,
     pub source: String,
     pub agent: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
     pub protocol: Option<String>,
@@ -198,13 +202,27 @@ pub struct RequestObservation {
 impl RequestObservation {
     pub fn new(agent: &str, protocol: &str, request: &str) -> Self {
         let request = serde_json::from_str::<Value>(request).ok();
+        let request_field = |names: &[&str]| {
+            request
+                .as_ref()
+                .and_then(|value| names.iter().find_map(|name| value.get(*name)))
+        };
         Self {
             record: RequestRecord {
                 id: uuid::Uuid::new_v4().to_string(),
                 timestamp_ms: now_ms(),
                 source: "proxy".to_string(),
                 agent: agent.to_string(),
-                provider: None,
+                session_id: identifier(request_field(&[
+                    "session_id",
+                    "sessionId",
+                    "conversation_id",
+                    "conversationId",
+                ])),
+                project: request_field(&["cwd", "project", "project_path"])
+                    .and_then(Value::as_str)
+                    .and_then(sanitize_project),
+                provider: identifier(request_field(&["provider", "provider_id", "providerId"])),
                 model: request.as_ref().and_then(|v| identifier(v.get("model"))),
                 protocol: Some(protocol.to_string()),
                 upstream_protocol: None,
@@ -542,6 +560,8 @@ fn sanitize_record(mut record: RequestRecord) -> Option<RequestRecord> {
     }
     record.provider = record.provider.as_deref().and_then(identifier_str);
     record.model = record.model.as_deref().and_then(identifier_str);
+    record.session_id = record.session_id.as_deref().and_then(identifier_str);
+    record.project = record.project.as_deref().and_then(sanitize_project);
     for protocol in [&mut record.protocol, &mut record.upstream_protocol] {
         if !matches!(
             protocol.as_deref(),
@@ -563,9 +583,48 @@ fn sanitize_record(mut record: RequestRecord) -> Option<RequestRecord> {
     Some(record)
 }
 
+fn sanitize_project(value: &str) -> Option<String> {
+    let value = value.trim();
+    let project = value.rsplit(['/', '\\']).next()?.trim();
+    (!project.is_empty()
+        && project.len() <= 128
+        && !project.chars().any(|character| character.is_control()))
+    .then(|| project.to_string())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestObservation;
+
+    #[test]
+    fn request_metadata_is_collected_without_body_content() {
+        let mut observation = RequestObservation::new(
+            "codex",
+            "responses",
+            r#"{"model":"fixture-model","stream":false,"session_id":"chat-1","cwd":"C:\\work\\fixture","provider":"relay-fixture","messages":[{"role":"user","content":"PRIVATE_PROMPT"}]}"#,
+        );
+        observation.upstream(
+            200,
+            false,
+            "responses",
+            Some("relay-fixture"),
+            Some("fixture-model"),
+        );
+        observation
+            .push_bytes(br#"{"object":"response","usage":{"input_tokens":2,"output_tokens":3}}"#);
+        let record = observation.finish();
+        assert_eq!(record.session_id.as_deref(), Some("chat-1"));
+        assert_eq!(record.project.as_deref(), Some("fixture"));
+        assert_eq!(record.provider.as_deref(), Some("relay-fixture"));
+        assert_eq!(record.status, "success");
+        let encoded = serde_json::to_string(&record).unwrap();
+        assert!(!encoded.contains("PRIVATE_PROMPT"));
+    }
 }

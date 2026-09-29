@@ -535,7 +535,7 @@ export function AppShell({
         </header>
 
         <section className="ops-screen" data-route={route}>
-          {route !== "prompts" && route !== "overview" && route !== "sessions" ? (
+          {route !== "prompts" && route !== "overview" && route !== "sessions" && route !== "supplier" && route !== "themes" ? (
             <div className="ops-page-heading">
               <div>
                 <h1>{routeLabel(route)}</h1>

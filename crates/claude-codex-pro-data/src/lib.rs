@@ -1,4 +1,6 @@
+pub mod aitracker;
 pub mod backup;
+pub mod local_usage;
 pub mod markdown;
 pub mod provider_sync;
 pub mod request_history;

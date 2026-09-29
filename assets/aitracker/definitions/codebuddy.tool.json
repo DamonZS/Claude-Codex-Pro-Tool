@@ -1,0 +1,64 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "codebuddy",
+  "display": {
+    "name": "CodeBuddy",
+    "nameZh": "CodeBuddy",
+    "icon": "other",
+    "color": "#0052d9"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": ["macos"],
+        "base": "appData",
+        "path": "CodeBuddyExtension/Logs"
+      },
+      {
+        "targets": ["windows10", "windows11"],
+        "base": "userProfile",
+        "path": "Local/CodeBuddyExtension/Logs"
+      },
+      {
+        "targets": ["linux"],
+        "base": "dataHome",
+        "path": "CodeBuddyExtension/Logs"
+      }
+    ],
+    "executable": {
+      "shared": ["codebuddy"]
+    }
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "codebuddy-log-v1",
+      "paths": [
+        {
+          "targets": ["macos", "windows10", "windows11", "linux"],
+          "base": "home",
+          "path": ".codebuddy/projects",
+          "glob": "**/*.jsonl",
+          "format": "jsonl"
+        }
+      ],
+      "maxFileSizeBytes": 67108864
+    },
+    "skills": "unsupported",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "unsupported"
+    },
+    "market": "unsupported",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model"
+  }
+}

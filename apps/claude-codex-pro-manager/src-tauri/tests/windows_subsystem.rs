@@ -1080,10 +1080,10 @@ fn pangu_memory_public_surfaces_are_removed() {
 }
 
 #[test]
-fn session_page_omits_redundant_heading_band() {
+fn session_and_supplier_and_theme_pages_omit_redundant_heading_band() {
     let shell = normalize_source(include_str!("../../src/components/AppShell.tsx").to_string());
     assert!(shell.contains(
-        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" ? (\n            <div className=\"ops-page-heading\">"
+        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" ? (\n            <div className=\"ops-page-heading\">"
     ));
 }
 
@@ -1126,7 +1126,7 @@ fn plugin_tools_ui_regression_is_locked_down() {
 }
 
 #[test]
-fn session_management_route_contains_history_and_codex_claude_session_management() {
+fn session_management_route_contains_aitracker_session_management() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
     let app_tsx = read_frontend_file("screens.tsx");
@@ -1134,60 +1134,22 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     let tauri_bridge = read_frontend_file("tauriBridge.ts");
     let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
-    let styles = manifest_dir.parent().unwrap().join("src/styles.css");
-    let styles = read_source_file(&styles);
+    let workspace_styles = read_frontend_file("workspace.css");
 
     let session_section = app_tsx
-        .split("function SessionManagementScreen")
+        .split("export const SessionManagementScreen")
         .nth(1)
-        .and_then(|rest| rest.split("function PluginHubScreen").next())
+        .and_then(|rest| rest.split("export const PluginListItem").next())
         .expect("session screen source");
 
-    assert!(session_section.contains("会话管理"));
-    assert!(session_section.contains("历史会话修复"));
-    assert!(session_section.contains("Codex 会话管理"));
-    assert!(session_section.contains("Claude 会话管理"));
-    assert!(session_section.contains("refreshLocalSessions"));
-    assert!(session_section.contains("deleteLocalSession"));
-    assert!(session_section.contains("refreshClaudeSessions"));
-    assert!(session_section.contains("deleteClaudeSession"));
-    assert!(session_section.contains("loadClaudeSessionContext"));
-    assert!(session_section.contains("groupLocalSessionsByProject(codexSessions)"));
-    assert!(session_section.contains("groupClaudeSessionsByProject(claudeSessionsList)"));
-    assert!(session_section.contains("renderSessionBrowserPanel"));
-    assert!(session_section.contains("session-management-wide-grid"));
-    assert!(session_section.contains("session-history-card"));
-    assert!(session_section.contains("session-codex-card"));
-    assert!(session_section.contains("session-claude-card"));
-    assert!(session_section.contains("className=\"codex-session-browser\""));
-    assert!(session_section.contains("Codex 本地会话项目列表"));
-    assert!(session_section.contains("Claude 本地会话项目列表"));
-    assert!(session_section.contains("data: localSessions"));
-    assert!(session_section.contains("data: claudeSessions"));
-    assert!(!session_section.contains("data: null"));
-    assert!(!session_section.contains("Claude 会话扫描尚未接入"));
-    assert!(session_section.contains(r#"sourceLabel: "Claude 会话源""#));
-    assert!(!session_section.contains(r#"statusLabel: "待接入""#));
-    assert!(!session_section.contains(r#"renderSessionBrowserPanel("Claude 会话管理""#));
-    assert!(session_section.contains("className=\"codex-session-project-header\""));
-    assert!(session_section.contains("className=\"codex-session-main\""));
-    assert!(session_section.contains("onClick={() => onOpen?.(session)}"));
-    assert!(session_section.contains("formatSessionRelativeTime(session.updatedAtMs)"));
-    assert!(
-        session_section.contains("onDelete: (session) => void actions.deleteLocalSession(session)")
-    );
-    assert!(
-        session_section
-            .contains("onDelete: (session) => void actions.deleteClaudeSession(session)")
-    );
-    assert!(
-        session_section
-            .contains("onOpen: (session) => void actions.loadClaudeSessionContext(session)")
-    );
-    assert!(session_section.contains("claude-session-context-overlay"));
-    assert!(session_section.contains("claude-session-context-dialog"));
-    assert!(session_section.contains("加载更早内容"));
-    assert!(session_section.contains("关闭会话上下文"));
+    assert!(session_section.contains("AitrackerSessionPanel"));
+    assert!(session_section.contains("aitrackerCapabilities"));
+    assert!(session_section.contains("aitrackerSessions"));
+    assert!(session_section.contains("distillationCandidates"));
+    assert!(!session_section.contains("历史会话修复"));
+    assert!(!session_section.contains("Codex 会话管理"));
+    assert!(!session_section.contains("Claude 会话管理"));
+    assert!(!session_section.contains("session-management-wide-grid"));
     assert!(app_shell.contains("const [claudeSessions, setClaudeSessions]"));
     assert!(app_shell.contains("const [claudeSessionContext, setClaudeSessionContext]"));
     assert!(app_shell.contains("call<ClaudeSessionsResult>(\"list_claude_sessions\")"));
@@ -1202,26 +1164,22 @@ fn session_management_route_contains_history_and_codex_claude_session_management
     assert!(tauri_bridge.contains("command === \"list_claude_sessions\""));
     assert!(tauri_bridge.contains("command === \"load_claude_session_context\""));
     assert!(tauri_bridge.contains("command === \"delete_claude_session\""));
-    assert!(session_section.contains("repairHistorySessions"));
     assert!(!session_section.contains("Claude 会话诊断"));
     assert!(!session_section.contains("launchClaudeDesktop"));
     assert!(!session_section.contains("installClaudeZhPatch"));
     assert!(!session_section.contains("openClaudeChinese"));
-    assert!(styles.contains(".session-management-wide-grid"));
-    assert!(styles.contains("grid-template-columns: minmax(340px, 0.72fr) minmax(560px, 1.28fr);"));
-    assert!(styles.contains(".session-codex-card .codex-session-browser"));
-    assert!(styles.contains("max-height: 136px;"));
-    assert!(styles.contains(".session-claude-card"));
-    assert!(styles.contains("grid-column: 1 / -1;"));
-    assert!(styles.contains(".codex-session-browser"));
-    assert!(!styles.contains("background: #f3eeee;"));
-    assert!(styles.contains("rgba(8, 9, 12, 0.72);"));
-    assert!(styles.contains(".codex-session-project-header"));
-    assert!(styles.contains(".codex-session-main time"));
-    assert!(styles.contains(".codex-session-delete"));
-    assert!(styles.contains(".claude-session-context-overlay"));
-    assert!(styles.contains(".claude-session-context-dialog"));
-    assert!(styles.contains(".claude-session-context-message"));
+    assert!(workspace_styles.contains(".aitracker-session-page"));
+    assert!(workspace_styles.contains(".aitracker-session-card"));
+    assert!(workspace_styles.contains(".aitracker-session-detail-view"));
+    assert!(app_tsx.contains("function AitrackerSessionPanel"));
+    assert!(app_tsx.contains("aitracker-session-summary"));
+    assert!(app_tsx.contains("aitracker-session-day-heading"));
+    assert!(app_tsx.contains("aitracker-session-resume"));
+    assert!(app_tsx.contains("range: nextRange"));
+    assert!(workspace_styles.contains(".aitracker-session-card"));
+    assert!(workspace_styles.contains(".aitracker-session-pagination"));
+    assert!(commands_rs.contains("pub range: Option<String>"));
+    assert!(commands_rs.contains("request.range.as_deref()"));
 }
 
 #[test]
@@ -1617,11 +1575,10 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "function SupplierModelDropdown",
     );
     assert!(screens.contains("type OverviewAgentScope = \"codex\" | \"claude\";"));
-    assert!(overview_screen.contains("[[\"codex\", \"Codex\"], [\"claude\", \"Claude\"]]"));
-    assert!(!overview_screen.contains("\"all\", \"全部\""));
-    assert!(overview_screen.contains(
-        "return agentScope === \"codex\" ? target === \"codex\" : target !== \"codex\";"
-    ));
+    assert!(overview_screen.contains("<OverviewDataDashboard agentScope={agentScope}"));
+    assert!(overview_screen.contains("<AgentOverview capabilities={aitrackerCapabilities}"));
+    assert!(!overview_screen.contains("overview-legacy-route"));
+    assert!(!overview_screen.contains("overview-legacy-inspector"));
     for action_binding in [
         "onRestartCodex={() => void actions.restartCodex()}",
         "onLaunchClaude={() => void actions.launchClaudeDesktop()}",
@@ -1705,49 +1662,30 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         !session_screen.contains("<Panel title=\"会话管理\""),
         "the sessions page must not repeat a generic introduction panel"
     );
-    let session_card_positions = [
-        session_screen
-            .find("className=\"session-history-card\"")
-            .expect("history repair card"),
-        session_screen
-            .find("className=\"session-codex-card\"")
-            .expect("Codex session card"),
-        session_screen
-            .find("className=\"session-claude-card\"")
-            .expect("Claude session card"),
-    ];
-    assert!(
-        session_card_positions
-            .windows(2)
-            .all(|pair| pair[0] < pair[1]),
-        "history repair must precede the paired Codex and Claude session panes"
-    );
-    for title in [
-        "title=\"历史会话修复\"",
-        "title: \"Codex 会话管理\"",
-        "title: \"Claude 会话管理\"",
+    assert!(session_screen.contains("<AitrackerSessionPanel"));
+    for legacy in [
+        "session-history-card",
+        "session-codex-card",
+        "session-claude-card",
+        "历史会话修复",
+        "Codex 会话管理",
+        "Claude 会话管理",
     ] {
         assert!(
-            session_screen.contains(title),
-            "missing session pane: {title}"
+            !session_screen.contains(legacy),
+            "legacy session UI remains: {legacy}"
         );
     }
     assert!(css_rule_has(
         &workspace,
-        ".session-management-wide-grid",
-        "grid-template-columns: repeat(2, minmax(0, 1fr));"
+        ".aitracker-session-page",
+        "display: grid;"
     ));
     assert!(css_rule_has(
         &workspace,
-        ".session-history-card",
-        "grid-column: 1 / -1;"
+        ".aitracker-session-card",
+        "display: grid;"
     ));
-    assert!(
-        css_rule_declarations(&workspace, ".session-management-wide-grid")
-            .into_iter()
-            .any(|declarations| normalize_css(declarations).contains("grid-template-columns: 1fr;")),
-        "the paired session panes must collapse to one column at narrow widths"
-    );
 
     let tools_screen = source_section(
         &screens,
@@ -2883,7 +2821,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         "const result = await run(() => call<SettingsResult>(\"load_settings\"), \"设置\""
     ));
     assert!(app_tsx.contains("if (result) {\n      setSettings(result);"));
-    assert!(app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch)"));
+    assert!(!app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch)"));
     assert!(!app_tsx.contains("claudeOverviewStatus(claudeDesktop, claudeZhPatch, claudeChinese)"));
     let overview_screen = screens_file
         .split("function OverviewScreen")
@@ -2892,40 +2830,63 @@ fn manager_window_and_ops_console_layout_stay_usable() {
         .expect("overview screen source");
     for contract in [
         "className=\"overview-control-plane\"",
-        "className=\"overview-kpi-grid\"",
-        "<span>当前供应商</span>",
-        "<span>本地代理</span>",
-        "<span>Codex 增强</span>",
-        "className=\"overview-route-board overview-glass-panel\"",
-        "<strong>供应商路由</strong>",
-        "<strong>当前请求链路</strong>",
-        "className=\"overview-topology-node provider\"",
-        "className=\"overview-topology-node protocol\"",
-        "className=\"overview-topology-node agent\"",
-        "className=\"overview-inspector overview-glass-panel\"",
-        "<strong>智能诊断</strong>",
-        "<RequestTimeline agentScope={agentScope}",
+        "<OverviewDataDashboard agentScope={agentScope}",
     ] {
         assert!(
             overview_screen.contains(contract),
             "overview control plane is missing: {contract}"
         );
     }
-    assert!(overview_screen.contains("const profiles = settings?.relayProfiles ?? [];"));
-    assert!(overview_screen.contains("supplierProfileCanActivate(profile)"));
-    assert!(overview_screen.contains("•••••••• · 已配置"));
-    assert!(overview_screen.contains("actions.testRelayProfile(selectedProfile)"));
+    assert!(screens_file.contains("className=\"overview-data-kpis overview-kpi-grid\""));
+    assert!(overview_screen.contains("className=\"overview-view-toolbar\""));
+    assert!(overview_screen.contains("className=\"overview-data-range\""));
+    assert!(overview_screen.contains("overview-main overview-agent-scroll"));
+    assert!(!overview_screen.contains("供应商路由"));
+    assert!(!overview_screen.contains("智能诊断"));
+    assert!(!screens_file.contains("Agent 数据概览"));
+    let overview_styles = read_frontend_file("components/request-timeline.css");
+    assert!(overview_styles.contains("flex: 0 0 194px; min-height: 194px;"));
+    assert!(overview_styles.contains("flex-basis: 150px; min-height: 150px;"));
     assert!(
-        overview_screen.contains(
-            "actions.switchSupplierProfile(selectedTarget, selectedProfile.id, settings)"
-        )
+        overview_styles
+            .contains(".overview-main.overview-agent-scroll { height: 100%; overflow-y: auto;")
     );
+    let agent_styles = read_frontend_file("components/agent-overview.css");
+    assert!(agent_styles.contains("background-color: rgb(2 7 4 / .2)"));
+    assert!(agent_styles.contains("backdrop-filter: blur(32px) saturate(160%)"));
+    let agent_overview = read_frontend_file("components/AgentOverview.tsx");
+    assert!(agent_overview.contains("Number(b.detected) - Number(a.detected)"));
+    for dashboard_contract in ["Token 消耗趋势", "模型消耗", "项目消耗总览", "活跃日历"]
+    {
+        assert!(
+            screens_file.contains(dashboard_contract),
+            "overview dashboard is missing: {dashboard_contract}"
+        );
+    }
+    let dashboard = screens_file
+        .split("function OverviewDataDashboard")
+        .nth(1)
+        .and_then(|rest| rest.split("export function OverviewScreen").next())
+        .expect("overview dashboard source");
+    assert_eq!(
+        dashboard
+            .matches("overview-data-trend aitracker-trend-panel")
+            .count(),
+        1,
+        "total overview must render one Token trend"
+    );
+    assert!(!dashboard.contains("<RequestTimeline"));
+    assert!(dashboard.contains("calendarWeeks.flat().map"));
+    assert!(dashboard.contains("agentScopedRecords.forEach((record) => {"));
+    assert!(!overview_screen.contains("overview-route-board"));
+    assert!(!overview_screen.contains("overview-inspector"));
     let timeline = read_frontend_file("components/RequestTimeline.tsx");
-    assert!(timeline.contains("<strong>请求与事件时间线</strong>"));
+    assert!(timeline.contains("<strong>模型消耗明细</strong>"));
+    assert!(timeline.contains("按模型"));
+    assert!(timeline.contains("近 7 天"));
+    assert!(timeline.contains("current.tokens += tokenTotal(record)"));
+    assert!(timeline.contains("未计价"));
     assert!(!timeline.contains("value.detail"));
-    assert!(timeline.contains("for (const record of records)"));
-    assert!(timeline.contains("lane.items.map"));
-    assert!(!timeline.contains("records.slice("));
     assert!(timeline.contains("record.first_byte_ms"));
     assert!(timeline.contains("\"cache_creation_tokens\""));
     assert!(timeline.contains("\"cached_tokens\""));
@@ -2934,49 +2895,43 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(lib_rs.contains("commands::read_request_timeline"));
     assert!(app_tsx.contains("if (route !== \"overview\") return;"));
     assert!(app_tsx.contains("requestTimelineInFlight.current"));
-    assert!(overview_screen.contains("aria-label=\"诊断与修复\""));
-    assert!(overview_screen.contains("actions.repairFrontendConnection()"));
-    assert!(overview_screen.contains("actions.repairBackendService()"));
-    assert!(overview_screen.contains("actions.refreshClaudeThirdPartyConfig()"));
-    assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
-    assert!(overview_screen.contains("className=\"overview-announcement-link\""));
-    assert!(overview_screen.contains("announcement.title"));
-    assert!(overview_screen.contains("announcement.buttonLabel"));
-    assert!(overview_screen.contains("actions.openExternalUrl(announcement.url)"));
     assert!(!overview_screen.contains("https://api.toporeduce.cn"));
     assert!(!overview_screen.contains("dangerouslySetInnerHTML"));
     for fabricated_metric in ["99.9%", "12 ms", "1,284 req", "拓扑熵减API"] {
         assert!(!overview_screen.contains(fabricated_metric));
     }
+    for static_preview in [
+        "overviewPreview",
+        "previewMode",
+        "previewModels",
+        "示例数据",
+    ] {
+        assert!(
+            !overview_screen.contains(static_preview),
+            "overview must not contain static preview data: {static_preview}"
+        );
+    }
     assert!(app_tsx.contains("call<AdsResult>(\"load_ads\")"));
-    assert!(app_tsx.contains("ads={ads}"));
+    assert!(!overview_screen.contains("ads={ads}"));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.start\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.result\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.action.failed\""));
     assert!(app_tsx.contains("writeUiEvent(\"manager.ui.button.click\""));
     assert!(app_tsx.contains("function buttonLogLabel(button: HTMLButtonElement): string"));
     assert!(app_tsx.contains("document.addEventListener(\"click\", handleButtonClick, true)"));
+    let timeline_styles = read_frontend_file("components/request-timeline.css");
     for style_contract in [
-        ".overview-control-plane",
-        ".overview-kpi-grid",
-        "grid-template-columns: repeat(4, minmax(0, 1fr));",
-        ".overview-route-board",
-        ".overview-topology-stage",
-        ".overview-inspector",
-        ".overview-timeline",
-        "transform: rotateY(25deg) rotateZ(-1.5deg) translateZ(-34px);",
-        "transform: rotateY(-25deg) rotateZ(1.5deg) translateZ(-34px);",
+        ".overview-data-dashboard",
+        ".overview-data-layout .overview-main.overview-agent-scroll",
+        ".overview-data-dashboard .overview-data-kpis",
+        "grid-template-columns: repeat(6, minmax(0, 1fr));",
         "@media (max-width: 980px)",
-        "@media (min-width: 2400px) and (min-height: 1350px)",
-        "width: 100%;",
-        "height: 100%;",
     ] {
         assert!(
-            workspace.contains(style_contract),
-            "workspace is missing overview style contract: {style_contract}"
+            timeline_styles.contains(style_contract),
+            "overview stylesheet is missing contract: {style_contract}"
         );
     }
-    let timeline_styles = read_frontend_file("components/request-timeline.css");
     assert!(timeline_styles.contains(
         ".overview-timeline-body { display: flex; flex: 1; min-height: 0; overflow: auto; }"
     ));
@@ -2987,11 +2942,11 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(!overview_screen.contains("插件中心"));
     assert!(!overview_screen.contains("提示词工坊"));
     assert!(!overview_screen.contains("PromptOptimizerCard"));
-    assert!(overview_screen.contains("刷新概览"));
-    assert!(overview_screen.contains("actions.refreshRoute(\"overview\", { notify: true })"));
-    assert!(overview_screen.contains("刷新 Claude"));
-    assert!(overview_screen.contains("修复前端"));
-    assert!(overview_screen.contains("修复后端"));
+    assert!(overview_screen.contains("总览"));
+    assert!(overview_screen.contains("Agent 概览"));
+    assert!(!overview_screen.contains("刷新 Claude"));
+    assert!(!overview_screen.contains("修复前端"));
+    assert!(!overview_screen.contains("修复后端"));
     assert!(app_tsx.contains("refresh_claude_third_party_config"));
     assert!(app_tsx.contains("repair_frontend_connection"));
     assert!(app_tsx.contains("repair_backend_service"));
@@ -3041,10 +2996,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(commands_rs.contains("\"degraded\""));
     assert!(!overview_screen.contains("StatusActionTile"));
     assert!(!overview_screen.contains("actions.installClaudeZhPatch()"));
-    assert!(overview_screen.contains("const devModeValue = claudeDevModeBusy"));
-    assert!(overview_screen.contains("开发模式已写入"));
-    assert!(overview_screen.contains("写入中..."));
-    assert!(overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
+    assert!(!overview_screen.contains("actions.configureClaudeDesktopDevMode()"));
     assert!(app_tsx.contains("const [claudeDevModeBusy, setClaudeDevModeBusy] = useState(false);"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: \"正在写入 Claude Desktop 开发配置...\", status: \"running\" });"));
     assert!(app_tsx.contains("setNotice({ title: \"Claude 一键开发模式\", message: result.message || result.outcome.message, status: result.status });"));
@@ -3193,9 +3145,9 @@ fn initial_manager_load_is_route_scoped_instead_of_global_prefetch() {
         "load_claude_desktop_status\"), \"Claude Desktop\", { trackBusy: !silent, notify: !silent }"
     ));
     assert!(app_tsx.contains(
-        "if (target === \"overview\") {\n      // Keep the default manager/Codex entrypoint side-effect free for Claude.\n      // Claude status and development-mode probes are loaded only after the\n      // user enters the dedicated client/tool surfaces or triggers an action.\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);"
+        "if (target === \"overview\") {\n      // Keep the default manager/Codex entrypoint side-effect free for Claude.\n      // Claude status and development-mode probes are loaded only after the\n      // user enters the dedicated client/tool surfaces or triggers an action.\n      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true), refreshAitrackerCapabilities(true)]);"
     ));
-    assert!(app_tsx.contains("const devModeValue = claudeDevModeBusy\n    ? \"写入中...\"\n    : devModeConfigured\n      ? \"开发模式已写入\"\n      : \"写入开发模式\";"));
+    assert!(!app_tsx.contains("const devModeValue = claudeDevModeBusy"));
     assert!(app_tsx.contains("useEffect(() => {\n    void refreshRoute(route);\n  }, [route]);"));
     assert!(!app_tsx.contains(
         "useEffect(() => {\n    void (async () => {\n      await Promise.all([\n        refreshOverview(true),\n        refreshClaude(true),\n        refreshSettings(true),\n        refreshPluginHub(true),"

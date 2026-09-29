@@ -3727,6 +3727,30 @@ body {
   min-width: 0;
 }
 
+.aitracker-session-page { display: grid; gap: 12px; min-width: 0; }
+.aitracker-session-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--ops-hairline); border-radius: 18px; background: rgba(255,255,255,.78); box-shadow: 0 10px 24px rgba(43,58,73,.08); }
+.aitracker-session-summary > div { position: relative; display: grid; gap: 3px; min-height: 104px; padding: 13px 16px; border-right: 1px solid var(--ops-hairline); }
+.aitracker-session-summary > div:last-child { border-right: 0; }
+.aitracker-session-summary span { color: var(--ops-muted); font-size: 12px; }
+.aitracker-session-summary strong { color: var(--ops-ink); font-size: 26px; line-height: 1.1; }
+.aitracker-session-summary small { color: var(--ops-muted); font-size: 11px; }
+.aitracker-session-summary svg { position: absolute; top: 15px; right: 14px; width: 14px; height: 14px; color: var(--ops-muted); }
+.aitracker-session-search { display: flex; min-width: 260px; flex: 1; align-items: center; gap: 8px; border: 1px solid var(--ops-hairline); border-radius: 16px; background: rgba(226,232,238,.7); padding: 0 12px; }
+.aitracker-session-search svg { width: 15px; color: var(--ops-muted); }
+.aitracker-session-search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ops-ink); }
+.aitracker-session-range { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--ops-hairline); border-radius: 16px; background: rgba(255,255,255,.65); }
+.aitracker-session-range > button:not(.button) { border: 0; border-radius: 12px; background: transparent; color: var(--ops-muted); padding: 7px 9px; font-size: 11px; }
+.aitracker-session-range > button.active { background: white; color: var(--ops-ink); box-shadow: 0 1px 4px rgba(43,58,73,.1); }
+.aitracker-session-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.aitracker-session-tools button { border: 1px solid transparent; border-radius: 17px; background: rgba(255,255,255,.82); color: var(--ops-ink); padding: 8px 13px; font-size: 12px; }
+.aitracker-session-tools button.active { border-bottom: 2px solid #087bd3; color: #087bd3; }
+.aitracker-session-filterbar { display: none; }
+.aitracker-session-page .codex-session-browser { max-height: 640px; border: 0; border-radius: 14px; background: rgba(255,255,255,.64); padding: 0; }
+.aitracker-session-page .codex-session-browser-title { display: none; }
+.aitracker-session-page .codex-session-row { border-bottom: 1px solid var(--ops-hairline); padding: 8px 12px; }
+.aitracker-session-page .codex-session-main { padding: 5px 2px; }
+@media (max-width: 760px) { .aitracker-session-summary { grid-template-columns: 1fr; }.aitracker-session-summary > div { border-right: 0; border-bottom: 1px solid var(--ops-hairline); }.aitracker-session-range { overflow-x: auto; }.aitracker-session-search { min-width: 0; } }
+
 .status-tile {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);

@@ -56,6 +56,10 @@ import type {
   UpdateReleasePayload,
   UpdateResult,
   UnifiedToolInventoryResult,
+  AitrackerSessionDetailResult,
+  AitrackerSessionQueryResult,
+  DistillationCandidatesResult,
+  AitrackerSessionRange,
   WatcherResult,
 } from "@/types";
 
@@ -145,6 +149,12 @@ export function createActionsShape() {
     closeCodexSessionContext: () => {},
     deleteLocalSession: async (_session: LocalSession) => {},
     refreshClaudeSessions: async () => null as ClaudeSessionsResult | null,
+    queryAitrackerSessions: async (_request: { agent?: string | null; status?: string | null; keyword?: string | null; range?: AitrackerSessionRange; page?: number; pageSize?: number }) => null as AitrackerSessionQueryResult | null,
+    readAitrackerSessionDetail: async (_request: { agent: string; sessionId: string }) => null as AitrackerSessionDetailResult | null,
+    listDistillationCandidates: async () => null as DistillationCandidatesResult | null,
+    createDistillationCandidate: async (_request: { agent: string; sessionId: string }) => null as DistillationCandidatesResult | null,
+    updateDistillationCandidate: async (_request: { id: string }) => null as DistillationCandidatesResult | null,
+    cancelDistillationCandidate: async (_request: { id: string }) => null as DistillationCandidatesResult | null,
     listMulticaConnections: async (_silent?: boolean) => null as MulticaConnectionsResult | null,
     saveMulticaConnection: async (_connection: MulticaConnectionConfig) => null as MulticaConnectionsResult | null,
     deleteMulticaConnection: async (_connectionId: string) => null as MulticaConnectionsResult | null,

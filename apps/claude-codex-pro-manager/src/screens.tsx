@@ -1,14 +1,20 @@
 import { type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { compactMetric, overviewBarPosition, overviewPeriod, overviewTrend } from "./lib/overviewUsage";
 import {
   Activity,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   AlertTriangle,
   ArchiveRestore,
   BarChart3,
   Bot,
   CheckCircle2,
+  Check,
+  Database,
   Copy,
+  Cpu,
   Download,
   Edit,
   ExternalLink,
@@ -16,7 +22,7 @@ import {
   EyeOff,
   FileCode2,
   GripVertical,
-  Gauge,
+  Flame,
   Info,
   KeyRound,
   Languages,
@@ -27,17 +33,20 @@ import {
   Plus,
   Power,
   RefreshCw,
+  Search,
   Save,
   Server,
   ShieldCheck,
   Sparkles,
+  Timer,
   Trash2,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { RequestTimeline } from "@/components/RequestTimeline";
+import { AgentOverview } from "@/components/AgentOverview";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import claudeLogo from "@/assets/claude.svg";
 import codexLogo from "@/assets/openai.svg";
@@ -65,8 +74,6 @@ import {
   ToggleSwitch,
 } from "@/components/ui/ops";
 import {
-  claudeOverviewStatus,
-  codexOverviewStatus,
   compactDisplayPath,
   compactPath,
   formatSessionRelativeTime,
@@ -125,7 +132,10 @@ import {
   trustedUpdateAssetUrl,
 } from "@/lib/update";
 import type {
-  AdsResult,
+  AitrackerCapabilitiesResult,
+  AitrackerSessionDetailResult,
+  AitrackerSessionQueryResult,
+  AitrackerSessionRange,
   BackendSettings,
   ClaudeChineseWindowResult,
   ClaudeDesktopDevModeStatusResult,
@@ -135,18 +145,14 @@ import type {
   ClaudeDesktopProviderPreviewResult,
   CredentialEnvironmentResult,
   ClaudeDesktopResult,
-  ClaudeSession,
-  ClaudeSessionContextPage,
-  ClaudeSessionsResult,
   ClaudeZhPatchResult,
   CodexPluginMarketplaceStatusResult,
-  CodexSessionContextPage,
   ContextKind,
-  LocalSession,
-  LocalSessionsResult,
+  DistillationCandidatesResult,
+  AitrackerSessionSummary,
   LogsResult,
   RequestTimelineResult,
-  TimelineLogsState,
+  RequestRecord,
   MulticaConnectionConfig,
   MulticaConnectionStatus,
   MulticaConnectionStatusResult,
@@ -164,7 +170,6 @@ import type {
   PluginCatalogItem,
   PluginHubResult,
   PluginInstallPreviewResult,
-  ProviderSyncResult,
   RelayProfile,
   RelayProfileModelsResult,
   SettingsResult,
@@ -195,241 +200,451 @@ const SUPPLIER_USER_AGENT_PRESETS = [
 ] as const;
 
 type OverviewAgentScope = "codex" | "claude";
-function overviewProfileTarget(profile: RelayProfile): SupplierTargetApp {
-  return profile.targetApp || "codex";
+type OverviewRange = "24h" | "7d" | "30d";
+const overviewRangeLabels: Record<OverviewRange, string> = { "24h": "24 小时", "7d": "7 天", "30d": "30 天" };
+
+function overviewRecordTokens(record: RequestRecord) {
+  if (record.total_tokens != null) return record.total_tokens;
+  return [record.input_tokens, record.output_tokens, record.cached_tokens, record.cache_creation_tokens, record.reasoning_tokens]
+    .reduce<number>((sum, value) => sum + (value ?? 0), 0);
 }
 
-function overviewProfileInitials(profile: RelayProfile) {
-  const source = (profile.name || profile.id || "API").trim();
-  const words = source.split(/[\s_-]+/).filter(Boolean);
-  if (words.length > 1) return words.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
-  return source.slice(0, 2).toUpperCase();
+function smoothTrendPath(values: number[], max: number) {
+  const points = values.map((value, index) => ({ x: overviewBarPosition(index, values.length).center, y: 38 - value / max * 32 }));
+  if (!points.length) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  return points.map((point, index) => {
+    if (index === 0) return `M ${point.x} ${point.y}`;
+    const previous = points[index - 1];
+    const midpoint = (previous.x + point.x) / 2;
+    return `C ${midpoint} ${previous.y}, ${midpoint} ${point.y}, ${point.x} ${point.y}`;
+  }).join(" ");
+}
+
+function overviewLocalDayKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function overviewSnapshotRecords(usage: RequestTimelineResult["usage_snapshot"]): RequestRecord[] | null {
+  const details = usage?.details;
+  if (!details) return null;
+  return details.map((detail) => {
+    const timestamp = Date.parse(detail.timestamp);
+    const known = (value: string) => value && value !== "unknown" ? value : null;
+    return {
+      id: detail.id,
+      timestamp_ms: Number.isFinite(timestamp) ? timestamp : 0,
+      source: detail.source,
+      agent: detail.agent,
+      session_id: detail.sessionId,
+      project: known(detail.project),
+      provider: known(detail.provider),
+      model: known(detail.model),
+      protocol: null,
+      upstream_protocol: null,
+      status: detail.status,
+      http_status: null,
+      duration_ms: detail.durationMs,
+      first_byte_ms: null,
+      input_tokens: detail.inputTokens,
+      output_tokens: detail.outputTokens,
+      cached_tokens: detail.cachedInputTokens,
+      cache_creation_tokens: detail.cacheCreationInputTokens,
+      reasoning_tokens: detail.reasoningOutputTokens,
+      total_tokens: detail.totalTokens,
+      streaming: false,
+    };
+  });
+}
+
+function OverviewAnalysisPanels({
+  records,
+  trend,
+  previousTrend,
+  range,
+  axisLabels,
+  maxStackedTokens,
+  onRefresh,
+}: {
+  records: RequestRecord[];
+  trend: Array<{ requests: number; tokens: number; input: number; cached: number; output: number }>;
+  previousTrend: number[];
+  range: OverviewRange;
+  axisLabels: string[];
+  maxStackedTokens: number;
+  onRefresh: () => Promise<unknown>;
+}) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  const agentUsage = useMemo(() => {
+    const grouped = new Map<string, { tokens: number; events: number }>();
+    records.forEach((record) => {
+      const key = record.agent || "未采集 Agent";
+      const current = grouped.get(key) ?? { tokens: 0, events: 0 };
+      current.tokens += overviewRecordTokens(record);
+      current.events += 1;
+      grouped.set(key, current);
+    });
+    return [...grouped.entries()].sort((a, b) => b[1].tokens - a[1].tokens).slice(0, 6);
+  }, [records]);
+  const providerUsage = useMemo(() => {
+    const grouped = new Map<string, number>();
+    records.forEach((record) => {
+      const key = record.provider?.trim() || "未采集 Provider";
+      grouped.set(key, (grouped.get(key) ?? 0) + 1);
+    });
+    return [...grouped.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+  }, [records]);
+  const hourly = useMemo(() => {
+    const cells = Array.from({ length: 28 }, () => 0);
+    records.forEach((record) => {
+      const date = new Date(record.timestamp_ms);
+      const day = (date.getDay() + 6) % 7;
+      cells[day * 4 + Math.min(3, Math.floor(date.getHours() / 6))] += 1;
+    });
+    return cells;
+  }, [records]);
+  const totalProviderEvents = providerUsage.reduce((sum, [, count]) => sum + count, 0);
+  const maxAgentTokens = Math.max(...agentUsage.map(([, item]) => item.tokens), 1);
+  const maxHourly = Math.max(...hourly, 1);
+  const maxRequests = Math.max(...trend.map((item) => item.requests), 1);
+  const maxPrevious = Math.max(...previousTrend, 1);
+  const x = (index: number) => index * 100 / Math.max(1, trend.length - 1);
+  const y = (value: number, max: number) => 38 - value / max * 32;
+  const previousPath = smoothTrendPath(previousTrend, maxPrevious);
+  const days = ["一", "二", "三", "四", "五", "六", "日"];
+  return <>
+    <div className="overview-data-grid-main aitracker-analysis-main">
+      <section className="overview-data-panel overview-data-trend aitracker-trend-panel aitracker-trend-replacement">
+        <header><div><strong>Token 消耗趋势</strong><small>缓存读取、输入、输出与环比 · 最近 {overviewRangeLabels[range]}</small></div><button type="button" aria-label="刷新数据" title="刷新数据" onClick={() => void onRefresh()}><RefreshCw aria-hidden="true" /></button></header>
+        <div className="overview-data-chart"><div className="overview-chart-yaxis"><span>{compactMetric(maxStackedTokens)}</span><span>{compactMetric(Math.round(maxStackedTokens * .75))}</span><span>{compactMetric(Math.round(maxStackedTokens * .5))}</span><span>{compactMetric(Math.round(maxStackedTokens * .25))}</span><span>0</span></div><svg viewBox="0 0 100 42" preserveAspectRatio="none" aria-label="Token 消耗趋势图">
+          {trend.map((item, index) => { const width = 2.6; const left = x(index) - width / 2; const outputY = y(item.output, maxStackedTokens); const inputY = outputY - item.input / maxStackedTokens * 32; const cachedY = inputY - item.cached / maxStackedTokens * 32; return <g key={`bar-${index}`} onMouseEnter={() => setHovered(index)} onMouseLeave={() => setHovered(null)}><rect className="trend-bar-cache" x={left} y={cachedY} width={width} height={item.cached / maxStackedTokens * 32} /><rect className="trend-bar-input" x={left} y={inputY} width={width} height={item.input / maxStackedTokens * 32} /><rect className="trend-bar-output" x={left} y={outputY} width={width} height={item.output / maxStackedTokens * 32} /><rect className="trend-hit" x={Math.max(0, left - 2)} y="0" width={width + 4} height="42" /></g>; })}
+          <path className="trend-previous" d={previousPath} />
+          {hovered != null ? <g className="overview-trend-tooltip" pointerEvents="none"><line x1={x(hovered)} x2={x(hovered)} y1="0" y2="38" /><circle className="token-dot" cx={x(hovered)} cy={y(trend[hovered].tokens, maxStackedTokens)} r="1.4" /><rect x={Math.min(Math.max(2, x(hovered) - 16), 74)} y="2" width="24" height="11" rx="2" /><text x={Math.min(Math.max(2, x(hovered) - 16), 74) + 12} y="6.5" textAnchor="middle">{axisLabels[hovered]}</text><text x={Math.min(Math.max(2, x(hovered) - 16), 74) + 12} y="10.5" textAnchor="middle">{compactMetric(trend[hovered].tokens)} Token · {trend[hovered].requests} 请求</text></g> : null}
+        </svg><div className="overview-data-axis">{axisLabels.slice(0, 6).map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div></div>
+        <footer><span><i className="trend-swatch cache" />缓存读取</span><span><i className="trend-swatch input" />输入</span><span><i className="trend-swatch output" />输出</span><span><i className="trend-swatch previous" />环比</span><em>数据来源：本地采集器</em></footer>
+      </section>
+      <section className="overview-data-panel overview-data-agent-rank"><header><div><strong>Agent 使用排行</strong><small>按 Token 消耗排序 · {records.length} 个事件</small></div></header><div>{agentUsage.map(([name, item], index) => <div className="overview-agent-rank" key={name}><b>{index + 1}</b><span className="overview-agent-badge">{name.slice(0, 1).toUpperCase()}</span><div><strong>{name}</strong><small>{item.events} 次调用</small><i><em style={{ width: `${Math.max(3, item.tokens / maxAgentTokens * 100)}%` }} /></i></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无 Agent 用量记录</p>}</div></section>
+    </div>
+    <div className="overview-data-grid-lower aitracker-analysis-lower">
+      <section className="overview-data-panel overview-data-provider"><header><div><strong>Provider 请求占比</strong><small>按本地请求事件统计</small></div></header><div className="overview-provider-chart"><div className="overview-donut" style={{ background: providerUsage.length ? `conic-gradient(${providerUsage.map(([, count], index) => `${["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff", "#f2b856"][index % 6]} ${providerUsage.slice(0, index).reduce((sum, [, value]) => sum + value, 0) / totalProviderEvents * 100}% ${(providerUsage.slice(0, index + 1).reduce((sum, [, value]) => sum + value, 0) / totalProviderEvents * 100)}%`).join(",")}` : undefined }}><span>{totalProviderEvents || "未采集"}<small>请求</small></span></div><div className="overview-provider-legend">{providerUsage.map(([name, count], index) => <div key={name}><i style={{ background: ["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff", "#f2b856"][index % 6] }} /><span>{name}</span><b>{totalProviderEvents ? `${(count / totalProviderEvents * 100).toFixed(1)}%` : "未采集"}</b></div>)}</div></div></section>
+      <section className="overview-data-panel overview-data-heat"><header><div><strong>Agent 活跃度</strong><small>按星期与时段统计事件</small></div></header><div className="overview-heat-summary"><span>周一</span><span>周日</span></div><div className="overview-heatmap">{hourly.map((count, index) => <i key={index} data-level={count ? Math.max(1, Math.ceil(count / maxHourly * 4)) : 0} title={`${days[Math.floor(index / 4)]} · ${Math.floor(index % 4) * 6}:00 · ${count} 个事件`} />)}</div><footer><span>少</span><i data-level="1" /><i data-level="2" /><i data-level="3" /><i data-level="4" /><span>多</span></footer></section>
+      <section className="overview-data-panel overview-data-burning"><header><div><strong>Token 燃烧榜</strong><small>按 Agent Token 消耗排行</small></div></header><div>{agentUsage.slice(0, 5).map(([name, item], index) => <div className="overview-burning-row" key={name}><b>#{index + 1}</b><Flame aria-hidden="true" /><div><strong>{name}</strong><small>{item.events} 次调用 · 本地记录</small></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无燃烧数据</p>}</div></section>
+    </div>
+  </>;
+}
+
+function OverviewDataDashboard({ agentScope, range, requestTimeline, aitrackerCapabilities, distillationCandidates, onRefresh }: {
+  agentScope: OverviewAgentScope;
+  range: OverviewRange;
+  requestTimeline: RequestTimelineResult | null;
+  aitrackerCapabilities: AitrackerCapabilitiesResult | null;
+  distillationCandidates: DistillationCandidatesResult | null;
+  onRefresh: () => Promise<unknown>;
+}) {
+  const [hoveredTrendIndex, setHoveredTrendIndex] = useState<number | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState("all");
+  const [projectTopN, setProjectTopN] = useState(5);
+  const [calendarHover, setCalendarHover] = useState<{ date: string; tokens: number; events: number; sessions: number; left: number; top: number } | null>(null);
+  const calendarRef = useRef<HTMLElement>(null);
+  const snapshotRecords = useMemo(() => overviewSnapshotRecords(requestTimeline?.usage_snapshot ?? aitrackerCapabilities?.usage), [aitrackerCapabilities, requestTimeline]);
+  const sourceRecords = snapshotRecords ?? requestTimeline?.records ?? [];
+  const scopedRecords = useMemo(() => aitrackerCapabilities ? sourceRecords : sourceRecords.filter((record) => agentScope === "codex" ? record.agent === "codex" : record.agent.startsWith("claude")), [agentScope, aitrackerCapabilities, sourceRecords]);
+  const availableAgents = useMemo(() => {
+    const names = new Set<string>();
+    scopedRecords.forEach((record) => { if (record.agent) names.add(record.agent); });
+    aitrackerCapabilities?.snapshot.registry.filter((item) => item.detected).forEach((item) => names.add(item.id));
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [aitrackerCapabilities, scopedRecords]);
+  useEffect(() => {
+    if (selectedAgent !== "all" && !availableAgents.includes(selectedAgent)) setSelectedAgent("all");
+  }, [availableAgents, selectedAgent]);
+  const agentScopedRecords = useMemo(() => selectedAgent === "all" ? scopedRecords : scopedRecords.filter((record) => record.agent === selectedAgent), [selectedAgent, scopedRecords]);
+  const now = Date.now();
+  const period = overviewPeriod(range, now);
+  const periodStart = period.start;
+  const records = useMemo(() => agentScopedRecords.filter((record) => record.timestamp_ms >= periodStart && record.timestamp_ms <= now), [agentScopedRecords, now, periodStart]);
+  const previousRecords = useMemo(() => agentScopedRecords.filter((record) => record.timestamp_ms >= period.previousStart && record.timestamp_ms < periodStart), [agentScopedRecords, period.previousStart, periodStart]);
+  const totalTokens = records.reduce((sum, record) => sum + overviewRecordTokens(record), 0);
+  const judgedRecords = records.filter((record) => ["success", "failed", "interrupted"].includes(record.status));
+  const successCount = judgedRecords.filter((record) => record.status === "success").length;
+  const latencyValues = records.map((record) => record.duration_ms).filter((value): value is number => value != null);
+  const averageLatency = latencyValues.length ? latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length : null;
+  const agentUsage = useMemo(() => {
+    const grouped = new Map<string, { tokens: number; events: number; model?: string }>();
+    records.forEach((record) => {
+      const key = record.agent || "未知 Agent";
+      const item = grouped.get(key) ?? { tokens: 0, events: 0, model: record.model ?? undefined };
+      item.tokens += overviewRecordTokens(record); item.events += 1; grouped.set(key, item);
+    });
+    return [...grouped.entries()].sort((a, b) => b[1].tokens - a[1].tokens).slice(0, 5);
+  }, [records]);
+  const modelUsage = useMemo(() => {
+    const grouped = new Map<string, { tokens: number; events: number; sessions: Set<string> }>();
+    records.forEach((record) => {
+      const key = record.model?.trim() || "未采集模型";
+      const item = grouped.get(key) ?? { tokens: 0, events: 0, sessions: new Set<string>() };
+      item.tokens += overviewRecordTokens(record);
+      item.events += 1;
+      if (record.session_id) item.sessions.add(`${record.agent}:${record.session_id}`);
+      grouped.set(key, item);
+    });
+    const total = [...grouped.values()].reduce((sum, item) => sum + item.tokens, 0);
+    return [...grouped.entries()]
+      .map(([key, item]) => ({ key, ...item, share: total ? item.tokens / total * 100 : 0 }))
+      .sort((a, b) => b.tokens - a.tokens);
+  }, [records]);
+  const projectUsage = useMemo(() => {
+    const grouped = new Map<string, { tokens: number; events: number; sessions: Set<string> }>();
+    records.forEach((record) => {
+      const key = record.project?.trim() || "未采集项目";
+      const item = grouped.get(key) ?? { tokens: 0, events: 0, sessions: new Set<string>() };
+      item.tokens += overviewRecordTokens(record);
+      item.events += 1;
+      if (record.session_id) item.sessions.add(`${record.agent}:${record.session_id}`);
+      grouped.set(key, item);
+    });
+    const total = [...grouped.values()].reduce((sum, item) => sum + item.tokens, 0);
+    return [...grouped.entries()]
+      .map(([key, item]) => ({ key, ...item, share: total ? item.tokens / total * 100 : 0 }))
+      .sort((a, b) => b.tokens - a.tokens);
+  }, [records]);
+  const providerUsage = useMemo(() => {
+    const grouped = new Map<string, number>();
+    records.forEach((record) => {
+      const name = record.provider?.trim() || "未知 Provider";
+      grouped.set(name, (grouped.get(name) ?? 0) + 1);
+    });
+    const sorted = [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+    return sorted.length > 4 ? [...sorted.slice(0, 3), ["其他", sorted.slice(3).reduce((sum, [, count]) => sum + count, 0)] as [string, number]] : sorted;
+  }, [records]);
+  const trend = overviewTrend(records, period.boundaries);
+  const previousPeriod = overviewPeriod(range, periodStart - 1);
+  const previousTrend = overviewTrend(previousRecords, previousPeriod.boundaries).map((item) => item.tokens);
+  const maxStackedTokens = Math.max(...trend.map((item) => item.input + item.cached + item.output), ...previousTrend, 1);
+  const calendarCounts = useMemo(() => {
+    const grouped = new Map<string, { events: number; tokens: number; sessions: Set<string> }>();
+    agentScopedRecords.forEach((record) => {
+      if (record.timestamp_ms < now - 365 * 24 * 60 * 60 * 1000 || record.timestamp_ms > now) return;
+      const key = overviewLocalDayKey(new Date(record.timestamp_ms));
+      const current = grouped.get(key) ?? { events: 0, tokens: 0, sessions: new Set<string>() };
+      current.events += 1;
+      current.tokens += overviewRecordTokens(record);
+      if (record.session_id) current.sessions.add(`${record.agent}:${record.session_id}`);
+      grouped.set(key, current);
+    });
+    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [agentScopedRecords, now]);
+  const calendarMax = Math.max(...calendarCounts.map(([, value]) => value.tokens), 1);
+  const hourlyActivity = useMemo(() => {
+    const cells = Array.from({ length: 28 }, () => 0);
+    records.forEach((record) => {
+      const date = new Date(record.timestamp_ms);
+      const day = (date.getDay() + 6) % 7;
+      const hourBand = Math.min(3, Math.floor(date.getHours() / 6));
+      cells[day * 4 + hourBand] += 1;
+    });
+    return cells;
+  }, [records]);
+  const maxHourlyActivity = Math.max(...hourlyActivity, 1);
+  const calendarDays = useMemo(() => {
+    const counts = new Map(calendarCounts);
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 364);
+    return Array.from({ length: 365 }, (_, index) => {
+      const date = new Date(start);
+      date.setDate(start.getDate() + index);
+      const key = overviewLocalDayKey(date);
+      return { date: key, events: counts.get(key)?.events ?? 0, tokens: counts.get(key)?.tokens ?? 0, sessions: counts.get(key)?.sessions.size ?? 0 };
+    });
+  }, [calendarCounts, now]);
+  const calendarWeeks = useMemo(() => {
+    const first = new Date(`${calendarDays[0].date}T00:00:00`);
+    const last = new Date(`${calendarDays[calendarDays.length - 1].date}T00:00:00`);
+    first.setDate(first.getDate() - first.getDay());
+    last.setDate(last.getDate() + 6 - last.getDay());
+    const byDate = new Map(calendarDays.map((day) => [day.date, day]));
+    const weeks = [];
+    for (let start = first; start <= last; start.setDate(start.getDate() + 7)) {
+      const days = Array.from({ length: 7 }, (_, index) => {
+        const date = new Date(start);
+        date.setDate(start.getDate() + index);
+        const key = overviewLocalDayKey(date);
+        return { date: key, data: byDate.get(key) ?? null };
+      });
+      weeks.push(days);
+    }
+    return weeks;
+  }, [calendarDays]);
+  const calendarMonthTicks = calendarWeeks.flatMap((week, index) => index === 0 || week[0].date.slice(5, 7) !== calendarWeeks[index - 1][0].date.slice(5, 7) ? [{ index, label: new Date(`${week[0].date}T00:00:00`).toLocaleDateString("zh-CN", { month: "short" }) }] : []);
+  const projectTop = projectUsage.slice(0, projectTopN);
+  const projectTopShare = projectTop.reduce((sum, item) => sum + item.share, 0);
+  const projectRingCircumference = 2 * Math.PI * 42;
+  const projectRing = projectTop.reduce<{ segments: { key: string; color: string; length: number; offset: number }[]; offset: number }>((result, item, index) => {
+    const length = item.share / 100 * projectRingCircumference;
+    const color = ["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff"][index % 5];
+    result.segments.push({ key: item.key, color, length, offset: result.offset });
+    result.offset += length;
+    return result;
+  }, { segments: [], offset: 0 });
+  const displayTotalTokens = records.length ? compactMetric(totalTokens) : "未采集";
+  const displayRequests = records.length.toLocaleString("zh-CN");
+  const sessionCount = new Set(records.filter((record) => record.session_id).map((record) => `${record.agent}:${record.session_id}`)).size;
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+  const todayRecords = agentScopedRecords.filter((record) => record.timestamp_ms >= todayStart.getTime() && record.timestamp_ms <= now);
+  const todayTokens = todayRecords.reduce((sum, record) => sum + overviewRecordTokens(record), 0);
+  const cachedInputTokens = records.reduce((sum, record) => sum + (record.cached_tokens ?? 0), 0);
+  const inputTokens = records.reduce((sum, record) => sum + (record.input_tokens ?? 0) + (record.cache_creation_tokens ?? 0), 0);
+  const cacheHitRate = inputTokens + cachedInputTokens > 0 ? cachedInputTokens / (inputTokens + cachedInputTokens) * 100 : null;
+  const registry = aitrackerCapabilities?.snapshot.registry ?? [];
+  const detectedAgents = registry.filter((item) => item.detected);
+  const activeAgentIds = new Set(agentScopedRecords.filter((record) => record.timestamp_ms >= periodStart && record.timestamp_ms <= now).map((record) => record.agent));
+  const agentCoverage = aitrackerCapabilities ? detectedAgents.length : new Set(scopedRecords.map((record) => record.agent).filter(Boolean)).size;
+  const activeAgentCount = activeAgentIds.size;
+  const idleAgentCount = Math.max(0, agentCoverage - activeAgentCount);
+  const distillation = distillationCandidates?.candidates ?? null;
+  const distillationAssetCount = distillation?.length ?? null;
+  const distillationOutputCount = distillation ? distillation.filter((item) => item.status === "approved").length : null;
+  const trendText = (current: number, previous: number, suffix = "较上一周期") => previous > 0 ? `${current >= previous ? "↑" : "↓"} ${Math.abs((current - previous) / previous * 100).toFixed(1)}%　${suffix}` : "暂无对比数据";
+  const previousTokens = previousRecords.reduce((sum, record) => sum + overviewRecordTokens(record), 0);
+  const previousJudgedRecords = previousRecords.filter((record) => ["success", "failed", "interrupted"].includes(record.status));
+  const previousSuccess = previousJudgedRecords.length ? previousJudgedRecords.filter((record) => record.status === "success").length / previousJudgedRecords.length * 100 : 0;
+  const successRate = judgedRecords.length ? successCount / judgedRecords.length * 100 : null;
+  const previousLatencyValues = previousRecords.map((record) => record.duration_ms).filter((value): value is number => value != null);
+  const previousLatency = previousLatencyValues.length ? previousLatencyValues.reduce((sum, value) => sum + value, 0) / previousLatencyValues.length : 0;
+  const axisLabels = trend.map((_, index) => range === "24h" ? new Date(period.boundaries[index]).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : new Date(period.boundaries[index]).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }));
+  const peakIndex = trend.reduce((best, item, index) => item.tokens > (trend[best]?.tokens ?? 0) ? index : best, 0);
+  const baselineLabel = `较前 ${range === "24h" ? "24 小时" : range === "7d" ? "7 天" : "30 天"}`;
+  const usageDelta = (key: string, current: number, field: "project" | "model") => {
+    const previous = previousRecords.filter((record) => record[field] === key).reduce((sum, record) => sum + overviewRecordTokens(record), 0);
+    return previous > 0 ? `${current >= previous ? "↑" : "↓"} ${Math.abs((current - previous) / previous * 100).toFixed(1)}%` : current > 0 ? "↑ +100%" : "--";
+  };
+  const refresh = async () => { await onRefresh(); };
+  const calendarSummaryPeriod = overviewPeriod("7d", now);
+  const calendarSummaryRecords = agentScopedRecords.filter((record) => record.timestamp_ms >= calendarSummaryPeriod.start && record.timestamp_ms <= now);
+  const focusedCalendarCounts = new Map<string, number>();
+  calendarSummaryRecords.forEach((record) => {
+    const day = overviewLocalDayKey(new Date(record.timestamp_ms));
+    focusedCalendarCounts.set(day, (focusedCalendarCounts.get(day) ?? 0) + 1);
+  });
+  const activeCalendarDays = focusedCalendarCounts.size;
+  const calendarTokenTotal = calendarSummaryRecords.reduce((sum, record) => sum + overviewRecordTokens(record), 0);
+  let currentStreak = 0;
+  let longestCalendarStreak = 0;
+  const calendarSummaryStart = new Date(now);
+  calendarSummaryStart.setHours(0, 0, 0, 0);
+  calendarSummaryStart.setDate(calendarSummaryStart.getDate() - 6);
+  for (let index = 0; index < 7; index += 1) {
+    const date = new Date(calendarSummaryStart);
+    date.setDate(calendarSummaryStart.getDate() + index);
+    currentStreak = focusedCalendarCounts.has(overviewLocalDayKey(date)) ? currentStreak + 1 : 0;
+    longestCalendarStreak = Math.max(longestCalendarStreak, currentStreak);
+  }
+  return <div className="overview-data-dashboard aitracker-overview-layout">
+    <section className="overview-summary-cards aitracker-spotlight-grid" aria-label="概览摘要">
+      <article><div><span>Agent 覆盖</span><strong>{aitrackerCapabilities ? agentCoverage.toLocaleString("zh-CN") : "未采集"}</strong><small>{aitrackerCapabilities ? `${detectedAgents.length} 已检测 · ${activeAgentCount} 活跃 · ${idleAgentCount} 休眠` : "本地采集器未返回 Agent registry"}</small></div><button className="overview-summary-action" type="button" onClick={() => setSelectedAgent("all")}>Agent 视角</button></article>
+      <article><div><span>蒸馏资产</span><strong>{distillationAssetCount == null ? "未采集" : distillationAssetCount.toLocaleString("zh-CN")}</strong><small>{distillation ? `${distillation.filter((item) => item.status === "pending").length} 待处理 · ${distillationOutputCount ?? 0} 已产出` : "未加载蒸馏候选"}</small></div><span className="overview-summary-action">本地候选</span></article>
+      <article><div><span>今日消费</span><strong>{todayRecords.length ? compactMetric(todayTokens) : "未采集"}</strong><small>{todayRecords.length ? `Token · ${cacheHitRate == null ? "缓存命中率未采集" : `缓存命中率 ${cacheHitRate.toFixed(0)}%`} · 费用未计价` : "本地记录未覆盖今日"}</small></div><span className="overview-summary-action">消费明细</span></article>
+    </section>
+    <section className="overview-data-kpis overview-kpi-grid" aria-label="概览指标">
+      <article><span>Token 消耗</span><strong>{displayTotalTokens}</strong><small className="overview-kpi-trend">{trendText(totalTokens, previousTokens)} · {overviewRangeLabels[range]}</small></article>
+      <article><span>费用估算</span><strong>未计价</strong><small className="overview-kpi-trend is-warning">本地记录没有价格来源</small></article>
+      <article><span>会话总数</span><strong>{sessionCount ? sessionCount.toLocaleString("zh-CN") : "未采集"}</strong><small className="overview-kpi-trend">{sessionCount ? `按 session_id 去重 · ${overviewRangeLabels[range]}` : "本地记录未提供 session_id"}</small></article>
+      <article><span>缓存命中率</span><strong>{cacheHitRate == null ? "未采集" : `${cacheHitRate.toFixed(1)}%`}</strong><small className="overview-kpi-trend">{cacheHitRate == null ? "本地记录未提供缓存 Token" : "按输入与缓存 Token 计算"}</small></article>
+      <article><span>Agent 活跃</span><strong>{aitrackerCapabilities ? activeAgentCount.toLocaleString("zh-CN") : (activeAgentCount || "未采集")}</strong><small className="overview-kpi-trend">{aitrackerCapabilities ? `${idleAgentCount} 休眠 · ${overviewRangeLabels[range]}` : "按本地请求记录聚合"}</small></article>
+      <article><span>蒸馏产出</span><strong>{distillationOutputCount == null ? "未采集" : distillationOutputCount.toLocaleString("zh-CN")}</strong><small className="overview-kpi-trend">{distillation ? "已审批候选 · 本地状态" : "未加载蒸馏候选"}</small></article>
+    </section>
+    <div className="overview-agent-filters aitracker-tool-switcher" role="group" aria-label="Agent 筛选"><button type="button" className={selectedAgent === "all" ? "active" : ""} onClick={() => setSelectedAgent("all")}>全部 Agent</button>{availableAgents.map((agent) => <button type="button" key={agent} className={selectedAgent === agent ? "active" : ""} onClick={() => setSelectedAgent(agent)}>{agent}</button>)}</div>
+    <section className="overview-data-panel overview-data-trend aitracker-trend-panel aitracker-trend-replacement">
+      <header><div><strong>Token 消耗趋势</strong><small>{records.length ? `${range === "24h" ? "时均" : "日均"} ${compactMetric(Math.round(totalTokens / trend.length))}　${trendText(totalTokens, previousTokens)}　峰值 ${axisLabels[peakIndex]} · ${compactMetric(trend[peakIndex].tokens)}` : `暂无 ${overviewRangeLabels[range]} 用量记录`}</small></div><div className="aitracker-trend-header-actions"><span>缓存命中率 {cacheHitRate == null ? "未采集" : `${cacheHitRate.toFixed(0)}%`}</span><button type="button" aria-label="刷新数据" title="刷新数据" onClick={() => void refresh()}><RefreshCw aria-hidden="true" /></button></div></header>
+      <div className="overview-data-chart" onMouseLeave={() => setHoveredTrendIndex(null)}>
+        <div className="overview-chart-yaxis">{[1, .75, .5, .25, 0].map((scale) => <span key={scale}>{compactMetric(Math.round(maxStackedTokens * scale))}</span>)}</div>
+        <svg viewBox="0 0 100 42" preserveAspectRatio="none" aria-label="Token 消耗趋势图">
+          {trend.map((item, index) => {
+            const { left, width } = overviewBarPosition(index, trend.length);
+            const cachedY = 38 - item.cached / maxStackedTokens * 32;
+            const inputY = cachedY - item.input / maxStackedTokens * 32;
+            const outputY = inputY - item.output / maxStackedTokens * 32;
+            return <g key={`trend-bar-${index}`}>
+              <rect className="trend-bar-cache" x={left} y={cachedY} width={width} height={item.cached / maxStackedTokens * 32} />
+              <rect className="trend-bar-input" x={left} y={inputY} width={width} height={item.input / maxStackedTokens * 32} />
+              <rect className="trend-bar-output" x={left} y={outputY} width={width} height={item.output / maxStackedTokens * 32} />
+            </g>;
+          })}
+          <path className="trend-previous" d={smoothTrendPath(previousTrend, maxStackedTokens)} pointerEvents="none" />
+          {trend.map((_, index) => <rect key={`trend-hit-${index}`} className="trend-hit" x={index * 100 / trend.length} y="0" width={100 / trend.length} height="42" onMouseEnter={() => setHoveredTrendIndex(index)} />)}
+          {hoveredTrendIndex != null && hoveredTrendIndex < trend.length ? <line className="trend-hover-line" x1={overviewBarPosition(hoveredTrendIndex, trend.length).center} x2={overviewBarPosition(hoveredTrendIndex, trend.length).center} y1="0" y2="38" pointerEvents="none" /> : null}
+        </svg>
+        {hoveredTrendIndex != null && hoveredTrendIndex < trend.length ? <div className="overview-trend-tooltip-html" style={{ left: `${Math.min(82, Math.max(18, overviewBarPosition(hoveredTrendIndex, trend.length).center))}%` }}><strong>{axisLabels[hoveredTrendIndex]}</strong><span>Token 消耗　{compactMetric(trend[hoveredTrendIndex].tokens)}</span><span>缓存读取　{compactMetric(trend[hoveredTrendIndex].cached)}</span><span>输入　{compactMetric(trend[hoveredTrendIndex].input)}</span><span>输出　{compactMetric(trend[hoveredTrendIndex].output)}</span><span>会话总数　{trend[hoveredTrendIndex].sessions}</span></div> : null}
+        <div className="overview-data-axis">{axisLabels.map((label, index) => <span key={`${label}-${index}`} style={{ left: `${overviewBarPosition(index, trend.length).center}%` }}>{range === "30d" && index % 5 !== 0 && index !== 29 || range === "24h" && index % 4 !== 0 && index !== 23 ? "" : label}</span>)}</div>
+      </div>
+      <footer><span><i className="trend-swatch cache" />缓存读取</span><span><i className="trend-swatch input" />输入</span><span><i className="trend-swatch output" />输出</span><span><i className="trend-swatch previous" />vs 上一区间</span><em>比较周期 · {baselineLabel}</em></footer>
+    </section>
+    <section className="overview-data-panel aitracker-model-panel">
+      <header><div><strong>模型消耗</strong><small>{modelUsage.length ? `${modelUsage.length} 个模型 · 按使用量排序 · ${overviewRangeLabels[range]}` : "暂无模型用量记录"}</small></div><span className="overview-panel-meta">按 Token</span></header>
+      <div className="aitracker-model-list">
+        {modelUsage.map((item, index) => <div className="aitracker-model-row" key={item.key}>
+          <div className="aitracker-model-heading"><strong>{item.key}</strong><span>{item.events.toLocaleString("zh-CN")} 次调用 · {item.sessions.size || "未采集"} 会话</span><b>{compactMetric(item.tokens)}</b><span>{item.share.toFixed(1)}%</span><span>未计价</span><span>{usageDelta(item.key, item.tokens, "model")}</span></div>
+          <div className="aitracker-model-meter"><i style={{ width: `${modelUsage[0]?.tokens ? Math.max(2, item.tokens / modelUsage[0].tokens * 100) : 0}%`, background: ["#41d8c0", "#9d83ff", "#ff9a72", "#e96987"][index % 4] }} /></div>
+        </div>)}
+        {!modelUsage.length && <p className="overview-data-empty">暂无模型用量记录</p>}
+      </div>
+    </section>
+    <section className="overview-data-panel aitracker-project-panel">
+      <header><div><strong>项目消耗总览</strong><small>{projectUsage.length ? `${projectUsage.length} 个项目 · ${overviewRangeLabels[range]}` : "暂无项目用量记录"}</small></div><div className="aitracker-project-controls"><span className="overview-panel-meta">比较周期 · {baselineLabel}</span><div className="aitracker-project-segments">{([3, 5, 10] as const).map((count) => <button key={count} type="button" className={projectTopN === count ? "active" : ""} onClick={() => setProjectTopN(count)}>TOP {count}</button>)}</div></div></header>
+      <div className="aitracker-project-layout">
+        <div className="aitracker-project-summary"><div className="aitracker-project-ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="42" fill="none" stroke="rgb(190 210 225 / .32)" strokeWidth="10" />{projectRing.segments.map((segment) => <circle key={segment.key} cx="50" cy="50" r="42" fill="none" stroke={segment.color} strokeWidth="10" strokeDasharray={`${Math.max(0, segment.length - 1.4)} ${projectRingCircumference}`} strokeDashoffset={-segment.offset} />)}</svg><span>{projectUsage.length.toLocaleString("zh-CN")}<small>项目</small></span></div><div className="aitracker-project-total"><span>总消耗额度</span><b>{compactMetric(totalTokens)}</b></div><div className="aitracker-project-share-meter"><i style={{ width: `${projectTopShare}%` }} /></div><div className="aitracker-project-share">TOP {projectTopN} 占比 <b>{projectTopShare.toFixed(1)}%</b></div></div>
+        <div className="aitracker-project-table">
+          <table><thead><tr><th>项目名称</th><th>消耗占比</th><th>消耗额度</th><th>会话</th><th>环比</th></tr></thead><tbody>
+            {projectTop.map((item, index) => <tr key={item.key}><td><div><i style={{ background: ["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff"][index % 5] }} /><span title={item.key}>{item.key}</span></div></td><td><b>{item.share.toFixed(1)}%</b></td><td>{compactMetric(item.tokens)}</td><td>{item.sessions.size || "未采集"}</td><td>{usageDelta(item.key, item.tokens, "project")}</td></tr>)}
+            {projectUsage.length > projectTopN && <tr className="aitracker-project-other"><td>其他 {projectUsage.length - projectTopN} 个项目</td><td>{Math.max(0, 100 - projectTopShare).toFixed(1)}%</td><td>--</td><td>--</td><td>--</td></tr>}
+          </tbody></table>
+          {!projectUsage.length && <p className="overview-data-empty">暂无项目用量记录</p>}
+        </div>
+      </div>
+      <footer className="aitracker-project-footer"><span>共 {projectUsage.length} 个项目</span><button type="button" onClick={() => setProjectTopN(10)}>查看项目消耗明细 →</button></footer>
+    </section>
+    <section className="overview-data-panel aitracker-calendar-panel" ref={calendarRef}>
+      <header><div className="aitracker-calendar-heading"><strong>活跃日历 <small className="aitracker-calendar-period">近 12 个月</small></strong><span className="aitracker-calendar-range-chip">近 7 天</span></div><span className="overview-panel-meta">{activeCalendarDays} 天活跃 · 最长连续 {longestCalendarStreak} 天 · 合计 {compactMetric(calendarTokenTotal)} tokens</span></header>
+      <div className="aitracker-calendar-chart">
+        <div className="aitracker-calendar-month-labels">{calendarMonthTicks.map(({ index, label }) => <span key={index} style={{ left: `${index / calendarWeeks.length * 100}%` }}>{label}</span>)}</div>
+        <div className="aitracker-calendar-body">
+          <div className="aitracker-calendar-weekdays"><span /><span>一</span><span /><span>三</span><span /><span>五</span><span /></div>
+          <div className="aitracker-calendar-grid" style={{ gridTemplateColumns: `repeat(${calendarWeeks.length}, minmax(0, 1fr))`, gridTemplateRows: "repeat(7, auto)" }}>{calendarWeeks.flat().map(({ date, data }) => <span key={date} data-level={data?.events ? Math.max(1, Math.ceil(data.tokens / calendarMax * 4)) : 0} data-outside={date < overviewLocalDayKey(new Date(periodStart))} data-padding={!data} title={data ? `${date} · ${compactMetric(data.tokens)} · ${data.events} 用量事件` : undefined} onMouseEnter={data ? (event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const container = calendarRef.current?.getBoundingClientRect();
+            if (container) setCalendarHover({ ...data, left: rect.left + rect.width / 2 - container.left, top: rect.top - container.top });
+          } : undefined} onMouseLeave={() => setCalendarHover(null)} />)}</div>
+        </div>
+      </div>
+      {calendarHover ? <div className="aitracker-calendar-tooltip" style={{ left: `${Math.min(82, Math.max(18, calendarHover.left / Math.max(1, calendarRef.current?.clientWidth ?? 1) * 100))}%`, top: `${calendarHover.top - 8}px` }}><div><span>{calendarHover.date.replaceAll("-", "/")}</span><b>Level {calendarHover.events ? Math.max(1, Math.ceil(calendarHover.tokens / calendarMax * 4)) : 0}</b></div><strong>{compactMetric(calendarHover.tokens)}</strong><small>{calendarHover.events.toLocaleString("zh-CN")} 用量事件　会话总数 {calendarHover.sessions}</small></div> : null}
+      <footer className="aitracker-calendar-legend"><span className="aitracker-calendar-note">颜色深浅表示当日 Token 消耗量</span><span>少</span><i data-level="0" /><i data-level="1" /><i data-level="2" /><i data-level="3" /><i data-level="4" /><span>多</span></footer>
+      {!calendarCounts.length && <p className="overview-data-empty">暂无活跃事件</p>}
+    </section>
+  </div>;
 }
 
 export function OverviewScreen({
   actions,
   agentScope,
-  ads,
-  overview,
-  claudeDesktop,
-  claudeZhPatch,
-  claudeDesktopDevMode,
-  claudeDevModeBusy,
-  timelineLogs,
+  aitrackerCapabilities,
+  distillationCandidates,
   requestTimeline,
-  onAgentScopeChange,
-  settings,
 }: {
   actions: AppActions;
   agentScope: OverviewAgentScope;
-  ads: AdsResult | null;
-  overview: OverviewResult | null;
-  claudeDesktop: ClaudeDesktopResult | null;
-  claudeZhPatch: ClaudeZhPatchResult | null;
-  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
-  claudeDevModeBusy: boolean;
-  timelineLogs: TimelineLogsState;
+  aitrackerCapabilities: AitrackerCapabilitiesResult | null;
+  distillationCandidates: DistillationCandidatesResult | null;
   requestTimeline: RequestTimelineResult | null;
-  onAgentScopeChange: (scope: OverviewAgentScope) => void;
-  settings: BackendSettings | null;
 }) {
-  const [selectedProfileId, setSelectedProfileId] = useState("");
-  const announcement = ads?.ads.find((item) => item.id === "official-toporeduce-api") ?? ads?.ads[0] ?? null;
-  const codexStatus = codexOverviewStatus(overview);
-  const claudeStatus = claudeOverviewStatus(claudeDesktop, claudeZhPatch);
-  const devModeConfigured = !!claudeDesktopDevMode?.devModeStatus.configured;
-  const devModeValue = claudeDevModeBusy
-    ? "写入中..."
-    : devModeConfigured
-      ? "开发模式已写入"
-      : "写入开发模式";
-  const profiles = settings?.relayProfiles ?? [];
-  const activeProfileIds = new Set([
-    settings?.activeRelayId,
-    settings?.activeClaudeRelayId,
-    settings?.activeClaudeDesktopRelayId,
-  ].filter(Boolean));
-  const scopedProfiles = profiles.filter((profile) => {
-    const target = overviewProfileTarget(profile);
-    return agentScope === "codex" ? target === "codex" : target !== "codex";
-  });
-  const preferredProfileId = agentScope === "claude"
-    ? settings?.activeClaudeRelayId || settings?.activeClaudeDesktopRelayId || ""
-    : settings?.activeRelayId || "";
-  const scopedProfileIds = scopedProfiles.map((profile) => profile.id).join("\u001f");
-  useEffect(() => {
-    if (selectedProfileId && scopedProfiles.some((profile) => profile.id === selectedProfileId)) return;
-    const next = scopedProfiles.find((profile) => profile.id === preferredProfileId) ?? scopedProfiles[0] ?? null;
-    setSelectedProfileId(next?.id ?? "");
-  }, [agentScope, preferredProfileId, scopedProfileIds]);
-  const selectedProfile = scopedProfiles.find((profile) => profile.id === selectedProfileId) ?? scopedProfiles[0] ?? null;
-  const selectedTarget = selectedProfile ? overviewProfileTarget(selectedProfile) : "codex";
-  const selectedActiveId = selectedTarget === "claude"
-    ? settings?.activeClaudeRelayId
-    : selectedTarget === "claude-desktop"
-      ? settings?.activeClaudeDesktopRelayId
-      : settings?.activeRelayId;
-  const selectedIsCurrent = Boolean(selectedProfile && selectedProfile.id === selectedActiveId);
-  const selectedHasCredential = Boolean(selectedProfile && supplierProfileCanActivate(selectedProfile));
-  const launch = overview?.latest_launch;
-  const proxyOnline = Boolean(launch?.helper_port_online);
-  const codexRunning = launch?.status === "running" || launch?.status === "degraded";
-  const claudeRunning = (claudeDesktop?.processCount ?? 0) > 0;
-  const selectedAgentOnline = selectedTarget === "codex" ? codexRunning : claudeRunning;
-  const providerCount = profiles.length;
-  const routeCount = profiles.filter((profile) => profile.routeEnabled).length;
-  const codexEnhancementValue = !overview
-    ? "未检测"
-    : statusFailed(launch?.status ?? "not_checked")
-      ? "异常"
-      : launch?.status === "degraded"
-        ? "部分在线"
-        : codexRunning
-          ? "已注入"
-          : "未运行";
-  const diagnostics: string[] = [];
-  if (!selectedProfile) diagnostics.push("当前范围内没有可检查的供应商配置。");
-  if (selectedProfile && !selectedHasCredential) diagnostics.push("当前供应商缺少可用凭据，请先进入编辑器补充 API Key。");
-  if (selectedProfile?.routeEnabled && !proxyOnline) diagnostics.push("该路由需要本地代理，但代理尚未在线，可尝试修复后端服务。");
-  if (selectedProfile && !selectedIsCurrent) diagnostics.push("当前仅在检查此供应商，尚未把它设为目标 Agent 的当前配置。");
-  if (selectedIsCurrent && !selectedAgentOnline) diagnostics.push(`${supplierTargetAppLabel(selectedTarget)} 尚未运行或状态未检测。`);
-  if (!diagnostics.length) diagnostics.push("当前链路没有已知异常，可继续使用当前配置。");
+  const [overviewView, setOverviewView] = useState<"total" | "agent">("total");
+  const [overviewRange, setOverviewRange] = useState<OverviewRange>("7d");
   return (
     <div className="overview-control-plane">
-      <div className="overview-console-layout">
-        <main className="overview-main">
-          <div className="overview-kpi-grid" aria-label="运行关键指标">
-        <section className="overview-kpi-card" data-tone={providerCount ? "ok" : "muted"}>
-          <header><span>当前供应商</span><Server aria-hidden="true" /></header>
-          <div className="overview-kpi-value"><strong>{settings ? providerCount : "未检测"}</strong><small>{settings ? "条可用配置" : "等待设置"}</small></div>
-          <p>{settings ? `${activeProfileIds.size} 个当前配置 · ${routeCount} 条路由` : "设置尚未加载"}</p>
-        </section>
-        <section className="overview-kpi-card" data-tone={proxyOnline ? "ok" : launch ? "warning" : "muted"}>
-          <header><span>本地代理</span><Gauge aria-hidden="true" /></header>
-          <div className="overview-kpi-value"><strong>{proxyOnline ? "在线" : launch ? "离线" : "未检测"}</strong><small>{proxyOnline ? "本机服务" : "运行状态"}</small></div>
-          <p>{proxyOnline && launch?.helper_port ? `本机端口 ${launch.helper_port}` : "等待本机运行状态"}</p>
-        </section>
-        <section className="overview-kpi-card is-accent" data-tone={codexStatus.status === "failed" ? "failed" : codexRunning ? "ok" : "muted"}>
-          <header><span>Codex 增强</span><Sparkles aria-hidden="true" /></header>
-          <div className="overview-kpi-value"><strong>{codexEnhancementValue}</strong><small>增强状态</small></div>
-          <p>{launch?.frontend_runtime_online ? "Renderer 与 Bridge 已连接" : "Renderer 尚未确认"}</p>
-        </section>
-          </div>
-
-          <section className="overview-route-board overview-glass-panel">
-            <aside className="overview-route-panel">
-          <header className="overview-panel-heading">
-            <div><Network aria-hidden="true" /><strong>供应商路由</strong><span>{profiles.length}</span></div>
-            <button aria-label="管理供应商" onClick={() => void actions.goSupplierProfile(null)} title="管理供应商" type="button"><Plus aria-hidden="true" /></button>
-          </header>
-          <div className="overview-route-tabs" role="group" aria-label="供应商 Agent 范围">
-            {([["codex", "Codex"], ["claude", "Claude"]] as Array<[OverviewAgentScope, string]>).map(([scope, label]) => (
-              <button aria-pressed={agentScope === scope} className={agentScope === scope ? "active" : ""} key={scope} onClick={() => onAgentScopeChange(scope)} type="button">{label}</button>
-            ))}
-          </div>
-          <div className="overview-provider-list">
-            {scopedProfiles.length ? scopedProfiles.map((profile) => {
-              const current = activeProfileIds.has(profile.id);
-              const hasCredential = supplierProfileCanActivate(profile);
-              const routeOffline = Boolean(profile.routeEnabled && !proxyOnline);
-              const statusLabel = !hasCredential ? "缺少 Key" : current ? routeOffline ? "代理离线" : profile.routeEnabled ? "在线" : "当前" : profile.routeEnabled ? "路由" : "待用";
-              const statusTone = !hasCredential || routeOffline ? "warning" : current ? "ok" : "muted";
-              return (
-                <button
-                  aria-pressed={selectedProfile?.id === profile.id}
-                  className={selectedProfile?.id === profile.id ? "active" : ""}
-                  key={profile.id}
-                  onClick={() => setSelectedProfileId(profile.id)}
-                  type="button"
-                >
-                  <span className="overview-provider-mark">{overviewProfileInitials(profile)}</span>
-                  <span className="overview-provider-copy"><strong>{profile.name || profile.id}</strong><small>{supplierApiFormatLabel(profile)} · {supplierTargetAppLabel(profile.targetApp)}</small></span>
-                  <span className={`overview-provider-status ${statusTone}`}><i />{statusLabel}</span>
-                </button>
-              );
-            }) : <div className="overview-provider-empty"><Server aria-hidden="true" /><strong>暂无供应商</strong><span>当前 Agent 范围内没有配置。</span></div>}
-          </div>
-            </aside>
-
-            <section className="overview-topology-panel">
-          <header className="overview-panel-heading overview-topology-heading">
-            <div><Activity aria-hidden="true" /><span><strong>当前请求链路</strong><small>供应商 → 协议代理 → 目标 Agent</small></span></div>
-            <button aria-label="刷新概览" onClick={() => void actions.refreshRoute("overview", { notify: true })} title="刷新概览" type="button"><RefreshCw aria-hidden="true" /></button>
-          </header>
-          {selectedProfile ? (
-            <div className="overview-topology-stage">
-              <div className="overview-topology-path" aria-label={`${selectedProfile.name || selectedProfile.id} 到 ${supplierTargetAppLabel(selectedTarget)} 的当前链路`}>
-                <span className="overview-route-line" aria-hidden="true" />
-                <article className="overview-topology-node provider">
-                  <header><span>PROVIDER</span><Server aria-hidden="true" /></header>
-                  <div><strong>{selectedProfile.name || selectedProfile.id}</strong><small>{selectedProfile.baseUrl || selectedProfile.upstreamBaseUrl ? "Base URL 已配置" : "Base URL 未配置"}</small></div>
-                  <footer><b>{selectedHasCredential ? "已配置" : "缺少"}</b><span>凭据状态</span></footer>
-                </article>
-                <article className="overview-topology-node protocol">
-                  <header><span>PROTOCOL ENGINE</span><Network aria-hidden="true" /></header>
-                  <div><strong>{supplierApiFormatLabel(selectedProfile)}</strong><small>{selectedProfile.routeEnabled ? "本地协议代理" : "上游直连"}</small></div>
-                  <footer><b>{selectedProfile.routeEnabled ? proxyOnline ? "在线" : "离线" : "直连"}</b><span>代理状态</span></footer>
-                </article>
-                <article className="overview-topology-node agent">
-                  <header><span>AGENT</span><Bot aria-hidden="true" /></header>
-                  <div><strong>{supplierTargetAppLabel(selectedTarget)}</strong><small>{selectedProfile.model || selectedProfile.testModel || "模型未配置"}</small></div>
-                  <footer><b>{selectedAgentOnline ? "在线" : selectedIsCurrent ? "未运行" : "待切换"}</b><span>运行状态</span></footer>
-                </article>
-              </div>
-              <p className="overview-topology-source">实时配置视图 · 状态来自本机检测</p>
-            </div>
-          ) : (
-            <div className="overview-topology-empty"><Network aria-hidden="true" /><strong>没有可显示的请求链路</strong><span>添加供应商后，这里会展示真实配置链路。</span></div>
-          )}
-            </section>
-          </section>
-
-        <aside className="overview-inspector overview-glass-panel">
-          <header className="overview-panel-heading"><div><Wrench aria-hidden="true" /><strong>智能诊断</strong></div></header>
-          <div className="overview-inspector-scroll">
-            {selectedProfile ? (
-              <>
-                <section className="overview-inspector-summary">
-                  <span>ROUTE / {selectedProfile.id}</span>
-                  <div><h2>{selectedProfile.name || selectedProfile.id} → {supplierTargetAppLabel(selectedTarget)}</h2><em className={selectedIsCurrent ? "current" : "saved"}>{selectedIsCurrent ? "当前配置" : "已保存"}</em></div>
-                  <p>该面板只读取已保存配置与本机运行状态；检查供应商不会自动切换或覆写配置。</p>
-                </section>
-                <dl className="overview-inspector-facts">
-                  <div><dt>实际模型</dt><dd>{selectedProfile.model || selectedProfile.testModel || "未配置"}</dd></div>
-                  <div><dt>请求协议</dt><dd>{supplierApiFormatLabel(selectedProfile)}</dd></div>
-                  <div><dt>目标客户端</dt><dd>{supplierTargetAppLabel(selectedTarget)}</dd></div>
-                  <div><dt>路由状态</dt><dd>{selectedProfile.routeEnabled ? proxyOnline ? "已开启 · 代理在线" : "已开启 · 代理离线" : "直连"}</dd></div>
-                  <div><dt>凭据状态</dt><dd><KeyRound aria-hidden="true" />{selectedHasCredential ? "•••••••• · 已配置" : "未配置"}</dd></div>
-                </dl>
-                <div className="overview-inspector-metrics">
-                  <span><b>{proxyOnline ? "在线" : launch ? "离线" : "未检测"}</b><small>本地代理</small></span>
-                  <span><b>{selectedHasCredential ? "已配置" : "缺失"}</b><small>连接凭据</small></span>
-                  <span><b>{selectedAgentOnline ? "在线" : "未检测"}</b><small>Agent 状态</small></span>
-                </div>
-              </>
-            ) : null}
-            <section className="overview-advice">
-              <header><Sparkles aria-hidden="true" /><strong>运行建议</strong></header>
-              <ul>{diagnostics.map((message) => <li key={message}>{message}</li>)}</ul>
-            </section>
-            <div className="overview-quick-actions" aria-label="诊断与修复">
-              <button onClick={() => void actions.repairFrontendConnection()} type="button"><Wrench aria-hidden="true" />修复前端</button>
-              <button onClick={() => void actions.repairBackendService()} type="button"><Wrench aria-hidden="true" />修复后端</button>
-              <button onClick={() => void actions.refreshClaudeThirdPartyConfig()} type="button"><RefreshCw aria-hidden="true" />刷新 Claude</button>
-              <button disabled={claudeDevModeBusy} onClick={() => void actions.configureClaudeDesktopDevMode()} type="button"><Power aria-hidden="true" />{devModeValue}</button>
-            </div>
-            {announcement ? (
-              <button className="overview-announcement-link" onClick={() => void actions.openExternalUrl(announcement.url)} type="button"><ExternalLink aria-hidden="true" /><span><strong>{announcement.title}</strong><small>{announcement.buttonLabel?.trim() || "查看公告"}</small></span></button>
-            ) : null}
-          </div>
-          <footer>
-            <Button disabled={!selectedProfile} onClick={() => void actions.goSupplierProfile(selectedProfile?.id)} variant="outline"><Pencil className="h-4 w-4" />编辑配置</Button>
-            {!selectedIsCurrent ? <Button disabled={!selectedProfile || !selectedHasCredential || !settings} onClick={() => { if (selectedProfile && settings) void actions.switchSupplierProfile(selectedTarget, selectedProfile.id, settings); }}><CheckCircle2 className="h-4 w-4" />设为当前</Button> : null}
-            <Button className="supplier-test-connection" disabled={!selectedProfile} onClick={() => { if (selectedProfile) void actions.testRelayProfile(selectedProfile); }}><Activity className="h-4 w-4" />测试连接</Button>
-          </footer>
-        </aside>
-
-          <RequestTimeline agentScope={agentScope} timelineLogs={timelineLogs} result={requestTimeline} onRefresh={actions.refreshRequestTimeline} />
+      <div className="overview-console-layout overview-data-layout">
+        <main className={overviewView === "agent" ? "overview-main overview-agent-scroll" : "overview-main"}>
+          <div className="overview-view-toolbar"><div className="overview-view-tabs" role="group" aria-label="概览视图"><button type="button" className={overviewView === "total" ? "active" : ""} aria-pressed={overviewView === "total"} onClick={() => setOverviewView("total")}>总览</button><button type="button" className={overviewView === "agent" ? "active" : ""} aria-pressed={overviewView === "agent"} onClick={() => setOverviewView("agent")}>Agent 概览</button></div>{overviewView === "total" && <div className="overview-data-range" role="group" aria-label="概览时间范围">{(Object.keys(overviewRangeLabels) as OverviewRange[]).map((key) => <button key={key} className={overviewRange === key ? "active" : ""} type="button" onClick={() => setOverviewRange(key)}>{overviewRangeLabels[key]}</button>)}</div>}</div>
+          {overviewView === "total" ? <OverviewDataDashboard agentScope={agentScope} range={overviewRange} requestTimeline={requestTimeline} aitrackerCapabilities={aitrackerCapabilities} distillationCandidates={distillationCandidates} onRefresh={actions.refreshRequestTimeline} /> : <AgentOverview capabilities={aitrackerCapabilities} timeline={requestTimeline} />}
         </main>
       </div>
     </div>
@@ -2330,325 +2545,264 @@ export function ClaudePluginRepositoryPanel({
     </Panel>
   );
 }
-export const SessionManagementScreen = memo(function SessionManagementScreen({
+function formatAitrackerTokens(value: number) {
+  return value.toLocaleString("zh-CN");
+}
+
+function aitrackerDateKey(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
+}
+
+function aitrackerDateLabel(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  });
+}
+
+function aitrackerStatusLabel(value: string) {
+  switch (value.toLowerCase()) {
+    case "ok":
+    case "success":
+    case "completed":
+    case "observed":
+      return "可恢复";
+    case "running":
+      return "运行中";
+    case "failed":
+    case "error":
+      return "异常";
+    default:
+      return value || "已采集";
+  }
+}
+
+function AitrackerSessionPanel({
   actions,
-  codexSessionContext,
-  codexSessionContextError,
-  codexSessionContextLoading,
-  codexSessionContextTarget,
-  claudeSessionContext,
-  claudeSessionContextError,
-  claudeSessionContextLoading,
-  claudeSessionContextTarget,
-  claudeSessions,
-  localSessions,
-  providerSync,
-  settings,
+  capabilities,
+  sessionsResult,
+  distillationResult,
 }: {
   actions: AppActions;
-  codexSessionContext: CodexSessionContextPage | null;
-  codexSessionContextError: string;
-  codexSessionContextLoading: boolean;
-  codexSessionContextTarget: LocalSession | null;
-  claudeSessionContext: ClaudeSessionContextPage | null;
-  claudeSessionContextError: string;
-  claudeSessionContextLoading: boolean;
-  claudeSessionContextTarget: ClaudeSession | null;
-  claudeSessions: ClaudeSessionsResult | null;
-  localSessions: LocalSessionsResult | null;
-  providerSync: ProviderSyncResult | null;
-  settings: SettingsResult | null;
+  capabilities: AitrackerCapabilitiesResult | null;
+  sessionsResult: AitrackerSessionQueryResult | null;
+  distillationResult: DistillationCandidatesResult | null;
 }) {
-  const codexSessions = useMemo(() => localSessions?.sessions ?? [], [localSessions]);
-  const codexSessionProjectGroups = useMemo(() => groupLocalSessionsByProject(codexSessions), [codexSessions]);
-  const claudeSessionsList = useMemo(() => claudeSessions?.sessions ?? [], [claudeSessions]);
-  const claudeSessionProjectGroups = useMemo(() => groupClaudeSessionsByProject(claudeSessionsList), [claudeSessionsList]);
-  const claudeContextPayload = claudeSessionContext;
-  const showingCodexContext = Boolean(codexSessionContextTarget);
-  const sessionContextTarget = codexSessionContextTarget ?? claudeSessionContextTarget;
-  const sessionContextPayload = codexSessionContext ?? claudeSessionContext;
-  const sessionContextLoading = showingCodexContext ? codexSessionContextLoading : claudeSessionContextLoading;
-  const sessionContextError = showingCodexContext ? codexSessionContextError : claudeSessionContextError;
-  const closeSessionContext = showingCodexContext ? actions.closeCodexSessionContext : actions.closeClaudeSessionContext;
-  const loadEarlierSessionContext = showingCodexContext ? actions.loadEarlierCodexSessionContext : actions.loadEarlierClaudeSessionContext;
-  const claudeContextDialogRef = useRef<HTMLElement | null>(null);
+  const [agent, setAgent] = useState("");
+  const [status, setStatus] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [range, setRange] = useState<AitrackerSessionRange>("30d");
+  const [page, setPage] = useState(sessionsResult?.page || 1);
+  const [selected, setSelected] = useState<AitrackerSessionSummary | null>(null);
+  const [detail, setDetail] = useState<AitrackerSessionDetailResult | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const detailRef = useRef<HTMLElement | null>(null);
+
+  const sessions = sessionsResult?.sessions ?? [];
+  const candidates = distillationResult?.candidates ?? [];
+  const pageSize = sessionsResult?.pageSize || 20;
+  const total = sessionsResult?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const agentRegistry = capabilities?.snapshot.registry ?? [];
+  const agentDefinitions = useMemo(() => new Map(agentRegistry.map((item) => [item.id, item])), [agentRegistry]);
+  const agents = useMemo(() => {
+    const observed = new Set([
+      ...(capabilities?.snapshot.sessions ?? []).map((item) => item.agent),
+      ...sessions.map((item) => item.agent),
+    ].filter(Boolean));
+    const detected = agentRegistry.filter((item) => item.detected || item.events > 0).map((item) => item.id);
+    const priority = new Map([["codex", 0], ["claude-code", 1], ["workbuddy", 2]]);
+    return Array.from(new Set([...observed, ...detected])).sort((left, right) => {
+      const priorityDelta = (priority.get(left) ?? 10) - (priority.get(right) ?? 10);
+      if (priorityDelta) return priorityDelta;
+      return (agentDefinitions.get(left)?.nameZh || agentDefinitions.get(left)?.name || left).localeCompare(
+        agentDefinitions.get(right)?.nameZh || agentDefinitions.get(right)?.name || right,
+        "zh-CN",
+      );
+    });
+  }, [agentDefinitions, agentRegistry, capabilities, sessions]);
+  const agentLabel = (name: string) => agentDefinitions.get(name)?.nameZh || agentDefinitions.get(name)?.name || name;
+  const agentColor = (name: string) => agentDefinitions.get(name)?.color || "var(--workspace-blue)";
+  const selectedAgentDetail = useMemo(
+    () => capabilities?.snapshot.details.find((item) => item.id === selected?.agent) ?? null,
+    [capabilities, selected],
+  );
+  const toolUsage = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const event of detail?.detail?.events ?? []) {
+      if (event.toolName) counts.set(event.toolName, (counts.get(event.toolName) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [detail]);
+  const sessionGroups = useMemo(() => {
+    const groups = new Map<string, AitrackerSessionSummary[]>();
+    for (const session of sessions) {
+      const key = aitrackerDateKey(session.startedAt);
+      const group = groups.get(key) ?? [];
+      group.push(session);
+      groups.set(key, group);
+    }
+    const today = aitrackerDateKey(new Date().toISOString());
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = aitrackerDateKey(yesterdayDate.toISOString());
+    return Array.from(groups.entries()).map(([dateKey, items]) => ({
+      dateKey,
+      items,
+      label: aitrackerDateLabel(items[0]?.startedAt ?? dateKey),
+      suffix: dateKey === today ? "今天" : dateKey === yesterday ? "昨天" : "",
+    }));
+  }, [sessions]);
+
+  const query = (nextPage = 1, nextAgent = agent, nextRange = range) => {
+    setPage(nextPage);
+    setAgent(nextAgent);
+    setRange(nextRange);
+    void actions.queryAitrackerSessions({
+      agent: nextAgent || undefined,
+      status: status || undefined,
+      keyword: keyword.trim() || undefined,
+      range: nextRange,
+      page: nextPage,
+      pageSize: 20,
+    });
+  };
+  const openSession = async (session: AitrackerSessionSummary) => {
+    setSelected(session);
+    setDetail(null);
+    setDetailLoading(true);
+    window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    const result = await actions.readAitrackerSessionDetail({ agent: session.agent, sessionId: session.sessionId });
+    setDetail(result);
+    setDetailLoading(false);
+  };
   useEffect(() => {
-    if (!sessionContextTarget) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const focusFrame = window.requestAnimationFrame(() => claudeContextDialogRef.current?.focus());
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeSessionContext();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      window.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [closeSessionContext, sessionContextTarget]);
-  const syncSummary = providerSync
-    ? `${providerSync.changedSessionFiles ?? 0} 个会话文件，${providerSync.sqliteRowsUpdated ?? 0} 行索引`
-    : "尚未执行";
-  const renderSessionBrowserPanel = <T extends LocalSession | ClaudeSession,>({
-    title,
-    ariaLabel,
-    emptyText,
-    data,
-    groups,
-    onRefresh,
-    onOpen,
-    onDelete,
-    sourceLabel = "数据库",
-    sourceCountLabel = "候选库",
-    statusLabel,
-  }: {
-    title: string;
-    ariaLabel: string;
-    emptyText: string;
-    data: LocalSessionsResult | ClaudeSessionsResult | null;
-    groups: Array<{ key: string; label: string; subtitle: string; sessions: T[] }>;
-    onRefresh?: () => void;
-    onOpen?: (session: T) => void;
-    onDelete?: (session: T) => void;
-    sourceLabel?: string;
-    sourceCountLabel?: string;
-    statusLabel?: string;
-  }) => {
-    const sessionCount = data?.sessions.length ?? 0;
-    const sourceRoot = data ? ("sourceRoot" in data ? data.sourceRoot : data.dbPath) : "";
-    const sourcePaths = data ? ("sourcePaths" in data ? data.sourcePaths : data.dbPaths) : [];
-    const warningCount = data && "warnings" in data ? data.warnings.length : 0;
-    const loadFailed = Boolean(data && statusFailed(data.status));
-    return (
-      <Panel title={title} detail={`${sessionCount} 个本地会话；删除会先写备份。${warningCount ? ` ${warningCount} 个来源需要检查。` : ""}`}>
+    if (selected) detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selected]);
+  const selectedCandidate = selected
+    ? candidates.find((item) => item.agent === selected.agent && item.sessionId === selected.sessionId && item.status === "pending")
+    : null;
+
+  return (
+    <div className="aitracker-session-page">
+      <div className="aitracker-session-summary" aria-label="会话统计">
+        <div><span>会话数</span><strong>{total.toLocaleString("zh-CN")}</strong><small>近 30 天的会话</small><MessageCircle aria-hidden="true" /></div>
+        <div><span>会话工具数</span><strong>{capabilities?.snapshot.toolCalls.length.toLocaleString("zh-CN") ?? "0"}</strong><small>覆盖的 Agent 工具</small><Wrench aria-hidden="true" /></div>
+        <div><span>对话轮次数</span><strong>{sessions.reduce((sum, item) => sum + item.events, 0).toLocaleString("zh-CN")}</strong><small>累计会话轮次</small><Sparkles aria-hidden="true" /></div>
+      </div>
+      <section className="aitracker-session-content" aria-label="会话与 Agent 数据">
         <div className="codex-session-toolbar">
-          <div>
-            <span>{sourceLabel}</span>
-            <strong>{sourceRoot ? compactPath(sourceRoot) : statusLabel || "尚未读取"}</strong>
+          <label className="aitracker-session-search"><Search aria-hidden="true" /><input onChange={(event) => setKeyword(event.currentTarget.value)} placeholder="搜索标题 / 项目 / 会话 ID" value={keyword} /></label>
+          <div className="aitracker-session-range" role="group" aria-label="会话时间范围">
+            {(["7d", "30d", "90d", "all"] as const).map((value) => (
+              <button className={range === value ? "active" : ""} key={value} onClick={() => { setRange(value); query(1, agent, value); }} type="button">
+                {value === "7d" ? "近 7 天" : value === "30d" ? "近 30 天" : value === "90d" ? "近 90 天" : "全部"}
+              </button>
+            ))}
+            <Button onClick={() => query(page)} size="sm" variant="outline"><RefreshCw className="h-4 w-4" />立即刷新</Button>
           </div>
-          <div>
-            <span>{sourceCountLabel}</span>
-            <strong>{sourcePaths.length} 个</strong>
-          </div>
-          <div>
-            <span>会话数</span>
-            <strong>{sessionCount} 个</strong>
-          </div>
-          {onRefresh ? (
-            <Button onClick={onRefresh} size="sm" variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              刷新
-            </Button>
-          ) : null}
         </div>
-        {loadFailed ? (
-          <div className="ops-danger-zone" role="alert">
-            <AlertTriangle className="h-4 w-4" />
-            <span>{data?.message || "会话加载失败，请刷新后重试。"}</span>
-          </div>
-        ) : (
-          <div className="codex-session-browser" aria-label={ariaLabel}>
-            <div className="codex-session-browser-title">项目</div>
-            {groups.length ? groups.map((group) => (
-              <section className="codex-session-project" key={`${title}:${group.key}`}>
-                <div className="codex-session-project-header" title={group.subtitle || group.label}>
-                  <FileCode2 className="h-4 w-4" />
-                  <strong>{group.label}</strong>
-                </div>
-                <div className="codex-session-project-list">
-                  {group.sessions.map((session) => (
-                    <div className="codex-session-row" key={`${title}:${"sourcePath" in session ? session.sourcePath : session.dbPath}:${session.id}`}>
-                      <button
-                        className="codex-session-main"
-                        onClick={() => onOpen?.(session)}
-                        title={session.title || session.id}
-                        type="button"
-                      >
-                        <span>{session.title || "未命名会话"}</span>
-                        <time>{formatSessionRelativeTime(session.updatedAtMs)}</time>
+        <div className="aitracker-session-tools" role="tablist" aria-label="Agent 工具筛选">
+          {["", ...agents].map((value) => {
+            const label = value ? agentLabel(value) : "全部工具";
+            return <button className={agent === value ? "active" : ""} key={label} onClick={() => { setSelected(null); setDetail(null); query(1, value); }} type="button">
+              {value ? <Bot className="aitracker-session-tool-icon" style={{ color: agentColor(value) }} /> : null}
+              {label}
+            </button>;
+          })}
+        </div>
+        {sessionsResult && statusFailed(sessionsResult.status) ? (
+          <div className="ops-danger-zone" role="alert"><AlertTriangle className="h-4 w-4" /><span>{sessionsResult.message || "会话读取失败。"}</span></div>
+        ) : sessions.length ? (
+          <div className="aitracker-session-groups" aria-label="按日期分组的会话列表">
+            {sessionGroups.map((group) => (
+              <section className="aitracker-session-day" key={group.dateKey}>
+                <div className="aitracker-session-day-heading"><strong>{group.label}{group.suffix ? ` · ${group.suffix}` : ""}</strong><span>{group.items.length} 场</span></div>
+                <div className="aitracker-session-day-list">
+                  {group.items.map((session) => (
+                    <article className="aitracker-session-card" key={`${session.agent}:${session.sessionId}`}>
+                      <button className="aitracker-session-card-main" onClick={() => void openSession(session)} title={`${session.agent} / ${session.sessionId}`} type="button">
+                        <div className="aitracker-session-card-source"><Bot className="aitracker-session-agent-icon" style={{ color: agentColor(session.agent) }} /><span>{agentLabel(session.agent)}</span><em>{aitrackerStatusLabel(session.status)}</em></div>
+                        <strong>{session.project || "未采集项目"}</strong>
+                        <small>{session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
-                      {onDelete ? (
-                        <button
-                          className="codex-session-delete"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onDelete(session);
-                          }}
-                          title="删除会话"
-                          type="button"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      ) : null}
-                    </div>
+                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm"><Play className="h-3.5 w-3.5" />恢复会话</Button>
+                    </article>
                   ))}
                 </div>
               </section>
-            )) : <Empty text={emptyText} />}
-          </div>
-        )}
-      </Panel>
-    );
-  };
-  return (
-    <>
-      <div className="stack">
-        <div className="session-management-wide-grid">
-          <div className="session-history-card">
-            <Panel title="历史会话修复" detail="用于修复切换供应商后 Codex 历史会话不可见或元数据不一致的问题。">
-              <div className="ops-status-list">
-                <StatusRow label="供应商同步" status={settings?.settings.providerSyncEnabled ? "running" : "disabled"} value={settings?.settings.providerSyncEnabled ? "已开启" : "未开启"} />
-                <StatusRow label="最近修复" status={providerSync ? "ok" : "not_checked"} value={syncSummary} />
-                <StatusRow label="目标供应商" status={providerSync?.targetProvider ? "ok" : "not_checked"} value={providerSync?.targetProvider || settings?.settings.providerSyncLastSelectedProvider || "自动识别"} />
-              </div>
-              <div className="action-row">
-                <Button onClick={() => void actions.repairHistorySessions()}>
-                  <Wrench className="h-4 w-4" />
-                  修复历史会话
-                </Button>
-                <Button onClick={() => void actions.refreshLocalSessions()} variant="outline">
-                  <RefreshCw className="h-4 w-4" />
-                  刷新会话
-                </Button>
-              </div>
-              {providerSync?.encryptedContentWarning ? (
-                <div className="ops-danger-zone">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span>{providerSync.encryptedContentWarning}</span>
-                </div>
-              ) : null}
-            </Panel>
-          </div>
-          <div className="session-codex-card">
-            {renderSessionBrowserPanel({
-              title: "Codex 会话管理",
-              ariaLabel: "Codex 本地会话项目列表",
-              emptyText: "暂未读取到 Codex 本地会话。",
-              data: localSessions,
-              groups: codexSessionProjectGroups,
-              onRefresh: () => void actions.refreshLocalSessions(),
-              onOpen: (session) => void actions.loadCodexSessionContext(session),
-              onDelete: (session) => void actions.deleteLocalSession(session),
-            })}
-          </div>
-          <div className="session-claude-card">
-            {renderSessionBrowserPanel({
-              title: "Claude 会话管理",
-              ariaLabel: "Claude 本地会话项目列表",
-              emptyText: "暂未读取到 Claude 本地会话。",
-              data: claudeSessions,
-              groups: claudeSessionProjectGroups,
-              onRefresh: () => void actions.refreshClaudeSessions(),
-              onOpen: (session) => void actions.loadClaudeSessionContext(session),
-              onDelete: (session) => void actions.deleteClaudeSession(session),
-              sourceLabel: "Claude 会话源",
-              sourceCountLabel: "候选源",
-            })}
-          </div>
-        </div>
-      </div>
-      {sessionContextTarget ? createPortal(
-        <div
-          className="claude-session-context-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeSessionContext();
-          }}
-          role="presentation"
-        >
-          <section
-            aria-labelledby="claude-session-context-title"
-            aria-modal="true"
-            className="claude-session-context-dialog"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") closeSessionContext();
-            }}
-            ref={claudeContextDialogRef}
-            role="dialog"
-            tabIndex={-1}
-          >
-            <header className="claude-session-context-header">
-              <div>
-                <span>{showingCodexContext ? "Codex" : "Claude"} 会话上下文</span>
-                <h2 id="claude-session-context-title">
-                  {sessionContextPayload?.title || sessionContextTarget.title || "未命名会话"}
-                </h2>
-                <p>
-                  {compactPath(sessionContextPayload?.cwd || sessionContextTarget.cwd || "未知项目")}
-                  {sessionContextPayload ? ` · ${sessionContextPayload.totalMessages} 条可读消息` : ""}
-                </p>
-              </div>
-              <button
-                aria-label="关闭会话上下文"
-                className="claude-session-context-close"
-                onClick={closeSessionContext}
-                title="关闭会话上下文"
-                type="button"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </header>
-
-            <div className="claude-session-context-meta">
-              <span>{showingCodexContext ? "Codex rollout" : (claudeSessionContext?.sourceKind || claudeSessionContextTarget?.sourceKind)}</span>
-              <strong>{compactPath(showingCodexContext ? (codexSessionContext?.rolloutPath || codexSessionContextTarget?.rolloutPath || "") : (claudeSessionContext?.sourcePath || claudeSessionContextTarget?.sourcePath || ""))}</strong>
+            ))}
+            <div className="aitracker-session-pagination">
+              <Button disabled={page <= 1} onClick={() => query(page - 1)} size="sm" variant="outline"><ChevronLeft className="h-4 w-4" />上一页</Button>
+              <span>第 {page} / {pageCount} 页，共 {total} 个会话</span>
+              <Button disabled={page >= pageCount} onClick={() => query(page + 1)} size="sm" variant="outline">下一页<ChevronRight className="h-4 w-4" /></Button>
             </div>
+          </div>
+        ) : <Empty text="暂无本地采集会话。" />}
+      </section>
 
-            <div className="claude-session-context-body">
-              {sessionContextPayload?.hasMoreBefore ? (
-                <Button
-                  disabled={sessionContextLoading}
-                  onClick={() => void loadEarlierSessionContext()}
-                  size="sm"
-                  variant="outline"
-                >
-                  <RefreshCw className={sessionContextLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                  加载更早内容
-                </Button>
-              ) : null}
-
-              {sessionContextError ? (
-                <div className="claude-session-context-error">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span>{sessionContextError}</span>
-                  {!sessionContextPayload ? (
-                    <Button onClick={() => void (showingCodexContext ? actions.loadCodexSessionContext(codexSessionContextTarget!) : actions.loadClaudeSessionContext(claudeSessionContextTarget!))} size="sm" variant="outline">
-                      重试
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {sessionContextLoading && !sessionContextPayload ? (
-                <div className="claude-session-context-loading">
-                  <RefreshCw className="h-5 w-5 animate-spin" />
-                  <span>正在读取真实会话上下文...</span>
-                </div>
-              ) : null}
-
-              {sessionContextPayload && !sessionContextPayload.messages.length && !sessionContextLoading ? (
-                <Empty text="该会话没有可展示的文本上下文。" />
-              ) : null}
-
-              {sessionContextPayload?.messages.map((message) => (
-                <article
-                  className={`claude-session-context-message role-${message.role}`}
-                  key={`${sessionContextPayload.sessionId}:${message.sequence}`}
-                >
-                  <header>
-                    <strong>{({ user: "用户", assistant: showingCodexContext ? "Codex" : "Claude", tool: "工具", system: "系统", developer: "开发者" } as Record<string, string>)[message.role] || message.role}</strong>
-                    <span>#{message.sequence}</span>
-                    {("timestampMs" in message && message.timestampMs) ? <time>{new Date(message.timestampMs).toLocaleString("zh-CN", { hour12: false })}</time> : ("timestamp" in message && message.timestamp ? <time>{message.timestamp}</time> : null)}
-                  </header>
-                  <pre>{message.text}</pre>
-                </article>
-              ))}
+      {selected ? (
+        <section className="aitracker-session-detail-view" ref={detailRef} aria-label="会话详情">
+          <header className="aitracker-session-detail-header">
+            <div>
+              <span>{agentLabel(selected.agent)} · 会话详情</span>
+              <h2>{selected.project || "未采集项目"}</h2>
+              <p>{selected.sessionId} · {selected.startedAt} - {selected.endedAt}</p>
             </div>
-          </section>
-        </div>,
-        document.body,
+            <button className="aitracker-session-detail-close" onClick={() => { setSelected(null); setDetail(null); }} type="button">关闭</button>
+          </header>
+          {detailLoading ? <div className="aitracker-session-detail-loading"><RefreshCw className="h-5 w-5 animate-spin" /><span>正在读取真实会话详情...</span></div> : detail?.detail ? (
+            <div className="aitracker-session-detail-grid">
+              <div className="aitracker-session-detail-summary">
+                <div><span>Agent</span><strong>{agentLabel(selected.agent)}</strong></div>
+                <div><span>Provider / 模型</span><strong>{selected.provider || "未采集"} · {selected.model || "未采集"}</strong></div>
+                <div><span>对话轮次 / 工具调用</span><strong>{detail.detail.summary.events} / {detail.detail.summary.toolCalls}</strong></div>
+                <div><span>Token 总量</span><strong>{formatAitrackerTokens(detail.detail.summary.totals.totalTokens)}</strong></div>
+                {selectedAgentDetail ? <div><span>Agent 累计会话</span><strong>{selectedAgentDetail.sessions} 场 · {formatAitrackerTokens(selectedAgentDetail.totals.totalTokens)} tokens</strong></div> : null}
+                {toolUsage.length ? <div><span>工具调用排行</span><strong>{toolUsage.map(([name, count]) => `${name} ×${count}`).join("、")}</strong></div> : null}
+                <div className="aitracker-session-detail-actions">
+                  <Button disabled={Boolean(selectedCandidate)} onClick={() => void actions.createDistillationCandidate({ agent: selected.agent, sessionId: selected.sessionId })} size="sm">
+                    <Sparkles className="h-4 w-4" />{selectedCandidate ? "已存在蒸馏候选" : "生成蒸馏候选"}
+                  </Button>
+                </div>
+              </div>
+              <div className="aitracker-session-event-list">
+                <div className="aitracker-session-event-heading"><strong>事件与工具调用</strong><span>{detail.detail.events.length} 条真实记录</span></div>
+                {detail.detail.events.length ? detail.detail.events.map((event) => (
+                  <article className="aitracker-session-event" key={event.id}>
+                    <div><strong>{event.toolName || event.model || "对话事件"}</strong><time>{event.timestamp}</time></div>
+                    <span>{event.status || "已采集"} · {formatAitrackerTokens(event.totalTokens)} tokens{event.provider ? ` · ${event.provider}` : ""}</span>
+                  </article>
+                )) : <Empty text="该会话暂无可解析事件。" />}
+              </div>
+            </div>
+          ) : <Empty text={detail?.message || "该会话暂无可读取详情。"} />}
+        </section>
       ) : null}
-    </>
+    </div>
+  );
+}
+
+export const SessionManagementScreen = memo(function SessionManagementScreen({
+  actions,
+  aitrackerCapabilities,
+  aitrackerSessions,
+  distillationCandidates,
+}: {
+  actions: AppActions;
+  aitrackerCapabilities: AitrackerCapabilitiesResult | null;
+  aitrackerSessions: AitrackerSessionQueryResult | null;
+  distillationCandidates: DistillationCandidatesResult | null;
+}) {
+  return (
+    <div className="stack">
+      <AitrackerSessionPanel actions={actions} capabilities={aitrackerCapabilities} sessionsResult={aitrackerSessions} distillationResult={distillationCandidates} />
+    </div>
   );
 });
 

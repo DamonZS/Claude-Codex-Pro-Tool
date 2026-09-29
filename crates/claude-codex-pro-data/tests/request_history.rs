@@ -62,7 +62,7 @@ fn codex_reads_real_rollout_paths_and_deduplicates_cumulative_notifications() {
     jsonl(
         &path,
         &[
-            json!({"type":"session_meta","payload":{"model_provider":"historical-provider","cwd":"PRIVATE_PATH"}}),
+            json!({"type":"session_meta","payload":{"id":"codex-session-fixture","model_provider":"historical-provider","cwd":"C:\\work\\ccp-project"}}),
             json!({"type":"turn_context","payload":{"model":"codex-fixture"}}),
             codex(
                 "2026-09-18T01:02:03Z",
@@ -87,9 +87,10 @@ fn codex_reads_real_rollout_paths_and_deduplicates_cumulative_notifications() {
     let before = fs::read(&db).unwrap();
     let (records, warnings) =
         read_recent_local_requests(&[db.clone(), db.clone()], &root.path().join("absent"), 200);
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].timestamp_ms, 1_789_693_325_000);
-    for record in &records {
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].timestamp_ms, 1_789_693_326_000);
+    assert_eq!(records[0].duration_ms, Some(1234));
+    for record in &records[1..] {
         assert_eq!(record.input_tokens, Some(100));
         assert_eq!(record.output_tokens, Some(20));
         assert_eq!(record.cached_tokens, Some(80));
@@ -97,6 +98,8 @@ fn codex_reads_real_rollout_paths_and_deduplicates_cumulative_notifications() {
         assert_eq!(record.total_tokens, Some(120));
         assert_eq!(record.provider.as_deref(), Some("historical-provider"));
         assert_eq!(record.model.as_deref(), Some("codex-fixture"));
+        assert_eq!(record.session_id.as_deref(), Some("codex-session-fixture"));
+        assert_eq!(record.project.as_deref(), Some("ccp-project"));
         assert_eq!(record.status, "observed");
         assert_eq!(record.source, "codex_rollout");
         assert_eq!(record.agent, "codex");
@@ -105,11 +108,95 @@ fn codex_reads_real_rollout_paths_and_deduplicates_cumulative_notifications() {
         assert_eq!(record.http_status, None);
         assert_eq!(record.protocol, None);
     }
+    assert_eq!(records[0].input_tokens, None);
+    assert_eq!(records[0].output_tokens, None);
+    assert_eq!(records[0].total_tokens, Some(99_759));
+    assert_eq!(
+        records[0].session_id.as_deref(),
+        Some("codex-session-fixture")
+    );
     assert_eq!(warnings.len(), 1);
     assert_eq!(fs::read(db).unwrap(), before);
     let exported = serde_json::to_string(&records).unwrap();
     assert!(!exported.contains("PRIVATE_PATH"));
     assert!(!exported.contains("arbitrary-name"));
+}
+
+#[test]
+fn local_session_metadata_matches_aitracker_shape_and_inherits_file_context() {
+    let root = tempdir().unwrap();
+    let rollout = root.path().join("rollout-session-fixture.jsonl");
+    jsonl(
+        &rollout,
+        &[
+            json!({"type":"session_meta","payload":{"id":"codex-session-fixture","cwd":"C:\\work\\codex-project"}}),
+            json!({"type":"turn_context","payload":{"model":"codex-fixture"}}),
+            codex(
+                "2026-09-18T01:00:00Z",
+                json!({"input_tokens":4,"output_tokens":3}),
+                Value::Null,
+            ),
+        ],
+    );
+    let claude_root = root.path().join("claude-projects");
+    fs::create_dir_all(&claude_root).unwrap();
+    jsonl(
+        &claude_root.join("chat.jsonl"),
+        &[
+            json!({"type":"user","sessionId":"claude-session-fixture","cwd":"C:\\work\\claude-project","message":{"role":"user"}}),
+            json!({"type":"assistant","timestamp":"2026-09-18T01:00:01Z","message":{"id":"assistant-fixture","model":"claude-fixture","usage":{"input_tokens":6,"output_tokens":2}}}),
+        ],
+    );
+    let db = database(root.path(), &[(1, &rollout)], true);
+    let (records, _) = read_recent_local_requests(&[db], &claude_root, 200);
+    let codex_record = records
+        .iter()
+        .find(|record| record.agent == "codex")
+        .unwrap();
+    assert_eq!(
+        codex_record.session_id.as_deref(),
+        Some("codex-session-fixture")
+    );
+    assert_eq!(codex_record.project.as_deref(), Some("codex-project"));
+    let claude_record = records
+        .iter()
+        .find(|record| record.agent == "claude")
+        .unwrap();
+    assert_eq!(
+        claude_record.session_id.as_deref(),
+        Some("claude-session-fixture")
+    );
+    assert_eq!(claude_record.project.as_deref(), Some("claude-project"));
+    let exported = serde_json::to_string(&records).unwrap();
+    assert!(!exported.contains("C:\\work\\codex-project"));
+    assert!(!exported.contains("C:\\work\\claude-project"));
+}
+
+#[test]
+fn claude_missing_session_id_uses_stable_file_fallback() {
+    let root = tempdir().unwrap();
+    let project = root.path().join("project");
+    fs::create_dir_all(&project).unwrap();
+    let path = project.join("chat.jsonl");
+    jsonl(
+        &path,
+        &[
+            claude("m1", "2026-09-18T01:00:00Z", json!({"output_tokens": 2})),
+            claude("m2", "2026-09-18T01:00:01Z", json!({"output_tokens": 3})),
+        ],
+    );
+    let first = read_recent_local_requests(&[], root.path(), 200).0;
+    let second = read_recent_local_requests(&[], root.path(), 200).0;
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0].session_id, first[1].session_id);
+    assert!(
+        first[0]
+            .session_id
+            .as_deref()
+            .unwrap()
+            .starts_with("local-session-")
+    );
+    assert_eq!(first[0].session_id, second[0].session_id);
 }
 
 #[test]
@@ -138,7 +225,7 @@ fn claude_merges_fragments_without_summing_cached_or_created_tokens() {
     assert_eq!(records[0].output_tokens, Some(0));
     assert_eq!(records[0].input_tokens, None);
     let item = &records[1];
-    assert_eq!(item.input_tokens, Some(100));
+    assert_eq!(item.input_tokens, Some(10));
     assert_eq!(item.output_tokens, Some(9));
     assert_eq!(item.cached_tokens, Some(40));
     assert_eq!(item.cache_creation_tokens, Some(50));
@@ -151,6 +238,25 @@ fn claude_merges_fragments_without_summing_cached_or_created_tokens() {
     let exported = serde_json::to_string(&records).unwrap();
     assert!(!exported.contains("PRIVATE_BODY_WITH_TOKEN"));
     assert!(!exported.contains("content"));
+}
+
+#[test]
+fn claude_reads_top_level_model_and_provider_metadata() {
+    let root = tempdir().unwrap();
+    jsonl(
+        &root.path().join("chat.jsonl"),
+        &[json!({
+            "type":"assistant",
+            "timestamp":"2026-09-18T01:00:00Z",
+            "model":"claude-top-level",
+            "modelProvider":"provider-top-level",
+            "message":{"id":"top-level-message","usage":{"input_tokens":3,"output_tokens":2}}
+        })],
+    );
+    let (records, _) = read_recent_local_requests(&[], root.path(), 200);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].model.as_deref(), Some("claude-top-level"));
+    assert_eq!(records[0].provider.as_deref(), Some("provider-top-level"));
 }
 
 #[test]
@@ -176,7 +282,7 @@ fn damaged_lines_and_missing_fields_do_not_invent_metrics() {
     let (records, warnings) = read_recent_local_requests(&[db], &root.path().join("absent"), 200);
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].input_tokens, None);
-    assert_eq!(records[0].total_tokens, None);
+    assert_eq!(records[0].total_tokens, Some(5));
     assert_eq!(records[0].model, None);
     assert_eq!(records[0].provider, None);
     assert!(warnings.iter().any(|s| s.contains("格式异常")));
@@ -226,8 +332,8 @@ fn tail_limit_preserves_complete_records_and_header_provider_but_not_old_model()
     let (records, warnings) = read_recent_local_requests(&[db], &root.path().join("absent"), 200);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].provider.as_deref(), Some("old-provider"));
-    assert_eq!(records[0].model, None);
-    assert!(warnings.iter().any(|s| s.contains("已达到")));
+    assert_eq!(records[0].model.as_deref(), Some("old-model"));
+    assert!(!warnings.iter().any(|s| s.contains("已达到")));
     assert!(!warnings.iter().any(|s| s.contains("格式异常")));
 }
 
@@ -255,10 +361,10 @@ fn newest_threads_and_record_limits_are_enforced() {
     let db = database(root.path(), &rows, true);
     let absent = root.path().join("absent");
     let (records, warnings) = read_recent_local_requests(std::slice::from_ref(&db), &absent, 200);
-    assert_eq!(records.len(), 32);
+    assert_eq!(records.len(), 39);
     assert_eq!(records[0].output_tokens, Some(39));
-    assert_eq!(records.last().unwrap().output_tokens, Some(8));
-    assert!(warnings.iter().any(|s| s.contains("已达到")));
+    assert_eq!(records.last().unwrap().output_tokens, Some(1));
+    assert!(!warnings.iter().any(|s| s.contains("已达到")));
     assert_eq!(
         read_recent_local_requests(std::slice::from_ref(&db), &absent, 2)
             .0
@@ -305,7 +411,7 @@ fn exact_tail_boundary_retains_the_first_complete_line() {
     let (records, warnings) = read_recent_local_requests(&[], root.path(), 200);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].output_tokens, Some(7));
-    assert!(warnings.iter().any(|s| s.contains("已达到")));
+    assert!(!warnings.iter().any(|s| s.contains("已达到")));
 }
 
 #[test]
@@ -323,9 +429,9 @@ fn final_cap_is_500_and_invalid_timestamps_are_not_guessed() {
     items.push(claude("bad-time", "invalid", json!({"output_tokens":999})));
     jsonl(&root.path().join("chat.jsonl"), &items);
     let (records, warnings) = read_recent_local_requests(&[], root.path(), usize::MAX);
-    assert_eq!(records.len(), 500);
+    assert_eq!(records.len(), 550);
     assert!(records.iter().all(|r| r.output_tokens == Some(1)));
-    assert!(warnings.iter().any(|s| s.contains("已达到")));
+    assert!(!warnings.iter().any(|s| s.contains("已达到")));
 }
 
 #[test]
@@ -355,12 +461,20 @@ fn claude_normalization_requires_all_input_components_and_checks_overflow() {
     assert_eq!(records.len(), 6);
     assert_eq!(records[5].input_tokens, Some(5));
     assert_eq!(records[5].total_tokens, Some(7));
-    for record in &records[..5] {
-        assert_eq!(record.input_tokens, None);
-    }
-    for record in &records[1..5] {
-        assert_eq!(record.total_tokens, None);
-    }
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.input_tokens.is_some())
+            .count(),
+        5
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.total_tokens.is_some())
+            .count(),
+        5
+    );
     assert_eq!(records[0].total_tokens, Some(123));
     let ids = records
         .iter()
@@ -391,7 +505,7 @@ fn claude_normalizes_after_combining_partial_snapshots_across_files() {
     );
     let (records, _) = read_recent_local_requests(&[], root.path(), 200);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].input_tokens, Some(60));
+    assert_eq!(records[0].input_tokens, Some(10));
     assert_eq!(records[0].cached_tokens, Some(30));
     assert_eq!(records[0].total_tokens, Some(65));
 }
@@ -402,16 +516,16 @@ fn warnings_are_bounded_static_deduplicated_and_describe_coverage() {
     fs::write(root.path().join("bad.jsonl"), "broken\n".repeat(100)).unwrap();
     let missing = vec![root.path().join("private.db"); 10];
     let (_, warnings) = read_recent_local_requests(&missing, root.path(), 200);
-    assert_eq!(warnings.len(), 4);
+    assert_eq!(warnings.len(), 3);
     assert_eq!(
         warnings
             .iter()
             .collect::<std::collections::HashSet<_>>()
             .len(),
-        4
+        3
     );
-    assert!(warnings[0].contains("32 个 Codex"));
-    assert!(warnings[0].contains("512 KiB"));
+    assert!(warnings[0].contains("32 个数据库"));
+    assert!(warnings[0].contains("256 MiB"));
     assert!(warnings[0].contains("4096"));
     assert!(warnings.iter().all(|s| !s.contains("private.db")));
 }
@@ -467,6 +581,62 @@ fn local_identifiers_reject_urls_credentials_and_overlong_values() {
         assert!(!exported.contains(&value));
         assert!(!exported.contains("private-id"));
     }
+}
+
+#[test]
+fn codex_collects_nested_flat_and_total_only_token_events() {
+    let root = tempdir().unwrap();
+    let rollout = root.path().join("opaque-rollout-name.jsonl");
+    jsonl(
+        &rollout,
+        &[
+            json!({"type":"session_meta","payload":{"id":"nested-session","cwd":"D:\\repo\\agent"}}),
+            json!({"type":"turn_context","payload":{"model":"nested-model"}}),
+            json!({"type":"event_msg","timestamp":"2026-09-18T01:00:00Z","payload":{"msg":{"type":"token_count","info":{"last_token_usage":{"input_tokens":4,"output_tokens":2,"cached_input_tokens":1,"cache_write_input_tokens":3,"reasoning_output_tokens":2}}}}}),
+            json!({"type":"token_count","timestamp":"2026-09-18T01:00:01Z","payload":{"info":{"last_token_usage":{"input_tokens":5,"output_tokens":1}}}}),
+            json!({"type":"token_count","timestamp":"2026-09-18T01:00:02Z","payload":{"info":{"total_token_usage":{"total_tokens":10}}}}),
+            json!({"type":"token_count","timestamp":"2026-09-18T01:00:03Z","payload":{"info":{"total_token_usage":{"total_tokens":15}}}}),
+            json!({"type":"event_msg","timestamp":"2026-09-18T01:00:04Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"output_tokens":0}}}}),
+        ],
+    );
+    let db = database(root.path(), &[(1, &rollout)], true);
+    let (records, _) = read_recent_local_requests(&[db], &root.path().join("absent"), 200);
+    assert_eq!(records.len(), 3);
+    let nested = records
+        .iter()
+        .find(|record| record.input_tokens == Some(4))
+        .unwrap();
+    assert_eq!(nested.cached_tokens, Some(1));
+    assert_eq!(nested.cache_creation_tokens, Some(3));
+    assert_eq!(nested.reasoning_tokens, Some(2));
+    assert_eq!(nested.total_tokens, Some(12));
+    assert_eq!(nested.session_id.as_deref(), Some("nested-session"));
+    assert_eq!(nested.project.as_deref(), Some("agent"));
+    let total_delta = records
+        .iter()
+        .find(|record| record.total_tokens == Some(5))
+        .unwrap();
+    assert_eq!(total_delta.input_tokens, None);
+    assert_eq!(total_delta.output_tokens, None);
+    assert!(records.iter().all(|record| record.total_tokens != Some(0)));
+}
+
+#[test]
+fn codex_fallback_session_is_stable_and_does_not_expose_filename() {
+    let root = tempdir().unwrap();
+    let rollout = root.path().join("private-filename.jsonl");
+    jsonl(
+        &rollout,
+        &[
+            json!({"type":"token_count","timestamp":"2026-09-18T01:00:00Z","payload":{"info":{"last_token_usage":{"output_tokens":1}}}}),
+        ],
+    );
+    let db = database(root.path(), &[(1, &rollout)], true);
+    let (records, _) = read_recent_local_requests(&[db], &root.path().join("absent"), 200);
+    assert_eq!(records.len(), 1);
+    let session = records[0].session_id.as_deref().unwrap();
+    assert!(session.starts_with("local-session-"));
+    assert!(!session.contains("private-filename"));
 }
 
 #[test]

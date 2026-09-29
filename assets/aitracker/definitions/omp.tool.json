@@ -1,0 +1,119 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "omp",
+  "display": {
+    "name": "oh-my-pi",
+    "nameZh": "oh-my-pi",
+    "icon": "other",
+    "color": "#00b3ff"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".omp"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".oh-my-pi"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".omp/agent/sessions"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".oh-my-pi/agent/sessions"
+      }
+    ]
+  },
+  "storage": {
+    "dataRoots": [
+      {
+        "base": "home",
+        "path": ".omp"
+      },
+      {
+        "base": "home",
+        "path": ".oh-my-pi"
+      }
+    ]
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "omp-session-v1",
+      "paths": [
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".omp/agent/sessions",
+          "glob": "**/*.jsonl",
+          "format": "jsonl"
+        },
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".oh-my-pi/agent/sessions",
+          "glob": "**/*.jsonl",
+          "format": "jsonl"
+        }
+      ],
+      "maxFileSizeBytes": 67108864
+    },
+    "skills": "unsupported",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "read",
+      "reader": "omp-session-v1"
+    },
+    "market": "unsupported",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model",
+    "tokenSemantics": {
+      "reasoningIncludedInOutput": false
+    }
+  }
+}

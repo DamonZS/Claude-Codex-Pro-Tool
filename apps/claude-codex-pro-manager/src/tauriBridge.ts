@@ -1350,6 +1350,31 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       observed_at_ms: now(),
     });
   }
+  if (command === "read_aitracker_capabilities") {
+    return ok("预览模式未连接本地采集源。", {
+      snapshot: { registry: [], sessions: [], toolCalls: [], details: [] },
+      usage: {
+        generatedAt: new Date().toISOString(),
+        mode: "empty",
+        events: 0,
+        totals: { events: 0, inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+        bySource: [], byModel: [], byProject: [], daily: [], details: [], recent: [],
+      },
+    });
+  }
+  if (command === "query_aitracker_sessions") {
+    const previewArgs = (_args?.request ?? {}) as { page?: number; pageSize?: number };
+    return ok("预览模式未连接会话采集源。", {
+      sessions: [], total: 0, page: previewArgs.page ?? 0, pageSize: previewArgs.pageSize ?? 20,
+      generatedAt: new Date().toISOString(), mode: "empty",
+    });
+  }
+  if (command === "read_aitracker_session_detail") {
+    return ok("预览模式未连接会话采集源。", { detail: null });
+  }
+  if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate") {
+    return ok("预览模式未连接蒸馏存储。", { candidates: [] });
+  }
   if (command === "read_latest_logs") {
     return ok("预览模式日志。", {
       path: "~\\.claude-codex-pro\\logs\\manager.log",

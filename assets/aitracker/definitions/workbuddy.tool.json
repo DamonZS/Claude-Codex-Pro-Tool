@@ -1,0 +1,80 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "workbuddy",
+  "display": {
+    "name": "WorkBuddy",
+    "nameZh": "WorkBuddy",
+    "icon": "other",
+    "color": "#22d3ee"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".workbuddy"
+      }
+    ]
+  },
+  "storage": {
+    "skills": {
+      "rootSpecs": [
+        {
+          "base": "home",
+          "path": ".workbuddy/skills"
+        },
+        {
+          "base": "home",
+          "path": ".workbuddy/plugins/cache"
+        }
+      ],
+      "markers": ["SKILL.md", "skill.md"],
+      "maxDepth": 8
+    }
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "workbuddy-native",
+      "paths": [
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".workbuddy/projects",
+          "glob": "**/*.jsonl",
+          "format": "jsonl"
+        }
+      ]
+    },
+    "skills": "read-write",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "read",
+      "reader": "workbuddy-session-v1"
+    },
+    "market": "install-target",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model",
+    "tokenSemantics": {
+      "reasoningIncludedInOutput": false
+    }
+  }
+}

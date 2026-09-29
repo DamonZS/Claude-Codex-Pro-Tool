@@ -1,0 +1,42 @@
+{
+  "scope": "Backend usage collection only; no frontend or independent manager Release build",
+  "cwd": "D:/Project/Claude-Codex-Pro-Tool",
+  "build_jobs": 1,
+  "checks": [
+    {
+      "command": "cargo test --release -p claude-codex-pro-data --lib local_usage -- --nocapture",
+      "exit_status": 0,
+      "stdout_result": "test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 8 filtered out; finished in 0.06s"
+    },
+    {
+      "command": "cargo test --release -p claude-codex-pro-data --test request_history -- --nocapture",
+      "exit_status": 0,
+      "stdout_result": "test result: ok. 19 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.50s"
+    },
+    {
+      "command": "cargo test --release -p claude-codex-pro-data --lib local_usage_read_only_parity_smoke -- --ignored --nocapture",
+      "exit_status": 0,
+      "stdout_result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 17.24s",
+      "stdout_aggregate": {"events":158346,"models":23,"sources":[{"key":"codex","events":137379,"inputTokens":2008284385,"cachedInputTokens":14881516987,"cacheCreationInputTokens":10997120,"outputTokens":63529374,"reasoningOutputTokens":21340410,"totalTokens":16989299174},{"key":"workbuddy","events":20708,"inputTokens":2446789766,"cachedInputTokens":937461355,"cacheCreationInputTokens":1437257,"outputTokens":9775254,"reasoningOutputTokens":125955,"totalTokens":3395589587},{"key":"claude-code","events":259,"inputTokens":2766100,"cachedInputTokens":86681868,"cacheCreationInputTokens":4598602,"outputTokens":71359,"reasoningOutputTokens":0,"totalTokens":94117929}],"tokens":{"inputTokens":4457840251,"cachedInputTokens":15905660210,"cacheCreationInputTokens":17032979,"outputTokens":73375987,"reasoningOutputTokens":21466365,"totalTokens":20479006690},"truncated":5,"elapsed_ms":17216}
+    },
+    {
+      "command": "git diff --check -- crates/claude-codex-pro-data/src/local_usage.rs crates/claude-codex-pro-data/src/request_history.rs apps/claude-codex-pro-manager/src-tauri/src/commands.rs spec/overview-usage-parity.md acceptance/overview-usage-parity.md",
+      "exit_status": 0,
+      "stdout_result": "",
+      "stderr": "warning: in the working copy of 'apps/claude-codex-pro-manager/src-tauri/src/commands.rs', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'crates/claude-codex-pro-data/src/request_history.rs', LF will be replaced by CRLF the next time Git touches it"
+    }
+  ],
+  "compiler_warning": "unused import: LEGACY_MANAGER_NAME, crates/claude-codex-pro-core/src/install/macos.rs:8:21",
+  "sha256": {
+    "crates/claude-codex-pro-data/src/local_usage.rs": "7BE5DDF409FA94A334479574A859C4E0D4A89CC17E78E4D98B9A1776801DF7B4",
+    "crates/claude-codex-pro-data/src/request_history.rs": "4D0D4D4BF92D20A055594E187FC23A2D5377CE0A6EFD72B867C37B6C0040B1E7"
+  },
+  "limitations": [
+    "Read-only smoke covers only codex, claude-code and workbuddy. Live data changes while agents are running.",
+    "Each adapter retains at most 100000 events; source totals can combine multiple adapters. Five truncation diagnostics were observed in the final smoke; these totals are not unlimited complete-history totals.",
+    "Other agents remain registry-driven generic mappings where no dedicated native reader has been ported.",
+    "Cross-application equality has not been verified against an AITracker scan of the same frozen input and time range.",
+    "Native readers still collect one bounded file before trimming; generic JSONL streams one Value at a time and intermediate cross-file events are bounded.",
+    "Custom CODEX_HOME / CLAUDE_CONFIG_DIR roots remain a follow-up for registry adapters; the legacy request reader retains its 4096-record contract."
+  ]
+}

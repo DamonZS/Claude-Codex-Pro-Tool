@@ -1,0 +1,98 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "openclaw",
+  "display": {
+    "name": "OpenClaw",
+    "nameZh": "OpenClaw",
+    "icon": "other",
+    "color": "#ff5543"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".openclaw"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".openclaw/agents"
+      }
+    ]
+  },
+  "storage": {
+    "skills": {
+      "rootSpecs": [
+        {
+          "base": "home",
+          "path": ".openclaw/workspace/skills"
+        }
+      ],
+      "markers": [
+        "SKILL.md",
+        "skill.md"
+      ],
+      "maxDepth": 3
+    }
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "openclaw-session-v1",
+      "maxFileSizeBytes": 67108864,
+      "paths": [
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".openclaw/agents",
+          "glob": "*/sessions/**/*.jsonl*",
+          "format": "jsonl"
+        },
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".openclaw/agents",
+          "glob": "*/session-sqlite-import-archive/**/*.jsonl*",
+          "format": "jsonl"
+        }
+      ]
+    },
+    "skills": "read-write",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "unsupported"
+    },
+    "market": "install-target",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model"
+  }
+}

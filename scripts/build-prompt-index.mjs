@@ -13,9 +13,13 @@ const promptRoot = fileURLToPath(new URL("../Prompt/", import.meta.url));
 const indexPath = path.join(promptRoot, "index.json");
 const checkOnly = process.argv.includes("--check");
 
+function compareNames(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function listFiles(dir) {
   const out = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => compareNames(a.name, b.name))) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listFiles(full));
     else if (entry.isFile()) out.push(path.relative(promptRoot, full).split(path.sep).join("/"));
@@ -153,7 +157,7 @@ function collectTools() {
 
     const files = [];
     const walk = (current) => {
-      for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => compareNames(a.name, b.name))) {
         const full = path.join(current, entry.name);
         if (entry.isSymbolicLink()) throw new Error(`${name} 不得包含符号链接：${full}`);
         if (entry.isDirectory()) walk(full);

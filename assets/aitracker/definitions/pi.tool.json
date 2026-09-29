@@ -1,0 +1,83 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "pi",
+  "display": {
+    "name": "pi",
+    "nameZh": "pi",
+    "icon": "other",
+    "color": "#fe2857"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "supported"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".pi"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".pi/agent/sessions"
+      }
+    ]
+  },
+  "storage": {
+    "dataRoots": [
+      {
+        "base": "home",
+        "path": ".pi"
+      }
+    ]
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "pi-session-v1",
+      "paths": [
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".pi/agent/sessions",
+          "glob": "**/*.jsonl",
+          "format": "jsonl"
+        }
+      ],
+      "maxFileSizeBytes": 67108864
+    },
+    "skills": "unsupported",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "read",
+      "reader": "pi-session-v1"
+    },
+    "market": "unsupported",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model",
+    "tokenSemantics": {
+      "reasoningIncludedInOutput": false
+    }
+  }
+}

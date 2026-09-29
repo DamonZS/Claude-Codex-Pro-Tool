@@ -1125,6 +1125,8 @@ export type RequestRecord = {
   timestamp_ms: number;
   source: string;
   agent: string;
+  session_id: string | null;
+  project: string | null;
   provider: string | null;
   model: string | null;
   protocol: string | null;
@@ -1146,7 +1148,128 @@ export type RequestTimelineResult = CommandResult<{
   records: RequestRecord[];
   warnings: string[];
   observed_at_ms: number;
+  usage_snapshot?: {
+    generatedAt: string;
+    mode: "real" | "empty" | string;
+    events: number;
+    totals: {
+      events: number;
+      inputTokens: number;
+      cachedInputTokens: number;
+      cacheCreationInputTokens: number;
+      outputTokens: number;
+      reasoningOutputTokens: number;
+      totalTokens: number;
+    };
+    bySource: Array<{ key: string; events: number; totalTokens: number }>;
+    byModel: Array<{ key: string; events: number; totalTokens: number }>;
+    byProject: Array<{ key: string; events: number; totalTokens: number }>;
+    daily: Array<{ date: string; events: number; totalTokens: number }>;
+    sessions: Array<{ id: string; source: string; agent: string; provider: string; model: string; project: string; startedAt: string; endedAt: string; status: string }>;
+    details: Array<{
+      id: string;
+      source: string;
+      agent: string;
+      provider: string;
+      status: string;
+      durationMs: number | null;
+      timestamp: string;
+      model: string;
+      project: string;
+      sessionId: string | null;
+      inputTokens: number;
+      cachedInputTokens: number;
+      cacheCreationInputTokens: number;
+      outputTokens: number;
+      reasoningOutputTokens: number;
+      totalTokens: number;
+      measurement: string;
+      toolName: string | null;
+    }>;
+    recent: Array<{
+      id: string;
+      source: string;
+      agent: string;
+      provider: string;
+      status: string;
+      durationMs: number | null;
+      timestamp: string;
+      model: string;
+      project: string;
+      sessionId: string | null;
+      inputTokens: number;
+      cachedInputTokens: number;
+      cacheCreationInputTokens: number;
+      outputTokens: number;
+      reasoningOutputTokens: number;
+      totalTokens: number;
+      measurement: string;
+      toolName: string | null;
+    }>;
+  } | null;
 }>;
+
+export type AitrackerCapabilitiesResult = CommandResult<{
+  snapshot: {
+    registry: Array<{
+      id: string;
+      name: string;
+      nameZh: string;
+      icon: string;
+      color: string;
+      platforms: Record<string, string>;
+      usageMode: string;
+      contextMode: string;
+      sessionsMode: string;
+      detected: boolean;
+      events: number;
+      skillCount: number | null;
+      skillScanStatus: "ok" | "missing" | "error" | "unsupported";
+    }>;
+    sessions: Array<{
+      sessionId: string;
+      agent: string;
+      provider: string;
+      model: string;
+      project: string;
+      startedAt: string;
+      endedAt: string;
+      events: number;
+      toolCalls: number;
+      status: string;
+      totals: { inputTokens: number; cachedInputTokens: number; cacheCreationInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number };
+    }>;
+    toolCalls: Array<{ id: string; agent: string; tool: string; sessionId: string | null; timestamp: string; status: string; durationMs: number | null }>;
+    details: Array<{ id: string; events: number; sessions: number; tools: Array<[string, number]>; models: Array<[string, number]>; providers: Array<[string, number]>; totals: { inputTokens: number; cachedInputTokens: number; cacheCreationInputTokens: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number } }>;
+  };
+  usage: RequestTimelineResult["usage_snapshot"];
+}>;
+
+export type AitrackerSessionSummary = NonNullable<AitrackerCapabilitiesResult["snapshot"]>["sessions"][number];
+export type AitrackerSessionQueryResult = CommandResult<{
+  sessions: AitrackerSessionSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  generatedAt: string;
+  mode: string;
+}>;
+export type AitrackerSessionRange = "7d" | "30d" | "90d" | "all";
+export type AitrackerSessionDetailResult = CommandResult<{
+  detail: {
+    summary: AitrackerSessionSummary;
+    events: NonNullable<RequestTimelineResult["usage_snapshot"]>["details"];
+  } | null;
+}>;
+export type DistillationCandidate = {
+  id: string;
+  agent: string;
+  sessionId: string;
+  summary: string;
+  status: string;
+  createdAt: string;
+};
+export type DistillationCandidatesResult = CommandResult<{ candidates: DistillationCandidate[] }>;
 
 export type LogsResult = CommandResult<{
   path: string;

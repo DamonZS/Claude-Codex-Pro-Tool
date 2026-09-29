@@ -203,6 +203,10 @@ import type {
   CredentialEnvironmentResult,
   CommandResult,
   AdsResult,
+  AitrackerCapabilitiesResult,
+  AitrackerSessionQueryResult,
+  AitrackerSessionDetailResult,
+  DistillationCandidatesResult,
   ContextEntries,
   ContextEntriesResult,
   ContextEntry,
@@ -318,8 +322,13 @@ export function App() {
   const [providerSync, setProviderSync] = useState<ProviderSyncResult | null>(null);
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [requestTimeline, setRequestTimeline] = useState<RequestTimelineResult | null>(null);
+  const [aitrackerCapabilities, setAitrackerCapabilities] = useState<AitrackerCapabilitiesResult | null>(null);
+  const [aitrackerSessions, setAitrackerSessions] = useState<AitrackerSessionQueryResult | null>(null);
+  const [aitrackerSessionDetail, setAitrackerSessionDetail] = useState<AitrackerSessionDetailResult | null>(null);
+  const [distillationCandidates, setDistillationCandidates] = useState<DistillationCandidatesResult | null>(null);
   const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
   const requestTimelineInFlight = useRef(false);
+  const capabilitiesInFlight = useRef(false);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
   const [codexContextEntries, setCodexContextEntries] = useState<ContextEntriesResult | null>(null);
@@ -1121,6 +1130,79 @@ export function App() {
     } finally {
       requestTimelineInFlight.current = false;
     }
+  };
+
+  const refreshAitrackerCapabilities = async (silent = true) => {
+    if (capabilitiesInFlight.current) return null;
+    capabilitiesInFlight.current = true;
+    try {
+      const result = await run(
+        () => call<AitrackerCapabilitiesResult>("read_aitracker_capabilities"),
+        "能力数据",
+        { trackBusy: !silent, notify: !silent },
+      );
+      if (result?.status === "ok") setAitrackerCapabilities(result);
+      return result;
+    } finally {
+      capabilitiesInFlight.current = false;
+    }
+  };
+
+  const queryAitrackerSessions = async (request: { agent?: string | null; status?: string | null; keyword?: string | null; range?: "7d" | "30d" | "90d" | "all"; page?: number; pageSize?: number }) => {
+    const result = await run(
+      () => call<AitrackerSessionQueryResult>("query_aitracker_sessions", { request }),
+      "会话",
+      { trackBusy: false, notify: false },
+    );
+    if (result) setAitrackerSessions(result);
+    return result;
+  };
+
+  const readAitrackerSessionDetail = async (request: { agent: string; sessionId: string }) => {
+    const result = await run(
+      () => call<AitrackerSessionDetailResult>("read_aitracker_session_detail", { request }),
+      "会话详情",
+      { trackBusy: true, notify: false },
+    );
+    if (result) setAitrackerSessionDetail(result);
+    return result;
+  };
+
+  const listDistillationCandidates = async () => {
+    const result = await run(
+      () => call<DistillationCandidatesResult>("list_distillation_candidates"),
+      "蒸馏候选",
+      { trackBusy: false, notify: false },
+    );
+    if (result) setDistillationCandidates(result);
+    return result;
+  };
+
+  const createDistillationCandidate = async (request: { agent: string; sessionId: string }) => {
+    const result = await run(
+      () => call<DistillationCandidatesResult>("create_distillation_candidate", { request }),
+      "创建蒸馏候选",
+    );
+    if (result) setDistillationCandidates(result);
+    return result;
+  };
+
+  const updateDistillationCandidate = async (request: { id: string }) => {
+    const result = await run(
+      () => call<DistillationCandidatesResult>("update_distillation_candidate", { request }),
+      "审批蒸馏候选",
+    );
+    if (result) setDistillationCandidates(result);
+    return result;
+  };
+
+  const cancelDistillationCandidate = async (request: { id: string }) => {
+    const result = await run(
+      () => call<DistillationCandidatesResult>("cancel_distillation_candidate", { request }),
+      "取消蒸馏候选",
+    );
+    if (result) setDistillationCandidates(result);
+    return result;
   };
 
   const refreshLogs = async (silent = false) => {
@@ -2727,7 +2809,7 @@ export function App() {
       // Keep the default manager/Codex entrypoint side-effect free for Claude.
       // Claude status and development-mode probes are loaded only after the
       // user enters the dedicated client/tool surfaces or triggers an action.
-      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true)]);
+      await Promise.all([refreshOverview(true), refreshAds(true), refreshSettings(true), refreshAitrackerCapabilities(true)]);
       afterFirstPaintIfFresh(() => {
         void refreshRequestTimeline();
       }, 900);
@@ -2773,6 +2855,9 @@ export function App() {
         refreshLocalSessions(true),
         refreshClaudeSessions(true),
         refreshSettings(true),
+        refreshAitrackerCapabilities(true),
+        queryAitrackerSessions({ page: 1, pageSize: 20 }),
+        listDistillationCandidates(),
       ]);
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
@@ -2952,6 +3037,12 @@ export function App() {
       loadEarlierClaudeSessionContext,
       closeClaudeSessionContext,
       deleteClaudeSession,
+      queryAitrackerSessions,
+      readAitrackerSessionDetail,
+      listDistillationCandidates,
+      createDistillationCandidate,
+      updateDistillationCandidate,
+      cancelDistillationCandidate,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
@@ -3098,6 +3189,12 @@ export function App() {
       loadEarlierClaudeSessionContext: (...args) => actionsRef.current!.loadEarlierClaudeSessionContext(...args),
       closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
+      queryAitrackerSessions: (...args) => actionsRef.current!.queryAitrackerSessions(...args),
+      readAitrackerSessionDetail: (...args) => actionsRef.current!.readAitrackerSessionDetail(...args),
+      listDistillationCandidates: (...args) => actionsRef.current!.listDistillationCandidates(...args),
+      createDistillationCandidate: (...args) => actionsRef.current!.createDistillationCandidate(...args),
+      updateDistillationCandidate: (...args) => actionsRef.current!.updateDistillationCandidate(...args),
+      cancelDistillationCandidate: (...args) => actionsRef.current!.cancelDistillationCandidate(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
@@ -3200,7 +3297,7 @@ export function App() {
         supplierOptions={shellSupplierOptions}
         updateInfo={updateInfo}
       >
-          {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} ads={ads} claudeDesktop={claudeDesktop} claudeDesktopDevMode={claudeDesktopDevMode} claudeDevModeBusy={claudeDevModeBusy} claudeZhPatch={claudeZhPatch} timelineLogs={timelineLogs} requestTimeline={requestTimeline} onAgentScopeChange={setAgentScope} overview={overview} settings={settingsDraft ?? settings?.settings ?? null} /> : null}
+          {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} aitrackerCapabilities={aitrackerCapabilities} distillationCandidates={distillationCandidates} requestTimeline={requestTimeline} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
               actions={actions}
@@ -3248,18 +3345,9 @@ export function App() {
           {route === "sessions" ? (
             <SessionManagementScreen
               actions={actions}
-              codexSessionContext={codexSessionContext}
-              codexSessionContextError={codexSessionContextError}
-              codexSessionContextLoading={codexSessionContextLoading}
-              codexSessionContextTarget={codexSessionContextTarget}
-              claudeSessionContext={claudeSessionContext}
-              claudeSessionContextError={claudeSessionContextError}
-              claudeSessionContextLoading={claudeSessionContextLoading}
-              claudeSessionContextTarget={claudeSessionContextTarget}
-              claudeSessions={claudeSessions}
-              localSessions={localSessions}
-              providerSync={providerSync}
-              settings={settings}
+              aitrackerCapabilities={aitrackerCapabilities}
+              aitrackerSessions={aitrackerSessions}
+              distillationCandidates={distillationCandidates}
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}

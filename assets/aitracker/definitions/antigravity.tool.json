@@ -1,0 +1,152 @@
+{
+  "$schema": "../tool-definition.schema.json",
+  "configVersion": 1,
+  "id": "antigravity",
+  "display": {
+    "name": "Antigravity",
+    "nameZh": "Antigravity",
+    "icon": "gemini",
+    "color": "#4285f4"
+  },
+  "platforms": {
+    "macos": "supported",
+    "windows": "supported",
+    "linux": "planned"
+  },
+  "detection": {
+    "locations": [
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".gemini/antigravity"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".gemini/antigravity-ide"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".gemini/antigravity-backup"
+      },
+      {
+        "targets": [
+          "macos",
+          "windows10",
+          "windows11",
+          "linux"
+        ],
+        "base": "home",
+        "path": ".gemini/antigravity-cli/conversations"
+      },
+      {
+        "targets": [
+          "macos"
+        ],
+        "base": "appData",
+        "path": "Antigravity"
+      },
+      {
+        "targets": [
+          "windows10",
+          "windows11"
+        ],
+        "base": "appDataRoaming",
+        "path": "Antigravity"
+      }
+    ]
+  },
+  "storage": {
+    "skills": {
+      "rootSpecs": [
+        {
+          "base": "home",
+          "path": ".gemini/antigravity/skills"
+        },
+        {
+          "base": "home",
+          "path": ".gemini/antigravity-ide/skills"
+        }
+      ],
+      "markers": [
+        "SKILL.md",
+        "skill.md"
+      ],
+      "maxDepth": 3
+    }
+  },
+  "capabilities": {
+    "usage": {
+      "mode": "native",
+      "reader": "antigravity-transcript-v1",
+      "maxFileSizeBytes": 67108864,
+      "paths": [
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".gemini/antigravity",
+          "glob": "**/.system_generated/logs/transcript.jsonl",
+          "format": "jsonl"
+        },
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".gemini/antigravity-ide",
+          "glob": "**/.system_generated/logs/transcript.jsonl",
+          "format": "jsonl"
+        },
+        {
+          "targets": [
+            "macos",
+            "windows10",
+            "windows11",
+            "linux"
+          ],
+          "base": "home",
+          "path": ".gemini/antigravity-cli",
+          "glob": "**/.system_generated/logs/transcript.jsonl",
+          "format": "jsonl"
+        }
+      ]
+    },
+    "skills": "read-write",
+    "agents": "unsupported",
+    "sessions": {
+      "mode": "unsupported"
+    },
+    "market": "install-target",
+    "security": "unsupported"
+  },
+  "modelObservation": {
+    "modelField": "model",
+    "tokenSemantics": {
+      "reasoningIncludedInOutput": false
+    }
+  }
+}

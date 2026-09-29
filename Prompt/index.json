@@ -473,9 +473,9 @@
       "path": "skills/analyzing-api-gateway-access-logs",
       "files": [
         "skills/analyzing-api-gateway-access-logs/LICENSE",
+        "skills/analyzing-api-gateway-access-logs/SKILL.md",
         "skills/analyzing-api-gateway-access-logs/references/api-reference.md",
-        "skills/analyzing-api-gateway-access-logs/scripts/agent.py",
-        "skills/analyzing-api-gateway-access-logs/SKILL.md"
+        "skills/analyzing-api-gateway-access-logs/scripts/agent.py"
       ]
     },
     {
@@ -484,9 +484,9 @@
       "path": "skills/analyzing-kubernetes-audit-logs",
       "files": [
         "skills/analyzing-kubernetes-audit-logs/LICENSE",
+        "skills/analyzing-kubernetes-audit-logs/SKILL.md",
         "skills/analyzing-kubernetes-audit-logs/references/api-reference.md",
-        "skills/analyzing-kubernetes-audit-logs/scripts/agent.py",
-        "skills/analyzing-kubernetes-audit-logs/SKILL.md"
+        "skills/analyzing-kubernetes-audit-logs/scripts/agent.py"
       ]
     },
     {
@@ -495,9 +495,9 @@
       "path": "skills/analyzing-linux-audit-logs-for-intrusion",
       "files": [
         "skills/analyzing-linux-audit-logs-for-intrusion/LICENSE",
+        "skills/analyzing-linux-audit-logs-for-intrusion/SKILL.md",
         "skills/analyzing-linux-audit-logs-for-intrusion/references/api-reference.md",
-        "skills/analyzing-linux-audit-logs-for-intrusion/scripts/agent.py",
-        "skills/analyzing-linux-audit-logs-for-intrusion/SKILL.md"
+        "skills/analyzing-linux-audit-logs-for-intrusion/scripts/agent.py"
       ]
     },
     {
@@ -506,9 +506,9 @@
       "path": "skills/analyzing-windows-event-logs-in-splunk",
       "files": [
         "skills/analyzing-windows-event-logs-in-splunk/LICENSE",
+        "skills/analyzing-windows-event-logs-in-splunk/SKILL.md",
         "skills/analyzing-windows-event-logs-in-splunk/references/api-reference.md",
-        "skills/analyzing-windows-event-logs-in-splunk/scripts/agent.py",
-        "skills/analyzing-windows-event-logs-in-splunk/SKILL.md"
+        "skills/analyzing-windows-event-logs-in-splunk/scripts/agent.py"
       ]
     },
     {
@@ -517,9 +517,9 @@
       "path": "skills/building-detection-rules-with-sigma",
       "files": [
         "skills/building-detection-rules-with-sigma/LICENSE",
+        "skills/building-detection-rules-with-sigma/SKILL.md",
         "skills/building-detection-rules-with-sigma/references/api-reference.md",
-        "skills/building-detection-rules-with-sigma/scripts/agent.py",
-        "skills/building-detection-rules-with-sigma/SKILL.md"
+        "skills/building-detection-rules-with-sigma/scripts/agent.py"
       ]
     },
     {
@@ -527,14 +527,14 @@
       "description": "Design and implement a comprehensive DevSecOps pipeline in GitLab CI/CD integrating SAST, DAST, container scanning, dependency scanning, and secret detection.",
       "path": "skills/building-devsecops-pipeline-with-gitlab-ci",
       "files": [
-        "skills/building-devsecops-pipeline-with-gitlab-ci/assets/template.md",
         "skills/building-devsecops-pipeline-with-gitlab-ci/LICENSE",
+        "skills/building-devsecops-pipeline-with-gitlab-ci/SKILL.md",
+        "skills/building-devsecops-pipeline-with-gitlab-ci/assets/template.md",
         "skills/building-devsecops-pipeline-with-gitlab-ci/references/api-reference.md",
         "skills/building-devsecops-pipeline-with-gitlab-ci/references/standards.md",
         "skills/building-devsecops-pipeline-with-gitlab-ci/references/workflows.md",
         "skills/building-devsecops-pipeline-with-gitlab-ci/scripts/agent.py",
-        "skills/building-devsecops-pipeline-with-gitlab-ci/scripts/process.py",
-        "skills/building-devsecops-pipeline-with-gitlab-ci/SKILL.md"
+        "skills/building-devsecops-pipeline-with-gitlab-ci/scripts/process.py"
       ]
     },
     {
@@ -542,13 +542,13 @@
       "description": "Use when a coding task needs spec-first planning, acceptance criteria, verification evidence, AI agent workflow design, sub-agent coordination, disciplined project delivery, or project workflow initialization.",
       "path": "skills/harness-engineering",
       "files": [
+        "skills/harness-engineering/SKILL.md",
         "skills/harness-engineering/agents/openai.yaml",
         "skills/harness-engineering/references/checklists.md",
         "skills/harness-engineering/references/initialization.md",
         "skills/harness-engineering/references/templates.md",
         "skills/harness-engineering/references/theory.md",
-        "skills/harness-engineering/scripts/init_harness.py",
-        "skills/harness-engineering/SKILL.md"
+        "skills/harness-engineering/scripts/init_harness.py"
       ]
     },
     {
@@ -556,8 +556,8 @@
       "description": "Use whenever the user asks who the assistant is, asks its name or identity, requests a self-introduction, or uses an equivalent Chinese or English identity question.",
       "path": "skills/leila-identity",
       "files": [
-        "skills/leila-identity/agents/openai.yaml",
-        "skills/leila-identity/SKILL.md"
+        "skills/leila-identity/SKILL.md",
+        "skills/leila-identity/agents/openai.yaml"
       ]
     },
     {
@@ -566,9 +566,9 @@
       "path": "skills/triaging-security-incident",
       "files": [
         "skills/triaging-security-incident/LICENSE",
+        "skills/triaging-security-incident/SKILL.md",
         "skills/triaging-security-incident/references/api-reference.md",
-        "skills/triaging-security-incident/scripts/agent.py",
-        "skills/triaging-security-incident/SKILL.md"
+        "skills/triaging-security-incident/scripts/agent.py"
       ]
     },
     {
@@ -577,12 +577,12 @@
       "path": "skills/triaging-vulnerabilities-with-ssvc-framework",
       "files": [
         "skills/triaging-vulnerabilities-with-ssvc-framework/LICENSE",
+        "skills/triaging-vulnerabilities-with-ssvc-framework/SKILL.md",
         "skills/triaging-vulnerabilities-with-ssvc-framework/references/api-reference.md",
         "skills/triaging-vulnerabilities-with-ssvc-framework/references/standards.md",
         "skills/triaging-vulnerabilities-with-ssvc-framework/references/workflows.md",
         "skills/triaging-vulnerabilities-with-ssvc-framework/scripts/agent.py",
-        "skills/triaging-vulnerabilities-with-ssvc-framework/scripts/process.py",
-        "skills/triaging-vulnerabilities-with-ssvc-framework/SKILL.md"
+        "skills/triaging-vulnerabilities-with-ssvc-framework/scripts/process.py"
       ]
     }
   ],
@@ -604,6 +604,11 @@
       "size": 37349,
       "files": [
         {
+          "path": "tools/codex-instruct/LICENSE",
+          "size": 1116,
+          "sha256": "edb45f4cb24498171bc9a748bea6eabba5ed8176213522822128622623413eeb"
+        },
+        {
           "path": "tools/codex-instruct/codex-instruct.py",
           "size": 29831,
           "sha256": "2bcd5e634f07fe2bcc6445d3e5c0933e1dc778678a5f521d46b29fd46185fab6"
@@ -617,11 +622,6 @@
           "path": "tools/codex-instruct/gpt-6-astra-v1.zip",
           "size": 3619,
           "sha256": "054edb6fa8a6edd2d144c8582756df3179a85481bcb6696d8b730177521b1de1"
-        },
-        {
-          "path": "tools/codex-instruct/LICENSE",
-          "size": 1116,
-          "sha256": "edb45f4cb24498171bc9a748bea6eabba5ed8176213522822128622623413eeb"
         }
       ]
     },
@@ -642,6 +642,11 @@
       "size": 53254,
       "files": [
         {
+          "path": "tools/deepseek-prompt-evaluator/LICENSE",
+          "size": 1084,
+          "sha256": "7078554f16d7c2c798eb7e6f395be6bc6f209c63b6678f33a46b4ccdebc62390"
+        },
+        {
           "path": "tools/deepseek-prompt-evaluator/_analyze.py",
           "size": 759,
           "sha256": "d085768152cc1ecb4c52ebdd6c98dd530478e6b781bdef2abfb5fa887f8457a6"
@@ -650,11 +655,6 @@
           "path": "tools/deepseek-prompt-evaluator/generate_prompt_bank.py",
           "size": 32844,
           "sha256": "d8c00e379adf5956fb94b0bf72e000afab7ff8d201253d0508adc51e43ef7bb5"
-        },
-        {
-          "path": "tools/deepseek-prompt-evaluator/LICENSE",
-          "size": 1084,
-          "sha256": "7078554f16d7c2c798eb7e6f395be6bc6f209c63b6678f33a46b4ccdebc62390"
         },
         {
           "path": "tools/deepseek-prompt-evaluator/run_prompt_bank.py",

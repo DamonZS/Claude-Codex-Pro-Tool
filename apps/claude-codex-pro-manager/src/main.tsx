@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
 import "./workspace.css";
+import "./components/request-timeline.css";
 
 // Keep technical identifiers readable offline; interface text uses the native system stack.
 import "@fontsource/jetbrains-mono";
