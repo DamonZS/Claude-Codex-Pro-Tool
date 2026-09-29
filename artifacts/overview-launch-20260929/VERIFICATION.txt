@@ -1,0 +1,186 @@
+{
+  "label": "BASELINE",
+  "command": [
+    "h:\\nodejs\\node.exe",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\artifacts\\overview-launch-20260929\\baseline"
+  ],
+  "cwd": "D:\\Project\\Claude-Codex-Pro-Tool",
+  "exit": 1,
+  "stdout": "TAP version 13\n# Subtest: 7/30 day periods use complete local calendar days and adjacent baselines\nnot ok 1 - 7/30 day periods use complete local calendar days and adjacent baselines\n  ---\n  duration_ms: 1.0818\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:19:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewPeriod is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:23:20)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.start (node:internal/test_runner/test:944:17)\n    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)\n  ...\n# Subtest: 24 hour comparison has 24 adjacent hourly buckets\nnot ok 2 - 24 hour comparison has 24 adjacent hourly buckets\n  ---\n  duration_ms: 0.0933\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:33:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewPeriod is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:34:18)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)\n  ...\n# Subtest: trend preserves zero buckets, first/last usage and cache creation\nnot ok 3 - trend preserves zero buckets, first/last usage and cache creation\n  ---\n  duration_ms: 0.0747\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:41:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewTrend is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:47:17)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: every bar stays inside the chart including first and last slots\nnot ok 4 - every bar stays inside the chart including first and last slots\n  ---\n  duration_ms: 0.0851\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:55:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewBarPosition is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:58:19)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: overview source keeps table, calendar tooltip, cache denominator and one scroll owner\nnot ok 5 - overview source keeps table, calendar tooltip, cache denominator and one scroll owner\n  ---\n  duration_ms: 5.2582\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:65:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    The expression evaluated to a falsy value:\n    \n      assert.ok(source.includes('<table><thead><tr><th>项目名称</th>'))\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: '=='\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:68:10)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: periodic collection is single-flight and Agent overview reads the latest snapshot\nnot ok 6 - periodic collection is single-flight and Agent overview reads the latest snapshot\n  ---\n  duration_ms: 1.3592\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:79:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    The expression evaluated to a falsy value:\n    \n      assert.ok(app.includes(\"if (capabilitiesInFlight.current) return null;\"))\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: '=='\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:82:10)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..6\n# tests 6\n# suites 0\n# pass 0\n# fail 6\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 13.4685\n",
+  "stderr": ""
+}
+
+{
+  "label": "MODIFIED",
+  "command": [
+    "h:\\nodejs\\node.exe",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\artifacts\\overview-launch-20260929\\MODIFIED_FILE"
+  ],
+  "cwd": "D:\\Project\\Claude-Codex-Pro-Tool",
+  "exit": 0,
+  "stdout": "TAP version 13\n# Subtest: 7/30 day periods use complete local calendar days and adjacent baselines\nok 1 - 7/30 day periods use complete local calendar days and adjacent baselines\n  ---\n  duration_ms: 1.1932\n  type: 'test'\n  ...\n# Subtest: 24 hour comparison has 24 adjacent hourly buckets\nok 2 - 24 hour comparison has 24 adjacent hourly buckets\n  ---\n  duration_ms: 0.1121\n  type: 'test'\n  ...\n# Subtest: trend preserves zero buckets, first/last usage and cache creation\nok 3 - trend preserves zero buckets, first/last usage and cache creation\n  ---\n  duration_ms: 0.5127\n  type: 'test'\n  ...\n# Subtest: every bar stays inside the chart including first and last slots\nok 4 - every bar stays inside the chart including first and last slots\n  ---\n  duration_ms: 0.2109\n  type: 'test'\n  ...\n# Subtest: overview source keeps table, calendar tooltip, cache denominator and one scroll owner\nok 5 - overview source keeps table, calendar tooltip, cache denominator and one scroll owner\n  ---\n  duration_ms: 1.304\n  type: 'test'\n  ...\n# Subtest: periodic collection is single-flight and Agent overview reads the latest snapshot\nok 6 - periodic collection is single-flight and Agent overview reads the latest snapshot\n  ---\n  duration_ms: 0.8459\n  type: 'test'\n  ...\n1..6\n# tests 6\n# suites 0\n# pass 6\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 9.2723\n",
+  "stderr": ""
+}
+
+{
+  "label": "ROLLBACK_COMMAND",
+  "command": [
+    "H:/git/bin/bash.exe",
+    "D:/Project/Claude-Codex-Pro-Tool/artifacts/overview-launch-20260929/ROLLBACK.sh",
+    "D:/Project/Claude-Codex-Pro-Tool/artifacts/overview-launch-20260929/rollback-copy"
+  ],
+  "cwd": "D:\\Project\\Claude-Codex-Pro-Tool",
+  "exit": 0,
+  "stdout": "Pristine baseline bytes restored to target copy\n",
+  "stderr": ""
+}
+
+{
+  "label": "ROLLBACK",
+  "command": [
+    "h:\\nodejs\\node.exe",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\artifacts\\overview-launch-20260929\\rollback-copy"
+  ],
+  "cwd": "D:\\Project\\Claude-Codex-Pro-Tool",
+  "exit": 1,
+  "stdout": "TAP version 13\n# Subtest: 7/30 day periods use complete local calendar days and adjacent baselines\nnot ok 1 - 7/30 day periods use complete local calendar days and adjacent baselines\n  ---\n  duration_ms: 1.105\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:19:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewPeriod is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:23:20)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.start (node:internal/test_runner/test:944:17)\n    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)\n  ...\n# Subtest: 24 hour comparison has 24 adjacent hourly buckets\nnot ok 2 - 24 hour comparison has 24 adjacent hourly buckets\n  ---\n  duration_ms: 0.0914\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:33:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewPeriod is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:34:18)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)\n  ...\n# Subtest: trend preserves zero buckets, first/last usage and cache creation\nnot ok 3 - trend preserves zero buckets, first/last usage and cache creation\n  ---\n  duration_ms: 0.1567\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:41:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewTrend is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:47:17)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: every bar stays inside the chart including first and last slots\nnot ok 4 - every bar stays inside the chart including first and last slots\n  ---\n  duration_ms: 0.1481\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:55:1'\n  failureType: 'testCodeFailure'\n  error: 'overviewBarPosition is not a function'\n  code: 'ERR_TEST_FAILURE'\n  name: 'TypeError'\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:58:19)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: overview source keeps table, calendar tooltip, cache denominator and one scroll owner\nnot ok 5 - overview source keeps table, calendar tooltip, cache denominator and one scroll owner\n  ---\n  duration_ms: 5.2252\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:65:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    The expression evaluated to a falsy value:\n    \n      assert.ok(source.includes('<table><thead><tr><th>项目名称</th>'))\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: '=='\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:68:10)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n# Subtest: periodic collection is single-flight and Agent overview reads the latest snapshot\nnot ok 6 - periodic collection is single-flight and Agent overview reads the latest snapshot\n  ---\n  duration_ms: 1.3271\n  type: 'test'\n  location: 'D:\\\\Project\\\\Claude-Codex-Pro-Tool\\\\scripts\\\\test-overview-usage.cjs:79:1'\n  failureType: 'testCodeFailure'\n  error: |-\n    The expression evaluated to a falsy value:\n    \n      assert.ok(app.includes(\"if (capabilitiesInFlight.current) return null;\"))\n    \n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  expected: true\n  actual: false\n  operator: '=='\n  stack: |-\n    TestContext.<anonymous> (D:\\Project\\Claude-Codex-Pro-Tool\\scripts\\test-overview-usage.cjs:82:10)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.processPendingSubtests (node:internal/test_runner/test:744:18)\n    Test.postRun (node:internal/test_runner/test:1173:19)\n    Test.run (node:internal/test_runner/test:1101:12)\n    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)\n  ...\n1..6\n# tests 6\n# suites 0\n# pass 0\n# fail 6\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 13.7883\n",
+  "stderr": ""
+}
+
+{
+  "label": "REAPPLY_PATCH",
+  "command": [
+    "git",
+    "-c",
+    "core.autocrlf=false",
+    "apply",
+    "--directory=artifacts/overview-launch-20260929/patch-copy",
+    "--",
+    "D:\\Project\\Claude-Codex-Pro-Tool\\artifacts\\overview-launch-20260929\\DIFF_FILE.patch"
+  ],
+  "cwd": "D:\\Project\\Claude-Codex-Pro-Tool",
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}
+
+{
+  "label": "SHA256",
+  "restoredHashes": [
+    {
+      "relative": "apps/claude-codex-pro-manager/src/App.tsx",
+      "baseline": "a477063ad3340ab5fd75cc1f1771a36a3439ca8741f660dfd62d3709f15759bc",
+      "restored": "a477063ad3340ab5fd75cc1f1771a36a3439ca8741f660dfd62d3709f15759bc",
+      "modified": "c445e744bec02ba7e6c78e9da6ab610f888820894d42cd38f4723bb70207167b"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/components/AgentOverview.tsx",
+      "baseline": "7c884ce2ceef225b1f3203db313be39d7355683e800b8f619b664c0fddebac42",
+      "restored": "7c884ce2ceef225b1f3203db313be39d7355683e800b8f619b664c0fddebac42",
+      "modified": "14f5dc107f4edba947f23a9e459bbfbb932d8aec98a45bc4a191b3b9d790d10c"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/components/request-timeline.css",
+      "baseline": "448a3d93eafb47cf0ba4ddf4b93476de3c7b421fe404f447fffd15d527aaad5d",
+      "restored": "448a3d93eafb47cf0ba4ddf4b93476de3c7b421fe404f447fffd15d527aaad5d",
+      "modified": "a8925c17f13403e06c4a6d2a2629e8e096b31a9a271383571722a41d7e9088ce"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/screens.tsx",
+      "baseline": "7d0c1bb3de54875bd233fec58bc8bc0e5de66ecfd6ae69eb5288eaec4460db5c",
+      "restored": "7d0c1bb3de54875bd233fec58bc8bc0e5de66ecfd6ae69eb5288eaec4460db5c",
+      "modified": "7caea01047a476dcf6dcc1a3e150f0376f8d9fde9644aa977551fb964228ebdf"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src-tauri/src/commands.rs",
+      "baseline": "51d76f39f418d1bdd54ecb51878c06e4b651c2ed5077f9fee24f926874b8e5af",
+      "restored": "51d76f39f418d1bdd54ecb51878c06e4b651c2ed5077f9fee24f926874b8e5af",
+      "modified": "1dd632588f7e1433de2aa8ea2263f1b8094bae24b51bb031665920e30db0e79b"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src-tauri/tests/windows_subsystem.rs",
+      "baseline": "eaab1e57211c7cab780f0c2007b016a74e442dafb83a2bc9eb4fc1838f7e2930",
+      "restored": "eaab1e57211c7cab780f0c2007b016a74e442dafb83a2bc9eb4fc1838f7e2930",
+      "modified": "eaab1e57211c7cab780f0c2007b016a74e442dafb83a2bc9eb4fc1838f7e2930"
+    },
+    {
+      "relative": "crates/claude-codex-pro-core/src/claude_desktop.rs",
+      "baseline": "4b7948b74ca76195ed5b2561047ba86497592a90de6d6ffbc8015e85f46a9ca9",
+      "restored": "4b7948b74ca76195ed5b2561047ba86497592a90de6d6ffbc8015e85f46a9ca9",
+      "modified": "f086ddec980d8df3f20e64b875c56264ee5889be17d3bab4bfc0d833d8321366"
+    },
+    {
+      "relative": "crates/claude-codex-pro-data/src/local_usage.rs",
+      "baseline": "6476ca52587aca4d842d9f5bb215b508bae255091bb6cdc4f0030350e2f77fe1",
+      "restored": "6476ca52587aca4d842d9f5bb215b508bae255091bb6cdc4f0030350e2f77fe1",
+      "modified": "7be5ddf409fa94a334479574a859c4e0d4a89cc17e78e4d98b9a1776801df7b4"
+    },
+    {
+      "relative": "crates/claude-codex-pro-data/src/request_history.rs",
+      "baseline": "6df26ac3c6ad175919d3c4a6d6e62d5ef9443f519029c0f5f6a7b6c93aa399a1",
+      "restored": "6df26ac3c6ad175919d3c4a6d6e62d5ef9443f519029c0f5f6a7b6c93aa399a1",
+      "modified": "4d0d4d4bf92d20a055594e187fc23a2d5377ce0a6efd72b867c37b6c0040b1e7"
+    }
+  ],
+  "reapplied": [
+    {
+      "relative": "apps/claude-codex-pro-manager/src/App.tsx",
+      "expected": "c445e744bec02ba7e6c78e9da6ab610f888820894d42cd38f4723bb70207167b",
+      "actual": "c445e744bec02ba7e6c78e9da6ab610f888820894d42cd38f4723bb70207167b"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/components/AgentOverview.tsx",
+      "expected": "14f5dc107f4edba947f23a9e459bbfbb932d8aec98a45bc4a191b3b9d790d10c",
+      "actual": "14f5dc107f4edba947f23a9e459bbfbb932d8aec98a45bc4a191b3b9d790d10c"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/components/request-timeline.css",
+      "expected": "a8925c17f13403e06c4a6d2a2629e8e096b31a9a271383571722a41d7e9088ce",
+      "actual": "a8925c17f13403e06c4a6d2a2629e8e096b31a9a271383571722a41d7e9088ce"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/screens.tsx",
+      "expected": "7caea01047a476dcf6dcc1a3e150f0376f8d9fde9644aa977551fb964228ebdf",
+      "actual": "7caea01047a476dcf6dcc1a3e150f0376f8d9fde9644aa977551fb964228ebdf"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src-tauri/src/commands.rs",
+      "expected": "1dd632588f7e1433de2aa8ea2263f1b8094bae24b51bb031665920e30db0e79b",
+      "actual": "1dd632588f7e1433de2aa8ea2263f1b8094bae24b51bb031665920e30db0e79b"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src-tauri/tests/windows_subsystem.rs",
+      "expected": "eaab1e57211c7cab780f0c2007b016a74e442dafb83a2bc9eb4fc1838f7e2930",
+      "actual": "eaab1e57211c7cab780f0c2007b016a74e442dafb83a2bc9eb4fc1838f7e2930"
+    },
+    {
+      "relative": "crates/claude-codex-pro-core/src/claude_desktop.rs",
+      "expected": "f086ddec980d8df3f20e64b875c56264ee5889be17d3bab4bfc0d833d8321366",
+      "actual": "f086ddec980d8df3f20e64b875c56264ee5889be17d3bab4bfc0d833d8321366"
+    },
+    {
+      "relative": "crates/claude-codex-pro-data/src/local_usage.rs",
+      "expected": "7be5ddf409fa94a334479574a859c4e0d4a89cc17e78e4d98b9a1776801df7b4",
+      "actual": "7be5ddf409fa94a334479574a859c4e0d4a89cc17e78e4d98b9a1776801df7b4"
+    },
+    {
+      "relative": "crates/claude-codex-pro-data/src/request_history.rs",
+      "expected": "4d0d4d4bf92d20a055594e187fc23a2d5377ce0a6efd72b867c37b6c0040b1e7",
+      "actual": "4d0d4d4bf92d20a055594e187fc23a2d5377ce0a6efd72b867c37b6c0040b1e7"
+    },
+    {
+      "relative": "apps/claude-codex-pro-manager/src/lib/overviewUsage.ts",
+      "expected": "f3ae1e11b275b3aabc1a3f327a09c2b60279fbedfe045e1c78f35e96f2ff80b6",
+      "actual": "f3ae1e11b275b3aabc1a3f327a09c2b60279fbedfe045e1c78f35e96f2ff80b6"
+    },
+    {
+      "relative": "scripts/test-overview-usage.cjs",
+      "expected": "151d14bc8342dcf732ea6dac696fc618e0d5984c8a78250d0425db9512130761",
+      "actual": "151d14bc8342dcf732ea6dac696fc618e0d5984c8a78250d0425db9512130761"
+    }
+  ],
+  "patchMatches": true
+}

@@ -1,0 +1,41 @@
+{
+  "build": {
+    "command": "CARGO_BUILD_JOBS=1 cargo build --release -p claude-codex-pro-manager",
+    "exit_status": 0,
+    "last_stdout": "Finished `release` profile [optimized] target(s) in 7m 01s",
+    "warnings": "Unused import in core install/macos.rs; 14 existing manager dead-code warnings",
+    "binary": "D:/Project/Claude-Codex-Pro-Tool/target/release/claude-codex-pro.exe",
+    "bytes": 90482176,
+    "sha256": "19F0C46ECDD3518CB65C99B58EE63E574F1595C998B49304E61CCD925E22CC33"
+  },
+  "native_webview": {
+    "command": "node artifacts/overview-launch-20260929/check-native-overview.cjs 9223",
+    "exit_status": 0,
+    "clientHeight": 716,
+    "scrollHeight": 1452,
+    "scrollTop_before": 0,
+    "scrollTop_after": 736,
+    "calendarBottom": 786.015625,
+    "viewportBottom": 804,
+    "calendarVisible": true,
+    "modelRows": 5,
+    "projectRows": 6,
+    "trendBars": 28,
+    "projectColumnOffsets": [0, 0, 0, 0, 0],
+    "topButtonWidths": [50, 50, 55],
+    "topButtonGaps": [2, 2],
+    "calendarTooltip": "2026/05/31Level 1242M1,420 用量事件　会话总数 10",
+    "trendTooltipFontSize": "14px",
+    "trendTooltipTransform": "matrix(1, 0, 0, 1, -66, 0)"
+  },
+  "normal_release": {
+    "pid": 41948,
+    "responding": true,
+    "debug_port_9223": "not listening"
+  },
+  "unverified": [
+    "AITracker and CCP have not been compared on identical frozen input and time range",
+    "Five collection truncation diagnostics remain; other agents may still use generic mappings",
+    "Claude Desktop package registration still fails on this machine with 0x80070005"
+  ]
+}
