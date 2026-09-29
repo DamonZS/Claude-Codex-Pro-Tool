@@ -194,6 +194,7 @@ function collectTools() {
 
 const manifest = { version: 1, prompts: collectPrompts(), skills: collectSkills(), tools: collectTools() };
 const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+const normalizeNewlines = (text) => text.replace(/\r\n?/g, "\n");
 
 if (checkOnly) {
   let current = "";
@@ -203,7 +204,7 @@ if (checkOnly) {
     console.error("Prompt/index.json 不存在，请运行 node scripts/build-prompt-index.mjs");
     process.exit(1);
   }
-  if (current !== serialized) {
+  if (normalizeNewlines(current) !== serialized) {
     console.error("Prompt/index.json 与 Prompt/ 实际内容不一致。");
     console.error("运行 node scripts/build-prompt-index.mjs 重新生成后提交。");
     process.exit(1);
