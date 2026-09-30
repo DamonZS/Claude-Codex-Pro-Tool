@@ -1169,12 +1169,40 @@ pub struct AitrackerSessionsPayload {
 pub struct AitrackerSessionDetailRequest {
     pub agent: String,
     pub session_id: String,
+    pub detail: Option<claude_codex_pro_data::aitracker::AitrackerSessionDetail>,
+}
+
+impl AitrackerSessionDetailRequest {
+    fn matching_detail(self) -> Option<claude_codex_pro_data::aitracker::AitrackerSessionDetail> {
+        self.detail.filter(|detail| {
+            detail.summary.agent == self.agent.trim()
+                && detail.summary.session_id == self.session_id.trim()
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AitrackerSessionDetailPayload {
     pub detail: Option<claude_codex_pro_data::aitracker::AitrackerSessionDetail>,
+    pub transcript: Option<AitrackerSessionTranscript>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerSessionTranscript {
+    pub title: String,
+    pub messages: Vec<AitrackerTranscriptMessage>,
+    pub total_messages: usize,
+    pub has_more_before: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AitrackerTranscriptMessage {
+    pub role: String,
+    pub text: String,
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -8099,18 +8127,29 @@ pub async fn read_aitracker_session_detail(
     request: AitrackerSessionDetailRequest,
 ) -> CommandResult<AitrackerSessionDetailPayload> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (_, _, usage) = collect_unified_usage_snapshot();
-        let detail = claude_codex_pro_data::aitracker::session_detail(
-            &usage,
-            request.agent.trim(),
-            request.session_id.trim(),
-        );
+        let agent = request.agent.clone();
+        let session_id = request.session_id.clone();
+        let detail = request.matching_detail().or_else(|| {
+            let (_, _, usage) = collect_unified_usage_snapshot();
+            claude_codex_pro_data::aitracker::session_detail(
+                &usage,
+                agent.trim(),
+                session_id.trim(),
+            )
+        });
         if detail.is_some() {
-            ok("会话详情已加载。", AitrackerSessionDetailPayload { detail })
+            let transcript = aitracker_session_transcript(&agent, &session_id);
+            ok(
+                "会话详情已加载。",
+                AitrackerSessionDetailPayload { detail, transcript },
+            )
         } else {
             failed(
                 "未找到该会话。",
-                AitrackerSessionDetailPayload { detail: None },
+                AitrackerSessionDetailPayload {
+                    detail: None,
+                    transcript: None,
+                },
             )
         }
     })
@@ -8118,9 +8157,91 @@ pub async fn read_aitracker_session_detail(
     .unwrap_or_else(|_| {
         failed(
             "会话详情读取失败。",
-            AitrackerSessionDetailPayload { detail: None },
+            AitrackerSessionDetailPayload {
+                detail: None,
+                transcript: None,
+            },
         )
     })
+}
+
+fn aitracker_session_transcript(
+    agent: &str,
+    private_session_id: &str,
+) -> Option<AitrackerSessionTranscript> {
+    let matches = |raw_id: &str| {
+        claude_codex_pro_data::local_usage::session_id_from_structured(
+            agent,
+            Some(&Value::String(raw_id.to_string())),
+        )
+        .as_deref()
+            == Some(private_session_id)
+    };
+    match agent {
+        "codex" => {
+            for db_path in session_candidate_db_paths(None) {
+                let Ok(sessions) = local_session_adapter(&db_path).list_local_sessions() else {
+                    continue;
+                };
+                let Some(session) = sessions.into_iter().find(|session| matches(&session.id))
+                else {
+                    continue;
+                };
+                let Ok(Some(page)) = claude_codex_pro_data::load_codex_session_context(
+                    &db_path,
+                    &session.id,
+                    None,
+                    Some(200),
+                ) else {
+                    continue;
+                };
+                return Some(AitrackerSessionTranscript {
+                    title: page.title,
+                    total_messages: page.total_messages,
+                    has_more_before: page.has_more_before,
+                    messages: page
+                        .messages
+                        .into_iter()
+                        .map(|message| AitrackerTranscriptMessage {
+                            role: message.role,
+                            text: message.text,
+                            timestamp: message.timestamp,
+                        })
+                        .collect(),
+                });
+            }
+            None
+        }
+        "claude-code" => {
+            let inventory = claude_codex_pro_core::claude_sessions::list_claude_sessions().ok()?;
+            let session = inventory
+                .sessions
+                .into_iter()
+                .find(|session| matches(&session.id))?;
+            let page = claude_codex_pro_core::claude_sessions::load_claude_session_context(
+                &session.id,
+                Path::new(&session.source_path),
+                None,
+                Some(200),
+            )
+            .ok()?;
+            Some(AitrackerSessionTranscript {
+                title: page.title,
+                total_messages: page.total_messages,
+                has_more_before: page.has_more_before,
+                messages: page
+                    .messages
+                    .into_iter()
+                    .map(|message| AitrackerTranscriptMessage {
+                        role: message.role,
+                        text: message.text,
+                        timestamp: message.timestamp_ms.map(|value| value.to_string()),
+                    })
+                    .collect(),
+            })
+        }
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -12227,6 +12348,48 @@ mod tests {
     fn test_path_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn session_detail_reuses_only_matching_snapshot() {
+        let detail = claude_codex_pro_data::aitracker::AitrackerSessionDetail {
+            summary: claude_codex_pro_data::aitracker::AgentSessionSummary {
+                session_id: "session-1".into(),
+                agent: "codex".into(),
+                provider: String::new(),
+                model: String::new(),
+                project: String::new(),
+                started_at: String::new(),
+                ended_at: String::new(),
+                events: 0,
+                tool_calls: 0,
+                status: String::new(),
+                totals: Default::default(),
+            },
+            events: Vec::new(),
+        };
+        let request = AitrackerSessionDetailRequest {
+            agent: "codex".into(),
+            session_id: "session-1".into(),
+            detail: Some(detail),
+        };
+        assert!(request.clone().matching_detail().is_some());
+        assert!(
+            AitrackerSessionDetailRequest {
+                agent: "workbuddy".into(),
+                ..request.clone()
+            }
+            .matching_detail()
+            .is_none()
+        );
+        assert!(
+            AitrackerSessionDetailRequest {
+                session_id: "session-2".into(),
+                ..request
+            }
+            .matching_detail()
+            .is_none()
+        );
     }
 
     #[test]

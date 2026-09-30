@@ -204,7 +204,6 @@ import type {
   CommandResult,
   AdsResult,
   AitrackerCapabilitiesResult,
-  AitrackerSessionQueryResult,
   AitrackerSessionDetailResult,
   DistillationCandidatesResult,
   ContextEntries,
@@ -323,8 +322,6 @@ export function App() {
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [requestTimeline, setRequestTimeline] = useState<RequestTimelineResult | null>(null);
   const [aitrackerCapabilities, setAitrackerCapabilities] = useState<AitrackerCapabilitiesResult | null>(null);
-  const [aitrackerSessions, setAitrackerSessions] = useState<AitrackerSessionQueryResult | null>(null);
-  const [aitrackerSessionDetail, setAitrackerSessionDetail] = useState<AitrackerSessionDetailResult | null>(null);
   const [distillationCandidates, setDistillationCandidates] = useState<DistillationCandidatesResult | null>(null);
   const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
   const requestTimelineInFlight = useRef(false);
@@ -1148,23 +1145,12 @@ export function App() {
     }
   };
 
-  const queryAitrackerSessions = async (request: { agent?: string | null; status?: string | null; keyword?: string | null; range?: "7d" | "30d" | "90d" | "all"; page?: number; pageSize?: number }) => {
-    const result = await run(
-      () => call<AitrackerSessionQueryResult>("query_aitracker_sessions", { request }),
-      "会话",
-      { trackBusy: false, notify: false },
-    );
-    if (result) setAitrackerSessions(result);
-    return result;
-  };
-
-  const readAitrackerSessionDetail = async (request: { agent: string; sessionId: string }) => {
+  const readAitrackerSessionDetail = async (request: { agent: string; sessionId: string; detail?: AitrackerSessionDetailResult["detail"] }) => {
     const result = await run(
       () => call<AitrackerSessionDetailResult>("read_aitracker_session_detail", { request }),
       "会话详情",
-      { trackBusy: true, notify: false },
+      { trackBusy: false, notify: false },
     );
-    if (result) setAitrackerSessionDetail(result);
     return result;
   };
 
@@ -2852,11 +2838,8 @@ export function App() {
       }, 650);
     } else if (target === "sessions") {
       await Promise.all([
-        refreshLocalSessions(true),
-        refreshClaudeSessions(true),
         refreshSettings(true),
         refreshAitrackerCapabilities(true),
-        queryAitrackerSessions({ page: 1, pageSize: 20 }),
         listDistillationCandidates(),
       ]);
       afterFirstPaintIfFresh(() => {
@@ -3037,7 +3020,7 @@ export function App() {
       loadEarlierClaudeSessionContext,
       closeClaudeSessionContext,
       deleteClaudeSession,
-      queryAitrackerSessions,
+      refreshAitrackerCapabilities,
       readAitrackerSessionDetail,
       listDistillationCandidates,
       createDistillationCandidate,
@@ -3189,7 +3172,7 @@ export function App() {
       loadEarlierClaudeSessionContext: (...args) => actionsRef.current!.loadEarlierClaudeSessionContext(...args),
       closeClaudeSessionContext: (...args) => actionsRef.current!.closeClaudeSessionContext(...args),
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
-      queryAitrackerSessions: (...args) => actionsRef.current!.queryAitrackerSessions(...args),
+      refreshAitrackerCapabilities: (...args) => actionsRef.current!.refreshAitrackerCapabilities(...args),
       readAitrackerSessionDetail: (...args) => actionsRef.current!.readAitrackerSessionDetail(...args),
       listDistillationCandidates: (...args) => actionsRef.current!.listDistillationCandidates(...args),
       createDistillationCandidate: (...args) => actionsRef.current!.createDistillationCandidate(...args),
@@ -3346,7 +3329,6 @@ export function App() {
             <SessionManagementScreen
               actions={actions}
               aitrackerCapabilities={aitrackerCapabilities}
-              aitrackerSessions={aitrackerSessions}
               distillationCandidates={distillationCandidates}
             />
           ) : null}

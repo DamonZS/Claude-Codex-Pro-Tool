@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   ArchiveRestore,
   BarChart3,
-  Bot,
   CheckCircle2,
   Check,
   Database,
@@ -40,6 +39,7 @@ import {
   Sparkles,
   Timer,
   Trash2,
+  UserRound,
   Wrench,
   X,
   Zap,
@@ -50,6 +50,10 @@ import { AgentOverview } from "@/components/AgentOverview";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import claudeLogo from "@/assets/claude.svg";
 import codexLogo from "@/assets/openai.svg";
+import workbuddyLogo from "@/assets/agent-brands/workbuddy.svg";
+import cursorLogo from "@/assets/agent-brands/cursor.svg";
+import deepseekLogo from "@/assets/agent-brands/deepseek.svg";
+import openclawLogo from "@/assets/agent-brands/openclaw.svg";
 import {
   AGGREGATE_STRATEGIES,
   CODEX_PRODUCT_DESIGN_SKILL_MARKETPLACE_LOCAL_SOURCE,
@@ -134,7 +138,6 @@ import {
 import type {
   AitrackerCapabilitiesResult,
   AitrackerSessionDetailResult,
-  AitrackerSessionQueryResult,
   AitrackerSessionRange,
   BackendSettings,
   ClaudeChineseWindowResult,
@@ -2582,32 +2585,61 @@ function aitrackerStatusLabel(value: string) {
   }
 }
 
+const sessionAgentLogos: Record<string, string> = {
+  codex: codexLogo,
+  "claude-code": claudeLogo,
+  workbuddy: workbuddyLogo,
+  cursor: cursorLogo,
+  "deepseek-harness": deepseekLogo,
+  openclaw: openclawLogo,
+};
+
+function SessionAgentIcon({ agent, label }: { agent: string; label: string }) {
+  const logo = sessionAgentLogos[agent];
+  return logo
+    ? <img alt="" aria-hidden="true" className="aitracker-session-tool-icon" src={logo} />
+    : <span aria-hidden="true" className="aitracker-session-tool-icon aitracker-session-tool-mark">{label.slice(0, 1).toUpperCase()}</span>;
+}
+
 function AitrackerSessionPanel({
   actions,
   capabilities,
-  sessionsResult,
   distillationResult,
 }: {
   actions: AppActions;
   capabilities: AitrackerCapabilitiesResult | null;
-  sessionsResult: AitrackerSessionQueryResult | null;
   distillationResult: DistillationCandidatesResult | null;
 }) {
   const [agent, setAgent] = useState("");
-  const [status, setStatus] = useState("");
   const [keyword, setKeyword] = useState("");
   const [range, setRange] = useState<AitrackerSessionRange>("30d");
-  const [page, setPage] = useState(sessionsResult?.page || 1);
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<AitrackerSessionSummary | null>(null);
   const [detail, setDetail] = useState<AitrackerSessionDetailResult | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const detailRef = useRef<HTMLElement | null>(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [historyKeyword, setHistoryKeyword] = useState("");
+  const detailEpoch = useRef(0);
 
-  const sessions = sessionsResult?.sessions ?? [];
+  const sessions = capabilities?.snapshot.sessions ?? [];
   const candidates = distillationResult?.candidates ?? [];
-  const pageSize = sessionsResult?.pageSize || 20;
-  const total = sessionsResult?.total ?? 0;
+  const pageSize = 20;
+  const filteredSessions = useMemo(() => {
+    const search = keyword.trim().toLocaleLowerCase();
+    const days = range === "all" ? 0 : range === "7d" ? 7 : range === "30d" ? 30 : 90;
+    const cutoff = days ? Date.now() - days * 86_400_000 : 0;
+    return sessions.filter((session) => {
+      const started = Date.parse(session.startedAt);
+      return (!agent || session.agent === agent)
+        && (!cutoff || Number.isNaN(started) || started >= cutoff)
+        && (!search || [session.agent, session.provider, session.model, session.project, session.sessionId]
+          .some((value) => value.toLocaleLowerCase().includes(search)));
+    });
+  }, [sessions, agent, keyword, range]);
+  const total = filteredSessions.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleSessions = filteredSessions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const agentRegistry = capabilities?.snapshot.registry ?? [];
   const agentDefinitions = useMemo(() => new Map(agentRegistry.map((item) => [item.id, item])), [agentRegistry]);
   const agents = useMemo(() => {
@@ -2627,7 +2659,6 @@ function AitrackerSessionPanel({
     });
   }, [agentDefinitions, agentRegistry, capabilities, sessions]);
   const agentLabel = (name: string) => agentDefinitions.get(name)?.nameZh || agentDefinitions.get(name)?.name || name;
-  const agentColor = (name: string) => agentDefinitions.get(name)?.color || "var(--workspace-blue)";
   const selectedAgentDetail = useMemo(
     () => capabilities?.snapshot.details.find((item) => item.id === selected?.agent) ?? null,
     [capabilities, selected],
@@ -2641,7 +2672,7 @@ function AitrackerSessionPanel({
   }, [detail]);
   const sessionGroups = useMemo(() => {
     const groups = new Map<string, AitrackerSessionSummary[]>();
-    for (const session of sessions) {
+    for (const session of visibleSessions) {
       const key = aitrackerDateKey(session.startedAt);
       const group = groups.get(key) ?? [];
       group.push(session);
@@ -2657,36 +2688,103 @@ function AitrackerSessionPanel({
       label: aitrackerDateLabel(items[0]?.startedAt ?? dateKey),
       suffix: dateKey === today ? "今天" : dateKey === yesterday ? "昨天" : "",
     }));
-  }, [sessions]);
+  }, [visibleSessions]);
 
-  const query = (nextPage = 1, nextAgent = agent, nextRange = range) => {
-    setPage(nextPage);
-    setAgent(nextAgent);
-    setRange(nextRange);
-    void actions.queryAitrackerSessions({
-      agent: nextAgent || undefined,
-      status: status || undefined,
-      keyword: keyword.trim() || undefined,
-      range: nextRange,
-      page: nextPage,
-      pageSize: 20,
-    });
+  const historyGroups = useMemo(() => {
+    const search = historyKeyword.trim().toLocaleLowerCase();
+    const source = [selected, ...(capabilities?.snapshot.sessions ?? sessions)]
+      .filter((session): session is AitrackerSessionSummary => Boolean(session))
+      .filter((session) => session.agent === selected?.agent)
+      .filter((session) => !search || [session.project, session.sessionId, session.model].some((value) => value.toLocaleLowerCase().includes(search)))
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+    const groups = new Map<string, AitrackerSessionSummary[]>();
+    const seen = new Set<string>();
+    for (const session of source) {
+      if (seen.has(session.sessionId)) continue;
+      seen.add(session.sessionId);
+      const key = aitrackerDateKey(session.startedAt);
+      groups.set(key, [...(groups.get(key) ?? []), session]);
+    }
+    return Array.from(groups.entries());
+  }, [capabilities, historyKeyword, selected, sessions]);
+
+  const refresh = async () => {
+    setQueryLoading(true);
+    try {
+      await actions.refreshAitrackerCapabilities(true);
+    } finally {
+      setQueryLoading(false);
+    }
   };
   const openSession = async (session: AitrackerSessionSummary) => {
+    const epoch = ++detailEpoch.current;
+    const localDetail = {
+      summary: session,
+      events: (capabilities?.usage?.details ?? []).filter((event) => event.agent === session.agent && event.sessionId === session.sessionId),
+    };
     setSelected(session);
-    setDetail(null);
+    setDetail({ status: "ok", message: "本地事件已加载。", detail: localDetail, transcript: null });
     setDetailLoading(true);
-    window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-    const result = await actions.readAitrackerSessionDetail({ agent: session.agent, sessionId: session.sessionId });
-    setDetail(result);
-    setDetailLoading(false);
+    const result = await actions.readAitrackerSessionDetail({ agent: session.agent, sessionId: session.sessionId, detail: localDetail });
+    if (epoch === detailEpoch.current) {
+      if (result) setDetail({ ...result, detail: result.detail ?? localDetail });
+      setDetailLoading(false);
+    }
   };
-  useEffect(() => {
-    if (selected) detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [selected]);
   const selectedCandidate = selected
     ? candidates.find((item) => item.agent === selected.agent && item.sessionId === selected.sessionId && item.status === "pending")
     : null;
+
+  if (selected) return (
+    <div className="aitracker-session-history" aria-label="会话历史">
+      <aside className="aitracker-session-history-sidebar" aria-label="会话历史列表">
+        <header><MessageCircle aria-hidden="true" /><strong>会话历史</strong><span>{historyGroups.reduce((count, [, items]) => count + items.length, 0)}</span></header>
+        <label className="aitracker-session-history-search"><Search aria-hidden="true" /><input aria-label="搜索会话历史" onChange={(event) => setHistoryKeyword(event.currentTarget.value)} placeholder="搜索项目 / 会话 ID / 模型" value={historyKeyword} /></label>
+        <div className="aitracker-session-history-items">
+          {historyGroups.length ? historyGroups.map(([date, items]) => (
+            <div className="aitracker-session-history-group" key={date}>
+              <time>{aitrackerDateLabel(items[0].startedAt)}</time>
+              {items.map((session) => (
+                <button className={selected.sessionId === session.sessionId && selected.agent === session.agent ? "active" : ""} key={`${session.agent}:${session.sessionId}`} onClick={() => void openSession(session)} title={session.project || session.sessionId} type="button">
+                  <strong>{session.sessionId === selected.sessionId ? detail?.transcript?.title || session.project || "未采集标题" : session.project || "未采集标题"}</strong>
+                  <small>{new Date(session.startedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · {session.model || agentLabel(session.agent)}</small>
+                </button>
+              ))}
+            </div>
+          )) : <Empty text="没有匹配的会话。" />}
+        </div>
+      </aside>
+      <section className="aitracker-session-history-main" aria-label="会话内容">
+        <header className="aitracker-session-history-header">
+          <button aria-label="返回会话列表" className="aitracker-session-history-back" onClick={() => { detailEpoch.current += 1; setSelected(null); setDetail(null); }} title="返回会话列表" type="button"><ArrowLeft aria-hidden="true" /></button>
+          <div><h2>{detail?.transcript?.title || selected.project || "未采集标题"}</h2><p><SessionAgentIcon agent={selected.agent} label={agentLabel(selected.agent)} />{agentLabel(selected.agent)} <span>·</span> {new Date(selected.startedAt).toLocaleString("zh-CN")} <span>·</span> {selected.project || "项目未采集"} <span>·</span> {detail?.transcript?.totalMessages ?? selected.events} 条记录</p></div>
+          <Button disabled={Boolean(selectedCandidate)} onClick={() => void actions.createDistillationCandidate({ agent: selected.agent, sessionId: selected.sessionId })} size="sm" variant="outline"><Sparkles className="h-4 w-4" />{selectedCandidate ? "已加入蒸馏" : "蒸馏"}</Button>
+        </header>
+        <div className="aitracker-session-history-scroll">
+          {detail?.detail ? (
+            <>
+              <div className="aitracker-session-history-source"><strong>{detail.transcript ? "本地对话记录" : "本地用量事件"}</strong><span>{detail.transcript ? `${detail.transcript.totalMessages} 条消息` : `${detail.detail.events.length} 条事件`}</span><small>{detailLoading ? "正在读取本地对话正文..." : detail.transcript ? "对话仅从本机读取" : "该工具尚未采集对话正文，以下是实际采集到的请求和工具事件"}</small></div>
+              {detail.transcript?.hasMoreBefore ? <p className="aitracker-session-history-note">当前展示最近 200 条消息，较早消息未加载。</p> : null}
+              {detail.transcript ? (
+                detail.transcript.messages.length ? <div className="aitracker-session-messages">{detail.transcript.messages.map((message, index) => (
+                  <article className={`aitracker-session-message ${message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : "other"}`} key={`${selected.sessionId}:${index}`}>
+                    <header className="aitracker-session-message-identity">
+                      {message.role === "user" ? <UserRound aria-hidden="true" /> : message.role === "assistant" ? <SessionAgentIcon agent={selected.agent} label={agentLabel(selected.agent)} /> : <Info aria-hidden="true" />}
+                      <strong>{message.role === "user" ? "用户" : message.role === "assistant" ? `AI 智能体 · ${agentLabel(selected.agent)}` : `来源 · ${message.role}`}</strong>
+                    </header>
+                    <p>{message.text}</p>
+                  </article>
+                ))}</div> : <Empty text="该会话没有可读取的对话消息。" />
+              ) : detail.detail.events.length ? <div className="aitracker-session-events">{detail.detail.events.map((event) => (
+                <article className="aitracker-session-event" key={event.id}><div><strong>{event.toolName || event.model || "请求事件"}</strong><time>{event.timestamp}</time></div><span>{event.status || "已采集"} · {formatAitrackerTokens(event.totalTokens)} tokens{event.provider ? ` · ${event.provider}` : ""}</span></article>
+              ))}</div> : detailLoading ? <div className="aitracker-session-detail-loading"><RefreshCw className="h-5 w-5 animate-spin" />正在读取本地对话...</div> : <Empty text="该会话暂无可解析事件。" />}
+              {detail.transcript && detail.detail.events.length ? <details className="aitracker-session-history-analysis"><summary>工具调用与用量分析</summary><p>{formatAitrackerTokens(detail.detail.summary.totals.totalTokens)} tokens · {detail.detail.summary.toolCalls} 次工具调用{selectedAgentDetail ? ` · Agent 累计 ${selectedAgentDetail.sessions} 场会话` : ""}</p>{toolUsage.map(([name, count]) => <span key={name}>{name} ×{count}</span>)}</details> : null}
+            </>
+          ) : <Empty text={detail?.message || "该会话暂无可读取详情。"} />}
+        </div>
+      </section>
+    </div>
+  );
 
   return (
     <div className="aitracker-session-page">
@@ -2697,28 +2795,26 @@ function AitrackerSessionPanel({
       </div>
       <section className="aitracker-session-content" aria-label="会话与 Agent 数据">
         <div className="codex-session-toolbar">
-          <label className="aitracker-session-search"><Search aria-hidden="true" /><input onChange={(event) => setKeyword(event.currentTarget.value)} placeholder="搜索标题 / 项目 / 会话 ID" value={keyword} /></label>
+          <label className="aitracker-session-search"><Search aria-hidden="true" /><input onChange={(event) => { setKeyword(event.currentTarget.value); setPage(1); }} placeholder="搜索标题 / 项目 / 会话 ID" value={keyword} /></label>
           <div className="aitracker-session-range" role="group" aria-label="会话时间范围">
             {(["7d", "30d", "90d", "all"] as const).map((value) => (
-              <button className={range === value ? "active" : ""} key={value} onClick={() => { setRange(value); query(1, agent, value); }} type="button">
+              <button className={range === value ? "active" : ""} key={value} onClick={() => { setRange(value); setPage(1); }} type="button">
                 {value === "7d" ? "近 7 天" : value === "30d" ? "近 30 天" : value === "90d" ? "近 90 天" : "全部"}
               </button>
             ))}
-            <Button onClick={() => query(page)} size="sm" variant="outline"><RefreshCw className="h-4 w-4" />立即刷新</Button>
+            <Button disabled={queryLoading} onClick={() => void refresh()} size="sm" variant="outline"><RefreshCw className="h-4 w-4" />立即刷新</Button>
           </div>
         </div>
         <div className="aitracker-session-tools" role="tablist" aria-label="Agent 工具筛选">
           {["", ...agents].map((value) => {
             const label = value ? agentLabel(value) : "全部工具";
-            return <button className={agent === value ? "active" : ""} key={label} onClick={() => { setSelected(null); setDetail(null); query(1, value); }} type="button">
-              {value ? <Bot className="aitracker-session-tool-icon" style={{ color: agentColor(value) }} /> : null}
+            return <button className={agent === value ? "active" : ""} key={label} onClick={() => { setAgent(value); setPage(1); }} type="button">
+              {value ? <SessionAgentIcon agent={value} label={label} /> : null}
               {label}
             </button>;
           })}
         </div>
-        {sessionsResult && statusFailed(sessionsResult.status) ? (
-          <div className="ops-danger-zone" role="alert"><AlertTriangle className="h-4 w-4" /><span>{sessionsResult.message || "会话读取失败。"}</span></div>
-        ) : sessions.length ? (
+        {!capabilities ? <div className="aitracker-session-detail-loading"><RefreshCw className="h-5 w-5 animate-spin" />正在读取会话快照...</div> : visibleSessions.length ? (
           <div className="aitracker-session-groups" aria-label="按日期分组的会话列表">
             {sessionGroups.map((group) => (
               <section className="aitracker-session-day" key={group.dateKey}>
@@ -2727,63 +2823,24 @@ function AitrackerSessionPanel({
                   {group.items.map((session) => (
                     <article className="aitracker-session-card" key={`${session.agent}:${session.sessionId}`}>
                       <button className="aitracker-session-card-main" onClick={() => void openSession(session)} title={`${session.agent} / ${session.sessionId}`} type="button">
-                        <div className="aitracker-session-card-source"><Bot className="aitracker-session-agent-icon" style={{ color: agentColor(session.agent) }} /><span>{agentLabel(session.agent)}</span><em>{aitrackerStatusLabel(session.status)}</em></div>
+                        <div className="aitracker-session-card-source"><SessionAgentIcon agent={session.agent} label={agentLabel(session.agent)} /><span>{agentLabel(session.agent)}</span><em>{aitrackerStatusLabel(session.status)}</em></div>
                         <strong>{session.project || "未采集项目"}</strong>
                         <small>{session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
-                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm"><Play className="h-3.5 w-3.5" />恢复会话</Button>
+                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm"><MessageCircle className="h-3.5 w-3.5" />查看会话</Button>
                     </article>
                   ))}
                 </div>
               </section>
             ))}
             <div className="aitracker-session-pagination">
-              <Button disabled={page <= 1} onClick={() => query(page - 1)} size="sm" variant="outline"><ChevronLeft className="h-4 w-4" />上一页</Button>
-              <span>第 {page} / {pageCount} 页，共 {total} 个会话</span>
-              <Button disabled={page >= pageCount} onClick={() => query(page + 1)} size="sm" variant="outline">下一页<ChevronRight className="h-4 w-4" /></Button>
+              <Button disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} size="sm" variant="outline"><ChevronLeft className="h-4 w-4" />上一页</Button>
+              <span>第 {currentPage} / {pageCount} 页，共 {total} 个会话</span>
+              <Button disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)} size="sm" variant="outline">下一页<ChevronRight className="h-4 w-4" /></Button>
             </div>
           </div>
-        ) : <Empty text="暂无本地采集会话。" />}
+        ) : <Empty text={agent ? `暂无 ${agentLabel(agent)} 的本地采集会话。` : "暂无本地采集会话。"} />}
       </section>
-
-      {selected ? (
-        <section className="aitracker-session-detail-view" ref={detailRef} aria-label="会话详情">
-          <header className="aitracker-session-detail-header">
-            <div>
-              <span>{agentLabel(selected.agent)} · 会话详情</span>
-              <h2>{selected.project || "未采集项目"}</h2>
-              <p>{selected.sessionId} · {selected.startedAt} - {selected.endedAt}</p>
-            </div>
-            <button className="aitracker-session-detail-close" onClick={() => { setSelected(null); setDetail(null); }} type="button">关闭</button>
-          </header>
-          {detailLoading ? <div className="aitracker-session-detail-loading"><RefreshCw className="h-5 w-5 animate-spin" /><span>正在读取真实会话详情...</span></div> : detail?.detail ? (
-            <div className="aitracker-session-detail-grid">
-              <div className="aitracker-session-detail-summary">
-                <div><span>Agent</span><strong>{agentLabel(selected.agent)}</strong></div>
-                <div><span>Provider / 模型</span><strong>{selected.provider || "未采集"} · {selected.model || "未采集"}</strong></div>
-                <div><span>对话轮次 / 工具调用</span><strong>{detail.detail.summary.events} / {detail.detail.summary.toolCalls}</strong></div>
-                <div><span>Token 总量</span><strong>{formatAitrackerTokens(detail.detail.summary.totals.totalTokens)}</strong></div>
-                {selectedAgentDetail ? <div><span>Agent 累计会话</span><strong>{selectedAgentDetail.sessions} 场 · {formatAitrackerTokens(selectedAgentDetail.totals.totalTokens)} tokens</strong></div> : null}
-                {toolUsage.length ? <div><span>工具调用排行</span><strong>{toolUsage.map(([name, count]) => `${name} ×${count}`).join("、")}</strong></div> : null}
-                <div className="aitracker-session-detail-actions">
-                  <Button disabled={Boolean(selectedCandidate)} onClick={() => void actions.createDistillationCandidate({ agent: selected.agent, sessionId: selected.sessionId })} size="sm">
-                    <Sparkles className="h-4 w-4" />{selectedCandidate ? "已存在蒸馏候选" : "生成蒸馏候选"}
-                  </Button>
-                </div>
-              </div>
-              <div className="aitracker-session-event-list">
-                <div className="aitracker-session-event-heading"><strong>事件与工具调用</strong><span>{detail.detail.events.length} 条真实记录</span></div>
-                {detail.detail.events.length ? detail.detail.events.map((event) => (
-                  <article className="aitracker-session-event" key={event.id}>
-                    <div><strong>{event.toolName || event.model || "对话事件"}</strong><time>{event.timestamp}</time></div>
-                    <span>{event.status || "已采集"} · {formatAitrackerTokens(event.totalTokens)} tokens{event.provider ? ` · ${event.provider}` : ""}</span>
-                  </article>
-                )) : <Empty text="该会话暂无可解析事件。" />}
-              </div>
-            </div>
-          ) : <Empty text={detail?.message || "该会话暂无可读取详情。"} />}
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -2791,17 +2848,15 @@ function AitrackerSessionPanel({
 export const SessionManagementScreen = memo(function SessionManagementScreen({
   actions,
   aitrackerCapabilities,
-  aitrackerSessions,
   distillationCandidates,
 }: {
   actions: AppActions;
   aitrackerCapabilities: AitrackerCapabilitiesResult | null;
-  aitrackerSessions: AitrackerSessionQueryResult | null;
   distillationCandidates: DistillationCandidatesResult | null;
 }) {
   return (
     <div className="stack">
-      <AitrackerSessionPanel actions={actions} capabilities={aitrackerCapabilities} sessionsResult={aitrackerSessions} distillationResult={distillationCandidates} />
+      <AitrackerSessionPanel actions={actions} capabilities={aitrackerCapabilities} distillationResult={distillationCandidates} />
     </div>
   );
 });

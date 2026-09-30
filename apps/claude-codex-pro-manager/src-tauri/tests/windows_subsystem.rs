@@ -1170,8 +1170,13 @@ fn session_management_route_contains_aitracker_session_management() {
     assert!(!session_section.contains("openClaudeChinese"));
     assert!(workspace_styles.contains(".aitracker-session-page"));
     assert!(workspace_styles.contains(".aitracker-session-card"));
-    assert!(workspace_styles.contains(".aitracker-session-detail-view"));
+    assert!(workspace_styles.contains(".aitracker-session-history"));
     assert!(app_tsx.contains("function AitrackerSessionPanel"));
+    assert!(app_tsx.contains("aria-label=\"会话历史\""));
+    assert!(app_tsx.contains("session.agent === agent"));
+    assert!(app_tsx.contains("queryEpoch.current"));
+    assert!(app_shell.contains("aitrackerSessionsEpochRef.current"));
+    assert!(commands_rs.contains("fn aitracker_session_transcript("));
     assert!(app_tsx.contains("aitracker-session-summary"));
     assert!(app_tsx.contains("aitracker-session-day-heading"));
     assert!(app_tsx.contains("aitracker-session-resume"));

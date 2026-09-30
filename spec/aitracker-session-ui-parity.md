@@ -18,18 +18,24 @@ CCP 已经接入统一的 AITRACKER 本地会话快照，但当前会话页仍�
 - Agent 工具以品牌图标标签显示，当前项使用蓝色底部高亮。
 - 会话按本地日期分组，显示日期、今天/昨天标识和组内数量。
 - 每条会话显示 Agent、状态徽标、项目、Provider、模型、事件/工具调用数和 Token 数，并提供恢复会话入口。
-- 列表支持分页；点击会话后，在当前 AITRACKER 页面下方显示该会话的真实详情、工具调用分析和蒸馏入口。
+- 列表支持分页；Agent、关键词、时间范围及翻页直接过滤已加载的完整会话快照，操作时不重新触发本地采集。
+- 只有进入页面和点击“立即刷新”才重新采集会话快照；详情先显示快照中已有的事件，再异步读取本地对话正文。
+- Agent 工具使用可识别的专属图标，不共用机器人图标。
+- 点击会话后切换到独立历史视图，不在列表下方追加详情。历史视图参照 AITracker 的左侧可搜索、按日期分组的会话列表和右侧会话内容结构，并提供返回列表、切换会话及蒸馏入口。
+- Codex 和 Claude Code 的历史页标题优先采用本地会话读取器提供的真实标题；左侧列表至少保留当前选中的会话。
+- 真实对话正文只有在本地源可解析时显示；当前仅有用量事件的 Agent 明确标注事件记录，不得伪装成对话消息。
+- 对话消息以清晰的身份标识、图标和左右布局区分用户与 Agent；长消息滚动时身份标识保持可见。源数据未标识子智能体时不推断子智能体身份。
 - 窄窗口下工具行与会话卡自适应换行，内容不重叠。
 
 ## 数据要求
 
-- 统计和列表数据继续来自 `query_aitracker_sessions` 与 `read_aitracker_capabilities`。
-- 会话详情继续调用 `read_aitracker_session_detail`。
+- 统计和列表数据来自 `read_aitracker_capabilities` 的完整会话快照，在前端筛选与分页。
+- 会话详情调用 `read_aitracker_session_detail`，传入已加载的匹配详情以复用快照；无匹配快照时保留后端采集回退。
 - 不添加演示数据或硬编码业务统计。
 
 ## 技术约束
 
-- 仅修改 CCP React 页面和样式，以及本任务规格/验收文档。
+- 修改范围限定为 CCP 会话 React 页面、样式、必要的数据调用和本地会话详情读取，以及本任务规格/验收文档。
 - 不引入 npm 依赖，不修改 CCP 外层窗口和导航。
 - AITracker 源码作为界面结构参考，不把其 Electron/Node 运行时迁入 CCP。
 
@@ -37,4 +43,6 @@ CCP 已经接入统一的 AITRACKER 本地会话快照，但当前会话页仍�
 
 - `apps/claude-codex-pro-manager/src/screens.tsx`
 - `apps/claude-codex-pro-manager/src/workspace.css`
+- `apps/claude-codex-pro-manager/src/App.tsx`、`src/types.ts`、`src-tauri/src/commands.rs`
+- Agent 品牌图标及其来源说明
 - 本规格与对应验收标准

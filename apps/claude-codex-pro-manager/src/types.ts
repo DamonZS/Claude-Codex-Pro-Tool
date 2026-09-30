@@ -1260,6 +1260,12 @@ export type AitrackerSessionDetailResult = CommandResult<{
     summary: AitrackerSessionSummary;
     events: NonNullable<RequestTimelineResult["usage_snapshot"]>["details"];
   } | null;
+  transcript: {
+    title: string;
+    messages: Array<{ role: string; text: string; timestamp: string | null }>;
+    totalMessages: number;
+    hasMoreBefore: boolean;
+  } | null;
 }>;
 export type DistillationCandidate = {
   id: string;
