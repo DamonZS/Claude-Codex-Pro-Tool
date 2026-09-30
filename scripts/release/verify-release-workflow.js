@@ -40,12 +40,13 @@ for (const [label, source] of [["auto", auto], ["manual", manual], ["PR", pr]]) 
   const buildJobs = source.split(/(?=^  [a-z][a-z0-9-]*:\s*$)/m).filter((job) => job.includes("cargo build"));
   assert.equal(buildJobs.length, 2, `${label} Windows and macOS build jobs`);
   for (const job of buildJobs) {
+    const managerInstall = job.indexOf("working-directory: apps/claude-codex-pro-manager\n        run: npm ci");
     const install = job.indexOf("working-directory: apps/codex-workflow-surface\n        run: npm ci");
     const verify = job.indexOf("run: node scripts/release/verify-release-workflow.js");
     const check = job.indexOf("working-directory: apps/claude-codex-pro-manager\n        run: npm run check");
     const build = job.indexOf("run: npm run vite:build");
     const cargo = job.indexOf("cargo build");
-    assert.ok(install >= 0 && install < verify && verify < check && check < build && build < cargo,
+    assert.ok(managerInstall >= 0 && managerInstall < install && install < verify && verify < check && check < build && build < cargo,
       `${label} must install, verify, type-check Manager and build workflow inputs before compiling core`);
   }
   const stage = source.indexOf("run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica");

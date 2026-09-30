@@ -9,6 +9,7 @@
 3. 手动发布直接上传 MSI；自动发布将 MSI 纳入 Windows artifact，并由发布 job 上传。
 4. 自动发布的资产数量校验为 7，`latest.json` 生成逻辑会读取并收录 MSI。
 5. 工作流 YAML 语法、Tauri CLI 参数和文档检查通过。
+6. 自动发布、手动发布与 PR 工作流均使用 `npm ci` 安装 Manager 依赖；锁定的 `@tauri-apps/api` 与 `@tauri-apps/plugin-dialog` 分别匹配 `Cargo.lock` 中 `tauri` 与 `tauri-plugin-dialog` 的 major/minor。
 
 ## 验证方式
 

@@ -40,7 +40,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Install workflow dependencies
         working-directory: apps/codex-workflow-surface
@@ -151,7 +151,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: apps/claude-codex-pro-manager
-        run: npm install --package-lock=false
+        run: npm ci
 
       - name: Install workflow dependencies
         working-directory: apps/codex-workflow-surface

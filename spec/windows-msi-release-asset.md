@@ -13,6 +13,7 @@ Windows Release 当前通过仓库内 NSIS 脚本生成 setup.exe 和 ZIP。用�
 ## 功能要求
 
 - Windows runner 安装 WiX Toolset。
+- Manager 前端依赖在 CI 中使用 `npm ci` 按 `package-lock.json` 安装，保持 Tauri API 与 Rust crate 的 major/minor 一致。
 - Rust 二进制和前端完成后，使用 Tauri CLI 生成 `bundle/msi/*.msi`。
 - MSI 以 `claude-codex-pro-<version>-windows-x64.msi` 命名并在产物缺失时失败。
 - 自动发布的构建资产数量由 6 增加为 7。
