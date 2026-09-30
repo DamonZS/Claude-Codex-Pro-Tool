@@ -923,11 +923,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
     assert!(app_tsx.contains("managed_skill_bundle"));
     assert!(app_tsx.contains("Claude Desktop MCP"));
     assert!(app_tsx.contains("Claude Code 插件"));
-    assert!(
-        app_tsx.contains(
-            "Claude 插件、Codex 插件仓库、MCP Registry 与 awesome-claude-code 社区资源。"
-        )
-    );
+    assert!(!app_tsx.contains("统一管理插件、Skills、MCP、来源、风险与依赖。"));
     assert!(styles.contains(".plugin-layout"));
     assert!(styles.contains(".ops-tools-columns"));
     assert!(styles.contains(".plugin-list"));
@@ -1412,6 +1408,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     assert!(!document_title.contains("Claude Codex Pro 管理工具"));
     assert!(routes.contains("normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE)"));
     assert!(routes.contains("new URLSearchParams(window.location.search).get(\"view\")"));
+    assert!(routes.contains("tools: \"\","));
     let normalize_route = source_section(
         &routes,
         "export function normalizeRoute",
@@ -1695,13 +1692,20 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let tools_screen = source_section(
         &screens,
         "export const ToolsAndPluginsScreen",
-        "function UnifiedToolInventoryPanel",
+        "function SessionManagementScreen",
     );
+    let inventory_index = tools_screen
+        .find("<UnifiedToolInventoryPanel")
+        .expect("unified inventory must render");
     let repository_grid = source_section(
         tools_screen,
         "<div className=\"repository-status-grid\">",
         "</div>",
     );
+    let repository_index = tools_screen
+        .find("<div className=\"repository-status-grid\">")
+        .expect("repository status grid must render");
+    assert!(inventory_index < repository_index);
     assert!(repository_grid.contains("<CodexPluginRepositoryPanel"));
     assert!(repository_grid.contains("<ClaudePluginRepositoryPanel"));
     assert!(css_rule_has(

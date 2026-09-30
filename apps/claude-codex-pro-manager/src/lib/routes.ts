@@ -104,7 +104,7 @@ export function routeSubtitle(route: Route) {
     clients: "管理 Codex、Claude Desktop、Claude Code 与本地增强。",
     themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     prompts: "管理 Codex 系统提示词、分类与当前生效方式。",
-    tools: "统一管理插件、Skills、MCP、来源、风险与依赖。",
+    tools: "",
     sessions: "查看本地会话、项目归属、迁移与供应商同步。",
     maintenance: "检查入口、Watcher、后端、日志并执行明确修复。",
     settings: "调整本地偏好、增强开关和运行参数。",

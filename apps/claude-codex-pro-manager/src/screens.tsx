@@ -2203,15 +2203,15 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
 }) {
   return (
     <div className="stack">
-      <div className="repository-status-grid">
-        <CodexPluginRepositoryPanel actions={actions} marketplace={codexPluginMarketplace} />
-        <ClaudePluginRepositoryPanel actions={actions} marketplace={claudeDesktopMarketplace} />
-      </div>
       <UnifiedToolInventoryPanel
         actions={actions}
         result={unifiedInventory}
         settings={settings?.settings ?? null}
       />
+      <div className="repository-status-grid">
+        <CodexPluginRepositoryPanel actions={actions} marketplace={codexPluginMarketplace} />
+        <ClaudePluginRepositoryPanel actions={actions} marketplace={claudeDesktopMarketplace} />
+      </div>
     </div>
   );
 });

@@ -539,7 +539,7 @@ export function AppShell({
             <div className="ops-page-heading">
               <div>
                 <h1>{routeLabel(route)}</h1>
-                <p>{routeSubtitle(route)}</p>
+                {routeSubtitle(route) ? <p>{routeSubtitle(route)}</p> : null}
               </div>
               {domainTabs.length ? (
                 <div className="ops-domain-tabs" aria-label={`${routeLabel(activePrimaryRoute)}视图`}>
