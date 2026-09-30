@@ -208,6 +208,7 @@ import type {
   ContextEntriesResult,
   ContextEntry,
   ContextKind,
+  CreateSkillResult,
   DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
   LaunchStatus,
@@ -1285,6 +1286,18 @@ export function App() {
         status: result.status,
       });
       if (!statusOk(result.status)) await refreshUnifiedToolInventory(true);
+    }
+    return result;
+  };
+
+  const createSkill = async (target: "claude" | "codex", id: string, body: string) => {
+    const result = await run(
+      () => call<CreateSkillResult>("create_skill", { request: { target, id, body } }),
+      "新增 Skill",
+    );
+    if (result) {
+      await refreshUnifiedToolInventory(true);
+      notifyResult({ title: "新增 Skill", message: result.message, status: result.status });
     }
     return result;
   };
@@ -2977,6 +2990,7 @@ export function App() {
       deleteClaudeContextEntry,
       refreshUnifiedToolInventory,
       toggleUnifiedToolAsset,
+      createSkill,
   };
 
   const actions = useMemo<AppActions>(() => ({
@@ -3122,6 +3136,7 @@ export function App() {
       deleteClaudeContextEntry: (...args) => actionsRef.current!.deleteClaudeContextEntry(...args),
       refreshUnifiedToolInventory: (...args) => actionsRef.current!.refreshUnifiedToolInventory(...args),
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
+      createSkill: (...args) => actionsRef.current!.createSkill(...args),
   }), []);
 
   useEffect(() => {
@@ -3170,6 +3185,7 @@ export function App() {
         codexThemeBackground={codexThemeBackground?.data_uri ?? null}
         onAgentScopeChange={setAgentScope}
         onInstallUpdate={() => void actions.performUpdate(updateInfoToRelease(updateInfo))}
+        onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}
         onLaunchClaude={() => void actions.launchClaudeDesktop()}
         onNavigate={(nextRoute) => {
           if (nextRoute !== "supplier") setSupplierFocusProfileId(null);
@@ -3227,6 +3243,7 @@ export function App() {
               actions={actions}
               claudeDesktopMarketplace={claudeDesktopMarketplace}
               codexPluginMarketplace={codexPluginMarketplace}
+              aitrackerCapabilities={aitrackerCapabilities}
               settings={settings}
               unifiedInventory={unifiedToolInventory}
             />

@@ -2187,12 +2187,14 @@ export function LegacySupplierScreen({
 
 export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
   actions,
+  aitrackerCapabilities,
   claudeDesktopMarketplace,
   codexPluginMarketplace,
   settings,
   unifiedInventory,
 }: {
   actions: AppActions;
+  aitrackerCapabilities: AitrackerCapabilitiesResult | null;
   claudeDesktopMarketplace: ClaudeDesktopMarketplaceStatusResult | null;
   codexPluginMarketplace: CodexPluginMarketplaceStatusResult | null;
   settings: SettingsResult | null;
@@ -2202,6 +2204,7 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
     <div className="stack">
       <UnifiedToolInventoryPanel
         actions={actions}
+        aitrackerCapabilities={aitrackerCapabilities}
         result={unifiedInventory}
         settings={settings?.settings ?? null}
       />
@@ -2215,20 +2218,30 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
 
 function UnifiedToolInventoryPanel({
   actions,
+  aitrackerCapabilities,
   result,
   settings,
 }: {
   actions: AppActions;
+  aitrackerCapabilities: AitrackerCapabilitiesResult | null;
   result: UnifiedToolInventoryResult | null;
   settings: BackendSettings | null;
 }) {
   const [tab, setTab] = useState<ContextKind>("mcp");
   const [pending, setPending] = useState<string | null>(null);
   const [creatingMcp, setCreatingMcp] = useState(false);
+  const [creatingSkill, setCreatingSkill] = useState(false);
+  const [skillTarget, setSkillTarget] = useState<"claude" | "codex">("codex");
+  const [skillId, setSkillId] = useState("");
+  const [skillBody, setSkillBody] = useState(defaultSkillBody());
   const [mcpTarget, setMcpTarget] = useState<"claude" | "codex">("codex");
   const [mcpId, setMcpId] = useState("");
   const [mcpBody, setMcpBody] = useState(defaultContextToml("mcp"));
   const inventory = result?.inventory;
+  const detectedAgents = useMemo(
+    () => (aitrackerCapabilities?.snapshot.registry ?? []).filter((agent) => agent.detected || (agent.skillCount ?? 0) > 0),
+    [aitrackerCapabilities],
+  );
   const entries = useMemo(
     () => (inventory?.assets ?? []).filter((asset) => asset.kind === tab),
     [inventory, tab],
@@ -2254,12 +2267,24 @@ function UnifiedToolInventoryPanel({
     setMcpId("");
     setMcpBody(defaultContextToml("mcp"));
   };
+  const resetSkillDraft = () => {
+    setCreatingSkill(false);
+    setSkillTarget("codex");
+    setSkillId("");
+    setSkillBody(defaultSkillBody());
+  };
   const beginCreateMcp = () => {
+    resetSkillDraft();
     setTab("mcp");
     setCreatingMcp(true);
     setMcpTarget("codex");
     setMcpId("");
     setMcpBody(defaultContextToml("mcp"));
+  };
+  const beginCreateSkill = () => {
+    resetMcpDraft();
+    setTab("skill");
+    setCreatingSkill(true);
   };
   const saveMcp = async () => {
     const id = mcpId.trim();
@@ -2279,6 +2304,17 @@ function UnifiedToolInventoryPanel({
       setPending(null);
     }
   };
+  const saveSkill = async () => {
+    const id = skillId.trim();
+    if (!id || !skillBody.trim() || pending !== null) return;
+    setPending("create:skill");
+    try {
+      const saved = await actions.createSkill(skillTarget, id, skillBody);
+      if (saved && statusOk(saved.status)) resetSkillDraft();
+    } finally {
+      setPending(null);
+    }
+  };
 
   return (
     <section className="context-manager-card unified-tool-inventory">
@@ -2289,14 +2325,14 @@ function UnifiedToolInventoryPanel({
         </div>
         <div className="action-row">
           <Button
-            aria-controls="unified-mcp-editor"
-            aria-expanded={creatingMcp}
+            aria-controls={tab === "mcp" ? "unified-mcp-editor" : "unified-skill-editor"}
+            aria-expanded={tab === "mcp" ? creatingMcp : creatingSkill}
             disabled={pending !== null}
-            onClick={creatingMcp ? resetMcpDraft : beginCreateMcp}
+            onClick={tab === "mcp" ? (creatingMcp ? resetMcpDraft : beginCreateMcp) : (creatingSkill ? resetSkillDraft : beginCreateSkill)}
             size="sm"
           >
             <Plus className="h-4 w-4" />
-            {creatingMcp ? "收起新增 MCP" : "新增 MCP"}
+            {tab === "mcp" ? (creatingMcp ? "收起新增 MCP" : "新增 MCP") : (creatingSkill ? "收起新增 Skill" : "新增 Skill")}
           </Button>
           <Button disabled={pending !== null} onClick={async () => {
             setPending("scan");
@@ -2371,6 +2407,32 @@ function UnifiedToolInventoryPanel({
           </div>
         </div>
       ) : null}
+      {creatingSkill ? (
+        <div aria-label="新增 Skill" className="context-editor" id="unified-skill-editor" role="region">
+          <div className="context-editor-grid">
+            <label className="ops-form-field">
+              <span>目标应用</span>
+              <select className="ops-select" disabled={pending !== null} onChange={(event) => setSkillTarget(event.currentTarget.value as "claude" | "codex")} value={skillTarget}>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+              </select>
+            </label>
+            <label className="ops-form-field">
+              <span>Skill ID</span>
+              <input autoComplete="off" disabled={pending !== null} onChange={(event) => setSkillId(event.currentTarget.value)} placeholder="例如：review-helper" value={skillId} />
+            </label>
+          </div>
+          <label className="ops-form-field">
+            <span>SKILL.md</span>
+            <textarea className="ops-textarea context-toml-editor mono" disabled={pending !== null} onChange={(event) => setSkillBody(event.currentTarget.value)} spellCheck={false} value={skillBody} />
+          </label>
+          <p className="context-manager-note">将写入 {skillTarget === "codex" ? "~/.codex/skills" : "~/.claude/skills"} 的真实 Skill 目录。</p>
+          <div className="action-row">
+            <Button disabled={pending !== null || !skillId.trim() || !skillBody.trim()} onClick={() => void saveSkill()} size="sm"><Save className="h-4 w-4" />{pending === "create:skill" ? "保存中" : "保存 Skill"}</Button>
+            <Button disabled={pending !== null} onClick={resetSkillDraft} size="sm" variant="outline">取消</Button>
+          </div>
+        </div>
+      ) : null}
       <div className="unified-tool-countbar">
         <span>共 {inventory?.counts.total ?? 0} 项</span>
         <span>原始发现 {inventory?.counts.rawDiscoveries ?? 0}</span>
@@ -2399,6 +2461,9 @@ function UnifiedToolInventoryPanel({
               {asset.summary ? <span title={asset.summary}>{asset.summary}</span> : null}
               {asset.source ? <small title={asset.source}>{compactPath(asset.source)}</small> : null}
             </div>
+            <div className="agent-icon-group" aria-label={`${asset.title} 已检测 Agent`}>
+              {detectedAgents.map((agent) => <span className="agent-inventory-icon" key={agent.id} title={`${agent.name}：${agent.detected ? "已检测" : "有 Skill"}`}><AgentInventoryIcon agent={agent} /></span>)}
+            </div>
             <div className="agent-toggle-group" aria-label={`${asset.title} 应用状态`}>
               {(["claude", "codex"] as const).map((app) => {
                 const state = asset[app];
@@ -2421,7 +2486,7 @@ function UnifiedToolInventoryPanel({
               })}
             </div>
           </div>
-        )) : <Empty text={result ? `未发现${contextKindLabel(tab)}；可点击重新检测查看最新本地状态。` : "尚未检测本地工具与插件。"} />}
+          )) : <Empty text={result ? `未发现${contextKindLabel(tab)}；可点击重新检测查看最新本地状态。` : "尚未检测本地工具与插件。"} />}
       </div>
     </section>
   );
@@ -2583,6 +2648,26 @@ const sessionAgentLogos: Record<string, string> = {
   "deepseek-harness": deepseekLogo,
   openclaw: openclawLogo,
 };
+
+const inventoryAgentLogos: Record<string, string> = {
+  codex: codexLogo,
+  "claude-code": claudeLogo,
+  workbuddy: workbuddyLogo,
+  cursor: cursorLogo,
+  "deepseek-harness": deepseekLogo,
+  openclaw: openclawLogo,
+};
+
+function defaultSkillBody() {
+  return "---\nname: new-skill\ndescription: Describe what this skill does.\n---\n\n# New Skill\n\nAdd the instructions for this skill here.\n";
+}
+
+function AgentInventoryIcon({ agent }: { agent: { id: string; name: string; color: string } }) {
+  const logo = inventoryAgentLogos[agent.id];
+  return logo
+    ? <img alt="" aria-hidden="true" src={logo} />
+    : <span aria-hidden="true" style={{ color: agent.color }}>{agent.name.slice(0, 1).toUpperCase()}</span>;
+}
 
 function SessionAgentIcon({ agent, label }: { agent: string; label: string }) {
   const logo = sessionAgentLogos[agent];

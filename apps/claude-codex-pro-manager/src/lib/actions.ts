@@ -32,6 +32,7 @@ import type {
   CredentialEnvironmentResult,
   ContextEntriesResult,
   ContextKind,
+  CreateSkillResult,
   LocalSession,
   LocalSessionsResult,
   LogsResult,
@@ -207,6 +208,7 @@ export function createActionsShape() {
     deleteClaudeContextEntry: async (_kind: ContextKind, _id: string) => null as ClaudeContextEntriesResult | null,
     refreshUnifiedToolInventory: async (_silent?: boolean) => null as UnifiedToolInventoryResult | null,
     toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: "claude" | "codex", _enabled: boolean) => null as UnifiedToolInventoryResult | null,
+    createSkill: async (_target: "claude" | "codex", _id: string, _body: string) => null as CreateSkillResult | null,
   };
 }
 

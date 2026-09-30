@@ -7,6 +7,7 @@ import {
   Command,
   Laptop,
   LoaderCircle,
+  Languages,
   MessageCircle,
   Moon,
   PanelLeftClose,
@@ -57,6 +58,7 @@ type AppShellProps = {
   codexThemeBackground: string | null;
   onAgentScopeChange: (scope: AgentScope) => void;
   onInstallUpdate: () => void;
+  onInstallClaudeZhPatch: () => void;
   onLaunchClaude: () => void;
   onNavigate: (route: Route) => void;
   onRestartCodex: () => void;
@@ -108,6 +110,7 @@ export function AppShell({
   codexThemeBackground,
   onAgentScopeChange,
   onInstallUpdate,
+  onInstallClaudeZhPatch,
   onLaunchClaude,
   onNavigate,
   onRestartCodex,
@@ -522,6 +525,10 @@ export function AppShell({
               <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onLaunchClaude} title="启动或重启 Claude" type="button">
                 <MessageCircle aria-hidden="true" className="h-4 w-4" />
                 <span>启动/重启 Claude</span>
+              </button>
+              <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onInstallClaudeZhPatch} title="Claude 一键汉化" type="button">
+                <Languages aria-hidden="true" className="h-4 w-4" />
+                <span>Claude 一键汉化</span>
               </button>
             </div>
           </div>

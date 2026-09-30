@@ -76,7 +76,11 @@
     - 通过：MCP 标签存在可访问的“新增 MCP”入口，可选择 Claude 或 Codex，保存后重新检测；页面没有恢复旧的双面板，也没有“同步到当前 Codex”。
     - 证据：前端源码检查、页面手动验收或组件测试。
 
-19. 前端检查与构建通过。
+19. 统一面板提供新增 Skill 能力。
+   - 通过：Skills 标签可打开新增表单，可选择 Claude/Codex，保存后在对应真实 skills 目录生成 `SKILL.md` 并重新检测；空正文、路径遍历和已存在 Skill 被拒绝。
+   - 证据：core 单元测试、Tauri 命令源码检查和前端源码检查。
+
+20. 前端检查与构建通过。
     - 证据：
 
       ```powershell
@@ -84,7 +88,7 @@
       npm --prefix apps/claude-codex-pro-manager run vite:build
       ```
 
-20. 定向 Rust 测试与 manager 构建通过。
+21. 定向 Rust 测试与 manager 构建通过。
     - 证据：
 
       ```powershell
@@ -93,11 +97,11 @@
       cargo build -p claude-codex-pro-manager --manifest-path Cargo.toml
       ```
 
-21. 代码评审无阻断缺陷。
+22. 代码评审无阻断缺陷。
     - 通过：独立评审没有 CRITICAL/HIGH；若发现则在交付前修复并重新验证。
     - 证据：评审结论。
 
-22. Windows 后台仓库任务不弹出终端窗口。
+23. Windows 后台仓库任务不弹出终端窗口。
     - 通过：管理器启动时自动检测或修复 Codex marketplace、建立 Git 本地快照以及其他工具页后台任务，均通过 `CREATE_NO_WINDOW` 启动外部进程；打开管理器不会出现 `git.exe`、cmd、PowerShell 或 Windows Terminal 弹窗。
     - 证据：Windows 子系统回归测试、Manager 重新构建及本机启动检查。
 

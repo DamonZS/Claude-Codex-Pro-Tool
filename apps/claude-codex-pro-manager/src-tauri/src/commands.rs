@@ -690,7 +690,7 @@ fn complete_claude_zh_patch_install(
             payload,
         )
     } else {
-        ok(
+        failed(
             &format!(
                 "{message} 汉化已写入，但自动启动 Claude Desktop 失败：{}",
                 launch.message
@@ -1065,6 +1065,22 @@ pub struct UnifiedToolToggleRequest {
     pub kind: String,
     pub app: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSkillRequest {
+    pub target: String,
+    pub id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSkillPayload {
+    pub target: String,
+    pub id: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -2456,6 +2472,11 @@ fn allowed_executable_prefixes() -> anyhow::Result<Vec<PathBuf>> {
     }
     prefixes.push(dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("无法获取本地数据目录"))?);
     prefixes.push(dirs::data_dir().ok_or_else(|| anyhow::anyhow!("无法获取数据目录"))?);
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            prefixes.push(parent.to_path_buf());
+        }
+    }
     Ok(prefixes)
 }
 
@@ -9318,6 +9339,69 @@ fn toggle_unified_tool_asset_blocking(
     }
 }
 
+#[tauri::command]
+pub async fn create_skill(request: CreateSkillRequest) -> CommandResult<CreateSkillPayload> {
+    tauri::async_runtime::spawn_blocking(move || create_skill_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("新增 Skill 任务失败：{join_error}"),
+                CreateSkillPayload {
+                    target: String::new(),
+                    id: String::new(),
+                    path: String::new(),
+                },
+            )
+        })
+}
+
+fn create_skill_blocking(request: CreateSkillRequest) -> CommandResult<CreateSkillPayload> {
+    let roots = claude_codex_pro_core::unified_tool_inventory::UnifiedToolInventoryRoots::default();
+    match claude_codex_pro_core::unified_tool_inventory::create_skill(
+        &roots,
+        &request.target,
+        &request.id,
+        &request.body,
+    ) {
+        Ok(path) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.skill.create.ok",
+                json!({
+                    "target": request.target,
+                    "id": request.id,
+                    "path": path,
+                }),
+            );
+            ok(
+                "Skill 已创建并写入目标应用目录。",
+                CreateSkillPayload {
+                    target: request.target,
+                    id: request.id,
+                    path: path.to_string_lossy().to_string(),
+                },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.skill.create.failed",
+                json!({
+                    "target": request.target,
+                    "id": request.id,
+                    "error": error.to_string(),
+                }),
+            );
+            failed(
+                &format!("新增 Skill 失败：{error}"),
+                CreateSkillPayload {
+                    target: request.target,
+                    id: request.id,
+                    path: String::new(),
+                },
+            )
+        }
+    }
+}
+
 fn read_live_context_entries_blocking() -> CommandResult<LiveContextEntriesPayload> {
     let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
     let config_path = home.join("config.toml");
@@ -12132,6 +12216,12 @@ mod tests {
 
         assert_eq!(sanitize_auth_header("Bearer TOKEN"), "Bearer [REDACTED]");
         assert_eq!(sanitize_auth_header("TOKEN"), "[REDACTED]");
+    }
+
+    #[test]
+    fn current_executable_path_is_accepted_for_elevated_patch_runner() {
+        let executable = std::env::current_exe().unwrap();
+        assert!(validate_executable_path(&executable).is_ok());
     }
 
     #[test]

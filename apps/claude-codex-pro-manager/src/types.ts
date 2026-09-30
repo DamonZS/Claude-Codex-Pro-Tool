@@ -329,6 +329,12 @@ export type UnifiedToolInventoryResult = CommandResult<{
   inventory: UnifiedToolInventory;
 }>;
 
+export type CreateSkillResult = CommandResult<{
+  target: "claude" | "codex";
+  id: string;
+  path: string;
+}>;
+
 export type SupplierPreset = {
   id: string;
   name: string;

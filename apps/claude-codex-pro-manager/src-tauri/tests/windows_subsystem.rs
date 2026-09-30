@@ -1518,8 +1518,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         commandbar.matches("ops-action-command").count(),
-        2,
-        "the command bar must expose exactly two primary client actions"
+        3,
+        "the command bar must expose exactly three primary client actions"
     );
     let action_positions = [
         commandbar
@@ -1528,6 +1528,9 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         commandbar
             .find("onClick={onLaunchClaude}")
             .expect("Claude launch action"),
+        commandbar
+            .find("onClick={onInstallClaudeZhPatch}")
+            .expect("Claude translation action"),
     ];
     assert!(action_positions.windows(2).all(|pair| pair[0] < pair[1]));
     for control in [
@@ -1548,6 +1551,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     for (handler, label) in [
         ("onClick={onRestartCodex}", "启动/重启 Codex"),
         ("onClick={onLaunchClaude}", "启动/重启 Claude"),
+        ("onClick={onInstallClaudeZhPatch}", "Claude 一键汉化"),
     ] {
         let button = jsx_button_containing(commandbar, handler);
         let icon = button
@@ -1583,6 +1587,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     for action_binding in [
         "onRestartCodex={() => void actions.restartCodex()}",
         "onLaunchClaude={() => void actions.launchClaudeDesktop()}",
+        "onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}",
     ] {
         assert!(
             app.contains(action_binding),

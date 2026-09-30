@@ -337,6 +337,34 @@ pub fn set_unified_tool_asset_enabled(
     scan_unified_tool_inventory(roots)
 }
 
+pub fn create_skill(
+    roots: &UnifiedToolInventoryRoots,
+    target: &str,
+    id: &str,
+    body: &str,
+) -> anyhow::Result<PathBuf> {
+    let relative = safe_skill_relative_path(id)
+        .ok_or_else(|| anyhow::anyhow!("Skill ID 只能包含相对路径片段"))?;
+    if body.trim().is_empty() {
+        anyhow::bail!("Skill 内容不能为空");
+    }
+    let home = match target {
+        "codex" => &roots.codex_home,
+        "claude" => &roots.claude_home,
+        _ => anyhow::bail!("不支持的 Skill 目标应用：{target}"),
+    };
+    let skill_dir = home.join("skills").join(relative);
+    let skill_path = skill_dir.join("SKILL.md");
+    if skill_path.exists() {
+        anyhow::bail!("Skill 已存在：{}", display_path(&skill_path));
+    }
+    std::fs::create_dir_all(&skill_dir)
+        .with_context(|| format!("创建 Skill 目录失败：{}", display_path(&skill_dir)))?;
+    crate::settings::atomic_write(&skill_path, body.as_bytes())
+        .with_context(|| format!("写入 Skill 失败：{}", display_path(&skill_path)))?;
+    Ok(skill_path)
+}
+
 #[derive(Clone, Copy)]
 enum AppTarget {
     Claude,
@@ -1895,6 +1923,22 @@ fn kind_order(kind: &str) -> u8 {
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
+
+    #[test]
+    fn create_skill_writes_to_selected_agent_home_and_rejects_traversal() {
+        let temp = tempfile::tempdir().unwrap();
+        let roots = UnifiedToolInventoryRoots {
+            codex_home: temp.path().join("codex"),
+            claude_home: temp.path().join("claude"),
+            claude_config_paths: Vec::new(),
+        };
+
+        let path = create_skill(&roots, "codex", "review-helper", "# Review").unwrap();
+        assert_eq!(path, roots.codex_home.join("skills/review-helper/SKILL.md"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "# Review");
+        assert!(create_skill(&roots, "claude", "../outside", "x").is_err());
+        assert!(create_skill(&roots, "claude", "review-helper", "").is_err());
+    }
 
     #[test]
     fn json_update_transaction_restores_prior_files_when_a_later_write_fails() {
