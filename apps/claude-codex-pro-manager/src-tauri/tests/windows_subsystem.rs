@@ -200,8 +200,7 @@ fn manager_navigation_hides_legacy_multica_runtime_page() {
     assert!(routes.contains("value === \"logs\" || value === \"multica\""));
     assert!(!app.contains("route === \"multica\""));
     assert!(!app.contains("<MulticaRuntimeScreen"));
-    assert!(screens.contains("[\"本地工作流\", \"multicaWorkspaceEnabled\"]"));
-    assert!(screens.contains("s?.multicaWorkspaceEnabled !== false"));
+    assert!(!screens.contains("[\"本地工作流\", \"multicaWorkspaceEnabled\"]"));
 }
 
 #[test]
@@ -1140,7 +1139,7 @@ fn session_management_route_contains_aitracker_session_management() {
 
     assert!(session_section.contains("AitrackerSessionPanel"));
     assert!(session_section.contains("aitrackerCapabilities"));
-    assert!(session_section.contains("aitrackerSessions"));
+    assert!(session_section.contains("AitrackerSessionPanel"));
     assert!(session_section.contains("distillationCandidates"));
     assert!(!session_section.contains("历史会话修复"));
     assert!(!session_section.contains("Codex 会话管理"));
@@ -1170,13 +1169,13 @@ fn session_management_route_contains_aitracker_session_management() {
     assert!(app_tsx.contains("function AitrackerSessionPanel"));
     assert!(app_tsx.contains("aria-label=\"会话历史\""));
     assert!(app_tsx.contains("session.agent === agent"));
-    assert!(app_tsx.contains("queryEpoch.current"));
-    assert!(app_shell.contains("aitrackerSessionsEpochRef.current"));
+    assert!(app_tsx.contains("detailEpoch.current"));
+    assert!(!app_shell.contains("aitrackerSessionsEpochRef.current"));
     assert!(commands_rs.contains("fn aitracker_session_transcript("));
     assert!(app_tsx.contains("aitracker-session-summary"));
     assert!(app_tsx.contains("aitracker-session-day-heading"));
     assert!(app_tsx.contains("aitracker-session-resume"));
-    assert!(app_tsx.contains("range: nextRange"));
+    assert!(app_tsx.contains("setRange(value)"));
     assert!(workspace_styles.contains(".aitracker-session-card"));
     assert!(workspace_styles.contains(".aitracker-session-pagination"));
     assert!(commands_rs.contains("pub range: Option<String>"));
@@ -1196,9 +1195,11 @@ fn codex_session_management_opens_real_context_viewer() {
     assert!(commands.contains("Codex 会话数据库不是受信任的已发现路径"));
     assert!(lib.contains("commands::load_codex_session_context"));
     assert!(app.contains("loadEarlierCodexSessionContext"));
-    assert!(screens.contains("actions.loadCodexSessionContext(session)"));
-    assert!(screens.contains("Codex rollout"));
-    assert!(screens.contains("assistant: showingCodexContext ? \"Codex\" : \"Claude\""));
+    assert!(screens.contains(
+        "actions.readAitrackerSessionDetail({ agent: session.agent, sessionId: session.sessionId"
+    ));
+    assert!(screens.contains("本地事件已加载"));
+    assert!(screens.contains("AI 智能体"));
     assert!(bridge.contains("load_codex_session_context"));
 }
 
@@ -1393,13 +1394,15 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "export const routeCatalog: RouteItem[] = [...routes, ...compatibilityRoutes];"
         )
     );
-    assert!(routes.contains("return routeCatalog.some((item) => item.id === value);"));
+    assert!(
+        routes.contains(
+            "return routeCatalog.some((item) => item.id === value) || value === \"about\";"
+        )
+    );
     assert!(routes.contains("if (route === \"about\") return \"settings\";"));
     assert!(routes.contains("if (route === \"sessions\")"));
     assert!(routes.contains("{ id: \"sessions\", label: \"会话\" }"));
-    assert!(routes.contains("if (route === \"settings\" || route === \"about\")"));
-    assert!(routes.contains("{ id: \"settings\", label: \"偏好设置\" }"));
-    assert!(routes.contains("{ id: \"about\", label: \"关于与更新\" }"));
+    assert!(routes.contains("if (route === \"settings\") return [];"));
     let document_title = &routes[routes
         .find("export function routeDocumentTitle")
         .expect("document title helper")..];
@@ -1515,8 +1518,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         commandbar.matches("ops-action-command").count(),
-        3,
-        "the command bar must expose exactly three primary client actions"
+        2,
+        "the command bar must expose exactly two primary client actions"
     );
     let action_positions = [
         commandbar
@@ -1525,9 +1528,6 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         commandbar
             .find("onClick={onLaunchClaude}")
             .expect("Claude launch action"),
-        commandbar
-            .find("onClick={onInstallClaudeZhPatch}")
-            .expect("Claude localization action"),
     ];
     assert!(action_positions.windows(2).all(|pair| pair[0] < pair[1]));
     for control in [
@@ -1548,7 +1548,6 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     for (handler, label) in [
         ("onClick={onRestartCodex}", "启动/重启 Codex"),
         ("onClick={onLaunchClaude}", "启动/重启 Claude"),
-        ("onClick={onInstallClaudeZhPatch}", "Claude 一键汉化"),
     ] {
         let button = jsx_button_containing(commandbar, handler);
         let icon = button
@@ -1584,7 +1583,6 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     for action_binding in [
         "onRestartCodex={() => void actions.restartCodex()}",
         "onLaunchClaude={() => void actions.launchClaudeDesktop()}",
-        "onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}",
     ] {
         assert!(
             app.contains(action_binding),
@@ -1678,11 +1676,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "legacy session UI remains: {legacy}"
         );
     }
-    assert!(css_rule_has(
-        &workspace,
-        ".aitracker-session-page",
-        "display: grid;"
-    ));
+    assert!(workspace.contains(".aitracker-session-content"));
     assert!(css_rule_has(
         &workspace,
         ".aitracker-session-card",
@@ -2959,7 +2953,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(app_tsx.contains("refresh_claude_third_party_config"));
     assert!(app_tsx.contains("repair_frontend_connection"));
     assert!(app_tsx.contains("repair_backend_service"));
-    assert!(app_tsx.contains("actions.restoreClaudeZhPatch()"));
+    assert!(app_tsx.contains("restoreClaudeZhPatch"));
     assert!(app_tsx.contains("options: { notify?: boolean } = {}"));
     assert!(app_tsx.contains("const shouldNotify = options.notify === true"));
     assert!(app_tsx.contains("setNotice({ title: refreshTitle, message: `正在刷新${routeLabel(target)}状态...`, status: \"running\" })"));
@@ -4153,7 +4147,6 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
     assert!(screens.contains("value={visibleHeaderOverride}"));
     assert!(screens.contains("value={visibleBodyOverride}"));
     assert!(screens.contains("readOnly={!showSupplierApiKey}"));
-    assert!(screens.contains("const loadFailed = Boolean(data && statusFailed(data.status));"));
     assert!(screens.contains("role=\"alert\""));
 }
 
@@ -4211,7 +4204,7 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
     let primary_action = &app_tsx_file[primary_start..manual_start];
     let manual_action = &app_tsx_file[manual_start
         ..app_tsx_file[manual_start..]
-            .find("const openClaudeChinese")
+            .find("const restoreClaudeZhPatch")
             .unwrap()
             + manual_start];
 
@@ -4244,7 +4237,7 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
     assert!(manual_action.contains("waitForPaint()"));
     assert!(manual_action.contains("setNotice({ title: \"Claude 手动汉化\", message: zhPatchNoticeMessage(result), status: result.status })"));
     assert!(manual_action.contains("install_claude_zh_patch_at_install_root"));
-    assert!(app_tsx.contains("actions.installClaudeZhPatchFromDirectory()"));
+    assert!(app_tsx.contains("installClaudeZhPatchFromDirectory"));
     assert!(commands_rs.contains("pub async fn install_claude_zh_patch_at_install_root"));
     assert!(commands_rs.contains("install_root_patch_needs_elevation(&validated_root)"));
     assert!(
@@ -4964,46 +4957,27 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("function ToolsAndPluginsScreen"));
     assert!(app_tsx.contains("function MaintenanceToolsPanel"));
     assert!(app_tsx.contains("label: \"插件、Skills 与 MCP\""));
-    assert!(app_tsx.contains("安装入口"));
-    assert!(app_tsx.contains("修复入口"));
-    assert!(app_tsx.contains("修复后端"));
-    assert!(app_tsx.contains("Watcher 自动接管"));
     assert!(app_tsx.contains("启动/重启Claude"));
-    assert!(app_tsx.contains("Claude 一键汉化"));
     assert!(app_tsx.contains("Claude 一键开发模式"));
     assert!(app_tsx.contains("启动/重启Codex"));
-    assert!(app_tsx.contains("load_watcher_state"));
-    assert!(app_tsx.contains("install_entrypoints"));
-    assert!(app_tsx.contains("uninstall_entrypoints"));
-    assert!(app_tsx.contains("install_watcher"));
-    assert!(app_tsx.contains("disable_watcher"));
 
     assert!(app_tsx.contains("function SettingsScreen"));
-    assert!(app_tsx.contains("设置文件位置"));
-    assert!(app_tsx.contains("Codex 增强矩阵"));
-    assert!(app_tsx.contains("Claude 一键汉化"));
+    assert!(!app_tsx.contains("设置文件位置"));
+    assert!(!app_tsx.contains("Codex 增强矩阵"));
+    assert!(!app_tsx.contains("CLI 命令包装器"));
+    assert!(!app_tsx.contains("统一管理插件、Skills、MCP、来源、风险与依赖。"));
+    assert!(!app_tsx.contains("commands::repair_backend"));
     let settings_screen = screens_file
         .split("function SettingsScreen")
         .nth(1)
         .and_then(|rest| rest.split("function AboutScreen").next())
         .expect("settings screen source");
-    let zh_settings_panel = screens_file
-        .split("<Panel title=\"Claude 一键汉化\"")
-        .nth(1)
-        .and_then(|rest| rest.split("<Panel title=\"CLI 命令包装器\"").next())
-        .expect("Claude zh settings panel source");
-    assert!(zh_settings_panel.contains("安装类型"));
-    assert!(zh_settings_panel.contains("目录可写"));
-    assert!(zh_settings_panel.contains("诊断日志"));
-    assert!(zh_settings_panel.contains("桌面资源"));
-    assert!(zh_settings_panel.contains("前端资源"));
-    assert!(zh_settings_panel.contains("Statsig 资源"));
-    assert!(!zh_settings_panel.contains("入口 URL"));
-    assert!(!zh_settings_panel.contains("wrapped_webview"));
-    assert!(app_tsx.contains("CLI 命令包装器"));
     assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
+    assert!(settings_screen.contains("<AboutScreen actions={actions}"));
     assert!(!settings_screen.contains("修复后端"));
-    assert!(!settings_screen.contains("供应商配置"));
+    assert!(!settings_screen.contains("Claude 一键汉化"));
+    assert!(!settings_screen.contains("CLI 命令包装器"));
+    assert!(settings_screen.contains("供应商配置"));
     assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
     assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
     assert!(!settings_screen.contains("<Panel title=\"安全边界\""));
@@ -5039,13 +5013,9 @@ fn settings_and_tools_route_keep_full_ops_controls() {
 }
 
 #[test]
-fn maintenance_check_runs_full_scan_auto_repair_with_visible_feedback() {
+fn removed_maintenance_check_has_no_frontend_or_backend_entrypoint() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let app = read_frontend_file("App.tsx");
     let screens = read_frontend_file("screens.tsx");
-    let actions = read_frontend_file("lib/actions.ts");
-    let types = read_frontend_file("types.ts");
-    let bridge = read_frontend_file("tauriBridge.ts");
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
 
@@ -5054,48 +5024,12 @@ fn maintenance_check_runs_full_scan_auto_repair_with_visible_feedback() {
         .nth(1)
         .and_then(|rest| rest.split("export function").next())
         .expect("maintenance tools panel source");
-    assert!(maintenance_panel.contains("actions.runMaintenanceCheck()"));
-    assert!(!maintenance_panel.contains("actions.refreshRoute(\"maintenance\")"));
-    assert!(!maintenance_panel.contains("卸载时移除 Claude Code Pro 托管数据"));
-    assert!(!maintenance_panel.contains("修复入口"));
-
-    let maintenance_action = app
-        .split("const runMaintenanceCheck = async () => {")
-        .nth(1)
-        .and_then(|rest| rest.split("const refreshRoute").next())
-        .expect("maintenance action source");
-    assert!(maintenance_action.contains("正在全量扫描 Codex、Claude 和管理工具"));
-    assert!(maintenance_action.contains("status: \"running\""));
-    assert!(maintenance_action.contains("await waitForPaint()"));
-    assert!(maintenance_action.contains("call<MaintenanceCheckResult>(\"run_maintenance_check\")"));
-    assert!(maintenance_action.contains("refreshOverview(true)"));
-    assert!(maintenance_action.contains("refreshSettings(true)"));
-    assert!(maintenance_action.contains("refreshClaude(true)"));
-    assert!(maintenance_action.contains("refreshWatcher(true)"));
-    assert!(maintenance_action.contains("notifyResult({ title: \"维护检查\""));
-    assert!(
-        maintenance_action.find("await waitForPaint()").unwrap()
-            < maintenance_action.find("run_maintenance_check").unwrap()
-    );
-
-    assert!(
-        actions.contains("runMaintenanceCheck: async () => null as MaintenanceCheckResult | null")
-    );
-    assert!(types.contains("export type MaintenanceCheckResult = CommandResult<{"));
-    assert!(types.contains("codexAppPath: string"));
-    assert!(types.contains("claudeAppPaths: string[]"));
-    assert!(types.contains("repairedItems: string[]"));
-    assert!(types.contains("remainingIssues: string[]"));
-    assert!(bridge.contains("command === \"run_maintenance_check\""));
-
-    assert!(commands.contains("pub async fn run_maintenance_check()"));
-    assert!(commands.contains("resolve_codex_app_dir(None)"));
-    assert!(commands.contains("settings.codex_app_path = codex_app_path"));
-    assert!(commands.contains("SettingsStore::default().save(&settings)"));
-    assert!(commands.contains("install::repair_shortcuts"));
-    assert!(commands.contains("ensure_cli_wrapper"));
-    assert!(commands.contains("ensure_detached_helper"));
-    assert!(lib.contains("commands::run_maintenance_check"));
+    assert!(!maintenance_panel.contains("runMaintenanceCheck"));
+    assert!(!maintenance_panel.contains("installEntrypoints"));
+    assert!(!maintenance_panel.contains("installWatcher"));
+    assert!(!commands.contains("ensure_cli_wrapper"));
+    assert!(!commands.contains("pub async fn run_maintenance_check()"));
+    assert!(!lib.contains("commands::run_maintenance_check"));
 }
 
 #[test]

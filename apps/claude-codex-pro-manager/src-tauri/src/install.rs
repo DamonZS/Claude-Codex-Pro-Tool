@@ -1,18 +1,4 @@
-pub use claude_codex_pro_core::install::{
-    EntryPointState, InstallActionResult, InstallOptions, ShortcutState, inspect_entrypoints,
-};
-
-pub fn install_entrypoints() -> InstallActionResult {
-    claude_codex_pro_core::install::install_entrypoints(&InstallOptions::default())
-}
-
-pub fn uninstall_entrypoints(options: InstallOptions) -> InstallActionResult {
-    claude_codex_pro_core::install::uninstall_entrypoints(&options)
-}
-
-pub fn repair_shortcuts() -> InstallActionResult {
-    claude_codex_pro_core::install::repair_entrypoints(&InstallOptions::default())
-}
+pub use claude_codex_pro_core::install::{EntryPointState, ShortcutState, inspect_entrypoints};
 
 #[cfg(test)]
 mod tests {

@@ -24,7 +24,6 @@ import {
   Flame,
   Info,
   KeyRound,
-  Languages,
   MessageCircle,
   Network,
   Pencil,
@@ -140,7 +139,6 @@ import type {
   AitrackerSessionDetailResult,
   AitrackerSessionRange,
   BackendSettings,
-  ClaudeChineseWindowResult,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopMarketplaceStatusResult,
   ClaudeDesktopOrgPluginStatusResult,
@@ -148,7 +146,6 @@ import type {
   ClaudeDesktopProviderPreviewResult,
   CredentialEnvironmentResult,
   ClaudeDesktopResult,
-  ClaudeZhPatchResult,
   CodexPluginMarketplaceStatusResult,
   ContextKind,
   DistillationCandidatesResult,
@@ -3034,49 +3031,17 @@ export function MaintenanceToolsPanel({
   claudeDesktop,
   overview,
   settings,
-  watcher,
 }: {
   actions: AppActions;
   claudeDesktop: ClaudeDesktopResult | null;
   overview: OverviewResult | null;
   settings: SettingsResult | null;
-  watcher: WatcherResult | null;
 }) {
   const savedCodexPath = settings?.settings.codexAppPath?.trim() || "";
   const detectedCodexPath = overview?.codex_app.path || "";
   const detectedClaudePath = claudeDesktop?.executablePaths?.[0] || "";
   return (
     <div className="stack">
-      <Panel title="检查与修复" detail="检查入口、Codex 应用和 Watcher 状态。">
-        <div className="ops-status-list">
-          <StatusRow label="Codex 应用" status={overview?.codex_app.status ?? "not_checked"} value={compactDisplayPath(detectedCodexPath)} />
-          <StatusRow label="静默启动入口" status={overview?.silent_shortcut.status ?? "not_checked"} value={compactDisplayPath(overview?.silent_shortcut.path)} />
-          <StatusRow label="管理控制台入口" status={overview?.management_shortcut.status ?? "not_checked"} value={compactDisplayPath(overview?.management_shortcut.path)} />
-          <StatusRow label="Watcher 自动接管" status={watcher?.enabled ? "running" : "disabled"} value={watcher?.enabled ? "正常" : compactDisplayPath(watcher?.disabled_flag)} />
-        </div>
-        <div className="action-row">
-          <Button onClick={() => void actions.runMaintenanceCheck()} size="sm">检查</Button>
-          <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复快捷方式</Button>
-          <Button onClick={() => void actions.repairBackend()} size="sm" variant="outline">修复后端</Button>
-        </div>
-      </Panel>
-
-      <Panel title="入口管理" detail="快捷方式写入系统实际桌面位置，不使用写死桌面路径。">
-        <div className="action-row">
-          <Button onClick={() => void actions.installEntrypoints()} size="sm">安装入口</Button>
-          <Button onClick={() => void actions.uninstallEntrypoints()} size="sm" variant="outline">卸载入口</Button>
-        </div>
-      </Panel>
-
-      <Panel title="自动接管" detail="Watcher 用于保持 Claude Code Pro 接管状态。">
-        <div className="action-row">
-          <Button onClick={() => void actions.installWatcher()} size="sm" variant="outline">安装 Watcher</Button>
-          <Button onClick={() => void actions.uninstallWatcher()} size="sm" variant="outline">移除 Watcher</Button>
-          <Button onClick={() => void actions.enableWatcher()} size="sm" variant="outline">启用</Button>
-          <Button onClick={() => void actions.disableWatcher()} size="sm" variant="outline">禁用</Button>
-        </div>
-      </Panel>
-
       <Panel title="Codex 应用路径" detail="免安装版或绿色版只需要选择一次，之后静默启动会自动复用。">
         <div className="ops-status-list">
           <StatusRow label="保存路径" status={savedCodexPath ? "ok" : "not_checked"} value={savedCodexPath ? compactDisplayPath(savedCodexPath) : "未记录路径"} />
@@ -3096,7 +3061,6 @@ export function MaintenanceToolsPanel({
         </div>
         <div className="action-row">
           <Button onClick={() => void actions.launchClaudeDesktop()} size="sm" variant="outline">启动/重启Claude</Button>
-          <Button className="claude-zh-success" onClick={() => void actions.installClaudeZhPatch()} size="sm" variant="outline">Claude 一键汉化</Button>
           <Button onClick={() => void actions.configureClaudeDesktopDevMode()} size="sm" variant="outline">Claude 一键开发模式</Button>
         </div>
       </Panel>
@@ -3123,78 +3087,49 @@ export const MaintenanceScreen = memo(function MaintenanceScreen({
   claudeDesktop,
   overview,
   settings,
-  watcher,
 }: {
   actions: AppActions;
   claudeDesktop: ClaudeDesktopResult | null;
   overview: OverviewResult | null;
   settings: SettingsResult | null;
-  watcher: WatcherResult | null;
 }) {
   return (
     <div className="stack">
-      <MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} />
+      <MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} />
     </div>
   );
 });
 
 export const SettingsScreen = memo(function SettingsScreen({
   actions,
-  claudeChinese,
-  claudeZhPatch,
+  claudeDesktop,
   draft,
   logs,
   onDraftChange,
   overview,
   settings,
-  watcher,
+  updateInfo,
 }: {
   actions: AppActions;
-  claudeChinese: ClaudeChineseWindowResult | null;
-  claudeZhPatch: ClaudeZhPatchResult | null;
+  claudeDesktop: ClaudeDesktopResult | null;
   draft: BackendSettings | null;
   logs: LogsResult | null;
   onDraftChange: (settings: BackendSettings) => void;
   overview: OverviewResult | null;
   settings: SettingsResult | null;
-  watcher: WatcherResult | null;
+  updateInfo: UpdateResult | null;
 }) {
   const s = draft ?? settings?.settings ?? null;
-  const updateDraft = <K extends keyof BackendSettings>(key: K, value: BackendSettings[K]) => {
-    if (!s) return;
-    onDraftChange({ ...s, [key]: value });
-  };
   const saveDraft = async () => {
     if (!s) return;
     await actions.saveSettings(s);
   };
-  const enhancementRows = [
-    ["增强总开关", "enhancementsEnabled"],
-    ["电脑操作守护", "computerUseGuardEnabled"],
-    ["插件入口解锁", "codexAppPluginEntryUnlock"],
-    ["插件市场解锁", "codexAppPluginMarketplaceUnlock"],
-    ["特殊插件强制安装", "codexAppForcePluginInstall"],
-    ["对话时间线", "codexAppConversationTimeline"],
-    ["对话阅读视图", "codexAppConversationView"],
-    ["切换对话保留位置", "codexAppThreadScrollRestore"],
-    ["Zed 远程打开", "codexAppZedRemoteOpen"],
-    ["Zed 项目记录", "zedRemoteProjectRegistryEnabled"],
-    ["同步 Zed 设置", "zedRemoteSyncToZedSettings"],
-    ["上游工作树创建", "codexAppUpstreamWorktreeCreate"],
-    ["原生菜单栏位置", "codexAppNativeMenuPlacement"],
-    ["Fast 按钮", "codexAppServiceTierControls"],
-    ["图片覆盖", "codexAppImageOverlayEnabled"],
-  ] as const;
   return (
     <div className="stack">
-      <div className="ops-two-column">
-        <div className="ops-wide-column">
-        <Panel title="设置文件位置" detail={settings?.settings_path ?? "未读取到设置文件。"}>
+      <Panel title="偏好设置" detail="保存本地运行偏好与供应商配置。">
           <div className="info-grid compact">
-            <InfoRow label="设置文件" value={compactPath(settings?.settings_path)} />
             <InfoRow label="Codex App" value={compactPath(s?.codexAppPath || overview?.codex_app.path)} />
             <InfoRow label="启动模式" value={s?.launchMode ?? "patch"} />
-            <InfoRow label="Watcher" value={watcher?.enabled ? "已启用" : "未启用"} />
             <InfoRow label="供应商数量" value={`${s?.relayProfiles.length ?? 0} 个`} />
             <InfoRow label="当前供应商" value={s?.activeRelayId ?? "default"} />
           </div>
@@ -3208,85 +3143,8 @@ export const SettingsScreen = memo(function SettingsScreen({
               保存设置
             </Button>
           </div>
-        </Panel>
-        <Panel title="Codex 增强矩阵" detail="可直接开关，点击保存设置后写入配置。">
-          <div className="ops-setting-grid">
-            {enhancementRows.map(([label, key]) => {
-              const enabled = Boolean(s?.[key]);
-              return (
-                <div className={`ops-setting-card ${enabled ? "enabled" : ""}`} key={label}>
-                  <strong>{label}</strong>
-                  <span>{enabled ? "开启" : "关闭"}</span>
-                  <ToggleSwitch checked={enabled} disabled={!s} onChange={(value) => updateDraft(key, value)} />
-                </div>
-              );
-            })}
-          </div>
-          <div className="action-row">
-            <Button disabled={!s} onClick={() => void saveDraft()}>保存增强矩阵</Button>
-          </div>
-        </Panel>
-      </div>
-      <div className="stack">
-        <Panel title="Claude 一键汉化" detail="一键汉化目标是本机 zh-CN 资源补丁；MSIX/WindowsApps 不可写时会提示选择可写安装目录。">
-          <div className="info-grid compact">
-            <InfoRow label="本机汉化" value={claudeZhPatch?.status.status ?? "not_checked"} />
-            <InfoRow label="安装类型" value={claudeZhPatch?.status.installKind ?? claudeChinese?.officialInstallKind ?? "未检测"} />
-            <InfoRow label="补丁目标" value={compactPath(claudeZhPatch?.status.appRoot)} />
-            <InfoRow label="目录可写" value={claudeZhPatch?.status.writable ? "是" : "否，需要管理员授权"} />
-            <InfoRow label="备份目录" value={compactPath(claudeZhPatch?.backupDir)} />
-            <InfoRow label="诊断日志" value={compactPath(claudeZhPatch?.logsPath)} />
-            <InfoRow label="桌面资源" value={claudeZhPatch?.status.resourcesPresent ? "已写入" : "未写入"} />
-            <InfoRow label="前端资源" value={claudeZhPatch?.status.frontendI18nPresent ? "已写入" : "未写入"} />
-            <InfoRow label="Statsig 资源" value={claudeZhPatch?.status.statsigI18nPresent ? "已写入" : "未写入"} />
-            <InfoRow label="Locale" value={claudeZhPatch?.status.localeConfigured ? "zh-CN" : "未设置"} />
-            <InfoRow label="语言白名单" value={claudeZhPatch?.status.languageWhitelistPatched ? "已激活" : "未激活"} />
-            <InfoRow label="Chunk 注入" value={claudeZhPatch?.status.chunkPatchPresent ? "已注入" : "未注入"} />
-          </div>
-          <div className="action-row">
-            <Button className="claude-zh-success" onClick={() => void actions.installClaudeZhPatch()}>
-              <Languages className="h-4 w-4" />
-              Claude 一键汉化
-            </Button>
-            <Button onClick={() => void actions.installClaudeZhPatchFromDirectory()} variant="outline">
-              <Languages className="h-4 w-4" />
-              手动选择安装目录
-            </Button>
-            <Button onClick={() => void actions.restoreClaudeZhPatch()} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              恢复官方 Claude
-            </Button>
-            <Button onClick={() => void actions.launchClaudeDesktop()} variant="outline">
-              <MessageCircle className="h-4 w-4" />
-              启动/重启Claude
-            </Button>
-          </div>
-        </Panel>
-        <Panel title="CLI 命令包装器" detail="命令行包装器用于把本地 Codex CLI 请求接入当前配置。">
-          <div className="ops-toggle-line">
-            <span>启用 CLI 命令包装器</span>
-            <ToggleSwitch checked={Boolean(s?.cliWrapperEnabled)} disabled={!s} onChange={(value) => updateDraft("cliWrapperEnabled", value)} />
-          </div>
-          <label className="ops-form-field">
-            <span>Base URL</span>
-            <input disabled={!s} onChange={(event) => updateDraft("cliWrapperBaseUrl", event.currentTarget.value)} placeholder="https://api.example.com/v1" value={s?.cliWrapperBaseUrl ?? ""} />
-          </label>
-          <label className="ops-form-field">
-            <span>API Key 环境变量</span>
-            <input disabled={!s} onChange={(event) => updateDraft("cliWrapperApiKeyEnv", event.currentTarget.value)} placeholder="OPENAI_API_KEY" value={s?.cliWrapperApiKeyEnv ?? ""} />
-          </label>
-          <label className="ops-form-field">
-            <span>API Key</span>
-            <input disabled={!s} onChange={(event) => updateDraft("cliWrapperApiKey", event.currentTarget.value)} placeholder={s?.cliWrapperApiKey ? "已配置，输入新值覆盖" : "未设置"} type="password" value={s?.cliWrapperApiKey ?? ""} />
-          </label>
-          <div className="info-grid compact">
-            <InfoRow label="生效方式" value="保存后重建 Codex CLI 命令包装器" />
-            <InfoRow label="依赖" value="需要本机可执行 Codex CLI" />
-          </div>
-          <Button disabled={!s} onClick={() => void saveDraft()} variant="outline">保存 CLI 命令包装器</Button>
-        </Panel>
-      </div>
-      </div>
+      </Panel>
+      <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />
       <LogsScreen actions={actions} logs={logs} />
     </div>
   );

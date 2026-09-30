@@ -54,7 +54,7 @@ use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt as TokioAsyncWr
 use tokio::sync::oneshot;
 use toml_edit::DocumentMut;
 
-use crate::install::{self, InstallActionResult, InstallOptions};
+use crate::install;
 
 static CLAUDE_DESKTOP_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static SETTINGS_WRITE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -488,23 +488,6 @@ pub struct OverviewPayload {
     pub update_status: String,
     pub settings_path: String,
     pub logs_path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MaintenanceCheckPayload {
-    pub codex_app_path: String,
-    pub claude_app_paths: Vec<String>,
-    pub repaired_items: Vec<String>,
-    pub remaining_issues: Vec<String>,
-    pub details: Vec<String>,
-}
-
-struct MaintenanceLocalResult {
-    codex_app_path: String,
-    repaired_items: Vec<String>,
-    remaining_issues: Vec<String>,
-    details: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3869,9 +3852,7 @@ pub async fn load_settings() -> CommandResult<SettingsPayload> {
 
 #[tauri::command]
 pub async fn save_settings(settings: BackendSettings) -> CommandResult<SettingsPayload> {
-    // Saving normalizes the settings, writes settings.json, and (via
-    // refresh_cli_wrapper_after_settings_save) may write CLI wrapper files — all
-    // synchronous disk IO that must stay off the UI thread.
+    // Saving normalizes the settings and writes settings.json off the UI thread.
     let sequence = SETTINGS_SAVE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn_blocking(move || save_settings_blocking(settings, sequence))
         .await
@@ -3905,7 +3886,6 @@ const BOOLEAN_CAPABILITY_SETTINGS: &[&str] = &[
     "codexAppNativeMenuPlacement",
     "claudeAppChineseOverlayEnabled",
     "codexAppServiceTierControls",
-    "cliWrapperEnabled",
     "multicaWorkspaceEnabled",
 ];
 
@@ -3961,13 +3941,7 @@ fn save_settings_blocking(
         || {
             let settings = normalize_settings_before_save(settings);
             match SettingsStore::default().save(&settings) {
-                Ok(()) => {
-                    let wrapper_message = refresh_cli_wrapper_after_settings_save(&settings);
-                    settings_payload(
-                        &format!("设置已保存。{wrapper_message}"),
-                        "保存后重新加载设置失败。",
-                    )
-                }
+                Ok(()) => settings_payload("设置已保存。", "保存后重新加载设置失败。"),
                 Err(error) => failed(
                     &format!("保存设置失败：{error}"),
                     SettingsPayload {
@@ -7479,230 +7453,6 @@ pub fn open_external_url(url: String) -> CommandResult<Value> {
 }
 
 #[tauri::command]
-pub async fn install_entrypoints() -> InstallActionResult {
-    tauri::async_runtime::spawn_blocking(install::install_entrypoints)
-        .await
-        .unwrap_or_else(|error| install_background_failure("安装入口", error))
-}
-
-#[tauri::command]
-pub async fn uninstall_entrypoints(options: InstallOptions) -> InstallActionResult {
-    tauri::async_runtime::spawn_blocking(move || install::uninstall_entrypoints(options))
-        .await
-        .unwrap_or_else(|error| install_background_failure("卸载入口", error))
-}
-
-#[tauri::command]
-pub async fn repair_shortcuts() -> InstallActionResult {
-    tauri::async_runtime::spawn_blocking(install::repair_shortcuts)
-        .await
-        .unwrap_or_else(|error| install_background_failure("修复快捷方式", error))
-}
-
-#[tauri::command]
-pub fn repair_backend() -> CommandResult<SettingsPayload> {
-    let settings = SettingsStore::default().load().unwrap_or_default();
-    let message = match claude_codex_pro_core::cli_wrapper::ensure_cli_wrapper(&settings) {
-        Ok(Some(install)) => format!(
-            "命令封装器已更新：{}。",
-            install.real_codex.to_string_lossy()
-        ),
-        Ok(None) => "命令封装器已是最新。".to_string(),
-        Err(error) => {
-            return match settings_payload_value() {
-                Ok(payload) => failed(&format!("命令封装器更新失败：{error}"), payload),
-                Err((payload_error, payload)) => failed(
-                    &format!("命令封装器更新失败：{error}；设置读取失败：{payload_error}"),
-                    payload,
-                ),
-            };
-        }
-    };
-    settings_payload(&message, "后端修复失败")
-}
-
-#[tauri::command]
-pub async fn run_maintenance_check() -> CommandResult<MaintenanceCheckPayload> {
-    let local = tauri::async_runtime::spawn_blocking(run_local_maintenance_check).await;
-    let Ok(mut local) = local else {
-        return failed(
-            "维护检查后台任务失败，请查看诊断日志。",
-            MaintenanceCheckPayload {
-                codex_app_path: String::new(),
-                claude_app_paths: Vec::new(),
-                repaired_items: Vec::new(),
-                remaining_issues: vec!["维护检查后台任务未完成。".to_string()],
-                details: Vec::new(),
-            },
-        );
-    };
-
-    let backend = repair_backend_service().await;
-    local.details.extend(backend.payload.details.clone());
-    if backend.payload.codex_backend_online {
-        local
-            .repaired_items
-            .push("Codex 本地后端已确认在线".to_string());
-    } else {
-        local
-            .remaining_issues
-            .push("Codex 本地后端仍未上线".to_string());
-    }
-    if backend.payload.claude_backend_online {
-        local
-            .repaired_items
-            .push("Claude 本地代理已确认在线".to_string());
-    } else {
-        local
-            .remaining_issues
-            .push("Claude 本地代理仍未上线".to_string());
-    }
-
-    let claude_status =
-        tauri::async_runtime::spawn_blocking(claude_codex_pro_core::claude_desktop::detect_status)
-            .await
-            .unwrap_or_else(|_| claude_codex_pro_core::claude_desktop::detect_status_light());
-    if claude_status.executable_paths.is_empty() {
-        local
-            .remaining_issues
-            .push("未发现 Claude Desktop 安装路径".to_string());
-    } else {
-        local.details.push(format!(
-            "已发现 Claude Desktop：{}",
-            claude_status.executable_paths.join("；")
-        ));
-    }
-
-    let final_entrypoints = install::inspect_entrypoints();
-    if !final_entrypoints.silent_shortcut.installed {
-        local
-            .remaining_issues
-            .push("Codex 静默启动入口仍缺失".to_string());
-    }
-    if !final_entrypoints.management_shortcut.installed {
-        local
-            .remaining_issues
-            .push("CCP 管理工具入口仍缺失".to_string());
-    }
-
-    local.repaired_items.sort();
-    local.repaired_items.dedup();
-    local.remaining_issues.sort();
-    local.remaining_issues.dedup();
-    local.details.sort();
-    local.details.dedup();
-    let repaired_count = local.repaired_items.len();
-    let issue_count = local.remaining_issues.len();
-    let codex_summary = if local.codex_app_path.is_empty() {
-        "未发现 Codex".to_string()
-    } else {
-        format!("Codex：{}", local.codex_app_path)
-    };
-    let message = if issue_count == 0 {
-        format!("检查完成，{codex_summary}；已自动修复或确认 {repaired_count} 项。")
-    } else {
-        format!(
-            "检查完成，{codex_summary}；已自动修复或确认 {repaired_count} 项，仍有 {issue_count} 项需处理。"
-        )
-    };
-    CommandResult {
-        status: if issue_count == 0 { "ok" } else { "degraded" }.to_string(),
-        message,
-        payload: MaintenanceCheckPayload {
-            codex_app_path: local.codex_app_path,
-            claude_app_paths: claude_status.executable_paths,
-            repaired_items: local.repaired_items,
-            remaining_issues: local.remaining_issues,
-            details: local.details,
-        },
-    }
-}
-
-fn run_local_maintenance_check() -> MaintenanceLocalResult {
-    let store = SettingsStore::default();
-    let (mut settings, settings_load_error) = match store.load_strict() {
-        Ok(settings) => (settings, None),
-        Err(error) => (BackendSettings::default(), Some(error.to_string())),
-    };
-    let mut repaired_items = Vec::new();
-    let mut remaining_issues = Vec::new();
-    let mut details = Vec::new();
-
-    match std::env::current_exe() {
-        Ok(path) if path.is_file() => repaired_items.push(format!(
-            "CCP 管理工具可执行文件已确认：{}",
-            path.to_string_lossy()
-        )),
-        Ok(path) => remaining_issues.push(format!(
-            "CCP 管理工具可执行文件不存在：{}",
-            path.to_string_lossy()
-        )),
-        Err(error) => remaining_issues.push(format!("无法确认 CCP 管理工具路径：{error}")),
-    }
-    if let Some(error) = settings_load_error.as_deref() {
-        remaining_issues.push(format!("管理工具设置文件读取失败：{error}"));
-    }
-
-    let saved_path = settings.codex_app_path.trim().to_string();
-    let saved_candidate = (!saved_path.is_empty())
-        .then(|| PathBuf::from(&saved_path))
-        .and_then(|path| claude_codex_pro_core::app_paths::normalize_codex_app_path(&path))
-        .filter(|path| claude_codex_pro_core::app_paths::build_codex_executable(path).exists());
-    let discovered = claude_codex_pro_core::app_paths::resolve_codex_app_dir(None)
-        .or_else(claude_codex_pro_core::app_paths::find_running_codex_app_dir)
-        .or(saved_candidate);
-    let codex_app_path = discovered
-        .as_deref()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if codex_app_path.is_empty() {
-        remaining_issues.push("未发现 Codex/ChatGPT 应用安装路径".to_string());
-    } else {
-        details.push(format!("已发现 Codex/ChatGPT：{codex_app_path}"));
-        if settings.codex_app_path != codex_app_path && settings_load_error.is_none() {
-            settings.codex_app_path = codex_app_path.clone();
-            match SettingsStore::default().save(&settings) {
-                Ok(()) => repaired_items.push("已保存最新 Codex 应用路径".to_string()),
-                Err(error) => remaining_issues.push(format!("保存 Codex 应用路径失败：{error}")),
-            }
-        }
-    }
-
-    let entrypoints = install::inspect_entrypoints();
-    if !entrypoints.silent_shortcut.installed || !entrypoints.management_shortcut.installed {
-        let result = install::repair_shortcuts();
-        details.push(result.message.clone());
-        if result.status == "ok" {
-            repaired_items.push("已修复 CCP 启动入口".to_string());
-        } else {
-            remaining_issues.push(format!("修复 CCP 启动入口失败：{}", result.message));
-        }
-    } else {
-        repaired_items.push("CCP 启动入口已确认正常".to_string());
-    }
-
-    if settings_load_error.is_none() {
-        match claude_codex_pro_core::cli_wrapper::ensure_cli_wrapper(&settings) {
-            Ok(Some(install)) => repaired_items.push(format!(
-                "已更新 Codex CLI 包装器：{}",
-                install.real_codex.to_string_lossy()
-            )),
-            Ok(None) => details.push("Codex CLI 包装器无需更新。".to_string()),
-            Err(error) => remaining_issues.push(format!("Codex CLI 包装器检查失败：{error}")),
-        }
-    } else {
-        details.push("设置文件不可读，已跳过 CLI 包装器写入。".to_string());
-    }
-
-    MaintenanceLocalResult {
-        codex_app_path,
-        repaired_items,
-        remaining_issues,
-        details,
-    }
-}
-
-#[tauri::command]
 pub async fn check_update() -> CommandResult<Value> {
     match claude_codex_pro_core::update::check_for_update(claude_codex_pro_core::version::VERSION)
         .await
@@ -10385,17 +10135,6 @@ fn sanitize_manager_event(event: &str) -> String {
     }
 }
 
-fn refresh_cli_wrapper_after_settings_save(settings: &BackendSettings) -> String {
-    match claude_codex_pro_core::cli_wrapper::ensure_cli_wrapper(settings) {
-        Ok(Some(install)) => format!(
-            " 命令封装器已更新：{}。",
-            install.real_codex.to_string_lossy()
-        ),
-        Ok(None) => String::new(),
-        Err(error) => format!(" 命令封装器更新失败：{error}。"),
-    }
-}
-
 fn relay_payload(
     status: claude_codex_pro_core::relay_config::RelayStatus,
     backup_path: Option<String>,
@@ -11309,16 +11048,6 @@ fn connect_loopback(port: u16) -> std::io::Result<TcpStream> {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     Ok(stream)
-}
-
-fn install_background_failure(action: &str, error: impl std::fmt::Display) -> InstallActionResult {
-    let state = install::inspect_entrypoints();
-    InstallActionResult {
-        status: "failed".to_string(),
-        message: format!("{action}后台任务失败：{error}"),
-        silent_shortcut: state.silent_shortcut,
-        management_shortcut: state.management_shortcut,
-    }
 }
 
 fn watcher_payload() -> WatcherPayload {

@@ -1,6 +1,5 @@
 import {
   Boxes,
-  Info,
   LayoutDashboard,
   MessageSquare,
   Network,
@@ -37,17 +36,19 @@ export const routes: RouteItem[] = [
   { id: "settings", label: "设置", icon: Settings, description: "偏好设置、更新与产品信息", keywords: ["配置", "about", "update"] },
 ];
 
+// Hidden compatibility alias for persisted legacy deep links.
 export const compatibilityRoutes: RouteItem[] = [
-  { id: "about", label: "关于与更新", icon: Info, description: "版本、Release 与联系方式", keywords: ["about", "update", "版本"] },
+  { id: "about", label: "关于与更新", icon: Settings, description: "旧版入口已归一到设置", keywords: ["about", "update", "版本"] },
 ];
 
 export const routeCatalog: RouteItem[] = [...routes, ...compatibilityRoutes];
 
 export function isRoute(value: unknown): value is Route {
-  return routeCatalog.some((item) => item.id === value);
+  return routeCatalog.some((item) => item.id === value) || value === "about";
 }
 
 export function routeLabel(route: Route) {
+  if (route === "about") return "设置";
   return routeCatalog.find((item) => item.id === route)?.label ?? "概览";
 }
 
@@ -68,12 +69,7 @@ export function routeDomainTabs(route: Route): Array<{ id: Route; label: string 
       { id: "sessions", label: "会话" },
     ];
   }
-  if (route === "settings" || route === "about") {
-    return [
-      { id: "settings", label: "偏好设置" },
-      { id: "about", label: "关于与更新" },
-    ];
-  }
+  if (route === "settings") return [];
   return [];
 }
 
@@ -90,6 +86,7 @@ export function initialRoute(): Route {
 }
 
 export function normalizeRoute(value: unknown): unknown {
+  if (value === "about") return "settings";
   if (value === "pluginHub" || value === "context" || value === "scripts") return "tools";
   if (value === "logs" || value === "multica") return "settings";
   if (value === "relay" || value === "models") return "supplier";

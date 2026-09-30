@@ -143,7 +143,6 @@ import {
   ToggleSwitch,
 } from "@/components/ui/ops";
 import {
-  AboutScreen,
   MaintenanceScreen,
   OverviewScreen,
   SessionManagementScreen,
@@ -156,7 +155,6 @@ import type {
   AggregateStrategy,
   BackendSettings,
   CcswitchImportResult,
-  ClaudeChineseWindowResult,
   ClaudeContextEntriesResult,
   ClaudeSession,
   ClaudeSessionContextPage,
@@ -212,7 +210,6 @@ import type {
   ContextKind,
   DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
-  InstallEntrypointsResult,
   LaunchStatus,
   LegacyRoute,
   LiveContextEntriesResult,
@@ -222,7 +219,6 @@ import type {
   LogsResult,
   RequestTimelineResult,
   TimelineLogsState,
-  MaintenanceCheckResult,
   McpbPackageResult,
   MulticaConnectionConfig,
   MulticaConnectionsResult,
@@ -274,7 +270,6 @@ export function App() {
   const [overview, setOverview] = useState<OverviewResult | null>(null);
   const [ads, setAds] = useState<AdsResult | null>(null);
   const [claudeDesktop, setClaudeDesktop] = useState<ClaudeDesktopResult | null>(null);
-  const [claudeChinese, setClaudeChinese] = useState<ClaudeChineseWindowResult | null>(null);
   const [claudeZhPatch, setClaudeZhPatch] = useState<ClaudeZhPatchResult | null>(null);
   const [settings, setSettings] = useState<SettingsResult | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<BackendSettings | null>(null);
@@ -474,24 +469,18 @@ export function App() {
   };
 
   const refreshClaude = async (silent = false) => {
-    const [desktop, wrapped, zhPatch] = await Promise.all([
+    const [desktop, zhPatch] = await Promise.all([
       run(() => call<ClaudeDesktopResult>("load_claude_desktop_status"), "Claude Desktop", { trackBusy: !silent, notify: !silent }),
-      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化", { trackBusy: !silent, notify: !silent }),
       run(() => call<ClaudeZhPatchResult>("load_claude_zh_patch_status"), "Claude 本机汉化", { trackBusy: !silent, notify: !silent }),
     ]);
     if (desktop) setClaudeDesktop(desktop);
-    if (wrapped) setClaudeChinese(wrapped);
     if (zhPatch) setClaudeZhPatch(zhPatch);
     if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude Desktop", message: desktop.message, status: desktop.status });
   };
 
   const refreshClaudeLight = async (silent = false) => {
-    const [desktop, wrapped] = await Promise.all([
-      run(() => call<ClaudeDesktopResult>("load_claude_desktop_status_light"), "Claude Desktop", { trackBusy: !silent, notify: !silent }),
-      run(() => call<ClaudeChineseWindowResult>("load_claude_chinese_window_status"), "Claude 一键汉化", { trackBusy: !silent, notify: !silent }),
-    ]);
+    const desktop = await run(() => call<ClaudeDesktopResult>("load_claude_desktop_status_light"), "Claude Desktop", { trackBusy: !silent, notify: !silent });
     if (desktop) setClaudeDesktop(desktop);
-    if (wrapped) setClaudeChinese(wrapped);
     if (!silent && desktop) notifyIfNeedsAttention({ title: "Claude Desktop", message: desktop.message, status: desktop.status });
   };
 
@@ -1495,15 +1484,6 @@ export function App() {
     }
   };
 
-  const openClaudeChinese = async () => {
-    const result = await run(() => call<ClaudeChineseWindowResult>("open_claude_chinese_window"), "Claude 一键汉化");
-    if (result) {
-      setClaudeChinese(result);
-      notifyResult({ title: "Claude 一键汉化", message: result.message, status: result.status });
-      await refreshClaude(true);
-    }
-  };
-
   const restoreClaudeZhPatch = async () => {
     if (!window.confirm("确认恢复 Claude 官方文件？这会用汉化前的备份覆盖已修改文件。")) return;
     setNotice({
@@ -2421,21 +2401,6 @@ export function App() {
     setRoute("supplier");
   };
 
-  const repairEntrypoints = async () => {
-    const result = await run(() => call<CommandResult<Record<string, unknown>>>("repair_shortcuts"), "修复入口");
-    if (result) notifyResult({ title: "修复入口", message: result.message, status: result.status });
-    await refreshOverview(true);
-  };
-
-  const repairBackend = async () => {
-    const result = await run(() => call<SettingsResult>("repair_backend"), "修复后端");
-    if (result) {
-      setSettings(result);
-      updateSettingsDraft(result.settings);
-      notifyResult({ title: "修复后端", message: result.message, status: result.status });
-    }
-  };
-
   const repairHistorySessions = async () => {
     setNotice({
       title: "历史会话修复",
@@ -2687,28 +2652,6 @@ export function App() {
     return result;
   };
 
-  const installEntrypoints = async () => {
-    const result = await run(() => call<InstallEntrypointsResult>("install_entrypoints"), "安装入口");
-    if (result) notifyResult({ title: "安装入口", message: result.message, status: result.status });
-    await refreshOverview(true);
-  };
-
-  const uninstallEntrypoints = async () => {
-    if (!window.confirm("卸载入口会移除静默启动和管理工具快捷方式，不会删除配置数据。继续？")) return;
-    const result = await run(
-      () => call<InstallEntrypointsResult>("uninstall_entrypoints", { options: { removeOwnedData: false } }),
-      "卸载入口",
-    );
-    if (result) notifyResult({ title: "卸载入口", message: result.message, status: result.status });
-    await refreshOverview(true);
-  };
-
-  const repairShortcuts = async () => {
-    const result = await run(() => call<InstallEntrypointsResult>("repair_shortcuts"), "修复快捷方式");
-    if (result) notifyResult({ title: "修复快捷方式", message: result.message, status: result.status });
-    await refreshOverview(true);
-  };
-
   const watcherAction = async (command: "install_watcher" | "uninstall_watcher" | "enable_watcher" | "disable_watcher", title: string) => {
     const result = await run(() => call<WatcherResult>(command), title);
     if (result) {
@@ -2734,28 +2677,6 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "重置图片覆盖", message: result.message, status: result.status });
     }
-  };
-
-  const runMaintenanceCheck = async () => {
-    setNotice({
-      title: "维护检查",
-      message: "正在全量扫描 Codex、Claude 和管理工具，并自动修复安全异常...",
-      status: "running",
-    });
-    await waitForPaint();
-    const result = await run(
-      () => call<MaintenanceCheckResult>("run_maintenance_check"),
-      "维护检查",
-    );
-    if (!result) return null;
-    await Promise.all([
-      refreshOverview(true),
-      refreshSettings(true),
-      refreshClaude(true),
-      refreshWatcher(true),
-    ]);
-    notifyResult({ title: "维护检查", message: result.message, status: result.status });
-    return result;
   };
 
   const saveSettingBoolean = async (key: string, value: boolean) => {
@@ -2915,9 +2836,7 @@ export function App() {
   const actionsRef = useRef<AppActions | null>(null);
   actionsRef.current = {
       refreshRoute,
-      runMaintenanceCheck,
       showNotice: setNotice,
-      openClaudeChinese,
       installClaudeZhPatch,
       installClaudeZhPatchFromDirectory,
       restoreClaudeZhPatch,
@@ -2987,8 +2906,6 @@ export function App() {
       refreshClaudeDesktopMarketplace,
       refreshClaudeDesktopDevMode,
       refreshScripts,
-      repairEntrypoints,
-      repairBackend,
       repairHistorySessions,
       refreshLocalSessions,
       loadCodexSessionContext,
@@ -3041,9 +2958,6 @@ export function App() {
       restoreClaudeDesktopProviderOfficial: restoreClaudeDesktopProviderOfficial as unknown as AppActions["restoreClaudeDesktopProviderOfficial"],
       saveSettings,
       saveSettingBoolean,
-      installEntrypoints,
-      uninstallEntrypoints,
-      repairShortcuts,
       installWatcher: () => watcherAction("install_watcher", "安装 Watcher"),
       uninstallWatcher: () => watcherAction("uninstall_watcher", "移除 Watcher"),
       enableWatcher: () => watcherAction("enable_watcher", "启用 Watcher"),
@@ -3067,9 +2981,7 @@ export function App() {
 
   const actions = useMemo<AppActions>(() => ({
       refreshRoute: (...args) => actionsRef.current!.refreshRoute(...args),
-      runMaintenanceCheck: (...args) => actionsRef.current!.runMaintenanceCheck(...args),
       showNotice: (...args) => actionsRef.current!.showNotice(...args),
-      openClaudeChinese: (...args) => actionsRef.current!.openClaudeChinese(...args),
       installClaudeZhPatch: (...args) => actionsRef.current!.installClaudeZhPatch(...args),
       installClaudeZhPatchFromDirectory: (...args) => actionsRef.current!.installClaudeZhPatchFromDirectory(...args),
       restoreClaudeZhPatch: (...args) => actionsRef.current!.restoreClaudeZhPatch(...args),
@@ -3139,8 +3051,6 @@ export function App() {
       refreshClaudeDesktopMarketplace: (...args) => actionsRef.current!.refreshClaudeDesktopMarketplace(...args),
       refreshClaudeDesktopDevMode: (...args) => actionsRef.current!.refreshClaudeDesktopDevMode(...args),
       refreshScripts: (...args) => actionsRef.current!.refreshScripts(...args),
-      repairEntrypoints: (...args) => actionsRef.current!.repairEntrypoints(...args),
-      repairBackend: (...args) => actionsRef.current!.repairBackend(...args),
       repairHistorySessions: (...args) => actionsRef.current!.repairHistorySessions(...args),
       refreshLocalSessions: (...args) => actionsRef.current!.refreshLocalSessions(...args),
       loadCodexSessionContext: (...args) => actionsRef.current!.loadCodexSessionContext(...args),
@@ -3193,9 +3103,6 @@ export function App() {
       restoreClaudeDesktopProviderOfficial: (...args) => actionsRef.current!.restoreClaudeDesktopProviderOfficial(...args),
       saveSettings: (...args) => actionsRef.current!.saveSettings(...args),
       saveSettingBoolean: (...args) => actionsRef.current!.saveSettingBoolean(...args),
-      installEntrypoints: (...args) => actionsRef.current!.installEntrypoints(...args),
-      uninstallEntrypoints: (...args) => actionsRef.current!.uninstallEntrypoints(...args),
-      repairShortcuts: (...args) => actionsRef.current!.repairShortcuts(...args),
       installWatcher: (...args) => actionsRef.current!.installWatcher(...args),
       uninstallWatcher: (...args) => actionsRef.current!.uninstallWatcher(...args),
       enableWatcher: (...args) => actionsRef.current!.enableWatcher(...args),
@@ -3262,7 +3169,6 @@ export function App() {
         busy={busy}
         codexThemeBackground={codexThemeBackground?.data_uri ?? null}
         onAgentScopeChange={setAgentScope}
-        onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}
         onInstallUpdate={() => void actions.performUpdate(updateInfoToRelease(updateInfo))}
         onLaunchClaude={() => void actions.launchClaudeDesktop()}
         onNavigate={(nextRoute) => {
@@ -3332,9 +3238,8 @@ export function App() {
               distillationCandidates={distillationCandidates}
             />
           ) : null}
-          {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} watcher={watcher} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeChinese={claudeChinese} claudeZhPatch={claudeZhPatch} draft={settingsDraft} logs={logs} onDraftChange={updateSettingsDraft} overview={overview} settings={settings} watcher={watcher} /> : null}
-          {route === "about" ? <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} /> : null}
+          {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} draft={settingsDraft} logs={logs} onDraftChange={updateSettingsDraft} overview={overview} settings={settings} updateInfo={updateInfo} /> : null}
       </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
     </>

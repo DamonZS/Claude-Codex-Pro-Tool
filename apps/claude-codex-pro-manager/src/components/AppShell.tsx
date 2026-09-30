@@ -6,7 +6,6 @@ import {
   CircleCheck,
   Command,
   Laptop,
-  Languages,
   LoaderCircle,
   MessageCircle,
   Moon,
@@ -57,7 +56,6 @@ type AppShellProps = {
   children: ReactNode;
   codexThemeBackground: string | null;
   onAgentScopeChange: (scope: AgentScope) => void;
-  onInstallClaudeZhPatch: () => void;
   onInstallUpdate: () => void;
   onLaunchClaude: () => void;
   onNavigate: (route: Route) => void;
@@ -109,7 +107,6 @@ export function AppShell({
   children,
   codexThemeBackground,
   onAgentScopeChange,
-  onInstallClaudeZhPatch,
   onInstallUpdate,
   onLaunchClaude,
   onNavigate,
@@ -525,10 +522,6 @@ export function AppShell({
               <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onLaunchClaude} title="启动或重启 Claude" type="button">
                 <MessageCircle aria-hidden="true" className="h-4 w-4" />
                 <span>启动/重启 Claude</span>
-              </button>
-              <button className="ops-icon-command ops-action-command ops-primary-command claude-zh-success" disabled={busy} onClick={onInstallClaudeZhPatch} title="写入 Claude 本机汉化资源" type="button">
-                <Languages aria-hidden="true" className="h-4 w-4" />
-                <span>Claude 一键汉化</span>
               </button>
             </div>
           </div>

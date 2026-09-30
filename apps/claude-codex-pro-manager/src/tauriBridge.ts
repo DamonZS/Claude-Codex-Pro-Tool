@@ -697,15 +697,6 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
     });
   }
-  if (command === "run_maintenance_check") {
-    return ok("检查完成，预览模式已确认管理工具状态。", {
-      codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe",
-      claudeAppPaths: [],
-      repairedItems: ["CCP 启动入口已确认正常"],
-      remainingIssues: [],
-      details: ["预览模式不会修改真实系统。"],
-    });
-  }
   if (command === "load_ads") {
     return ok("预览模式已加载公告。", {
       version: announcementConfig.version,
@@ -1329,12 +1320,6 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "install_market_script") {
     return previewScriptMarket("预览模式已模拟安装脚本。");
-  }
-  if (command === "install_entrypoints" || command === "uninstall_entrypoints" || command === "repair_shortcuts") {
-    return ok("预览模式已模拟入口维护。", {
-      silent_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Code Pro.lnk" },
-      management_shortcut: { installed: command !== "uninstall_entrypoints", path: "Desktop\\Claude Code Pro 管理工具.lnk" },
-    });
   }
   if (command === "load_watcher_state" || command === "install_watcher" || command === "enable_watcher" || command === "disable_watcher" || command === "uninstall_watcher") {
     const enabled = command === "enable_watcher" || command === "install_watcher" || command === "load_watcher_state";

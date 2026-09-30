@@ -1,15 +1,9 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(windows)]
-use super::LEGACY_MANAGER_NAME;
 use super::{
     InstallOptions, MANAGER_BINARY, MANAGER_NAME, SILENT_NAME, install_root_or_default,
     option_or_current_exe,
 };
-
-const INSTALL_SUBKEY: &str = r"Software\Claude Codex Pro";
-const UNINSTALL_SUBKEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudeCodexPro";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsEntrypointPlan {
@@ -54,89 +48,6 @@ pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> WindowsEntrypo
         uninstall_key: "ClaudeCodexPro".to_string(),
         remove_owned_data: options.remove_owned_data,
     }
-}
-
-#[cfg(windows)]
-pub fn install_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
-    let plan = build_windows_entrypoint_plan(options);
-    let install_root = PathBuf::from(&plan.install_root);
-    std::fs::create_dir_all(&install_root)?;
-    create_entrypoint_shortcut(
-        PathBuf::from(&plan.manager_shortcut),
-        PathBuf::from(&plan.manager_path),
-        "Open Claude Codex Pro management tool",
-        PathBuf::from(&plan.manager_icon_path),
-    )?;
-    write_uninstall_registration(&plan)?;
-    Ok(())
-}
-
-#[cfg(windows)]
-pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
-    let plan = build_windows_entrypoint_plan(options);
-    let _ = std::fs::remove_file(&plan.silent_shortcut);
-    let _ = std::fs::remove_file(&plan.manager_shortcut);
-    let _ = std::fs::remove_file(
-        PathBuf::from(&plan.install_root).join(format!("{LEGACY_MANAGER_NAME}.lnk")),
-    );
-    let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
-    let _ = crate::windows_integration::delete_current_user_key(INSTALL_SUBKEY);
-    Ok(())
-}
-#[cfg(not(windows))]
-pub fn install_shortcuts(_options: &InstallOptions) -> anyhow::Result<()> {
-    anyhow::bail!("Windows shortcuts are only supported on Windows")
-}
-
-#[cfg(not(windows))]
-pub fn uninstall_shortcuts(_options: &InstallOptions) -> anyhow::Result<()> {
-    anyhow::bail!("Windows shortcuts are only supported on Windows")
-}
-
-#[cfg(windows)]
-fn create_entrypoint_shortcut(
-    path: PathBuf,
-    target: PathBuf,
-    description: &str,
-    icon: PathBuf,
-) -> anyhow::Result<()> {
-    crate::windows_integration::create_shortcut(&crate::windows_integration::ShortcutSpec {
-        working_directory: target.parent().map(Path::to_path_buf),
-        path,
-        target,
-        arguments: String::new(),
-        description: description.to_string(),
-        icon: Some(icon),
-        show_minimized: false,
-    })
-}
-
-#[cfg(windows)]
-fn write_uninstall_registration(plan: &WindowsEntrypointPlan) -> anyhow::Result<()> {
-    let uninstall_command = format!("\"{}\"", plan.manager_path);
-    let install_location = Path::new(&plan.manager_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(&plan.install_root))
-        .to_string_lossy()
-        .to_string();
-    for (name, value) in [
-        ("DisplayName", SILENT_NAME.to_string()),
-        ("DisplayVersion", crate::version::VERSION.to_string()),
-        ("Publisher", "DamonZS".to_string()),
-        ("DisplayIcon", plan.manager_icon_path.clone()),
-        ("InstallLocation", install_location.clone()),
-        ("UninstallString", uninstall_command.clone()),
-        ("QuietUninstallString", uninstall_command),
-    ] {
-        crate::windows_integration::set_current_user_string_value(UNINSTALL_SUBKEY, name, &value)?;
-    }
-    crate::windows_integration::set_current_user_string_value(
-        INSTALL_SUBKEY,
-        "InstallDir",
-        &install_location,
-    )?;
-    Ok(())
 }
 
 fn default_icon_path() -> PathBuf {

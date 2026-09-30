@@ -1,12 +1,8 @@
-#[cfg(target_os = "macos")]
-use std::fs;
-#[cfg(target_os = "macos")]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use super::{
-    InstallOptions, LEGACY_MANAGER_NAME, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle,
-    SILENT_BINARY, SILENT_NAME, install_root_or_default, option_or_current_exe,
+    InstallOptions, MANAGER_BINARY, MANAGER_NAME, MacosAppBundle, SILENT_BINARY, SILENT_NAME,
+    install_root_or_default, option_or_current_exe,
 };
 
 pub fn build_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
@@ -56,91 +52,6 @@ fn is_bundle_executable_target(target: &Path, executable_name: &str) -> bool {
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str())
             == Some("Contents")
-}
-
-#[cfg(target_os = "macos")]
-pub fn install_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
-    write_bundle(&build_app_bundle(options, true))?;
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-pub fn uninstall_app_bundles(options: &InstallOptions) -> anyhow::Result<()> {
-    let install_root = install_root_or_default(options);
-    for name in [SILENT_NAME, LEGACY_MANAGER_NAME] {
-        let app = install_root.join(format!("{name}.app"));
-        if app.exists() {
-            fs::remove_dir_all(app)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn install_app_bundles(_options: &InstallOptions) -> anyhow::Result<()> {
-    anyhow::bail!("macOS app bundles are only supported on macOS")
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn uninstall_app_bundles(_options: &InstallOptions) -> anyhow::Result<()> {
-    anyhow::bail!("macOS app bundles are only supported on macOS")
-}
-
-#[cfg(target_os = "macos")]
-fn write_bundle(bundle: &MacosAppBundle) -> anyhow::Result<()> {
-    let contents = bundle.app_path.join("Contents");
-    let macos = contents.join("MacOS");
-    let resources = contents.join("Resources");
-    fs::create_dir_all(&macos)?;
-    fs::create_dir_all(&resources)?;
-    fs::write(contents.join("Info.plist"), &bundle.info_plist)?;
-    if let (Some(source), Some(target_name)) = (&bundle.binary_source, &bundle.binary_target_name) {
-        if source.exists() {
-            let target = macos.join(target_name);
-            if source != &target {
-                fs::copy(source, &target)?;
-                let mut permissions = fs::metadata(&target)?.permissions();
-                permissions.set_mode(0o755);
-                fs::set_permissions(target, permissions)?;
-            }
-        }
-    }
-    let executable = macos.join(executable_name_from_plist(&bundle.info_plist));
-    let executable_is_copied_binary = bundle
-        .binary_target_name
-        .as_deref()
-        .is_some_and(|name| executable.file_name().and_then(|value| value.to_str()) == Some(name));
-    if !executable_is_copied_binary || !executable.exists() {
-        fs::write(&executable, &bundle.launch_script)?;
-        let mut permissions = fs::metadata(&executable)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(executable, permissions)?;
-    }
-    copy_icon(&resources)?;
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn copy_icon(resources: &Path) -> anyhow::Result<()> {
-    let source = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .map(|path| path.join("claude-codex-pro.png"));
-    if let Some(source) = source.filter(|path| path.exists()) {
-        fs::copy(source, resources.join("claude-codex-pro.png"))?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn executable_name_from_plist(plist: &str) -> String {
-    plist
-        .split("<key>CFBundleExecutable</key>")
-        .nth(1)
-        .and_then(|tail| tail.split("<string>").nth(1))
-        .and_then(|tail| tail.split("</string>").next())
-        .unwrap_or("ClaudeCodexPro")
-        .to_string()
 }
 
 fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str) -> String {

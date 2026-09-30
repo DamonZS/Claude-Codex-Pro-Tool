@@ -9,8 +9,6 @@ pub const SILENT_NAME: &str = "Claude Codex Pro";
 pub const MANAGER_NAME: &str = SILENT_NAME;
 pub const SILENT_BINARY: &str = "claude-codex-pro";
 pub const MANAGER_BINARY: &str = SILENT_BINARY;
-pub const LEGACY_MANAGER_BINARY: &str = "claude-codex-pro-manager";
-pub const LEGACY_MANAGER_NAME: &str = "Claude Code Pro 管理工具";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOptions {
@@ -32,14 +30,6 @@ pub struct ShortcutState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EntryPointState {
-    pub silent_shortcut: ShortcutState,
-    pub management_shortcut: ShortcutState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct InstallActionResult {
-    pub status: String,
-    pub message: String,
     pub silent_shortcut: ShortcutState,
     pub management_shortcut: ShortcutState,
 }
@@ -88,38 +78,12 @@ pub fn inspect_entrypoints() -> EntryPointState {
     }
 }
 
-pub fn install_entrypoints(options: &InstallOptions) -> InstallActionResult {
-    let result = platform_install(options);
-    action_result(result, "入口已安装。")
-}
-
-pub fn uninstall_entrypoints(options: &InstallOptions) -> InstallActionResult {
-    let result = platform_uninstall(options);
-    if result.is_ok() && options.remove_owned_data {
-        let _ = remove_owned_data();
-    }
-    action_result(result, "入口已卸载。")
-}
-
-pub fn repair_entrypoints(options: &InstallOptions) -> InstallActionResult {
-    let result = platform_install(options);
-    action_result(result, "入口已修复。")
-}
-
 pub fn build_windows_entrypoint_plan(options: &InstallOptions) -> windows::WindowsEntrypointPlan {
     windows::build_windows_entrypoint_plan(options)
 }
 
 pub fn build_macos_app_bundle(options: &InstallOptions, manager: bool) -> MacosAppBundle {
     macos::build_app_bundle(options, manager)
-}
-
-pub fn remove_owned_data() -> std::io::Result<()> {
-    let dir = crate::paths::default_app_state_dir();
-    if dir.exists() {
-        std::fs::remove_dir_all(dir)?;
-    }
-    Ok(())
 }
 
 pub fn default_install_root() -> Option<PathBuf> {
@@ -148,60 +112,6 @@ pub fn default_install_root_strategy() -> &'static str {
         "macos-applications"
     } else {
         "user-dirs-desktop"
-    }
-}
-
-fn platform_install(options: &InstallOptions) -> anyhow::Result<()> {
-    #[cfg(windows)]
-    {
-        windows::install_shortcuts(options)
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        macos::install_app_bundles(options)
-    }
-
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = options;
-        anyhow::bail!("当前平台暂不支持安装 Claude Codex Pro 入口")
-    }
-}
-
-fn platform_uninstall(options: &InstallOptions) -> anyhow::Result<()> {
-    #[cfg(windows)]
-    {
-        windows::uninstall_shortcuts(options)
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        macos::uninstall_app_bundles(options)
-    }
-
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = options;
-        anyhow::bail!("当前平台暂不支持卸载 Claude Codex Pro 入口")
-    }
-}
-
-fn action_result(result: anyhow::Result<()>, success_message: &str) -> InstallActionResult {
-    let state = inspect_entrypoints();
-    match result {
-        Ok(()) => InstallActionResult {
-            status: "ok".to_string(),
-            message: success_message.to_string(),
-            silent_shortcut: state.silent_shortcut,
-            management_shortcut: state.management_shortcut,
-        },
-        Err(error) => InstallActionResult {
-            status: "failed".to_string(),
-            message: error.to_string(),
-            silent_shortcut: state.silent_shortcut,
-            management_shortcut: state.management_shortcut,
-        },
     }
 }
 
