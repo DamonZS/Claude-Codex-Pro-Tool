@@ -266,13 +266,8 @@ function buildClientRecords({
         },
         {
           label: "会话操作增强",
-          detail: "删除、导出、迁移与时间线能力",
-          enabled: settings
-            ? settings.codexAppSessionDelete
-              || settings.codexAppMarkdownExport
-              || settings.codexAppProjectMove
-              || settings.codexAppConversationTimeline
-            : null,
+          detail: "保留会话位置与时间线能力",
+          enabled: settings?.codexAppConversationTimeline ?? null,
         },
         {
           label: "我的任务",

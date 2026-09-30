@@ -102,9 +102,6 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_plugin_entry_unlock
         || settings.codex_app_plugin_marketplace_unlock
         || settings.codex_app_force_plugin_install
-        || settings.codex_app_session_delete
-        || settings.codex_app_markdown_export
-        || settings.codex_app_project_move
         || settings.codex_app_conversation_timeline
         || settings.codex_app_conversation_view
         || settings.codex_app_thread_scroll_restore
@@ -113,7 +110,6 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_native_menu_placement
         || settings.codex_app_service_tier_controls
         || settings.codex_app_image_overlay_enabled
-        || settings.codex_goals_enabled
         || settings.multica_workspace_enabled
 }
 
@@ -3644,6 +3640,40 @@ mod tests {
         assert!(injection.contains(".with_codex_page_transport(Arc::new(page_transport))"));
         assert!(injection.contains("MulticaWebhookStore::default().with_helper_port(helper_port)"));
         assert!(!injection.contains("CodexPageHostTransport::new"));
+    }
+
+    #[test]
+    fn removed_legacy_session_features_do_not_trigger_frontend_injection() {
+        let mut settings = BackendSettings::default();
+        settings.enhancements_enabled = false;
+        settings.codex_app_plugin_entry_unlock = false;
+        settings.codex_app_plugin_marketplace_unlock = false;
+        settings.codex_app_conversation_timeline = false;
+        settings.codex_app_conversation_view = false;
+        settings.codex_app_thread_scroll_restore = false;
+        settings.codex_app_zed_remote_open = false;
+        settings.codex_app_upstream_worktree_create = false;
+        settings.codex_app_native_menu_placement = false;
+        settings.codex_app_service_tier_controls = false;
+        settings.codex_app_image_overlay_enabled = false;
+        settings.multica_workspace_enabled = false;
+
+        let mut session_delete = settings.clone();
+        session_delete.codex_app_session_delete = true;
+        assert!(!codex_frontend_injection_enabled(&session_delete));
+        let mut markdown_export = settings.clone();
+        markdown_export.codex_app_markdown_export = true;
+        assert!(!codex_frontend_injection_enabled(&markdown_export));
+        let mut project_move = settings.clone();
+        project_move.codex_app_project_move = true;
+        assert!(!codex_frontend_injection_enabled(&project_move));
+        let mut codex_goals = settings.clone();
+        codex_goals.codex_goals_enabled = true;
+        assert!(!codex_frontend_injection_enabled(&codex_goals));
+
+        let mut timeline = settings;
+        timeline.codex_app_conversation_timeline = true;
+        assert!(codex_frontend_injection_enabled(&timeline));
     }
 
     #[test]

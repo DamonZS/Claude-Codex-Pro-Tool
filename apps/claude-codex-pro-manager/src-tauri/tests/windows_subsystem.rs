@@ -4998,6 +4998,8 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(!zh_settings_panel.contains("wrapped_webview"));
     assert!(app_tsx.contains("CLI 命令包装器"));
     assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
+    assert!(!settings_screen.contains("修复后端"));
+    assert!(!settings_screen.contains("供应商配置"));
     assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
     assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
     assert!(!settings_screen.contains("<Panel title=\"安全边界\""));
@@ -5005,6 +5007,13 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(!settings_screen.contains("保存图片覆盖"));
     assert!(!settings_screen.contains("重置图片覆盖"));
     assert!(!settings_screen.contains("重置设置"));
+    let supplier_screen = screens_file
+        .split("export function SupplierScreen")
+        .nth(1)
+        .and_then(|rest| rest.split("export function ToolsAndPluginsScreen").next())
+        .expect("supplier screen source");
+    assert!(!supplier_screen.contains("供应商同步"));
+    assert!(!supplier_screen.contains("启用供应商配置切换"));
     assert!(app_tsx.contains("saveSettings"));
     assert!(app_tsx.contains("logsPath: string;"));
     assert!(app_tsx.contains("function zhPatchNoticeMessage"));
@@ -5043,6 +5052,8 @@ fn maintenance_check_runs_full_scan_auto_repair_with_visible_feedback() {
         .expect("maintenance tools panel source");
     assert!(maintenance_panel.contains("actions.runMaintenanceCheck()"));
     assert!(!maintenance_panel.contains("actions.refreshRoute(\"maintenance\")"));
+    assert!(!maintenance_panel.contains("卸载时移除 Claude Code Pro 托管数据"));
+    assert!(!maintenance_panel.contains("修复入口"));
 
     let maintenance_action = app
         .split("const runMaintenanceCheck = async () => {")

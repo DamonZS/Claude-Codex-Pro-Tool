@@ -454,7 +454,7 @@ pub struct BackendSettings {
     pub codex_app_path: String,
     #[serde(rename = "codexExtraArgs", default)]
     pub codex_extra_args: Vec<String>,
-    #[serde(rename = "providerSyncEnabled", default)]
+    #[serde(rename = "providerSyncEnabled", default = "default_true")]
     pub provider_sync_enabled: bool,
     #[serde(rename = "providerSyncSavedProviders", default)]
     pub provider_sync_saved_providers: Vec<String>,
@@ -472,13 +472,13 @@ pub struct BackendSettings {
     pub codex_app_plugin_entry_unlock: bool,
     #[serde(rename = "codexAppPluginMarketplaceUnlock", default = "default_true")]
     pub codex_app_plugin_marketplace_unlock: bool,
-    #[serde(rename = "codexAppForcePluginInstall", default = "default_true")]
+    #[serde(rename = "codexAppForcePluginInstall", default)]
     pub codex_app_force_plugin_install: bool,
-    #[serde(rename = "codexAppSessionDelete", default = "default_true")]
+    #[serde(rename = "codexAppSessionDelete", default)]
     pub codex_app_session_delete: bool,
-    #[serde(rename = "codexAppMarkdownExport", default = "default_true")]
+    #[serde(rename = "codexAppMarkdownExport", default)]
     pub codex_app_markdown_export: bool,
-    #[serde(rename = "codexAppProjectMove", default = "default_true")]
+    #[serde(rename = "codexAppProjectMove", default)]
     pub codex_app_project_move: bool,
     #[serde(rename = "codexAppConversationTimeline", default = "default_true")]
     pub codex_app_conversation_timeline: bool,
@@ -486,17 +486,17 @@ pub struct BackendSettings {
     pub codex_app_conversation_view: bool,
     #[serde(rename = "codexAppThreadScrollRestore", default = "default_true")]
     pub codex_app_thread_scroll_restore: bool,
-    #[serde(rename = "codexAppZedRemoteOpen", default = "default_true")]
+    #[serde(rename = "codexAppZedRemoteOpen", default)]
     pub codex_app_zed_remote_open: bool,
     #[serde(rename = "zedRemoteOpenStrategy", default)]
     pub zed_remote_open_strategy: ZedOpenStrategy,
-    #[serde(rename = "zedRemoteProjectRegistryEnabled", default = "default_true")]
+    #[serde(rename = "zedRemoteProjectRegistryEnabled", default)]
     pub zed_remote_project_registry_enabled: bool,
     #[serde(rename = "zedRemoteSyncToZedSettings", default)]
     pub zed_remote_sync_to_zed_settings: bool,
-    #[serde(rename = "codexAppUpstreamWorktreeCreate", default = "default_true")]
+    #[serde(rename = "codexAppUpstreamWorktreeCreate", default)]
     pub codex_app_upstream_worktree_create: bool,
-    #[serde(rename = "codexAppNativeMenuPlacement", default = "default_true")]
+    #[serde(rename = "codexAppNativeMenuPlacement", default)]
     pub codex_app_native_menu_placement: bool,
     #[serde(rename = "claudeAppChineseOverlayEnabled", default)]
     pub claude_app_chinese_overlay_enabled: bool,
@@ -561,7 +561,7 @@ impl Default for BackendSettings {
         Self {
             codex_app_path: String::new(),
             codex_extra_args: Vec::new(),
-            provider_sync_enabled: false,
+            provider_sync_enabled: true,
             provider_sync_saved_providers: Vec::new(),
             provider_sync_manual_providers: Vec::new(),
             provider_sync_last_selected_provider: String::new(),
@@ -570,19 +570,19 @@ impl Default for BackendSettings {
             computer_use_guard_enabled: false,
             codex_app_plugin_entry_unlock: true,
             codex_app_plugin_marketplace_unlock: true,
-            codex_app_force_plugin_install: true,
-            codex_app_session_delete: true,
-            codex_app_markdown_export: true,
-            codex_app_project_move: true,
+            codex_app_force_plugin_install: false,
+            codex_app_session_delete: false,
+            codex_app_markdown_export: false,
+            codex_app_project_move: false,
             codex_app_conversation_timeline: true,
             codex_app_conversation_view: false,
             codex_app_thread_scroll_restore: true,
-            codex_app_zed_remote_open: true,
+            codex_app_zed_remote_open: false,
             zed_remote_open_strategy: ZedOpenStrategy::AddToFocusedWorkspace,
-            zed_remote_project_registry_enabled: true,
+            zed_remote_project_registry_enabled: false,
             zed_remote_sync_to_zed_settings: false,
-            codex_app_upstream_worktree_create: true,
-            codex_app_native_menu_placement: true,
+            codex_app_upstream_worktree_create: false,
+            codex_app_native_menu_placement: false,
             claude_app_chinese_overlay_enabled: false,
             codex_app_service_tier_controls: false,
             codex_app_image_overlay_enabled: false,
@@ -2125,13 +2125,16 @@ mod tests {
     #[test]
     fn settings_default_matches_expected_behavior() {
         let settings = BackendSettings::default();
-        assert!(!settings.provider_sync_enabled);
+        assert!(settings.provider_sync_enabled);
         assert!(settings.relay_profiles_enabled);
         assert!(settings.enhancements_enabled);
         assert!(!settings.computer_use_guard_enabled);
         assert!(settings.codex_app_plugin_entry_unlock);
         assert!(settings.codex_app_plugin_marketplace_unlock);
-        assert!(settings.codex_app_force_plugin_install);
+        assert!(!settings.codex_app_force_plugin_install);
+        assert!(!settings.codex_app_session_delete);
+        assert!(!settings.codex_app_markdown_export);
+        assert!(!settings.codex_app_project_move);
         assert!(!settings.codex_goals_enabled);
         assert!(settings.codex_app_path.is_empty());
         assert!(settings.codex_extra_args.is_empty());
@@ -2139,8 +2142,11 @@ mod tests {
             settings.zed_remote_open_strategy,
             ZedOpenStrategy::AddToFocusedWorkspace
         );
-        assert!(settings.zed_remote_project_registry_enabled);
+        assert!(!settings.codex_app_zed_remote_open);
+        assert!(!settings.zed_remote_project_registry_enabled);
         assert!(!settings.zed_remote_sync_to_zed_settings);
+        assert!(!settings.codex_app_upstream_worktree_create);
+        assert!(!settings.codex_app_native_menu_placement);
         assert_eq!(settings.launch_mode, LaunchMode::Patch);
         assert_eq!(settings.relay_base_url, default_relay_base_url());
         assert!(settings.relay_api_key.is_empty());
@@ -2149,6 +2155,21 @@ mod tests {
         assert_eq!(settings.relay_test_model, default_relay_test_model());
         assert!(!settings.cli_wrapper_enabled);
         assert_eq!(settings.cli_wrapper_api_key_env, "CUSTOM_OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn empty_settings_keep_safe_compatibility_defaults() {
+        let settings: BackendSettings = serde_json::from_str("{}").unwrap();
+        assert!(settings.provider_sync_enabled);
+        assert!(settings.relay_profiles_enabled);
+        assert!(!settings.codex_app_force_plugin_install);
+        assert!(!settings.codex_app_session_delete);
+        assert!(!settings.codex_app_markdown_export);
+        assert!(!settings.codex_app_project_move);
+        assert!(!settings.codex_app_zed_remote_open);
+        assert!(!settings.zed_remote_project_registry_enabled);
+        assert!(!settings.codex_app_upstream_worktree_create);
+        assert!(!settings.codex_app_native_menu_placement);
     }
 
     #[test]

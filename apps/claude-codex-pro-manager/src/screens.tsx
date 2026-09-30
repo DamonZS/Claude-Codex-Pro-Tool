@@ -1404,10 +1404,6 @@ export function SupplierScreen({
       }
     }
   };
-  const toggleMasterSwitch = async (enabled: boolean) => {
-    if (!appSettings) return;
-    await saveSupplierSettings({ ...appSettings, relayProfilesEnabled: enabled });
-  };
   const toggleVisibleSupplierRouting = async (enabled: boolean) => {
     if (!appSettings || !routableSupplierProfiles.length || supplierRouteToggleInFlightRef.current) return;
     supplierRouteToggleInFlightRef.current = true;
@@ -2028,7 +2024,6 @@ env_key = "OPENAI_API_KEY"
   return (
     <div className="supplier-list-shell">
       {credentialEnvironment && (credentialEnvironment.present || credentialEnvironment.restartRequired) ? <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>{credentialEnvironment.conflict ? "检测到凭据环境变量冲突" : "检测到凭据环境变量"}</strong><p>{credentialEnvironment.conflict ? `${credentialEnvironment.variableName} 与当前 Codex 供应商凭据不一致，可能覆盖 config.toml / auth.json 并导致 401；不会清理 CODEX_HOME。` : credentialEnvironment.present ? `${credentialEnvironment.variableName} 已存在，当前未发现与活动供应商的值冲突。` : `${credentialEnvironment.variableName} 已从 CCP 可管理的作用域清理。`}{credentialEnvironmentScopeUnavailable ? " 用户会话环境暂不可访问，CCP 未执行扩大范围的清理。" : ""}{credentialEnvironmentExternalSource ? " 该值来自 CCP 外部启动环境，需在原设置来源中清理。" : ""}{credentialEnvironment.restartRequired ? " 请完全退出并重新启动 Codex。" : ""}</p><span className="supplier-env-chip">{credentialEnvironment.variableName} {credentialEnvironment.userPresent ? "用户会话" : credentialEnvironment.systemPresent ? "系统环境" : credentialEnvironment.processPresent ? "当前进程" : "已清理"}</span></div><div className="supplier-env-actions"><Button disabled={!credentialEnvironment.canClearUser || credentialEnvironmentBusy} onClick={() => void clearCredentialEnvironment()} size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button disabled={credentialEnvironmentBusy} onClick={() => void refreshCredentialEnvironment()} size="sm" variant="outline"><RefreshCw className={`h-4 w-4 ${credentialEnvironmentBusy ? "spin" : ""}`} />{credentialEnvironmentBusy ? "检测中" : "检测"}</Button></div></div> : null}
-      <div className="supplier-master-row"><label><input checked={appSettings?.relayProfilesEnabled !== false} disabled={!appSettings} onChange={(event) => void toggleMasterSwitch(event.currentTarget.checked)} type="checkbox" />启用供应商配置切换</label><p>关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。</p></div>
       <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
       <div className="supplier-card-list">
         {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="\u6682\u65e0\u4f9b\u5e94\u5546\u914d\u7f6e\uff0c\u70b9\u51fb\u201c\u6dfb\u52a0\u4f9b\u5e94\u5546\u201d\u521b\u5efa\u4e00\u4e2a\u771f\u5b9e\u53ef\u5207\u6362\u7684 Codex API \u914d\u7f6e\u3002" />}
@@ -2184,8 +2179,6 @@ export function LegacySupplierScreen({
         </Panel>
         <Panel title="当前配置摘录" detail="只展示路径和非敏感字段。">
           <div className="info-grid compact">
-            <InfoRow label="供应商同步" value={settings?.settings.providerSyncEnabled ? "开启" : "关闭"} />
-            <InfoRow label="供应商开关" value={settings?.settings.relayProfilesEnabled ? "开启" : "关闭"} />
             <InfoRow label="协议" value={active?.protocol || "responses"} />
             <InfoRow label="测试模型" value={active?.testModel || settings?.settings.relayTestModel || "默认"} />
           </div>
@@ -3069,14 +3062,9 @@ export function MaintenanceToolsPanel({
       </Panel>
 
       <Panel title="入口管理" detail="快捷方式写入系统实际桌面位置，不使用写死桌面路径。">
-        <div className="ops-toggle-line">
-          <span>卸载时移除 Claude Code Pro 托管数据</span>
-          <ToggleSwitch checked={false} disabled onChange={() => {}} />
-        </div>
         <div className="action-row">
           <Button onClick={() => void actions.installEntrypoints()} size="sm">安装入口</Button>
           <Button onClick={() => void actions.uninstallEntrypoints()} size="sm" variant="outline">卸载入口</Button>
-          <Button onClick={() => void actions.repairShortcuts()} size="sm" variant="outline">修复入口</Button>
         </div>
       </Panel>
 
@@ -3098,11 +3086,6 @@ export function MaintenanceToolsPanel({
           <span>保存的应用路径</span>
           <input readOnly value={savedCodexPath || "选择 Codex.exe、Codex.app、app 目录或绿色目录"} />
         </label>
-        <div className="action-row">
-          <Button disabled size="sm">选择应用目录</Button>
-          <Button disabled size="sm" variant="outline">选择 Codex.exe</Button>
-          <Button disabled size="sm" variant="outline">清除保存路径</Button>
-        </div>
       </Panel>
 
       <Panel title="Claude 应用路径" detail="用于核对 Claude Desktop 安装位置和开发模式相关操作。">
@@ -3186,16 +3169,11 @@ export const SettingsScreen = memo(function SettingsScreen({
     await actions.saveSettings(s);
   };
   const enhancementRows = [
-    ["供应商同步", "providerSyncEnabled"],
-    ["供应商配置", "relayProfilesEnabled"],
     ["增强总开关", "enhancementsEnabled"],
     ["电脑操作守护", "computerUseGuardEnabled"],
     ["插件入口解锁", "codexAppPluginEntryUnlock"],
     ["插件市场解锁", "codexAppPluginMarketplaceUnlock"],
     ["特殊插件强制安装", "codexAppForcePluginInstall"],
-    ["会话删除", "codexAppSessionDelete"],
-    ["Markdown 导出", "codexAppMarkdownExport"],
-    ["会话项目移动", "codexAppProjectMove"],
     ["对话时间线", "codexAppConversationTimeline"],
     ["对话阅读视图", "codexAppConversationView"],
     ["切换对话保留位置", "codexAppThreadScrollRestore"],
@@ -3204,12 +3182,8 @@ export const SettingsScreen = memo(function SettingsScreen({
     ["同步 Zed 设置", "zedRemoteSyncToZedSettings"],
     ["上游工作树创建", "codexAppUpstreamWorktreeCreate"],
     ["原生菜单栏位置", "codexAppNativeMenuPlacement"],
-    ["Claude 中文覆盖", "claudeAppChineseOverlayEnabled"],
     ["Fast 按钮", "codexAppServiceTierControls"],
     ["图片覆盖", "codexAppImageOverlayEnabled"],
-    ["Codex 目标", "codexGoalsEnabled"],
-    ["CLI 包装器", "cliWrapperEnabled"],
-    ["本地工作流", "multicaWorkspaceEnabled"],
   ] as const;
   return (
     <div className="stack">
@@ -3229,10 +3203,6 @@ export const SettingsScreen = memo(function SettingsScreen({
               <RefreshCw className="h-4 w-4" />
               刷新设置
             </Button>
-            <Button onClick={() => void actions.repairBackend()} variant="outline">
-              <ShieldCheck className="h-4 w-4" />
-              修复后端
-            </Button>
             <Button disabled={!s} onClick={() => void saveDraft()}>
               <CheckCircle2 className="h-4 w-4" />
               保存设置
@@ -3242,8 +3212,7 @@ export const SettingsScreen = memo(function SettingsScreen({
         <Panel title="Codex 增强矩阵" detail="可直接开关，点击保存设置后写入配置。">
           <div className="ops-setting-grid">
             {enhancementRows.map(([label, key]) => {
-              // Newly introduced settings remain enabled for older responses until explicitly disabled.
-              const enabled = key === "multicaWorkspaceEnabled" ? s?.multicaWorkspaceEnabled !== false : Boolean(s?.[key]);
+              const enabled = Boolean(s?.[key]);
               return (
                 <div className={`ops-setting-card ${enabled ? "enabled" : ""}`} key={label}>
                   <strong>{label}</strong>
