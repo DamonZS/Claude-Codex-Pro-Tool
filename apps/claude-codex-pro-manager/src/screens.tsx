@@ -3103,47 +3103,18 @@ export const MaintenanceScreen = memo(function MaintenanceScreen({
 export const SettingsScreen = memo(function SettingsScreen({
   actions,
   claudeDesktop,
-  draft,
   logs,
-  onDraftChange,
   overview,
-  settings,
   updateInfo,
 }: {
   actions: AppActions;
   claudeDesktop: ClaudeDesktopResult | null;
-  draft: BackendSettings | null;
   logs: LogsResult | null;
-  onDraftChange: (settings: BackendSettings) => void;
   overview: OverviewResult | null;
-  settings: SettingsResult | null;
   updateInfo: UpdateResult | null;
 }) {
-  const s = draft ?? settings?.settings ?? null;
-  const saveDraft = async () => {
-    if (!s) return;
-    await actions.saveSettings(s);
-  };
   return (
     <div className="stack">
-      <Panel title="偏好设置" detail="保存本地运行偏好与供应商配置。">
-          <div className="info-grid compact">
-            <InfoRow label="Codex App" value={compactPath(s?.codexAppPath || overview?.codex_app.path)} />
-            <InfoRow label="启动模式" value={s?.launchMode ?? "patch"} />
-            <InfoRow label="供应商数量" value={`${s?.relayProfiles.length ?? 0} 个`} />
-            <InfoRow label="当前供应商" value={s?.activeRelayId ?? "default"} />
-          </div>
-          <div className="action-row">
-            <Button onClick={() => void actions.refreshRoute("settings")} variant="outline">
-              <RefreshCw className="h-4 w-4" />
-              刷新设置
-            </Button>
-            <Button disabled={!s} onClick={() => void saveDraft()}>
-              <CheckCircle2 className="h-4 w-4" />
-              保存设置
-            </Button>
-          </div>
-      </Panel>
       <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />
       <LogsScreen actions={actions} logs={logs} />
     </div>

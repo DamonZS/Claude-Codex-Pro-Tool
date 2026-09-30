@@ -3239,7 +3239,7 @@ export function App() {
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} draft={settingsDraft} logs={logs} onDraftChange={updateSettingsDraft} overview={overview} settings={settings} updateInfo={updateInfo} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} updateInfo={updateInfo} /> : null}
       </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
     </>

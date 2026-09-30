@@ -1075,10 +1075,10 @@ fn pangu_memory_public_surfaces_are_removed() {
 }
 
 #[test]
-fn session_and_supplier_and_theme_pages_omit_redundant_heading_band() {
+fn selected_pages_omit_redundant_heading_band() {
     let shell = normalize_source(include_str!("../../src/components/AppShell.tsx").to_string());
     assert!(shell.contains(
-        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" ? (\n            <div className=\"ops-page-heading\">"
+        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" && route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\" ? (\n            <div className=\"ops-page-heading\">"
     ));
 }
 
@@ -4974,10 +4974,10 @@ fn settings_and_tools_route_keep_full_ops_controls() {
         .expect("settings screen source");
     assert!(settings_screen.contains("<LogsScreen actions={actions} logs={logs} />"));
     assert!(settings_screen.contains("<AboutScreen actions={actions}"));
+    assert!(!settings_screen.contains("<Panel title=\"偏好设置\""));
     assert!(!settings_screen.contains("修复后端"));
     assert!(!settings_screen.contains("Claude 一键汉化"));
     assert!(!settings_screen.contains("CLI 命令包装器"));
-    assert!(settings_screen.contains("供应商配置"));
     assert!(!settings_screen.contains("<Panel title=\"Codex 启动参数\""));
     assert!(!settings_screen.contains("<Panel title=\"图片覆盖\""));
     assert!(!settings_screen.contains("<Panel title=\"安全边界\""));
@@ -5010,6 +5010,12 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(styles.contains(".toggle-switch"));
     assert!(styles.contains(".toggle-switch-thumb"));
     assert!(styles.contains(".ops-textarea"));
+
+    let app_shell = read_frontend_file("components/AppShell.tsx");
+    assert!(
+        app_shell
+            .contains("route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\"")
+    );
 }
 
 #[test]
