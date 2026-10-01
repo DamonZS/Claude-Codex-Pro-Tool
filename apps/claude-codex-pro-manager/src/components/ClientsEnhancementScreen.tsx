@@ -1,362 +1,696 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  BookOpen,
-  BrainCircuit,
-  Check,
-  Clock3,
-  FlaskConical,
-  FolderOpen,
-  History,
-  LoaderCircle,
-  Send,
-  X,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, ChevronLeft, ChevronRight, FlaskConical, FolderOpen, LoaderCircle, PackageCheck, Trash2, X, Zap } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import "./distillation/distillation.css";
 import type { AppActions } from "@/lib/actions";
 import {
   filterDistillationSessions,
-  groupDistillationSessionsByProject,
+  toggleMaterialSelection,
+  toggleProjectSelection,
+  type DistillationMaterialGranularity,
+  type DistillationTimeRange,
 } from "@/lib/distillation-materials";
-import type {
-  AitrackerSessionDetailResult,
-  DistillationCandidate,
-  DistillationRunResult,
-  DistillationSessionSelection,
-  DistillationWorkbenchResult,
-  DistillationWorkbenchSession,
-} from "@/types";
+import type { DistillationCandidate, DistillationRunResult, DistillationWorkbenchResult, DistillationWorkbenchSession } from "@/types";
 
-// The layout and interaction order below follow AITRACKER's
-// DistillationPage/DistillConfig/MaterialDrawer/ExpCard flow.  CCP owns the
-// rendered components and liquid-glass styles; only the distillation semantics
-// are shared with the local Rust workbench commands.
+import { AgentIcon, EST_TOKENS_PER_TURN, agentLabel, candidateRefs, formatDateTime, formatTokens, materialKeyOf, resolveCandidateSource, sessionTurns, timestampValue } from "./distillation/common";
+import { ExpCard } from "./distillation/ExpCard";
+import { MaterialDrawer, MaterialPicker, type SegmentRef } from "./distillation/MaterialDrawer";
+import { ModelSelect, type DistillModelOption } from "./distillation/ModelSelect";
+import { OUT_GROUPS, OUT_TYPES, PROMPT_PRESETS, kindMeta, outTypeMeta, type OutTypeId } from "./distillation/out-types";
 
-type DistillKind = "skill" | "brief" | "prompt" | "persona" | "memory";
-type TimeRange = "today" | "7d" | "30d" | "all";
-type MaterialMode = "session" | "project";
-type Selection = DistillationSessionSelection;
+// 蒸馏工作台：交互、文案与状态机对齐 AITracker DistillationPage / DistillConfig
+// （经版权方授权移植），视觉使用 CCP 液态玻璃 token（distillation.css）。
+// 出产物分两组：能力资产 → Skill 库，记忆资产 → 记忆库（见 out-types.ts）。
 
-const OUTPUT_TYPES: Array<{ id: DistillKind; label: string; group: "capability" | "memory" }> = [
-  { id: "skill", label: "Skill", group: "capability" },
-  { id: "brief", label: "Workflow", group: "capability" },
-  { id: "prompt", label: "Prompt", group: "capability" },
-  { id: "persona", label: "Profile / Persona", group: "memory" },
-  { id: "memory", label: "Task Memory", group: "memory" },
-];
+const HIST_PAGE = 10;
+const OFFLINE_MODEL_ID = "offline";
+const MODEL_STORAGE_KEY = "ccp.distillation.model";
+const TASK_STORAGE_KEY = "ccp.distillation.active-task";
+const TERMINAL_PHASES = ["completed", "failed", "cancelled"];
 
-function sessionKey(session: Pick<DistillationWorkbenchSession, "agent" | "sessionId">) {
-  return `${session.agent}:${session.sessionId}`;
+type Mode = "quick" | "pro";
+type Toast = { id: number; tone: "ok" | "error"; text: string; action?: { label: string; run: () => void } };
+
+function readStorage(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 
-function agentLabel(agent: string) {
-  const labels: Record<string, string> = {
-    codex: "Codex",
-    "claude-code": "Claude Code",
-    "claude-desktop": "Claude Desktop",
-    workbuddy: "WorkBuddy",
-    cursor: "Cursor",
-    openclaw: "OpenClaw",
-  };
-  return labels[agent.toLocaleLowerCase()] ?? agent;
+function writeStorage(key: string, value: string | null) {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // Storage is a convenience only; the task keeps running server-side.
+  }
 }
 
-function timestampValue(value: string | number | null | undefined) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : Number.NaN;
-  const normalized = value?.trim();
-  if (!normalized) return Number.NaN;
-  return /^\d+(?:\.\d+)?$/.test(normalized) ? Number(normalized) : Date.parse(normalized);
+function RowLabel({ children }: { children: React.ReactNode }) {
+  return <span className="dw-row-label">{children}</span>;
 }
 
-function dateLabel(value: string | number | null | undefined) {
-  const date = new Date(timestampValue(value));
-  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+function Chip({ on, onClick, children, icon }: { on?: boolean; onClick: () => void; children: React.ReactNode; icon?: React.ReactNode }) {
+  return <button aria-pressed={on} className={`dw-chip${on ? " on" : ""}`} onClick={onClick} type="button">{icon}{children}</button>;
 }
 
-function materialRange(range: TimeRange) {
-  return range === "7d" ? "7" : range === "30d" ? "30" : range;
+function DistillMetrics({ selectedCount, estTokens, runs, approved, busy }: { selectedCount: number; estTokens: number; runs: number; approved: number; busy: boolean }) {
+  const cards = [
+    { k: "已选素材", v: `${selectedCount}`, s: `~${formatTokens(estTokens)} tokens`, c: "var(--dw-chart-1)" },
+    { k: "素材 Token", v: formatTokens(estTokens), s: "本次输入预估", c: "var(--dw-chart-4)" },
+    { k: "蒸馏次数", v: `${runs}`, s: busy ? "进行中…" : "累计", c: "var(--dw-chart-2)" },
+    { k: "已入库", v: `${approved}`, s: "保存为 Skill", c: "var(--dw-chart-3)" },
+  ];
+  return (
+    <section aria-label="蒸馏统计" className="dw-metrics">
+      {cards.map((card) => (
+        <div className="dw-glass dw-metric" key={card.k}>
+          <small>{card.k}</small>
+          <strong style={{ color: card.c }}>{card.v}</strong>
+          <span>{card.s}</span>
+        </div>
+      ))}
+    </section>
+  );
 }
 
-function formatTokens(value: number) {
-  if (value >= 1_000_000_000) return `${compactTokenValue(value / 1_000_000_000)}B`;
-  if (value >= 1_000_000) return `${compactTokenValue(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${compactTokenValue(value / 1_000)}K`;
-  return Math.round(value).toLocaleString("zh-CN");
+function RunningExpCard({ color, kindLabel, modelLabel, segCount, sources, progress: serverProgress, startedAt }: { color: string; kindLabel: string; modelLabel: string; segCount: number; sources: string; progress: number; startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 120);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const visible = serverProgress > 0 ? serverProgress : Math.min(0.92, (now - startedAt) / 30_000);
+  return (
+    <article className="dw-glass dw-running" style={{ ["--dw-accent" as string]: color }}>
+      <div className="dw-running-meta">
+        <span className="dw-kind-chip">{kindLabel}</span>
+        <span>{formatDateTime(startedAt)}</span>
+        <span>· {modelLabel}</span>
+      </div>
+      <div className="dw-running-material">素材：{segCount} 段 · {sources}</div>
+      <div className="dw-progress"><i style={{ width: `${Math.round(visible * 100)}%` }} /></div>
+      <p className="dw-running-copy">蒸馏中… {Math.round(visible * 100)}% · 已耗时 {elapsed}s</p>
+    </article>
+  );
 }
 
-function compactTokenValue(value: number) {
-  return value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2).replace(/\.?0+$/, "");
+function OutTypePicker({ value, onChange }: { value: OutTypeId; onChange: (value: OutTypeId) => void }) {
+  return (
+    <div className="dw-out-groups">
+      {OUT_GROUPS.map((group) => {
+        const items = OUT_TYPES.filter((meta) => meta.group === group.id);
+        const active = items.some((meta) => meta.id === value);
+        return (
+          <div className={`dw-out-group${active ? " active" : ""}`} key={group.id}>
+            <div className="dw-out-group-head">
+              <strong>{group.label}</strong>
+              <span className="dw-tag">→ {group.dest}</span>
+            </div>
+            <div className="dw-out-group-items">
+              {items.map((meta) => (
+                <button aria-pressed={meta.id === value} className={`dw-chip${meta.id === value ? " on" : ""}`} key={meta.id} onClick={() => onChange(meta.id)} title={meta.hint} type="button">{meta.label}</button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
-function sessionRow(session: DistillationWorkbenchSession, selected: boolean, onToggle: () => void, onPreview: () => void) {
-  return <article className={`distillation-session-row${selected ? " selected" : ""}`} key={sessionKey(session)}>
-    <button aria-pressed={selected} className="distillation-session-select" onClick={onToggle} type="button">
-      <span className="distillation-check">{selected ? <Check aria-hidden="true" className="h-3.5 w-3.5" /> : null}</span>
-      <span className="distillation-session-copy">
-        <strong>{session.title || session.sessionId}</strong>
-        <small>{agentLabel(session.agent)} · {dateLabel(session.updatedAt)} · {session.events} 轮 · ~{formatTokens(session.tokens)} tokens</small>
-      </span>
-      <span className="distillation-session-model">{session.model || "未知模型"}</span>
-    </button>
-    <button aria-label={`预览 ${session.title || session.sessionId}`} className="distillation-preview-button" onClick={onPreview} type="button"><BookOpen className="h-4 w-4" />预览</button>
-  </article>;
-}
-
-function AssetGroup({
-  title,
-  destination,
-  items,
-  value,
-  onChange,
-}: {
-  title: string;
-  destination: string;
-  items: typeof OUTPUT_TYPES;
-  value: DistillKind;
-  onChange: (kind: DistillKind) => void;
-}) {
-  return <section className={`distillation-asset-group${items.some((item) => item.id === value) ? " active" : ""}`}>
-    <header><strong>{title}</strong><span>→ {destination}</span></header>
-    <div>{items.map((item) => <button aria-pressed={value === item.id} className={value === item.id ? "active" : ""} key={item.id} onClick={() => onChange(item.id)} type="button">{item.label}</button>)}</div>
-  </section>;
+function Pagination({ page, pageCount, onChange }: { page: number; pageCount: number; onChange: (page: number) => void }) {
+  return (
+    <div className="dw-glass dw-pagination">
+      <button aria-label="上一页" disabled={page <= 1} onClick={() => onChange(page - 1)} type="button"><ChevronLeft aria-hidden="true" />上一页</button>
+      <span>{page} / {pageCount}</span>
+      <button aria-label="下一页" disabled={page >= pageCount} onClick={() => onChange(page + 1)} type="button">下一页<ChevronRight aria-hidden="true" /></button>
+    </div>
+  );
 }
 
 function DistillationWorkbench({ actions, data }: { actions: AppActions; data: DistillationWorkbenchResult | null }) {
-  const [range, setRange] = useState<TimeRange>("all");
-  const [materialMode, setMaterialMode] = useState<MaterialMode>("session");
-  const [selected, setSelected] = useState<Record<string, Selection>>({});
-  const [providerId, setProviderId] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [kind, setKind] = useState<DistillKind>("skill");
-  const [mode, setMode] = useState<"model">("model");
-  const [configMode, setConfigMode] = useState<"quick" | "advanced">("quick");
-  const [prompt, setPrompt] = useState("");
-  const [tab, setTab] = useState<"config" | "history">("config");
-  const [preview, setPreview] = useState<DistillationWorkbenchSession | null>(null);
-  const [detailCache, setDetailCache] = useState<Record<string, AitrackerSessionDetailResult["transcript"]>>({});
+  const sessions = useMemo(
+    () => [...(data?.sessions ?? [])].sort((left, right) => timestampValue(right.updatedAt) - timestampValue(left.updatedAt)),
+    [data?.sessions],
+  );
+  const providers = useMemo(() => data?.providers ?? [], [data?.providers]);
+  const skillAgents = useMemo(() => data?.skillAgents ?? [], [data?.skillAgents]);
+  const candidates = useMemo(
+    () => [...(data?.candidates ?? [])].filter((item) => item.status !== "cancelled").sort((left, right) => timestampValue(right.createdAt) - timestampValue(left.createdAt)),
+    [data?.candidates],
+  );
+
+  const modelOptions = useMemo<DistillModelOption[]>(() => {
+    const real = providers.flatMap((provider) => provider.models.map((model) => ({
+      id: `${provider.id}::${model}`,
+      providerId: provider.id,
+      model,
+      label: model,
+      sub: provider.name,
+      vendor: provider.vendor || provider.name,
+      ok: (provider.status ?? "ok") === "ok",
+      active: Boolean(provider.active) && (provider.activeModel ? provider.activeModel === model : true),
+    })));
+    return [...real, { id: OFFLINE_MODEL_ID, providerId: OFFLINE_MODEL_ID, model: OFFLINE_MODEL_ID, label: "离线回退（确定性）", vendor: "离线", offline: true, ok: true }];
+  }, [providers]);
+  const hasRealModel = modelOptions.some((option) => !option.offline);
+
+  const [mode, setMode] = useState<Mode>("quick");
+  const [outType, setOutType] = useState<OutTypeId>("skill");
+  const [view, setView] = useState<"config" | "result">("config");
+  const [timeRange, setTimeRange] = useState<DistillationTimeRange>("all");
+  const [granularity, setGranularity] = useState<DistillationMaterialGranularity>("session");
+  const [modelId, setModelId] = useState(() => readStorage(MODEL_STORAGE_KEY) ?? "");
+  const [promptText, setPromptText] = useState("");
+  const [segments, setSegments] = useState<SegmentRef[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [histPage, setHistPage] = useState(1);
+  const [viewId, setViewId] = useState<string | null>(null);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(() => new Set());
   const [task, setTask] = useState<DistillationRunResult | null>(null);
-  const [notice, setNotice] = useState("");
+  const [taskStartedAt, setTaskStartedAt] = useState(() => Date.now());
+  const [runningMeta, setRunningMeta] = useState<{ kind: string; modelLabel: string; segCount: number; sources: string } | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastSeq = useRef(0);
 
-  const sessions = data?.sessions ?? [];
-  const candidates = data?.candidates ?? [];
-  const providers = data?.providers ?? [];
-  const visibleSessions = useMemo(() => {
-    return [...filterDistillationSessions(sessions, materialRange(range) as "today" | "7" | "30" | "all")]
-      .sort((left, right) => timestampValue(right.updatedAt) - timestampValue(left.updatedAt));
-  }, [range, sessions]);
-  const visibleSessionKeys = useMemo(() => new Set(visibleSessions.map(sessionKey)), [visibleSessions]);
+  const distilling = Boolean(task && !TERMINAL_PHASES.includes(task.phase));
+
+  const pushToast = useCallback((toast: Omit<Toast, "id">) => {
+    const id = ++toastSeq.current;
+    setToasts((current) => [...current.slice(-2), { ...toast, id }]);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 6000);
+  }, []);
+
+  // Model resolution (AITracker: "active profile, else first saved, else offline"):
+  // 1. the user's last explicit pick, if that supplier/model still exists;
+  // 2. the supplier CCP is currently running, with its current model;
+  // 3. the first usable configured model; 4. the offline fallback.
   useEffect(() => {
+    // Wait for the workbench payload; resolving against an empty provider list
+    // would always land on the offline fallback.
+    if (!data) return;
+    if (modelOptions.some((option) => option.id === modelId)) return;
+    const real = modelOptions.filter((option) => !option.offline);
+    const next = real.find((option) => option.active && option.ok)
+      ?? real.find((option) => option.active)
+      ?? real.find((option) => option.ok)
+      ?? real[0];
+    setModelId(next?.id ?? OFFLINE_MODEL_ID);
+  }, [data, modelId, modelOptions]);
+  // Only an explicit user pick is remembered; automatic defaults keep
+  // following the supplier CCP is currently running.
+  const pickModel = useCallback((id: string) => {
+    setModelId(id);
+    writeStorage(MODEL_STORAGE_KEY, id);
+  }, []);
+
+  const materialSessions = useMemo(() => filterDistillationSessions(sessions, timeRange), [sessions, timeRange]);
+  // A range is a selection boundary: refs outside the visible set are dropped.
+  useEffect(() => {
+    const available = new Set(materialSessions.map(materialKeyOf));
     setSelected((current) => {
-      const next = Object.fromEntries(Object.entries(current).filter(([key]) => visibleSessionKeys.has(key))) as Record<string, Selection>;
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
+      const next = new Set([...current].filter((key) => available.has(key)));
+      return next.size === current.size ? current : next;
     });
-  }, [visibleSessionKeys]);
-  const currentProvider = providers.find((provider) => provider.id === providerId);
-  const models = currentProvider?.models ?? [];
-  const selectedSessions = visibleSessions.flatMap((session) => {
-    const selection = selected[sessionKey(session)];
-    return selection ? [selection] : [];
-  });
-  const selectedCount = selectedSessions.length;
-  const estimatedTokens = selectedSessions.reduce((sum, selection) => sum + (sessions.find((session) => sessionKey(session) === sessionKey(selection))?.tokens ?? 0), 0);
-  const savedCount = candidates.filter((candidate) => candidate.status === "saved").length;
-  const activeTask = task?.phase && !["completed", "failed", "cancelled"].includes(task.phase);
-  const transcript = preview ? detailCache[sessionKey(preview)] : null;
-  const transcriptMessages = transcript?.messages ?? [];
-  const previewSelection = preview ? selected[sessionKey(preview)] : null;
-
+  }, [materialSessions]);
+  // A segment whose session leaves the selection is meaningless.
   useEffect(() => {
-    if (!providerId && providers[0]) setProviderId(providers[0].id);
-  }, [providerId, providers]);
-
-  useEffect(() => {
-    if ((!modelId || !models.includes(modelId)) && models[0]) setModelId(models[0]);
-  }, [modelId, models]);
-
-  useEffect(() => {
-    if (!preview) return;
-    const key = sessionKey(preview);
-    if (Object.prototype.hasOwnProperty.call(detailCache, key)) return;
-    let current = true;
-    void actions.readAitrackerSessionDetail({ agent: preview.agent, sessionId: preview.sessionId }).then((result) => {
-      if (current) setDetailCache((cache) => ({ ...cache, [key]: result?.transcript ?? null }));
+    if (segments.length === 0) return;
+    setSegments((current) => {
+      const next = current.filter((segment) => selected.has(materialKeyOf(segment)));
+      return next.length === current.length ? current : next;
     });
-    return () => { current = false; };
-  }, [actions, detailCache, preview]);
+  }, [selected, segments]);
 
+  const selectedItems = useMemo(() => sessions.filter((item) => selected.has(materialKeyOf(item))), [sessions, selected]);
+  const estTokens = selectedItems.reduce((sum, item) => sum + sessionTurns(item) * EST_TOKENS_PER_TURN, 0);
+  const selectedOption = modelOptions.find((option) => option.id === modelId) ?? modelOptions[0];
+  const pickedEmpty = mode === "pro" ? segments.length === 0 : selected.size === 0;
+  const canRun = !distilling && !pickedEmpty && hasRealModel;
+  const runs = candidates.length;
+  const approved = candidates.filter((item) => item.status === "approved" || item.status === "saved").length;
+
+  const histPageCount = Math.max(1, Math.ceil(runs / HIST_PAGE));
+  const curHistPage = Math.min(histPage, histPageCount);
+  const winStart = (curHistPage - 1) * HIST_PAGE;
+  const shownCandidates = candidates.slice(winStart, winStart + HIST_PAGE);
+
+  const finishTask = useCallback((result: DistillationRunResult) => {
+    writeStorage(TASK_STORAGE_KEY, null);
+    void actions.loadDistillationWorkbench();
+    if (result.phase === "completed") {
+      const candidate = result.candidate;
+      const label = kindMeta(candidate?.kind ?? result.kind).label;
+      if (candidate) {
+        setViewId(candidate.id);
+        setHistPage(1);
+      }
+      setView("result");
+      pushToast({
+        tone: "ok",
+        text: `蒸馏完成，已生成${label} · 见蒸馏历史`,
+        action: {
+          label: "查看结果",
+          run: () => {
+            setView("result");
+            if (candidate) setViewId(candidate.id);
+          },
+        },
+      });
+    } else if (result.phase === "failed") {
+      pushToast({ tone: "error", text: result.detail || result.message || "蒸馏任务失败。" });
+    } else {
+      pushToast({ tone: "error", text: "蒸馏任务已取消。" });
+    }
+  }, [actions, pushToast]);
+
+  // Poll the active task (500 ms) until a terminal phase.
   useEffect(() => {
-    if (!task?.taskId || !activeTask) return;
+    if (!task?.taskId || !distilling) return;
     let stopped = false;
-    let timer = 0;
-    const poll = async () => {
+    const timer = window.setInterval(async () => {
       const result = await actions.queryDistillationTask(task.taskId);
       if (stopped || !result) return;
       setTask(result);
-      if (["completed", "failed", "cancelled"].includes(result.phase)) {
-        if (result.phase === "completed") setNotice("蒸馏完成，候选已加入历史，等待审批。");
-        if (result.phase === "failed") setNotice(result.detail || result.message || "蒸馏任务失败。");
-        if (result.phase === "cancelled") setNotice("蒸馏任务已取消。");
-        void actions.loadDistillationWorkbench();
-      } else {
-        timer = window.setTimeout(() => void poll(), 800);
+      if (TERMINAL_PHASES.includes(result.phase)) {
+        stopped = true;
+        window.clearInterval(timer);
+        finishTask(result);
       }
+    }, 500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
     };
-    timer = window.setTimeout(() => void poll(), 350);
-    return () => { stopped = true; window.clearTimeout(timer); };
-  }, [actions, activeTask, task?.taskId]);
+  }, [actions, distilling, finishTask, task?.taskId]);
 
-  const toggleSession = (session: DistillationWorkbenchSession) => {
-    const key = sessionKey(session);
-    setSelected((current) => {
-      const next = { ...current };
-      if (next[key]) delete next[key];
-      else next[key] = { agent: session.agent, sessionId: session.sessionId };
-      return next;
-    });
-  };
-
-  const toggleProject = (projectSessions: readonly DistillationWorkbenchSession[]) => {
-    const allSelected = projectSessions.every((session) => selected[sessionKey(session)]);
-    setSelected((current) => {
-      const next = { ...current };
-      for (const session of projectSessions) {
-        const key = sessionKey(session);
-        if (allSelected) delete next[key];
-        else next[key] = { agent: session.agent, sessionId: session.sessionId };
+  // Re-entering the page resumes a task that is still running server-side.
+  useEffect(() => {
+    const stored = readStorage(TASK_STORAGE_KEY);
+    if (!stored) return;
+    let disposed = false;
+    void actions.queryDistillationTask(stored).then((result) => {
+      if (disposed) return;
+      if (!result || !result.taskId || TERMINAL_PHASES.includes(result.phase)) {
+        writeStorage(TASK_STORAGE_KEY, null);
+        return;
       }
-      return next;
+      const startedAt = timestampValue(result.startedAt);
+      setTaskStartedAt(Number.isFinite(startedAt) ? startedAt : Date.now());
+      setRunningMeta({ kind: result.kind ?? "skill", modelLabel: result.modelId || "模型", segCount: result.selectionCount ?? 0, sources: "" });
+      setTask(result);
+      setView("result");
     });
-  };
+    return () => {
+      disposed = true;
+    };
+  }, [actions]);
 
-  const setRangeBoundary = (which: "startIndex" | "endIndex", index: number) => {
-    if (!preview) return;
-    const key = sessionKey(preview);
-    const max = Math.max(0, transcriptMessages.length - 1);
-    setSelected((current) => {
-      const prior = current[key] ?? { agent: preview.agent, sessionId: preview.sessionId };
-      const startIndex = which === "startIndex" ? index : Math.min(prior.startIndex ?? 0, index);
-      const endIndex = which === "endIndex" ? index : Math.max(prior.endIndex ?? max, index);
-      return { ...current, [key]: { ...prior, startIndex: Math.max(0, Math.min(max, startIndex)), endIndex: Math.max(0, Math.min(max, endIndex)) } };
-    });
-  };
+  const toggle = (item: DistillationWorkbenchSession) => setSelected((current) => toggleMaterialSelection(current, materialKeyOf(item)) as Set<string>);
+  const toggleProject = (items: readonly DistillationWorkbenchSession[]) => setSelected((current) => toggleProjectSelection(current, items.map(materialKeyOf)) as Set<string>);
 
-  const selectVisible = () => setSelected((current) => ({
-    ...current,
-    ...Object.fromEntries(visibleSessions.map((session) => [sessionKey(session), { agent: session.agent, sessionId: session.sessionId }])) as Record<string, Selection>,
-  }));
+  function handleSegmentsChange(next: SegmentRef[]) {
+    const nextSelected = new Set(selected);
+    let changed = false;
+    for (const segment of next) {
+      const key = materialKeyOf(segment);
+      if (nextSelected.has(key) || !sessions.some((item) => materialKeyOf(item) === key)) continue;
+      nextSelected.add(key);
+      changed = true;
+    }
+    if (changed) setSelected(nextSelected);
+    setSegments(next.filter((segment) => nextSelected.has(materialKeyOf(segment))));
+  }
 
-  const clearSelection = () => setSelected({});
+  function buildPrompt(userPrompt: string | undefined) {
+    const parts = [outTypeMeta(outType).instruction, userPrompt?.trim()].filter(Boolean);
+    return parts.length ? parts.join("；") : undefined;
+  }
 
-  const start = async () => {
-    if (!selectedCount || activeTask) return;
-    setNotice("");
+  async function runDistillation(refs: Array<{ agent: string; sessionId: string; startIndex?: number; endIndex?: number }>) {
+    if (refs.length === 0 || distilling) return;
+    const option = selectedOption;
+    const offline = !option || option.offline;
+    const meta = outTypeMeta(outType);
     const result = await actions.runDistillationWorkbench({
-      selections: selectedSessions,
-      providerId: currentProvider?.id ?? "",
-      modelId,
-      kind,
-      mode,
-      prompt: prompt.trim() || undefined,
+      selections: refs,
+      providerId: offline ? OFFLINE_MODEL_ID : option.providerId,
+      modelId: offline ? OFFLINE_MODEL_ID : option.model,
+      kind: meta.kind,
+      mode: offline ? "offline" : "model",
+      prompt: buildPrompt(mode === "pro" ? promptText : undefined),
     });
+    if (!result || result.status === "failed" || result.phase === "failed") {
+      pushToast({ tone: "error", text: result?.detail || result?.message || "蒸馏任务启动失败。" });
+      return;
+    }
+    const startedAt = timestampValue(result.startedAt);
+    setTaskStartedAt(Number.isFinite(startedAt) ? startedAt : Date.now());
+    setRunningMeta({
+      kind: meta.kind,
+      modelLabel: offline ? "离线回退（确定性）" : option.label,
+      segCount: refs.length,
+      sources: [...new Set(refs.map((ref) => agentLabel(ref.agent)))].join(" / "),
+    });
+    writeStorage(TASK_STORAGE_KEY, result.taskId);
     setTask(result);
-    if (result?.phase === "failed") setNotice(result.message || "蒸馏任务启动失败。");
-  };
+    if (TERMINAL_PHASES.includes(result.phase)) finishTask(result);
+  }
 
-  const cancel = async () => {
-    if (!task?.taskId) return;
-    const result = await actions.cancelDistillationTask(task.taskId);
-    if (result) setTask(result);
-  };
+  function handleStart() {
+    if (!hasRealModel) return;
+    setViewId(null);
+    setView("result");
+    const segmentByKey = new Map(segments.map((segment) => [materialKeyOf(segment), segment]));
+    void runDistillation(selectedItems.map((item) => {
+      const segment = segmentByKey.get(materialKeyOf(item));
+      return segment
+        ? { agent: item.agent, sessionId: item.sessionId, startIndex: segment.startIndex, endIndex: segment.endIndex }
+        : { agent: item.agent, sessionId: item.sessionId };
+    }));
+  }
 
-  const approve = async (candidate: DistillationCandidate) => {
-    const result = await actions.updateDistillationCandidate({ id: candidate.id });
-    if (result?.candidates) void actions.loadDistillationWorkbench();
-  };
+  function handleRegenerate(candidate: DistillationCandidate) {
+    setViewId(null);
+    setView("result");
+    void runDistillation(candidateRefs(candidate).map((ref) => (
+      candidate.sourceRefs?.length && ref.endIndex > ref.startIndex
+        ? { agent: ref.agent, sessionId: ref.sessionId, startIndex: ref.startIndex, endIndex: ref.endIndex }
+        : { agent: ref.agent, sessionId: ref.sessionId }
+    )));
+  }
 
-  const cancelCandidate = async (candidate: DistillationCandidate) => {
-    const result = await actions.cancelDistillationCandidate({ id: candidate.id });
-    if (result?.candidates) void actions.loadDistillationWorkbench();
-  };
+  async function removeCandidates(ids: readonly string[]) {
+    if (ids.length === 0) return;
+    await actions.deleteDistillationCandidates(ids.slice(0, 100));
+    setSelectedCandidateIds(new Set());
+    setViewId((current) => (current && ids.includes(current) ? null : current));
+  }
 
-  const save = async (candidate: DistillationCandidate) => {
-    const result = await actions.saveDistillationOutput({ candidateId: candidate.id, target: candidate.kind ?? "memory", skillId: candidate.id });
-    setNotice(result?.message ?? "蒸馏产出已写入目标库。");
-    if (result?.status === "ok") void actions.loadDistillationWorkbench();
-  };
+  const pickPreset = (text: string) => setPromptText((current) => (
+    current.includes(text) ? current : (current.trim() ? `${current.trim()}；` : "") + text
+  ));
+  const goSupplier = () => void actions.refreshRoute("supplier");
 
-  const outputKindLabel = OUTPUT_TYPES.find((item) => item.id === kind)?.label ?? "Skill";
-  const sessionGroups = useMemo(() => {
-    return groupDistillationSessionsByProject(visibleSessions).map((group) => [group.projectKey, [...group.sessions]] as const);
-  }, [visibleSessions]);
-  const groupedKeys = useMemo(() => new Set(sessionGroups.map(([key]) => key)), [sessionGroups]);
-  const ungroupedSessions = visibleSessions.filter((session) => !groupedKeys.has(session.projectKey ?? session.project));
+  const typeMeta = outTypeMeta(outType);
+  const statusLabel = selectedOption?.offline ? null : selectedOption?.ok ? "自有模型 · 已连接" : "自有模型 · 未配置 Endpoint";
+  const segsBySession = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const segment of segments) map.set(materialKeyOf(segment), (map.get(materialKeyOf(segment)) ?? 0) + 1);
+    return map;
+  }, [segments]);
+  const titleByKey = useMemo(() => new Map(sessions.map((item) => [materialKeyOf(item), item.title])), [sessions]);
+  const runHint = pickedEmpty
+    ? mode === "quick"
+      ? granularity === "project" ? "请先选择一个项目" : "请先勾选至少一场会话"
+      : "请先在素材库选择会话选段"
+    : mode === "quick"
+      ? `${selectedItems.length} 场会话 · ~${formatTokens(estTokens)} tokens · ${selectedOption?.offline ? "离线回退" : selectedOption?.label ?? "模型"} 与推荐提示词，无需配置`
+      : `${segments.length} 段素材 · ~${formatTokens(estTokens)} tokens`;
+  const progress = task ? (task.phase === "completed" ? 1 : Math.min(0.92, (task.percent ?? 0) / 100)) : 0;
 
-  return <section className="distillation-workbench" aria-label="蒸馏工作台">
-    <div className="distillation-metrics">
-      <article><small>已选素材</small><strong>{selectedCount}</strong><span>~{formatTokens(estimatedTokens)} tokens</span></article>
-      <article><small>素材 Token</small><strong>{formatTokens(estimatedTokens)}</strong><span>本次输入预估</span></article>
-      <article><small>蒸馏次数</small><strong>{candidates.length}</strong><span>{activeTask ? "正在蒸馏" : "历史任务"}</span></article>
-      <article><small>已入库</small><strong>{savedCount}</strong><span>已审批并写入</span></article>
+  const viewTabs = (
+    <div className="dw-toolbar">
+      <Chip icon={<FlaskConical aria-hidden="true" />} on={view === "config"} onClick={() => setView("config")}>蒸馏配置</Chip>
+      <Chip icon={<PackageCheck aria-hidden="true" />} on={view === "result"} onClick={() => setView("result")}>
+        蒸馏历史{runs > 0 ? <span className="dw-badge">{runs}</span> : null}
+      </Chip>
     </div>
+  );
 
-    <div className="distillation-tabs" role="tablist" aria-label="蒸馏工作台视图">
-      <button aria-selected={tab === "config"} className={tab === "config" ? "active" : ""} onClick={() => setTab("config")} role="tab" type="button"><FlaskConical className="h-4 w-4" />蒸馏配置</button>
-      <button aria-selected={tab === "history"} className={tab === "history" ? "active" : ""} onClick={() => setTab("history")} role="tab" type="button"><History className="h-4 w-4" />蒸馏历史</button>
-      <span>{tab === "config" ? "选素材、配参数、跑蒸馏" : `${candidates.length} 个候选 · ${savedCount} 个已入库`}</span>
-    </div>
-
-    {tab === "config" ? <>
-      <section className="distillation-config glass-card">
-          <header className="distillation-config-header"><div className="distillation-config-title"><strong>蒸馏配置</strong><div className="distillation-segmented"><button aria-pressed={configMode === "quick"} className={configMode === "quick" ? "active" : ""} onClick={() => setConfigMode("quick")} type="button">快速模式</button><button aria-pressed={configMode === "advanced"} className={configMode === "advanced" ? "active" : ""} onClick={() => setConfigMode("advanced")} type="button">高级配置</button></div><span>{providers.length ? "使用已添加的供应商模型" : "请先在供应商中添加模型配置"}</span></div>
-          <div className="distillation-config-tools">
-            <label className="distillation-provider-select"><span>供应商</span><select aria-label="蒸馏供应商" value={providerId} onChange={(event) => { setProviderId(event.target.value); setModelId(providers.find((provider) => provider.id === event.target.value)?.models[0] ?? ""); }}><option value="">{providers.length ? "选择供应商" : "暂无已配置供应商"}</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
-            <label className="distillation-provider-select"><span>模型</span><select aria-label="蒸馏模型" disabled={!currentProvider} value={modelId} onChange={(event) => setModelId(event.target.value)}><option value="">{currentProvider ? "选择模型" : "先选择供应商"}</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
-            <a href="#supplier" onClick={(event) => { event.preventDefault(); void actions.refreshRoute("supplier"); }}>管理模型</a></div>
-        </header>
-
-        {configMode === "advanced" ? <div className="distillation-advanced-panel"><label className="distillation-prompt"><span>提示词补充要求</span><textarea onChange={(event) => setPrompt(event.target.value)} placeholder="例如：提炼重复流程、保留失败处理与验证步骤，使用中文输出。" value={prompt} /></label></div> : null}
-
-        <div className="distillation-config-row distillation-filter-row">
-          <span className="distillation-row-label">选素材</span><div className="distillation-segmented compact"><button aria-pressed={materialMode === "session"} className={materialMode === "session" ? "active" : ""} onClick={() => setMaterialMode("session")} type="button">按会话</button><button aria-pressed={materialMode === "project"} className={materialMode === "project" ? "active" : ""} onClick={() => setMaterialMode("project")} type="button">按项目</button></div>
-          <div className="distillation-chip-row">{(["today", "7d", "30d", "all"] as const).map((value) => <button aria-pressed={range === value} className={range === value ? "active" : ""} key={value} onClick={() => setRange(value)} type="button">{value === "today" ? "今天" : value === "7d" ? "近 7 天" : value === "30d" ? "近 30 天" : "全部"}</button>)}</div>
-          <span className="distillation-material-count">范围内 {visibleSessions.length} 个会话</span>
-        </div>
-
-        <div className="distillation-config-row distillation-material-row">
-          <span className="distillation-row-label">{materialMode === "project" ? "项目" : "会话"}</span>
-          <div className="distillation-material-surface">
-            <div className="distillation-session-list">
-              {materialMode === "session" ? visibleSessions.map((session) => sessionRow(session, Boolean(selected[sessionKey(session)]), () => toggleSession(session), () => setPreview(session))) : sessionGroups.map(([projectName, group]) => {
-                const allSelected = group.every((session) => selected[sessionKey(session)]);
-                const sources = [...new Set(group.map((session) => agentLabel(session.agent)))];
-                const tokens = group.reduce((sum, item) => sum + item.tokens, 0);
-                const latest = group.reduce((value, session) => Math.max(value, timestampValue(session.updatedAt)), Number.NEGATIVE_INFINITY);
-                return <button aria-pressed={allSelected} className={`distillation-project-row${allSelected ? " selected" : ""}`} key={projectName} onClick={() => toggleProject(group)} type="button"><span className="distillation-check">{allSelected ? <Check className="h-3.5 w-3.5" /> : null}</span><FolderOpen aria-hidden="true" className="h-4 w-4" /><span className="distillation-project-copy"><strong>{projectName}</strong><small>{group.length} 个会话 · {sources.join("、")} · ~{formatTokens(tokens)} · {dateLabel(latest)}</small></span></button>;
-              })}
-              {materialMode === "project" ? ungroupedSessions.map((session) => sessionRow(session, Boolean(selected[sessionKey(session)]), () => toggleSession(session), () => setPreview(session))) : null}
-              {!visibleSessions.length ? <div className="distillation-empty">筛选条件下没有本地会话。刷新本地会话数据后再试。</div> : null}
-            </div>
-            <footer className="distillation-material-footer"><div><button className="text-button" onClick={selectVisible} type="button">全选当前列表</button><button className="text-button" onClick={clearSelection} type="button">清空选择</button><span>已选 {selectedCount} 个会话</span></div><span>正文只在本次运行时读取</span></footer>
+  return (
+    <section aria-label="蒸馏工作台" className="dw-root distillation-workbench">
+      {view === "config" ? (
+        <>
+          <DistillMetrics approved={approved} busy={distilling} estTokens={estTokens} runs={runs} selectedCount={mode === "pro" ? segments.length : selected.size} />
+          <div className="dw-glass dw-viewbar">
+            {viewTabs}
+            <span className="dw-viewbar-hint">选素材、配参数、跑蒸馏</span>
           </div>
+
+          <section className="dw-glass dw-config">
+            <header className="dw-config-head">
+              <h2>蒸馏配置</h2>
+              <div className="dw-toolbar">
+                <Chip icon={<Zap aria-hidden="true" />} on={mode === "quick"} onClick={() => setMode("quick")}>快速模式</Chip>
+                <Chip icon={<FlaskConical aria-hidden="true" />} on={mode === "pro"} onClick={() => setMode("pro")}>高级配置</Chip>
+              </div>
+              {statusLabel ? <span className="dw-config-status" title={statusLabel}>{statusLabel}</span> : <span className="dw-config-status" />}
+              {mode === "quick" && hasRealModel ? <div className="dw-config-model"><ModelSelect onChange={pickModel} onManage={goSupplier} options={modelOptions} value={modelId} /></div> : null}
+              <button className="dw-chip" onClick={goSupplier} type="button">管理模型</button>
+            </header>
+
+            <div className="dw-rows">
+              <div className="dw-row">
+                <RowLabel>选素材</RowLabel>
+                {mode === "quick" ? (
+                  <>
+                    <div className="dw-toolbar">
+                      <Chip on={granularity === "session"} onClick={() => setGranularity("session")}>按会话</Chip>
+                      <Chip on={granularity === "project"} onClick={() => setGranularity("project")}>按项目</Chip>
+                    </div>
+                    <span className="dw-divider" />
+                    <div className="dw-toolbar">
+                      {([["today", "今天"], ["7", "近 7 天"], ["30", "近 30 天"], ["all", "全部"]] as const).map(([value, label]) => (
+                        <Chip key={value} on={timeRange === value} onClick={() => setTimeRange(value)}>{label}</Chip>
+                      ))}
+                    </div>
+                    <span className="dw-meta">
+                      范围内 {materialSessions.length} 个会话{granularity === "session" && selected.size > 0 ? ` · 已选 ${selected.size}` : ""}
+                    </span>
+                    {granularity === "session" && selected.size > 0 ? <button className="dw-link" onClick={() => setSelected(new Set())} type="button">清空</button> : null}
+                  </>
+                ) : null}
+              </div>
+
+              <div className="dw-row top">
+                <RowLabel>{granularity === "project" ? "项目" : "会话"}</RowLabel>
+                <div className="dw-row-body">
+                  {mode === "quick" ? (
+                    <MaterialPicker granularity={granularity} onToggle={toggle} onToggleProject={toggleProject} selected={selected} sessions={materialSessions} />
+                  ) : (
+                    <div className={`dw-material-box${segments.length ? " filled" : ""}`}>
+                      <div className="dw-material-box-head">
+                        <span className="dw-material-box-icon"><FolderOpen aria-hidden="true" /></span>
+                        <div className="dw-material-box-copy">
+                          {segments.length === 0 ? (
+                            <>
+                              <strong>还没有选择素材</strong>
+                              <small>在素材库里跨会话勾选对话区间（Hover 消息可设起点/终点）</small>
+                            </>
+                          ) : (
+                            <>
+                              <strong>{segsBySession.size} 场会话 · {segments.length} 条对话</strong>
+                              <small>预估输入 ~{formatTokens(estTokens)} tokens</small>
+                            </>
+                          )}
+                        </div>
+                        <button className="dw-accent-button" onClick={() => setDrawerOpen(true)} type="button">
+                          {segments.length === 0 ? <><FolderOpen aria-hidden="true" />打开素材库</> : "继续添加"}
+                        </button>
+                        {segments.length ? <button className="dw-soft-button" onClick={() => setSegments([])} type="button"><Trash2 aria-hidden="true" />清空</button> : null}
+                      </div>
+                      {segsBySession.size > 0 ? (
+                        <ul className="dw-session-chips">
+                          {[...segsBySession.entries()].slice(0, 8).map(([key, count]) => (
+                            <li key={key}>
+                              <AgentIcon agent={key.split(":")[0]!} />
+                              <span>{titleByKey.get(key) || key.split(":").slice(1).join(":")}</span>
+                              <em>{count} 条</em>
+                            </li>
+                          ))}
+                          {segsBySession.size > 8 ? <li className="more">+{segsBySession.size - 8}</li> : null}
+                        </ul>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {mode === "pro" ? (
+                <>
+                  <div className="dw-row">
+                    <RowLabel>模型</RowLabel>
+                    <div className="dw-row-body">
+                      <ModelSelect onChange={pickModel} onManage={goSupplier} options={modelOptions} value={modelId} />
+                    </div>
+                  </div>
+                  <div className="dw-row top">
+                    <RowLabel>提示词预设</RowLabel>
+                    <div className="dw-row-body dw-prompt">
+                      <div className="dw-presets">
+                        {PROMPT_PRESETS.map((preset) => (
+                          <button key={preset.id} onClick={() => pickPreset(preset.text)} type="button">+ {preset.label}</button>
+                        ))}
+                        {promptText.trim() ? <button className="dw-link" onClick={() => setPromptText("")} type="button">清空</button> : null}
+                      </div>
+                      <div className="dw-prompt-box">
+                        <textarea
+                          aria-label="自定义蒸馏提示词"
+                          onChange={(event) => setPromptText(event.target.value)}
+                          onKeyDown={(event) => {
+                            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRun) {
+                              event.preventDefault();
+                              handleStart();
+                            }
+                          }}
+                          placeholder="自定义蒸馏提示词…（⌘↵ 运行）"
+                          rows={3}
+                          value={promptText}
+                        />
+                        <span>{promptText.length} 字 · ⌘↵ 运行</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+
+              <div className="dw-row top">
+                <RowLabel>出产物</RowLabel>
+                <OutTypePicker onChange={setOutType} value={outType} />
+              </div>
+
+              <div className="dw-row last">
+                <RowLabel>跑蒸馏</RowLabel>
+                <button className="dw-run-button" disabled={distilling || (!canRun && hasRealModel)} onClick={handleStart} type="button">
+                  {distilling ? <LoaderCircle aria-hidden="true" className="spin" /> : mode === "quick" ? <Zap aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}
+                  {distilling ? "蒸馏中…" : mode === "quick" ? `一键蒸馏 ${typeMeta.label}` : `开始蒸馏 ${typeMeta.label}`}
+                </button>
+                <span className="dw-run-hint">
+                  {hasRealModel ? runHint : <button className="dw-warn-link" onClick={goSupplier} type="button">蒸馏需配置模型。去配置 →</button>}
+                </span>
+              </div>
+            </div>
+          </section>
+        </>
+      ) : (
+        <>
+          <div className="dw-glass dw-viewbar">
+            {viewTabs}
+            <span className="dw-viewbar-hint">共 {runs} 次蒸馏 · 已入库 {approved}</span>
+            {distilling ? <span className="dw-running-flag"><LoaderCircle aria-hidden="true" className="spin" />蒸馏中…</span> : null}
+            {distilling && task?.taskId ? <button className="dw-link" onClick={() => void actions.cancelDistillationTask(task.taskId).then((result) => result && setTask(result))} type="button">取消任务</button> : null}
+            <button className="dw-link accent" onClick={() => void actions.refreshRoute("tools")} type="button">去 Skill 管理 <ArrowRight aria-hidden="true" /></button>
+          </div>
+
+          <div className="dw-history">
+            {distilling ? (
+              <RunningExpCard
+                color={kindMeta(runningMeta?.kind ?? typeMeta.kind).color}
+                kindLabel={kindMeta(runningMeta?.kind ?? typeMeta.kind).label}
+                modelLabel={runningMeta?.modelLabel ?? selectedOption?.label ?? "offline"}
+                progress={progress}
+                segCount={runningMeta?.segCount ?? selectedItems.length}
+                sources={runningMeta?.sources ?? ""}
+                startedAt={taskStartedAt}
+              />
+            ) : null}
+
+            {runs === 0 && !distilling ? (
+              <div className="dw-glass dw-history-empty">
+                <FlaskConical aria-hidden="true" />
+                <p>左侧选好素材后点「一键蒸馏」</p>
+                <small>产物与历史记录都会显示在这里</small>
+              </div>
+            ) : null}
+
+            {shownCandidates.length > 0 ? (
+              <>
+                <div className="dw-glass dw-history-tools">
+                  <label>
+                    <input
+                      checked={shownCandidates.every((item) => selectedCandidateIds.has(item.id))}
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
+                        setSelectedCandidateIds((current) => {
+                          const next = new Set(current);
+                          for (const item of shownCandidates) {
+                            if (checked) next.add(item.id);
+                            else next.delete(item.id);
+                          }
+                          return next;
+                        });
+                      }}
+                      type="checkbox"
+                    />
+                    已选 {selectedCandidateIds.size} 条
+                  </label>
+                  {selectedCandidateIds.size > 0 ? <button className="dw-danger-link" onClick={() => void removeCandidates([...selectedCandidateIds])} type="button">删除选中</button> : null}
+                </div>
+                <ul className="dw-glass dw-history-list">
+                  {shownCandidates.map((candidate) => {
+                    const badge = kindMeta(candidate.kind);
+                    const resolved = resolveCandidateSource(candidate, sessions);
+                    const open = viewId === candidate.id;
+                    const saved = candidate.status === "approved" || candidate.status === "saved";
+                    return (
+                      <li className={open ? "open" : ""} key={candidate.id} style={{ ["--dw-accent" as string]: badge.color }}>
+                        <div className="dw-history-row">
+                          <input
+                            aria-label={`选择 ${candidate.title || badge.label}`}
+                            checked={selectedCandidateIds.has(candidate.id)}
+                            onChange={(event) => {
+                              const checked = event.currentTarget.checked;
+                              setSelectedCandidateIds((current) => {
+                                const next = new Set(current);
+                                if (checked) next.add(candidate.id);
+                                else next.delete(candidate.id);
+                                return next;
+                              });
+                            }}
+                            type="checkbox"
+                          />
+                          <button aria-expanded={open} className="dw-history-toggle" onClick={() => setViewId(open ? null : candidate.id)} type="button">
+                            <span className="dw-history-icon">{saved ? <PackageCheck aria-hidden="true" /> : <FlaskConical aria-hidden="true" />}</span>
+                            <span className="dw-history-copy">
+                              <span className="dw-history-title">
+                                <strong>{candidate.title || badge.label}</strong>
+                                <span className="dw-kind-tag">{badge.label}</span>
+                                <span className="dw-history-when">{candidateRefs(candidate).length} 段 · {formatDateTime(candidate.createdAt)}</span>
+                                <span className={`dw-saved-chip${saved ? " on" : ""}`}>{saved ? "已入库" : "未保存"}</span>
+                              </span>
+                              <small>{resolved.sources.join(" / ")}</small>
+                            </span>
+                            <ChevronRight aria-hidden="true" className={`dw-history-chevron${open ? " open" : ""}`} />
+                          </button>
+                        </div>
+                        {open ? (
+                          <div className="dw-history-detail">
+                            <ExpCard actions={actions} busy={distilling} candidate={candidate} onRegenerate={() => handleRegenerate(candidate)} sessions={sessions} skillAgents={skillAgents} />
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : null}
+
+            {runs > HIST_PAGE ? <Pagination onChange={setHistPage} page={curHistPage} pageCount={histPageCount} /> : null}
+          </div>
+        </>
+      )}
+
+      {drawerOpen ? <MaterialDrawer actions={actions} onClose={() => setDrawerOpen(false)} onSegmentsChange={handleSegmentsChange} segments={segments} sessions={sessions} /> : null}
+
+      {toasts.length ? (
+        <div aria-live="polite" className="dw-toasts">
+          {toasts.map((toast) => (
+            <div className={`dw-toast ${toast.tone}`} key={toast.id} role="status">
+              <span>{toast.text}</span>
+              {toast.action ? <button onClick={() => { toast.action?.run(); setToasts((current) => current.filter((item) => item.id !== toast.id)); }} type="button">{toast.action.label}</button> : null}
+              <button aria-label="关闭提示" onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))} type="button"><X aria-hidden="true" /></button>
+            </div>
+          ))}
         </div>
-
-        <div className="distillation-config-row distillation-output-row"><span className="distillation-row-label">出产物</span><AssetGroup destination="Skill 库" items={OUTPUT_TYPES.filter((item) => item.group === "capability")} onChange={setKind} title="能力资产（关于‘事’）" value={kind} /><AssetGroup destination="记忆库" items={OUTPUT_TYPES.filter((item) => item.group === "memory")} onChange={setKind} title="记忆资产（关于‘人’）" value={kind} /></div>
-        <footer className="distillation-run-bar">
-          <span className="distillation-row-label">跑蒸馏</span><span className="distillation-run-hint"><Clock3 className="h-4 w-4" />{selectedCount ? `已选 ${selectedCount} 个会话 · ${outputKindLabel}` : "请先从材料库选择会话"}</span>
-          {activeTask ? <><div className="distillation-task-progress"><div><span>{task?.phase === "reading-material" ? "读取材料" : task?.phase === "calling-model" ? "调用模型" : task?.phase === "quality-check" ? "质量检查" : task?.phase === "persisting-candidate" ? "保存候选" : "准备蒸馏"}</span><strong>{task?.percent ?? 0}%</strong></div><div className="progress-track"><i style={{ width: `${task?.percent ?? 0}%` }} /></div></div><Button onClick={() => void cancel()} variant="outline"><X className="h-4 w-4" />取消任务</Button></> : <Button className="distillation-run-button" disabled={!selectedCount || !providerId || !modelId} onClick={() => void start()}><Send className="h-4 w-4" />一键蒸馏 {outputKindLabel}</Button>}
-        </footer>
-      </section>
-      {notice ? <p className="distillation-notice" role="status">{notice}</p> : null}
-    </> : <div className="distillation-history">
-      {candidates.length ? candidates.map((candidate) => <article key={candidate.id}>
-        <div className="distillation-history-icon"><BrainCircuit className="h-4 w-4" /></div>
-        <div className="distillation-history-copy"><div className="distillation-history-heading"><strong>{candidate.title || candidate.summary}</strong><span className={`distillation-status ${candidate.status}`}>{candidate.status === "pending" ? "待审批" : candidate.status === "approved" ? "已审批" : candidate.status === "saved" ? "已入库" : candidate.status === "cancelled" ? "已取消" : candidate.status}</span></div><small>{candidate.kind || "memory"} · {candidate.mode || "offline"} · {dateLabel(candidate.createdAt)} · {agentLabel(candidate.agent)}</small>{candidate.sourceRefs?.length ? <small>来源：{candidate.sourceRefs.map((source) => `${agentLabel(source.agent)} · ${source.project || source.sessionId} · ${source.startIndex + 1}-${source.endIndex + 1}`).join("；")}</small> : null}<p>{candidate.output || candidate.summary}</p></div>
-        <div className="distillation-history-actions">{candidate.status === "pending" ? <><button onClick={() => void approve(candidate)} type="button">审批入库</button><button className="secondary" onClick={() => void cancelCandidate(candidate)} type="button">取消</button></> : null}{candidate.status === "approved" ? <button onClick={() => void save(candidate)} type="button">写入 {OUTPUT_TYPES.find((item) => item.id === candidate.kind)?.label ?? "目标库"}</button> : null}</div>
-      </article>) : <div className="distillation-empty">还没有蒸馏候选。选择会话、配置产物类型后开始蒸馏。</div>}
-    </div>}
-
-    {preview ? <div className="distillation-preview-backdrop" onClick={() => setPreview(null)} role="presentation"><section aria-label="会话片段预览" aria-modal="true" className="distillation-preview-dialog" onClick={(event) => event.stopPropagation()} role="dialog"><header><div><strong>{preview.title || preview.sessionId}</strong><small>{agentLabel(preview.agent)} · {preview.project || "未命名项目"} · {preview.events} 轮</small></div><button aria-label="关闭预览" onClick={() => setPreview(null)} type="button"><X className="h-4 w-4" /></button></header>{transcript === undefined ? <div className="distillation-preview-loading"><LoaderCircle className="h-4 w-4 spin" />正在读取会话正文…</div> : transcript ? <><div className="distillation-range-controls"><label>起始消息<select onChange={(event) => setRangeBoundary("startIndex", Number(event.target.value))} value={previewSelection?.startIndex ?? 0}>{transcriptMessages.map((message, index) => <option key={index} value={index}>{index + 1}. {message.role} · {message.text.slice(0, 54) || "空消息"}</option>)}</select></label><label>结束消息<select onChange={(event) => setRangeBoundary("endIndex", Number(event.target.value))} value={previewSelection?.endIndex ?? Math.max(0, transcriptMessages.length - 1)}>{transcriptMessages.map((message, index) => <option key={index} value={index}>{index + 1}. {message.role} · {message.text.slice(0, 54) || "空消息"}</option>)}</select></label><span>范围含首尾 · {Math.max(0, (previewSelection?.endIndex ?? transcriptMessages.length - 1) - (previewSelection?.startIndex ?? 0) + 1)} 条消息</span></div><div className="distillation-transcript">{transcriptMessages.map((message, index) => { const startIndex = previewSelection?.startIndex ?? 0; const endIndex = previewSelection?.endIndex ?? transcriptMessages.length - 1; const included = index >= startIndex && index <= endIndex; return <article className={included ? "included" : ""} key={`${index}-${message.timestamp ?? ""}`}><small>{message.role} · {message.timestamp ? dateLabel(message.timestamp) : `消息 ${index + 1}`}</small><p>{message.text || "（空消息）"}</p></article>; })}</div><footer><span>{previewSelection?.startIndex != null ? "已选择消息片段" : "默认包含整个会话"}</span><Button onClick={() => { setSelected((current) => ({ ...current, [sessionKey(preview)]: current[sessionKey(preview)] ?? { agent: preview.agent, sessionId: preview.sessionId } })); setPreview(null); }}><Check className="h-4 w-4" />确认材料</Button></footer></> : <div className="distillation-empty">没有可预览的会话正文。</div>}</section></div> : null}
-  </section>;
+      ) : null}
+    </section>
+  );
 }
 
 export function ClientsEnhancementScreen({ actions, distillationWorkbench }: { actions: AppActions; distillationWorkbench?: DistillationWorkbenchResult | null }) {

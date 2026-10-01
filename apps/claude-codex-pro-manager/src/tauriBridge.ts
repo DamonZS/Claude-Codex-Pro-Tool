@@ -1369,17 +1369,49 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "read_aitracker_session_detail") {
     return ok("预览模式未连接会话采集源。", { detail: null });
   }
-  if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate") {
+  if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate" || command === "delete_distillation_candidates") {
     return ok("预览模式未连接蒸馏存储。", { candidates: [] });
   }
+  if (command === "read_distillation_transcript") {
+    return ok("预览模式会话正文。", {
+      transcript: {
+        title: "预览会话",
+        messages: [
+          { role: "user", text: "帮我把发布流程整理成可复用的步骤。", timestamp: null },
+          { role: "assistant", text: "好的，先确认构建、签名、上传三个阶段的输入与产物。", timestamp: null },
+          { role: "user", text: "签名失败时要能回滚。", timestamp: null },
+          { role: "assistant", text: "已加入回滚检查点：签名失败时恢复上一版安装包并保留日志。", timestamp: null },
+        ],
+        totalMessages: 4,
+        hasMoreBefore: false,
+      },
+    });
+  }
+  if (command === "open_distillation_library") {
+    return ok("预览模式不会打开本地目录。", { path: "" });
+  }
   if (command === "load_distillation_workbench") {
-    return ok("预览模式蒸馏工作台已加载。", { sessions: [], providers: [], candidates: [] });
+    const now = Date.now();
+    const iso = (offsetHours: number) => new Date(now - offsetHours * 3_600_000).toISOString();
+    return ok("预览模式蒸馏工作台已加载。", {
+      sessions: [
+        { agent: "claude-code", sessionId: "preview-a", title: "发布流程整理", project: "Claude-Codex-Pro-Tool", projectKey: "Claude-Codex-Pro-Tool", isGitProject: true, model: "claude-opus", startedAt: iso(2), updatedAt: iso(1), events: 18, turns: 18, tokens: 0, status: "completed" },
+        { agent: "codex", sessionId: "preview-b", title: "主题 token 重构", project: "Claude-Codex-Pro-Tool", projectKey: "Claude-Codex-Pro-Tool", isGitProject: true, model: "gpt-5.5", startedAt: iso(30), updatedAt: iso(29), events: 6, turns: 6, tokens: 0, status: "completed" },
+        { agent: "codex", sessionId: "preview-c", title: "toporeduce 性能排查", project: "toporeduce", projectKey: "toporeduce", isGitProject: true, model: "gpt-5.5", startedAt: iso(200), updatedAt: iso(199), events: 8, turns: 8, tokens: 0, status: "completed" },
+      ],
+      providers: [{ id: "preview-provider", name: "Preview Relay", models: ["deepseek-v4-pro", "deepseek-v4-flash"], status: "ok", vendor: "OpenAI" }],
+      candidates: [],
+      skillAgents: [
+        { id: "claude-code", label: "Claude Code", root: "~/.claude/skills" },
+        { id: "codex", label: "Codex", root: "~/.codex/skills" },
+      ],
+    });
   }
   if (command === "run_distillation_workbench") {
     return { status: "failed", message: "预览模式未连接蒸馏执行器。", taskId: "preview", phase: "failed", percent: 0, candidate: null };
   }
   if (command === "cancel_distillation_task" || command === "save_distillation_output") {
-    return ok("预览模式已记录蒸馏操作。", { taskId: "preview", phase: "completed", percent: 100, candidate: null });
+    return ok("预览模式已记录蒸馏操作。", { taskId: "preview", phase: "completed", percent: 100, candidate: null, candidates: [] });
   }
   if (command === "read_latest_logs") {
     return ok("预览模式日志。", {

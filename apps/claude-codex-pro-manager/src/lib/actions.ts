@@ -62,6 +62,7 @@ import type {
   DistillationWorkbenchResult,
   DistillationRunResult,
   DistillationSessionSelection,
+  DistillationSaveResult,
   WatcherResult,
 } from "@/types";
 
@@ -157,7 +158,10 @@ export function createActionsShape() {
     runDistillationWorkbench: async (_request: { selections: DistillationSessionSelection[]; providerId: string; modelId: string; kind: string; mode: string; prompt?: string }) => null as DistillationRunResult | null,
     queryDistillationTask: async (_taskId: string) => null as DistillationRunResult | null,
     cancelDistillationTask: async (_taskId: string) => null as DistillationRunResult | null,
-    saveDistillationOutput: async (_request: { candidateId: string; target: string; skillId?: string }) => null as DistillationRunResult | null,
+    saveDistillationOutput: async (_request: { candidateId: string; target: string; skillId?: string; files?: Array<{ path: string; content: string }>; agents?: string[] }) => null as DistillationSaveResult | null,
+    deleteDistillationCandidates: async (_ids: string[]) => null as DistillationCandidatesResult | null,
+    openDistillationLibrary: async (_kind: string) => {},
+    readDistillationTranscript: async (_request: { agent: string; sessionId: string }) => null as AitrackerSessionDetailResult | null,
     listMulticaConnections: async (_silent?: boolean) => null as MulticaConnectionsResult | null,
     saveMulticaConnection: async (_connection: MulticaConnectionConfig) => null as MulticaConnectionsResult | null,
     deleteMulticaConnection: async (_connectionId: string) => null as MulticaConnectionsResult | null,

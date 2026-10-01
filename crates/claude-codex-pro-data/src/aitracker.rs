@@ -276,6 +276,9 @@ pub struct DistillationCandidate {
     pub task_id: String,
     #[serde(default)]
     pub source_refs: Vec<DistillationSourceRef>,
+    /// Local path written for this candidate (memory file or first Skill dir).
+    #[serde(default)]
+    pub saved_path: String,
 }
 
 fn value<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
@@ -806,6 +809,7 @@ mod tests {
         }))
         .unwrap();
         assert!(legacy.source_refs.is_empty());
+        assert!(legacy.saved_path.is_empty());
 
         let source = DistillationSourceRef {
             agent: "codex".into(),

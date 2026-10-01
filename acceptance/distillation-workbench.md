@@ -1,27 +1,21 @@
-# 蒸馏工作台验收标准
+# 蒸馏工作台验收标准（AITracker 对齐版）
 
 对应规格：spec/distillation-workbench.md
 
 ## 通过标准
-- [ ] 导航和面包屑显示“蒸馏工作台”；AppShell 通用页标题/副标题栏及重复的大标题不显示，统计卡片成为全局工具栏下的首个内容；页面无“客户端与增强”旧状态区。
-- [ ] UI 层级按 AITRACKER 的统计卡片、配置/历史切换、配置卡头与模式/模型、紧凑素材筛选条及材料列表、双资产卡、卡片内底部执行动作呈现；桌面宽度下供应商/模型下拉与配置标题、模式、管理模型控件同排；高级模式提示词标签独占一行，文本框位于材料筛选之前；快速模式没有额外素材搜索框或预设胶囊；项目模式同一项目合并为一个汇总行并可整组选择；产出类型为无胶囊背景的文本式可点击项，记忆组选项为 Profile / Persona 与 Task Memory；Token 达到 1M/1B 显示 M/B；统计数值使用四种对应强调色；宽度缩窄时自然堆叠，不出现挤压/横向溢出。
-- [ ] AITRACKER 前端只作为蒸馏工作台结构与交互来源；仓库不包含完整 AITRACKER 源码树，运行时仅使用 CCP 内部必要实现。
-- [ ] 可过滤 Agent、会话/项目及今日/7天/30天/全部材料；可预览会话内容、勾选片段、全选和取消。
-- [ ] 供应商列表来自 CCP 已配置供应商，模型随供应商联动，不出现独立静态模型源。
-- [ ] 快速/高级配置、Skill/Workflow/Prompt/Profile/Task 输出及能力/记忆资产分组可用。
-- [ ] 启动立即返回任务 ID；后端轮询状态显示真实阶段/进度；取消后任务进入可查询的 cancelled 状态；重新打开工作台可查询已保存的任务/候选。
-- [ ] 本地 mock HTTP 验证一键蒸馏实际发出匹配协议/模型的请求；模型响应无文本或请求失败时任务状态保留可见原因，不产生伪装成模型生成的离线候选。
-- [ ] 运行完整材料与生成流程，验证路径/凭据脱敏、选中片段边界、按消息边界压缩、分类型提示词、结构质量检查和质量修订、offline/fallback/budget-exceeded 状态。
-- [ ] 结果和候选历史可查询；候选审批/取消、输出保存和失败时保留结果可用。
-- [ ] Skill/Workflow/Prompt/Profile/Persona/Task Memory 按类型写入对应 CCP 本地目标库，历史状态与实际写入路径一致。
+- [ ] 统计卡、视图切换、配置卡头、快速/高级模式、素材库弹窗、提示词预设、出产物、跑蒸馏、历史与 ExpCard、保存弹窗的文案与交互和 AITracker 一致（规格 1–8、11）。
+- [ ] 视觉为 CCP 液态玻璃风格：统计卡/配置卡/弹窗为半透明玻璃面，颜色只来自 `--ops-*`/`--workspace-*`/`hsl(var(--x))`；蒸馏 CSS 中无裸 `var(--primary|--border|--background|--foreground|--panel)`；760px 以下无横向溢出。
+- [ ] Rust 提示词与 AITracker `prompts.ts` 原文一致（单测断言关键句）。
+- [ ] 流水线：校验规则、controlledContext、压缩、segmentMarkdown、质检反馈重试、候选标题/摘要规则有单测覆盖。
+- [ ] 模型调用：本地 mock HTTP 验证 openai/responses/anthropic 三种协议的 URL、请求体（无 temperature、max_tokens 8192）、请求头；429 后重试成功；仅推理内容判失败。
+- [ ] 任务阶段与百分比同规格 10；重新打开页面恢复活动任务轮询；取消进入 cancelled。
+- [ ] 完成后候选自动批准；画像/任务记忆写入记忆库；Skill 保存写入所选 Agent 根目录、目录已存在不覆盖、SKILL.md 含 `aitracker-origin: distilled`。
+- [ ] 删除选中候选可用（≤100）。
 
 ## 必需证据
-- 规格与验收文档路径。
-- 前端 npm run check 与 npm run vite:build 输出。
-- 相关 cargo test、cargo fmt --check 输出。
-- 自动/手动验证导航与标题、材料过滤/选择/预览、供应商/模型联动、真实后端任务进度/取消、审批历史和五种类型的输出路由。
+- `npm --prefix apps/claude-codex-pro-manager run check`、`run vite:build` 输出。
+- 蒸馏相关 `cargo test` 与 `cargo fmt --check` 输出、`windows_subsystem` 测试输出。
+- 浏览器预览截图（深色液态玻璃）。
 
 ## 非目标
-- 不要求改变供应商配置页面。
-- 不要求修改与蒸馏无关的启动器或发布流程。
-
+- 额度、Jarvis 洞察卡、首次引导、知识库数据库、模型 Profile 设置页。

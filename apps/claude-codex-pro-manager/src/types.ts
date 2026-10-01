@@ -1280,6 +1280,7 @@ export type DistillationCandidate = {
   providerId?: string;
   modelId?: string;
   taskId?: string;
+  savedPath?: string;
   sourceRefs?: Array<{
     agent: string;
     sessionId: string;
@@ -1302,17 +1303,41 @@ export type DistillationWorkbenchSession = {
   updatedAt: string;
   events: number;
   tokens: number;
+  turns?: number;
+  status?: string;
 };
 export type DistillationWorkbenchProvider = {
   id: string;
   name: string;
   models: string[];
   targetApp?: string;
+  status?: "ok" | "missing-endpoint" | string;
+  vendor?: string;
+  active?: boolean;
+  activeModel?: string | null;
+};
+export type DistillationSkillAgent = {
+  id: string;
+  label: string;
+  root: string;
 };
 export type DistillationWorkbenchResult = CommandResult<{
   sessions: DistillationWorkbenchSession[];
   providers: DistillationWorkbenchProvider[];
   candidates: DistillationCandidate[];
+  skillAgents?: DistillationSkillAgent[];
+}>;
+export type DistillationQualityCheck = {
+  id: string;
+  label: string;
+  level: "error" | "warn";
+  ok: boolean;
+  detail?: string | null;
+};
+export type DistillationSaveResult = CommandResult<{
+  candidates: DistillationCandidate[];
+  quality?: { pass: boolean; checks: DistillationQualityCheck[] } | null;
+  written?: string[];
 }>;
 export type DistillationSessionSelection = {
   agent: string;
@@ -1326,6 +1351,11 @@ export type DistillationRunResult = CommandResult<{
   percent: number;
   detail?: string | null;
   candidate?: DistillationCandidate | null;
+  startedAt?: string;
+  kind?: string;
+  modelId?: string;
+  selectionCount?: number;
+  segmentCount?: number;
 }>;
 
 export type LogsResult = CommandResult<{

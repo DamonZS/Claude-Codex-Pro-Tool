@@ -54,7 +54,7 @@ export function groupDistillationSessionsByProject(
 ): readonly DistillationProjectMaterial[] {
   const groups = new Map<string, DistillationProjectMaterial>();
   for (const session of sessions) {
-    if (session.isGitProject === false) continue;
+    if (session.isGitProject !== true) continue;
     const projectKey = session.projectKey ?? session.project;
     if (!projectKey.trim()) continue;
     const current = groups.get(projectKey);

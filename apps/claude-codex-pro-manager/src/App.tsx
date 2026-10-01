@@ -207,6 +207,7 @@ import type {
   DistillationWorkbenchResult,
   DistillationRunResult,
   DistillationSessionSelection,
+  DistillationSaveResult,
   ContextEntries,
   ContextEntriesResult,
   ContextEntry,
@@ -1214,10 +1215,30 @@ export function App() {
     "取消蒸馏",
   );
 
-  const saveDistillationOutput = async (request: { candidateId: string; target: string; skillId?: string }) => {
+  const saveDistillationOutput = async (request: { candidateId: string; target: string; skillId?: string; files?: Array<{ path: string; content: string }>; agents?: string[] }) => {
     const result = await run(
-      () => call<DistillationRunResult>("save_distillation_output", { request }),
+      () => call<DistillationSaveResult>("save_distillation_output", { request }),
       "保存蒸馏产出",
+    );
+    if (result) void loadDistillationWorkbench();
+    return result;
+  };
+
+  const readDistillationTranscript = async (request: { agent: string; sessionId: string }) =>
+    call<AitrackerSessionDetailResult>("read_distillation_transcript", { request }).catch(() => null);
+
+  const openDistillationLibrary = async (kind: string) => {
+    await run(
+      () => call<CommandResult<{ path?: string }>>("open_distillation_library", { request: { kind } }),
+      "打开记忆库",
+    );
+  };
+
+  const deleteDistillationCandidates = async (ids: string[]) => {
+    const result = await run(
+      () => call<DistillationCandidatesResult>("delete_distillation_candidates", { request: { ids } }),
+      "删除蒸馏记录",
+      { notify: false },
     );
     if (result) void loadDistillationWorkbench();
     return result;
@@ -3003,6 +3024,9 @@ export function App() {
       cancelDistillationTask,
       queryDistillationTask,
       saveDistillationOutput,
+      deleteDistillationCandidates,
+      openDistillationLibrary,
+      readDistillationTranscript,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
@@ -3154,6 +3178,9 @@ export function App() {
       cancelDistillationTask: (...args) => actionsRef.current!.cancelDistillationTask(...args),
       queryDistillationTask: (...args) => actionsRef.current!.queryDistillationTask(...args),
       saveDistillationOutput: (...args) => actionsRef.current!.saveDistillationOutput(...args),
+      deleteDistillationCandidates: (...args) => actionsRef.current!.deleteDistillationCandidates(...args),
+      openDistillationLibrary: (...args) => actionsRef.current!.openDistillationLibrary(...args),
+      readDistillationTranscript: (...args) => actionsRef.current!.readDistillationTranscript(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
