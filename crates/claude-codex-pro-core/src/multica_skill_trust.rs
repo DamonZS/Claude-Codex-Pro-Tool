@@ -471,6 +471,7 @@ mod tests {
             codex_home: dir.join("codex"),
             claude_home: dir.join("claude"),
             claude_config_paths: Vec::new(),
+            agent_skill_roots: BTreeMap::new(),
         }
     }
 

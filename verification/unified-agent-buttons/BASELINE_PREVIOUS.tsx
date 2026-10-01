@@ -2227,7 +2227,7 @@ function UnifiedToolInventoryPanel({
   result: UnifiedToolInventoryResult | null;
   settings: BackendSettings | null;
 }) {
-  const [tab, setTab] = useState<ContextKind>("skill");
+  const [tab, setTab] = useState<ContextKind>("mcp");
   const [pending, setPending] = useState<string | null>(null);
   const [creatingMcp, setCreatingMcp] = useState(false);
   const [creatingSkill, setCreatingSkill] = useState(false);
@@ -2238,15 +2238,8 @@ function UnifiedToolInventoryPanel({
   const [mcpId, setMcpId] = useState("");
   const [mcpBody, setMcpBody] = useState(defaultContextToml("mcp"));
   const inventory = result?.inventory;
-  const inventoryAgents = useMemo(
-    () => {
-      const preferred = ["claude-code", "codex", "workbuddy", "cursor", "openclaw"];
-      return [...(aitrackerCapabilities?.snapshot.registry ?? []).filter((agent) => agent.detected || (agent.skillCount ?? 0) > 0)].sort((left, right) => {
-        const leftOrder = preferred.indexOf(left.id);
-        const rightOrder = preferred.indexOf(right.id);
-        return (leftOrder < 0 ? preferred.length : leftOrder) - (rightOrder < 0 ? preferred.length : rightOrder);
-      });
-    },
+  const detectedAgents = useMemo(
+    () => (aitrackerCapabilities?.snapshot.registry ?? []).filter((agent) => agent.detected || (agent.skillCount ?? 0) > 0),
     [aitrackerCapabilities],
   );
   const entries = useMemo(
@@ -2258,11 +2251,12 @@ function UnifiedToolInventoryPanel({
     if (kind === "plugin") return inventory?.counts.plugins ?? 0;
     return inventory?.counts.mcp ?? 0;
   };
-  const toggle = async (asset: UnifiedToolAsset, app: string, enabled: boolean) => {
+  const toggle = async (asset: UnifiedToolAsset, app: "claude" | "codex") => {
+    const state = asset[app];
     const key = `${asset.kind}:${asset.id}:${app}`;
     setPending(key);
     try {
-      await actions.toggleUnifiedToolAsset(asset.id, asset.kind, app, enabled);
+      await actions.toggleUnifiedToolAsset(asset.id, asset.kind, app, !state.enabled);
     } finally {
       setPending(null);
     }
@@ -2467,34 +2461,26 @@ function UnifiedToolInventoryPanel({
               {asset.summary ? <span title={asset.summary}>{asset.summary}</span> : null}
               {asset.source ? <small title={asset.source}>{compactPath(asset.source)}</small> : null}
             </div>
+            <div className="agent-icon-group" aria-label={`${asset.title} 已检测 Agent`}>
+              {detectedAgents.map((agent) => <span className="agent-inventory-icon" key={agent.id} title={`${agent.name}：${agent.detected ? "已检测" : "有 Skill"}`}><AgentInventoryIcon agent={agent} /></span>)}
+            </div>
             <div className="agent-toggle-group" aria-label={`${asset.title} 应用状态`}>
-              {(asset.kind === "skill"
-                ? inventoryAgents
-                : inventoryAgents.filter((agent) => agent.id === "claude-code" || agent.id === "codex")
-              ).map((agent) => {
-                const app = agent.id === "claude-code" ? "claude" : agent.id === "codex" ? "codex" : agent.id;
-                const state = agent.id === "claude-code" ? asset.claude : agent.id === "codex" ? asset.codex : asset.agents?.[agent.id] ?? {
-                  enabled: false,
-                  available: false,
-                  toggleSupported: false,
-                  sourcePath: "",
-                };
-                const appName = agent.nameZh || agent.name;
+              {(["claude", "codex"] as const).map((app) => {
+                const state = asset[app];
+                const appName = app === "claude" ? "Claude" : "Codex";
                 const key = `${asset.kind}:${asset.id}:${app}`;
                 const isPending = pending === key;
                 return (
                   <button
                     aria-label={`${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
-                    aria-pressed={state.enabled}
                     className={`agent-toggle ${app} ${state.enabled ? "enabled" : "disabled"}${isPending ? " pending" : ""}`}
                     disabled={!state.toggleSupported || pending !== null}
-                    key={agent.id}
-                    onClick={() => void toggle(asset, app, !state.enabled)}
-                    style={agent.id === "claude-code" || agent.id === "codex" ? undefined : { color: agent.color }}
+                    key={app}
+                    onClick={() => void toggle(asset, app)}
                     title={`${appName}${state.enabled ? " ✓（点击关闭）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
                     type="button"
                   >
-                    <AgentInventoryIcon agent={agent} />
+                    <img alt="" aria-hidden="true" src={app === "claude" ? claudeLogo : codexLogo} />
                   </button>
                 );
               })}

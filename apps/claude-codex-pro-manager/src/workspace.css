@@ -10934,3 +10934,613 @@ html.dark > body > .supplier-model-dropdown-menu,
     grid-template-columns: 1fr;
   }
 }
+
+/* AITRACKER-inspired distillation workbench, using CCP liquid-glass tokens. */
+.distillation-workbench { margin: 0 0 22px; padding: 24px; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 24px; background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 78%, transparent), color-mix(in srgb, var(--panel) 52%, transparent)); box-shadow: 0 20px 70px rgba(0,0,0,.18); backdrop-filter: blur(24px); }
+.distillation-workbench-header { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; margin-bottom:18px; }
+.distillation-workbench-header h2 { margin: 6px 0 4px; font-size: 28px; letter-spacing:-.03em; }
+.distillation-workbench-header p { margin:0; color:var(--muted-foreground); }
+.distillation-workbench .eyebrow { display:inline-flex; gap:7px; align-items:center; color:var(--primary); font-size:12px; text-transform:uppercase; letter-spacing:.1em; }
+.distillation-header-stats { display:flex; gap:12px; flex-wrap:wrap; }
+.distillation-header-stats span { padding:10px 14px; border:1px solid color-mix(in srgb, var(--border) 65%, transparent); border-radius:14px; background:color-mix(in srgb, var(--background) 24%, transparent); color:var(--muted-foreground); font-size:12px; }
+.distillation-header-stats strong { display:block; color:var(--foreground); font-size:20px; }
+.distillation-tabs { display:flex; gap:8px; border-bottom:1px solid color-mix(in srgb, var(--border) 60%, transparent); margin-bottom:18px; }
+.distillation-tabs button,.distillation-output-types button,.distillation-segmented button { border:0; background:transparent; color:var(--muted-foreground); padding:9px 12px; border-radius:10px 10px 0 0; cursor:pointer; display:inline-flex; align-items:center; gap:7px; }
+.distillation-tabs button.active,.distillation-output-types button.active,.distillation-segmented button.active { color:var(--foreground); background:color-mix(in srgb, var(--primary) 14%, transparent); }
+.distillation-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(330px,.75fr); gap:16px; }
+.distillation-materials,.distillation-config,.distillation-history { padding:18px; border-radius:18px; }
+.distillation-card-title { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:14px; }
+.distillation-card-title strong { display:block; font-size:15px; }
+.distillation-card-title small { color:var(--muted-foreground); }
+.distillation-filter { display:flex; gap:8px; }
+.distillation-filter select,.distillation-config select,.distillation-config textarea { border:1px solid color-mix(in srgb, var(--border) 74%, transparent); background:color-mix(in srgb, var(--background) 38%, transparent); color:var(--foreground); border-radius:10px; padding:8px 10px; }
+.distillation-session-list { display:grid; gap:8px; max-height:330px; overflow:auto; }
+.distillation-session-list button { display:grid; grid-template-columns:20px 1fr auto; gap:10px; text-align:left; align-items:center; padding:12px; border:1px solid transparent; background:color-mix(in srgb, var(--background) 20%, transparent); color:var(--foreground); border-radius:12px; cursor:pointer; }
+.distillation-session-list button:hover,.distillation-session-list button.selected { border-color:color-mix(in srgb, var(--primary) 60%, transparent); background:color-mix(in srgb, var(--primary) 12%, transparent); }
+.distillation-session-list strong,.distillation-session-list small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.distillation-session-list small,.distillation-session-model { color:var(--muted-foreground); font-size:12px; }
+.distillation-check { width:18px; height:18px; border:1px solid var(--border); border-radius:6px; display:grid; place-items:center; color:var(--primary); }
+.distillation-materials footer { display:flex; justify-content:space-between; margin-top:12px; color:var(--muted-foreground); font-size:12px; }
+.text-button { border:0; background:none; color:var(--primary); cursor:pointer; }
+.distillation-config { display:grid; gap:12px; align-content:start; }
+.distillation-config label { display:grid; gap:6px; font-size:12px; color:var(--muted-foreground); }
+.distillation-config label select,.distillation-config label textarea { width:100%; box-sizing:border-box; }
+.distillation-config textarea { min-height:70px; resize:vertical; font:inherit; }
+.distillation-mode-pill { font-size:11px; color:var(--primary); padding:5px 8px; border-radius:999px; background:color-mix(in srgb, var(--primary) 12%, transparent); }
+.distillation-segmented { display:flex; gap:4px; padding:4px; border-radius:12px; background:color-mix(in srgb, var(--background) 28%, transparent); }
+.distillation-segmented button { flex:1; border-radius:8px; justify-content:center; font-size:12px; }
+.distillation-output-types > span { display:block; color:var(--muted-foreground); font-size:12px; margin-bottom:5px; }
+.distillation-output-types > div { display:flex; flex-wrap:wrap; gap:5px; }
+.distillation-output-types button { border-radius:9px; border:1px solid color-mix(in srgb, var(--border) 58%, transparent); font-size:12px; }
+.distillation-run-button { min-height:42px; border:0; border-radius:12px; background:linear-gradient(135deg, color-mix(in srgb, var(--primary) 85%, white), var(--primary)); color:var(--primary-foreground); display:flex; gap:8px; align-items:center; justify-content:center; cursor:pointer; font-weight:600; }
+.distillation-run-button:disabled { opacity:.55; cursor:not-allowed; }
+.distillation-progress { display:grid; gap:7px; font-size:12px; color:var(--muted-foreground); }
+.distillation-progress > div:first-child { display:flex; justify-content:space-between; }
+.progress-track { height:6px; border-radius:99px; overflow:hidden; background:color-mix(in srgb, var(--border) 40%, transparent); }
+.progress-track i { display:block; height:100%; background:var(--primary); transition:width .3s ease; }
+.distillation-history { display:grid; gap:10px; }
+.distillation-history article { display:grid; grid-template-columns:34px 1fr auto; gap:12px; padding:14px; border:1px solid color-mix(in srgb, var(--border) 58%, transparent); border-radius:14px; background:color-mix(in srgb, var(--background) 20%, transparent); }
+.distillation-history-icon { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; color:var(--primary); background:color-mix(in srgb, var(--primary) 14%, transparent); }
+.distillation-history-copy strong,.distillation-history-copy small { display:block; }
+.distillation-history-copy small { color:var(--muted-foreground); font-size:11px; margin-top:2px; }
+.distillation-history-copy p { white-space:pre-wrap; max-height:120px; overflow:auto; color:var(--muted-foreground); font-size:12px; margin:8px 0 0; }
+.distillation-history-actions { display:flex; gap:7px; align-items:flex-start; }
+.distillation-history-actions button { border:1px solid color-mix(in srgb, var(--primary) 52%, transparent); color:var(--primary); background:transparent; border-radius:9px; padding:7px 10px; cursor:pointer; font-size:12px; }
+.distillation-empty { padding:28px; color:var(--muted-foreground); text-align:center; border:1px dashed color-mix(in srgb, var(--border) 65%, transparent); border-radius:12px; }
+@media (max-width: 900px) { .distillation-grid { grid-template-columns:1fr; } .distillation-workbench-header { flex-direction:column; } }
+
+/* Distillation workbench: full-width AITRACKER hierarchy on CCP glass tokens. */
+.distillation-workbench {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.ops-screen[data-route="clients"] { padding-top: 8px; }
+.distillation-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.distillation-metrics article { min-width: 0; padding: 14px 15px 12px; border: 1px solid color-mix(in srgb, var(--border) 64%, transparent); border-radius: 15px; background: color-mix(in srgb, var(--panel) 78%, transparent); box-shadow: 0 5px 18px rgba(0,0,0,.08); backdrop-filter: blur(18px); }
+.distillation-metrics small,.distillation-metrics span { display: block; overflow: hidden; color: var(--muted-foreground); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.distillation-metrics strong { display: block; margin: 5px 0 3px; color: var(--primary); font: 700 24px/1.1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.distillation-metrics article:nth-child(1) strong { color: #34d399; }
+.distillation-metrics article:nth-child(2) strong { color: #a78bfa; }
+.distillation-metrics article:nth-child(3) strong { color: #60a5fa; }
+.distillation-metrics article:nth-child(4) strong { color: #fb923c; }
+.distillation-tabs { display: flex; align-items: center; gap: 6px; min-height: 42px; margin: 0; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--border) 64%, transparent); border-radius: 13px; background: color-mix(in srgb, var(--panel) 80%, transparent); backdrop-filter: blur(18px); }
+.distillation-tabs button { border-radius: 999px; }
+.distillation-tabs button.active { background: color-mix(in srgb, var(--primary) 11%, var(--panel)); }
+.distillation-tabs > span { margin-left: 5px; color: var(--muted-foreground); font-size: 12px; }
+.distillation-config { display: grid; gap: 0; padding: 16px; border: 1px solid color-mix(in srgb, var(--border) 68%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--panel) 80%, transparent); box-shadow: 0 8px 26px rgba(0,0,0,.10); backdrop-filter: blur(22px); }
+.distillation-config-header,.distillation-config-header > div:first-child { display: flex; align-items: center; gap: 12px; }
+.distillation-config-header { justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 0 0 13px; }
+.distillation-config-header strong { color: var(--foreground); font-size: 15px; }
+.distillation-config-header span { color: var(--muted-foreground); font-size: 11px; }
+.distillation-config-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.distillation-config-tools a { color: var(--primary); font-size: 11px; white-space: nowrap; }
+.distillation-config .distillation-provider-select { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
+.distillation-config .distillation-provider-select select { width: 170px; max-width: 170px; min-height: 32px; padding: 6px 8px; font-size: 10px; }
+.distillation-segmented { display: flex; gap: 4px; padding: 3px; border: 1px solid color-mix(in srgb, var(--border) 50%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--background) 22%, transparent); }
+.distillation-segmented button { padding: 7px 11px; border-radius: 999px; font-size: 11px; }
+.distillation-segmented button.active { background: color-mix(in srgb, var(--primary) 13%, var(--panel)); color: var(--foreground); }
+.distillation-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; min-height: 43px; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.distillation-filter-row > span:first-child,.distillation-material-count,.distillation-model-row > span { color: var(--muted-foreground); font-size: 11px; }
+.distillation-chip-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.distillation-chip-row button { padding: 6px 10px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--background) 23%, transparent); color: var(--muted-foreground); cursor: pointer; font-size: 11px; }
+.distillation-chip-row button.active { background: color-mix(in srgb, var(--primary) 13%, var(--panel)); color: var(--foreground); }
+.distillation-material-count { margin-left: auto; }
+.distillation-model-row label,.distillation-prompt { display: grid; min-width: 0; gap: 5px; color: var(--muted-foreground); font-size: 11px; }
+.distillation-model-row select,.distillation-prompt textarea,.distillation-range-controls select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--background) 35%, transparent); color: var(--foreground); padding: 8px 10px; }
+.distillation-session-list { display: grid; gap: 6px; max-height: 370px; overflow: auto; padding: 0 2px 2px; }
+.distillation-session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 6px; min-width: 0; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--background) 20%, transparent); }
+.distillation-session-row.selected { border-color: color-mix(in srgb, var(--primary) 52%, transparent); background: color-mix(in srgb, var(--primary) 7%, var(--panel)); }
+.distillation-session-select { display: grid; grid-template-columns: 19px minmax(0, 1fr) minmax(80px, auto); align-items: center; gap: 10px; min-width: 0; padding: 8px; border: 0; background: transparent; color: var(--foreground); text-align: left; cursor: pointer; }
+.distillation-session-select:hover .distillation-session-copy strong { color: var(--primary); }
+.distillation-session-copy { display: grid; min-width: 0; gap: 3px; }
+.distillation-session-copy strong,.distillation-session-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.distillation-session-copy strong { font-size: 12px; }
+.distillation-session-copy small,.distillation-session-model { color: var(--muted-foreground); font-size: 10px; }
+.distillation-check { display: inline-grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent); border-radius: 6px; color: var(--primary); }
+.distillation-preview-button { display: inline-flex; align-items: center; gap: 5px; align-self: center; padding: 7px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; font-size: 10px; }
+.distillation-preview-button:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
+.distillation-project-row { display: grid; grid-template-columns: 18px 18px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--background) 20%, transparent); color: var(--foreground); text-align: left; cursor: pointer; }
+.distillation-project-row:hover,.distillation-project-row.selected { border-color: color-mix(in srgb, var(--primary) 52%, transparent); background: color-mix(in srgb, var(--primary) 7%, var(--panel)); }
+.distillation-project-copy { display: grid; min-width: 0; gap: 3px; }
+.distillation-project-copy strong,.distillation-project-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.distillation-project-copy strong { font-size: 12px; }
+.distillation-project-copy small { color: var(--muted-foreground); font-size: 10px; }
+.distillation-material-footer,.distillation-material-footer > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.distillation-material-footer { justify-content: space-between; padding: 9px 0 13px; color: var(--muted-foreground); font-size: 10px; }
+.distillation-material-footer .text-button { padding: 0; font-size: 11px; }
+.distillation-model-row { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) auto; align-items: end; gap: 10px; padding: 12px 0; border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.distillation-model-row.quick { grid-template-columns: minmax(150px, .8fr) minmax(180px, 1fr) auto; }
+.distillation-model-row select { min-height: 36px; }
+.distillation-prompt { padding: 2px 0 13px; }
+.distillation-prompt textarea { min-height: 76px; resize: vertical; font: inherit; }
+.distillation-output-row { display: grid; grid-template-columns: 60px minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 8px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--border) 52%, transparent); }
+.distillation-output-row > span { padding: 6px 0; color: var(--muted-foreground); font-size: 11px; }
+.distillation-asset-group { min-width: 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--border) 65%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--background) 18%, transparent); }
+.distillation-asset-group.active { border-color: color-mix(in srgb, var(--primary) 48%, transparent); background: color-mix(in srgb, var(--primary) 6%, var(--panel)); }
+.distillation-asset-group header { display: flex; align-items: center; gap: 7px; }
+.distillation-asset-group header strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.distillation-asset-group header span { margin-left: auto; color: var(--muted-foreground); font: 10px ui-monospace, monospace; white-space: nowrap; }
+.distillation-asset-group > div { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.distillation-asset-group button { padding: 2px 0; border: 0; border-radius: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; font-size: 10px; text-align: left; }
+.distillation-asset-group button.active { background: transparent; color: var(--primary); font-weight: 650; }
+.distillation-run-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; padding: 12px 0 0; border: 0; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; }
+.distillation-run-bar > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; flex: 1; color: var(--muted-foreground); font-size: 11px; }
+.distillation-run-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 0 15px; border: 0; border-radius: 10px; background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 82%, white), var(--primary)); color: var(--primary-foreground); cursor: pointer; font-size: 12px; font-weight: 650; }
+.distillation-run-button:disabled { opacity: .48; cursor: not-allowed; }
+.distillation-task-progress { display: grid; width: min(330px, 100%); gap: 5px; color: var(--muted-foreground); font-size: 10px; }
+.distillation-task-progress > div:first-child { display: flex; justify-content: space-between; }
+.distillation-task-progress .progress-track { height: 5px; }
+.distillation-notice { margin: 0; padding: 7px 10px; border-radius: 9px; background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--muted-foreground); font-size: 11px; }
+.distillation-history { display: grid; gap: 9px; padding: 14px; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: 17px; background: color-mix(in srgb, var(--panel) 74%, transparent); backdrop-filter: blur(18px); }
+.distillation-history article { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 11px; padding: 12px; border: 1px solid color-mix(in srgb, var(--border) 58%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--background) 18%, transparent); }
+.distillation-history-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+.distillation-history-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.distillation-history-heading strong { font-size: 12px; }
+.distillation-status { padding: 3px 7px; border-radius: 99px; background: color-mix(in srgb, var(--border) 25%, transparent); color: var(--muted-foreground); font-size: 9px; }
+.distillation-status.pending { color: var(--primary); }
+.distillation-history-copy > small { display: block; margin-top: 4px; color: var(--muted-foreground); font-size: 10px; }
+.distillation-history-copy p { max-height: 220px; overflow: auto; margin: 8px 0 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+.distillation-history-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; }
+.distillation-history-actions button { padding: 6px 9px; border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent); border-radius: 8px; background: transparent; color: var(--primary); cursor: pointer; font-size: 10px; white-space: nowrap; }
+.distillation-history-actions button.secondary { border-color: color-mix(in srgb, var(--border) 70%, transparent); color: var(--muted-foreground); }
+.distillation-empty { padding: 28px; border: 1px dashed color-mix(in srgb, var(--border) 65%, transparent); border-radius: 12px; color: var(--muted-foreground); text-align: center; font-size: 12px; }
+.distillation-preview-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(7,10,15,.48); backdrop-filter: blur(5px); }
+.distillation-preview-dialog { display: grid; width: min(880px, 100%); max-height: min(88vh, 900px); grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid color-mix(in srgb, var(--border) 78%, transparent); border-radius: 19px; background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: 0 25px 90px rgba(0,0,0,.36); backdrop-filter: blur(24px); }
+.distillation-preview-dialog > header,.distillation-preview-dialog > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.distillation-preview-dialog > header > div { display: grid; gap: 4px; min-width: 0; }
+.distillation-preview-dialog > header strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.distillation-preview-dialog > header small,.distillation-preview-dialog > footer > span { color: var(--muted-foreground); font-size: 10px; }
+.distillation-preview-dialog > header button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.distillation-range-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 9px; padding: 12px 16px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+.distillation-range-controls label { display: grid; min-width: 0; gap: 4px; color: var(--muted-foreground); font-size: 10px; }
+.distillation-range-controls select { padding: 7px; font-size: 10px; }
+.distillation-range-controls > span { padding: 8px 0; color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
+.distillation-transcript { display: grid; align-content: start; gap: 8px; overflow: auto; padding: 12px 16px; }
+.distillation-transcript article { padding: 10px; border: 1px solid color-mix(in srgb, var(--border) 50%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--background) 20%, transparent); opacity: .58; }
+.distillation-transcript article.included { border-color: color-mix(in srgb, var(--primary) 48%, transparent); background: color-mix(in srgb, var(--primary) 7%, transparent); opacity: 1; }
+.distillation-transcript small { color: var(--primary); font: 10px ui-monospace, monospace; }
+.distillation-transcript p { margin: 5px 0 0; color: var(--foreground); font-size: 11px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.distillation-preview-dialog > footer { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); border-bottom: 0; }
+.distillation-preview-dialog > footer button { display: inline-flex; align-items: center; gap: 6px; }
+.distillation-preview-loading { display: flex; align-items: center; gap: 8px; padding: 30px; color: var(--muted-foreground); font-size: 12px; }
+@media (max-width: 760px) {
+  .distillation-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .distillation-config-header > div:first-child { flex-wrap: wrap; }
+  .distillation-config-tools { width: 100%; }
+  .distillation-config .distillation-provider-select { min-width: 0; flex: 1 1 100%; }
+  .distillation-config .distillation-provider-select select { width: 100%; min-width: 0; max-width: none; flex: 1; }
+  .distillation-model-row,.distillation-model-row.quick { grid-template-columns: 1fr; }
+  .distillation-output-row { grid-template-columns: 1fr; }
+  .distillation-output-row > span { padding: 0; }
+  .distillation-session-select { grid-template-columns: 19px minmax(0, 1fr); }
+  .distillation-session-model { display: none; }
+  .distillation-range-controls { grid-template-columns: 1fr; }
+  .distillation-range-controls > span { padding: 0; }
+  .distillation-history article { grid-template-columns: 30px minmax(0, 1fr); }
+  .distillation-history-actions { grid-column: 2; }
+}
+
+/* Flatten the workbench to the reference hierarchy while keeping CCP glass surfaces. */
+.distillation-workbench {
+  gap: 10px;
+}
+.distillation-metrics {
+  gap: 10px;
+}
+.distillation-metrics article {
+  min-height: 72px;
+  padding: 12px 14px 10px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .08), inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
+}
+.distillation-tabs {
+  min-height: 38px;
+  padding: 3px 6px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+.distillation-tabs button,
+.distillation-segmented button,
+.distillation-chip-row button {
+  box-shadow: none;
+  transform: none;
+}
+.distillation-tabs button:hover,
+.distillation-segmented button:hover,
+.distillation-chip-row button:hover {
+  box-shadow: none;
+  transform: none;
+}
+.distillation-tabs button.active,
+.distillation-segmented button.active,
+.distillation-chip-row button.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+.distillation-config {
+  padding: 12px 14px 10px;
+  border-radius: 12px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .08), inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
+}
+.distillation-config-header {
+  min-height: 34px;
+  padding-bottom: 9px;
+}
+.distillation-config-title {
+  gap: 9px;
+}
+.distillation-config-title > span {
+  font-family: inherit;
+  font-size: 11px;
+}
+.distillation-segmented {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--distill-bg) 28%, transparent);
+  box-shadow: none;
+}
+.distillation-segmented button {
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.distillation-segmented button.active {
+  background: color-mix(in srgb, var(--primary) 11%, var(--distill-card));
+  box-shadow: none;
+}
+.distillation-config .distillation-provider-select select {
+  min-height: 30px;
+  border-radius: 7px;
+  box-shadow: none;
+}
+.distillation-filter-row {
+  min-height: 40px;
+  gap: 8px;
+  padding-block: 6px;
+}
+.distillation-material-surface {
+  padding: 5px;
+  border-radius: 9px;
+  box-shadow: none;
+}
+.distillation-session-list {
+  min-height: 96px;
+  max-height: 264px;
+}
+.distillation-empty {
+  min-height: 88px;
+  padding: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--distill-bg) 20%, transparent);
+}
+.distillation-material-footer {
+  padding: 7px 2px 3px;
+}
+.distillation-material-row {
+  padding-block: 8px;
+}
+.distillation-advanced-panel {
+  margin: 0 0 8px 60px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--distill-border) 50%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--distill-bg) 16%, transparent);
+}
+.distillation-prompt textarea {
+  min-height: 72px;
+}
+.distillation-output-row {
+  padding-top: 8px;
+}
+.distillation-asset-group {
+  padding: 8px 9px;
+  border-radius: 9px;
+  box-shadow: none;
+}
+.distillation-run-bar {
+  margin-top: 8px;
+  padding-top: 9px;
+}
+@media (max-width: 760px) {
+  .distillation-advanced-panel {
+    margin-left: 0;
+  }
+}
+
+/* Final AITRACKER layout alignment: fixed label column, compact rows and a
+   bounded material surface. CCP glass tokens remain the only visual source. */
+.distillation-workbench {
+  gap: 12px;
+  max-width: 100%;
+}
+.distillation-metrics {
+  gap: 12px;
+}
+.distillation-metrics article {
+  min-height: 78px;
+  padding: 14px 15px 12px;
+  background: color-mix(in srgb, var(--panel) 66%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+}
+.distillation-tabs {
+  min-height: 42px;
+  padding: 5px 9px;
+  background: color-mix(in srgb, var(--panel) 68%, transparent);
+}
+.distillation-config {
+  gap: 0;
+  padding: 14px 18px 12px;
+  background: color-mix(in srgb, var(--panel) 66%, transparent);
+}
+.distillation-config-header {
+  align-items: center;
+  min-height: 38px;
+  padding-bottom: 11px;
+}
+.distillation-config-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.distillation-config-title > span {
+  color: var(--muted-foreground);
+  font: 10px ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.distillation-config-tools {
+  justify-content: flex-end;
+}
+.distillation-config-row {
+  min-width: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+}
+.distillation-row-label {
+  width: 60px;
+  flex: 0 0 60px;
+  padding-left: 22px;
+  color: var(--muted-foreground);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
+}
+.distillation-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 0;
+  border-bottom: 0;
+}
+.distillation-filter-row > .distillation-row-label {
+  display: inline-block;
+}
+.distillation-filter-row .distillation-material-count { margin-left: auto; }
+.distillation-material-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 0;
+}
+.distillation-material-row > .distillation-row-label,
+.distillation-output-row > .distillation-row-label {
+  padding-top: 7px;
+}
+.distillation-material-surface {
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+}
+.distillation-session-list {
+  min-height: 238px;
+  max-height: 292px;
+  padding: 0 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.distillation-session-row {
+  background: color-mix(in srgb, var(--panel) 48%, transparent);
+}
+.distillation-empty {
+  display: grid;
+  min-height: 222px;
+  place-items: center;
+  padding: 14px;
+  border: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.distillation-material-footer {
+  padding: 8px 2px 0;
+}
+.distillation-output-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 0 0;
+}
+.distillation-run-bar {
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 0 0;
+}
+.distillation-run-bar > .distillation-row-label {
+  flex: 0 0 60px;
+}
+.distillation-run-hint {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+@media (max-width: 760px) {
+  .distillation-config {
+    padding-inline: 12px;
+  }
+  .distillation-filter-row {
+    align-items: flex-start;
+  }
+  .distillation-material-row,
+  .distillation-output-row {
+    grid-template-columns: 1fr;
+  }
+  .distillation-row-label,
+  .distillation-run-bar > .distillation-row-label {
+    width: auto;
+    flex-basis: auto;
+    padding-left: 0;
+  }
+  .distillation-material-row > .distillation-row-label,
+  .distillation-output-row > .distillation-row-label {
+    padding-top: 0;
+  }
+}
+
+/* Raised controls: preserve CCP's dark glass while giving the workbench
+   controls tactile separation and a visible edge highlight. */
+.distillation-tabs {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .14), inset 0 1px 0 color-mix(in srgb, white 9%, transparent);
+}
+.distillation-tabs button,
+.distillation-segmented button,
+.distillation-chip-row button {
+  border: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .16), inset 0 1px 0 color-mix(in srgb, white 7%, transparent);
+  transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease;
+}
+.distillation-tabs button:hover,
+.distillation-segmented button:hover,
+.distillation-chip-row button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 9px rgba(0, 0, 0, .2), inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+.distillation-tabs button.active,
+.distillation-segmented button.active,
+.distillation-chip-row button.active {
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--border));
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 18%, transparent), inset 0 1px 0 color-mix(in srgb, white 13%, transparent);
+}
+.distillation-segmented {
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2), 0 2px 7px rgba(0, 0, 0, .12);
+}
+
+/* Theme variables store HSL channels, so expose concrete colors locally before
+   using them in color-mix(). This keeps the AITRACKER hierarchy translucent
+   without changing CCP's global theme contract. */
+.distillation-workbench {
+  --distill-bg: hsl(var(--background));
+  --distill-card: hsl(var(--card));
+  --distill-border: hsl(var(--border));
+  --distill-muted: hsl(var(--muted-foreground));
+}
+.distillation-metrics article,
+.distillation-tabs,
+.distillation-config,
+.distillation-history {
+  background: color-mix(in srgb, var(--distill-card) 72%, transparent);
+  border-color: color-mix(in srgb, var(--distill-border) 72%, transparent);
+}
+.distillation-tabs button.active,
+.distillation-segmented button.active,
+.distillation-chip-row button.active,
+.distillation-session-row.selected,
+.distillation-asset-group.active {
+  background: color-mix(in srgb, var(--primary) 12%, var(--distill-card));
+}
+.distillation-asset-group button.active { background: transparent; }
+.distillation-session-row,
+.distillation-asset-group,
+.distillation-material-surface {
+  background: color-mix(in srgb, var(--distill-bg) 24%, transparent);
+  border-color: color-mix(in srgb, var(--distill-border) 64%, transparent);
+}
+.distillation-config select,
+.distillation-config textarea,
+.distillation-range-controls select {
+  background: color-mix(in srgb, var(--distill-bg) 42%, transparent);
+  border-color: color-mix(in srgb, var(--distill-border) 76%, transparent);
+}
+.distillation-workbench button,
+.distillation-workbench input,
+.distillation-workbench select,
+.distillation-workbench textarea {
+  font-family: inherit;
+}
+.distillation-config-header {
+  padding-bottom: 9px;
+}
+.distillation-prompt textarea {
+  min-height: 68px;
+}
+.distillation-material-row {
+  padding-block: 10px;
+}
+.distillation-output-row {
+  padding-top: 10px;
+}
+.distillation-run-bar {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+/* Keep the desktop configuration controls on the same line as the mode. */
+.distillation-config-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+}
+.distillation-config-title {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.distillation-config-title > span {
+  white-space: nowrap;
+}
+.distillation-config-tools {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.distillation-config .distillation-provider-select select {
+  width: 142px;
+  max-width: 142px;
+}
+.distillation-config-tools > .distillation-provider-select:nth-child(2) select {
+  width: 128px;
+  max-width: 128px;
+}
+@media (max-width: 760px) {
+  .distillation-config-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .distillation-config-title {
+    flex-wrap: wrap;
+  }
+  .distillation-config-tools {
+    flex-wrap: wrap;
+  }
+  .distillation-config .distillation-provider-select select,
+  .distillation-config-tools > .distillation-provider-select:nth-child(2) select {
+    width: 100%;
+    max-width: none;
+  }
+}

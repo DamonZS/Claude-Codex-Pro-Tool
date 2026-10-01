@@ -13,6 +13,8 @@
 - 将 Codex、Claude 的 MCP、Skills、插件合并到一个标题为“Claude、Codex 工具与插件”的面板。
 - 完整发现本机可解析的 Codex 与 Claude 资产，而不是只显示本工具受管条目。
 - 同一资产跨应用去重合并，并保留每个应用独立的启用状态和来源路径。
+- 从 AITRACKER 注册表加载本机已检测 Agent（例如 Cursor、WorkBuddy、OpenClaw），Skill 行按 Agent 展示独立启用状态。
+- 每次进入统一工具页时刷新 AITRACKER 本机检测结果，确保直接进入工具页时也能显示已检测 Agent。
 - 以 Claude、Codex 应用图标作为独立开关：点亮表示该端可用，点灭表示该端关闭。
 - 修复“检测”按钮无反馈，提供检测中、成功、失败和数量摘要。
 - 删除“同步到当前 Codex”按钮。
@@ -25,11 +27,11 @@
 - 删除 Skills 或插件的唯一原始副本。
 - 重置 Codex、Claude 配置或其他用户数据。
 - 修改供应商、盘古记忆、Claude 汉化注入或发布流程。
-- 增加 Gemini、OpenCode、Hermes 等其他应用入口。
+- 为不具备结构化 Skill 写入能力的 Agent 伪造 MCP/插件启用状态；这类条目仍只显示 Claude/Codex 可切换按钮。
 
 ## 用户视角描述
 
-用户进入“工具与插件”页面后，顶部仍可审查 Codex 与 Claude 插件仓库的真实状态。下方只出现一个“Claude、Codex 工具与插件”面板，可以在 MCP、Skills、插件三类资产之间切换。
+用户进入“工具与插件”页面后，顶部仍可审查 Codex 与 Claude 插件仓库的真实状态。下方只出现一个“Claude、Codex 工具与插件”面板，默认打开 Skills 标签，让 AITRACKER 已检测 Agent 的 Skill 激活按钮直接可见；用户也可以切换到 MCP、插件资产。AITRACKER 的 Agent 激活能力仅适用于 Skills，不在 MCP/插件行伪造未实现的适配。
 
 每项资产只占一行，显示名称、摘要、来源，以及 Claude 和 Codex 图标。图标点亮表示该资产已在对应应用中启用；点击亮图标只关闭该应用中的资产，点击灰图标只把资产启用到该应用。操作必须显示处理中及最终结果，并在完成后重新检测真实状态。
 
@@ -79,6 +81,7 @@ Claude 插件必须聚合 `~/.claude/plugins` 的已安装/启用记录和 Claud
 - 插件：优先使用应用原生启用配置；若只能通过本地目录生效，必须采用可恢复停用方式。缓存插件首次启用时必须使用配置或 marketplace manifest 中的真实 marketplace ID，不得使用缓存目录名伪造 ID。
 - 切换 Claude 不得改变 Codex，切换 Codex 不得改变 Claude。
 - 切换失败时前端状态必须回滚为重新检测后的真实值，并显示失败原因。
+- AITRACKER Skill Agent 的启用/关闭必须移动到对应 Agent 的真实 Skill 根目录或 `.ccp-disabled` 可恢复目录；按钮点击期间显示 pending，完成后重新检测并通知结果。
 
 ### 5. 仓库状态
 
@@ -106,7 +109,7 @@ Claude 状态必须聚合所有候选配置路径并标明当前实际写入/发
 - 统一面板只使用一个标题“Claude、Codex 工具与插件”。
 - 面板包含 MCP、Skills、插件三个标签及真实数量。
 - 每条资产使用紧凑列表行，不再为 Codex/Claude 分别重复展示。
-- 行尾固定展示 Claude、Codex 两个可识别应用图标；亮色表示启用，灰色表示未启用。
+- 行尾与资产内容保持同一行，展示 AITRACKER 本机已检测 Agent 的可识别图标；Skill 支持的 Agent 使用与 Claude/Codex 相同的亮/灰激活按钮，亮色表示启用，灰色表示未启用。
 - 图标必须有可访问名称、悬停提示、加载态和禁用态。
 - 编辑、删除等高级操作只在对应资产确实支持时显示，不得遮挡应用图标。
 - 空态需要说明本次扫描过的来源与未发现原因。

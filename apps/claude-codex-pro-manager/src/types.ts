@@ -307,6 +307,7 @@ export type UnifiedToolAsset = {
   source: string;
   claude: UnifiedToolAppState;
   codex: UnifiedToolAppState;
+  agents?: Record<string, UnifiedToolAppState>;
 };
 
 export type UnifiedToolInventory = {
@@ -1272,8 +1273,60 @@ export type DistillationCandidate = {
   summary: string;
   status: string;
   createdAt: string;
+  kind?: "memory" | "brief" | "prompt" | "persona" | "skill" | string;
+  title?: string;
+  output?: string;
+  mode?: "model" | "offline" | "fallback" | "budget-exceeded" | string;
+  providerId?: string;
+  modelId?: string;
+  taskId?: string;
+  sourceRefs?: Array<{
+    agent: string;
+    sessionId: string;
+    project: string;
+    startIndex: number;
+    endIndex: number;
+  }>;
 };
 export type DistillationCandidatesResult = CommandResult<{ candidates: DistillationCandidate[] }>;
+
+export type DistillationWorkbenchSession = {
+  agent: string;
+  sessionId: string;
+  title: string;
+  project: string;
+  projectKey?: string;
+  isGitProject?: boolean;
+  model: string;
+  startedAt?: string;
+  updatedAt: string;
+  events: number;
+  tokens: number;
+};
+export type DistillationWorkbenchProvider = {
+  id: string;
+  name: string;
+  models: string[];
+  targetApp?: string;
+};
+export type DistillationWorkbenchResult = CommandResult<{
+  sessions: DistillationWorkbenchSession[];
+  providers: DistillationWorkbenchProvider[];
+  candidates: DistillationCandidate[];
+}>;
+export type DistillationSessionSelection = {
+  agent: string;
+  sessionId: string;
+  startIndex?: number;
+  endIndex?: number;
+};
+export type DistillationRunResult = CommandResult<{
+  taskId: string;
+  phase: string;
+  percent: number;
+  detail?: string | null;
+  candidate?: DistillationCandidate | null;
+}>;
 
 export type LogsResult = CommandResult<{
   path: string;

@@ -243,6 +243,16 @@ pub struct AitrackerSessionDetail {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct DistillationSourceRef {
+    pub agent: String,
+    pub session_id: String,
+    pub project: String,
+    pub start_index: usize,
+    pub end_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct DistillationCandidate {
     pub id: String,
     pub agent: String,
@@ -250,6 +260,22 @@ pub struct DistillationCandidate {
     pub summary: String,
     pub status: String,
     pub created_at: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub output: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub source_refs: Vec<DistillationSourceRef>,
 }
 
 fn value<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
@@ -323,6 +349,19 @@ fn skill_roots(skills: &Value, home: &Path) -> Vec<PathBuf> {
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .collect()
+}
+
+/// Resolves the writable local Skill roots declared by every AITRACKER tool definition.
+pub fn skill_roots_for_agents(home: &Path) -> BTreeMap<String, Vec<PathBuf>> {
+    DEFINITION_FILES
+        .iter()
+        .filter_map(|(id, source)| {
+            let definition = serde_json::from_str::<Value>(source).ok()?;
+            let skills = definition.pointer("/storage/skills")?;
+            let roots = skill_roots(skills, home);
+            (!roots.is_empty()).then_some(((*id).to_string(), roots))
+        })
         .collect()
 }
 
@@ -755,6 +794,32 @@ mod tests {
             tool_name: tool.map(str::to_string),
         }
     }
+    #[test]
+    fn distillation_candidate_keeps_selected_source_ranges_and_reads_legacy_records() {
+        let legacy: DistillationCandidate = serde_json::from_value(serde_json::json!({
+            "id": "old",
+            "agent": "codex",
+            "sessionId": "session-1",
+            "summary": "old candidate",
+            "status": "pending",
+            "createdAt": "1"
+        }))
+        .unwrap();
+        assert!(legacy.source_refs.is_empty());
+
+        let source = DistillationSourceRef {
+            agent: "codex".into(),
+            session_id: "session-2".into(),
+            project: "ccp".into(),
+            start_index: 3,
+            end_index: 7,
+        };
+        let encoded = serde_json::to_value(source).unwrap();
+        assert_eq!(encoded["startIndex"], 3);
+        assert_eq!(encoded["endIndex"], 7);
+        assert_eq!(encoded["project"], "ccp");
+    }
+
     #[test]
     fn registry_matches_manifest_and_projects_tool_calls() {
         let snapshot = aggregate(vec![event("codex", "s", Some("terminal"))], Vec::new());

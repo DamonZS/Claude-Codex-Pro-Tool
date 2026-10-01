@@ -37,8 +37,12 @@
    - 证据：Rust 回归测试。
 
 9. 应用图标准确表达状态。
-   - 通过：每行固定显示 Claude、Codex 图标；已启用为亮色，未启用为灰色；图标带可访问名称和悬停说明。
+   - 通过：每行内容与 Agent 图标位于同一行；Skill 行显示 AITRACKER 本机已检测 Agent（例如 Cursor、WorkBuddy、OpenClaw），已启用为亮色，未启用为灰色；图标带可访问名称和悬停说明。
    - 证据：前端源码检查、截图或组件测试。
+   - 通过：进入工具页默认选中 Skills 标签，WorkBuddy、Cursor、OpenClaw 等本机已检测 Agent 的 Skill 开关无需额外切页即可看到；MCP/插件行只展示已有真实配置适配的 Claude/Codex 开关。
+   - 证据：前端源码检查及定向前端构建。
+   - 通过：直接打开工具页时也先读取本机 Agent 注册表，不依赖此前访问概览页。
+   - 证据：工具页路由加载源码检查及定向前端构建。
 
 10. 切换只影响目标应用。
     - 通过：fixture 中点灭 Claude 后 Claude 状态关闭而 Codex 保持不变；反向同理；OpenAI 缓存插件首次启用写入 manifest 中的真实 marketplace ID，不得写成 `plugin@plugins`。
@@ -55,6 +59,10 @@
 13. Claude 仓库状态聚合候选路径。
     - 通过：仓库只写在非首个候选配置路径时，状态仍能识别并返回该实际路径。
    - 证据：Rust 回归测试。
+
+11a. AITRACKER Agent Skill 激活按钮可用。
+   - 通过：fixture 为 `cursor` 或其他注册 Agent 提供 Skill 根目录时，行尾按钮可点击；点击显示 pending/结果反馈，关闭后进入 `.ccp-disabled`，再次点击恢复且内容不变。
+   - 证据：Rust 回归测试、前端源码检查。
 
 14. Codex 注入包含所有真实本地 marketplace。
     - 通过：fixture 同时提供 OpenAI、第三方、Product Design 和自定义本地 marketplace 快照时，注入清单全部包含；只有配置但缺少本地 `marketplace.json` 的来源不得进入清单，也不得报告应用可见。
@@ -118,7 +126,7 @@
 
 ## 非目标
 
-- 不要求本次支持 Claude、Codex 之外的应用。
+- MCP/插件不要求为缺少结构化配置能力的其他 Agent 伪造启用状态。
 - 不要求自动安装所有仓库中的可用插件。
 - 不要求执行第三方安装脚本。
 - 不验证供应商、盘古记忆、汉化注入或发布功能。

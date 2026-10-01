@@ -829,7 +829,7 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     assert!(app_tsx.contains("启动/重启Claude"));
     assert!(app_tsx.contains("Claude 一键汉化"));
     assert!(app_tsx.contains("install_claude_zh_patch"));
-    assert!(app_tsx.contains("onClick={() => void actions.installClaudeZhPatch()}"));
+    assert!(app_tsx.contains("onInstallClaudeZhPatch={() => void actions.installClaudeZhPatch()}"));
     assert!(!app_tsx.contains("onClick={() => void actions.openClaudeChinese()}"));
     assert!(!app_tsx.contains("包装 WebView"));
     assert!(commands_rs.contains("pub async fn open_claude_chinese_window"));
@@ -993,6 +993,7 @@ fn tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedbac
         .nth(1)
         .and_then(|rest| rest.split("} else if (target === \"sessions\")").next())
         .expect("tools route refresh source");
+    assert!(tools_route.contains("refreshAitrackerCapabilities(true)"));
     assert!(tools_route.contains("refreshCodexPluginMarketplace(true)"));
     assert!(tools_route.contains("refreshClaudeDesktopMarketplace(true)"));
     assert!(tools_route.contains("codexMarketplaceStatus"));
@@ -1078,7 +1079,7 @@ fn pangu_memory_public_surfaces_are_removed() {
 fn selected_pages_omit_redundant_heading_band() {
     let shell = normalize_source(include_str!("../../src/components/AppShell.tsx").to_string());
     assert!(shell.contains(
-        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" && route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\" ? (\n            <div className=\"ops-page-heading\">"
+        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" && route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\" && route !== \"clients\" ? (\n            <div className=\"ops-page-heading\">"
     ));
 }
 
@@ -1110,7 +1111,7 @@ fn plugin_tools_ui_regression_is_locked_down() {
 
     assert!(app_tsx.contains("className=\"agent-toggle-group\""));
     assert!(app_tsx.contains("className={`agent-toggle ${app}"));
-    assert!(app_tsx.contains("onClick={() => void toggle(asset, app)}"));
+    assert!(app_tsx.contains("onClick={() => void toggle(asset, app, !state.enabled)}"));
     assert!(styles.contains(".agent-toggle-group"));
     assert!(styles.contains(".agent-toggle.claude.enabled"));
     assert!(styles.contains(".agent-toggle.codex.enabled"));
@@ -1363,7 +1364,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     for (id, label) in [
         ("overview", "概览"),
         ("supplier", "供应商与路由"),
-        ("clients", "客户端与增强"),
+        ("clients", "蒸馏工作台"),
         ("sessions", "会话"),
         ("tools", "插件、Skills 与 MCP"),
         ("maintenance", "维护与诊断"),
@@ -1601,61 +1602,33 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     for prop in [
         "actions={actions}",
-        "agentScope={agentScope}",
-        "claudeDesktop={claudeDesktop}",
-        "claudeDesktopDevMode={claudeDesktopDevMode}",
-        "claudeZhPatch={claudeZhPatch}",
-        "overview={overview}",
-        "settings={settingsDraft ?? settings?.settings ?? null}",
-        "watcher={watcher}",
+        "distillationWorkbench={distillationWorkbench}",
     ] {
         assert!(
             clients_route.contains(prop),
-            "clients route is missing real state prop: {prop}"
+            "distillation route is missing real state prop: {prop}"
         );
     }
 
-    for client_contract in [
-        "overview?.latest_launch",
-        "claudeZhPatch?.status.localeConfigured",
-        "claudeDesktopDevMode?.devModeStatus.configured",
-        "watcher?.enabled",
-        "settings?.relayProfiles.find(",
-        "const visibleClients = clients",
-        "agentScope === \"codex\" ? \"codex\" : \"claude-desktop\"",
-        "{visibleClients.length} 个本机客户端",
-        "<StateCell label=\"已安装\"",
-        "<StateCell label=\"已启用\"",
-        "<StateCell label=\"当前生效\"",
-        "<StateCell label=\"健康状态\"",
-        "正在读取本机客户端与增强状态",
-        "状态读取失败，页面保留已取得的数据",
-        "当前 Agent 范围没有可显示的客户端",
-        "我的任务",
-        "multicaWorkspaceEnabled",
-        "actions.saveSettingBoolean",
-        "<ToggleSwitch",
+    for distillation_contract in [
+        "蒸馏工作台",
+        "蒸馏配置",
+        "蒸馏历史",
+        "快速模式",
+        "高级配置",
+        "按会话",
+        "按项目",
+        "Skill 库",
+        "记忆库",
+        "一键蒸馏",
     ] {
         assert!(
-            clients_screen.contains(client_contract),
-            "missing client/enhancement contract: {client_contract}"
+            clients_screen.contains(distillation_contract),
+            "missing distillation workbench contract: {distillation_contract}"
         );
     }
-    for action in [
-        "actions.restartCodex()",
-        "actions.repairFrontendConnection()",
-        "actions.launchClaudeDesktop()",
-        "actions.installClaudeZhPatch()",
-        "actions.configureClaudeDesktopDevMode()",
-        "actions.installWatcher()",
-        "actions.disableWatcher()",
-        "actions.enableWatcher()",
-    ] {
-        assert!(
-            clients_screen.contains(action),
-            "client page no longer delegates to existing action: {action}"
-        );
-    }
+    assert!(app.contains("list_distillation_candidates"));
+    assert!(app.contains("run_distillation_workbench"));
     assert!(!clients_screen.contains("invokeCommand"));
 
     let session_screen = source_section(

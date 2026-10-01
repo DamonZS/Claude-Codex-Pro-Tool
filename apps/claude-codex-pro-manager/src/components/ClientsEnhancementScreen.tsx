@@ -1,623 +1,364 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  AppWindow,
-  CheckCircle2,
-  CircleDot,
-  CircleOff,
-  Languages,
-  MessageCircle,
-  RefreshCw,
-  Settings2,
-  ShieldCheck,
-  SquareTerminal,
-  Wrench,
-  type LucideIcon,
+  BookOpen,
+  BrainCircuit,
+  Check,
+  Clock3,
+  FlaskConical,
+  FolderOpen,
+  History,
+  LoaderCircle,
+  Send,
+  X,
 } from "lucide-react";
 
-import type { AgentScope } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import type { AppActions } from "@/lib/actions";
-import { compactDisplayPath, statusFailed, statusOk } from "@/lib/helpers";
+import {
+  filterDistillationSessions,
+  groupDistillationSessionsByProject,
+} from "@/lib/distillation-materials";
 import type {
-  BackendSettings,
-  ClaudeDesktopDevModeStatusResult,
-  ClaudeDesktopResult,
-  ClaudeZhPatchResult,
-  OverviewResult,
-  WatcherResult,
+  AitrackerSessionDetailResult,
+  DistillationCandidate,
+  DistillationRunResult,
+  DistillationSessionSelection,
+  DistillationWorkbenchResult,
+  DistillationWorkbenchSession,
 } from "@/types";
-import { ToggleSwitch } from "@/components/ui/ops";
 
-type ClientId = "codex" | "claude-desktop" | "claude-code";
-type StateTone = "ok" | "attention" | "danger" | "muted";
+// The layout and interaction order below follow AITRACKER's
+// DistillationPage/DistillConfig/MaterialDrawer/ExpCard flow.  CCP owns the
+// rendered components and liquid-glass styles; only the distillation semantics
+// are shared with the local Rust workbench commands.
 
-type StateValue = {
-  detail: string;
-  label: string;
-  tone: StateTone;
-};
+type DistillKind = "skill" | "brief" | "prompt" | "persona" | "memory";
+type TimeRange = "today" | "7d" | "30d" | "all";
+type MaterialMode = "session" | "project";
+type Selection = DistillationSessionSelection;
 
-type Capability = {
-  detail: string;
-  enabled: boolean | null;
-  label: string;
-  settingKey?: EnhancementSettingKey;
-};
+const OUTPUT_TYPES: Array<{ id: DistillKind; label: string; group: "capability" | "memory" }> = [
+  { id: "skill", label: "Skill", group: "capability" },
+  { id: "brief", label: "Workflow", group: "capability" },
+  { id: "prompt", label: "Prompt", group: "capability" },
+  { id: "persona", label: "Profile / Persona", group: "memory" },
+  { id: "memory", label: "Task Memory", group: "memory" },
+];
 
-type EnhancementSettingKey =
-  | "claudeAppChineseOverlayEnabled"
-  | "cliWrapperEnabled"
-  | "codexAppPluginMarketplaceUnlock"
-  | "codexAppServiceTierControls"
-  | "enhancementsEnabled"
-  | "multicaWorkspaceEnabled";
-
-type ClientRecord = {
-  capabilities: Capability[];
-  details: Array<{ label: string; mono?: boolean; value: string }>;
-  effective: StateValue;
-  enabled: StateValue;
-  health: StateValue;
-  icon: LucideIcon;
-  id: ClientId;
-  installed: StateValue;
-  label: string;
-  subtitle: string;
-};
-
-type ClientsEnhancementScreenProps = {
-  actions: AppActions;
-  agentScope: AgentScope;
-  claudeDesktop: ClaudeDesktopResult | null;
-  claudeDesktopDevMode: ClaudeDesktopDevModeStatusResult | null;
-  claudeZhPatch: ClaudeZhPatchResult | null;
-  overview: OverviewResult | null;
-  settings: BackendSettings | null;
-  watcher: WatcherResult | null;
-};
-
-const UNKNOWN_STATE: StateValue = {
-  detail: "刷新后读取本机状态",
-  label: "未检测",
-  tone: "muted",
-};
-
-function stateValue(label: string, detail: string, tone: StateTone): StateValue {
-  return { detail, label, tone };
+function sessionKey(session: Pick<DistillationWorkbenchSession, "agent" | "sessionId">) {
+  return `${session.agent}:${session.sessionId}`;
 }
 
-function stateIcon(tone: StateTone) {
-  if (tone === "ok") return CheckCircle2;
-  if (tone === "danger" || tone === "attention") return AlertTriangle;
-  return CircleDot;
+function agentLabel(agent: string) {
+  const labels: Record<string, string> = {
+    codex: "Codex",
+    "claude-code": "Claude Code",
+    "claude-desktop": "Claude Desktop",
+    workbuddy: "WorkBuddy",
+    cursor: "Cursor",
+    openclaw: "OpenClaw",
+  };
+  return labels[agent.toLocaleLowerCase()] ?? agent;
 }
 
-function StateCell({ label, value }: { label: string; value: StateValue }) {
-  const Icon = stateIcon(value.tone);
-  return (
-    <div className={`client-state-cell ${value.tone}`}>
-      <dt>{label}</dt>
-      <dd>
-        <span className="client-state-value">
-          <Icon aria-hidden="true" className="h-4 w-4" />
-          {value.label}
-        </span>
-        <small>{value.detail}</small>
-      </dd>
-    </div>
-  );
+function timestampValue(value: string | number | null | undefined) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : Number.NaN;
+  const normalized = value?.trim();
+  if (!normalized) return Number.NaN;
+  return /^\d+(?:\.\d+)?$/.test(normalized) ? Number(normalized) : Date.parse(normalized);
 }
 
-function CapabilityState({
-  capability,
-  onToggle,
-  pendingSetting,
+function dateLabel(value: string | number | null | undefined) {
+  const date = new Date(timestampValue(value));
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function materialRange(range: TimeRange) {
+  return range === "7d" ? "7" : range === "30d" ? "30" : range;
+}
+
+function formatTokens(value: number) {
+  if (value >= 1_000_000_000) return `${compactTokenValue(value / 1_000_000_000)}B`;
+  if (value >= 1_000_000) return `${compactTokenValue(value / 1_000_000)}M`;
+  if (value >= 1_000) return `${compactTokenValue(value / 1_000)}K`;
+  return Math.round(value).toLocaleString("zh-CN");
+}
+
+function compactTokenValue(value: number) {
+  return value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2).replace(/\.?0+$/, "");
+}
+
+function sessionRow(session: DistillationWorkbenchSession, selected: boolean, onToggle: () => void, onPreview: () => void) {
+  return <article className={`distillation-session-row${selected ? " selected" : ""}`} key={sessionKey(session)}>
+    <button aria-pressed={selected} className="distillation-session-select" onClick={onToggle} type="button">
+      <span className="distillation-check">{selected ? <Check aria-hidden="true" className="h-3.5 w-3.5" /> : null}</span>
+      <span className="distillation-session-copy">
+        <strong>{session.title || session.sessionId}</strong>
+        <small>{agentLabel(session.agent)} · {dateLabel(session.updatedAt)} · {session.events} 轮 · ~{formatTokens(session.tokens)} tokens</small>
+      </span>
+      <span className="distillation-session-model">{session.model || "未知模型"}</span>
+    </button>
+    <button aria-label={`预览 ${session.title || session.sessionId}`} className="distillation-preview-button" onClick={onPreview} type="button"><BookOpen className="h-4 w-4" />预览</button>
+  </article>;
+}
+
+function AssetGroup({
+  title,
+  destination,
+  items,
+  value,
+  onChange,
 }: {
-  capability: Capability;
-  onToggle?: (key: EnhancementSettingKey, enabled: boolean) => void;
-  pendingSetting?: EnhancementSettingKey | null;
+  title: string;
+  destination: string;
+  items: typeof OUTPUT_TYPES;
+  value: DistillKind;
+  onChange: (kind: DistillKind) => void;
 }) {
-  const enabled = capability.enabled === true;
-  const unknown = capability.enabled === null;
-  const Icon = enabled ? CheckCircle2 : unknown ? CircleDot : CircleOff;
-  const toggleable = Boolean(capability.settingKey && onToggle);
-  return (
-    <li>
-      <span className={`client-capability-icon ${enabled ? "enabled" : unknown ? "unknown" : "disabled"}`}>
-        <Icon aria-hidden="true" className="h-4 w-4" />
-      </span>
-      <span>
-        <strong>{capability.label}</strong>
-        <small>{capability.detail}</small>
-      </span>
-      <span className="client-capability-control">
-        <span className={`client-capability-label ${enabled ? "enabled" : unknown ? "unknown" : "disabled"}`}>
-          {enabled ? "已启用" : unknown ? "未检测" : "未启用"}
-        </span>
-        {toggleable && capability.settingKey ? (
-          <ToggleSwitch
-            ariaLabel={`${capability.label}${enabled ? "：停用" : "：启用"}`}
-            checked={enabled}
-            disabled={unknown || pendingSetting != null}
-            onChange={(value) => onToggle?.(capability.settingKey!, value)}
-          />
-        ) : null}
-      </span>
-    </li>
-  );
+  return <section className={`distillation-asset-group${items.some((item) => item.id === value) ? " active" : ""}`}>
+    <header><strong>{title}</strong><span>→ {destination}</span></header>
+    <div>{items.map((item) => <button aria-pressed={value === item.id} className={value === item.id ? "active" : ""} key={item.id} onClick={() => onChange(item.id)} type="button">{item.label}</button>)}</div>
+  </section>;
 }
 
-function buildClientRecords({
-  claudeDesktop,
-  claudeDesktopDevMode,
-  claudeZhPatch,
-  overview,
-  settings,
-  watcher,
-}: Omit<ClientsEnhancementScreenProps, "actions" | "agentScope">): ClientRecord[] {
-  const launch = overview?.latest_launch;
-  const codexInstalled = Boolean(overview?.codex_app.path) || statusOk(overview?.codex_app.status);
-  const codexRunning = launch?.status === "running" || launch?.status === "degraded";
-  const codexFrontendOnline = Boolean(launch?.frontend_runtime_online || launch?.debug_port_online);
-  const codexBackendOnline = Boolean(launch?.helper_port_online);
-  const codexFailed = Boolean(
-    (overview && statusFailed(overview.status))
-    || statusFailed(overview?.codex_app.status)
-    || statusFailed(launch?.status),
-  );
-  const codexEnhancementsEnabled = settings?.enhancementsEnabled ?? null;
-  const codexEffective = codexRunning && codexFrontendOnline && codexBackendOnline && codexEnhancementsEnabled === true;
-  const codexPartiallyEffective = codexRunning && (codexFrontendOnline || codexBackendOnline);
+function DistillationWorkbench({ actions, data }: { actions: AppActions; data: DistillationWorkbenchResult | null }) {
+  const [range, setRange] = useState<TimeRange>("all");
+  const [materialMode, setMaterialMode] = useState<MaterialMode>("session");
+  const [selected, setSelected] = useState<Record<string, Selection>>({});
+  const [providerId, setProviderId] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [kind, setKind] = useState<DistillKind>("skill");
+  const [mode, setMode] = useState<"model">("model");
+  const [configMode, setConfigMode] = useState<"quick" | "advanced">("quick");
+  const [prompt, setPrompt] = useState("");
+  const [tab, setTab] = useState<"config" | "history">("config");
+  const [preview, setPreview] = useState<DistillationWorkbenchSession | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, AitrackerSessionDetailResult["transcript"]>>({});
+  const [task, setTask] = useState<DistillationRunResult | null>(null);
+  const [notice, setNotice] = useState("");
 
-  const patchInstalled = Boolean(
-    claudeZhPatch?.status.localeConfigured
-    && claudeZhPatch.status.frontendI18nPresent
-    && claudeZhPatch.status.chunkPatchPresent,
-  );
-  const devModeConfigured = claudeDesktopDevMode?.devModeStatus.configured ?? false;
-  const claudeInstalled = Boolean(
-    claudeDesktop?.executablePaths.length
-    || (claudeDesktop?.installKind && !["unknown", "not_found", "none"].includes(claudeDesktop.installKind)),
-  );
-  const claudeRunning = (claudeDesktop?.processCount ?? 0) > 0;
-  const claudeInspectorReady = Boolean(
-    claudeDesktop?.inspectorPorts.length
-    || claudeDesktop?.cdpStatus === "node_inspector_ready"
-    || claudeDesktop?.cdpStatus === "ok",
-  );
-  const claudeFailed = Boolean(
-    (claudeDesktop && statusFailed(claudeDesktop.status))
-    || statusFailed(claudeDesktop?.integrityStatus)
-    || claudeZhPatch?.status.status === "failed"
-    || (claudeDesktopDevMode && statusFailed(claudeDesktopDevMode.status)),
-  );
-  const claudeEnhancementsEnabled = settings
-    ? Boolean(settings.claudeAppChineseOverlayEnabled || patchInstalled || devModeConfigured)
-    : claudeDesktopDevMode || claudeZhPatch
-      ? Boolean(patchInstalled || devModeConfigured)
-      : null;
-  const claudeEnhancementConfigured = Boolean(patchInstalled || devModeConfigured);
-  const activeClaudeDesktopProfile = settings?.relayProfiles.find(
-    (profile) => profile.id === settings.activeClaudeDesktopRelayId,
-  );
-
-  const cliWrapperEnabled = settings?.cliWrapperEnabled ?? null;
-  const watcherEnabled = watcher?.enabled ?? null;
-  const activeClaudeCodeProfile = settings?.relayProfiles.find(
-    (profile) => profile.id === settings.activeClaudeRelayId,
-  );
-  const claudeCodePartiallyEffective = cliWrapperEnabled === true || watcherEnabled === true;
-  const claudeCodeEffective = cliWrapperEnabled === true && watcherEnabled === true;
-  const watcherFailed = Boolean(watcher && statusFailed(watcher.status));
-
-  return [
-    {
-      id: "codex",
-      label: "Codex App",
-      subtitle: "本地启动、窗口增强与代理运行时",
-      icon: AppWindow,
-      installed: overview
-        ? codexFailed
-          ? stateValue("检测异常", "无法确认 Codex 安装状态", "danger")
-          : codexInstalled
-            ? stateValue("已安装", compactDisplayPath(overview.codex_app.path), "ok")
-            : stateValue("未检测到", "可在维护页选择应用路径", "attention")
-        : UNKNOWN_STATE,
-      enabled: settings
-        ? codexEnhancementsEnabled
-          ? stateValue("已启用", "应用增强总开关已开启", "ok")
-          : stateValue("未启用", "当前使用基础启动能力", "muted")
-        : UNKNOWN_STATE,
-      effective: launch
-        ? codexEffective
-          ? stateValue("当前生效", "前端注入与本地后端均在线", "ok")
-          : codexPartiallyEffective
-            ? stateValue("部分生效", "运行时仍有组件需要检查", "attention")
-            : stateValue("未生效", "Codex 未运行或增强未连接", "muted")
-        : UNKNOWN_STATE,
-      health: overview
-        ? codexFailed
-          ? stateValue("运行异常", launch?.message || overview.message, "danger")
-          : codexRunning && codexFrontendOnline && codexBackendOnline
-            ? stateValue("健康", "前端与后端连接正常", "ok")
-            : codexRunning
-              ? stateValue("需要检查", "运行中，但连接不完整", "attention")
-              : stateValue("未运行", "启动后可检查实时健康状态", "muted")
-        : UNKNOWN_STATE,
-      capabilities: [
-        {
-          label: "应用增强总开关",
-          detail: "控制 Codex 本地窗口增强能力",
-          enabled: codexEnhancementsEnabled,
-          settingKey: "enhancementsEnabled",
-        },
-        {
-          label: "服务层级控制",
-          detail: "按当前模型选择 Standard 或 Fast 服务模式",
-          enabled: settings ? settings.codexAppServiceTierControls : null,
-          settingKey: "codexAppServiceTierControls",
-        },
-        {
-          label: "插件市场入口",
-          detail: "显示并维护 Codex 插件市场入口",
-          enabled: settings?.codexAppPluginMarketplaceUnlock ?? null,
-          settingKey: "codexAppPluginMarketplaceUnlock",
-        },
-        {
-          label: "会话操作增强",
-          detail: "保留会话位置与时间线能力",
-          enabled: settings?.codexAppConversationTimeline ?? null,
-        },
-        {
-          label: "我的任务",
-          detail: "控制 Codex 左侧导航中的本地工作流入口",
-          enabled: settings ? settings.multicaWorkspaceEnabled !== false : null,
-          settingKey: "multicaWorkspaceEnabled",
-        },
-      ],
-      details: [
-        { label: "应用版本", value: overview?.codex_version || "未检测" },
-        { label: "启动模式", value: settings?.launchMode === "relay" ? "本地代理" : settings?.launchMode === "patch" ? "本地增强" : "未读取" },
-        { label: "前端运行时", value: codexFrontendOnline ? "在线" : "离线" },
-        { label: "本地后端", value: codexBackendOnline ? "在线" : "离线" },
-      ],
-    },
-    {
-      id: "claude-desktop",
-      label: "Claude Desktop",
-      subtitle: "本机汉化、开发模式与供应商配置",
-      icon: MessageCircle,
-      installed: claudeDesktop
-        ? claudeFailed && !claudeInstalled
-          ? stateValue("检测异常", "无法确认 Claude Desktop 安装", "danger")
-          : claudeInstalled
-            ? stateValue("已安装", claudeDesktop.installKind || "本机安装", "ok")
-            : stateValue("未检测到", "未发现可执行文件", "attention")
-        : UNKNOWN_STATE,
-      enabled: claudeEnhancementsEnabled === null
-        ? UNKNOWN_STATE
-        : claudeEnhancementsEnabled
-          ? stateValue("已启用", "至少一项本地增强已配置", "ok")
-          : stateValue("未启用", "尚未配置汉化或开发模式", "muted"),
-      effective: claudeDesktop
-        ? claudeRunning && claudeEnhancementConfigured
-          ? stateValue(
-            "待重启确认",
-            patchInstalled ? "汉化资源或开发配置已写入，需重启后实际确认" : "开发配置已写入，需重启后实际确认",
-            "attention",
-          )
-          : claudeRunning
-            ? stateValue("原生运行", "客户端运行中，增强尚未确认生效", "attention")
-            : claudeEnhancementConfigured
-              ? stateValue("待启动验证", "本地配置已写入，启动客户端后验证", "attention")
-              : stateValue("未运行", "启动后确认本地增强状态", "muted")
-        : UNKNOWN_STATE,
-      health: claudeDesktop
-        ? claudeFailed
-          ? stateValue("需要修复", claudeDesktop.integrityMessage || claudeDesktop.message, "danger")
-          : claudeRunning && claudeInspectorReady
-            ? stateValue("健康", "客户端与 Inspector 状态正常", "ok")
-            : claudeRunning
-              ? stateValue("运行中", "Inspector 尚未就绪", "attention")
-              : stateValue("未运行", "未发现 Claude Desktop 进程", "muted")
-        : UNKNOWN_STATE,
-      capabilities: [
-        {
-          label: "本机汉化资源",
-          detail: patchInstalled ? "Locale、前端资源与 Chunk 已写入" : "尚未检测到完整汉化资源",
-          enabled: claudeZhPatch ? patchInstalled : null,
-        },
-        {
-          label: "开发模式配置",
-          detail: devModeConfigured ? "本地开发配置已写入" : "尚未写入开发配置",
-          enabled: claudeDesktopDevMode ? devModeConfigured : null,
-        },
-        {
-          label: "第三方供应商配置",
-          detail: activeClaudeDesktopProfile
-            ? `当前配置：${activeClaudeDesktopProfile.name || activeClaudeDesktopProfile.id}`
-            : "当前未选择第三方供应商",
-          enabled: settings ? Boolean(activeClaudeDesktopProfile) : null,
-        },
-        {
-          label: "中文覆盖层",
-          detail: "仅表示本地界面增强开关，不涉及账号状态",
-          enabled: settings?.claudeAppChineseOverlayEnabled ?? null,
-          settingKey: "claudeAppChineseOverlayEnabled",
-        },
-      ],
-      details: [
-        { label: "安装类型", value: claudeDesktop?.installKind || "未检测" },
-        { label: "运行进程", value: claudeDesktop ? `${claudeDesktop.processCount} 个` : "未检测" },
-        { label: "CDP / Inspector", value: claudeDesktop?.cdpStatus || "未检测" },
-        { label: "完整性", value: claudeDesktop?.integrityStatus || "未检测" },
-      ],
-    },
-    {
-      id: "claude-code",
-      label: "Claude Code",
-      subtitle: "CLI 包装、第三方供应商配置与 Watcher",
-      icon: SquareTerminal,
-      installed: stateValue("未单独检测", "当前接口不读取官方 CLI 安装状态", "muted"),
-      enabled: cliWrapperEnabled === null
-        ? UNKNOWN_STATE
-        : cliWrapperEnabled
-          ? stateValue("已启用", "CLI 包装入口已开启", "ok")
-          : stateValue("未启用", "CLI 包装入口已关闭", "muted"),
-      effective: cliWrapperEnabled === null && watcherEnabled === null
-        ? UNKNOWN_STATE
-        : claudeCodeEffective
-          ? stateValue("待使用验证", "CLI 包装与 Watcher 已启用，需在下次启动验证", "attention")
-          : claudeCodePartiallyEffective
-            ? stateValue("配置不完整", "CLI 包装与 Watcher 状态不一致", "attention")
-            : stateValue("未配置", "本地配置能力未启用", "muted"),
-      health: watcher
-        ? watcherFailed
-          ? stateValue("状态异常", watcher.message, "danger")
-          : claudeCodeEffective
-            ? stateValue("配置就绪", "Watcher 与 CLI 包装均已启用", "ok")
-            : watcher.enabled
-              ? stateValue("等待配置", "Watcher 已启用，CLI 包装尚未开启", "attention")
-              : stateValue("未启用", "Watcher 当前未启用", "muted")
-        : UNKNOWN_STATE,
-      capabilities: [
-        {
-          label: "CLI 包装入口",
-          detail: "为 Claude Code 应用本地供应商与协议配置",
-          enabled: cliWrapperEnabled,
-          settingKey: "cliWrapperEnabled",
-        },
-        {
-          label: "Watcher 配置监测",
-          detail: "监测本地配置状态并执行既有维护规则",
-          enabled: watcherEnabled,
-        },
-        {
-          label: "第三方供应商配置",
-          detail: activeClaudeCodeProfile
-            ? `当前配置：${activeClaudeCodeProfile.name || activeClaudeCodeProfile.id}`
-            : "当前未选择第三方供应商",
-          enabled: settings ? Boolean(activeClaudeCodeProfile) : null,
-        },
-        {
-          label: "供应商配置集",
-          detail: settings ? `${settings.relayProfiles.filter((profile) => profile.targetApp === "claude").length} 个 Claude Code 配置` : "尚未读取",
-          enabled: settings ? settings.relayProfiles.some((profile) => profile.targetApp === "claude") : null,
-        },
-      ],
-      details: [
-        { label: "当前供应商", value: activeClaudeCodeProfile?.name || activeClaudeCodeProfile?.id || "未选择" },
-        { label: "CLI 包装", value: cliWrapperEnabled === null ? "未检测" : cliWrapperEnabled ? "已启用" : "未启用" },
-        { label: "Watcher", value: watcherEnabled === null ? "未检测" : watcherEnabled ? "已启用" : "未启用" },
-        { label: "配置来源", value: "本地管理工具" },
-      ],
-    },
-  ];
-}
-
-export function ClientsEnhancementScreen(props: ClientsEnhancementScreenProps) {
-  const {
-    actions,
-    agentScope,
-    claudeDesktop,
-    claudeDesktopDevMode,
-    claudeZhPatch,
-    overview,
-    settings,
-    watcher,
-  } = props;
-  const clients = useMemo(
-    () => buildClientRecords({ claudeDesktop, claudeDesktopDevMode, claudeZhPatch, overview, settings, watcher }),
-    [claudeDesktop, claudeDesktopDevMode, claudeZhPatch, overview, settings, watcher],
-  );
-  const visibleClients = clients;
-  const [selectedId, setSelectedId] = useState<ClientId>(() => (
-    agentScope === "codex" ? "codex" : "claude-desktop"
-  ));
+  const sessions = data?.sessions ?? [];
+  const candidates = data?.candidates ?? [];
+  const providers = data?.providers ?? [];
+  const visibleSessions = useMemo(() => {
+    return [...filterDistillationSessions(sessions, materialRange(range) as "today" | "7" | "30" | "all")]
+      .sort((left, right) => timestampValue(right.updatedAt) - timestampValue(left.updatedAt));
+  }, [range, sessions]);
+  const visibleSessionKeys = useMemo(() => new Set(visibleSessions.map(sessionKey)), [visibleSessions]);
+  useEffect(() => {
+    setSelected((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => visibleSessionKeys.has(key))) as Record<string, Selection>;
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [visibleSessionKeys]);
+  const currentProvider = providers.find((provider) => provider.id === providerId);
+  const models = currentProvider?.models ?? [];
+  const selectedSessions = visibleSessions.flatMap((session) => {
+    const selection = selected[sessionKey(session)];
+    return selection ? [selection] : [];
+  });
+  const selectedCount = selectedSessions.length;
+  const estimatedTokens = selectedSessions.reduce((sum, selection) => sum + (sessions.find((session) => sessionKey(session) === sessionKey(selection))?.tokens ?? 0), 0);
+  const savedCount = candidates.filter((candidate) => candidate.status === "saved").length;
+  const activeTask = task?.phase && !["completed", "failed", "cancelled"].includes(task.phase);
+  const transcript = preview ? detailCache[sessionKey(preview)] : null;
+  const transcriptMessages = transcript?.messages ?? [];
+  const previewSelection = preview ? selected[sessionKey(preview)] : null;
 
   useEffect(() => {
-    if (!visibleClients.some((client) => client.id === selectedId) && visibleClients[0]) {
-      setSelectedId(visibleClients[0].id);
-    }
-  }, [selectedId, visibleClients]);
+    if (!providerId && providers[0]) setProviderId(providers[0].id);
+  }, [providerId, providers]);
 
-  const selected = visibleClients.find((client) => client.id === selectedId) ?? visibleClients[0];
-  const [pendingSetting, setPendingSetting] = useState<EnhancementSettingKey | null>(null);
-  const toggleSetting = async (key: EnhancementSettingKey, enabled: boolean) => {
-    if (!settings || pendingSetting) return;
-    setPendingSetting(key);
-    try {
-      await actions.saveSettingBoolean(key, enabled);
-    } finally {
-      setPendingSetting(null);
-    }
+  useEffect(() => {
+    if ((!modelId || !models.includes(modelId)) && models[0]) setModelId(models[0]);
+  }, [modelId, models]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const key = sessionKey(preview);
+    if (Object.prototype.hasOwnProperty.call(detailCache, key)) return;
+    let current = true;
+    void actions.readAitrackerSessionDetail({ agent: preview.agent, sessionId: preview.sessionId }).then((result) => {
+      if (current) setDetailCache((cache) => ({ ...cache, [key]: result?.transcript ?? null }));
+    });
+    return () => { current = false; };
+  }, [actions, detailCache, preview]);
+
+  useEffect(() => {
+    if (!task?.taskId || !activeTask) return;
+    let stopped = false;
+    let timer = 0;
+    const poll = async () => {
+      const result = await actions.queryDistillationTask(task.taskId);
+      if (stopped || !result) return;
+      setTask(result);
+      if (["completed", "failed", "cancelled"].includes(result.phase)) {
+        if (result.phase === "completed") setNotice("蒸馏完成，候选已加入历史，等待审批。");
+        if (result.phase === "failed") setNotice(result.detail || result.message || "蒸馏任务失败。");
+        if (result.phase === "cancelled") setNotice("蒸馏任务已取消。");
+        void actions.loadDistillationWorkbench();
+      } else {
+        timer = window.setTimeout(() => void poll(), 800);
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 350);
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [actions, activeTask, task?.taskId]);
+
+  const toggleSession = (session: DistillationWorkbenchSession) => {
+    const key = sessionKey(session);
+    setSelected((current) => {
+      const next = { ...current };
+      if (next[key]) delete next[key];
+      else next[key] = { agent: session.agent, sessionId: session.sessionId };
+      return next;
+    });
   };
-  const noStateLoaded = !overview && !claudeDesktop && !settings && !watcher;
-  const failedSources = [
-    overview && statusFailed(overview.status) ? "Codex" : null,
-    claudeDesktop && statusFailed(claudeDesktop.status) ? "Claude Desktop" : null,
-    claudeDesktopDevMode && statusFailed(claudeDesktopDevMode.status) ? "Claude 开发模式" : null,
-    claudeZhPatch?.status.status === "failed" ? "Claude 汉化" : null,
-    watcher && statusFailed(watcher.status) ? "Watcher" : null,
-  ].filter((value): value is string => Boolean(value));
 
-  return (
-    <div className="clients-enhancement-screen">
-      {noStateLoaded ? (
-        <div className="clients-state-banner loading" role="status">
-          <RefreshCw aria-hidden="true" className="h-4 w-4 spin" />
-          <span>正在读取本机客户端与增强状态...</span>
-        </div>
-      ) : null}
+  const toggleProject = (projectSessions: readonly DistillationWorkbenchSession[]) => {
+    const allSelected = projectSessions.every((session) => selected[sessionKey(session)]);
+    setSelected((current) => {
+      const next = { ...current };
+      for (const session of projectSessions) {
+        const key = sessionKey(session);
+        if (allSelected) delete next[key];
+        else next[key] = { agent: session.agent, sessionId: session.sessionId };
+      }
+      return next;
+    });
+  };
 
-      {failedSources.length ? (
-        <div className="clients-state-banner danger" role="alert">
-          <AlertTriangle aria-hidden="true" className="h-4 w-4" />
-          <span>{failedSources.join("、")} 状态读取失败，页面保留已取得的数据；可刷新后重试。</span>
-        </div>
-      ) : null}
+  const setRangeBoundary = (which: "startIndex" | "endIndex", index: number) => {
+    if (!preview) return;
+    const key = sessionKey(preview);
+    const max = Math.max(0, transcriptMessages.length - 1);
+    setSelected((current) => {
+      const prior = current[key] ?? { agent: preview.agent, sessionId: preview.sessionId };
+      const startIndex = which === "startIndex" ? index : Math.min(prior.startIndex ?? 0, index);
+      const endIndex = which === "endIndex" ? index : Math.max(prior.endIndex ?? max, index);
+      return { ...current, [key]: { ...prior, startIndex: Math.max(0, Math.min(max, startIndex)), endIndex: Math.max(0, Math.min(max, endIndex)) } };
+    });
+  };
 
-      <section aria-label="客户端与增强状态" className="clients-console">
-        <aside className="clients-master-list">
-          <header>
-            <strong>本机客户端</strong>
-            <span>{visibleClients.length} 个本机客户端</span>
-          </header>
-          <div className="clients-master-items">
-            {visibleClients.map((client) => {
-              const Icon = client.icon;
-              const HealthIcon = stateIcon(client.health.tone);
-              return (
-                <button
-                  aria-pressed={selected?.id === client.id}
-                  className={selected?.id === client.id ? "active" : ""}
-                  key={client.id}
-                  onClick={() => setSelectedId(client.id)}
-                  type="button"
-                >
-                  <span className="client-product-icon"><Icon aria-hidden="true" className="h-5 w-5" /></span>
-                  <span className="client-product-copy">
-                    <strong>{client.label}</strong>
-                    <small>{client.subtitle}</small>
-                  </span>
-                  <span className={`client-list-health ${client.health.tone}`} title={`健康状态：${client.health.label}`}>
-                    <HealthIcon aria-hidden="true" className="h-4 w-4" />
-                    <span className="sr-only">{client.health.label}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
+  const selectVisible = () => setSelected((current) => ({
+    ...current,
+    ...Object.fromEntries(visibleSessions.map((session) => [sessionKey(session), { agent: session.agent, sessionId: session.sessionId }])) as Record<string, Selection>,
+  }));
 
-        {selected ? (
-          <article className="client-inspector">
-            <header className="client-inspector-header">
-              <span className="client-product-icon large"><selected.icon aria-hidden="true" className="h-6 w-6" /></span>
-              <span>
-                <strong>{selected.label}</strong>
-                <small>{selected.subtitle}</small>
-              </span>
-            </header>
+  const clearSelection = () => setSelected({});
 
-            <dl className="client-state-grid">
-              <StateCell label="已安装" value={selected.installed} />
-              <StateCell label="已启用" value={selected.enabled} />
-              <StateCell label="当前生效" value={selected.effective} />
-              <StateCell label="健康状态" value={selected.health} />
-            </dl>
+  const start = async () => {
+    if (!selectedCount || activeTask) return;
+    setNotice("");
+    const result = await actions.runDistillationWorkbench({
+      selections: selectedSessions,
+      providerId: currentProvider?.id ?? "",
+      modelId,
+      kind,
+      mode,
+      prompt: prompt.trim() || undefined,
+    });
+    setTask(result);
+    if (result?.phase === "failed") setNotice(result.message || "蒸馏任务启动失败。");
+  };
 
-            <div className="client-inspector-body">
-              <section className="client-capabilities" aria-labelledby="client-capabilities-title">
-                <header>
-                  <div>
-                    <strong id="client-capabilities-title">增强能力</strong>
-                    <small>本机配置与实时状态分开显示</small>
-                  </div>
-                  <ShieldCheck aria-hidden="true" className="h-4 w-4" />
-                </header>
-                <ul>
-                  {selected.capabilities.map((capability) => (
-                    <CapabilityState
-                      capability={capability}
-                      key={capability.label}
-                      onToggle={toggleSetting}
-                      pendingSetting={pendingSetting}
-                    />
-                  ))}
-                </ul>
-              </section>
+  const cancel = async () => {
+    if (!task?.taskId) return;
+    const result = await actions.cancelDistillationTask(task.taskId);
+    if (result) setTask(result);
+  };
 
-              <section className="client-runtime-details" aria-labelledby="client-runtime-title">
-                <header>
-                  <div>
-                    <strong id="client-runtime-title">运行详情</strong>
-                    <small>只显示本地检测结果</small>
-                  </div>
-                  <Settings2 aria-hidden="true" className="h-4 w-4" />
-                </header>
-                <dl>
-                  {selected.details.map((detail) => (
-                    <div key={detail.label}>
-                      <dt>{detail.label}</dt>
-                      <dd className={detail.mono ? "font-mono" : undefined}>{detail.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            </div>
+  const approve = async (candidate: DistillationCandidate) => {
+    const result = await actions.updateDistillationCandidate({ id: candidate.id });
+    if (result?.candidates) void actions.loadDistillationWorkbench();
+  };
 
-            <footer className="client-action-bar">
-              {selected.id === "codex" ? (
-                <>
-                  <Button onClick={() => void actions.restartCodex()}>
-                    <RefreshCw aria-hidden="true" className="h-4 w-4" />
-                    启动/重启 Codex
-                  </Button>
-                  <Button onClick={() => void actions.repairFrontendConnection()} variant="outline">
-                    <Wrench aria-hidden="true" className="h-4 w-4" />
-                    修复连接
-                  </Button>
-                </>
-              ) : null}
-              {selected.id === "claude-desktop" ? (
-                <>
-                  <Button onClick={() => void actions.launchClaudeDesktop()}>
-                    <MessageCircle aria-hidden="true" className="h-4 w-4" />
-                    启动/重启 Claude
-                  </Button>
-                  <Button onClick={() => void actions.installClaudeZhPatch()} variant="outline">
-                    <Languages aria-hidden="true" className="h-4 w-4" />
-                    一键汉化
-                  </Button>
-                  <Button onClick={() => void actions.configureClaudeDesktopDevMode()} variant="outline">
-                    <Wrench aria-hidden="true" className="h-4 w-4" />
-                    开发模式
-                  </Button>
-                </>
-              ) : null}
-              {selected.id === "claude-code" ? (
-                <>
-                  <Button onClick={() => void actions.installWatcher()}>
-                    <SquareTerminal aria-hidden="true" className="h-4 w-4" />
-                    安装 Watcher
-                  </Button>
-                  {watcher?.enabled ? (
-                    <Button onClick={() => void actions.disableWatcher()} variant="outline">停用 Watcher</Button>
-                  ) : (
-                    <Button onClick={() => void actions.enableWatcher()} variant="outline">启用 Watcher</Button>
-                  )}
-                </>
-              ) : null}
-            </footer>
-          </article>
-        ) : (
-          <div className="client-empty-state" role="status">
-            当前 Agent 范围没有可显示的客户端。
-          </div>
-        )}
-      </section>
+  const cancelCandidate = async (candidate: DistillationCandidate) => {
+    const result = await actions.cancelDistillationCandidate({ id: candidate.id });
+    if (result?.candidates) void actions.loadDistillationWorkbench();
+  };
+
+  const save = async (candidate: DistillationCandidate) => {
+    const result = await actions.saveDistillationOutput({ candidateId: candidate.id, target: candidate.kind ?? "memory", skillId: candidate.id });
+    setNotice(result?.message ?? "蒸馏产出已写入目标库。");
+    if (result?.status === "ok") void actions.loadDistillationWorkbench();
+  };
+
+  const outputKindLabel = OUTPUT_TYPES.find((item) => item.id === kind)?.label ?? "Skill";
+  const sessionGroups = useMemo(() => {
+    return groupDistillationSessionsByProject(visibleSessions).map((group) => [group.projectKey, [...group.sessions]] as const);
+  }, [visibleSessions]);
+  const groupedKeys = useMemo(() => new Set(sessionGroups.map(([key]) => key)), [sessionGroups]);
+  const ungroupedSessions = visibleSessions.filter((session) => !groupedKeys.has(session.projectKey ?? session.project));
+
+  return <section className="distillation-workbench" aria-label="蒸馏工作台">
+    <div className="distillation-metrics">
+      <article><small>已选素材</small><strong>{selectedCount}</strong><span>~{formatTokens(estimatedTokens)} tokens</span></article>
+      <article><small>素材 Token</small><strong>{formatTokens(estimatedTokens)}</strong><span>本次输入预估</span></article>
+      <article><small>蒸馏次数</small><strong>{candidates.length}</strong><span>{activeTask ? "正在蒸馏" : "历史任务"}</span></article>
+      <article><small>已入库</small><strong>{savedCount}</strong><span>已审批并写入</span></article>
     </div>
-  );
+
+    <div className="distillation-tabs" role="tablist" aria-label="蒸馏工作台视图">
+      <button aria-selected={tab === "config"} className={tab === "config" ? "active" : ""} onClick={() => setTab("config")} role="tab" type="button"><FlaskConical className="h-4 w-4" />蒸馏配置</button>
+      <button aria-selected={tab === "history"} className={tab === "history" ? "active" : ""} onClick={() => setTab("history")} role="tab" type="button"><History className="h-4 w-4" />蒸馏历史</button>
+      <span>{tab === "config" ? "选素材、配参数、跑蒸馏" : `${candidates.length} 个候选 · ${savedCount} 个已入库`}</span>
+    </div>
+
+    {tab === "config" ? <>
+      <section className="distillation-config glass-card">
+          <header className="distillation-config-header"><div className="distillation-config-title"><strong>蒸馏配置</strong><div className="distillation-segmented"><button aria-pressed={configMode === "quick"} className={configMode === "quick" ? "active" : ""} onClick={() => setConfigMode("quick")} type="button">快速模式</button><button aria-pressed={configMode === "advanced"} className={configMode === "advanced" ? "active" : ""} onClick={() => setConfigMode("advanced")} type="button">高级配置</button></div><span>{providers.length ? "使用已添加的供应商模型" : "请先在供应商中添加模型配置"}</span></div>
+          <div className="distillation-config-tools">
+            <label className="distillation-provider-select"><span>供应商</span><select aria-label="蒸馏供应商" value={providerId} onChange={(event) => { setProviderId(event.target.value); setModelId(providers.find((provider) => provider.id === event.target.value)?.models[0] ?? ""); }}><option value="">{providers.length ? "选择供应商" : "暂无已配置供应商"}</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label>
+            <label className="distillation-provider-select"><span>模型</span><select aria-label="蒸馏模型" disabled={!currentProvider} value={modelId} onChange={(event) => setModelId(event.target.value)}><option value="">{currentProvider ? "选择模型" : "先选择供应商"}</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+            <a href="#supplier" onClick={(event) => { event.preventDefault(); void actions.refreshRoute("supplier"); }}>管理模型</a></div>
+        </header>
+
+        {configMode === "advanced" ? <div className="distillation-advanced-panel"><label className="distillation-prompt"><span>提示词补充要求</span><textarea onChange={(event) => setPrompt(event.target.value)} placeholder="例如：提炼重复流程、保留失败处理与验证步骤，使用中文输出。" value={prompt} /></label></div> : null}
+
+        <div className="distillation-config-row distillation-filter-row">
+          <span className="distillation-row-label">选素材</span><div className="distillation-segmented compact"><button aria-pressed={materialMode === "session"} className={materialMode === "session" ? "active" : ""} onClick={() => setMaterialMode("session")} type="button">按会话</button><button aria-pressed={materialMode === "project"} className={materialMode === "project" ? "active" : ""} onClick={() => setMaterialMode("project")} type="button">按项目</button></div>
+          <div className="distillation-chip-row">{(["today", "7d", "30d", "all"] as const).map((value) => <button aria-pressed={range === value} className={range === value ? "active" : ""} key={value} onClick={() => setRange(value)} type="button">{value === "today" ? "今天" : value === "7d" ? "近 7 天" : value === "30d" ? "近 30 天" : "全部"}</button>)}</div>
+          <span className="distillation-material-count">范围内 {visibleSessions.length} 个会话</span>
+        </div>
+
+        <div className="distillation-config-row distillation-material-row">
+          <span className="distillation-row-label">{materialMode === "project" ? "项目" : "会话"}</span>
+          <div className="distillation-material-surface">
+            <div className="distillation-session-list">
+              {materialMode === "session" ? visibleSessions.map((session) => sessionRow(session, Boolean(selected[sessionKey(session)]), () => toggleSession(session), () => setPreview(session))) : sessionGroups.map(([projectName, group]) => {
+                const allSelected = group.every((session) => selected[sessionKey(session)]);
+                const sources = [...new Set(group.map((session) => agentLabel(session.agent)))];
+                const tokens = group.reduce((sum, item) => sum + item.tokens, 0);
+                const latest = group.reduce((value, session) => Math.max(value, timestampValue(session.updatedAt)), Number.NEGATIVE_INFINITY);
+                return <button aria-pressed={allSelected} className={`distillation-project-row${allSelected ? " selected" : ""}`} key={projectName} onClick={() => toggleProject(group)} type="button"><span className="distillation-check">{allSelected ? <Check className="h-3.5 w-3.5" /> : null}</span><FolderOpen aria-hidden="true" className="h-4 w-4" /><span className="distillation-project-copy"><strong>{projectName}</strong><small>{group.length} 个会话 · {sources.join("、")} · ~{formatTokens(tokens)} · {dateLabel(latest)}</small></span></button>;
+              })}
+              {materialMode === "project" ? ungroupedSessions.map((session) => sessionRow(session, Boolean(selected[sessionKey(session)]), () => toggleSession(session), () => setPreview(session))) : null}
+              {!visibleSessions.length ? <div className="distillation-empty">筛选条件下没有本地会话。刷新本地会话数据后再试。</div> : null}
+            </div>
+            <footer className="distillation-material-footer"><div><button className="text-button" onClick={selectVisible} type="button">全选当前列表</button><button className="text-button" onClick={clearSelection} type="button">清空选择</button><span>已选 {selectedCount} 个会话</span></div><span>正文只在本次运行时读取</span></footer>
+          </div>
+        </div>
+
+        <div className="distillation-config-row distillation-output-row"><span className="distillation-row-label">出产物</span><AssetGroup destination="Skill 库" items={OUTPUT_TYPES.filter((item) => item.group === "capability")} onChange={setKind} title="能力资产（关于‘事’）" value={kind} /><AssetGroup destination="记忆库" items={OUTPUT_TYPES.filter((item) => item.group === "memory")} onChange={setKind} title="记忆资产（关于‘人’）" value={kind} /></div>
+        <footer className="distillation-run-bar">
+          <span className="distillation-row-label">跑蒸馏</span><span className="distillation-run-hint"><Clock3 className="h-4 w-4" />{selectedCount ? `已选 ${selectedCount} 个会话 · ${outputKindLabel}` : "请先从材料库选择会话"}</span>
+          {activeTask ? <><div className="distillation-task-progress"><div><span>{task?.phase === "reading-material" ? "读取材料" : task?.phase === "calling-model" ? "调用模型" : task?.phase === "quality-check" ? "质量检查" : task?.phase === "persisting-candidate" ? "保存候选" : "准备蒸馏"}</span><strong>{task?.percent ?? 0}%</strong></div><div className="progress-track"><i style={{ width: `${task?.percent ?? 0}%` }} /></div></div><Button onClick={() => void cancel()} variant="outline"><X className="h-4 w-4" />取消任务</Button></> : <Button className="distillation-run-button" disabled={!selectedCount || !providerId || !modelId} onClick={() => void start()}><Send className="h-4 w-4" />一键蒸馏 {outputKindLabel}</Button>}
+        </footer>
+      </section>
+      {notice ? <p className="distillation-notice" role="status">{notice}</p> : null}
+    </> : <div className="distillation-history">
+      {candidates.length ? candidates.map((candidate) => <article key={candidate.id}>
+        <div className="distillation-history-icon"><BrainCircuit className="h-4 w-4" /></div>
+        <div className="distillation-history-copy"><div className="distillation-history-heading"><strong>{candidate.title || candidate.summary}</strong><span className={`distillation-status ${candidate.status}`}>{candidate.status === "pending" ? "待审批" : candidate.status === "approved" ? "已审批" : candidate.status === "saved" ? "已入库" : candidate.status === "cancelled" ? "已取消" : candidate.status}</span></div><small>{candidate.kind || "memory"} · {candidate.mode || "offline"} · {dateLabel(candidate.createdAt)} · {agentLabel(candidate.agent)}</small>{candidate.sourceRefs?.length ? <small>来源：{candidate.sourceRefs.map((source) => `${agentLabel(source.agent)} · ${source.project || source.sessionId} · ${source.startIndex + 1}-${source.endIndex + 1}`).join("；")}</small> : null}<p>{candidate.output || candidate.summary}</p></div>
+        <div className="distillation-history-actions">{candidate.status === "pending" ? <><button onClick={() => void approve(candidate)} type="button">审批入库</button><button className="secondary" onClick={() => void cancelCandidate(candidate)} type="button">取消</button></> : null}{candidate.status === "approved" ? <button onClick={() => void save(candidate)} type="button">写入 {OUTPUT_TYPES.find((item) => item.id === candidate.kind)?.label ?? "目标库"}</button> : null}</div>
+      </article>) : <div className="distillation-empty">还没有蒸馏候选。选择会话、配置产物类型后开始蒸馏。</div>}
+    </div>}
+
+    {preview ? <div className="distillation-preview-backdrop" onClick={() => setPreview(null)} role="presentation"><section aria-label="会话片段预览" aria-modal="true" className="distillation-preview-dialog" onClick={(event) => event.stopPropagation()} role="dialog"><header><div><strong>{preview.title || preview.sessionId}</strong><small>{agentLabel(preview.agent)} · {preview.project || "未命名项目"} · {preview.events} 轮</small></div><button aria-label="关闭预览" onClick={() => setPreview(null)} type="button"><X className="h-4 w-4" /></button></header>{transcript === undefined ? <div className="distillation-preview-loading"><LoaderCircle className="h-4 w-4 spin" />正在读取会话正文…</div> : transcript ? <><div className="distillation-range-controls"><label>起始消息<select onChange={(event) => setRangeBoundary("startIndex", Number(event.target.value))} value={previewSelection?.startIndex ?? 0}>{transcriptMessages.map((message, index) => <option key={index} value={index}>{index + 1}. {message.role} · {message.text.slice(0, 54) || "空消息"}</option>)}</select></label><label>结束消息<select onChange={(event) => setRangeBoundary("endIndex", Number(event.target.value))} value={previewSelection?.endIndex ?? Math.max(0, transcriptMessages.length - 1)}>{transcriptMessages.map((message, index) => <option key={index} value={index}>{index + 1}. {message.role} · {message.text.slice(0, 54) || "空消息"}</option>)}</select></label><span>范围含首尾 · {Math.max(0, (previewSelection?.endIndex ?? transcriptMessages.length - 1) - (previewSelection?.startIndex ?? 0) + 1)} 条消息</span></div><div className="distillation-transcript">{transcriptMessages.map((message, index) => { const startIndex = previewSelection?.startIndex ?? 0; const endIndex = previewSelection?.endIndex ?? transcriptMessages.length - 1; const included = index >= startIndex && index <= endIndex; return <article className={included ? "included" : ""} key={`${index}-${message.timestamp ?? ""}`}><small>{message.role} · {message.timestamp ? dateLabel(message.timestamp) : `消息 ${index + 1}`}</small><p>{message.text || "（空消息）"}</p></article>; })}</div><footer><span>{previewSelection?.startIndex != null ? "已选择消息片段" : "默认包含整个会话"}</span><Button onClick={() => { setSelected((current) => ({ ...current, [sessionKey(preview)]: current[sessionKey(preview)] ?? { agent: preview.agent, sessionId: preview.sessionId } })); setPreview(null); }}><Check className="h-4 w-4" />确认材料</Button></footer></> : <div className="distillation-empty">没有可预览的会话正文。</div>}</section></div> : null}
+  </section>;
+}
+
+export function ClientsEnhancementScreen({ actions, distillationWorkbench }: { actions: AppActions; distillationWorkbench?: DistillationWorkbenchResult | null }) {
+  return <DistillationWorkbench actions={actions} data={distillationWorkbench ?? null} />;
 }

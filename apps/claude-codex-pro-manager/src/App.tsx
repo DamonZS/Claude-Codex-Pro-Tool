@@ -204,6 +204,9 @@ import type {
   AitrackerCapabilitiesResult,
   AitrackerSessionDetailResult,
   DistillationCandidatesResult,
+  DistillationWorkbenchResult,
+  DistillationRunResult,
+  DistillationSessionSelection,
   ContextEntries,
   ContextEntriesResult,
   ContextEntry,
@@ -319,6 +322,7 @@ export function App() {
   const [requestTimeline, setRequestTimeline] = useState<RequestTimelineResult | null>(null);
   const [aitrackerCapabilities, setAitrackerCapabilities] = useState<AitrackerCapabilitiesResult | null>(null);
   const [distillationCandidates, setDistillationCandidates] = useState<DistillationCandidatesResult | null>(null);
+  const [distillationWorkbench, setDistillationWorkbench] = useState<DistillationWorkbenchResult | null>(null);
   const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
   const requestTimelineInFlight = useRef(false);
   const capabilitiesInFlight = useRef(false);
@@ -1181,6 +1185,44 @@ export function App() {
     return result;
   };
 
+  const loadDistillationWorkbench = async () => {
+    const result = await run(
+      () => call<DistillationWorkbenchResult>("load_distillation_workbench"),
+      "蒸馏工作台",
+      { trackBusy: false, notify: false },
+    );
+    if (result) {
+      setDistillationWorkbench(result);
+      setDistillationCandidates({ ...result, candidates: result.candidates });
+    }
+    return result;
+  };
+
+  const runDistillationWorkbench = async (request: { selections: DistillationSessionSelection[]; providerId: string; modelId: string; kind: string; mode: string; prompt?: string }) => {
+    const result = await run(
+      () => call<DistillationRunResult>("run_distillation_workbench", { request }),
+      "执行蒸馏",
+    );
+    if (result?.candidate) void loadDistillationWorkbench();
+    return result;
+  };
+
+  const queryDistillationTask = async (taskId: string) => call<DistillationRunResult>("query_distillation_task", { request: { taskId } });
+
+  const cancelDistillationTask = async (taskId: string) => run(
+    () => call<DistillationRunResult>("cancel_distillation_task", { request: { taskId } }),
+    "取消蒸馏",
+  );
+
+  const saveDistillationOutput = async (request: { candidateId: string; target: string; skillId?: string }) => {
+    const result = await run(
+      () => call<DistillationRunResult>("save_distillation_output", { request }),
+      "保存蒸馏产出",
+    );
+    if (result) void loadDistillationWorkbench();
+    return result;
+  };
+
   const refreshLogs = async (silent = false) => {
     const result = await run(() => call<LogsResult>("read_latest_logs", { request: { lines: 240 } }), "日志", { trackBusy: !silent, notify: !silent });
     if (result) {
@@ -1272,8 +1314,8 @@ export function App() {
     return result;
   };
 
-  const toggleUnifiedToolAsset = async (id: string, kind: ContextKind, app: "claude" | "codex", enabled: boolean) => {
-    const appLabel = app === "claude" ? "Claude" : "Codex";
+  const toggleUnifiedToolAsset = async (id: string, kind: ContextKind, app: string, enabled: boolean) => {
+    const appLabel = app === "claude" ? "Claude" : app === "codex" ? "Codex" : app;
     const result = await run(
       () => call<UnifiedToolInventoryResult>("toggle_unified_tool_asset", { request: { id, kind, app, enabled } }),
       `${enabled ? "启用" : "关闭"} ${appLabel} 工具或插件`,
@@ -2741,10 +2783,7 @@ export function App() {
     } else if (target === "supplier") {
       requiredResults = await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
     } else if (target === "clients") {
-      await Promise.all([refreshOverview(true), refreshClaudeLight(true), refreshSettings(true), refreshWatcher(true)]);
-      afterFirstPaintIfFresh(() => {
-        void Promise.all([refreshClaudeDesktopDevMode(true), refreshClaudeZhPatch(true)]);
-      }, 250);
+      await Promise.all([refreshSettings(true), loadDistillationWorkbench()]);
     } else if (target === "themes") {
       await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
@@ -2756,8 +2795,11 @@ export function App() {
         refreshLogs(true),
       ]);
     } else if (target === "tools") {
-      await refreshSettings(true);
-      await refreshUnifiedToolInventory(true);
+      await Promise.all([
+        refreshSettings(true),
+        refreshUnifiedToolInventory(true),
+        refreshAitrackerCapabilities(true),
+      ]);
       if (isStaleRouteLoad()) return;
       afterFirstPaintIfFresh(async () => {
         const [codexMarketplaceStatus, claudeMarketplaceStatus] = await Promise.all([
@@ -2956,6 +2998,11 @@ export function App() {
       createDistillationCandidate,
       updateDistillationCandidate,
       cancelDistillationCandidate,
+      loadDistillationWorkbench,
+      runDistillationWorkbench,
+      cancelDistillationTask,
+      queryDistillationTask,
+      saveDistillationOutput,
       applyRelayMode,
       applyPureApiMode,
       clearRelayMode: clearRelayMode as unknown as AppActions["clearRelayMode"],
@@ -3102,6 +3149,11 @@ export function App() {
       createDistillationCandidate: (...args) => actionsRef.current!.createDistillationCandidate(...args),
       updateDistillationCandidate: (...args) => actionsRef.current!.updateDistillationCandidate(...args),
       cancelDistillationCandidate: (...args) => actionsRef.current!.cancelDistillationCandidate(...args),
+      loadDistillationWorkbench: (...args) => actionsRef.current!.loadDistillationWorkbench(...args),
+      runDistillationWorkbench: (...args) => actionsRef.current!.runDistillationWorkbench(...args),
+      cancelDistillationTask: (...args) => actionsRef.current!.cancelDistillationTask(...args),
+      queryDistillationTask: (...args) => actionsRef.current!.queryDistillationTask(...args),
+      saveDistillationOutput: (...args) => actionsRef.current!.saveDistillationOutput(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
       clearRelayMode: (...args) => actionsRef.current!.clearRelayMode(...args),
@@ -3219,13 +3271,7 @@ export function App() {
           {route === "clients" ? (
             <ClientsEnhancementScreen
               actions={actions}
-              agentScope={agentScope}
-              claudeDesktop={claudeDesktop}
-              claudeDesktopDevMode={claudeDesktopDevMode}
-              claudeZhPatch={claudeZhPatch}
-              overview={overview}
-              settings={settingsDraft ?? settings?.settings ?? null}
-              watcher={watcher}
+              distillationWorkbench={distillationWorkbench}
             />
           ) : null}
           {route === "themes" ? (

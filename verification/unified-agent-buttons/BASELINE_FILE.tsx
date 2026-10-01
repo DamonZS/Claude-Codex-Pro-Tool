@@ -2227,7 +2227,7 @@ function UnifiedToolInventoryPanel({
   result: UnifiedToolInventoryResult | null;
   settings: BackendSettings | null;
 }) {
-  const [tab, setTab] = useState<ContextKind>("skill");
+  const [tab, setTab] = useState<ContextKind>("mcp");
   const [pending, setPending] = useState<string | null>(null);
   const [creatingMcp, setCreatingMcp] = useState(false);
   const [creatingSkill, setCreatingSkill] = useState(false);

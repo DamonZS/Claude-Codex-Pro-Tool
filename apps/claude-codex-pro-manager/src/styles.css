@@ -6756,7 +6756,7 @@ body {
 }
 
 .unified-tool-row {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 58px;
 }
 
@@ -6775,36 +6775,14 @@ body {
   white-space: nowrap;
 }
 
-.agent-icon-group {
-  display: flex;
-  flex-shrink: 0;
-  gap: 4px;
-  align-items: center;
-  max-width: 180px;
-  overflow: hidden;
-}
-
-.agent-inventory-icon {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--ops-border) 72%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--ops-surface) 72%, transparent);
-}
-
-.agent-inventory-icon img {
-  width: 15px;
-  height: 15px;
-}
-
 .agent-toggle-group {
   display: flex;
   flex-shrink: 0;
   gap: 6px;
   align-items: center;
+  max-width: min(42vw, 360px);
+  overflow-x: auto;
+  padding: 2px;
 }
 
 .agent-toggle {
@@ -6853,11 +6831,17 @@ body {
   background: rgb(52 211 153 / 0.14);
 }
 
+.agent-toggle.enabled:not(.claude):not(.codex) {
+  border-color: color-mix(in srgb, currentColor 46%, transparent);
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
 .agent-toggle:disabled {
   cursor: not-allowed;
 }
 
 .agent-toggle.pending img,
+.agent-toggle.pending span,
 .spin {
   animation: unified-tool-spin 0.85s linear infinite;
 }

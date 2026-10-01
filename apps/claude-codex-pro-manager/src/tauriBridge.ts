@@ -522,11 +522,12 @@ type PreviewUnifiedToolAssetState = {
   summary: string;
   claudeEnabled: boolean;
   codexEnabled: boolean;
+  agents?: Record<string, boolean>;
 };
 
 const previewUnifiedToolAssets: PreviewUnifiedToolAssetState[] = [
   { id: "codebase-memory-mcp", kind: "mcp", title: "codebase-memory-mcp", summary: "代码库知识图谱 MCP", claudeEnabled: true, codexEnabled: true },
-  { id: "ask-matt", kind: "skill", title: "ask-matt", summary: "工程工作流路由技能", claudeEnabled: true, codexEnabled: true },
+  { id: "ask-matt", kind: "skill", title: "ask-matt", summary: "工程工作流路由技能", claudeEnabled: true, codexEnabled: true, agents: { cursor: false, workbuddy: true, openclaw: false } },
   { id: "github", kind: "plugin", title: "github", summary: "GitHub 工作流插件", claudeEnabled: false, codexEnabled: true },
 ];
 
@@ -539,6 +540,7 @@ function previewUnifiedToolInventory(message = "检测完成：已加载预览�
     source: `~\\.claude\\${item.kind}s\\${item.id} | ~\\.codex\\${item.kind}s\\${item.id}`,
     claude: { enabled: item.claudeEnabled, available: true, toggleSupported: true, sourcePath: `~\\.claude\\${item.kind}s\\${item.id}` },
     codex: { enabled: item.codexEnabled, available: true, toggleSupported: true, sourcePath: `~\\.codex\\${item.kind}s\\${item.id}` },
+    agents: Object.fromEntries(Object.entries(item.agents ?? {}).map(([id, enabled]) => [id, { enabled, available: true, toggleSupported: true, sourcePath: `~\\.${id}\\skills\\${item.id}` }])),
   }));
   return ok(message, {
     inventory: {
@@ -1216,7 +1218,7 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     const request = _args?.request as {
       id?: string;
       kind?: PreviewUnifiedToolAssetState["kind"];
-      app?: "claude" | "codex";
+      app?: string;
       enabled?: boolean;
     } | undefined;
     const asset = previewUnifiedToolAssets.find((item) => item.id === request?.id && item.kind === request?.kind);
@@ -1225,9 +1227,10 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
       return { ...result, status: "failed", message: "预览模式切换请求无效。" };
     }
     if (request.app === "claude") asset.claudeEnabled = request.enabled;
-    else asset.codexEnabled = request.enabled;
+    else if (request.app === "codex") asset.codexEnabled = request.enabled;
+    else if (asset.agents && request.app in asset.agents) asset.agents[request.app] = request.enabled;
     return previewUnifiedToolInventory(
-      `预览模式已为 ${request.app === "claude" ? "Claude" : "Codex"}${request.enabled ? "启用" : "关闭"} ${asset.title}。`,
+      `预览模式已为 ${request.app === "claude" ? "Claude" : request.app === "codex" ? "Codex" : request.app}${request.enabled ? "启用" : "关闭"} ${asset.title}。`,
     );
   }
   if (command === "import_ccswitch_codex_providers") {
@@ -1336,8 +1339,17 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "read_aitracker_capabilities") {
-    return ok("预览模式未连接本地采集源。", {
-      snapshot: { registry: [], sessions: [], toolCalls: [], details: [] },
+    return ok("预览模式已加载本地 Agent 注册表。", {
+      snapshot: {
+        registry: [
+          ["claude-code", "Claude Code", "#d97757"],
+          ["codex", "Codex", "#10b981"],
+          ["cursor", "Cursor", "#111827"],
+          ["workbuddy", "WorkBuddy", "#22d3ee"],
+          ["openclaw", "OpenClaw", "#f97316"],
+        ].map(([id, name, color]) => ({ id, name, nameZh: name, icon: id, color, platforms: { windows: "supported" }, usageMode: "adapter", contextMode: "unsupported", sessionsMode: "read", detected: true, events: 0, skillCount: id === "cursor" ? 2 : 0, skillScanStatus: "ok" })),
+        sessions: [], toolCalls: [], details: [],
+      },
       usage: {
         generatedAt: new Date().toISOString(),
         mode: "empty",
@@ -1359,6 +1371,15 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   }
   if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate") {
     return ok("预览模式未连接蒸馏存储。", { candidates: [] });
+  }
+  if (command === "load_distillation_workbench") {
+    return ok("预览模式蒸馏工作台已加载。", { sessions: [], providers: [], candidates: [] });
+  }
+  if (command === "run_distillation_workbench") {
+    return { status: "failed", message: "预览模式未连接蒸馏执行器。", taskId: "preview", phase: "failed", percent: 0, candidate: null };
+  }
+  if (command === "cancel_distillation_task" || command === "save_distillation_output") {
+    return ok("预览模式已记录蒸馏操作。", { taskId: "preview", phase: "completed", percent: 100, candidate: null });
   }
   if (command === "read_latest_logs") {
     return ok("预览模式日志。", {

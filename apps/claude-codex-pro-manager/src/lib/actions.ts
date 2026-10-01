@@ -59,6 +59,9 @@ import type {
   AitrackerCapabilitiesResult,
   AitrackerSessionDetailResult,
   DistillationCandidatesResult,
+  DistillationWorkbenchResult,
+  DistillationRunResult,
+  DistillationSessionSelection,
   WatcherResult,
 } from "@/types";
 
@@ -150,6 +153,11 @@ export function createActionsShape() {
     createDistillationCandidate: async (_request: { agent: string; sessionId: string }) => null as DistillationCandidatesResult | null,
     updateDistillationCandidate: async (_request: { id: string }) => null as DistillationCandidatesResult | null,
     cancelDistillationCandidate: async (_request: { id: string }) => null as DistillationCandidatesResult | null,
+    loadDistillationWorkbench: async () => null as DistillationWorkbenchResult | null,
+    runDistillationWorkbench: async (_request: { selections: DistillationSessionSelection[]; providerId: string; modelId: string; kind: string; mode: string; prompt?: string }) => null as DistillationRunResult | null,
+    queryDistillationTask: async (_taskId: string) => null as DistillationRunResult | null,
+    cancelDistillationTask: async (_taskId: string) => null as DistillationRunResult | null,
+    saveDistillationOutput: async (_request: { candidateId: string; target: string; skillId?: string }) => null as DistillationRunResult | null,
     listMulticaConnections: async (_silent?: boolean) => null as MulticaConnectionsResult | null,
     saveMulticaConnection: async (_connection: MulticaConnectionConfig) => null as MulticaConnectionsResult | null,
     deleteMulticaConnection: async (_connectionId: string) => null as MulticaConnectionsResult | null,
@@ -207,7 +215,7 @@ export function createActionsShape() {
     saveClaudeContextEntry: async (_kind: ContextKind, _id: string, _body: string) => null as ClaudeContextEntriesResult | null,
     deleteClaudeContextEntry: async (_kind: ContextKind, _id: string) => null as ClaudeContextEntriesResult | null,
     refreshUnifiedToolInventory: async (_silent?: boolean) => null as UnifiedToolInventoryResult | null,
-    toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: "claude" | "codex", _enabled: boolean) => null as UnifiedToolInventoryResult | null,
+    toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: string, _enabled: boolean) => null as UnifiedToolInventoryResult | null,
     createSkill: async (_target: "claude" | "codex", _id: string, _body: string) => null as CreateSkillResult | null,
   };
 }

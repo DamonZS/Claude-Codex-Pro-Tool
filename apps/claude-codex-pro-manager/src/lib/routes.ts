@@ -1,5 +1,6 @@
 import {
   Boxes,
+  FlaskConical,
   LayoutDashboard,
   MessageSquare,
   Network,
@@ -27,7 +28,7 @@ export type RouteItem = {
 export const routes: RouteItem[] = [
   { id: "overview", label: "概览", icon: LayoutDashboard, description: "服务状态、异常与近期操作", keywords: ["首页", "状态", "dashboard"] },
   { id: "supplier", label: "供应商与路由", icon: Network, description: "第三方 API、模型映射、代理与故障转移", keywords: ["provider", "api", "model", "protocol", "模型", "协议", "代理", "中转"] },
-  { id: "clients", label: "客户端与增强", icon: Boxes, description: "Codex、Claude 与本地增强状态", keywords: ["codex", "claude", "启动", "注入"] },
+  { id: "clients", label: "蒸馏工作台", icon: FlaskConical, description: "从本机会话提炼并管理可复用的能力与记忆资产", keywords: ["distill", "蒸馏", "skill", "workflow", "prompt", "persona", "memory"] },
   { id: "themes", label: "主题中心", icon: Palette, description: "导入、应用与恢复 Codex 主题", keywords: ["theme", "主题", "皮肤", "外观"] },
   { id: "prompts", label: "系统提示词", icon: FileText, description: "管理 Codex 指令模板与生效方式", keywords: ["prompt", "instructions", "提示词", "指令"] },
   { id: "sessions", label: "会话", icon: MessageSquare, description: "本地会话、项目归属、迁移与供应商同步", keywords: ["session", "会话"] },
@@ -98,7 +99,7 @@ export function routeSubtitle(route: Route) {
     overview: "服务健康、当前配置、异常与近期运行状态。",
     supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
     multica: "本地工作流入口与开关已归入设置。",
-    clients: "管理 Codex、Claude Desktop、Claude Code 与本地增强。",
+    clients: "筛选本机会话、选择片段、配置模型，并审批和归档蒸馏产物。",
     themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     prompts: "管理 Codex 系统提示词、分类与当前生效方式。",
     tools: "",

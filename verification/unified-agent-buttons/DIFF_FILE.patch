@@ -1,0 +1,13 @@
+diff --git a/verification/unified-agent-buttons/BASELINE_FILE.tsx b/verification/unified-agent-buttons/MODIFIED_FILE.tsx
+index 70b7edb..0a130d1 100644
+--- a/verification/unified-agent-buttons/BASELINE_FILE.tsx
++++ b/verification/unified-agent-buttons/MODIFIED_FILE.tsx
+@@ -2227,7 +2227,7 @@ function UnifiedToolInventoryPanel({
+   result: UnifiedToolInventoryResult | null;
+   settings: BackendSettings | null;
+ }) {
+-  const [tab, setTab] = useState<ContextKind>("mcp");
++  const [tab, setTab] = useState<ContextKind>("skill");
+   const [pending, setPending] = useState<string | null>(null);
+   const [creatingMcp, setCreatingMcp] = useState(false);
+   const [creatingSkill, setCreatingSkill] = useState(false);

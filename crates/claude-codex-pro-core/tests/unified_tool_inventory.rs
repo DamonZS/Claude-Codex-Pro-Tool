@@ -1,4 +1,4 @@
-use std::fs;
+use std::{collections::BTreeMap, fs};
 
 use claude_codex_pro_core::unified_tool_inventory::{
     UnifiedToolInventoryRoots, UnifiedToolToggleRequest, scan_unified_tool_inventory,
@@ -39,6 +39,7 @@ fn unified_tool_inventory_toggles_only_the_requested_app_and_restores_skills() {
         codex_home: codex_home.clone(),
         claude_home: claude_home.clone(),
         claude_config_paths: vec![claude_config.clone()],
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let after_mcp = set_unified_tool_asset_enabled(
@@ -104,6 +105,7 @@ fn nested_skill_toggle_preserves_its_relative_directory() {
         codex_home: codex_home.clone(),
         claude_home,
         claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
     };
 
     set_unified_tool_asset_enabled(
@@ -168,6 +170,7 @@ fn unified_tool_inventory_aggregates_claude_configs_and_keeps_cached_plugins_dis
         codex_home,
         claude_home,
         claude_config_paths: vec![claude_primary, claude_msix],
+        agent_skill_roots: BTreeMap::new(),
     })
     .unwrap();
 
@@ -238,6 +241,7 @@ fn disabling_claude_mcp_removes_all_top_level_and_project_copies() {
         codex_home,
         claude_home,
         claude_config_paths: vec![claude_primary.clone(), claude_msix.clone()],
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let before = scan_unified_tool_inventory(&roots).unwrap();
@@ -346,6 +350,7 @@ fn restoring_claude_mcp_refuses_to_overwrite_a_new_same_name_configuration() {
         codex_home,
         claude_home,
         claude_config_paths: vec![claude_config.clone()],
+        agent_skill_roots: BTreeMap::new(),
     };
 
     set_unified_tool_asset_enabled(
@@ -407,6 +412,7 @@ fn unified_tool_inventory_can_enable_codex_mcp_in_claude() {
         codex_home,
         claude_home,
         claude_config_paths: vec![claude_config.clone()],
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let inventory = set_unified_tool_asset_enabled(
@@ -462,6 +468,7 @@ fn unified_tool_inventory_plugin_toggles_are_independent_and_reversible() {
         codex_home: codex_home.clone(),
         claude_home: claude_home.clone(),
         claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let codex_off = set_unified_tool_asset_enabled(
@@ -559,6 +566,7 @@ fn enabling_openai_cached_plugin_uses_the_manifest_marketplace_id() {
         codex_home: codex_home.clone(),
         claude_home,
         claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let inventory = set_unified_tool_asset_enabled(
@@ -605,6 +613,7 @@ fn enabling_custom_local_marketplace_plugin_uses_its_manifest_id() {
         codex_home: codex_home.clone(),
         claude_home,
         claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let before = scan_unified_tool_inventory(&roots).unwrap();
@@ -652,6 +661,7 @@ fn cached_plugin_without_a_marketplace_manifest_does_not_invent_an_id() {
         codex_home,
         claude_home,
         claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
     };
 
     let inventory = scan_unified_tool_inventory(&roots).unwrap();
@@ -728,6 +738,7 @@ enabled = true
         codex_home,
         claude_home,
         claude_config_paths: vec![claude_config],
+        agent_skill_roots: BTreeMap::new(),
     };
     let inventory = scan_unified_tool_inventory(&roots).unwrap();
 
@@ -762,5 +773,171 @@ enabled = true
     assert_eq!(
         inventory.counts.deduplicated,
         inventory.counts.raw_discoveries - inventory.counts.total
+    );
+}
+
+#[test]
+fn unified_tool_inventory_discovers_and_toggles_aitracker_agent_skill() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().join("codex");
+    let claude_home = temp.path().join("claude");
+    let cursor_root = temp.path().join("cursor-skills");
+    write(
+        &cursor_root.join("review-helper/SKILL.md"),
+        "---\nname: review-helper\ndescription: Cursor skill\n---\n",
+    );
+    write(
+        &codex_home.join("skills/shared-helper/SKILL.md"),
+        "---\nname: shared-helper\ndescription: Shared source\n---\n",
+    );
+    let mut agent_skill_roots = BTreeMap::new();
+    agent_skill_roots.insert("cursor".to_string(), vec![cursor_root.clone()]);
+    let roots = UnifiedToolInventoryRoots {
+        codex_home,
+        claude_home,
+        claude_config_paths: Vec::new(),
+        agent_skill_roots,
+    };
+
+    let inventory = scan_unified_tool_inventory(&roots).unwrap();
+    let asset = inventory
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "skill" && asset.id == "review-helper")
+        .unwrap();
+    assert!(asset.agents["cursor"].enabled);
+    assert!(asset.agents["cursor"].toggle_supported);
+
+    let disabled = set_unified_tool_asset_enabled(
+        &roots,
+        &UnifiedToolToggleRequest {
+            id: "review-helper".into(),
+            kind: "skill".into(),
+            app: "cursor".into(),
+            enabled: false,
+        },
+    )
+    .unwrap();
+    let disabled_asset = disabled
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "skill" && asset.id == "review-helper")
+        .unwrap();
+    assert!(!disabled_asset.agents["cursor"].enabled);
+    assert!(
+        cursor_root
+            .join(".ccp-disabled/review-helper/SKILL.md")
+            .exists()
+    );
+
+    let restored = set_unified_tool_asset_enabled(
+        &roots,
+        &UnifiedToolToggleRequest {
+            id: "review-helper".into(),
+            kind: "skill".into(),
+            app: "cursor".into(),
+            enabled: true,
+        },
+    )
+    .unwrap();
+    assert!(
+        restored
+            .assets
+            .iter()
+            .find(|asset| asset.kind == "skill" && asset.id == "review-helper")
+            .unwrap()
+            .agents["cursor"]
+            .enabled
+    );
+    assert!(cursor_root.join("review-helper/SKILL.md").exists());
+
+    let shared = scan_unified_tool_inventory(&roots)
+        .unwrap()
+        .assets
+        .into_iter()
+        .find(|asset| asset.id == "shared-helper")
+        .unwrap();
+    assert!(!shared.agents["cursor"].enabled);
+    assert!(shared.agents["cursor"].toggle_supported);
+    set_unified_tool_asset_enabled(
+        &roots,
+        &UnifiedToolToggleRequest {
+            id: "shared-helper".into(),
+            kind: "skill".into(),
+            app: "cursor".into(),
+            enabled: true,
+        },
+    )
+    .unwrap();
+    assert!(cursor_root.join("shared-helper/SKILL.md").exists());
+}
+
+#[test]
+fn unified_tool_inventory_can_install_a_skill_for_agent_without_existing_skill_root() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().join("codex");
+    let claude_home = temp.path().join("claude");
+    let cursor_root = temp.path().join("cursor/skills");
+    let source = codex_home.join("skills/review-helper/SKILL.md");
+    write(&source, "---\nname: review-helper\n---\n# Review helper\n");
+    let mut agent_skill_roots = BTreeMap::new();
+    agent_skill_roots.insert("cursor".to_string(), vec![cursor_root.clone()]);
+    let roots = UnifiedToolInventoryRoots {
+        codex_home,
+        claude_home,
+        claude_config_paths: Vec::new(),
+        agent_skill_roots,
+    };
+
+    let inventory = scan_unified_tool_inventory(&roots).unwrap();
+    let asset = inventory
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "skill" && asset.id == "review-helper")
+        .unwrap();
+    assert!(!asset.agents["cursor"].enabled);
+    assert!(asset.agents["cursor"].available);
+    assert!(asset.agents["cursor"].toggle_supported);
+
+    let installed = set_unified_tool_asset_enabled(
+        &roots,
+        &UnifiedToolToggleRequest {
+            id: "review-helper".into(),
+            kind: "skill".into(),
+            app: "cursor".into(),
+            enabled: true,
+        },
+    )
+    .unwrap();
+    let active = cursor_root.join("review-helper/SKILL.md");
+    assert_eq!(
+        std::fs::read_to_string(&active).unwrap(),
+        std::fs::read_to_string(&source).unwrap()
+    );
+    assert!(
+        installed
+            .assets
+            .iter()
+            .find(|asset| asset.kind == "skill" && asset.id == "review-helper")
+            .unwrap()
+            .agents["cursor"]
+            .enabled
+    );
+
+    set_unified_tool_asset_enabled(
+        &roots,
+        &UnifiedToolToggleRequest {
+            id: "review-helper".into(),
+            kind: "skill".into(),
+            app: "cursor".into(),
+            enabled: false,
+        },
+    )
+    .unwrap();
+    assert!(!active.exists());
+    assert!(
+        cursor_root
+            .join(".ccp-disabled/review-helper/SKILL.md")
+            .exists()
     );
 }

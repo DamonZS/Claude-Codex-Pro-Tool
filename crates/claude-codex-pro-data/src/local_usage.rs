@@ -413,6 +413,56 @@ pub fn event_from_record(
     })
 }
 
+/// Build a zero-token session marker from a transcript record. AITracker
+/// treats local sessions as first-class material even when a provider did not
+/// persist usage counters; the marker keeps those sessions visible without
+/// inventing token totals.
+fn session_marker_from_record(
+    record: &Value,
+    adapter: &UsageAdapter,
+    fallback_session_id: Option<String>,
+    fallback_timestamp: DateTime<Utc>,
+) -> Option<LocalUsageEvent> {
+    let timestamp = timestamp_value(record, &adapter.mapping).unwrap_or(fallback_timestamp);
+    let session_id = session_id_from_structured(
+        &adapter.source,
+        first_value(record, &adapter.mapping.session_id),
+    )
+    .or(fallback_session_id)?;
+    let event_identity = identifier(first_value(record, &adapter.mapping.event_id))
+        .unwrap_or_else(|| timestamp.to_rfc3339());
+    Some(LocalUsageEvent {
+        id: private_id(
+            &adapter.source,
+            "session-marker",
+            &format!("{}:{}", session_id, event_identity),
+        ),
+        source: adapter.source.clone(),
+        agent: identifier(first_value(record, &adapter.mapping.agent))
+            .unwrap_or_else(|| adapter.source.clone()),
+        provider: identifier(first_value(record, &adapter.mapping.provider))
+            .unwrap_or_else(|| "unknown".into()),
+        status: identifier(first_value(record, &adapter.mapping.status))
+            .unwrap_or_else(|| "observed".into()),
+        duration_ms: None,
+        timestamp: timestamp.to_rfc3339(),
+        model: identifier(first_value(record, &adapter.mapping.model))
+            .unwrap_or_else(|| "unknown".into()),
+        project: project_label(first_value(record, &adapter.mapping.project)),
+        session_id: Some(session_id),
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        total_tokens: 0,
+        measurement: "session".into(),
+        tool_name: first_value(record, &adapter.mapping.tool_name)
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 fn workbuddy_event_from_record(
     record: &Value,
     adapter: &UsageAdapter,
@@ -887,6 +937,13 @@ fn scan_jsonl_file(
         return;
     }
     let fallback = session_id_from_relative_file(&adapter.source, &path.to_string_lossy());
+    let fallback_timestamp = file
+        .metadata()
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|duration| DateTime::from_timestamp_millis(duration.as_millis() as i64))
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     let mut malformed = 0;
     for line in BufReader::new(file).split(b'\n') {
         let Ok(line) = line else {
@@ -911,6 +968,14 @@ fn scan_jsonl_file(
                 };
                 if let Some(event) = event {
                     events.push(event);
+                    bound_scan_events(events, adapter, diagnostics);
+                } else if let Some(marker) = session_marker_from_record(
+                    &value,
+                    adapter,
+                    Some(fallback.clone()),
+                    fallback_timestamp,
+                ) {
+                    events.push(marker);
                     bound_scan_events(events, adapter, diagnostics);
                 }
             }

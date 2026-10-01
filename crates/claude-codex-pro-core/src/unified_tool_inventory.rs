@@ -18,6 +18,7 @@ pub struct UnifiedToolInventoryRoots {
     pub codex_home: PathBuf,
     pub claude_home: PathBuf,
     pub claude_config_paths: Vec<PathBuf>,
+    pub agent_skill_roots: BTreeMap<String, Vec<PathBuf>>,
 }
 
 impl Default for UnifiedToolInventoryRoots {
@@ -72,6 +73,7 @@ impl Default for UnifiedToolInventoryRoots {
             codex_home,
             claude_home,
             claude_config_paths,
+            agent_skill_roots: BTreeMap::new(),
         }
     }
 }
@@ -118,6 +120,8 @@ pub struct UnifiedToolAsset {
     pub source: String,
     pub claude: UnifiedToolAppState,
     pub codex: UnifiedToolAppState,
+    #[serde(default)]
+    pub agents: BTreeMap<String, UnifiedToolAppState>,
     #[serde(skip_serializing)]
     pub discovery_count: usize,
 }
@@ -181,6 +185,30 @@ pub fn scan_unified_tool_inventory(
         &mut scanned_sources,
         &mut diagnostics,
     );
+
+    for (agent_id, roots_for_agent) in &roots.agent_skill_roots {
+        if agent_id == "claude-code" || agent_id == "codex" {
+            continue;
+        }
+        for root in roots_for_agent {
+            scan_generic_skill_root(
+                root,
+                agent_id,
+                true,
+                &mut assets,
+                &mut scanned_sources,
+                &mut diagnostics,
+            );
+            scan_generic_skill_root(
+                &root.join(DISABLED_DIR),
+                agent_id,
+                false,
+                &mut assets,
+                &mut scanned_sources,
+                &mut diagnostics,
+            );
+        }
+    }
     scan_skill_root(
         &roots.codex_home.join("skills").join(DISABLED_DIR),
         AppTarget::Codex,
@@ -276,6 +304,32 @@ pub fn scan_unified_tool_inventory(
     let deduplicated = raw_discoveries.saturating_sub(assets.len());
     let mut assets = assets.into_values().collect::<Vec<_>>();
     for asset in &mut assets {
+        if asset.kind == "skill" {
+            let source_state = if !asset.codex.source_path.is_empty() {
+                Some(&asset.codex)
+            } else if !asset.claude.source_path.is_empty() {
+                Some(&asset.claude)
+            } else {
+                None
+            };
+            for (agent_id, _) in &roots.agent_skill_roots {
+                if agent_id == "claude-code"
+                    || agent_id == "codex"
+                    || asset.agents.contains_key(agent_id)
+                {
+                    continue;
+                }
+                let Some(source_state) = source_state else {
+                    continue;
+                };
+                let mut state = UnifiedToolAppState::default();
+                state.available = true;
+                state.toggle_supported = true;
+                state.source_path = source_state.source_path.clone();
+                state.config_id = source_state.config_id.clone();
+                asset.agents.insert(agent_id.clone(), state);
+            }
+        }
         if matches!(asset.kind.as_str(), "mcp" | "skill") {
             let any_available = asset.codex.available || asset.claude.available;
             asset.codex.available |= any_available;
@@ -283,7 +337,19 @@ pub fn scan_unified_tool_inventory(
             asset.codex.toggle_supported |= any_available;
             asset.claude.toggle_supported |= any_available;
         }
-        asset.source = joined_sources(&asset.codex.source_path, &asset.claude.source_path);
+        let mut sources = BTreeSet::new();
+        if !asset.codex.source_path.is_empty() {
+            sources.insert(format!("Codex: {}", asset.codex.source_path));
+        }
+        if !asset.claude.source_path.is_empty() {
+            sources.insert(format!("Claude: {}", asset.claude.source_path));
+        }
+        for (agent_id, state) in &asset.agents {
+            if !state.source_path.is_empty() {
+                sources.insert(format!("{agent_id}: {}", state.source_path));
+            }
+        }
+        asset.source = sources.into_iter().collect::<Vec<_>>().join("；");
     }
     assets.sort_by(|left, right| {
         kind_order(&left.kind)
@@ -329,6 +395,9 @@ pub fn set_unified_tool_asset_enabled(
         ("plugin", "claude") => set_claude_plugin_enabled(roots, asset, request.enabled)?,
         ("skill", "codex") => set_skill_enabled(roots, asset, AppTarget::Codex, request.enabled)?,
         ("skill", "claude") => set_skill_enabled(roots, asset, AppTarget::Claude, request.enabled)?,
+        ("skill", agent) if !agent.is_empty() => {
+            set_generic_skill_enabled(roots, asset, agent, request.enabled)?;
+        }
         (_, app) if app != "claude" && app != "codex" => {
             anyhow::bail!("未知目标应用：{app}")
         }
@@ -943,6 +1012,49 @@ fn set_skill_enabled(
     move_directory(&source, &disabled)
 }
 
+fn set_generic_skill_enabled(
+    roots: &UnifiedToolInventoryRoots,
+    asset: &UnifiedToolAsset,
+    agent_id: &str,
+    enabled: bool,
+) -> anyhow::Result<()> {
+    let roots_for_agent = roots
+        .agent_skill_roots
+        .get(agent_id)
+        .ok_or_else(|| anyhow::anyhow!("未发现目标 Agent：{agent_id}"))?;
+    let state = asset
+        .agents
+        .get(agent_id)
+        .ok_or_else(|| anyhow::anyhow!("该 Skill 尚未发现于 Agent：{agent_id}"))?;
+    let relative =
+        safe_skill_relative_path(&state.config_id).unwrap_or_else(|| PathBuf::from(&asset.id));
+    let source_root = roots_for_agent
+        .iter()
+        .find(|root| {
+            root.join(&relative).join("SKILL.md").exists()
+                || root.join(&relative).join("skill.md").exists()
+        })
+        .or_else(|| roots_for_agent.first())
+        .ok_or_else(|| anyhow::anyhow!("Agent 没有可写 Skill 根目录：{agent_id}"))?;
+    let active = source_root.join(&relative);
+    let disabled = source_root.join(DISABLED_DIR).join(&relative);
+    if enabled {
+        if active.join("SKILL.md").exists() || active.join("skill.md").exists() {
+            return Ok(());
+        }
+        if disabled.join("SKILL.md").exists() || disabled.join("skill.md").exists() {
+            return move_directory(&disabled, &active);
+        }
+        let source = path_from_state(state)?;
+        return copy_directory(&source, &active);
+    }
+    let source = path_from_state(state)?;
+    if !source.join("SKILL.md").exists() && !source.join("skill.md").exists() {
+        anyhow::bail!("Skill 来源无效：{}", display_path(&source));
+    }
+    move_directory(&source, &disabled)
+}
+
 fn safe_skill_relative_path(value: &str) -> Option<PathBuf> {
     let path = Path::new(value.trim());
     if value.trim().is_empty() || path.is_absolute() {
@@ -1349,6 +1461,74 @@ fn scan_skill_root(
                         state.config_id = relative.to_string_lossy().to_string();
                     }
                 }
+            }
+        }
+    });
+    if visited >= MAX_SCAN_ENTRIES {
+        diagnostics.push(format!("Skill 扫描达到数量上限：{}", display_path(root)));
+    }
+}
+
+fn scan_generic_skill_root(
+    root: &Path,
+    agent_id: &str,
+    enabled: bool,
+    assets: &mut BTreeMap<String, UnifiedToolAsset>,
+    scanned_sources: &mut BTreeSet<String>,
+    diagnostics: &mut Vec<String>,
+) {
+    if !root.exists() {
+        return;
+    }
+    scanned_sources.insert(display_path(root));
+    let mut visited = 0usize;
+    walk_files(root, MAX_SCAN_DEPTH, &mut visited, &mut |path| {
+        if !matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("SKILL.md" | "skill.md")
+        ) {
+            return;
+        }
+        if enabled
+            && path
+                .components()
+                .any(|part| part.as_os_str() == DISABLED_DIR)
+        {
+            return;
+        }
+        let metadata = read_limited_text(path).unwrap_or_default();
+        let parent = path.parent().unwrap_or(root);
+        let fallback = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill");
+        let title = frontmatter_value(&metadata, "name").unwrap_or_else(|| fallback.to_string());
+        let summary =
+            frontmatter_value(&metadata, "description").unwrap_or_else(|| "本地 Skill".to_string());
+        let id = normalized_asset_id("skill", &title);
+        if id.is_empty() {
+            return;
+        }
+        let asset = assets
+            .entry(format!("skill:{id}"))
+            .or_insert_with(|| UnifiedToolAsset {
+                id: id.clone(),
+                kind: "skill".into(),
+                title: clean_title(&title, fallback),
+                summary: summary.clone(),
+                ..UnifiedToolAsset::default()
+            });
+        asset.discovery_count = asset.discovery_count.saturating_add(1);
+        let state = asset.agents.entry(agent_id.to_string()).or_default();
+        state.enabled |= enabled;
+        state.available = true;
+        state.toggle_supported = true;
+        if state.source_path.is_empty() || enabled {
+            state.source_path = display_path(parent);
+        }
+        if let Ok(relative) = parent.strip_prefix(root) {
+            if !relative.as_os_str().is_empty() && (state.config_id.is_empty() || enabled) {
+                state.config_id = relative.to_string_lossy().to_string();
             }
         }
     });
@@ -1897,15 +2077,6 @@ fn claude_home_path(home: &Path) -> PathBuf {
     home.join(".claude")
 }
 
-fn joined_sources(codex: &str, claude: &str) -> String {
-    match (codex.is_empty(), claude.is_empty()) {
-        (false, false) if codex != claude => format!("Codex: {codex}；Claude: {claude}"),
-        (false, _) => codex.to_string(),
-        (_, false) => claude.to_string(),
-        _ => String::new(),
-    }
-}
-
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -1931,6 +2102,7 @@ mod tests {
             codex_home: temp.path().join("codex"),
             claude_home: temp.path().join("claude"),
             claude_config_paths: Vec::new(),
+            agent_skill_roots: BTreeMap::new(),
         };
 
         let path = create_skill(&roots, "codex", "review-helper", "# Review").unwrap();
