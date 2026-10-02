@@ -7900,11 +7900,40 @@ pub async fn read_request_timeline() -> CommandResult<RequestTimelinePayload> {
     .unwrap_or_else(|_| failed("请求记录读取任务失败。", RequestTimelinePayload::default()))
 }
 
-fn collect_unified_usage_snapshot() -> (
+type UnifiedUsageSnapshot = (
     Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
     Vec<String>,
     claude_codex_pro_data::local_usage::LocalUsageSnapshot,
-) {
+);
+
+/// How long a full local-usage scan is reused. Overview, sessions and the
+/// distillation workbench each asked for a fresh scan of every agent's logs,
+/// and the overview fires two of them in parallel on every visit.
+const UNIFIED_USAGE_CACHE_TTL: Duration = Duration::from_secs(15);
+
+static UNIFIED_USAGE_CACHE: OnceLock<
+    Mutex<Option<(Instant, std::sync::Arc<UnifiedUsageSnapshot>)>>,
+> = OnceLock::new();
+
+/// Cached scan with single flight: the mutex is held while scanning, so
+/// concurrent callers wait for the one scan instead of starting their own.
+fn collect_unified_usage_snapshot() -> UnifiedUsageSnapshot {
+    let cache = UNIFIED_USAGE_CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((scanned_at, snapshot)) = slot.as_ref()
+        && scanned_at.elapsed() < UNIFIED_USAGE_CACHE_TTL
+    {
+        return (**snapshot).clone();
+    }
+    let snapshot = std::sync::Arc::new(scan_unified_usage_snapshot());
+    *slot = Some((Instant::now(), snapshot.clone()));
+    (*snapshot).clone()
+}
+
+fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
     let (mut records, mut warnings) =
         claude_codex_pro_data::request_history::read_recent_local_requests(
             &session_candidate_db_paths(None),
