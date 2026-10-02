@@ -116,6 +116,16 @@ fn read_source_file(path: &std::path::Path) -> String {
     )
 }
 
+/// screens.tsx plus the SupplierScreen module that was split out of it.
+fn read_screens_with_supplier() -> String {
+    format!(
+        "{}
+{}",
+        read_frontend_file("screens.tsx"),
+        read_frontend_file("components/supplier/SupplierScreen.tsx")
+    )
+}
+
 fn read_frontend_file(relative: &str) -> String {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.parent().unwrap().join("src").join(relative);
@@ -189,7 +199,7 @@ fn manager_startup_restores_only_user_configured_multica_sidecars() {
 fn manager_navigation_hides_legacy_multica_runtime_page() {
     let routes = read_frontend_file("lib/routes.ts");
     let app = read_frontend_file("App.tsx");
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let visible_routes = source_section(
         &routes,
         "export const routes: RouteItem[] = [",
@@ -936,7 +946,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
 fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
-    let screens_file = read_frontend_file("screens.tsx");
+    let screens_file = read_screens_with_supplier();
     let commands_rs = manifest_dir.join("src/commands.rs");
     let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
 
@@ -1125,7 +1135,7 @@ fn plugin_tools_ui_regression_is_locked_down() {
 fn session_management_route_contains_aitracker_session_management() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
-    let app_tsx = read_frontend_file("screens.tsx");
+    let app_tsx = read_screens_with_supplier();
     let app_shell = read_frontend_file("App.tsx");
     let tauri_bridge = read_frontend_file("tauriBridge.ts");
     let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
@@ -1187,7 +1197,7 @@ fn session_management_route_contains_aitracker_session_management() {
 fn codex_session_management_opens_real_context_viewer() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app = read_frontend_file("App.tsx");
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
     let bridge = read_frontend_file("tauriBridge.ts");
@@ -1346,7 +1356,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let main = read_frontend_file("main.tsx");
     let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
     let routes = read_frontend_file("lib/routes.ts");
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let tauri_config = read_source_file(&manifest_dir.join("tauri.conf.json"));
     let types = read_frontend_file("types.ts");
     let workspace = read_frontend_file("workspace.css");
@@ -1586,7 +1596,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let overview_screen = source_section(
         &screens,
         "export function OverviewScreen",
-        "function SupplierModelDropdown",
+        "const CONTACT_QQ_GROUP_PRIMARY_URL",
     );
     assert!(screens.contains("type OverviewAgentScope = \"codex\" | \"claude\";"));
     assert!(overview_screen.contains("<OverviewDataDashboard agentScope={agentScope}"));
@@ -2764,7 +2774,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     // 拆分后：存在性/禁止性断言读前端源码全集（字符串迁到哪个文件都能命中，
     // 且 !contains 覆盖所有前端文件，护栏更强）；结构化切片仍读 App.tsx 单文件。
     let app_tsx = read_all_frontend_sources();
-    let screens_file = read_frontend_file("screens.tsx");
+    let screens_file = read_screens_with_supplier();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let workspace = read_frontend_file("workspace.css");
@@ -2815,7 +2825,7 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     let overview_screen = screens_file
         .split("function OverviewScreen")
         .nth(1)
-        .and_then(|rest| rest.split("function SupplierScreen").next())
+        .and_then(|rest| rest.split("const CONTACT_QQ_GROUP_PRIMARY_URL").next())
         .expect("overview screen source");
     for contract in [
         "className=\"overview-control-plane\"",
@@ -3372,7 +3382,7 @@ fn update_check_cannot_replace_an_active_download() {
 #[test]
 fn failed_update_keeps_a_validated_browser_download_fallback() {
     let app = read_frontend_file("App.tsx").replace("\r\n", "\n");
-    let screens = read_frontend_file("screens.tsx").replace("\r\n", "\n");
+    let screens = read_screens_with_supplier().replace("\r\n", "\n");
     let update = read_frontend_file("lib/update.ts").replace("\r\n", "\n");
 
     let perform_update = app
@@ -3502,14 +3512,13 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // 存在性断言读前端源码全集；结构化切片读 screens.tsx（SupplierScreen 已拆分到 screens.tsx）。
     let app_tsx = read_all_frontend_sources().replace("\r\n", "\n");
-    let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
+    let screens_file = read_screens_with_supplier().replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
 
     let supplier_screen = screens_file
         .split("function SupplierScreen")
         .nth(1)
-        .and_then(|rest| rest.split("function LegacySupplierScreen").next())
         .expect("supplier screen source");
 
     assert!(supplier_screen.contains("actions.saveSettings(next)"));
@@ -3669,7 +3678,7 @@ fn supplier_screen_exposes_real_provider_crud_and_switching() {
 fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
-    let screens_file = read_frontend_file("screens.tsx").replace("\r\n", "\n");
+    let screens_file = read_screens_with_supplier().replace("\r\n", "\n");
     let supplier_lib = read_frontend_file("lib/supplier.ts").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
@@ -3680,7 +3689,6 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let supplier_screen = screens_file
         .split("function SupplierScreen")
         .nth(1)
-        .and_then(|rest| rest.split("function LegacySupplierScreen").next())
         .expect("supplier screen source");
 
     assert!(supplier_screen.contains("supplier-target-filter"));
@@ -4104,7 +4112,7 @@ fn injected_status_bars_are_transparent_single_backend_lamp_and_safe_for_codex_t
 fn audit_remediation_frontend_contracts_are_locked_down() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app = read_frontend_file("App.tsx");
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let update = read_frontend_file("lib/update.ts");
     let button = read_frontend_file("components/ui/button.tsx");
     let styles = read_frontend_file("styles.css");
@@ -4936,7 +4944,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     // 存在性断言读前端源码全集；结构化切片读 screens.tsx（SettingsScreen 已拆到 screens.tsx）。
     let app_tsx = read_all_frontend_sources();
-    let screens_file = read_frontend_file("screens.tsx");
+    let screens_file = read_screens_with_supplier();
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
 
@@ -4974,7 +4982,6 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     let supplier_screen = screens_file
         .split("export function SupplierScreen")
         .nth(1)
-        .and_then(|rest| rest.split("export function ToolsAndPluginsScreen").next())
         .expect("supplier screen source");
     assert!(!supplier_screen.contains("供应商同步"));
     assert!(!supplier_screen.contains("启用供应商配置切换"));
@@ -5007,7 +5014,7 @@ fn settings_and_tools_route_keep_full_ops_controls() {
 #[test]
 fn removed_maintenance_check_has_no_frontend_or_backend_entrypoint() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
 
@@ -5040,7 +5047,7 @@ fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
 fn about_screen_exposes_contact_entrypoints() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let manager_root = manifest_dir.parent().unwrap();
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let styles = read_frontend_file("styles.css");
     let qr_asset = manager_root.join("src/assets/contact-wechat-qr.jpg");
 
@@ -5225,7 +5232,7 @@ fn manager_liquid_glass_shell_uses_real_update_state_and_keeps_dense_content_opa
 
 #[test]
 fn credential_environment_ui_describes_platform_scope_and_external_source_boundaries() {
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
 
     assert!(screens.contains("credentialEnvironment?.externalSourceLikely"));
     assert!(screens.contains("credentialEnvironmentScopeLabel"));
@@ -5242,7 +5249,7 @@ fn multica_runtime_adapter_keeps_its_ipc_boundary_isolated_and_task_views_read_o
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
-    let screens = read_frontend_file("screens.tsx");
+    let screens = read_screens_with_supplier();
     let command_registration = source_section(&manager_lib, "tauri::generate_handler![", "])");
     let multica_commands = source_section(
         &commands,
