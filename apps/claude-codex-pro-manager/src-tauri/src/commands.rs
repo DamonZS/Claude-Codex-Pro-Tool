@@ -16124,3 +16124,694 @@ fn sync_launch_on_startup(enabled: bool, silent_startup: bool) -> anyhow::Result
 fn sync_launch_on_startup(_enabled: bool, _silent_startup: bool) -> anyhow::Result<()> {
     Ok(())
 }
+
+// ============================================================================
+// 本地路由（load_routing_config / save_routing_config / set_routing_enabled ...）
+// ============================================================================
+
+/// Per-port TCP probe budget for `scan_local_proxies`.
+const LOCAL_PROXY_SCAN_TIMEOUT: Duration = Duration::from_millis(300);
+/// Requests inspected when computing `totalRequests` / `successRate`.
+const ROUTING_TELEMETRY_WINDOW: usize = 500;
+/// Outbound HTTP API contract: 8s timeout, one retry (CC Switch 行为).
+const GLOBAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const GLOBAL_PROXY_TEST_URL: &str = "https://www.gstatic.com/generate_204";
+
+/// When the local routing proxy was last switched on by this process.
+static ROUTING_STARTED_AT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+fn routing_started_at() -> &'static Mutex<Option<Instant>> {
+    ROUTING_STARTED_AT.get_or_init(|| Mutex::new(None))
+}
+
+fn mark_routing_started() {
+    let mut started = match routing_started_at().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *started = Some(Instant::now());
+}
+
+fn mark_routing_started_if_unset() {
+    let mut started = match routing_started_at().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    started.get_or_insert_with(Instant::now);
+}
+
+fn clear_routing_started() {
+    let mut started = match routing_started_at().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *started = None;
+}
+
+fn routing_uptime_seconds() -> u64 {
+    let started = match routing_started_at().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    started
+        .map(|instant| instant.elapsed().as_secs())
+        .unwrap_or_default()
+}
+
+/// Live view of the local routing proxy (contract `RoutingStatus`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingRuntime {
+    pub running: bool,
+    pub address: String,
+    pub port: u16,
+    /// The proxy does not track per-connection sessions yet.
+    pub active_connections: u64,
+    pub total_requests: u64,
+    pub success_rate: f64,
+    pub uptime_seconds: u64,
+    pub current_providers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailoverQueueEntry {
+    pub provider_id: String,
+    pub name: String,
+    pub priority: i64,
+    pub circuit_state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingPayload {
+    pub config: claude_codex_pro_core::routing_config::RoutingConfig,
+    /// 命名为 runtime，避免与 `CommandResult.status` 冲突。
+    pub runtime: RoutingRuntime,
+    pub queues: BTreeMap<String, Vec<FailoverQueueEntry>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalProxyTestPayload {
+    pub ok: bool,
+    pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProxyScanPayload {
+    pub candidates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRoutingConfigRequest {
+    pub config: claude_codex_pro_core::routing_config::RoutingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRoutingEnabledRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRoutingAppTakeoverRequest {
+    pub app_id: String,
+    pub takeover: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailoverQueueRequest {
+    pub app_id: String,
+    pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestGlobalProxyRequest {
+    pub url: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+fn routing_store() -> anyhow::Result<claude_codex_pro_core::routing_config::RoutingStore> {
+    claude_codex_pro_core::routing_config::RoutingStore::open_default()
+}
+
+/// `status` values actually written by `request_telemetry` are `success`,
+/// `failed`, `interrupted` and `observed`; only `success` counts here.
+const TELEMETRY_SUCCESS_STATUS: &str = "success";
+
+/// `(totalRequests, successRate)` over the recent request log.
+fn routing_request_stats() -> (u64, f64) {
+    let records =
+        claude_codex_pro_core::request_telemetry::read_recent_requests(ROUTING_TELEMETRY_WINDOW)
+            .unwrap_or_default();
+    let total = records.len() as u64;
+    if total == 0 {
+        return (0, 0.0);
+    }
+    let succeeded = records
+        .iter()
+        .filter(|record| record.status == TELEMETRY_SUCCESS_STATUS)
+        .count();
+    (total, succeeded as f64 / total as f64)
+}
+
+/// Display name of the profile id currently used by `app_id`.
+fn routing_current_provider_name(app_id: &str) -> String {
+    match SettingsStore::default().load() {
+        Ok(settings) => {
+            let profile = settings.active_relay_profile_for_target(app_id);
+            let name = profile.name.trim();
+            if name.is_empty() {
+                profile.id
+            } else {
+                name.to_string()
+            }
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// Provider id → display name, used to label failover queue entries.
+fn relay_profile_names(settings: &BackendSettings) -> BTreeMap<String, String> {
+    settings
+        .relay_profiles
+        .iter()
+        .filter(|profile| !profile.id.trim().is_empty())
+        .map(|profile| {
+            let name = profile.name.trim();
+            let name = if name.is_empty() {
+                profile.id.clone()
+            } else {
+                name.to_string()
+            };
+            (profile.id.clone(), name)
+        })
+        .collect()
+}
+
+fn routing_runtime(
+    config: &claude_codex_pro_core::routing_config::RoutingConfig,
+) -> RoutingRuntime {
+    // `protocol_proxy_backend_online` probes the helper's status socket, so it
+    // runs off the UI thread (every caller already sits in `spawn_blocking`).
+    let running = config.enabled
+        && claude_codex_pro_core::launcher::protocol_proxy_backend_online(config.listen_port);
+    let (total_requests, success_rate) = routing_request_stats();
+    let mut current_providers = BTreeMap::new();
+    for app_id in ["claude", "claude-desktop", "codex"] {
+        let name = routing_current_provider_name(app_id);
+        if !name.is_empty() {
+            current_providers.insert(app_id.to_string(), name);
+        }
+    }
+    RoutingRuntime {
+        running,
+        address: config.listen_address.clone(),
+        port: config.listen_port,
+        active_connections: 0,
+        total_requests,
+        success_rate,
+        uptime_seconds: if running {
+            // Routing enabled in an earlier session: start counting from the
+            // first time this process observes it running.
+            if routing_uptime_seconds() == 0 {
+                mark_routing_started_if_unset();
+            }
+            routing_uptime_seconds()
+        } else {
+            0
+        },
+        current_providers,
+    }
+}
+
+/// The full routing payload: stored config, live status and per-app queues.
+fn routing_payload_from_store(
+    store: &claude_codex_pro_core::routing_config::RoutingStore,
+) -> anyhow::Result<RoutingPayload> {
+    let config = store.load()?;
+    let settings = SettingsStore::default().load().unwrap_or_default();
+    let names = relay_profile_names(&settings);
+
+    let mut queues = BTreeMap::new();
+    for app_id in claude_codex_pro_core::routing_config::PROXY_APP_IDS {
+        let rows = store.queue(app_id)?;
+        let entries = rows
+            .into_iter()
+            .map(|row| {
+                let name = names
+                    .get(&row.provider_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.provider_id.clone());
+                FailoverQueueEntry {
+                    provider_id: row.provider_id,
+                    name,
+                    priority: row.priority,
+                    circuit_state: row.circuit_state,
+                }
+            })
+            .collect();
+        queues.insert(app_id.to_string(), entries);
+    }
+
+    let runtime = routing_runtime(&config);
+    Ok(RoutingPayload {
+        config,
+        runtime,
+        queues,
+    })
+}
+
+/// Fallback payload: the stored configuration plus an offline runtime. Never
+/// fails, so a command error can still return a usable snapshot.
+fn routing_fallback_payload() -> RoutingPayload {
+    let config = routing_store()
+        .and_then(|store| store.load())
+        .unwrap_or_default();
+    let mut queues = BTreeMap::new();
+    for app_id in claude_codex_pro_core::routing_config::PROXY_APP_IDS {
+        queues.insert(app_id.to_string(), Vec::new());
+    }
+    let runtime = RoutingRuntime {
+        running: false,
+        address: config.listen_address.clone(),
+        port: config.listen_port,
+        active_connections: 0,
+        total_requests: 0,
+        success_rate: 0.0,
+        uptime_seconds: 0,
+        current_providers: BTreeMap::new(),
+    };
+    RoutingPayload {
+        config,
+        runtime,
+        queues,
+    }
+}
+
+/// Validate one of the routing commands' app ids before touching the store.
+fn routing_known_app(app_id: &str) -> bool {
+    claude_codex_pro_core::routing_config::PROXY_APP_IDS.contains(&app_id)
+}
+
+/// Whether `provider_id` names a profile the user actually configured.
+fn relay_profile_exists(provider_id: &str) -> bool {
+    match SettingsStore::default().load() {
+        Ok(settings) => settings
+            .relay_profiles
+            .iter()
+            .any(|profile| profile.id == provider_id),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+pub async fn load_routing_config() -> CommandResult<RoutingPayload> {
+    // Configuration read plus helper liveness probe and telemetry scan are all blocking.
+    tauri::async_runtime::spawn_blocking(|| match routing_store() {
+        Ok(store) => match routing_payload_from_store(&store) {
+            Ok(payload) => ok("路由配置已加载。", payload),
+            Err(error) => failed(
+                &format!("加载路由配置失败：{error}"),
+                routing_fallback_payload(),
+            ),
+        },
+        Err(error) => failed(
+            &format!("加载路由配置失败：{error}"),
+            routing_fallback_payload(),
+        ),
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("加载路由配置任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn save_routing_config(
+    request: SaveRoutingConfigRequest,
+) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = match routing_store() {
+            Ok(store) => store,
+            Err(error) => {
+                return failed(
+                    &format!("保存路由配置失败：{error}"),
+                    routing_fallback_payload(),
+                );
+            }
+        };
+        if let Err(error) = store.save(request.config) {
+            return failed(
+                &format!("保存路由配置失败：{error}"),
+                routing_fallback_payload(),
+            );
+        }
+        match routing_payload_from_store(&store) {
+            Ok(payload) => ok("路由配置已保存。", payload),
+            Err(error) => failed(
+                &format!("保存路由配置失败：{error}"),
+                routing_fallback_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("保存路由配置任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn set_routing_enabled(
+    request: SetRoutingEnabledRequest,
+) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = match routing_store() {
+            Ok(store) => store,
+            Err(error) => {
+                return failed(
+                    &format!("切换本地路由失败：{error}"),
+                    routing_fallback_payload(),
+                );
+            }
+        };
+        if request.enabled {
+            // The shared helper listener serves the routing proxy; bring it up
+            // before persisting `enabled` so the flag never claims a dead proxy.
+            let port = store
+                .load()
+                .map(|config| config.listen_port)
+                .unwrap_or(claude_codex_pro_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT);
+            if let Err(error) = tauri::async_runtime::block_on(
+                claude_codex_pro_core::launcher::ensure_detached_helper(port),
+            ) {
+                return failed(
+                    &format!("本地路由代理 {port} 启动失败：{error}"),
+                    routing_fallback_payload(),
+                );
+            }
+        }
+        if let Err(error) = store.set_enabled(request.enabled) {
+            return failed(
+                &format!("切换本地路由失败：{error}"),
+                routing_fallback_payload(),
+            );
+        }
+        if request.enabled {
+            mark_routing_started();
+        } else {
+            clear_routing_started();
+        }
+        let message = if request.enabled {
+            "本地路由已启用。"
+        } else {
+            "本地路由已停用。"
+        };
+        match routing_payload_from_store(&store) {
+            Ok(payload) => ok(message, payload),
+            Err(error) => failed(
+                &format!("切换本地路由失败：{error}"),
+                routing_fallback_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("切换本地路由任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn set_routing_app_takeover(
+    request: SetRoutingAppTakeoverRequest,
+) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = match routing_store() {
+            Ok(store) => store,
+            Err(error) => {
+                return failed(
+                    &format!("切换应用接管失败：{error}"),
+                    routing_fallback_payload(),
+                );
+            }
+        };
+        if let Err(error) = store.set_app_takeover(&request.app_id, request.takeover) {
+            return failed(
+                &format!("切换应用接管失败：{error}"),
+                routing_fallback_payload(),
+            );
+        }
+        let message = format!(
+            "{} 接管已{}。",
+            request.app_id,
+            if request.takeover { "开启" } else { "关闭" }
+        );
+        match routing_payload_from_store(&store) {
+            Ok(payload) => ok(&message, payload),
+            Err(error) => failed(
+                &format!("切换应用接管失败：{error}"),
+                routing_fallback_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("切换应用接管任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn add_failover_queue_provider(
+    request: FailoverQueueRequest,
+) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !routing_known_app(&request.app_id) {
+            return failed(
+                &format!("未知的路由应用：{}", request.app_id),
+                routing_fallback_payload(),
+            );
+        }
+        if !relay_profile_exists(request.provider_id.trim()) {
+            return failed(
+                &format!("供应商不存在：{}", request.provider_id.trim()),
+                routing_fallback_payload(),
+            );
+        }
+        routing_queue_mutation("已加入故障转移队列。", move |store| {
+            store.add_to_queue(&request.app_id, &request.provider_id)
+        })
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("加入故障转移队列任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn remove_failover_queue_provider(
+    request: FailoverQueueRequest,
+) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        routing_queue_mutation("已移出故障转移队列。", move |store| {
+            store.remove_from_queue(&request.app_id, &request.provider_id)
+        })
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("移出故障转移队列任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn reset_circuit_breaker(request: FailoverQueueRequest) -> CommandResult<RoutingPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        routing_queue_mutation("熔断器已重置。", move |store| {
+            store.reset_circuit(&request.app_id, &request.provider_id)
+        })
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("重置熔断器任务失败：{join_error}"),
+            routing_fallback_payload(),
+        )
+    })
+}
+
+/// Shared body of the three queue commands: open the store, apply `mutate`,
+/// then answer with a freshly reloaded payload.
+fn routing_queue_mutation<F>(message: &str, mutate: F) -> CommandResult<RoutingPayload>
+where
+    F: FnOnce(&mut claude_codex_pro_core::routing_config::RoutingStore) -> anyhow::Result<()>,
+{
+    let mut store = match routing_store() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("更新故障转移队列失败：{error}"),
+                routing_fallback_payload(),
+            );
+        }
+    };
+    if let Err(error) = mutate(&mut store) {
+        return failed(
+            &format!("更新故障转移队列失败：{error}"),
+            routing_fallback_payload(),
+        );
+    }
+    match routing_payload_from_store(&store) {
+        Ok(payload) => ok(message, payload),
+        Err(error) => failed(
+            &format!("更新故障转移队列失败：{error}"),
+            routing_fallback_payload(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn test_global_proxy(
+    request: TestGlobalProxyRequest,
+) -> CommandResult<GlobalProxyTestPayload> {
+    let url = request.url.trim().to_string();
+    if url.is_empty() {
+        return failed(
+            "请先填写代理地址",
+            GlobalProxyTestPayload {
+                ok: false,
+                latency_ms: None,
+            },
+        );
+    }
+    // 密码留空时回退到已保存的密码；任何错误信息都不得包含密码。
+    let password = match request.password.as_deref().map(str::trim) {
+        Some(value) if !value.is_empty() => Some(value.to_string()),
+        _ => tauri::async_runtime::spawn_blocking(|| match routing_store() {
+            Ok(store) => store.global_proxy_password().unwrap_or_default(),
+            Err(_) => None,
+        })
+        .await
+        .unwrap_or_default(),
+    };
+    let username = request
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    match test_global_proxy_once(&url, username.as_deref(), password.as_deref()).await {
+        Ok(latency_ms) => ok(
+            &format!("代理连通（{latency_ms} ms）"),
+            GlobalProxyTestPayload {
+                ok: true,
+                latency_ms: Some(latency_ms),
+            },
+        ),
+        Err(first_error) => {
+            // CC Switch 行为：超时重试 1 次。
+            match test_global_proxy_once(&url, username.as_deref(), password.as_deref()).await {
+                Ok(latency_ms) => ok(
+                    &format!("代理连通（{latency_ms} ms）"),
+                    GlobalProxyTestPayload {
+                        ok: true,
+                        latency_ms: Some(latency_ms),
+                    },
+                ),
+                Err(_) => failed(
+                    &format!("代理测试失败：{first_error}"),
+                    GlobalProxyTestPayload {
+                        ok: false,
+                        latency_ms: None,
+                    },
+                ),
+            }
+        }
+    }
+}
+
+/// One proxy connectivity attempt. Any HTTP status counts as reachable.
+async fn test_global_proxy_once(
+    url: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> anyhow::Result<u64> {
+    let mut proxy = reqwest::Proxy::all(url).context("代理地址无效")?;
+    if let Some(username) = username {
+        proxy = proxy.basic_auth(username, password.unwrap_or_default());
+    }
+    let client = reqwest::Client::builder()
+        .proxy(proxy)
+        .timeout(GLOBAL_PROXY_CONNECT_TIMEOUT)
+        .build()
+        .context("创建代理客户端失败")?;
+    let started = Instant::now();
+    let response = client
+        .get(GLOBAL_PROXY_TEST_URL)
+        .send()
+        .await
+        .context("无法通过代理建立连接")?;
+    let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    // 任何 HTTP 状态码都说明代理连通。
+    let _ = response.status();
+    Ok(latency_ms)
+}
+
+#[tauri::command]
+pub async fn scan_local_proxies() -> CommandResult<LocalProxyScanPayload> {
+    // Port probing blocks on TCP connect timeouts, so keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut candidates = Vec::new();
+        // Only HTTP proxies: the global proxy setting accepts http(s) only, so a
+        // socks5 candidate would be auto-filled and then rejected on save.
+        for port in [7890_u16, 7891, 10808, 10809] {
+            if local_port_is_open(port) {
+                candidates.push(format!("http://127.0.0.1:{port}"));
+            }
+        }
+        let message = if candidates.is_empty() {
+            "未找到本机代理。".to_string()
+        } else {
+            format!("找到 {} 个本机代理。", candidates.len())
+        };
+        ok(&message, LocalProxyScanPayload { candidates })
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("扫描本机代理任务失败：{join_error}"),
+            LocalProxyScanPayload {
+                candidates: Vec::new(),
+            },
+        )
+    })
+}
+
+fn local_port_is_open(port: u16) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&address, LOCAL_PROXY_SCAN_TIMEOUT).is_ok()
+}
