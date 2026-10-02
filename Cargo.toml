@@ -52,7 +52,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # Release size: drop debug symbols and let LTO remove dead code across crates.
 # panic stays "unwind" on purpose: spawn_blocking commands turn a panic into a
 # JoinError and report it, instead of killing the whole manager.
+# opt-level "s": the manager is UI + file IO + a local proxy that is bound by
+# network latency, so size matters more than peak CPU throughput here.
 [profile.release]
 strip = true
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+opt-level = "s"
