@@ -48,3 +48,11 @@ url = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
 winresource = "0.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Release size: drop debug symbols and let LTO remove dead code across crates.
+# panic stays "unwind" on purpose: spawn_blocking commands turn a panic into a
+# JoinError and report it, instead of killing the whole manager.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
