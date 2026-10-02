@@ -577,7 +577,9 @@ fn codex_multica_uses_current_page_host_with_modern_app_initial_fallback() {
 
 #[test]
 fn codex_multica_workspace_anchors_three_workflow_routes_after_plugin() {
-    let script = assets::injection_script(57321);
+    // Multi-line `contains` checks below assume LF; a CRLF checkout of
+    // renderer-inject.js (core.autocrlf=true) would otherwise never match.
+    let script = assets::injection_script(57321).replace("\r\n", "\n");
 
     assert!(script.contains("nav[role=\"navigation\"] button.sidebar-item"));
     assert!(script.contains("aside.app-shell-left-panel button.sidebar-item"));
@@ -2172,9 +2174,12 @@ fn manager_disabling_active_codex_routing_reapplies_supplier_without_clearing_ap
         .parent()
         .and_then(std::path::Path::parent)
         .expect("core crate should live under crates/claude-codex-pro-core");
-    let source =
-        std::fs::read_to_string(repo.join("apps/claude-codex-pro-manager/src/screens.tsx"))
-            .unwrap();
+    // SupplierScreen moved out of screens.tsx into its own module.
+    let source = std::fs::read_to_string(
+        repo.join("apps/claude-codex-pro-manager/src/components/supplier/SupplierScreen.tsx"),
+    )
+    .unwrap()
+    .replace("\r\n", "\n");
     let handler_start = source
         .find("const toggleVisibleSupplierRouting = async")
         .expect("supplier routing handler should exist");
