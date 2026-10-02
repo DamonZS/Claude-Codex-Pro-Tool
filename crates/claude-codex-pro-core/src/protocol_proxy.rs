@@ -969,10 +969,85 @@ fn load_proxy_settings(store: &SettingsStore) -> anyhow::Result<BackendSettings>
         .map_err(|error| anyhow::anyhow!("failed to load protocol proxy settings: {error:#}"))
 }
 
+/// 把目标应用名归一成 `settings.rs` 里的三个规范值之一。
+///
+/// `settings::normalized_target_app` 是私有的，故障转移必须能独立判断
+/// "某个候选供应商是否服务于本次请求的目标应用"，因此在这里保留同一套
+/// 规则：空值、"codex" 以及任何未知值都算 codex。
+fn relay_failover_target_app(target_app: &str) -> &str {
+    match target_app.trim().to_ascii_lowercase().as_str() {
+        "claude" => "claude",
+        "claude-desktop" | "claude_desktop" | "claudedesktop" => "claude-desktop",
+        _ => "codex",
+    }
+}
+
+/// 候选供应商是否服务于 `target_app`。
+///
+/// 与 `settings::relay_profile_matches_target` 等价：空的 `targetApp` 只服务
+/// codex，其余按归一化后的目标应用比较。
+fn relay_profile_targets(profile: &RelayProfile, target_app: &str) -> bool {
+    let profile_target = profile.target_app.trim();
+    if profile_target.is_empty() {
+        target_app == "codex"
+    } else {
+        relay_failover_target_app(profile_target) == target_app
+    }
+}
+
 pub async fn open_responses_proxy_request(body: &str) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = load_proxy_settings(&SettingsStore::default())?;
-    let relay = settings.active_relay_profile();
-    open_responses_proxy_request_with_relay(body, &relay).await
+    let active = settings.active_relay_profile();
+    let plan = crate::routing_failover::plan_for("codex", &active.id);
+
+    // 故障转移关闭时必须与旧行为完全一致：只发给当前供应商，不做任何重试。
+    if !plan.enabled {
+        return open_responses_proxy_request_with_relay(body, &active).await;
+    }
+
+    let mut last_response: Option<UpstreamProxyResponse> = None;
+    let mut last_error: Option<anyhow::Error> = None;
+    for provider_id in &plan.candidates {
+        let relay = if *provider_id == active.id {
+            active.clone()
+        } else {
+            match settings.relay_profiles.iter().find(|profile| {
+                profile.id == *provider_id && relay_profile_targets(profile, "codex")
+            }) {
+                Some(profile) => profile.clone(),
+                // 队列里的供应商已经被删掉/换了目标应用：跳过，不记熔断。
+                None => continue,
+            }
+        };
+
+        match open_responses_proxy_request_with_relay(body, &relay).await {
+            Ok(response) if crate::routing_failover::is_failover_status(response.status_code) => {
+                crate::routing_failover::record("codex", &relay.id, false);
+                // 保留真实的响应：所有候选都失败时客户端要看到上游状态码。
+                last_response = Some(response);
+            }
+            Ok(response) => {
+                // Request-level 4xx (400/422/...) are the client's fault: return
+                // them as-is without counting against the provider's circuit.
+                if response.status_code < 400 {
+                    crate::routing_failover::record("codex", &relay.id, true);
+                }
+                return Ok(response);
+            }
+            Err(error) => {
+                crate::routing_failover::record("codex", &relay.id, false);
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if let Some(response) = last_response {
+        return Ok(response);
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => anyhow::bail!("故障转移队列中没有可用供应商"),
+    }
 }
 
 async fn open_responses_proxy_request_with_relay(
@@ -1166,9 +1241,70 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
     metadata: &ClaudeMessagesRequestMetadata,
 ) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = load_proxy_settings(&SettingsStore::default())?;
-    let relay = settings.active_relay_profile_for_target("claude-desktop");
-    ensure_claude_desktop_route_enabled(&relay)?;
-    open_claude_desktop_messages_proxy_request_with_relay(body, &relay, &settings, metadata).await
+    let active = settings.active_relay_profile_for_target("claude-desktop");
+    let plan = crate::routing_failover::plan_for("claude-desktop", &active.id);
+
+    // 故障转移关闭时保持旧行为：先做路由开关校验，再转发一次。
+    if !plan.enabled {
+        ensure_claude_desktop_route_enabled(&active)?;
+        return open_claude_desktop_messages_proxy_request_with_relay(
+            body, &active, &settings, metadata,
+        )
+        .await;
+    }
+
+    let mut last_response: Option<UpstreamProxyResponse> = None;
+    let mut last_error: Option<anyhow::Error> = None;
+    for provider_id in &plan.candidates {
+        let relay = if *provider_id == active.id {
+            active.clone()
+        } else {
+            match settings.relay_profiles.iter().find(|profile| {
+                profile.id == *provider_id && relay_profile_targets(profile, "claude-desktop")
+            }) {
+                Some(profile) => profile.clone(),
+                // 候选供应商已被删除或换了目标应用：跳过。
+                None => continue,
+            }
+        };
+
+        // 每个候选都必须自己通过路由开关校验，否则一律计入失败。
+        if let Err(error) = ensure_claude_desktop_route_enabled(&relay) {
+            crate::routing_failover::record("claude-desktop", &relay.id, false);
+            last_error = Some(error);
+            continue;
+        }
+
+        match open_claude_desktop_messages_proxy_request_with_relay(
+            body, &relay, &settings, metadata,
+        )
+        .await
+        {
+            Ok(response) if crate::routing_failover::is_failover_status(response.status_code) => {
+                crate::routing_failover::record("claude-desktop", &relay.id, false);
+                last_response = Some(response);
+            }
+            Ok(response) => {
+                // Same as Codex: request-level 4xx do not touch the circuit.
+                if response.status_code < 400 {
+                    crate::routing_failover::record("claude-desktop", &relay.id, true);
+                }
+                return Ok(response);
+            }
+            Err(error) => {
+                crate::routing_failover::record("claude-desktop", &relay.id, false);
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if let Some(response) = last_response {
+        return Ok(response);
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => anyhow::bail!("故障转移队列中没有可用供应商"),
+    }
 }
 
 fn ensure_claude_desktop_route_enabled(relay: &RelayProfile) -> anyhow::Result<()> {

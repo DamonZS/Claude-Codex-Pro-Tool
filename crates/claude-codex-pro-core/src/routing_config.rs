@@ -359,6 +359,30 @@ pub struct FailoverQueueRow {
     pub circuit_state: String,
 }
 
+/// One provider's persisted circuit breaker state.
+///
+/// A missing `circuit_state` row is equivalent to a closed circuit with zeroed
+/// counters and no open timestamp; see [`RoutingStore::circuit`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CircuitRow {
+    pub state: String,
+    pub consecutive_failures: u32,
+    pub consecutive_successes: u32,
+    pub opened_at_ms: Option<i64>,
+}
+
+impl CircuitRow {
+    /// The implicit state of a provider that has never failed or succeeded.
+    pub fn closed() -> Self {
+        Self {
+            state: "closed".to_string(),
+            consecutive_failures: 0,
+            consecutive_successes: 0,
+            opened_at_ms: None,
+        }
+    }
+}
+
 /// SQLite-backed routing configuration store.
 pub struct RoutingStore {
     conn: rusqlite::Connection,
@@ -619,6 +643,66 @@ impl RoutingStore {
                  consecutive_successes = 0,
                  opened_at_ms = NULL",
             rusqlite::params![app_id, provider_id],
+        )?;
+        Ok(())
+    }
+
+    /// Read one provider's circuit state.
+    ///
+    /// A provider that has never been recorded reads back as
+    /// [`CircuitRow::closed`]: a missing row and a freshly reset circuit mean
+    /// the same thing to the failover loop.
+    pub fn circuit(&self, app_id: &str, provider_id: &str) -> anyhow::Result<CircuitRow> {
+        validate_app_id(app_id)?;
+        validate_provider_id(provider_id)?;
+        let provider_id = provider_id.trim();
+
+        let mut statement = self.conn.prepare(
+            "SELECT state, consecutive_failures, consecutive_successes, opened_at_ms
+             FROM circuit_state WHERE app_id = ?1 AND provider_id = ?2",
+        )?;
+        let mut rows = statement.query(rusqlite::params![app_id, provider_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(CircuitRow::closed());
+        };
+        let failures: i64 = row.get(1)?;
+        let successes: i64 = row.get(2)?;
+        Ok(CircuitRow {
+            state: row.get(0)?,
+            consecutive_failures: failures.max(0) as u32,
+            consecutive_successes: successes.max(0) as u32,
+            opened_at_ms: row.get(3)?,
+        })
+    }
+
+    /// Upsert one provider's circuit state.
+    pub fn put_circuit(
+        &mut self,
+        app_id: &str,
+        provider_id: &str,
+        row: &CircuitRow,
+    ) -> anyhow::Result<()> {
+        validate_app_id(app_id)?;
+        validate_provider_id(provider_id)?;
+        let provider_id = provider_id.trim().to_string();
+
+        self.conn.execute(
+            "INSERT INTO circuit_state
+                 (app_id, provider_id, state, consecutive_failures, consecutive_successes, opened_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(app_id, provider_id) DO UPDATE SET
+                 state = excluded.state,
+                 consecutive_failures = excluded.consecutive_failures,
+                 consecutive_successes = excluded.consecutive_successes,
+                 opened_at_ms = excluded.opened_at_ms",
+            rusqlite::params![
+                app_id,
+                provider_id,
+                row.state,
+                row.consecutive_failures,
+                row.consecutive_successes,
+                row.opened_at_ms
+            ],
         )?;
         Ok(())
     }
@@ -924,6 +1008,94 @@ mod tests {
             .remove_from_queue("nope", "alpha")
             .expect_err("未知应用应报错");
         assert_eq!(error.to_string(), "未知的路由应用：nope");
+
+        drop(store);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn routing_store_circuit_rows_roundtrip() {
+        let path = temp_db("circuit-rows");
+        let mut store = open_store(&path);
+
+        // 没有记录过的供应商等同于 closed 且计数清零。
+        assert_eq!(
+            store.circuit("codex", "alpha").expect("读取缺失的熔断状态"),
+            CircuitRow {
+                state: "closed".to_string(),
+                consecutive_failures: 0,
+                consecutive_successes: 0,
+                opened_at_ms: None,
+            }
+        );
+
+        let opened = CircuitRow {
+            state: "open".to_string(),
+            consecutive_failures: 5,
+            consecutive_successes: 0,
+            opened_at_ms: Some(1_700_000_000_000),
+        };
+        store
+            .put_circuit("codex", "alpha", &opened)
+            .expect("写入熔断状态");
+        assert_eq!(
+            store.circuit("codex", "alpha").expect("读取熔断状态"),
+            opened
+        );
+
+        // 同一个供应商再次写入必须覆盖，而不是插入第二行。
+        let half_open = CircuitRow {
+            state: "half_open".to_string(),
+            consecutive_failures: 5,
+            consecutive_successes: 1,
+            opened_at_ms: Some(1_700_000_000_000),
+        };
+        store
+            .put_circuit("codex", "alpha", &half_open)
+            .expect("覆盖熔断状态");
+        assert_eq!(
+            store.circuit("codex", "alpha").expect("读取熔断状态"),
+            half_open
+        );
+        let rows: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM circuit_state WHERE provider_id = ?1",
+                ["alpha"],
+                |row| row.get(0),
+            )
+            .expect("统计熔断状态行数");
+        assert_eq!(rows, 1);
+
+        // 队列里的熔断状态直接反映写入结果。
+        store.add_to_queue("codex", "alpha").expect("加入队列");
+        let queue = store.queue("codex").expect("读取队列");
+        assert_eq!(queue[0].circuit_state, "half_open");
+
+        // 熔断状态也是按应用隔离的。
+        assert_eq!(
+            store
+                .circuit("claude", "alpha")
+                .expect("读取 claude 熔断状态"),
+            CircuitRow::closed()
+        );
+
+        // 非法 app_id / provider_id 都是错误。
+        let error = store
+            .circuit("unknown-app", "alpha")
+            .expect_err("未知应用应报错");
+        assert_eq!(error.to_string(), "未知的路由应用：unknown-app");
+        let error = store
+            .put_circuit("codex", "   ", &CircuitRow::closed())
+            .expect_err("空供应商应报错");
+        assert_eq!(error.to_string(), "供应商 ID 不能为空");
+
+        // 移除队列项会连同熔断状态一起清掉。
+        store.remove_from_queue("codex", "alpha").expect("移出队列");
+        assert_eq!(
+            store.circuit("codex", "alpha").expect("读取熔断状态"),
+            CircuitRow::closed()
+        );
 
         drop(store);
         cleanup(&path);

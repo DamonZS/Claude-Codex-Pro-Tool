@@ -48,6 +48,7 @@ pub mod relay_switch;
 pub mod request_telemetry;
 pub mod routes;
 pub mod routing_config;
+pub mod routing_failover;
 pub mod script_market;
 pub mod settings;
 pub mod status;
