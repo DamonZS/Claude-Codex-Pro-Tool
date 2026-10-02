@@ -8,9 +8,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use claude_codex_pro_core::settings::{
-    RelayProfile, RelayProtocol, SettingsStore, relay_profile_resolved_api_key,
-};
+use claude_codex_pro_core::settings::{RelayProfile, RelayProtocol, SettingsStore};
 use claude_codex_pro_data::aitracker::{DistillationCandidate, DistillationSourceRef};
 
 use super::aitracker_distillation::{
@@ -100,11 +98,14 @@ pub fn profile_protocol(profile: &RelayProfile) -> ModelProtocol {
     }
 }
 
+/// Distillation calls the provider directly, so it must use the real upstream
+/// endpoint, never the raw `base_url` (empty after load, or the local proxy).
 pub fn model_target(profile: &RelayProfile, model: &str) -> ModelTarget {
+    let endpoint = claude_codex_pro_core::relay_config::resolve_provider_endpoint(profile);
     ModelTarget {
         protocol: profile_protocol(profile),
-        base_url: profile.base_url.trim().to_string(),
-        api_key: relay_profile_resolved_api_key(profile),
+        base_url: endpoint.base_url,
+        api_key: endpoint.api_key,
         model: model.to_string(),
     }
 }
@@ -158,23 +159,25 @@ fn is_reasoning_role(role: &str) -> bool {
 
 fn load_material(selections: &[DistillationSessionSelection]) -> Result<LoadedMaterial, String> {
     let (_, _, usage) = super::collect_unified_usage_snapshot();
+    // Aggregate once: `session_detail` re-aggregates the whole snapshot per
+    // call, which made large selections stall at the reading-material step.
+    let summaries = claude_codex_pro_data::aitracker::session_summaries(&usage)
+        .into_iter()
+        .map(|summary| ((summary.agent.clone(), summary.session_id.clone()), summary))
+        .collect::<BTreeMap<_, _>>();
     let mut loaded = LoadedMaterial {
         rows: Vec::new(),
         materials: Vec::new(),
         refs: Vec::new(),
     };
     for selection in selections {
-        let Some(detail) = claude_codex_pro_data::aitracker::session_detail(
-            &usage,
-            &selection.agent,
-            &selection.session_id,
-        ) else {
+        let Some(summary) = summaries.get(&(selection.agent.clone(), selection.session_id.clone()))
+        else {
             return Err(
                 "所选会话已不在当前本地索引中，请刷新素材列表后重试（errors.distillation.sessionNotFound）。"
                     .into(),
             );
         };
-        let summary = &detail.summary;
         let row = ControlledRow {
             source: selection.agent.clone(),
             session_id: selection.session_id.clone(),

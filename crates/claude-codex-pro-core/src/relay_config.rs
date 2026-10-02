@@ -1981,15 +1981,26 @@ pub struct ResolvedProviderEndpoint {
 /// `http://127.0.0.1:<port>/v1`（Codex 走 Responses 转换时才需要的地址），
 /// 调用方拿它去发请求只会打到自己的代理上，所以本地代理地址一律当成空。
 pub fn resolve_provider_endpoint(profile: &RelayProfile) -> ResolvedProviderEndpoint {
-    let base_url = relay_profile_storage_base_url(profile);
-    let base_url = if base_url.trim()
-        == crate::protocol_proxy::local_responses_proxy_base_url(
-            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-        ) {
-        String::new()
-    } else {
-        base_url
+    // Claude-format profiles keep the upstream in the JSON `env` block.
+    let claude_env_base_url = || {
+        serde_json::from_str::<Value>(
+            profile
+                .config_contents
+                .trim()
+                .trim_start_matches('\u{feff}'),
+        )
+        .ok()
+        .and_then(|config| {
+            config
+                .get("env")
+                .and_then(Value::as_object)
+                .and_then(|env| non_empty_json_string(env, "ANTHROPIC_BASE_URL"))
+        })
     };
+    let base_url = Some(relay_profile_storage_base_url(profile))
+        .filter(|url| !url.trim().is_empty() && !is_local_proxy_base_url(url))
+        .or_else(|| claude_env_base_url().filter(|url| !is_local_proxy_base_url(url)))
+        .unwrap_or_default();
 
     ResolvedProviderEndpoint {
         base_url,
@@ -1998,6 +2009,15 @@ pub fn resolve_provider_endpoint(profile: &RelayProfile) -> ResolvedProviderEndp
         uses_anthropic_messages: relay_profile_uses_anthropic_messages(profile),
         protocol: profile.protocol,
     }
+}
+
+/// CCP's own local routing endpoints (Codex protocol proxy, Claude Desktop
+/// proxy on any port) are never a real upstream for direct calls.
+fn is_local_proxy_base_url(url: &str) -> bool {
+    let url = url.trim().trim_end_matches('/');
+    url == crate::protocol_proxy::local_responses_proxy_base_url(
+        crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+    ) || (url.starts_with("http://127.0.0.1:") && url.ends_with("/claude-desktop"))
 }
 
 /// 解析 profile 實際使用的模型：编辑表单字段非空时优先，旧 config.toml 仅兜底。
@@ -3168,6 +3188,29 @@ mod tests {
         let resolved = resolve_provider_endpoint(&local_only);
         assert_eq!(resolved.base_url, "");
         assert_eq!(resolved.api_key, "test-key");
+
+        // 4. Claude 类 profile：base_url 是 Claude Desktop 本地代理（任意端口），
+        //    真实上游在 JSON env 的 ANTHROPIC_BASE_URL 里。
+        let claude_profile = RelayProfile {
+            target_app: "claude-desktop".to_string(),
+            base_url: crate::protocol_proxy::local_claude_desktop_proxy_base_url(57340),
+            api_key: "test-key".to_string(),
+            api_key_explicit: true,
+            config_contents:
+                r#"{"env":{"ANTHROPIC_BASE_URL":"https://anthropic-relay.example.com"}}"#
+                    .to_string(),
+            ..RelayProfile::default()
+        };
+        let resolved = resolve_provider_endpoint(&claude_profile);
+        assert_eq!(resolved.base_url, "https://anthropic-relay.example.com");
+
+        // 5. env 里也指向本地代理时依然清空。
+        let claude_local = RelayProfile {
+            config_contents: format!(r#"{{"env":{{"ANTHROPIC_BASE_URL":"{local_proxy}"}}}}"#),
+            base_url: String::new(),
+            ..claude_profile
+        };
+        assert_eq!(resolve_provider_endpoint(&claude_local).base_url, "");
     }
 
     #[test]
