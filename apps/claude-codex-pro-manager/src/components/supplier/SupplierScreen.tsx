@@ -1090,7 +1090,7 @@ export function SupplierScreen({
     const appLabel = imported ? supplierTargetAppLabel(profile.targetApp) : supplierRelayModeLabel(profile.relayMode);
     const protocolLabel = imported ? supplierApiFormatLabel(profile) : supplierProtocolLabel(profile.protocol);
     const summary = aggregate
-      ? `${aggregateStrategyLabel(profile.aggregateStrategy)} / ${profile.aggregateMembers?.length ?? 0} \u4e2a\u6210\u5458`
+      ? `${aggregateStrategyLabel(profile.aggregateStrategy)} / ${profile.aggregateMembers?.length ?? 0} 个成员`
       : `${appLabel} / ${protocolLabel}`;
     const displayUrl = supplierDisplayUrl(profile);
     const dragSource = draggedId === profile.id && !options.overlay;
@@ -1101,14 +1101,14 @@ export function SupplierScreen({
         ref={options.overlay ? undefined : setSupplierCardRef(profile.id)}
         style={options.style}
       >
-        <button aria-label={"\u62d6\u62fd\u6392\u5e8f"} className="supplier-drag-handle" disabled={options.overlay} onPointerDown={options.overlay ? undefined : (event) => beginSupplierPointerDrag(event, profile.id)} title={"\u6309\u4f4f\u62d6\u62fd\u6392\u5e8f"} type="button">
+        <button aria-label={"拖拽排序"} className="supplier-drag-handle" disabled={options.overlay} onPointerDown={options.overlay ? undefined : (event) => beginSupplierPointerDrag(event, profile.id)} title={"按住拖拽排序"} type="button">
           <GripVertical className="h-4 w-4" focusable="false" />
         </button>
-        <div className="supplier-avatar">{aggregate ? "\u805a" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
+        <div className="supplier-avatar">{aggregate ? "聚" : (profile.name || profile.id || "P").slice(0, 1).toUpperCase()}</div>
         <div className="supplier-card-main">
           <div className="supplier-title-line">
             <strong>{profile.name || profile.id}</strong>
-            {aggregate ? <span className="supplier-badge">\u805a\u5408</span> : null}
+            {aggregate ? <span className="supplier-badge">聚合</span> : null}
             {imported ? <span className="supplier-badge">cc-switch</span> : null}
           </div>
           {aggregate ? <span className="supplier-card-subtitle">{summary}</span> : null}
@@ -1117,13 +1117,13 @@ export function SupplierScreen({
         <div className="supplier-card-actions">
           <button className={`supplier-card-action-button supplier-card-use-button ${selected ? "current" : ""}`} disabled={selected || aggregate || appSettings?.relayProfilesEnabled === false || options.overlay} onClick={() => void actions.switchSupplierProfile(targetApp, profile.id)} type="button">
             <Play className="h-4 w-4" />
-            {selected ? "\u4f7f\u7528\u4e2d" : "\u4f7f\u7528"}
+            {selected ? "使用中" : "使用"}
           </button>
-          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => openProfileEditor(profile)} title="\u7f16\u8f91" type="button"><Edit className="h-4 w-4" /></button>
-          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => duplicateProfile(profile)} title="\u590d\u5236" type="button"><Copy className="h-4 w-4" /></button>
-          <button className="supplier-card-action-button" disabled title="\u68c0\u6d4b\u8fde\u901a" type="button"><Activity className="h-4 w-4" /></button>
-          <button className="supplier-card-action-button" disabled title="\u7528\u91cf\u914d\u7f6e" type="button"><BarChart3 className="h-4 w-4" /></button>
-          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => void removeProfile(profile)} title="\u5220\u9664\u4f9b\u5e94\u5546" type="button"><Trash2 className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => openProfileEditor(profile)} title="编辑" type="button"><Edit className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => duplicateProfile(profile)} title="复制" type="button"><Copy className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled title="检测连通" type="button"><Activity className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled title="用量配置" type="button"><BarChart3 className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => void removeProfile(profile)} title="删除供应商" type="button"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
     );
@@ -1457,7 +1457,7 @@ env_key = "OPENAI_API_KEY"
       {credentialEnvironment && (credentialEnvironment.present || credentialEnvironment.restartRequired) ? <div className="supplier-env-card"><ShieldCheck className="h-5 w-5" /><div><strong>{credentialEnvironment.conflict ? "检测到凭据环境变量冲突" : "检测到凭据环境变量"}</strong><p>{credentialEnvironment.conflict ? `${credentialEnvironment.variableName} 与当前 Codex 供应商凭据不一致，可能覆盖 config.toml / auth.json 并导致 401；不会清理 CODEX_HOME。` : credentialEnvironment.present ? `${credentialEnvironment.variableName} 已存在，当前未发现与活动供应商的值冲突。` : `${credentialEnvironment.variableName} 已从 CCP 可管理的作用域清理。`}{credentialEnvironmentScopeUnavailable ? " 用户会话环境暂不可访问，CCP 未执行扩大范围的清理。" : ""}{credentialEnvironmentExternalSource ? " 该值来自 CCP 外部启动环境，需在原设置来源中清理。" : ""}{credentialEnvironment.restartRequired ? " 请完全退出并重新启动 Codex。" : ""}</p><span className="supplier-env-chip">{credentialEnvironment.variableName} {credentialEnvironment.userPresent ? "用户会话" : credentialEnvironment.systemPresent ? "系统环境" : credentialEnvironment.processPresent ? "当前进程" : "已清理"}</span></div><div className="supplier-env-actions"><Button disabled={!credentialEnvironment.canClearUser || credentialEnvironmentBusy} onClick={() => void clearCredentialEnvironment()} size="sm" variant="outline"><Trash2 className="h-4 w-4" />删除</Button><Button disabled={credentialEnvironmentBusy} onClick={() => void refreshCredentialEnvironment()} size="sm" variant="outline"><RefreshCw className={`h-4 w-4 ${credentialEnvironmentBusy ? "spin" : ""}`} />{credentialEnvironmentBusy ? "检测中" : "检测"}</Button></div></div> : null}
       <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><div className="supplier-target-filter" aria-label="供应商目标应用过滤"><button className={supplierTargetFilter === "codex" ? "active" : ""} onClick={() => setSupplierTargetFilter("codex")} type="button">Codex</button><button className={supplierTargetFilter === "claude" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude")} type="button">Claude</button><button className={supplierTargetFilter === "claude-desktop" ? "active" : ""} onClick={() => setSupplierTargetFilter("claude-desktop")} type="button">Claude Desktop</button></div><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
       <div className="supplier-card-list">
-        {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="\u6682\u65e0\u4f9b\u5e94\u5546\u914d\u7f6e\uff0c\u70b9\u51fb\u201c\u6dfb\u52a0\u4f9b\u5e94\u5546\u201d\u521b\u5efa\u4e00\u4e2a\u771f\u5b9e\u53ef\u5207\u6362\u7684 Codex API \u914d\u7f6e\u3002" />}
+        {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
       </div>
       {supplierDragOverlay && supplierDragOverlayProfile ? renderSupplierCard(supplierDragOverlayProfile, {
         overlay: true,
