@@ -3950,10 +3950,11 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("config.toml"));
     assert!(supplier_screen.contains("Chat Completions"));
     assert!(supplier_screen.contains("Responses"));
-    assert!(supplier_screen.contains("supplierTestConfigOpen"));
-    assert!(supplier_screen.contains("supplierPricingConfigOpen"));
-    assert!(supplier_screen.contains("setSupplierTestConfigOpen"));
-    assert!(supplier_screen.contains("setSupplierPricingConfigOpen"));
+    // Model-test / pricing sections had no backend and dropped every value;
+    // they must not come back as disabled placeholders.
+    assert!(!supplier_screen.contains("supplierTestConfigOpen"));
+    assert!(!supplier_screen.contains("supplierPricingConfigOpen"));
+    assert!(!supplier_screen.contains("使用单独配置"));
     assert!(!supplier_screen.contains("supplier-ccswitch-collapse-card expanded"));
     assert!(supplier_screen.contains("supplier-ccswitch-savebar"));
 
