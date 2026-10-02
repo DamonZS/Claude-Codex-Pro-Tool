@@ -16,7 +16,7 @@ export type AgentApplyMode =
   /** Settings live in encrypted app storage; CCP shows copy-ready values. */
   | "manual";
 
-export type AgentApiFormat = "openai-chat" | "openai-responses" | "anthropic";
+export type AgentApiFormat = "openai-chat" | "openai-responses" | "anthropic" | "gemini-native";
 
 export type AgentProviderApp = {
   id: AgentProviderAppId;
@@ -28,11 +28,11 @@ export type AgentProviderApp = {
 };
 
 export const AGENT_PROVIDER_APPS: ReadonlyArray<AgentProviderApp> = [
-  { id: "gemini", label: "Gemini", mode: "switch", formats: ["openai-chat"], configHint: "~/.gemini/.env · settings.json" },
-  { id: "grok", label: "Grok Build", mode: "switch", formats: ["openai-chat", "openai-responses"], configHint: "~/.grok/config.toml" },
-  { id: "opencode", label: "OpenCode", mode: "additive", formats: ["openai-chat", "anthropic"], configHint: "~/.config/opencode/opencode.json" },
+  { id: "gemini", label: "Gemini", mode: "switch", formats: ["gemini-native"], configHint: "~/.gemini/.env · settings.json" },
+  { id: "grok", label: "Grok Build", mode: "switch", formats: ["openai-responses", "openai-chat"], configHint: "~/.grok/config.toml" },
+  { id: "opencode", label: "OpenCode", mode: "additive", formats: ["openai-chat", "anthropic", "openai-responses"], configHint: "~/.config/opencode/opencode.json" },
   { id: "openclaw", label: "OpenClaw", mode: "additive", formats: ["openai-chat", "openai-responses", "anthropic"], configHint: "~/.openclaw/openclaw.json" },
-  { id: "hermes", label: "Hermes", mode: "additive", formats: ["openai-chat"], configHint: "~/.hermes/config.yaml" },
+  { id: "hermes", label: "Hermes", mode: "additive", formats: ["openai-chat", "anthropic"], configHint: "~/.hermes/config.yaml" },
   { id: "pi", label: "Pi", mode: "additive", formats: ["openai-chat", "openai-responses", "anthropic"], configHint: "~/.pi/agent/models.json" },
   { id: "mcode", label: "MiniMax Code", mode: "additive", formats: ["anthropic", "openai-chat", "openai-responses"], configHint: "~/.minimax/config.yaml" },
   { id: "workbuddy", label: "WorkBuddy", mode: "additive", formats: ["openai-chat"], configHint: "~/.workbuddy/models.json" },

@@ -19,6 +19,7 @@ const FORMAT_LABELS: Record<AgentApiFormat, string> = {
   "openai-chat": "OpenAI Chat Completions",
   "openai-responses": "OpenAI Responses",
   anthropic: "Anthropic Messages",
+  "gemini-native": "Gemini API",
 };
 
 const MODE_HINTS = {
