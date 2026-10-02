@@ -831,6 +831,14 @@ fn claude_process_inventory() -> (usize, Vec<String>) {
 }
 
 pub fn close_claude_desktop_for_patch() -> bool {
+    // Unit tests drive the full install path against temp directories. They
+    // must never terminate the machine's real claude.exe processes: that
+    // killed the user's Claude Desktop (and any host running inside it).
+    #[cfg(test)]
+    {
+        return true;
+    }
+    #[cfg(not(test))]
     close_claude_processes_until_absent(
         std::time::Duration::from_secs(5),
         claude_process_ids,
