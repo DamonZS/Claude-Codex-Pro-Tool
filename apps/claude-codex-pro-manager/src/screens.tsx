@@ -852,11 +852,11 @@ function UnifiedToolInventoryPanel({
         </div>
       ) : null}
       <div className="unified-tool-countbar">
-        <span>共 {inventory?.counts.total ?? 0} 项</span>
-        <span>原始发现 {inventory?.counts.rawDiscoveries ?? 0}</span>
-        <span>已合并 {inventory?.counts.deduplicated ?? 0}</span>
-        <span className="claude-count">Claude {inventory?.counts.claudeEnabled ?? 0}</span>
-        <span className="codex-count">Codex {inventory?.counts.codexEnabled ?? 0}</span>
+        <span title="去重后的资产数（MCP + Skills + 插件）">共 {inventory?.counts.total ?? 0} 项</span>
+        <span title="合并前在各来源扫描到的条目总数">原始发现 {inventory?.counts.rawDiscoveries ?? 0}</span>
+        <span title="同一资产在多个来源出现、被合并为一行的次数">已合并 {inventory?.counts.deduplicated ?? 0}</span>
+        <span className="claude-count" title="在 Claude 中处于启用状态的资产数，不是 Claude 的资产总数">Claude 已启用 {inventory?.counts.claudeEnabled ?? 0}</span>
+        <span className="codex-count" title="在 Codex 中处于启用状态的资产数，不是 Codex 的资产总数">Codex 已启用 {inventory?.counts.codexEnabled ?? 0}</span>
       </div>
       <div className="context-tabs">
         {(["mcp", "skill", "plugin"] as ContextKind[]).map((kind) => (
