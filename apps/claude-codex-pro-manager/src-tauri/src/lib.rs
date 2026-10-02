@@ -80,6 +80,7 @@ pub fn run() {
             // Claude Desktop is an explicit, user-triggered integration. Do
             // not start its proxy while opening the manager or Codex task
             // workspace; Claude commands initialize it on demand.
+            commands::spawn_auto_backup_task();
             tauri::async_runtime::spawn(async {
                 // Restore only user-configured manual sidecars. The core
                 // filter excludes the reserved managed connection, so startup
@@ -254,6 +255,13 @@ pub fn run() {
             commands::reset_circuit_breaker,
             commands::test_global_proxy,
             commands::scan_local_proxies,
+            commands::list_database_backups,
+            commands::create_database_backup,
+            commands::restore_database_backup,
+            commands::rename_database_backup,
+            commands::delete_database_backup,
+            commands::export_ccp_data,
+            commands::import_ccp_data,
             commands::run_distillation_workbench,
             commands::query_distillation_task,
             commands::cancel_distillation_task,

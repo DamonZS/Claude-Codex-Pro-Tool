@@ -99,7 +99,7 @@ export function AdvancedTab({
 
   const importData = async () => {
     try {
-      const selected = await open({ multiple: false, directory: false, filters: [{ name: "CCP backup", extensions: ["db", "json"] }] });
+      const selected = await open({ multiple: false, directory: false, filters: [{ name: "CCP backup", extensions: ["ccpbak"] }] });
       if (typeof selected !== "string") return;
       if (!window.confirm(t("settings.data.importConfirm"))) return;
       await runBackup(SETTINGS_COMMANDS.importData, { request: { path: selected } }, t("settings.data.imported"));

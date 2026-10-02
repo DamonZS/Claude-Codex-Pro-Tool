@@ -16815,3 +16815,351 @@ fn local_port_is_open(port: u16) -> bool {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     TcpStream::connect_timeout(&address, LOCAL_PROXY_SCAN_TIMEOUT).is_ok()
 }
+
+// ============================================================================
+// 数据备份与迁移（ccp.db / settings.json / app-preferences.json）
+// ============================================================================
+
+/// 列表型命令的返回体，对应 `contract.ts` 的 `BackupListResult`。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupListPayload {
+    pub backups: Vec<claude_codex_pro_core::ccp_backup::BackupEntry>,
+    pub dir: String,
+}
+
+/// 导入导出命令的返回体，对应 `contract.ts` 的 `DataTransferResult`。
+///
+/// 两个字段互斥：导出只需要 `path`，导入只需要 `safetyBackupId`；另一个
+/// 序列化为 `null`，前端按可选字段处理。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataTransferPayload {
+    pub path: Option<String>,
+    pub safety_backup_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupIdRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameBackupRequest {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDataRequest {
+    pub dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportDataRequest {
+    pub path: String,
+}
+
+/// 备份用的三处数据位置与备份目录。
+fn backup_paths() -> claude_codex_pro_core::ccp_backup::BackupPaths {
+    claude_codex_pro_core::ccp_backup::BackupPaths::default_paths()
+}
+
+/// 当前备份列表，作为失败时的兜底负载（读取失败时返回空列表）。
+fn backup_list_fallback_payload() -> BackupListPayload {
+    let paths = backup_paths();
+    let dir = paths.backup_dir.to_string_lossy().to_string();
+    let backups = claude_codex_pro_core::ccp_backup::list_backups(&paths).unwrap_or_default();
+    BackupListPayload { backups, dir }
+}
+
+/// 数据导入导出命令的兜底负载。
+fn data_transfer_fallback_payload() -> DataTransferPayload {
+    DataTransferPayload {
+        path: None,
+        safety_backup_id: None,
+    }
+}
+
+#[tauri::command]
+pub async fn list_database_backups() -> CommandResult<BackupListPayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = backup_paths();
+        let dir = paths.backup_dir.to_string_lossy().to_string();
+        match claude_codex_pro_core::ccp_backup::list_backups(&paths) {
+            Ok(backups) => {
+                let message = format!("已加载 {} 个备份。", backups.len());
+                ok(&message, BackupListPayload { backups, dir })
+            }
+            Err(error) => failed(
+                &format!("加载备份列表失败：{error}"),
+                BackupListPayload {
+                    backups: Vec::new(),
+                    dir,
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("加载备份列表失败：{join_error}"),
+            backup_list_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn create_database_backup() -> CommandResult<BackupListPayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let paths = backup_paths();
+        let entry = match claude_codex_pro_core::ccp_backup::create_backup(&paths, None) {
+            Ok(entry) => entry,
+            Err(error) => {
+                return failed(
+                    &format!("创建备份失败：{error}"),
+                    backup_list_fallback_payload(),
+                );
+            }
+        };
+        // 保留策略与备份间隔都来自设备偏好设置；清理失败不影响创建结果。
+        let retain = app_preferences_store().load().backup_retain_count as usize;
+        let _ = claude_codex_pro_core::ccp_backup::prune_backups(&paths, retain);
+        let dir = paths.backup_dir.to_string_lossy().to_string();
+        match claude_codex_pro_core::ccp_backup::list_backups(&paths) {
+            Ok(backups) => {
+                let message = format!("已创建备份 {}。", entry.id);
+                ok(&message, BackupListPayload { backups, dir })
+            }
+            Err(error) => failed(
+                &format!("创建备份失败：{error}"),
+                BackupListPayload {
+                    backups: Vec::new(),
+                    dir,
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("创建备份失败：{join_error}"),
+            backup_list_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn restore_database_backup(request: BackupIdRequest) -> CommandResult<BackupListPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = backup_paths();
+        // 恢复会改写 settings.json，必须与设置保存串行，避免互相覆盖。
+        let _write_guard = settings_write_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let safety = match claude_codex_pro_core::ccp_backup::restore_backup(&paths, &request.id) {
+            Ok(entry) => entry,
+            Err(error) => {
+                return failed(
+                    &format!("恢复备份失败：{error}"),
+                    backup_list_fallback_payload(),
+                );
+            }
+        };
+        let dir = paths.backup_dir.to_string_lossy().to_string();
+        match claude_codex_pro_core::ccp_backup::list_backups(&paths) {
+            Ok(backups) => {
+                let message = format!("已恢复备份，恢复前状态已另存为 {}。", safety.id);
+                ok(&message, BackupListPayload { backups, dir })
+            }
+            Err(error) => failed(
+                &format!("恢复备份失败：{error}"),
+                BackupListPayload {
+                    backups: Vec::new(),
+                    dir,
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("恢复备份失败：{join_error}"),
+            backup_list_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn rename_database_backup(
+    request: RenameBackupRequest,
+) -> CommandResult<BackupListPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = backup_paths();
+        if let Err(error) =
+            claude_codex_pro_core::ccp_backup::rename_backup(&paths, &request.id, &request.name)
+        {
+            return failed(
+                &format!("重命名备份失败：{error}"),
+                backup_list_fallback_payload(),
+            );
+        }
+        let dir = paths.backup_dir.to_string_lossy().to_string();
+        match claude_codex_pro_core::ccp_backup::list_backups(&paths) {
+            Ok(backups) => ok("备份已重命名。", BackupListPayload { backups, dir }),
+            Err(error) => failed(
+                &format!("重命名备份失败：{error}"),
+                BackupListPayload {
+                    backups: Vec::new(),
+                    dir,
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("重命名备份失败：{join_error}"),
+            backup_list_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn delete_database_backup(request: BackupIdRequest) -> CommandResult<BackupListPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = backup_paths();
+        if let Err(error) = claude_codex_pro_core::ccp_backup::delete_backup(&paths, &request.id) {
+            return failed(
+                &format!("删除备份失败：{error}"),
+                backup_list_fallback_payload(),
+            );
+        }
+        let dir = paths.backup_dir.to_string_lossy().to_string();
+        match claude_codex_pro_core::ccp_backup::list_backups(&paths) {
+            Ok(backups) => ok("备份已删除。", BackupListPayload { backups, dir }),
+            Err(error) => failed(
+                &format!("删除备份失败：{error}"),
+                BackupListPayload {
+                    backups: Vec::new(),
+                    dir,
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("删除备份失败：{join_error}"),
+            backup_list_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn export_ccp_data(request: ExportDataRequest) -> CommandResult<DataTransferPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = backup_paths();
+        let dest_dir = PathBuf::from(request.dir.trim());
+        match claude_codex_pro_core::ccp_backup::export_bundle(&paths, &dest_dir) {
+            Ok(path) => {
+                let displayed = path.to_string_lossy().to_string();
+                let message = format!("数据已导出到 {displayed}。");
+                ok(
+                    &message,
+                    DataTransferPayload {
+                        path: Some(displayed),
+                        safety_backup_id: None,
+                    },
+                )
+            }
+            Err(error) => failed(
+                &format!("导出数据失败：{error}"),
+                data_transfer_fallback_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("导出数据失败：{join_error}"),
+            data_transfer_fallback_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn import_ccp_data(request: ImportDataRequest) -> CommandResult<DataTransferPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = backup_paths();
+        let source = PathBuf::from(request.path.trim());
+        // 导入同样会改写 settings.json，必须与设置保存串行。
+        let _write_guard = settings_write_mutex()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match claude_codex_pro_core::ccp_backup::import_bundle(&paths, &source) {
+            Ok(safety) => {
+                let message = format!("数据已导入，导入前状态已另存为 {}。", safety.id);
+                ok(
+                    &message,
+                    DataTransferPayload {
+                        path: None,
+                        safety_backup_id: Some(safety.id),
+                    },
+                )
+            }
+            Err(error) => failed(
+                &format!("导入数据失败：{error}"),
+                data_transfer_fallback_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("导入数据失败：{join_error}"),
+            data_transfer_fallback_payload(),
+        )
+    })
+}
+
+/// 启动自动备份后台任务：启动 60 秒后检查一次，之后每小时检查一次。
+///
+/// 是否该备份由 `backupIntervalHours` 决定，`0` 表示关闭；`backupRetainCount`
+/// 决定保留数量。任何失败都只写一行 stderr，绝不 panic，也不影响管理器主流程。
+pub fn spawn_auto_backup_task() {
+    tauri::async_runtime::spawn(async move {
+        // 启动阶段磁盘与数据库都还在预热，先让出 60 秒。
+        tokio::time::sleep(Duration::from_secs(AUTO_BACKUP_STARTUP_DELAY_SECONDS)).await;
+        loop {
+            let outcome = tauri::async_runtime::spawn_blocking(auto_backup_once).await;
+            if outcome.is_err() {
+                eprintln!("自动备份任务执行失败。");
+            }
+            tokio::time::sleep(Duration::from_secs(AUTO_BACKUP_INTERVAL_SECONDS)).await;
+        }
+    });
+}
+
+/// 一次自动备份检查。返回是否真的创建了备份。
+fn auto_backup_once() -> anyhow::Result<bool> {
+    let preferences = app_preferences_store().load();
+    let interval_hours = preferences.backup_interval_hours;
+    let retain = preferences.backup_retain_count as usize;
+    let paths = backup_paths();
+    if !claude_codex_pro_core::ccp_backup::auto_backup_due(&paths, interval_hours) {
+        return Ok(false);
+    }
+    claude_codex_pro_core::ccp_backup::create_backup(&paths, Some("auto"))?;
+    claude_codex_pro_core::ccp_backup::prune_backups(&paths, retain)?;
+    Ok(true)
+}
+
+/// 自动备份首次检查前的等待时间。
+const AUTO_BACKUP_STARTUP_DELAY_SECONDS: u64 = 60;
+/// 自动备份两次检查之间的间隔。
+const AUTO_BACKUP_INTERVAL_SECONDS: u64 = 60 * 60;

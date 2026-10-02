@@ -3,6 +3,7 @@ pub mod app_paths;
 pub mod app_preferences;
 pub mod assets;
 pub mod bridge;
+pub mod ccp_backup;
 pub mod ccp_db;
 pub mod cdp;
 pub mod claude_desktop;
