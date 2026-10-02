@@ -306,18 +306,15 @@ fn unified_binary_embeds_codex_icon_resource() {
 #[test]
 fn manager_runs_as_invoker_while_installer_requests_administrator_privileges() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manager_build =
-        std::fs::read_to_string(manifest_dir.join("build.rs")).expect("read manager build.rs");
-    let windows_manifest = std::fs::read_to_string(manifest_dir.join("windows-app-manifest.xml"))
-        .expect("read windows app manifest");
+    let manager_build = read_source_file(&manifest_dir.join("build.rs"));
+    let windows_manifest = read_source_file(&manifest_dir.join("windows-app-manifest.xml"));
     let windows_installer = manifest_dir
         .parent()
         .and_then(std::path::Path::parent)
         .and_then(std::path::Path::parent)
         .unwrap()
         .join("scripts/installer/windows/ClaudeCodexPro.nsi");
-    let windows_installer =
-        std::fs::read_to_string(&windows_installer).expect("read windows installer");
+    let windows_installer = read_source_file(&windows_installer);
 
     assert!(manager_build.contains("windows-app-manifest.xml"));
     assert!(windows_manifest.contains("asInvoker"));
@@ -419,10 +416,8 @@ fn codex_launch_and_injected_status_do_not_auto_open_manager() {
         .parent()
         .unwrap();
     let launcher_main =
-        std::fs::read_to_string(repo_root.join("apps/claude-codex-pro-launcher/src/lib.rs"))
-            .expect("read launcher main");
-    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
-        .expect("read renderer inject");
+        read_source_file(&repo_root.join("apps/claude-codex-pro-launcher/src/lib.rs"));
+    let codex_inject = read_source_file(&repo_root.join("assets/inject/renderer-inject.js"));
 
     let launch_command = commands_rs
         .split("fn spawn_silent_launcher(request: &LaunchRequest)")
@@ -490,7 +485,7 @@ fn macos_packager_builds_one_visible_unified_app() {
         .and_then(std::path::Path::parent)
         .unwrap()
         .join("scripts/installer/macos/package-dmg.sh");
-    let script = std::fs::read_to_string(&packager).expect("read macOS packager");
+    let script = read_source_file(&packager);
 
     assert!(script.contains("<key>LSUIElement</key>"));
     assert!(script.contains("ARCH=\"${2:-$(uname -m)}\""));
@@ -533,7 +528,7 @@ fn macos_workflows_verify_all_unified_bundle_runtimes() {
         ".github/workflows/release-assets.yml",
         ".github/workflows/auto-release-installers.yml",
     ] {
-        let source = std::fs::read_to_string(repo_root.join(workflow)).expect("read workflow");
+        let source = read_source_file(&repo_root.join(workflow));
         assert!(source.contains("for runtime in claude-codex-pro"));
         assert!(source.contains("app=\"dist/macos/stage/Claude Codex Pro.app\""));
         assert!(!source.contains("Claude Codex Pro Manager.app"));
@@ -549,17 +544,12 @@ fn public_release_packages_do_not_include_user_supplier_or_memory_state() {
         .and_then(std::path::Path::parent)
         .unwrap();
     let auto_workflow =
-        std::fs::read_to_string(repo_root.join(".github/workflows/auto-release-installers.yml"))
-            .expect("read auto release workflow");
-    let manual_workflow =
-        std::fs::read_to_string(repo_root.join(".github/workflows/release-assets.yml"))
-            .expect("read release assets workflow");
+        read_source_file(&repo_root.join(".github/workflows/auto-release-installers.yml"));
+    let manual_workflow = read_source_file(&repo_root.join(".github/workflows/release-assets.yml"));
     let windows_installer =
-        std::fs::read_to_string(repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"))
-            .expect("read Windows installer");
+        read_source_file(&repo_root.join("scripts/installer/windows/ClaudeCodexPro.nsi"));
     let macos_packager =
-        std::fs::read_to_string(repo_root.join("scripts/installer/macos/package-dmg.sh"))
-            .expect("read macOS packager");
+        read_source_file(&repo_root.join("scripts/installer/macos/package-dmg.sh"));
 
     for release_source in [&auto_workflow, &manual_workflow] {
         assert!(release_source.contains("dist/windows/app/*"));
@@ -682,7 +672,7 @@ fn github_release_workflow_builds_separate_macos_x64_and_arm64_dmgs() {
         .and_then(std::path::Path::parent)
         .unwrap()
         .join(".github/workflows/release-assets.yml");
-    let workflow = std::fs::read_to_string(&workflow).expect("read release assets workflow");
+    let workflow = read_source_file(&workflow);
 
     assert_release_workflow_uses_current_hosted_runners(&workflow);
     assert!(workflow.contains("x86_64-apple-darwin"));
@@ -703,7 +693,7 @@ fn github_release_workflow_uploads_static_latest_json() {
         .and_then(std::path::Path::parent)
         .unwrap()
         .join(".github/workflows/release-assets.yml");
-    let workflow = std::fs::read_to_string(&workflow).expect("read release assets workflow");
+    let workflow = read_source_file(&workflow);
 
     assert!(workflow.contains("latest-json:"));
     assert!(workflow.contains("latest.json"));
@@ -719,19 +709,12 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
         .and_then(std::path::Path::parent)
         .unwrap();
     let workflow =
-        std::fs::read_to_string(repo_root.join(".github/workflows/auto-release-installers.yml"))
-            .expect("read auto release workflow");
-    let pr_build = std::fs::read_to_string(repo_root.join(".github/workflows/pr-build.yml"))
-        .expect("read PR build workflow");
-    let release_assets =
-        std::fs::read_to_string(repo_root.join(".github/workflows/release-assets.yml"))
-            .expect("read release assets workflow");
-    let version_script =
-        std::fs::read_to_string(repo_root.join("scripts/release/next-release-tag.js"))
-            .expect("read release tag script");
+        read_source_file(&repo_root.join(".github/workflows/auto-release-installers.yml"));
+    let pr_build = read_source_file(&repo_root.join(".github/workflows/pr-build.yml"));
+    let release_assets = read_source_file(&repo_root.join(".github/workflows/release-assets.yml"));
+    let version_script = read_source_file(&repo_root.join("scripts/release/next-release-tag.js"));
     let version_rs =
-        std::fs::read_to_string(repo_root.join("crates/claude-codex-pro-core/src/version.rs"))
-            .expect("read version module");
+        read_source_file(&repo_root.join("crates/claude-codex-pro-core/src/version.rs"));
 
     assert!(workflow.contains("branches: [main]"));
     assert!(workflow.contains("workflow_dispatch:"));
@@ -833,7 +816,7 @@ fn ops_console_exposes_separate_claude_codex_and_plugin_actions() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = read_all_frontend_sources();
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(app_tsx.contains("启动/重启Codex"));
     assert!(app_tsx.contains("启动/重启Claude"));
@@ -910,7 +893,7 @@ fn plugin_hub_is_first_class_ops_console_route() {
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(app_tsx.contains("id: \"tools\""));
     assert!(app_tsx.contains("label: \"插件、Skills 与 MCP\""));
@@ -948,7 +931,7 @@ fn tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools() {
     let app_tsx = read_all_frontend_sources();
     let screens_file = read_screens_with_supplier();
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(!app_tsx.contains("id: \"context\""));
     assert!(!app_tsx.contains("id: \"pluginHub\""));
@@ -1244,7 +1227,7 @@ fn prompt_optimizer_feature_is_removed() {
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
 
     for removed in [
@@ -3047,9 +3030,9 @@ fn claude_launch_waits_for_real_window_readiness() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_desktop.rs");
-    let core_claude = std::fs::read_to_string(&core_claude).expect("read core claude desktop");
+    let core_claude = read_source_file(&core_claude);
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let open_section = core_claude
         .split("pub fn open_claude_desktop() -> ClaudeDesktopActionResult")
@@ -3465,7 +3448,7 @@ fn silent_launcher_logs_fatal_startup_errors() {
         .and_then(std::path::Path::parent)
         .unwrap()
         .join("apps/claude-codex-pro-launcher/src/lib.rs");
-    let launcher_main = std::fs::read_to_string(&launcher_main).expect("read launcher main.rs");
+    let launcher_main = read_source_file(&launcher_main);
 
     assert!(launcher_main.contains("async fn run_launcher(args: &[String])"));
     assert!(launcher_main.contains("\"launcher.fatal\""));
@@ -3476,7 +3459,7 @@ fn silent_launcher_logs_fatal_startup_errors() {
 fn claude_restart_button_closes_existing_processes_before_launching() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_source_file(&app_tsx);
     let core_claude = manifest_dir
         .parent()
         .unwrap()
@@ -3485,7 +3468,7 @@ fn claude_restart_button_closes_existing_processes_before_launching() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_desktop.rs");
-    let core_claude = std::fs::read_to_string(&core_claude).expect("read core claude_desktop.rs");
+    let core_claude = read_source_file(&core_claude);
 
     assert!(app_tsx.contains("\"open_claude_desktop\"), \"启动/重启Claude\""));
     assert!(core_claude.contains("let existing_process_ids = claude_process_ids();"));
@@ -3683,9 +3666,8 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     let supplier_lib = read_frontend_file("lib/supplier.ts").replace("\r\n", "\n");
     let styles = manifest_dir.parent().unwrap().join("src/styles.css");
     let styles = read_source_file(&styles);
-    let commands_rs =
-        std::fs::read_to_string(manifest_dir.join("src/commands.rs")).expect("read commands.rs");
-    let lib_rs = std::fs::read_to_string(manifest_dir.join("src/lib.rs")).expect("read lib.rs");
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
 
     let supplier_screen = screens_file
         .split("function SupplierScreen")
@@ -4035,12 +4017,11 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
 fn claude_dev_mode_button_preserves_the_active_supplier_mode() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_source_file(&app_tsx);
     let app_tsx = app_tsx.replace("\r\n", "\n");
     let core_plugin_hub =
         manifest_dir.join("../../../crates/claude-codex-pro-core/src/plugin_hub.rs");
-    let core_plugin_hub =
-        std::fs::read_to_string(core_plugin_hub).expect("read core plugin_hub.rs");
+    let core_plugin_hub = read_source_file(&core_plugin_hub);
 
     assert!(app_tsx.contains("const providerRequest = claudeDesktopProviderDraft.apiKey.trim()"));
     assert!(app_tsx.contains("? claudeDesktopProviderDraft\n      : null;"));
@@ -4070,11 +4051,8 @@ fn injected_status_bars_are_transparent_single_backend_lamp_and_safe_for_codex_t
         .unwrap()
         .parent()
         .unwrap();
-    let codex_inject = std::fs::read_to_string(repo_root.join("assets/inject/renderer-inject.js"))
-        .expect("read renderer inject");
-    let claude_inject =
-        std::fs::read_to_string(repo_root.join("assets/inject/claude-chinese-inject.js"))
-            .expect("read claude chinese inject");
+    let codex_inject = read_source_file(&repo_root.join("assets/inject/renderer-inject.js"));
+    let claude_inject = read_source_file(&repo_root.join("assets/inject/claude-chinese-inject.js"));
 
     assert!(codex_inject.contains(".claude-codex-pro-trigger {"));
     assert!(codex_inject.contains("background: transparent;"));
@@ -4150,13 +4128,11 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
 fn overview_startup_keeps_claude_integration_lazy() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx)
-        .expect("read manager App.tsx")
-        .replace("\r\n", "\n");
+    let app_tsx = read_source_file(&app_tsx).replace("\r\n", "\n");
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let lib_rs = manifest_dir.join("src/lib.rs");
-    let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
+    let lib_rs = read_source_file(&lib_rs);
 
     let refresh_route = app_tsx
         .split(
@@ -4189,7 +4165,7 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
     let app_tsx = read_all_frontend_sources();
     let app_tsx_file = read_frontend_file("App.tsx");
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let primary_start = app_tsx_file
         .find("const installClaudeZhPatch = async () => {")
@@ -4246,9 +4222,9 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
 fn diagnostics_include_running_exe_identity_for_zh_patch_debugging() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let lib_rs = manifest_dir.join("src/lib.rs");
-    let lib_rs = std::fs::read_to_string(&lib_rs).expect("read manager lib.rs");
+    let lib_rs = read_source_file(&lib_rs);
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(commands_rs.contains("pub fn current_exe_path_string() -> String"));
     assert!(commands_rs.contains("pub fn current_exe_last_modified_ms() -> Option<u128>"));
@@ -4264,7 +4240,7 @@ fn diagnostics_include_running_exe_identity_for_zh_patch_debugging() {
 fn claude_zh_patch_restore_shows_immediate_running_toast() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
-    let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
+    let app_tsx = read_source_file(&app_tsx);
 
     let restore_action = app_tsx
         .split("const restoreClaudeZhPatch = async () => {")
@@ -4291,7 +4267,7 @@ fn claude_zh_patch_restore_shows_immediate_running_toast() {
 fn claude_zh_patch_auto_launches_claude_after_successful_install() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let app_tsx = read_all_frontend_sources();
 
     assert!(commands_rs.contains("fn complete_claude_zh_patch_install("));
@@ -4308,9 +4284,9 @@ fn claude_zh_patch_auto_launches_claude_after_successful_install() {
 fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let main_rs = manifest_dir.join("src/main.rs");
-    let main_rs = std::fs::read_to_string(&main_rs).expect("read manager main.rs");
+    let main_rs = read_source_file(&main_rs);
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let core_zh_patch = manifest_dir
         .parent()
         .unwrap()
@@ -4319,8 +4295,7 @@ fn claude_zh_patch_msix_path_uses_uac_elevation_instead_of_dead_end() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
-    let core_zh_patch =
-        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
 
     assert!(main_rs.contains("handle_internal_cli()"));
     assert!(commands_rs.contains("detected_patch_needs_elevation()"));
@@ -4417,8 +4392,7 @@ fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
-    let core_zh_patch =
-        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
     let validation = core_zh_patch
         // Anchor on the single-chunk signature: the parallel batch helper
         // `validate_patched_javascript_chunks` shares this name prefix.
@@ -4453,8 +4427,7 @@ fn plugin_hub_marketplace_and_worktree_git_spawns_suppress_console_window() {
         .unwrap()
         .join("crates/claude-codex-pro-core/src");
 
-    let plugin_hub =
-        std::fs::read_to_string(core_dir.join("plugin_hub.rs")).expect("read core plugin_hub.rs");
+    let plugin_hub = read_source_file(&core_dir.join("plugin_hub.rs"));
     // run_command 是 git clone/pull 与 npm install 的公共出口。
     let run_command = plugin_hub
         .split("fn run_command(command: &[String])")
@@ -4474,8 +4447,7 @@ fn plugin_hub_marketplace_and_worktree_git_spawns_suppress_console_window() {
 
     // Codex marketplace 自动修复会在管理器启动时执行多个 Git 子命令；该异步
     // helper 同样必须隐藏窗口，否则每个 clone / sparse-checkout 都会弹出终端。
-    let codex_marketplace = std::fs::read_to_string(core_dir.join("codex_plugin_marketplace.rs"))
-        .expect("read core codex_plugin_marketplace.rs");
+    let codex_marketplace = read_source_file(&core_dir.join("codex_plugin_marketplace.rs"));
     let safe_git_command = codex_marketplace
         .split("fn safe_git_command(hooks: &Path) -> tokio::process::Command")
         .nth(1)
@@ -4485,8 +4457,7 @@ fn plugin_hub_marketplace_and_worktree_git_spawns_suppress_console_window() {
     assert!(safe_git_command.contains("creation_flags(crate::windows_create_no_window())"));
 
     // 上游 worktree 的 git 调用统一走 git_command()，且该 helper 带隐藏窗口标志。
-    let worktree_git = std::fs::read_to_string(core_dir.join("upstream_worktree/git.rs"))
-        .expect("read upstream_worktree/git.rs");
+    let worktree_git = read_source_file(&core_dir.join("upstream_worktree/git.rs"));
     let git_command = worktree_git
         .split("fn git_command() -> Command")
         .nth(1)
@@ -4510,8 +4481,7 @@ fn claude_zh_patch_remote_i18n_fetch_has_short_embedded_fallback() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
-    let core_zh_patch =
-        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
 
     assert!(core_zh_patch.contains("const REMOTE_I18N_FETCH_TIMEOUT"));
     assert!(core_zh_patch.contains("Duration::from_secs(2)"));
@@ -4524,7 +4494,7 @@ fn claude_zh_patch_remote_i18n_fetch_has_short_embedded_fallback() {
 fn claude_zh_patch_commands_close_claude_before_writing_resources() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let install_action = commands_rs
         .split("pub async fn install_claude_zh_patch()")
@@ -4560,7 +4530,7 @@ fn claude_zh_patch_commands_close_claude_before_writing_resources() {
 fn claude_zh_patch_closes_claude_before_elevation_branch() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let install_action = commands_rs
         .split("pub async fn install_claude_zh_patch()")
@@ -4614,7 +4584,7 @@ fn claude_zh_patch_closes_claude_before_elevation_branch() {
 fn claude_zh_patch_parent_verifies_final_status_after_elevation() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let install_action = commands_rs
         .split("pub async fn install_claude_zh_patch()")
@@ -4640,7 +4610,7 @@ fn claude_zh_patch_parent_verifies_final_status_after_elevation() {
 fn claude_zh_patch_falls_back_to_uac_when_direct_msix_write_fails() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let install_action = commands_rs
         .split("pub async fn install_claude_zh_patch()")
@@ -4666,7 +4636,7 @@ fn claude_zh_patch_falls_back_to_uac_when_direct_msix_write_fails() {
 fn claude_zh_patch_manual_install_falls_back_to_uac_when_direct_msix_write_fails() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let manual_action = commands_rs
         .split("pub async fn install_claude_zh_patch_at_install_root")
@@ -4698,7 +4668,7 @@ fn claude_zh_patch_manual_install_falls_back_to_uac_when_direct_msix_write_fails
 fn claude_zh_patch_restore_uses_uac_elevation_for_msix_paths() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let core_zh_patch = manifest_dir
         .parent()
         .unwrap()
@@ -4707,8 +4677,7 @@ fn claude_zh_patch_restore_uses_uac_elevation_for_msix_paths() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
-    let core_zh_patch =
-        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
 
     assert!(commands_rs.contains("--internal-restore-claude-zh-patch"));
     assert!(commands_rs.contains("manager.claude_zh_patch.restore.start"));
@@ -4729,7 +4698,7 @@ fn claude_zh_patch_restore_uses_uac_elevation_for_msix_paths() {
 fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
     let core_zh_patch = manifest_dir
         .parent()
         .unwrap()
@@ -4738,8 +4707,7 @@ fn claude_zh_patch_elevated_cli_uses_original_user_data_dirs() {
         .parent()
         .unwrap()
         .join("crates/claude-codex-pro-core/src/claude_zh_patch.rs");
-    let core_zh_patch =
-        std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
+    let core_zh_patch = read_source_file(&core_zh_patch);
 
     assert!(commands_rs.contains("current_user_data_dirs()"));
     assert!(commands_rs.contains("windows_argument_list(&arguments)"));
@@ -4833,7 +4801,7 @@ fn claude_zh_patch_locale_acl_uses_original_user_sid_and_system() {
 fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(commands_rs.contains("CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT"));
     assert!(commands_rs.contains("run_elevated_process_with_timeout"));
@@ -4858,7 +4826,7 @@ fn claude_zh_patch_elevated_process_has_timeout_and_kills_hung_child() {
 fn frontend_connection_repair_reuses_live_codex_and_requires_new_heartbeat() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     let repair = commands_rs
         .split("pub async fn repair_frontend_connection()")
@@ -4930,7 +4898,7 @@ fn frontend_connection_repair_reuses_live_codex_and_requires_new_heartbeat() {
 fn manager_status_rejects_renderer_heartbeat_from_previous_codex_launch() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands_rs = manifest_dir.join("src/commands.rs");
-    let commands_rs = std::fs::read_to_string(&commands_rs).expect("read manager commands.rs");
+    let commands_rs = read_source_file(&commands_rs);
 
     assert!(commands_rs.contains("fn renderer_heartbeat_is_current("));
     assert!(commands_rs.contains("timestamp_ms >= launch_started_at_ms"));
@@ -5039,7 +5007,7 @@ fn removed_maintenance_check_has_no_frontend_or_backend_entrypoint() {
 fn vite_build_uses_relative_assets_for_tauri_custom_protocol() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let vite_config = manifest_dir.parent().unwrap().join("vite.config.ts");
-    let vite_config = std::fs::read_to_string(&vite_config).expect("read manager vite config");
+    let vite_config = read_source_file(&vite_config);
     let app_tsx = read_all_frontend_sources();
 
     assert!(vite_config.contains("base: \"./\""));
