@@ -243,6 +243,8 @@ pub fn run() {
             commands::update_distillation_candidate,
             commands::cancel_distillation_candidate,
             commands::load_distillation_workbench,
+            commands::load_app_preferences,
+            commands::save_app_preferences,
             commands::run_distillation_workbench,
             commands::query_distillation_task,
             commands::cancel_distillation_task,

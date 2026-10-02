@@ -15964,3 +15964,163 @@ pub fn read_local_prompt(source_path: String) -> CommandResult<PromptContentPayl
         ),
     }
 }
+
+// ============================================================================
+// 设备级偏好设置（load_app_preferences / save_app_preferences）
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppPreferencesPayload {
+    pub preferences: claude_codex_pro_core::app_preferences::AppPreferences,
+    pub resolved_dirs: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAppPreferencesRequest {
+    pub preferences: claude_codex_pro_core::app_preferences::AppPreferences,
+}
+
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value for this app.
+#[cfg(windows)]
+const STARTUP_RUN_KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+#[cfg(windows)]
+const STARTUP_RUN_VALUE: &str = "ClaudeCodexPro";
+
+fn app_preferences_store() -> claude_codex_pro_core::app_preferences::PreferencesStore {
+    claude_codex_pro_core::app_preferences::PreferencesStore::new(
+        claude_codex_pro_core::app_preferences::PreferencesStore::default_path(),
+    )
+}
+
+fn app_preferences_payload(
+    preferences: claude_codex_pro_core::app_preferences::AppPreferences,
+) -> AppPreferencesPayload {
+    let resolved_dirs = claude_codex_pro_core::app_preferences::resolved_dirs(&preferences);
+    AppPreferencesPayload {
+        preferences,
+        resolved_dirs,
+    }
+}
+
+/// Currently persisted preferences, used as the fallback payload on errors.
+fn saved_app_preferences_payload() -> AppPreferencesPayload {
+    app_preferences_payload(app_preferences_store().load())
+}
+
+#[tauri::command]
+pub async fn load_app_preferences() -> CommandResult<AppPreferencesPayload> {
+    // Reading and normalizing the preferences file is blocking file IO.
+    tauri::async_runtime::spawn_blocking(|| ok("偏好设置已加载。", saved_app_preferences_payload()))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("加载偏好设置任务失败：{join_error}"),
+                saved_app_preferences_payload(),
+            )
+        })
+}
+
+#[tauri::command]
+pub async fn save_app_preferences(
+    request: SaveAppPreferencesRequest,
+) -> CommandResult<AppPreferencesPayload> {
+    let requested = claude_codex_pro_core::app_preferences::normalize(request.preferences);
+    // Both the preferences file and the Run key are written off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = app_preferences_store();
+        let previous = store.load();
+
+        let startup_changed = previous.launch_on_startup != requested.launch_on_startup
+            || (requested.launch_on_startup && previous.silent_startup != requested.silent_startup);
+        let startup_result = if startup_changed {
+            sync_launch_on_startup(requested.launch_on_startup, requested.silent_startup)
+        } else {
+            Ok(())
+        };
+
+        match store.save(requested) {
+            Ok(saved) => {
+                let payload = app_preferences_payload(saved);
+                match startup_result {
+                    Ok(()) => ok("设置已保存。", payload),
+                    Err(error) => failed(&format!("开机自启设置失败：{error}"), payload),
+                }
+            }
+            Err(error) => failed(
+                &format!("保存偏好设置失败：{error}"),
+                saved_app_preferences_payload(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("保存偏好设置任务失败：{join_error}"),
+            saved_app_preferences_payload(),
+        )
+    })
+}
+
+/// Register or unregister the current executable under the per-user Run key.
+///
+/// Non-Windows platforms have no equivalent here yet, so they report success.
+#[cfg(windows)]
+fn sync_launch_on_startup(enabled: bool, silent_startup: bool) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    let mut reg = std::process::Command::new("reg.exe");
+    if enabled {
+        let executable = std::env::current_exe().context("无法定位 Claude Codex Pro 运行文件")?;
+        let mut command = format!("\"{}\"", executable.to_string_lossy());
+        if silent_startup {
+            command.push_str(" --silent");
+        }
+        reg.args([
+            "add",
+            STARTUP_RUN_KEY,
+            "/v",
+            STARTUP_RUN_VALUE,
+            "/t",
+            "REG_SZ",
+            "/d",
+        ])
+        .arg(command)
+        .arg("/f");
+    } else {
+        reg.args(["delete", STARTUP_RUN_KEY, "/v", STARTUP_RUN_VALUE, "/f"]);
+    }
+    reg.creation_flags(claude_codex_pro_core::windows_create_no_window())
+        .stdin(std::process::Stdio::null());
+
+    if !enabled {
+        // Exit code alone tells us whether the value exists; reg.exe stderr is
+        // localized (GBK on Chinese Windows), so never match on its text.
+        let exists = std::process::Command::new("reg.exe")
+            .args(["query", STARTUP_RUN_KEY, "/v", STARTUP_RUN_VALUE])
+            .creation_flags(claude_codex_pro_core::windows_create_no_window())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(true);
+        if !exists {
+            return Ok(());
+        }
+    }
+
+    let output = reg.output().context("执行 reg.exe 失败")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{}注册表启动项失败（reg.exe 退出码 {:?}）",
+            if enabled { "写入" } else { "删除" },
+            output.status.code()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_launch_on_startup(_enabled: bool, _silent_startup: bool) -> anyhow::Result<()> {
+    Ok(())
+}

@@ -1,5 +1,6 @@
 pub mod ads;
 pub mod app_paths;
+pub mod app_preferences;
 pub mod assets;
 pub mod bridge;
 pub mod cdp;
