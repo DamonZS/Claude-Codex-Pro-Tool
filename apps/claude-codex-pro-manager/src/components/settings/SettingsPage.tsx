@@ -8,6 +8,7 @@ import type { MessageKey } from "@/lib/locales/zh";
 import type { BackendSettings } from "@/types";
 
 import { AdvancedTab } from "./AdvancedTab";
+import { ComputerUseTab } from "./ComputerUseTab";
 import { GeneralTab } from "./GeneralTab";
 import { RoutingTab, type ProviderOption } from "./RoutingTab";
 import { usePreferences, useRouting } from "./useSettingsData";
@@ -15,7 +16,7 @@ import { usePreferences, useRouting } from "./useSettingsData";
 // Settings page laid out after CC Switch 3.20.4 (MIT): general/routing/advanced/about tabs, immediate-effect
 // changes with rollback on failure; cloud sync is intentionally not included.
 
-const TABS = ["general", "routing", "advanced", "about"] as const;
+const TABS = ["general", "routing", "advanced", "about", "computerUse"] as const;
 export type SettingsTabId = (typeof TABS)[number];
 
 type Toast = { id: number; tone: "ok" | "error"; text: string };
@@ -94,6 +95,7 @@ export function SettingsPage({
           />
         ) : null}
         {tab === "about" ? <div className="st-tab-body">{about}</div> : null}
+        {tab === "computerUse" ? <ComputerUseTab actions={actions} notify={notify} /> : null}
       </div>
 
       {toasts.length ? (

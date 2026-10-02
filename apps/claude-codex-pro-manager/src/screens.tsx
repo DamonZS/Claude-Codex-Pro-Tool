@@ -37,7 +37,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { AgentOverview } from "@/components/AgentOverview";
 import { SettingsPage } from "@/components/settings/SettingsPage";
-import { invokeCommand } from "@/tauriBridge";
 export { SupplierScreen } from "@/components/supplier/SupplierScreen";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import claudeLogo from "@/assets/claude.svg";
@@ -79,13 +78,11 @@ import {
 } from "@/lib/update";
 import type {
   AitrackerCapabilitiesResult,
-  CommandResult,
   AitrackerSessionDetailResult,
   AitrackerSessionRange,
   BackendSettings,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopMarketplaceStatusResult,
-  ClaudeDesktopComputerUseStatusResult,
   ClaudeDesktopOrgPluginStatusResult,
   ClaudeDesktopResult,
   CodexPluginMarketplaceStatusResult,
@@ -591,7 +588,6 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
 }) {
   return (
     <div className="stack">
-      <ClaudeDesktopComputerUsePanel actions={actions} />
       <UnifiedToolInventoryPanel
         actions={actions}
         aitrackerCapabilities={aitrackerCapabilities}
@@ -988,117 +984,6 @@ export function CodexPluginRepositoryPanel({
           <Download className="h-4 w-4" />
           修复 Codex 插件仓库
         </Button>
-      </div>
-    </Panel>
-  );
-}
-
-type ComputerUseLogEntry = {
-  timestampMs?: number;
-  tool?: string;
-  ok?: boolean;
-  error?: string;
-  x?: number;
-  y?: number;
-  keys?: string[];
-  textLength?: number;
-};
-
-const COMPUTER_USE_TOOL_LABELS: Record<string, string> = {
-  screenshot: "截图",
-  click: "点击",
-  move_mouse: "移动鼠标",
-  drag: "拖拽",
-  scroll: "滚动",
-  type_text: "输入文字",
-  press_keys: "按键",
-  cursor_position: "读取光标",
-  wait: "等待",
-};
-
-function computerUseLogSummary(entry: ComputerUseLogEntry) {
-  const parts: string[] = [];
-  if (typeof entry.x === "number" && typeof entry.y === "number") parts.push(`(${entry.x}, ${entry.y})`);
-  if (entry.keys?.length) parts.push(entry.keys.join("+"));
-  if (typeof entry.textLength === "number") parts.push(`${entry.textLength} 字符`);
-  if (!entry.ok && entry.error) parts.push(entry.error);
-  return parts.join(" · ");
-}
-
-function ClaudeDesktopComputerUsePanel({ actions }: { actions: AppActions }) {
-  const [status, setStatus] = useState<ClaudeDesktopComputerUseStatusResult | null>(null);
-  const [log, setLog] = useState<ComputerUseLogEntry[]>([]);
-  const [busy, setBusy] = useState(false);
-  const refresh = async () => {
-    const [result, calls] = await Promise.all([
-      actions.refreshClaudeDesktopComputerUse(),
-      invokeCommand<CommandResult<{ entries: ComputerUseLogEntry[] }>>("get_claude_desktop_computer_use_log").catch(() => null),
-    ]);
-    if (result) setStatus(result);
-    setLog(calls?.entries ?? []);
-  };
-  useEffect(() => {
-    // actions is a stable latest-ref facade; load once on mount.
-    void refresh();
-  }, []);
-  const toggle = async (enabled: boolean) => {
-    setBusy(true);
-    try {
-      const result = await actions.setClaudeDesktopComputerUse(enabled);
-      if (result && statusOk(result.status)) setStatus(result);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-  const enabled = !!status?.enabled;
-  const supported = status?.supported ?? true;
-  const registered = status?.registeredPaths ?? [];
-  const isMac = status?.platform === "macos";
-  return (
-    <Panel
-      title="Claude Desktop Computer Use"
-      detail="让 Claude Desktop 通过本地 MCP 截图并操作鼠标键盘。开启后需完全退出并重启 Claude Desktop，然后在对话里直接让 Claude 截图或操作即可。"
-    >
-      <div className="action-row computer-use-switch-row">
-        <strong>{!supported ? `当前平台（${status?.platform ?? "未知"}）不支持` : enabled ? "已开启" : "已关闭"}</strong>
-        <ToggleSwitch checked={enabled} disabled={busy || !supported || !status} onChange={(value) => void toggle(value)} />
-        <Button disabled={busy} onClick={() => void refresh()} size="sm" variant="outline">
-          <RefreshCw className="h-4 w-4" />
-          刷新
-        </Button>
-      </div>
-      <div className="ops-status-list">
-        <StatusRow
-          label="MCP 注册"
-          status={registered.length ? "ok" : enabled ? "needs_review" : "not_checked"}
-          value={registered.length ? `已写入 ${registered.length} 个 Claude Desktop 配置` : "未注册（开启后写入）"}
-        />
-        {registered.map((path) => (
-          <StatusRow key={path} label="配置路径" status="found" value={compactPath(path)} />
-        ))}
-        <StatusRow label="急停" status="ok" value="把鼠标甩到屏幕左上角，下一次操作即被拒绝并自动关闭总开关" />
-        <StatusRow label="注意" status="needs_review" value="会移动真实鼠标；截图可能包含屏幕上的敏感信息，使用前请整理窗口" />
-        {isMac ? (
-          <StatusRow label="macOS 权限" status="needs_review" value="系统设置 → 隐私与安全性：为 Claude 开启「辅助功能」与「屏幕录制」，授权后重启 Claude" />
-        ) : null}
-      </div>
-      <div className="computer-use-log">
-        <strong>最近调用记录</strong>
-        {log.length ? (
-          <ul>
-            {log.map((entry, index) => (
-              <li className={entry.ok ? "ok" : "failed"} key={`${entry.timestampMs ?? 0}-${index}`}>
-                <time>{entry.timestampMs ? new Date(entry.timestampMs).toLocaleString("zh-CN", { hour12: false }) : "—"}</time>
-                <span>{COMPUTER_USE_TOOL_LABELS[entry.tool ?? ""] ?? entry.tool ?? "未知"}</span>
-                <em>{entry.ok ? "成功" : "失败"}</em>
-                <small title={computerUseLogSummary(entry)}>{computerUseLogSummary(entry)}</small>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="context-manager-note">暂无调用。开启并重启 Claude Desktop 后，Claude 每次截图或操作都会记在这里（输入文字只记录长度）。</p>
-        )}
       </div>
     </Panel>
   );

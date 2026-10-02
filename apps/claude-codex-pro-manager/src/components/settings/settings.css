@@ -16,7 +16,7 @@
 
 .st-tabs {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   border: 1px solid var(--finish-edge);
   border-radius: var(--st-radius);
@@ -659,4 +659,51 @@
 @media (prefers-reduced-motion: reduce) {
   .spin { animation: none; }
   .st-switch, .st-switch span, .st-section-chevron { transition: none; }
+}
+
+/* Computer Use tab */
+.cu-path { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 11.5px; }
+
+.cu-steps,
+.cu-notes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--workspace-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.cu-log {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.cu-log li {
+  display: grid;
+  grid-template-columns: 150px 76px 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--finish-edge-muted);
+  border-radius: 10px;
+  background: var(--st-fill);
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.cu-log time { color: var(--workspace-text-tertiary); font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; }
+.cu-log em { font-style: normal; font-weight: 600; }
+.cu-log li.ok em { color: var(--workspace-success); }
+.cu-log li.failed em { color: var(--workspace-danger); }
+.cu-log small { overflow: hidden; color: var(--workspace-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .cu-log li { grid-template-columns: minmax(0, 1fr) auto; }
+  .cu-log li small { grid-column: 1 / -1; }
 }
