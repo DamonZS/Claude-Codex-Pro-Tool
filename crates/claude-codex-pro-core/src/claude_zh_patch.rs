@@ -1662,8 +1662,17 @@ fn patch_locale_arrays(text: &str) -> (String, bool) {
     let mut changed = false;
     while cursor < bytes.len() {
         if bytes[cursor] != b'[' {
-            output.push(bytes[cursor] as char);
-            cursor += 1;
+            // Copy the whole run up to the next '[' as a str slice. Pushing
+            // `bytes[i] as char` re-encoded every UTF-8 byte as its own
+            // Latin-1 char, which garbled CJK text, emoji and Unicode regex
+            // ranges in the chunk and crashed Claude Desktop at runtime
+            // (syntax stays valid, so `node --check` could not catch it).
+            // '[' is ASCII, so the next one is always a char boundary.
+            let next = text[cursor..]
+                .find('[')
+                .map_or(bytes.len(), |offset| cursor + offset);
+            output.push_str(&text[cursor..next]);
+            cursor = next;
             continue;
         }
         if let Some((end, locales)) = parse_string_array_at(text, cursor) {
@@ -2064,6 +2073,19 @@ fn valid_i18n_resource_with_min_keys(path: &Path, min_keys: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locale_array_patch_keeps_non_ascii_text_intact() {
+        let input = "const L=[\"en-US\",\"de-DE\",\"fr-FR\",\"ja-JP\",\"ko-KR\",\"es-ES\",\"it-IT\"];const s=\"中文 😀 ü\";const r=/[\u{4e00}-\u{9fff}]/u;";
+        let (out, changed) = patch_locale_arrays(input);
+        assert!(changed);
+        assert!(out.contains("\"zh-CN\"]"));
+        assert!(
+            out.contains("const s=\"中文 😀 ü\";"),
+            "non-ASCII text was mangled: {out:?}"
+        );
+        assert!(out.contains("[\u{4e00}-\u{9fff}]"));
+    }
 
     #[cfg(windows)]
     fn current_windows_user_sid_for_test() -> String {
