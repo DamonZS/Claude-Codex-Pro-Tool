@@ -612,6 +612,17 @@ let previewRouting = {
   globalProxyUrl: "", globalProxyUsername: "", globalProxyPassword: undefined as string | undefined,
 };
 
+type PreviewAgentProvider = { id: string; appId: string; name: string; baseUrl: string; hasApiKey: boolean; apiFormat: string; models: string[]; defaultModel: string; notes: string; sortIndex: number };
+let previewAgentProviders: PreviewAgentProvider[] = [
+  { id: "preview-ds", appId: "opencode", name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", hasApiKey: true, apiFormat: "openai-chat", models: ["deepseek-chat", "deepseek-reasoner"], defaultModel: "", notes: "", sortIndex: 0 },
+  { id: "preview-wb", appId: "workbuddy", name: "中转 A", baseUrl: "https://relay.example.com/v1", hasApiKey: true, apiFormat: "openai-chat", models: ["gpt-5.4"], defaultModel: "", notes: "", sortIndex: 0 },
+];
+let previewAgentStates: Record<string, { activeId: string | null; appliedIds: string[]; configPath: string; installed: boolean }> = {
+  opencode: { activeId: null, appliedIds: ["preview-ds"], configPath: "~/.config/opencode/opencode.json", installed: true },
+  workbuddy: { activeId: null, appliedIds: [], configPath: "~/.workbuddy/models.json", installed: true },
+};
+const previewAgentPayload = () => ({ providers: previewAgentProviders, states: previewAgentStates });
+
 const hasTauriInternals = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
@@ -1410,6 +1421,31 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
     });
   }
   if (command === "test_global_proxy") return ok("预览模式代理测试。", { ok: true, latencyMs: 42 });
+  if (command === "list_agent_providers") return ok("预览模式供应商。", previewAgentPayload());
+  if (command === "save_agent_provider" || command === "delete_agent_provider" || command === "apply_agent_provider" || command === "unapply_agent_provider") {
+    const request = (_args?.request ?? {}) as { provider?: PreviewAgentProvider & { apiKey?: string }; appId?: string; id?: string };
+    if (command === "save_agent_provider" && request.provider) {
+      const { apiKey, ...provider } = request.provider;
+      const id = provider.id || `preview-${Date.now()}`;
+      const next = { ...provider, id, hasApiKey: provider.hasApiKey || !!apiKey };
+      previewAgentProviders = previewAgentProviders.some((item) => item.id === id) ? previewAgentProviders.map((item) => (item.id === id ? next : item)) : [...previewAgentProviders, next];
+    }
+    const appId = request.appId ?? "";
+    const state = previewAgentStates[appId] ?? { activeId: null, appliedIds: [], configPath: "", installed: true };
+    if (command === "delete_agent_provider") {
+      previewAgentProviders = previewAgentProviders.filter((item) => item.id !== request.id);
+      previewAgentStates = { ...previewAgentStates, [appId]: { ...state, appliedIds: state.appliedIds.filter((id) => id !== request.id), activeId: state.activeId === request.id ? null : state.activeId } };
+    }
+    if (command === "apply_agent_provider" && request.id) {
+      const switchMode = appId === "gemini" || appId === "grok";
+      previewAgentStates = { ...previewAgentStates, [appId]: switchMode ? { ...state, activeId: request.id } : { ...state, appliedIds: [...new Set([...state.appliedIds, request.id])] } };
+      if (appId === "cursor") return ok("预览模式。", { ...previewAgentPayload(), reveal: { baseUrl: "https://relay.example.com/v1", apiKey: "sk-preview", model: "gpt-5.4" } });
+    }
+    if (command === "unapply_agent_provider") {
+      previewAgentStates = { ...previewAgentStates, [appId]: { ...state, appliedIds: state.appliedIds.filter((id) => id !== request.id) } };
+    }
+    return ok("预览模式已更新。", previewAgentPayload());
+  }
   if (command === "scan_local_proxies") return ok("预览模式代理扫描。", { candidates: ["http://127.0.0.1:7890"] });
   if (command === "list_database_backups" || command === "create_database_backup" || command === "restore_database_backup" || command === "rename_database_backup" || command === "delete_database_backup") {
     return ok("预览模式备份列表。", { dir: "~\\.claude-codex-pro\\backups", backups: [{ id: "preview-1", name: "auto-2026-10-01", createdAt: new Date().toISOString(), sizeBytes: 48_000 }] });
