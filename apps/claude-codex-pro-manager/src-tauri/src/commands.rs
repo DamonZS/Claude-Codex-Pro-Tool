@@ -17163,3 +17163,731 @@ fn auto_backup_once() -> anyhow::Result<bool> {
 const AUTO_BACKUP_STARTUP_DELAY_SECONDS: u64 = 60;
 /// 自动备份两次检查之间的间隔。
 const AUTO_BACKUP_INTERVAL_SECONDS: u64 = 60 * 60;
+
+// ============================================================================
+// Agent 供应商（config 文件型 Agent，前端契约 agentProviderContract.ts）
+// ============================================================================
+
+use claude_codex_pro_core::agent_providers::{
+    self as agent_providers, AgentProvider, AgentProviderState, AgentProviderStore, ApplyMode,
+};
+
+/// 串行化所有会写文件的 Agent 供应商命令，避免同一次写入被并发交错。
+static AGENT_PROVIDER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn agent_provider_lock() -> &'static Mutex<()> {
+    AGENT_PROVIDER_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// 前端 `AgentProvidersResult`：状态、文案、列表与每个 App 的状态。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProvidersPayload {
+    pub providers: Vec<AgentProvider>,
+    pub states: BTreeMap<String, AgentProviderState>,
+}
+
+/// 手动模式（Cursor）一次性返回的粘贴用值，只有 `apply` 会带上它。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderReveal {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+/// `apply_agent_provider` 的结果：列表负载 + 可选的一次性展示值。
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentApplyPayload {
+    #[serde(flatten)]
+    pub providers: AgentProvidersPayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<AgentProviderReveal>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAgentProviderRequest {
+    pub provider: AgentProvider,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentProviderIdRequest {
+    pub app_id: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderAgentProvidersRequest {
+    pub app_id: String,
+    pub ids: Vec<String>,
+}
+
+/// Agent 的配置文件目录：优先用偏好设置里的覆盖值，否则用默认目录。
+fn agent_provider_dir(app_id: &str) -> Option<PathBuf> {
+    let preferences = app_preferences_store().load();
+    if let Some(override_dir) = preferences
+        .config_dirs
+        .get(app_id)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return Some(PathBuf::from(override_dir));
+    }
+    agent_providers::default_dir(app_id)
+}
+
+/// 当前列表负载：所有供应商 + 每个 App 的状态。
+fn agent_providers_snapshot(store: &AgentProviderStore) -> AgentProvidersPayload {
+    let providers = store.list().unwrap_or_else(|error| {
+        eprintln!("读取 Agent 供应商失败：{error}");
+        Vec::new()
+    });
+
+    let mut states = BTreeMap::new();
+    for app_id in agent_providers::AGENT_PROVIDER_APP_IDS {
+        let dir = agent_provider_dir(app_id);
+        let writer = agent_providers::writer_for(app_id);
+        let (config_path, installed) = match (dir.as_deref(), writer.as_deref()) {
+            (Some(dir), Some(writer)) => {
+                let path = writer.config_path(dir);
+                let installed = dir.is_dir();
+                (path.to_string_lossy().into_owned(), installed)
+            }
+            (Some(dir), None) => (String::new(), dir.is_dir()),
+            (None, _) => (String::new(), false),
+        };
+
+        let stored = store.state(app_id).unwrap_or_default();
+        states.insert(
+            app_id.to_string(),
+            AgentProviderState {
+                active_id: stored.active_id,
+                applied_ids: stored.applied_ids,
+                config_path,
+                installed,
+            },
+        );
+    }
+
+    AgentProvidersPayload { providers, states }
+}
+
+/// 读取当前快照，失败时退化为空负载（`failed` 的兜底值）。
+fn agent_providers_fallback() -> AgentProvidersPayload {
+    match AgentProviderStore::open_default() {
+        Ok(store) => agent_providers_snapshot(&store),
+        Err(error) => {
+            eprintln!("打开供应商数据库失败：{error}");
+            AgentProvidersPayload::default()
+        }
+    }
+}
+
+/// 写入一个供应商到 Agent 自己的配置文件。
+fn write_agent_provider(
+    app_id: &str,
+    provider: &AgentProvider,
+    api_key: &str,
+) -> anyhow::Result<()> {
+    let dir =
+        agent_provider_dir(app_id).ok_or_else(|| anyhow::anyhow!("未找到该 Agent 的配置目录"))?;
+    let writer = agent_providers::writer_for(app_id)
+        .ok_or_else(|| anyhow::anyhow!("该 Agent 不支持写入配置文件"))?;
+    writer.apply(&dir, provider, api_key)
+}
+
+/// Switch 模式是否把这个供应商写进了当前文件。
+fn agent_provider_is_active(store: &AgentProviderStore, app_id: &str, id: &str) -> bool {
+    if !matches!(agent_providers::apply_mode(app_id), Some(ApplyMode::Switch)) {
+        return false;
+    }
+    store
+        .state(app_id)
+        .map(|state| state.active_id.as_deref() == Some(id))
+        .unwrap_or(false)
+}
+
+/// Additive 模式是否已经把这个供应商写进了当前文件。
+fn agent_provider_is_applied(store: &AgentProviderStore, app_id: &str, id: &str) -> bool {
+    if !matches!(
+        agent_providers::apply_mode(app_id),
+        Some(ApplyMode::Additive)
+    ) {
+        return false;
+    }
+    store
+        .state(app_id)
+        .map(|state| state.applied_ids.iter().any(|applied| applied == id))
+        .unwrap_or(false)
+}
+
+/// 把 `id` 从 applied 列表中移除后的新列表。
+fn applied_ids_without(store: &AgentProviderStore, app_id: &str, id: &str) -> Vec<String> {
+    store
+        .state(app_id)
+        .map(|state| {
+            state
+                .applied_ids
+                .into_iter()
+                .filter(|applied| applied != id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn agent_app_label(app_id: &str) -> String {
+    match app_id {
+        "gemini" => "Gemini",
+        "grok" => "Grok Build",
+        "opencode" => "OpenCode",
+        "openclaw" => "OpenClaw",
+        "hermes" => "Hermes",
+        "pi" => "Pi",
+        "mcode" => "MiniMax Code",
+        "workbuddy" => "WorkBuddy",
+        "cursor" => "Cursor",
+        _ => app_id,
+    }
+    .to_string()
+}
+
+fn load_agent_providers_blocking() -> CommandResult<AgentProvidersPayload> {
+    match AgentProviderStore::open_default() {
+        Ok(store) => ok("已加载 Agent 供应商。", agent_providers_snapshot(&store)),
+        Err(error) => failed(
+            &format!("加载供应商失败：{error}"),
+            AgentProvidersPayload::default(),
+        ),
+    }
+}
+
+/// 列出所有 Agent 供应商及其在每个 Agent 中的状态。
+#[tauri::command]
+pub async fn list_agent_providers() -> CommandResult<AgentProvidersPayload> {
+    tauri::async_runtime::spawn_blocking(load_agent_providers_blocking)
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("加载供应商失败：{join_error}"),
+                agent_providers_fallback(),
+            )
+        })
+}
+
+fn save_agent_provider_blocking(
+    request: SaveAgentProviderRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    let mut store = match AgentProviderStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("保存供应商失败：{error}"),
+                AgentProvidersPayload::default(),
+            );
+        }
+    };
+
+    let mut provider = request.provider;
+    let incoming_key = provider.api_key.clone();
+    let saved = match store.save(&mut provider) {
+        Ok(saved) => saved,
+        Err(error) => {
+            return failed(
+                &format!("保存供应商失败：{error}"),
+                agent_providers_snapshot(&store),
+            );
+        }
+    };
+
+    // 已生效的供应商要在实时文件里同步更新，否则文件里还是旧值。
+    let key = incoming_key.unwrap_or_else(|| {
+        store
+            .get_with_key(&saved.id)
+            .ok()
+            .flatten()
+            .map(|(_, key)| key)
+            .unwrap_or_default()
+    });
+    let active = agent_provider_is_active(&store, &saved.app_id, &saved.id);
+    let applied = agent_provider_is_applied(&store, &saved.app_id, &saved.id);
+    if (active || applied) && !key.is_empty() {
+        let app_id = saved.app_id.clone();
+        if let Err(error) = write_agent_provider(&app_id, &saved, &key) {
+            return failed(
+                &format!("保存供应商失败：{error}"),
+                agent_providers_snapshot(&store),
+            );
+        }
+    }
+
+    ok("供应商已保存。", agent_providers_snapshot(&store))
+}
+
+/// 新增或更新一个 Agent 供应商；已生效时自动重新应用。
+#[tauri::command]
+pub async fn save_agent_provider(
+    request: SaveAgentProviderRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = agent_provider_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        save_agent_provider_blocking(request)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("保存供应商失败：{join_error}"),
+            agent_providers_fallback(),
+        )
+    })
+}
+
+fn delete_agent_provider_blocking(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    let mut store = match AgentProviderStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("删除供应商失败：{error}"),
+                AgentProvidersPayload::default(),
+            );
+        }
+    };
+
+    match agent_providers::apply_mode(&request.app_id) {
+        Some(ApplyMode::Additive) => {
+            // 先从文件里摘掉，失败就中止删除，避免文件里留下孤儿节点。
+            if agent_provider_is_applied(&store, &request.app_id, &request.id)
+                && let Some(dir) = agent_provider_dir(&request.app_id)
+                && let Some(writer) = agent_providers::writer_for(&request.app_id)
+                && let Err(error) = writer.unapply(&dir, &request.id)
+            {
+                return failed(
+                    &format!("删除供应商失败：{error}"),
+                    agent_providers_snapshot(&store),
+                );
+            }
+        }
+        Some(ApplyMode::Switch) => {
+            if agent_provider_is_active(&store, &request.app_id, &request.id) {
+                return failed(
+                    "请先切换到其他供应商再删除",
+                    agent_providers_snapshot(&store),
+                );
+            }
+        }
+        _ => {}
+    }
+
+    if let Err(error) = store.delete(&request.id) {
+        return failed(
+            &format!("删除供应商失败：{error}"),
+            agent_providers_snapshot(&store),
+        );
+    }
+    let remaining = applied_ids_without(&store, &request.app_id, &request.id);
+    if let Err(error) = store.set_applied(&request.app_id, &remaining) {
+        return failed(
+            &format!("删除供应商失败：{error}"),
+            agent_providers_snapshot(&store),
+        );
+    }
+
+    ok("供应商已删除。", agent_providers_snapshot(&store))
+}
+
+/// 删除一个 Agent 供应商。
+#[tauri::command]
+pub async fn delete_agent_provider(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = agent_provider_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        delete_agent_provider_blocking(request)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("删除供应商失败：{join_error}"),
+            agent_providers_fallback(),
+        )
+    })
+}
+
+fn apply_agent_provider_blocking(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentApplyPayload> {
+    let mut store = match AgentProviderStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("应用供应商失败：{error}"),
+                AgentApplyPayload::default(),
+            );
+        }
+    };
+
+    let Some((provider, api_key)) = store.get_with_key(&request.id).ok().flatten() else {
+        return failed(
+            "供应商不存在",
+            agent_apply_payload(agent_providers_snapshot(&store)),
+        );
+    };
+
+    match agent_providers::apply_mode(&request.app_id) {
+        Some(ApplyMode::Switch) => {
+            if let Err(error) = write_agent_provider(&request.app_id, &provider, &api_key) {
+                return failed(
+                    &format!("应用供应商失败：{error}"),
+                    agent_apply_payload(agent_providers_snapshot(&store)),
+                );
+            }
+            if let Err(error) = store.set_active(&request.app_id, Some(&request.id)) {
+                return failed(
+                    &format!("应用供应商失败：{error}"),
+                    agent_apply_payload(agent_providers_snapshot(&store)),
+                );
+            }
+        }
+        Some(ApplyMode::Additive) => {
+            if let Err(error) = write_agent_provider(&request.app_id, &provider, &api_key) {
+                return failed(
+                    &format!("应用供应商失败：{error}"),
+                    agent_apply_payload(agent_providers_snapshot(&store)),
+                );
+            }
+            let mut applied = store.state(&request.app_id).unwrap_or_default().applied_ids;
+            if !applied.iter().any(|id| id == &request.id) {
+                applied.push(request.id.clone());
+            }
+            if let Err(error) = store.set_applied(&request.app_id, &applied) {
+                return failed(
+                    &format!("应用供应商失败：{error}"),
+                    agent_apply_payload(agent_providers_snapshot(&store)),
+                );
+            }
+        }
+        // 手动模式：不写任何文件，只把值返回一次供用户粘贴。
+        Some(ApplyMode::Manual) => {
+            let model = if provider.default_model.trim().is_empty() {
+                provider.models.first().cloned().unwrap_or_default()
+            } else {
+                provider.default_model.clone()
+            };
+            let label = agent_app_label(&request.app_id);
+            return ok(
+                &format!("已应用到 {label}。"),
+                AgentApplyPayload {
+                    providers: agent_providers_snapshot(&store),
+                    reveal: Some(AgentProviderReveal {
+                        base_url: provider.base_url.clone(),
+                        api_key,
+                        model,
+                    }),
+                },
+            );
+        }
+        None => {
+            return failed(
+                "未知的 Agent 应用",
+                agent_apply_payload(agent_providers_snapshot(&store)),
+            );
+        }
+    }
+
+    let label = agent_app_label(&request.app_id);
+    ok(
+        &format!("已应用到 {label}。"),
+        agent_apply_payload(agent_providers_snapshot(&store)),
+    )
+}
+
+fn agent_apply_payload(providers: AgentProvidersPayload) -> AgentApplyPayload {
+    AgentApplyPayload {
+        providers,
+        reveal: None,
+    }
+}
+
+/// 把一个供应商应用到 Agent 的实时配置。
+#[tauri::command]
+pub async fn apply_agent_provider(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentApplyPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = agent_provider_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        apply_agent_provider_blocking(request)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("应用供应商失败：{join_error}"),
+            AgentApplyPayload {
+                providers: agent_providers_fallback(),
+                reveal: None,
+            },
+        )
+    })
+}
+
+fn unapply_agent_provider_blocking(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    let mut store = match AgentProviderStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("移除供应商失败：{error}"),
+                AgentProvidersPayload::default(),
+            );
+        }
+    };
+
+    if !matches!(
+        agent_providers::apply_mode(&request.app_id),
+        Some(ApplyMode::Additive)
+    ) {
+        return failed("该 Agent 不支持移除操作", agent_providers_snapshot(&store));
+    }
+
+    let dir = match agent_provider_dir(&request.app_id) {
+        Some(dir) => dir,
+        None => {
+            return failed(
+                "未找到该 Agent 的配置目录",
+                agent_providers_snapshot(&store),
+            );
+        }
+    };
+    let Some(writer) = agent_providers::writer_for(&request.app_id) else {
+        return failed(
+            "该 Agent 不支持写入配置文件",
+            agent_providers_snapshot(&store),
+        );
+    };
+    if let Err(error) = writer.unapply(&dir, &request.id) {
+        return failed(
+            &format!("移除供应商失败：{error}"),
+            agent_providers_snapshot(&store),
+        );
+    }
+
+    let remaining = applied_ids_without(&store, &request.app_id, &request.id);
+    if let Err(error) = store.set_applied(&request.app_id, &remaining) {
+        return failed(
+            &format!("移除供应商失败：{error}"),
+            agent_providers_snapshot(&store),
+        );
+    }
+
+    let label = agent_app_label(&request.app_id);
+    ok(
+        &format!("已从 {label} 移除。"),
+        agent_providers_snapshot(&store),
+    )
+}
+
+/// 从 Agent 的实时配置中移除一个 additive 供应商。
+#[tauri::command]
+pub async fn unapply_agent_provider(
+    request: AgentProviderIdRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = agent_provider_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unapply_agent_provider_blocking(request)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("移除供应商失败：{join_error}"),
+            agent_providers_fallback(),
+        )
+    })
+}
+
+fn reorder_agent_providers_blocking(
+    request: ReorderAgentProvidersRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    let mut store = match AgentProviderStore::open_default() {
+        Ok(store) => store,
+        Err(error) => {
+            return failed(
+                &format!("排序失败：{error}"),
+                AgentProvidersPayload::default(),
+            );
+        }
+    };
+    if let Err(error) = store.reorder(&request.app_id, &request.ids) {
+        return failed(
+            &format!("排序失败：{error}"),
+            agent_providers_snapshot(&store),
+        );
+    }
+    ok("排序已保存。", agent_providers_snapshot(&store))
+}
+
+/// 保存一个 Agent 内供应商的顺序。
+#[tauri::command]
+pub async fn reorder_agent_providers(
+    request: ReorderAgentProvidersRequest,
+) -> CommandResult<AgentProvidersPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = agent_provider_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reorder_agent_providers_blocking(request)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("排序失败：{join_error}"),
+            agent_providers_fallback(),
+        )
+    })
+}
+
+#[cfg(test)]
+mod agent_provider_command_tests {
+    use super::*;
+
+    /// 前端把 `apiKey` 作为可选字段发送，缺省与给出两种情况都必须能反序列化。
+    #[test]
+    fn save_request_accepts_an_optional_api_key() {
+        let with_key = serde_json::json!({
+            "provider": {
+                "id": "ap-1234567890ab",
+                "appId": "gemini",
+                "name": "供应商",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "sk-test-placeholder",
+                "hasApiKey": true,
+                "apiFormat": "gemini-native",
+                "models": ["model-a"],
+                "defaultModel": "model-a",
+                "notes": "",
+                "sortIndex": 0
+            }
+        });
+        let request: SaveAgentProviderRequest =
+            serde_json::from_value(with_key).expect("带 apiKey 的请求必须反序列化成功");
+        assert_eq!(
+            request.provider.api_key.as_deref(),
+            Some("sk-test-placeholder")
+        );
+
+        let without_key = serde_json::json!({
+            "provider": {
+                "id": "ap-1234567890ab",
+                "appId": "gemini",
+                "name": "供应商",
+                "baseUrl": "https://api.example.com/v1",
+                "hasApiKey": true,
+                "apiFormat": "gemini-native",
+                "models": ["model-a"],
+                "defaultModel": "model-a",
+                "notes": "",
+                "sortIndex": 0
+            }
+        });
+        let request: SaveAgentProviderRequest =
+            serde_json::from_value(without_key).expect("缺少 apiKey 的请求必须反序列化成功");
+        assert!(request.provider.api_key.is_none());
+    }
+
+    /// 负载形状必须与前端 `AgentProvidersResult` 一致：camelCase + 扁平化。
+    #[test]
+    fn payload_shape_matches_the_frontend_contract() {
+        let mut states = BTreeMap::new();
+        states.insert(
+            "gemini".to_string(),
+            AgentProviderState {
+                active_id: Some("ap-1234567890ab".to_string()),
+                applied_ids: Vec::new(),
+                config_path: "C:/Users/x/.gemini/settings.json".to_string(),
+                installed: true,
+            },
+        );
+        let result = ok(
+            "已加载 Agent 供应商。",
+            AgentProvidersPayload {
+                providers: Vec::new(),
+                states,
+            },
+        );
+        let value = serde_json::to_value(&result).expect("序列化负载");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["message"], "已加载 Agent 供应商。");
+        assert!(value["providers"].is_array());
+        assert_eq!(value["states"]["gemini"]["activeId"], "ap-1234567890ab");
+        assert_eq!(
+            value["states"]["gemini"]["configPath"],
+            "C:/Users/x/.gemini/settings.json"
+        );
+        assert_eq!(value["states"]["gemini"]["installed"], true);
+        assert!(value["states"]["gemini"]["appliedIds"].is_array());
+
+        // reveal 只在 apply 出现，并且是扁平化到同一层的字段。
+        let reveal_result = ok(
+            "已应用到 Cursor。",
+            AgentApplyPayload {
+                providers: AgentProvidersPayload::default(),
+                reveal: Some(AgentProviderReveal {
+                    base_url: "https://api.example.com/v1".to_string(),
+                    api_key: "sk-test-placeholder".to_string(),
+                    model: "model-a".to_string(),
+                }),
+            },
+        );
+        let value = serde_json::to_value(&reveal_result).expect("序列化 reveal 负载");
+        assert_eq!(value["reveal"]["baseUrl"], "https://api.example.com/v1");
+        assert_eq!(value["reveal"]["model"], "model-a");
+        assert!(value["providers"].is_array(), "reveal 与列表同层");
+        assert!(value["states"].is_object());
+    }
+
+    /// writer_for 必须覆盖全部 8 个可写 App，cursor 没有 writer。
+    #[test]
+    fn writer_lookup_covers_every_writable_app() {
+        assert!(matches!(
+            agent_providers::apply_mode("gemini"),
+            Some(ApplyMode::Switch)
+        ));
+        assert!(matches!(
+            agent_providers::apply_mode("hermes"),
+            Some(ApplyMode::Additive)
+        ));
+        assert!(matches!(
+            agent_providers::apply_mode("cursor"),
+            Some(ApplyMode::Manual)
+        ));
+        assert!(agent_providers::writer_for("cursor").is_none());
+        for app_id in [
+            "gemini",
+            "grok",
+            "opencode",
+            "openclaw",
+            "hermes",
+            "pi",
+            "mcode",
+            "workbuddy",
+        ] {
+            assert!(
+                agent_providers::writer_for(app_id).is_some(),
+                "{app_id} 必须有 writer"
+            );
+        }
+        assert_eq!(agent_app_label("mcode"), "MiniMax Code");
+    }
+}

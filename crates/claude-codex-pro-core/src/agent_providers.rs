@@ -12,6 +12,10 @@ use anyhow::{Context, bail};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod gemini;
+pub mod grok;
+pub mod hermes;
+pub mod mcode;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
@@ -503,8 +507,15 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// The writer that owns `app_id`'s config file, if CCP writes one yet.
+///
+/// Cursor keeps its suppliers in its own settings UI, so it has no writer and
+/// is applied manually by the user.
 pub fn writer_for(app_id: &str) -> Option<Box<dyn AgentWriter>> {
     match app_id {
+        "gemini" => Some(Box::new(gemini::GeminiWriter)),
+        "grok" => Some(Box::new(grok::GrokWriter)),
+        "hermes" => Some(Box::new(hermes::HermesWriter)),
+        "mcode" => Some(Box::new(mcode::MiniMaxWriter)),
         "workbuddy" => Some(Box::new(workbuddy::WorkBuddyWriter)),
         "opencode" => Some(Box::new(opencode::OpenCodeWriter)),
         "openclaw" => Some(Box::new(openclaw::OpenClawWriter)),
@@ -997,7 +1008,10 @@ mod tests {
     fn default_dir_and_writer_lookup_follow_the_contract() {
         assert!(default_dir("cursor").is_none());
         assert!(writer_for("cursor").is_none());
-        assert!(writer_for("gemini").is_none(), "任务 7b 才实现 gemini");
+        assert!(writer_for("gemini").is_some());
+        assert!(writer_for("grok").is_some());
+        assert!(writer_for("hermes").is_some());
+        assert!(writer_for("mcode").is_some());
         assert!(writer_for("workbuddy").is_some());
         assert!(writer_for("opencode").is_some());
         assert!(writer_for("openclaw").is_some());
