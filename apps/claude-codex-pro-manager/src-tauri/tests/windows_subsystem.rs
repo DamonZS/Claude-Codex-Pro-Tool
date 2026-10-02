@@ -4420,7 +4420,9 @@ fn claude_zh_patch_javascript_validation_runs_node_without_console_window() {
     let core_zh_patch =
         std::fs::read_to_string(&core_zh_patch).expect("read core claude_zh_patch.rs");
     let validation = core_zh_patch
-        .split("fn validate_patched_javascript_chunk")
+        // Anchor on the single-chunk signature: the parallel batch helper
+        // `validate_patched_javascript_chunks` shares this name prefix.
+        .split("fn validate_patched_javascript_chunk(path")
         .nth(1)
         .and_then(|rest| rest.split("fn write_patch_file").next())
         .expect("javascript validation source");

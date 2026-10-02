@@ -10411,17 +10411,29 @@ fn sync_live_context_entries_blocking(
             );
         }
     };
-    if let Some(parent) = config_path.parent() {
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            return failed(
-                &format!("创建 Codex 配置目录失败：{error}"),
+    // Unchanged content: skip the write so config.toml is not touched.
+    if updated_config == current_config {
+        return match claude_codex_pro_core::relay_config::list_context_entries_from_common_config(
+            &updated_config,
+        ) {
+            Ok(entries) => ok(
+                "实时上下文条目已是最新。",
+                LiveContextEntriesPayload { entries },
+            ),
+            Err(error) => failed(
+                &format!("读取实时上下文条目失败：{error}"),
                 LiveContextEntriesPayload {
                     entries: empty_context_entries(),
                 },
-            );
-        }
+            ),
+        };
     }
-    if let Err(error) = std::fs::write(&config_path, &updated_config) {
+    // Backs config.toml up once (.ccp-first-write.bak) and writes via temp +
+    // rename, so a crash mid-write cannot leave a truncated Codex config.
+    if let Err(error) = claude_codex_pro_core::agent_providers::write_with_backup(
+        &config_path,
+        updated_config.as_bytes(),
+    ) {
         return failed(
             &format!("写入实时 config.toml 失败：{error}"),
             LiveContextEntriesPayload {

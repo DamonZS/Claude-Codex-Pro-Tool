@@ -1294,6 +1294,9 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
+      // upsert only edits CCP's managed copy; write it into ~/.codex/config.toml
+      // too, otherwise a new MCP never reaches Codex or the inventory scan.
+      if (statusOk(result.status)) await syncCodexLiveContext(result.settings, "保存工具与插件");
     }
     return result;
   };
@@ -1309,8 +1312,19 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "删除工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
+      if (statusOk(result.status)) await syncCodexLiveContext(result.settings, "删除工具与插件");
     }
     return result;
+  };
+
+  const syncCodexLiveContext = async (sourceSettings: BackendSettings, title: string) => {
+    const synced = await run(
+      () => call<CommandResult<Record<string, unknown>>>("sync_live_context_entries", { request: { settings: sourceSettings } }),
+      title,
+      { notify: false },
+    );
+    if (synced && !statusOk(synced.status)) notifyResult({ title, message: synced.message, status: synced.status });
+    return synced;
   };
 
   const refreshClaudeContextEntries = async (silent = false) => {
