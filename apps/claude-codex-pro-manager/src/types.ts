@@ -134,6 +134,7 @@ export type BackendSettings = {
   relayProfilesEnabled: boolean;
   enhancementsEnabled: boolean;
   computerUseGuardEnabled: boolean;
+  claudeDesktopComputerUseEnabled?: boolean;
   codexAppPluginEntryUnlock: boolean;
   codexAppPluginMarketplaceUnlock: boolean;
   codexAppForcePluginInstall: boolean;
@@ -269,6 +270,15 @@ export type ContextEntriesResult = CommandResult<{
 
 export type LiveContextEntriesResult = CommandResult<{
   entries: ContextEntries;
+}>;
+
+export type ClaudeDesktopComputerUseStatusResult = CommandResult<{
+  enabled: boolean;
+  supported: boolean;
+  platform: string;
+  executablePath: string;
+  configPaths: string[];
+  registeredPaths: string[];
 }>;
 
 export type ClaudeContextEntriesResult = CommandResult<{

@@ -2866,7 +2866,7 @@ fn claude_desktop_config_path() -> PathBuf {
     )
 }
 
-fn claude_desktop_normal_config_paths() -> Vec<PathBuf> {
+pub(crate) fn claude_desktop_normal_config_paths() -> Vec<PathBuf> {
     let primary = claude_desktop_config_path();
     let mut paths = vec![primary];
 
@@ -3051,7 +3051,7 @@ fn claude_desktop_config_path_for_platform(
     .join("claude_desktop_config.json")
 }
 
-fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>> {
+pub(crate) fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -3086,7 +3086,7 @@ fn backup_claude_desktop_config(path: &PathBuf) -> anyhow::Result<Option<String>
 /// state, etc.) would be replaced wholesale by whatever the caller wrote next.
 /// Missing file -> empty object is safe; a parse failure on an existing file is
 /// an error so the caller aborts instead of overwriting.
-fn read_existing_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
+pub(crate) fn read_existing_json_object_or_empty(path: &Path) -> anyhow::Result<Value> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
             let text = strip_json_bom(&text);
@@ -3682,7 +3682,7 @@ fn write_verified_json_file(path: &Path, value: &Value, label: &str) -> anyhow::
     Ok(())
 }
 
-fn upsert_claude_desktop_mcp_server(
+pub(crate) fn upsert_claude_desktop_mcp_server(
     config_path: &PathBuf,
     server_name: &str,
     server_config: serde_json::Value,
@@ -3703,7 +3703,7 @@ fn upsert_claude_desktop_mcp_server(
     Ok(())
 }
 
-fn remove_claude_desktop_mcp_server(
+pub(crate) fn remove_claude_desktop_mcp_server(
     config_path: &PathBuf,
     server_name: &str,
 ) -> anyhow::Result<()> {

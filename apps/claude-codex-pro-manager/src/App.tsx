@@ -156,6 +156,7 @@ import type {
   BackendSettings,
   CcswitchImportResult,
   ClaudeContextEntriesResult,
+  ClaudeDesktopComputerUseStatusResult,
   ClaudeSession,
   ClaudeSessionContextPage,
   ClaudeSessionsResult,
@@ -1318,6 +1319,24 @@ export function App() {
     if (result) {
       setClaudeContextEntries(result);
       if (!silent) notifyIfNeedsAttention({ title: "Claude 工具与插件", message: result.message, status: result.status });
+    }
+    return result;
+  };
+
+  const refreshClaudeDesktopComputerUse = async () =>
+    run(
+      () => call<ClaudeDesktopComputerUseStatusResult>("get_claude_desktop_computer_use_status"),
+      "Claude Desktop Computer Use",
+      { trackBusy: false, notify: false },
+    );
+
+  const setClaudeDesktopComputerUse = async (enabled: boolean) => {
+    const result = await run(
+      () => call<ClaudeDesktopComputerUseStatusResult>("set_claude_desktop_computer_use_enabled", { request: { enabled } }),
+      "Claude Desktop Computer Use",
+    );
+    if (result) {
+      notifyResult({ title: "Claude Desktop Computer Use", message: result.message, status: result.status });
     }
     return result;
   };
@@ -3059,6 +3078,8 @@ export function App() {
       refreshClaudeContextEntries,
       saveClaudeContextEntry,
       deleteClaudeContextEntry,
+      refreshClaudeDesktopComputerUse,
+      setClaudeDesktopComputerUse,
       refreshUnifiedToolInventory,
       toggleUnifiedToolAsset,
       createSkill,
@@ -3213,6 +3234,8 @@ export function App() {
       refreshClaudeContextEntries: (...args) => actionsRef.current!.refreshClaudeContextEntries(...args),
       saveClaudeContextEntry: (...args) => actionsRef.current!.saveClaudeContextEntry(...args),
       deleteClaudeContextEntry: (...args) => actionsRef.current!.deleteClaudeContextEntry(...args),
+      refreshClaudeDesktopComputerUse: (...args) => actionsRef.current!.refreshClaudeDesktopComputerUse(...args),
+      setClaudeDesktopComputerUse: (...args) => actionsRef.current!.setClaudeDesktopComputerUse(...args),
       refreshUnifiedToolInventory: (...args) => actionsRef.current!.refreshUnifiedToolInventory(...args),
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
       createSkill: (...args) => actionsRef.current!.createSkill(...args),

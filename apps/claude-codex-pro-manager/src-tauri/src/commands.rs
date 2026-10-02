@@ -10,6 +10,7 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
+use claude_codex_pro_core::claude_desktop_computer_use;
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
 };
@@ -10473,6 +10474,74 @@ fn list_claude_context_entries_blocking() -> CommandResult<ClaudeContextEntriesP
             },
         ),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClaudeDesktopComputerUseRequest {
+    pub enabled: bool,
+}
+
+fn empty_computer_use_status() -> claude_desktop_computer_use::ComputerUseStatus {
+    claude_desktop_computer_use::ComputerUseStatus {
+        enabled: false,
+        supported: cfg!(any(windows, target_os = "macos")),
+        platform: std::env::consts::OS.to_string(),
+        executable_path: String::new(),
+        config_paths: Vec::new(),
+        registered_paths: Vec::new(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_claude_desktop_computer_use_status()
+-> CommandResult<claude_desktop_computer_use::ComputerUseStatus> {
+    // Reads settings plus every Claude Desktop config path: disk IO, keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(
+        || match claude_desktop_computer_use::computer_use_status() {
+            Ok(status) => ok("Computer Use 状态已加载。", status),
+            Err(error) => failed(
+                &format!("读取 Computer Use 状态失败：{error}"),
+                empty_computer_use_status(),
+            ),
+        },
+    )
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("读取 Computer Use 状态失败：{join_error}"),
+            empty_computer_use_status(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn set_claude_desktop_computer_use_enabled(
+    request: ClaudeDesktopComputerUseRequest,
+) -> CommandResult<claude_desktop_computer_use::ComputerUseStatus> {
+    let enabled = request.enabled;
+    tauri::async_runtime::spawn_blocking(move || {
+        match claude_desktop_computer_use::set_computer_use_enabled(enabled) {
+            Ok(status) => ok(
+                if enabled {
+                    "已为 Claude Desktop 开启 Computer Use；请完全退出并重启 Claude Desktop 后生效。"
+                } else {
+                    "已关闭 Claude Desktop Computer Use 并移除 MCP 注册。"
+                },
+                status,
+            ),
+            Err(error) => failed(
+                &format!("切换 Computer Use 失败：{error}"),
+                empty_computer_use_status(),
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("切换 Computer Use 失败：{join_error}"),
+            empty_computer_use_status(),
+        )
+    })
 }
 
 #[tauri::command]

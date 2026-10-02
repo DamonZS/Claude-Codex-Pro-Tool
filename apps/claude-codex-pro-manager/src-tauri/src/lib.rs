@@ -271,6 +271,8 @@ pub fn run() {
             commands::list_claude_context_entries,
             commands::upsert_claude_context_entry,
             commands::delete_claude_context_entry,
+            commands::get_claude_desktop_computer_use_status,
+            commands::set_claude_desktop_computer_use_enabled,
             commands::extract_relay_common_config,
             commands::test_relay_profile,
             commands::fetch_relay_profile_models,

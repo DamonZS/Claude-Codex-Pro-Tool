@@ -141,6 +141,7 @@ import type {
   BackendSettings,
   ClaudeDesktopDevModeStatusResult,
   ClaudeDesktopMarketplaceStatusResult,
+  ClaudeDesktopComputerUseStatusResult,
   ClaudeDesktopOrgPluginStatusResult,
   ClaudeDesktopProviderApplyResult,
   ClaudeDesktopProviderPreviewResult,
@@ -2212,6 +2213,7 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
         <CodexPluginRepositoryPanel actions={actions} marketplace={codexPluginMarketplace} />
         <ClaudePluginRepositoryPanel actions={actions} marketplace={claudeDesktopMarketplace} />
       </div>
+      <ClaudeDesktopComputerUsePanel actions={actions} />
     </div>
   );
 });
@@ -2567,6 +2569,68 @@ export function CodexPluginRepositoryPanel({
         <Button onClick={() => void actions.repairCodexPluginMarketplace()}>
           <Download className="h-4 w-4" />
           修复 Codex 插件仓库
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
+function ClaudeDesktopComputerUsePanel({ actions }: { actions: AppActions }) {
+  const [status, setStatus] = useState<ClaudeDesktopComputerUseStatusResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => {
+    const result = await actions.refreshClaudeDesktopComputerUse();
+    if (result) setStatus(result);
+  };
+  useEffect(() => {
+    // actions is a stable latest-ref facade; load once on mount.
+    void refresh();
+  }, []);
+  const toggle = async (enabled: boolean) => {
+    setBusy(true);
+    try {
+      const result = await actions.setClaudeDesktopComputerUse(enabled);
+      if (result && statusOk(result.status)) setStatus(result);
+      else await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const enabled = !!status?.enabled;
+  const supported = status?.supported ?? true;
+  const registered = status?.registeredPaths ?? [];
+  const isMac = status?.platform === "macos";
+  return (
+    <Panel
+      title="Claude Desktop Computer Use"
+      detail="让 Claude Desktop 通过本地 MCP 截图并操作鼠标键盘。开启后需完全退出并重启 Claude Desktop。"
+    >
+      <div className="ops-status-list">
+        <StatusRow
+          label="总开关"
+          status={!supported ? "not_implemented" : enabled ? "ok" : "not_checked"}
+          value={!supported ? `当前平台（${status?.platform ?? "未知"}）不支持` : enabled ? "已开启" : "已关闭"}
+        />
+        <StatusRow
+          label="MCP 注册"
+          status={registered.length ? "ok" : enabled ? "needs_review" : "not_checked"}
+          value={registered.length ? `已写入 ${registered.length} 个 Claude Desktop 配置` : "未注册"}
+        />
+        {registered.map((path) => (
+          <StatusRow key={path} label="配置路径" status="found" value={compactPath(path)} />
+        ))}
+        <StatusRow label="急停" status="ok" value="把鼠标甩到屏幕左上角，下一次操作即被拒绝并自动关闭总开关" />
+        <StatusRow label="注意" status="needs_review" value="会移动真实鼠标；截图可能包含屏幕上的敏感信息，使用前请整理窗口" />
+        {isMac ? (
+          <StatusRow label="macOS 权限" status="needs_review" value="系统设置 → 隐私与安全性：为 Claude 开启「辅助功能」与「屏幕录制」，授权后重启 Claude" />
+        ) : null}
+      </div>
+      <div className="action-row">
+        <span>启用 Computer Use</span>
+        <ToggleSwitch checked={enabled} disabled={busy || !supported || !status} onChange={(value) => void toggle(value)} />
+        <Button disabled={busy} onClick={() => void refresh()} variant="outline">
+          <RefreshCw className="h-4 w-4" />
+          刷新状态
         </Button>
       </div>
     </Panel>

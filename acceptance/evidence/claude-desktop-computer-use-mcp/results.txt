@@ -1,0 +1,391 @@
+=== cargo test -p claude-codex-pro-core --lib claude_desktop_computer_use -- --nocapture ===
+--- stdout (tail 60) ---
+
+running 11 tests
+test claude_desktop_computer_use::tests::initialize_echoes_protocol_and_advertises_tools ... ok
+test claude_desktop_computer_use::tests::failsafe_corner_stops_and_disables ... ok
+test claude_desktop_computer_use::tests::agent_cannot_target_failsafe_corner ... ok
+test claude_desktop_computer_use::tests::disabled_gate_blocks_every_tool ... ok
+test claude_desktop_computer_use::tests::coordinates_scale_from_screenshot_space ... ok
+test claude_desktop_computer_use::tests::protocol_errors_and_notifications ... ok
+test claude_desktop_computer_use::tests::keys_are_normalized_and_text_not_audited ... ok
+test claude_desktop_computer_use::tests::tools_list_has_all_tools_with_schemas ... ok
+test claude_desktop_computer_use::tests::register_refuses_unparseable_config ... ok
+test claude_desktop_computer_use::tests::register_and_unregister_preserve_other_entries ... ok
+test claude_desktop_computer_use::tests::screenshot_returns_bounded_jpeg ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 771 filtered out; finished in 1.01s
+
+--- stderr (tail 60) ---
+   Compiling strum v0.27.2
+   Compiling http-body-util v0.1.3
+   Compiling webpki-roots v0.26.11
+   Compiling filetime v0.2.29
+   Compiling ppv-lite86 v0.2.21
+   Compiling ahash v0.8.12
+   Compiling winnow v0.7.15
+   Compiling tokio v1.52.3
+   Compiling bytemuck v1.25.0
+   Compiling hashbrown v0.14.5
+   Compiling toml_edit v0.20.2
+   Compiling fallible-iterator v0.3.0
+   Compiling rand_chacha v0.9.0
+   Compiling toml_write v0.1.2
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling idna_adapter v1.2.2
+   Compiling fastrand v2.4.1
+   Compiling sha1_smol v1.0.1
+   Compiling rand v0.9.4
+   Compiling idna v1.1.0
+   Compiling uuid v1.23.1
+   Compiling chrono-tz v0.10.4
+   Compiling fs2 v0.4.3
+   Compiling moxcms v0.8.1
+   Compiling tempfile v3.27.0
+   Compiling croner v4.0.0
+   Compiling hashlink v0.9.1
+   Compiling tar v0.4.46
+   Compiling directories v6.0.0
+   Compiling windows v0.58.0
+   Compiling zip v2.4.2
+   Compiling url v2.5.8
+   Compiling anyhow v1.0.102
+   Compiling rusqlite v0.32.1
+   Compiling sha2 v0.10.9
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.2
+   Compiling hyper v1.9.0
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.18
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.26.2
+   Compiling tower-http v0.6.10
+   Compiling image v0.25.10
+   Compiling tokio-tungstenite v0.26.2
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling claude-codex-pro-core v0.12.0 (D:\Project\Claude-Codex-Pro-Tool\.claude\worktrees\no-return-info-issue-2812fd\crates\claude-codex-pro-core)
+warning: function `delete_current_user_key` is never used
+   --> crates\claude-codex-pro-core\src\windows_integration.rs:423:8
+    |
+423 | pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `claude-codex-pro-core` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.30s
+     Running unittests src\lib.rs (target\debug\deps\claude_codex_pro_core-2115421fde4729cc.exe)
+EXIT=0
+=== cargo test -p claude-codex-pro-core --lib claude_desktop_computer_use -- --nocapture ===
+--- stdout (tail 60) ---
+
+running 11 tests
+test claude_desktop_computer_use::tests::initialize_echoes_protocol_and_advertises_tools ... ok
+test claude_desktop_computer_use::tests::failsafe_corner_stops_and_disables ... ok
+test claude_desktop_computer_use::tests::agent_cannot_target_failsafe_corner ... ok
+test claude_desktop_computer_use::tests::disabled_gate_blocks_every_tool ... ok
+test claude_desktop_computer_use::tests::coordinates_scale_from_screenshot_space ... ok
+test claude_desktop_computer_use::tests::protocol_errors_and_notifications ... ok
+test claude_desktop_computer_use::tests::keys_are_normalized_and_text_not_audited ... ok
+test claude_desktop_computer_use::tests::tools_list_has_all_tools_with_schemas ... ok
+test claude_desktop_computer_use::tests::register_refuses_unparseable_config ... ok
+test claude_desktop_computer_use::tests::register_and_unregister_preserve_other_entries ... ok
+test claude_desktop_computer_use::tests::screenshot_returns_bounded_jpeg ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 771 filtered out; finished in 1.01s
+
+--- stderr (tail 60) ---
+   Compiling strum v0.27.2
+   Compiling http-body-util v0.1.3
+   Compiling webpki-roots v0.26.11
+   Compiling filetime v0.2.29
+   Compiling ppv-lite86 v0.2.21
+   Compiling ahash v0.8.12
+   Compiling winnow v0.7.15
+   Compiling tokio v1.52.3
+   Compiling bytemuck v1.25.0
+   Compiling hashbrown v0.14.5
+   Compiling toml_edit v0.20.2
+   Compiling fallible-iterator v0.3.0
+   Compiling rand_chacha v0.9.0
+   Compiling toml_write v0.1.2
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling idna_adapter v1.2.2
+   Compiling fastrand v2.4.1
+   Compiling sha1_smol v1.0.1
+   Compiling rand v0.9.4
+   Compiling idna v1.1.0
+   Compiling uuid v1.23.1
+   Compiling chrono-tz v0.10.4
+   Compiling fs2 v0.4.3
+   Compiling moxcms v0.8.1
+   Compiling tempfile v3.27.0
+   Compiling croner v4.0.0
+   Compiling hashlink v0.9.1
+   Compiling tar v0.4.46
+   Compiling directories v6.0.0
+   Compiling windows v0.58.0
+   Compiling zip v2.4.2
+   Compiling url v2.5.8
+   Compiling anyhow v1.0.102
+   Compiling rusqlite v0.32.1
+   Compiling sha2 v0.10.9
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.2
+   Compiling hyper v1.9.0
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.18
+   Compiling tokio-rustls v0.26.4
+   Compiling tungstenite v0.26.2
+   Compiling tower-http v0.6.10
+   Compiling image v0.25.10
+   Compiling tokio-tungstenite v0.26.2
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling claude-codex-pro-core v0.12.0 (D:\Project\Claude-Codex-Pro-Tool\.claude\worktrees\no-return-info-issue-2812fd\crates\claude-codex-pro-core)
+warning: function `delete_current_user_key` is never used
+   --> crates\claude-codex-pro-core\src\windows_integration.rs:423:8
+    |
+423 | pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `claude-codex-pro-core` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.30s
+     Running unittests src\lib.rs (target\debug\deps\claude_codex_pro_core-2115421fde4729cc.exe)
+EXIT=0
+=== cargo test -p claude-codex-pro-manager --test windows_subsystem ===
+--- stdout (tail 60) ---
+test manager_startup_does_not_launch_claude_desktop_proxy ... ok
+test manager_startup_restores_only_user_configured_multica_sidecars ... ok
+test manager_provider_writes_do_not_persist_codex_credentials ... ok
+test manager_startup_commands_run_blocking_work_off_ui_thread ... ok
+test manager_uses_single_instance_guard_before_starting_tauri ... ok
+test manager_status_rejects_renderer_heartbeat_from_previous_codex_launch ... ok
+test manager_liquid_glass_shell_uses_real_update_state_and_keeps_dense_content_opaque ... ok
+test manual_restart_skips_the_duplicate_provider_sync ... ok
+test multica_saved_issue_views_have_local_cache_fallback_and_validation ... ok
+test manager_navigation_hides_legacy_multica_runtime_page ... ok
+test overview_startup_keeps_claude_integration_lazy ... ok
+test macos_workflows_verify_all_unified_bundle_runtimes ... ok
+test plugin_hub_marketplace_and_worktree_git_spawns_suppress_console_window ... ok
+test multica_runtime_adapter_keeps_its_ipc_boundary_isolated_and_task_views_read_only ... ok
+test pr_build_workflow_refreshes_manager_frontend_before_packaging ... ok
+test manager_runs_as_invoker_while_installer_requests_administrator_privileges ... ok
+test provider_sync_keeps_rollout_contents_on_disk_instead_of_memory ... ok
+test provider_sync_skipped_status_is_not_reported_as_success ... ok
+test codex_session_management_opens_real_context_viewer ... ok
+test macos_packager_builds_one_visible_unified_app ... ok
+test selected_pages_omit_redundant_heading_band ... ok
+test manager_and_launcher_ship_as_one_cross_platform_binary ... ok
+test github_auto_release_workflow_builds_installers_with_v0_tags ... ok
+test public_release_packages_do_not_include_user_supplier_or_memory_state ... ok
+test silent_launcher_logs_fatal_startup_errors ... ok
+test removed_maintenance_check_has_no_frontend_or_backend_entrypoint ... ok
+test session_context_messages_do_not_shrink_and_hide_their_bodies ... ok
+test supplier_editor_generates_config_from_editable_supplier_id ... ok
+test failed_update_keeps_a_validated_browser_download_fallback ... ok
+test session_management_route_contains_aitracker_session_management ... ok
+test codex_theme_center_route_and_tauri_command_contracts_match ... ok
+test audit_remediation_frontend_contracts_are_locked_down ... ok
+test unified_binary_embeds_codex_icon_resource ... ok
+test ui_information_architecture_refactor_keeps_frontend_source_contracts ... ok
+test codex_theme_center_frontend_ipc_calls_match_tauri_commands ... ok
+test claude_zh_patch_primary_action_does_not_prompt_for_directory ... ok
+test supplier_route_shutdown_and_feedback_use_real_operation_results ... ok
+test initial_manager_load_is_route_scoped_instead_of_global_prefetch ... ok
+test windows_installer_registers_anonymous_installation_without_blocking_install ... ok
+test claude_zh_patch_auto_launches_claude_after_successful_install ... ok
+test windows_private_file_acl_command_stays_hidden ... ok
+test codex_restart_feedback_is_immediate_specific_and_auto_dismissable ... ok
+test update_check_cannot_replace_an_active_download ... ok
+test vite_build_uses_relative_assets_for_tauri_custom_protocol ... ok
+test watcher_install_uses_resolved_existing_launcher_path ... ok
+test tools_route_auto_detects_and_repairs_plugin_repositories_with_visible_feedback ... ok
+test codex_restart_passes_detected_app_path_and_uses_non_claude_debug_port ... ok
+test ops_console_exposes_separate_claude_codex_and_plugin_actions ... ok
+test plugin_tools_ui_regression_is_locked_down ... ok
+test plugin_hub_is_first_class_ops_console_route ... ok
+test tools_and_plugins_route_contains_plugin_catalog_and_session_repair_tools ... ok
+test settings_and_tools_route_keep_full_ops_controls ... ok
+test prompt_optimizer_feature_is_removed ... ok
+test supplier_screen_exposes_real_provider_crud_and_switching ... ok
+test manager_window_and_ops_console_layout_stay_usable ... ok
+test supplier_screen_matches_ccswitch_style_layout_and_drag_sorting ... ok
+test pangu_memory_public_surfaces_are_removed ... ok
+
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+--- stderr (tail 60) ---
+417 | fn sanitize_auth_header(header: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `sanitize_api_key_patterns` is never used
+   --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:432:4
+    |
+432 | fn sanitize_api_key_patterns(text: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `restart_codex_for_frontend_repair` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3376:10
+     |
+3376 | async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `wait_for_processes_to_exit_async` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3482:10
+     |
+3482 | async fn wait_for_processes_to_exit_async(pids: &[u32], timeout: Duration) -> bool {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `select_repair_debug_port` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3491:10
+     |
+3491 | async fn select_repair_debug_port(requested: u16) -> u16 {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `select_repair_debug_port_with` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3506:4
+     |
+3506 | fn select_repair_debug_port_with(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `force_kill_process_tree_for_frontend_repair` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3521:4
+     |
+3521 | fn force_kill_process_tree_for_frontend_repair(pids: &[u32]) -> usize {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_port` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:12957:4
+      |
+12957 | fn validate_port(port: u16) -> anyhow::Result<u16> {
+      |    ^^^^^^^^^^^^^
+
+warning: function `validate_non_empty_string` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:12989:4
+      |
+12989 | fn validate_non_empty_string(s: &str, field_name: &str) -> anyhow::Result<String> {
+      |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `failed_with_context` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:13067:4
+      |
+13067 | fn failed_with_context<T: Serialize>(
+      |    ^^^^^^^^^^^^^^^^^^^
+
+warning: `claude-codex-pro-manager` (lib) generated 14 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 40s
+     Running tests\windows_subsystem.rs (target\debug\deps\windows_subsystem-20da6f69a33552ca.exe)
+EXIT=0
+=== cargo build --release -p claude-codex-pro-manager ===
+--- stdout (tail 60) ---
+--- stderr (tail 60) ---
+    |
+417 | fn sanitize_auth_header(header: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `sanitize_api_key_patterns` is never used
+   --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:432:4
+    |
+432 | fn sanitize_api_key_patterns(text: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `restart_codex_for_frontend_repair` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3376:10
+     |
+3376 | async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<LaunchStatus> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `wait_for_processes_to_exit_async` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3482:10
+     |
+3482 | async fn wait_for_processes_to_exit_async(pids: &[u32], timeout: Duration) -> bool {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `select_repair_debug_port` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3491:10
+     |
+3491 | async fn select_repair_debug_port(requested: u16) -> u16 {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `select_repair_debug_port_with` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3506:4
+     |
+3506 | fn select_repair_debug_port_with(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `force_kill_process_tree_for_frontend_repair` is never used
+    --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:3521:4
+     |
+3521 | fn force_kill_process_tree_for_frontend_repair(pids: &[u32]) -> usize {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_port` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:12957:4
+      |
+12957 | fn validate_port(port: u16) -> anyhow::Result<u16> {
+      |    ^^^^^^^^^^^^^
+
+warning: function `validate_non_empty_string` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:12989:4
+      |
+12989 | fn validate_non_empty_string(s: &str, field_name: &str) -> anyhow::Result<String> {
+      |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `failed_with_context` is never used
+     --> apps\claude-codex-pro-manager\src-tauri\src\commands.rs:13067:4
+      |
+13067 | fn failed_with_context<T: Serialize>(
+      |    ^^^^^^^^^^^^^^^^^^^
+
+warning: `claude-codex-pro-manager` (lib) generated 14 warnings
+    Finished `release` profile [optimized] target(s) in 2m 36s
+EXIT=0
+=== node acceptance/evidence/claude-desktop-computer-use-mcp/smoke.mjs target/release/claude-codex-pro.exe ===
+--- stdout (tail 60) ---
+PASS initialize protocolVersion
+PASS initialize serverInfo
+PASS tools/list (screenshot,click,move_mouse,drag,scroll,type_text,press_keys,cursor_position,wait)
+PASS unknown method -32601
+screenshot isError=true first=Computer Use 未开启：请在 Claude Codex Pro「工具与插件」中开启 Claude Desktop Computer Use。
+PASS screenshot gated or returns jpeg
+--- stderr (tail 60) ---
+EXIT=0
+ALL_DONE
+=== native capture ===
+   Compiling claude-codex-pro-core v0.12.0 (D:\Project\Claude-Codex-Pro-Tool\.claude\worktrees\no-return-info-issue-2812fd\crates\claude-codex-pro-core)
+warning: function `delete_current_user_key` is never used
+   --> crates\claude-codex-pro-core\src\windows_integration.rs:423:8
+    |
+423 | pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `claude-codex-pro-core` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 38.18s
+     Running unittests src\lib.rs (target\debug\deps\claude_codex_pro_core-2115421fde4729cc.exe)
+
+running 12 tests
+test claude_desktop_computer_use::tests::initialize_echoes_protocol_and_advertises_tools ... ok
+test claude_desktop_computer_use::tests::failsafe_corner_stops_and_disables ... ok
+test claude_desktop_computer_use::tests::agent_cannot_target_failsafe_corner ... ok
+test claude_desktop_computer_use::tests::disabled_gate_blocks_every_tool ... ok
+test claude_desktop_computer_use::tests::coordinates_scale_from_screenshot_space ... ok
+test claude_desktop_computer_use::tests::keys_are_normalized_and_text_not_audited ... ok
+test claude_desktop_computer_use::tests::protocol_errors_and_notifications ... ok
+test claude_desktop_computer_use::tests::tools_list_has_all_tools_with_schemas ... ok
+test claude_desktop_computer_use::tests::register_refuses_unparseable_config ... ok
+test claude_desktop_computer_use::tests::register_and_unregister_preserve_other_entries ... ok
+test claude_desktop_computer_use::tests::native_capture_matches_screen_size ... ok
+test claude_desktop_computer_use::tests::screenshot_returns_bounded_jpeg ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 771 filtered out; finished in 1.02s
+
+EXIT=0
+NATIVE_DONE

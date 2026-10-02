@@ -1211,6 +1211,21 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "list_claude_context_entries" || command === "upsert_claude_context_entry" || command === "delete_claude_context_entry") {
     return previewClaudeContextEntries();
   }
+  if (command === "get_claude_desktop_computer_use_status" || command === "set_claude_desktop_computer_use_enabled") {
+    const request = _args?.request as { enabled?: boolean } | undefined;
+    const enabled = command === "set_claude_desktop_computer_use_enabled" ? !!request?.enabled : false;
+    const configPath = "%LOCALAPPDATA%\\Claude\\claude_desktop_config.json";
+    return {
+      status: "ok",
+      message: "预览模式：Computer Use 状态为模拟数据。",
+      enabled,
+      supported: true,
+      platform: "windows",
+      executablePath: "claude-codex-pro.exe",
+      configPaths: [configPath],
+      registeredPaths: enabled ? [configPath] : [],
+    };
+  }
   if (command === "scan_unified_tool_inventory") {
     return previewUnifiedToolInventory();
   }
