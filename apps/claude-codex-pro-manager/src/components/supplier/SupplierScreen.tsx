@@ -333,7 +333,6 @@ export function SupplierScreen({
   const [credentialEnvironmentBusy, setCredentialEnvironmentBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
-  const [supplierDirectModelsOpen, setSupplierDirectModelsOpen] = useState(true);
   const [supplierDirectModels, setSupplierDirectModels] = useState<SupplierDirectModelDraftRow[]>([]);
   const [supplierCodexCatalogModels, setSupplierCodexCatalogModels] = useState<SupplierCodexCatalogDraftRow[]>([]);
   const [supplierTargetFilter, setSupplierTargetFilter] = useState<SupplierTargetApp>("codex");
@@ -443,7 +442,6 @@ export function SupplierScreen({
     setShowSupplierApiKey(false);
     setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(profile.modelList)));
     setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(profile)));
-    setSupplierDirectModelsOpen(true);
     setEditingId(profile.id);
     const targetApp = supplierTargetForProfile(profile);
     setDraft(withSupplierRoutingState(profile, targetApp, !!profile.routeEnabled));
@@ -471,7 +469,6 @@ export function SupplierScreen({
     }, targetApp, supplierRoutingEnabledForTarget(targetApp));
     setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(profile.modelList)));
     setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(profile)));
-    setSupplierDirectModelsOpen(true);
     setDraft(profile);
   };
   const createAggregateProfile = () => {
@@ -499,7 +496,6 @@ export function SupplierScreen({
     setModelFetch(null);
     setSupplierDirectModels(createSupplierDirectModelRows(supplierDirectModelRows(copy.modelList)));
     setSupplierCodexCatalogModels(createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(copy)));
-    setSupplierDirectModelsOpen(true);
     setEditingId(null);
     setDraft(copy);
   };
@@ -641,16 +637,24 @@ export function SupplierScreen({
       return null;
     }
     if (targetApp === "claude-desktop" && !normalized.modelMappingEnabled) {
-      const invalidModel = supplierDirectModelRows(normalized.modelList)
-        .find((row) => !supplierDirectModelIsClaudeDesktopSafe(row.model));
-      if (invalidModel) {
-        actions.showNotice({
-          title: "供应商保存",
-          message: `Claude Desktop 直连模型 ID 无效：${invalidModel.model}。请使用 claude-/anthropic/claude- 的 Sonnet、Opus、Haiku 或 Fable 模型，或开启模型映射。`,
-          status: "failed",
-        });
-        return null;
+      // 直连模式：只校验用户主动填写的模型 ID
+      const routeEntries = supplierDirectModelRows(normalized.modelList)
+        .filter((row) => row.model.trim()); // 只处理非空行
+
+      if (routeEntries.length > 0) {
+        // 有手动填写的模型，校验格式
+        const invalidModel = routeEntries
+          .find((row) => !supplierDirectModelIsClaudeDesktopSafe(row.model));
+        if (invalidModel) {
+          actions.showNotice({
+            title: "供应商保存",
+            message: `Claude Desktop 直连模型 ID 无效：${invalidModel.model}。请使用 claude-/anthropic/claude- 的 Sonnet、Opus、Haiku 或 Fable 模型。`,
+            status: "failed",
+          });
+          return null;
+        }
       }
+      // routeEntries.length === 0 时（用户留空），跳过校验，信任供应商
     }
     const originalId = editingId;
     const conflicts = profiles.some((profile) => profile.id === normalized.id && profile.id !== originalId);
@@ -1275,10 +1279,32 @@ env_key = "OPENAI_API_KEY"
           <label className="ops-form-field"><span>API Key</span><div className="supplier-secret-input"><input onChange={(event) => updateDraft({ apiKey: event.currentTarget.value, apiKeyExplicit: true })} type={showSupplierApiKey ? "text" : "password"} value={generated.apiKey} /><button aria-label={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowSupplierApiKey((value) => !value)} title={showSupplierApiKey ? "隐藏密钥" : "显示密钥"} type="button">{showSupplierApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></label>
           <label className="ops-form-field"><span>{baseEndpointLabel} <span className="supplier-url-toggle">完整 URL</span></span><input onChange={(event) => updateDraft({ baseUrl: event.currentTarget.value, upstreamBaseUrl: event.currentTarget.value })} placeholder={isCodexSupplier ? "https://api.example.com/v1" : "https://api.example.com"} value={generated.baseUrl || generated.upstreamBaseUrl} /></label>
           <div className="supplier-route-note">提示：{baseEndpointHint}</div>
-          {isClaudeSupplier ? <section className="supplier-mapping-card"><div><strong>需要模型映射</strong><p>关闭时按原始模型 ID 直传；供应商不接受 Claude 安全路由 ID 时请开启映射。</p></div><ToggleSwitch checked={!!generated.modelMappingEnabled} onChange={(value) => updateDraft({ modelMappingEnabled: value })} /></section> : null}
           <details className="supplier-ccswitch-section supplier-advanced-card" open><summary><span>&gt;</span>高级选项</summary>
             {isClaudeSupplier ? (
-              generated.modelMappingEnabled ? (
+              <>
+                <div className="supplier-model-config-section">
+                  <div className="supplier-model-config-text">
+                    <strong>模型配置</strong>
+                    <p>
+                      {generated.modelMappingEnabled
+                        ? "Claude Desktop 只接受 claude-sonnet-* / claude-opus-* / claude-haiku-* / claude-fable-* 四档角色 ID。选择模型映射后，CCP 会把这四档映射到供应商的实际模型，并在使用期间保持本地路由开启。"
+                        : "仅当供应商直接接受 Claude Desktop 可识别的四档角色 ID（claude-sonnet-* / claude-opus-* / claude-haiku-* / claude-fable-*）时才适用直连；其他模型名（含 claude-3-5-sonnet-… 等旧式 ID）请选择模型映射。"}
+                    </p>
+                  </div>
+                  <div className="supplier-model-config-select">
+                    <label htmlFor="claude-desktop-mode">接入方式</label>
+                    <select
+                      className="ops-select"
+                      id="claude-desktop-mode"
+                      onChange={(event) => updateDraft({ modelMappingEnabled: event.target.value === "proxy" })}
+                      value={generated.modelMappingEnabled ? "proxy" : "direct"}
+                    >
+                      <option value="direct">直连</option>
+                      <option value="proxy">模型映射</option>
+                    </select>
+                  </div>
+                </div>
+                {generated.modelMappingEnabled ? (
                 <>
                   <label className="ops-form-field">
                     <span>API 格式</span>
@@ -1326,17 +1352,17 @@ env_key = "OPENAI_API_KEY"
                   <label className="ops-form-field"><span>默认兜底模型</span><input onChange={(event) => updateDraft({ model: event.currentTarget.value, testModel: event.currentTarget.value })} value={defaultModel} /></label>
                 </>
               ) : (
-                <details className="supplier-direct-model-list" onToggle={(event) => setSupplierDirectModelsOpen(event.currentTarget.open)} open={supplierDirectModelsOpen}>
-                  <summary><span>{supplierDirectModelsOpen ? "⌄" : ">"}</span>手动指定 Claude Desktop 模型列表（高级，可选）</summary>
-                  <div className="supplier-direct-model-list-body">
-                    <div className="supplier-direct-model-list-head">
-                      <p>仅当供应商的 /v1/models 不可用或没有返回 Claude Desktop 可识别的 Sonnet / Opus / Haiku 模型名时填写；勾选 1M 会向 Claude Desktop 声明支持 1M 上下文。</p>
-                      <div className="supplier-toolbar">
-                        <Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型列表</Button>
-                        <Button onClick={addSupplierDirectModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
-                      </div>
+                <div className="supplier-direct-model-section">
+                  <div className="supplier-direct-model-head">
+                    <strong>模型列表</strong>
+                    <div className="supplier-toolbar">
+                      <Button onClick={() => void fetchModels()} type="button" variant="outline"><Download className="h-4 w-4" />获取模型</Button>
+                      <Button onClick={addSupplierDirectModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
                     </div>
-                    {supplierDirectModels.length ? <div className="supplier-direct-model-rows">
+                  </div>
+                  <p className="supplier-inline-note">配置 Claude Desktop 可用的 Sonnet、Opus、Haiku、Fable 模型。留空时 Claude Desktop 会自动读取 /v1/models；勾选 1M 会声明支持 1M 上下文。</p>
+                  {supplierDirectModels.length ? (
+                    <div className="supplier-direct-model-rows">
                       {supplierDirectModels.map((row, index) => (
                         <div className="supplier-direct-model-row" key={row.rowId}>
                           <input aria-label={`Claude Desktop 模型 ${index + 1}`} onChange={(event) => updateSupplierDirectModel(row.rowId, { model: event.currentTarget.value })} placeholder="claude-sonnet-4-6" value={row.model} />
@@ -1344,10 +1370,11 @@ env_key = "OPENAI_API_KEY"
                           <button aria-label="删除模型" className="supplier-direct-model-remove" onClick={() => removeSupplierDirectModel(row.rowId)} title="删除模型" type="button"><Trash2 className="h-4 w-4" /></button>
                         </div>
                       ))}
-                    </div> : <p className="supplier-direct-model-empty">尚未指定手动模型；Claude Desktop 会优先读取供应商模型目录。</p>}
-                  </div>
-                </details>
-              )
+                    </div>
+                  ) : null}
+                </div>
+              )}
+              </>
             ) : (
               <>
                 <label className="ops-form-field">
