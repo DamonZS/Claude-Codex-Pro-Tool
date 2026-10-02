@@ -104,10 +104,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # 更新内容 = commit subjects since the previous published release.
+          mapfile -t published_tags < <(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName')
+          CHANGELOG="$(node scripts/release/release-changelog.mjs "$TAG" "$SHA" "$REPO" "${published_tags[@]}")"
           cat > release-notes.md <<NOTES
           <!-- auto-release-installers-managed -->
 
           ## 更新内容
+
+          $CHANGELOG
+
+          ## 发布说明
 
           - 本次发布由 GitHub Actions 自动构建 Windows 与 macOS 安装产物。
           - 发布版本号由自动递增 tag 注入到构建环境，应用“关于”页显示的就是本次发布版本。

@@ -164,6 +164,9 @@ mustContain(manual, "macos-${{ matrix.arch }}.zip", "manual macOS ZIP artifact p
 mustContain(auto, "## 更新内容", "auto release notes");
 mustContain(auto, "## 验证", "auto release notes");
 mustContain(auto, "## 构建产物说明", "auto release notes");
+// 更新内容 lists the commit subjects since the previous published release.
+mustContain(auto, 'node scripts/release/release-changelog.mjs "$TAG" "$SHA" "$REPO"', "auto release changelog from commits");
+mustContain(auto, "$CHANGELOG", "auto release changelog inserted into notes");
 mustNotContain(auto, "## Assets 9", "auto release notes");
 mustNotContain(auto, "Source code (zip)", "auto release notes");
 mustNotContain(auto, "Source code (tar.gz)", "auto release notes");
