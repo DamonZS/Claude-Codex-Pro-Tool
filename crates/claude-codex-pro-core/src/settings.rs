@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -13,6 +14,7 @@ use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item};
 use zeroize::Zeroize;
 
+use crate::ccp_db;
 use crate::zed_remote::ZedOpenStrategy;
 
 // ============================================================================
@@ -983,6 +985,57 @@ impl Default for SettingsStore {
     }
 }
 
+/// 每个进程只备份一次同样的损坏内容：`load()` 是高频调用点，如果每次解析
+/// 失败都写一个新备份，用户目录会被同一份坏内容刷满。
+static LAST_CORRUPT_SETTINGS_BACKUP: Mutex<Option<u64>> = Mutex::new(None);
+
+fn corrupt_settings_contents_hash(contents: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    contents.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn settings_corrupt_backup_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "settings.json".to_string());
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    path.with_file_name(format!("{file_name}.corrupt-{timestamp}.bak"))
+}
+
+/// 解析失败时把原文件按字节复制一份到同目录的 `.corrupt-<时间戳>.bak`。
+///
+/// 绝不 panic：备份只是尽力而为的兜底，`load()` 的调用方仍然必须拿到可用的
+/// 默认值。返回备份路径（失败时为 `None`）以便调用方记录日志。
+fn back_up_corrupt_settings(path: &Path, contents: &str) -> Option<PathBuf> {
+    if !mark_corrupt_settings_contents(contents) {
+        return None;
+    }
+    let backup_path = settings_corrupt_backup_path(path);
+    match fs::copy(path, &backup_path) {
+        Ok(_) => Some(backup_path),
+        Err(_) => None,
+    }
+}
+
+/// 返回 `true` 表示本次调用「赢得」了该内容的备份权。
+fn mark_corrupt_settings_contents(contents: &str) -> bool {
+    let hash = corrupt_settings_contents_hash(contents);
+    let mut last = match LAST_CORRUPT_SETTINGS_BACKUP.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if *last == Some(hash) {
+        return false;
+    }
+    *last = Some(hash);
+    true
+}
+
 impl SettingsStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
@@ -994,9 +1047,30 @@ impl SettingsStore {
             None => return Ok(BackendSettings::default()),
         };
 
-        Ok(normalize_settings_config_sections(
-            serde_json::from_str(&contents).unwrap_or_default(),
-        ))
+        // 以前这里 `unwrap_or_default()` 静默吞掉解析错误，下一次 save() 就会把
+        // 用户损坏前的配置整个覆盖掉。现在先把坏文件留一份副本再回退默认值。
+        let settings = match serde_json::from_str::<Value>(&contents)
+            .map_err(anyhow::Error::from)
+            .and_then(|mut value| {
+                overlay_db_profiles_in_value(&self.path, &mut value)?;
+                Ok(serde_json::from_value::<BackendSettings>(value)?)
+            }) {
+            Ok(settings) => settings,
+            Err(error) => {
+                let backup_path = back_up_corrupt_settings(&self.path, &contents);
+                match backup_path {
+                    Some(backup_path) => eprintln!(
+                        "settings.json 解析失败，已备份到 {}: {}",
+                        backup_path.display(),
+                        error
+                    ),
+                    None => eprintln!("settings.json 解析失败，且备份失败: {error}"),
+                }
+                BackendSettings::default()
+            }
+        };
+
+        Ok(normalize_settings_config_sections(settings))
     }
 
     pub fn load_strict(&self) -> anyhow::Result<BackendSettings> {
@@ -1005,7 +1079,10 @@ impl SettingsStore {
             None => return Ok(BackendSettings::default()),
         };
 
-        let settings = serde_json::from_str(&contents)
+        let mut value = serde_json::from_str::<Value>(&contents)
+            .with_context(|| format!("解析设置文件失败: {}", self.path.display()))?;
+        overlay_db_profiles_in_value(&self.path, &mut value)?;
+        let settings = serde_json::from_value::<BackendSettings>(value)
             .with_context(|| format!("解析设置文件失败: {}", self.path.display()))?;
         Ok(normalize_settings_config_sections(settings))
     }
@@ -1029,7 +1106,9 @@ impl SettingsStore {
         let _file_lock = SettingsFileLock::acquire(&self.path)?;
         let mut settings = normalize_settings_config_sections(settings.clone());
         settings.codex_extra_args = normalize_codex_extra_args(&settings.codex_extra_args);
-        let bytes = serde_json::to_vec_pretty(&settings)?;
+        let mut raw = settings_to_object(&settings);
+        self.persist_db_profiles(&mut raw)?;
+        let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         direct_write(&self.path, &bytes)
     }
 
@@ -1055,6 +1134,9 @@ impl SettingsStore {
             "relayContextConfigContents".to_string(),
             Value::String(settings.relay_context_config_contents.clone()),
         );
+        // 供应商已经由 `load_raw_object` 注入 raw，这里把它们落进 ccp.db 并把
+        // key 从 settings.json 里摘掉；返回值在上面就算好了，仍然带着供应商。
+        self.persist_db_profiles(&mut raw)?;
         let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         direct_write(&self.path, &bytes)?;
         Ok(settings)
@@ -1078,6 +1160,8 @@ impl SettingsStore {
         // changing an unrelated capability toggle.
         let settings = serde_json::from_value::<BackendSettings>(Value::Object(raw.clone()))
             .with_context(|| format!("failed to decode updated setting {key}"))?;
+        // 同 `update`：供应商在返回的 settings 里保留，只是搬到了 ccp.db。
+        self.persist_db_profiles(&mut raw)?;
         let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         direct_write(&self.path, &bytes)?;
         Ok(settings)
@@ -1087,7 +1171,9 @@ impl SettingsStore {
         let contents = match fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(settings_to_object(&BackendSettings::default()));
+                let mut raw = settings_to_object(&BackendSettings::default());
+                self.overlay_db_profiles(&mut raw);
+                return Ok(raw);
             }
             Err(error) => {
                 return Err(error)
@@ -1097,12 +1183,24 @@ impl SettingsStore {
 
         let value = serde_json::from_str::<Value>(&contents)
             .with_context(|| format!("failed to parse settings {}", self.path.display()))?;
-        value.as_object().cloned().ok_or_else(|| {
+        let mut raw = value.as_object().cloned().ok_or_else(|| {
             anyhow::anyhow!(
                 "settings root must be a JSON object: {}",
                 self.path.display()
             )
-        })
+        })?;
+        self.overlay_db_profiles(&mut raw);
+        Ok(raw)
+    }
+
+    /// 读路径：settings.json 里没有 `relayProfiles` 时，从 `ccp.db` 补齐。
+    fn overlay_db_profiles(&self, raw: &mut Map<String, Value>) {
+        overlay_db_profiles_for(&self.path, raw);
+    }
+
+    /// 写路径：把 `raw` 里的供应商搬进 `ccp.db`，成功后从 `raw` 里删掉该 key。
+    fn persist_db_profiles(&self, raw: &mut Map<String, Value>) -> anyhow::Result<()> {
+        persist_db_profiles_for(&self.path, raw)
     }
 }
 
@@ -1414,6 +1512,96 @@ fn settings_to_object(settings: &BackendSettings) -> Map<String, Value> {
         Value::Object(map) => map,
         _ => Map::new(),
     }
+}
+
+/// `ccp.db` 与 settings.json 同目录：迁移、备份和测试隔离都以这个目录为单位。
+fn providers_db_path(settings_path: &Path) -> PathBuf {
+    settings_path.with_file_name("ccp.db")
+}
+
+/// 升级回退用的 settings.json 原样副本。
+fn providers_backup_path(settings_path: &Path) -> PathBuf {
+    settings_path.with_file_name("settings.json.pre-sqlite.bak")
+}
+
+/// 读取路径上的"叠加数据库里的供应商"。
+///
+/// 只有 `settings.json` 里**没有** `relayProfiles` 时才走数据库：文件里存在这个
+/// key（旧版还没迁移，或旧版本程序刚写过）时以文件为准，读操作绝不产生副作用。
+fn overlay_db_profiles_in_value(settings_path: &Path, value: &mut Value) -> anyhow::Result<()> {
+    let Some(raw) = value.as_object_mut() else {
+        return Ok(());
+    };
+    overlay_db_profiles_for(settings_path, raw);
+    Ok(())
+}
+
+fn overlay_db_profiles_for(settings_path: &Path, raw: &mut Map<String, Value>) {
+    if raw.contains_key("relayProfiles") {
+        return;
+    }
+
+    let db_path = providers_db_path(settings_path);
+    // 读路径不创建数据库：目录里没有 ccp.db 就等价于"没有供应商"。
+    if !db_path.is_file() {
+        return;
+    }
+    let conn = match ccp_db::open(&db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("读取供应商数据库失败，按无供应商处理: {error}");
+            return;
+        }
+    };
+    match ccp_db::providers_load(&conn) {
+        Ok(Some(profiles)) => {
+            raw.insert("relayProfiles".to_string(), Value::Array(profiles));
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("读取供应商数据库失败，按无供应商处理: {error}"),
+    }
+}
+
+/// 落库并生成 settings.json 里不含 `relayProfiles` 的备份。
+///
+/// 只有 `raw` 里确实带着供应商数组时才动数据库。数据库写失败必须让整次保存失败——
+/// 绝不能先把 settings.json 写成没有供应商的样子，那会把用户数据弄丢。
+fn persist_db_profiles_for(
+    settings_path: &Path,
+    raw: &mut Map<String, Value>,
+) -> anyhow::Result<()> {
+    let Some(profiles) = raw.get("relayProfiles").and_then(Value::as_array).cloned() else {
+        return Ok(());
+    };
+
+    let db_path = providers_db_path(settings_path);
+    let mut conn = ccp_db::open(&db_path)?;
+    // 首次迁移前，用户目录里还没有 ccp.db（或还没写过 providers.migrated）时，
+    // 先留一份原样的 settings.json，用户想退回旧版本还有本可查。
+    if !profiles.is_empty()
+        && ccp_db::providers_load(&conn)?.is_none()
+        && let Err(error) = back_up_settings_before_sqlite(settings_path)
+    {
+        eprintln!("写迁移前备份失败，继续迁移: {error}");
+    }
+    ccp_db::providers_replace(&mut conn, &profiles)?;
+    raw.remove("relayProfiles");
+    Ok(())
+}
+
+fn back_up_settings_before_sqlite(settings_path: &Path) -> anyhow::Result<()> {
+    let backup_path = providers_backup_path(settings_path);
+    if backup_path.exists() {
+        return Ok(());
+    }
+    fs::copy(settings_path, &backup_path).with_context(|| {
+        format!(
+            "写迁移前备份失败：{} -> {}",
+            settings_path.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2125,6 +2313,65 @@ mod tests {
         path
     }
 
+    /// 迁移把供应商从 settings.json 挪进 ccp.db，所以断言落盘供应商的测试必须从
+    /// 数据库读回，`settings.json` 里已经没有 `relayProfiles` 了。
+    fn saved_db_profiles(dir: &Path) -> Vec<Value> {
+        let db_path = providers_db_path(&dir.join("settings.json"));
+        assert!(db_path.is_file(), "ccp.db 应已创建: {}", db_path.display());
+        let conn = ccp_db::open(&db_path).unwrap();
+        ccp_db::providers_load(&conn)
+            .unwrap()
+            .expect("ccp.db 应已迁移")
+    }
+
+    fn saved_db_profile(dir: &Path, id: &str) -> Value {
+        saved_db_profiles(dir)
+            .into_iter()
+            .find(|profile| profile["id"] == json!(id))
+            .unwrap_or_else(|| panic!("ccp.db 中缺少供应商 {id}"))
+    }
+
+    fn corrupt_backup_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut backups = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".corrupt-"))
+            })
+            .collect::<Vec<_>>();
+        backups.sort();
+        backups
+    }
+
+    #[test]
+    fn load_backs_up_corrupt_settings_once() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let corrupt = "{ this is not valid json";
+        std::fs::write(&path, corrupt).unwrap();
+        let store = SettingsStore::new(path.clone());
+
+        // 解析失败必须回退到默认值，而不是把错误抛给调用方。
+        let first = store.load().unwrap();
+        assert_eq!(first, BackendSettings::default());
+        // 多次调用仍然返回默认值，不会 panic，也不会再次备份。
+        let second = store.load().unwrap();
+        assert_eq!(second, BackendSettings::default());
+
+        let backups = corrupt_backup_files(&dir);
+        assert_eq!(backups.len(), 1, "损坏内容只应备份一次: {backups:?}");
+        let backup_name = backups[0].file_name().unwrap().to_string_lossy();
+        assert!(
+            backup_name.starts_with("settings.json.corrupt-") && backup_name.ends_with(".bak"),
+            "备份文件名应基于实际文件名: {backup_name}"
+        );
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), corrupt);
+        // 原文件必须保持原样，等用户自行修复。
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt);
+    }
+
     #[test]
     fn settings_default_matches_expected_behavior() {
         let settings = BackendSettings::default();
@@ -2531,7 +2778,7 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
         store.save(&settings).unwrap();
         let loaded = store.load().unwrap();
         let profile = &loaded.relay_profiles[0];
-        let persisted: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let persisted = saved_db_profiles(&dir);
 
         assert_eq!(profile.api_key, "test-codex-key");
         assert_eq!(profile.base_url, "https://relay.example/v1");
@@ -2541,12 +2788,9 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
             "test-codex-key"
         );
         assert!(profile.config_contents.contains("https://relay.example/v1"));
-        assert!(persisted["relayProfiles"][0].get("apiKey").is_none());
-        assert!(persisted["relayProfiles"][0].get("baseUrl").is_none());
-        assert_eq!(
-            persisted["relayProfiles"][0]["upstreamBaseUrl"],
-            "https://relay.example/v1"
-        );
+        assert!(persisted[0].get("apiKey").is_none());
+        assert!(persisted[0].get("baseUrl").is_none());
+        assert_eq!(persisted[0]["upstreamBaseUrl"], "https://relay.example/v1");
     }
 
     #[test]
@@ -3018,10 +3262,8 @@ base_url = "http://127.0.0.1:57321/v1"
                 .contains("claude_codex_pro_chat_base_url")
         );
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        let profile = &saved["relayProfiles"][0];
+        let saved_db = saved_db_profiles(&dir);
+        let profile = &saved_db[0];
         assert!(profile.get("baseUrl").is_none());
         assert_eq!(profile["upstreamBaseUrl"], "https://api.deepseek.com");
         assert!(profile.get("apiKey").is_none());
@@ -3112,18 +3354,16 @@ experimental_bearer_token = "sk-mix"
                 .contains(r#"experimental_bearer_token = "sk-mix""#)
         );
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        assert!(saved["relayProfiles"][0].get("apiKey").is_none());
+        let saved_db = saved_db_profiles(&dir);
+        assert!(saved_db[0].get("apiKey").is_none());
         assert!(
-            !saved["relayProfiles"][0]["authContents"]
+            !saved_db[0]["authContents"]
                 .as_str()
                 .unwrap()
                 .contains("OPENAI_API_KEY")
         );
         assert!(
-            saved["relayProfiles"][0]["configContents"]
+            saved_db[0]["configContents"]
                 .as_str()
                 .unwrap()
                 .contains(r#"experimental_bearer_token = "sk-mix""#)
@@ -3403,15 +3643,13 @@ experimental_bearer_token = "sk-existing"
             .unwrap();
         assert!(!updated.multica_workspace_enabled);
 
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let saved_db = saved_db_profiles(&dir);
+        assert_eq!(saved_db[0]["baseUrl"], "http://127.0.0.1:57321/v1");
         assert_eq!(
-            saved["relayProfiles"][0]["baseUrl"],
-            "http://127.0.0.1:57321/v1"
-        );
-        assert_eq!(
-            saved["relayProfiles"][0]["upstreamBaseUrl"],
+            saved_db[0]["upstreamBaseUrl"],
             "https://supplier.example/v1"
         );
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(saved["multicaWorkspaceEnabled"], false);
     }
 
@@ -3489,11 +3727,9 @@ experimental_bearer_token = "sk-existing"
         assert_eq!(active.name, "中转 B");
         assert_eq!(updated.relay_test_model, "claude-sonnet-4");
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        assert!(saved["relayProfiles"][1].get("baseUrl").is_none());
-        assert!(saved["relayProfiles"][1].get("apiKey").is_none());
+        let saved_db = saved_db_profiles(&dir);
+        assert!(saved_db[1].get("baseUrl").is_none());
+        assert!(saved_db[1].get("apiKey").is_none());
     }
 
     #[test]
@@ -3530,17 +3766,9 @@ experimental_bearer_token = "sk-existing"
         assert_eq!(aggregate.aggregate_strategy, "failover");
         assert_eq!(aggregate.aggregate_members, vec!["relay-a".to_string()]);
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            saved["relayProfiles"][1]["aggregateStrategy"],
-            json!("failover")
-        );
-        assert_eq!(
-            saved["relayProfiles"][1]["aggregateMembers"],
-            json!(["relay-a"])
-        );
+        let saved_db = saved_db_profiles(&dir);
+        assert_eq!(saved_db[1]["aggregateStrategy"], json!("failover"));
+        assert_eq!(saved_db[1]["aggregateMembers"], json!(["relay-a"]));
     }
 
     #[test]
@@ -3560,11 +3788,8 @@ experimental_bearer_token = "sk-existing"
             }))
             .unwrap();
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
         assert_eq!(
-            saved["relayProfiles"][0]["codexCatalogJson"],
+            saved_db_profile(&dir, "codex-catalog")["codexCatalogJson"],
             json!(catalog)
         );
 
@@ -3638,13 +3863,14 @@ experimental_bearer_token = "sk-existing"
         let saved: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
                 .unwrap();
-        assert_eq!(saved["relayProfiles"].as_array().unwrap().len(), 1);
-        assert_eq!(saved["relayProfiles"][0]["id"], json!("gpt-plus"));
+        let saved_db = saved_db_profiles(&dir);
+        assert_eq!(saved_db.len(), 1);
+        assert_eq!(saved_db[0]["id"], json!("gpt-plus"));
         assert_eq!(saved["activeRelayId"], json!("gpt-plus"));
-        assert!(saved["relayProfiles"][0].get("baseUrl").is_none());
-        assert!(saved["relayProfiles"][0].get("apiKey").is_none());
+        assert!(saved_db[0].get("baseUrl").is_none());
+        assert!(saved_db[0].get("apiKey").is_none());
         assert!(
-            saved["relayProfiles"][0]["configContents"]
+            saved_db[0]["configContents"]
                 .as_str()
                 .unwrap()
                 .contains("model_provider = \"gpt-plus\"")
@@ -3774,10 +4000,8 @@ experimental_bearer_token = "sk-existing"
         assert_eq!(updated.relay_profiles[0].id, "relay-a");
         assert_eq!(updated.relay_profiles[0].name, "供应商 A");
 
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        let saved_profile = &saved["relayProfiles"][0];
+        let saved_db = saved_db_profiles(&dir);
+        let saved_profile = &saved_db[0];
         assert!(saved_profile.get("model").is_none());
         assert!(saved_profile.get("baseUrl").is_none());
         assert!(saved_profile.get("apiKey").is_none());
@@ -4220,6 +4444,269 @@ experimental_bearer_token = "sk-existing"
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    // ========================================================================
+    // 供应商迁移到 ccp.db
+    // ========================================================================
+
+    fn supplier(id: &str, name: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "targetApp": "codex",
+            "relayMode": "pureApi",
+            "upstreamBaseUrl": format!("https://{id}.example/v1"),
+        })
+    }
+
+    fn legacy_settings_file(dir: &Path, profiles: Value) -> PathBuf {
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "relayProfilesEnabled": true,
+                "activeRelayId": "supplier-a",
+                "relayProfiles": profiles,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        path
+    }
+
+    fn settings_json(dir: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap()).unwrap()
+    }
+
+    fn pre_sqlite_backup_path(dir: &Path) -> PathBuf {
+        dir.join("settings.json.pre-sqlite.bak")
+    }
+
+    #[test]
+    fn legacy_relay_profiles_migrate_to_ccp_db() {
+        let dir = temp_dir();
+        let original = serde_json::to_vec_pretty(&json!({
+            "relayProfilesEnabled": true,
+            "activeRelayId": "supplier-a",
+            "relayProfiles": [
+                supplier("supplier-a", "供应商 A"),
+                supplier("supplier-b", "供应商 B"),
+            ],
+        }))
+        .unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, &original).unwrap();
+        let store = SettingsStore::new(path);
+
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.relay_profiles.len(), 2, "迁移前先从 JSON 读出供应商");
+
+        store.save(&loaded).unwrap();
+
+        let raw = settings_json(&dir);
+        assert!(
+            raw.get("relayProfiles").is_none(),
+            "迁移后 settings.json 不得再保留 relayProfiles: {raw}"
+        );
+        assert_eq!(raw["activeRelayId"], json!("supplier-a"));
+
+        let restored = saved_db_profiles(&dir);
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0]["id"], json!("supplier-a"));
+        assert_eq!(restored[0]["name"], json!("供应商 A"));
+        assert_eq!(restored[1]["id"], json!("supplier-b"));
+        assert_eq!(restored[1]["name"], json!("供应商 B"));
+
+        let backup = pre_sqlite_backup_path(&dir);
+        assert!(backup.is_file(), "首次迁移必须留下升级回退备份");
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            original,
+            "备份必须是迁移前 settings.json 的逐字节副本"
+        );
+
+        // 再次 load 必须仍然看到同样的两家供应商，顺序不变。
+        let reloaded = store.load().unwrap();
+        assert_eq!(reloaded.relay_profiles.len(), 2);
+        assert_eq!(reloaded.relay_profiles[0].id, "supplier-a");
+        assert_eq!(reloaded.relay_profiles[0].name, "供应商 A");
+        assert_eq!(reloaded.relay_profiles[1].id, "supplier-b");
+        assert_eq!(reloaded.relay_profiles[1].name, "供应商 B");
+    }
+
+    #[test]
+    fn boolean_update_after_migration_keeps_suppliers_in_db() {
+        let dir = temp_dir();
+        legacy_settings_file(
+            &dir,
+            json!([
+                supplier("supplier-a", "供应商 A"),
+                supplier("supplier-b", "供应商 B"),
+            ]),
+        );
+        let store = SettingsStore::new(dir.join("settings.json"));
+        store.save(&store.load().unwrap()).unwrap();
+        let before = saved_db_profiles(&dir);
+
+        let updated = store.update(json!({"enhancementsEnabled": true})).unwrap();
+
+        assert_eq!(updated.relay_profiles.len(), 2, "返回值必须仍然带着供应商");
+        assert_eq!(updated.relay_profiles[0].id, "supplier-a");
+        assert_eq!(updated.relay_profiles[1].id, "supplier-b");
+        assert!(settings_json(&dir).get("relayProfiles").is_none());
+        assert_eq!(saved_db_profiles(&dir), before, "无关更新不得改动数据库");
+    }
+
+    #[test]
+    fn old_version_write_back_wins_over_database() {
+        let dir = temp_dir();
+        legacy_settings_file(
+            &dir,
+            json!([
+                supplier("supplier-a", "供应商 A"),
+                supplier("supplier-b", "供应商 B"),
+            ]),
+        );
+        let path = dir.join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        store.save(&store.load().unwrap()).unwrap();
+
+        // 模拟用户用旧版本程序又写了一次 settings.json：文件里有且只有一家新供应商。
+        let mut raw = settings_json(&dir);
+        raw["relayProfiles"] = json!([supplier("supplier-new", "旧版本写入的供应商")]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&raw).unwrap()).unwrap();
+
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.relay_profiles.len(), 1, "文件里的供应商必须优先");
+        assert_eq!(loaded.relay_profiles[0].id, "supplier-new");
+        assert_eq!(loaded.relay_profiles[0].name, "旧版本写入的供应商");
+
+        store.save(&loaded).unwrap();
+
+        let saved = saved_db_profiles(&dir);
+        assert_eq!(saved.len(), 1, "旧版本文件必须覆盖数据库");
+        assert_eq!(saved[0]["id"], json!("supplier-new"));
+        assert!(settings_json(&dir).get("relayProfiles").is_none());
+    }
+
+    #[test]
+    fn saving_empty_supplier_list_clears_the_database() {
+        let dir = temp_dir();
+        legacy_settings_file(
+            &dir,
+            json!([
+                supplier("supplier-a", "供应商 A"),
+                supplier("supplier-b", "供应商 B"),
+            ]),
+        );
+        let store = SettingsStore::new(dir.join("settings.json"));
+        store.save(&store.load().unwrap()).unwrap();
+        assert_eq!(saved_db_profiles(&dir).len(), 2);
+
+        let cleared = BackendSettings {
+            relay_profiles: Vec::new(),
+            ..store.load().unwrap()
+        };
+        store.save(&cleared).unwrap();
+
+        assert!(
+            saved_db_profiles(&dir).is_empty(),
+            "清空供应商后数据库必须没有残留行"
+        );
+        assert!(
+            store.load().unwrap().relay_profiles.is_empty(),
+            "清空后不得回退到任何其它来源"
+        );
+    }
+
+    #[test]
+    fn loading_an_unmigrated_empty_directory_creates_no_database() {
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+
+        let loaded = store.load().unwrap();
+
+        assert_eq!(loaded, BackendSettings::default());
+        assert!(
+            !dir.join("ccp.db").exists(),
+            "读路径不得创建 ccp.db: {:?}",
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name())
+                .collect::<Vec<_>>()
+        );
+        assert!(!pre_sqlite_backup_path(&dir).exists());
+    }
+
+    #[test]
+    fn migrated_profiles_keep_skip_serializing_field_behavior() {
+        fn profile_with_skipped_fields() -> RelayProfile {
+            RelayProfile {
+                id: "skipped-fields".to_string(),
+                name: "跳过序列化字段".to_string(),
+                target_app: "codex".to_string(),
+                relay_mode: RelayMode::PureApi,
+                model: "gpt-5.4".to_string(),
+                base_url: "https://relay.example/v1".to_string(),
+                upstream_base_url: "https://relay.example/v1".to_string(),
+                api_key: "sk-secret".to_string(),
+                api_key_explicit: true,
+                auth_contents: "{\"OPENAI_API_KEY\":\"sk-secret\"}".to_string(),
+                config_contents: "model = \"gpt-5.4\"\n".to_string(),
+                ..RelayProfile::default()
+            }
+        }
+
+        let dir = temp_dir();
+        let store = SettingsStore::new(dir.join("settings.json"));
+        let profile = profile_with_skipped_fields();
+        let before = serde_json::to_value(&profile).unwrap();
+        // 这些字段今天就不参与序列化，迁移只不过换了个存放位置。
+        for skipped in ["model", "baseUrl", "apiKey"] {
+            assert!(before.get(skipped).is_none(), "{skipped} 不应被序列化");
+        }
+        assert_eq!(before["upstreamBaseUrl"], "https://relay.example/v1");
+
+        let settings = BackendSettings {
+            relay_profiles: vec![profile.clone()],
+            ..BackendSettings::default()
+        };
+        store.save(&settings).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.relay_profiles.len(), 1);
+        let after = serde_json::to_value(&loaded.relay_profiles[0]).unwrap();
+
+        // 基准是迁移前的真实行为：save 本来就会经 normalize 重写 config/auth，
+        // 所以用「旧格式 settings.json（relayProfiles 留在文件里）+ 无数据库」
+        // 读回的结果对比，而不是拿未经 normalize 的原始 profile。
+        let legacy_dir = temp_dir();
+        let legacy_path = legacy_dir.join("settings.json");
+        let mut legacy_raw = settings_to_object(&normalize_settings_config_sections(settings));
+        assert!(legacy_raw.contains_key("relayProfiles"));
+        fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&Value::Object(legacy_raw)).unwrap(),
+        )
+        .unwrap();
+        let legacy_loaded = SettingsStore::new(legacy_path).load().unwrap();
+        assert!(
+            !providers_db_path(&legacy_dir.join("settings.json")).exists(),
+            "读旧格式文件不得创建数据库"
+        );
+        let legacy = serde_json::to_value(&legacy_loaded.relay_profiles[0]).unwrap();
+
+        for skipped in ["model", "baseUrl", "apiKey"] {
+            assert!(
+                after.get(skipped).is_none(),
+                "{skipped} 迁移后仍不应被序列化"
+            );
+        }
+        assert_eq!(
+            after, legacy,
+            "迁移往返后 skip_serializing 字段的行为必须与迁移前完全一致"
         );
     }
 }

@@ -389,3 +389,16 @@ test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 771 filtered out; f
 
 EXIT=0
 NATIVE_DONE
+=== post-merge cargo test -p claude-codex-pro-core --lib claude_desktop_computer_use ===
+test result: ok. 11 passed; 0 failed; 1 ignored; 0 measured; 855 filtered out; finished in 1.03s
+EXIT=0
+=== post-merge cargo test -p claude-codex-pro-manager --test windows_subsystem ===
+test claude_launch_waits_for_real_window_readiness ... FAILED
+thread 'claude_launch_waits_for_real_window_readiness' (27884) panicked at apps\claude-codex-pro-manager\src-tauri\tests\windows_subsystem.rs:3105:5:
+test result: FAILED. 91 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+EXIT=101
+POSTMERGE_DONE
+=== post-merge LF windows_subsystem ===
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+EXIT=0
+LF_DONE

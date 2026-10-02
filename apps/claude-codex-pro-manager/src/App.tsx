@@ -80,6 +80,7 @@ import {
   initialRoute,
   isRoute,
   normalizeRoute,
+  primaryRoute,
   routeDocumentTitle,
   routeLabel,
 } from "@/lib/routes";
@@ -143,7 +144,6 @@ import {
   ToggleSwitch,
 } from "@/components/ui/ops";
 import {
-  MaintenanceScreen,
   OverviewScreen,
   SessionManagementScreen,
   SettingsScreen,
@@ -1295,6 +1295,9 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
+      // upsert only edits CCP's managed copy; write it into ~/.codex/config.toml
+      // too, otherwise a new MCP never reaches Codex or the inventory scan.
+      if (statusOk(result.status)) await syncCodexLiveContext(result.settings, "保存工具与插件");
     }
     return result;
   };
@@ -1310,8 +1313,19 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "删除工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
+      if (statusOk(result.status)) await syncCodexLiveContext(result.settings, "删除工具与插件");
     }
     return result;
+  };
+
+  const syncCodexLiveContext = async (sourceSettings: BackendSettings, title: string) => {
+    const synced = await run(
+      () => call<CommandResult<Record<string, unknown>>>("sync_live_context_entries", { request: { settings: sourceSettings } }),
+      title,
+      { notify: false },
+    );
+    if (synced && !statusOk(synced.status)) notifyResult({ title, message: synced.message, status: synced.status });
+    return synced;
   };
 
   const refreshClaudeContextEntries = async (silent = false) => {
@@ -2816,9 +2830,10 @@ export function App() {
         void refreshRequestTimeline();
       }, 900);
     } else if (target === "settings") {
-      await refreshSettings(true);
+      // Settings hosts the maintenance panel, logs and about tabs.
+      await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
-        void refreshLogs(true);
+        void Promise.all([refreshLogs(true), refreshOverview(true), checkUpdate(true)]);
       }, 250);
     } else if (target === "supplier") {
       requiredResults = await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
@@ -2861,11 +2876,6 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
-    } else if (target === "maintenance") {
-      await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
-      afterFirstPaintIfFresh(() => {
-        void Promise.all([refreshOverview(true), refreshWatcher(true)]);
-      }, 250);
     } else if (target === "about") {
       await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
@@ -2884,7 +2894,7 @@ export function App() {
     const navigate = (event: Event) => {
       const route = normalizeRoute((event as CustomEvent<{ route?: unknown }>).detail?.route);
       if (!isRoute(route)) return;
-      setRoute(route);
+      setRoute(primaryRoute(route));
     };
     window.addEventListener("claude-codex-pro-navigate", navigate);
     return () => window.removeEventListener("claude-codex-pro-navigate", navigate);
@@ -3291,7 +3301,8 @@ export function App() {
         onLaunchClaude={() => void actions.launchClaudeDesktop()}
         onNavigate={(nextRoute) => {
           if (nextRoute !== "supplier") setSupplierFocusProfileId(null);
-          setRoute(nextRoute);
+          // Compatibility aliases (about / maintenance) open their host page.
+          setRoute(primaryRoute(nextRoute));
         }}
         onRestartCodex={() => void actions.restartCodex()}
         onSelectSupplier={(profileId) => {
@@ -3351,8 +3362,7 @@ export function App() {
               distillationCandidates={distillationCandidates}
             />
           ) : null}
-          {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} updateInfo={updateInfo} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} settings={settings} updateInfo={updateInfo} /> : null}
       </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
     </>

@@ -1,0 +1,155 @@
+/* Multi-agent supplier panel — reuses st-* settings controls on the CCP
+ * liquid-glass tokens. Colours come only from --finish-* / --workspace-*. */
+.ap-root { gap: 12px; }
+
+.ap-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ap-head-copy { display: grid; gap: 4px; min-width: 0; }
+.ap-head-copy strong { font-size: 15px; font-weight: 650; }
+.ap-head-copy small { color: var(--workspace-text-secondary); font-size: 12px; line-height: 1.6; }
+
+.ap-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--workspace-text-tertiary);
+  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.ap-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ap-path em {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--workspace-warning) 14%, transparent);
+  color: var(--workspace-warning);
+  padding: 1px 8px;
+  font-family: inherit;
+  font-style: normal;
+}
+
+.ap-empty {
+  display: grid;
+  gap: 4px;
+  border: 1px dashed var(--finish-edge-muted);
+  border-radius: var(--st-radius);
+  padding: 22px;
+  text-align: center;
+}
+
+.ap-empty strong { font-size: 13.5px; }
+.ap-empty small { color: var(--workspace-text-secondary); font-size: 12px; }
+
+.ap-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+.ap-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--finish-edge);
+  border-radius: var(--st-radius);
+  background-color: var(--finish-glass-panel);
+  background-image: var(--finish-reflection);
+  box-shadow: inset 0 1px 0 var(--finish-highlight), 0 8px 22px var(--finish-depth);
+  padding: 12px 14px;
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  transition: border-color var(--finish-transition);
+}
+
+.ap-card.on { border-color: color-mix(in srgb, var(--workspace-blue) 55%, transparent); }
+
+.ap-avatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--finish-edge-muted);
+  border-radius: 11px;
+  background: var(--st-fill-hover);
+  font-weight: 700;
+}
+
+.ap-card-main { display: grid; flex: 1 1 auto; gap: 3px; min-width: 0; }
+.ap-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ap-title strong { font-size: 14px; font-weight: 650; }
+
+.ap-url,
+.ap-meta {
+  overflow: hidden;
+  color: var(--workspace-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ap-url { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; }
+.ap-meta { color: var(--workspace-text-tertiary); }
+
+.ap-card-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.ap-danger:hover { color: var(--workspace-danger); }
+.ap-error { color: var(--workspace-danger) !important; }
+
+/* Editor dialog */
+.ap-editor-backdrop {
+  position: fixed;
+  z-index: 320;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--workspace-overlay);
+  padding: 24px;
+}
+
+.ap-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(560px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  border: 1px solid var(--finish-edge);
+  border-radius: 18px;
+  background-color: var(--finish-data-surface);
+  background-image: var(--finish-reflection);
+  box-shadow: inset 0 1px 0 var(--finish-highlight), var(--workspace-menu-shadow);
+  color: var(--workspace-text);
+}
+
+.ap-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--finish-edge-muted);
+  padding: 14px 18px;
+}
+
+.ap-editor-head strong { font-size: 15px; font-weight: 650; }
+.ap-editor-body { display: grid; gap: 12px; overflow: auto; padding: 16px 18px; }
+.ap-editor-body .st-select { min-width: 0; width: 100%; }
+.ap-editor-foot { border-top: 1px solid var(--finish-edge-muted); padding: 12px 18px; }
+
+@media (max-width: 760px) {
+  .ap-card { flex-wrap: wrap; }
+  .ap-card-actions { width: 100%; justify-content: flex-end; }
+}
+
+/* Agent tabs above the supplier list: 12 entries, so wrap instead of overflow. */
+.supplier-target-filter.supplier-agent-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-self: start;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  margin-bottom: 12px;
+}
+
+.supplier-target-filter.supplier-agent-tabs button { min-width: 0; padding: 0 12px; }

@@ -5,19 +5,17 @@ import {
   ChevronRight,
   CircleCheck,
   Command,
-  Laptop,
   LoaderCircle,
   Languages,
   MessageCircle,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Rocket,
   Search,
-  Sun,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { THEME_CHANGE_EVENT, THEME_STORAGE_KEY, readThemePreference, type ThemePreference } from "@/lib/theme";
 import {
   useCallback,
   useEffect,
@@ -41,7 +39,7 @@ import { formatDownloadBytes, updateProgressLabel } from "@/lib/update";
 import type { Route, SupplierTargetApp, UpdateResult } from "@/types";
 
 export type AgentScope = "codex" | "claude";
-export type ThemePreference = "system" | "light" | "dark";
+export type { ThemePreference } from "@/lib/theme";
 export type ProxyHealth = "healthy" | "attention" | "offline" | "unknown";
 export type ShellSupplierOption = {
   id: string;
@@ -69,18 +67,7 @@ type AppShellProps = {
   updateInfo: UpdateResult | null;
 };
 
-const THEME_STORAGE_KEY = "ccp-manager-theme";
 const SIDEBAR_STORAGE_KEY = "ccp-manager-sidebar-collapsed";
-
-function readThemePreference(): ThemePreference {
-  try {
-    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
-    if (value === "light" || value === "dark" || value === "system") return value;
-  } catch {
-    // Local storage can be unavailable in hardened WebView contexts.
-  }
-  return "system";
-}
 
 function readSidebarPreference() {
   try {
@@ -123,7 +110,6 @@ export function AppShell({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarPreference);
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const [supplierMenuOpen, setSupplierMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
@@ -131,7 +117,6 @@ export function AppShell({
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const commandPaletteRef = useRef<HTMLElement | null>(null);
   const commandReturnFocusRef = useRef<HTMLElement | null>(null);
-  const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const supplierMenuRef = useRef<HTMLDivElement | null>(null);
   const resolvedTheme = themePreference === "system" ? (systemDark ? "dark" : "light") : themePreference;
   const activePrimaryRoute = primaryRoute(route);
@@ -180,6 +165,16 @@ export function AppShell({
     window.setTimeout(() => commandReturnFocusRef.current?.focus(), 0);
   }, []);
 
+  // The settings page changes the theme through a broadcast event.
+  useEffect(() => {
+    const onThemeChange = (event: Event) => {
+      const value = (event as CustomEvent<ThemePreference>).detail;
+      if (value === "light" || value === "dark" || value === "system") setThemePreference(value);
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange);
+  }, []);
+
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
     if (!media) return;
@@ -220,7 +215,6 @@ export function AppShell({
         if (!commandOpen) openCommand();
       } else if (event.key === "Escape") {
         if (commandOpen) closeCommand();
-        setThemeMenuOpen(false);
         setSupplierMenuOpen(false);
       }
     };
@@ -238,15 +232,6 @@ export function AppShell({
   useEffect(() => {
     setCommandIndex(0);
   }, [commandQuery]);
-
-  useEffect(() => {
-    if (!themeMenuOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!themeMenuRef.current?.contains(event.target as Node)) setThemeMenuOpen(false);
-    };
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
-  }, [themeMenuOpen]);
 
   useEffect(() => {
     if (!supplierMenuOpen) return;
@@ -338,34 +323,6 @@ export function AppShell({
         </nav>
 
         <div className="ops-rail-footer">
-          <div className="ops-theme-control" ref={themeMenuRef}>
-            <button
-              aria-expanded={themeMenuOpen}
-              aria-haspopup="menu"
-              className="ops-rail-utility"
-              onClick={() => setThemeMenuOpen((open) => !open)}
-              title="外观主题"
-              type="button"
-            >
-              {themePreference === "light" ? <Sun aria-hidden="true" className="h-4 w-4" /> : themePreference === "dark" ? <Moon aria-hidden="true" className="h-4 w-4" /> : <Laptop aria-hidden="true" className="h-4 w-4" />}
-              <span>{themePreference === "system" ? "跟随系统" : themePreference === "dark" ? "深色外观" : "浅色外观"}</span>
-            </button>
-            {themeMenuOpen ? (
-              <div className="ops-theme-menu" role="menu">
-                {([
-                  ["system", "跟随系统", Laptop],
-                  ["light", "浅色", Sun],
-                  ["dark", "深色", Moon],
-                ] as const).map(([value, label, Icon]) => (
-                  <button key={value} onClick={() => { setThemePreference(value); setThemeMenuOpen(false); }} role="menuitem" type="button">
-                    <Icon aria-hidden="true" className="h-4 w-4" />
-                    <span>{label}</span>
-                    {themePreference === value ? <Check aria-hidden="true" className="h-4 w-4" /> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
           <button
             aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
             className="ops-rail-utility"

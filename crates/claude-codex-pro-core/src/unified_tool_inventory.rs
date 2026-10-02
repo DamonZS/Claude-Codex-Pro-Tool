@@ -1756,7 +1756,40 @@ fn clean_title(title: &str, fallback: &str) -> String {
     }
 }
 
+/// The YAML between the leading `---` fences, if the file has one.
+fn frontmatter_block(text: &str) -> Option<&str> {
+    let text = text.trim_start_matches('\u{feff}');
+    let rest = text
+        .strip_prefix("---\r\n")
+        .or_else(|| text.strip_prefix("---\n"))?;
+    let end = rest
+        .find("\n---")
+        .map(|index| index + 1)
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// Single-line text for a frontmatter key. Parses the block as YAML so folded
+/// (`>`) and literal (`|`) scalars yield their text instead of the indicator.
 fn frontmatter_value(text: &str, key: &str) -> Option<String> {
+    if let Some(block) = frontmatter_block(text)
+        && let Ok(serde_yaml::Value::Mapping(map)) =
+            serde_yaml::from_str::<serde_yaml::Value>(block)
+    {
+        return match map.get(key) {
+            Some(serde_yaml::Value::String(value)) => {
+                let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                (!value.is_empty()).then_some(value)
+            }
+            Some(serde_yaml::Value::Number(value)) => Some(value.to_string()),
+            _ => None,
+        };
+    }
+    frontmatter_value_by_line(text, key)
+}
+
+/// Fallback for files whose frontmatter is not valid YAML.
+fn frontmatter_value_by_line(text: &str, key: &str) -> Option<String> {
     for line in text.lines().take(80) {
         let line = line.trim();
         let Some(value) = line
@@ -1766,11 +1799,55 @@ fn frontmatter_value(text: &str, key: &str) -> Option<String> {
             continue;
         };
         let value = value.trim().trim_matches(['\'', '"']);
-        if !value.is_empty() {
+        // A bare block-scalar indicator is not a value.
+        let is_block_indicator = matches!(value, ">" | "|" | ">-" | "|-" | ">+" | "|+");
+        if !value.is_empty() && !is_block_indicator {
             return Some(value.to_string());
         }
     }
     None
+}
+
+#[cfg(test)]
+mod frontmatter_tests {
+    use super::*;
+
+    #[test]
+    fn folded_and_literal_descriptions_are_read_as_text() {
+        let folded = "---\nname: demo\ndescription: >\n  First line\n  second line.\n---\nbody";
+        assert_eq!(
+            frontmatter_value(folded, "description").as_deref(),
+            Some("First line second line.")
+        );
+        let literal = "---\r\nname: demo\r\ndescription: |\r\n  Line A\r\n  Line B\r\n---\r\n";
+        assert_eq!(
+            frontmatter_value(literal, "description").as_deref(),
+            Some("Line A Line B")
+        );
+        assert_eq!(frontmatter_value(literal, "name").as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn plain_and_missing_values_keep_working() {
+        let plain = "---\nname: \"quoted\"\ndescription: Short one\n---\n";
+        assert_eq!(frontmatter_value(plain, "name").as_deref(), Some("quoted"));
+        assert_eq!(
+            frontmatter_value(plain, "description").as_deref(),
+            Some("Short one")
+        );
+        assert_eq!(frontmatter_value(plain, "version"), None);
+        // Invalid YAML falls back to line scanning and never returns the indicator.
+        let broken = "---\nname: a: b: c\ndescription: >\n  text\n---\n";
+        assert_ne!(
+            frontmatter_value(broken, "description").as_deref(),
+            Some(">")
+        );
+        // No frontmatter fences: line scan as before.
+        assert_eq!(
+            frontmatter_value("name: legacy\n", "name").as_deref(),
+            Some("legacy")
+        );
+    }
 }
 
 fn read_limited_text(path: &Path) -> anyhow::Result<String> {

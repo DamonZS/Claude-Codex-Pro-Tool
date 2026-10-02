@@ -1965,6 +1965,61 @@ fn user_env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// Resolved, directly callable upstream endpoint for a relay profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProviderEndpoint {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub uses_anthropic_messages: bool,
+    pub protocol: crate::settings::RelayProtocol,
+}
+
+/// 把 profile 解析成一个「可以直接调用」的上游端点。
+///
+/// 这里刻意绕开本地协议转换代理：`relay_profile_storage_base_url` 可能返回
+/// `http://127.0.0.1:<port>/v1`（Codex 走 Responses 转换时才需要的地址），
+/// 调用方拿它去发请求只会打到自己的代理上，所以本地代理地址一律当成空。
+pub fn resolve_provider_endpoint(profile: &RelayProfile) -> ResolvedProviderEndpoint {
+    // Claude-format profiles keep the upstream in the JSON `env` block.
+    let claude_env_base_url = || {
+        serde_json::from_str::<Value>(
+            profile
+                .config_contents
+                .trim()
+                .trim_start_matches('\u{feff}'),
+        )
+        .ok()
+        .and_then(|config| {
+            config
+                .get("env")
+                .and_then(Value::as_object)
+                .and_then(|env| non_empty_json_string(env, "ANTHROPIC_BASE_URL"))
+        })
+    };
+    let base_url = Some(relay_profile_storage_base_url(profile))
+        .filter(|url| !url.trim().is_empty() && !is_local_proxy_base_url(url))
+        .or_else(|| claude_env_base_url().filter(|url| !is_local_proxy_base_url(url)))
+        .unwrap_or_default();
+
+    ResolvedProviderEndpoint {
+        base_url,
+        api_key: crate::settings::relay_profile_resolved_api_key(profile),
+        model: relay_profile_model(profile),
+        uses_anthropic_messages: relay_profile_uses_anthropic_messages(profile),
+        protocol: profile.protocol,
+    }
+}
+
+/// CCP's own local routing endpoints (Codex protocol proxy, Claude Desktop
+/// proxy on any port) are never a real upstream for direct calls.
+fn is_local_proxy_base_url(url: &str) -> bool {
+    let url = url.trim().trim_end_matches('/');
+    url == crate::protocol_proxy::local_responses_proxy_base_url(
+        crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+    ) || (url.starts_with("http://127.0.0.1:") && url.ends_with("/claude-desktop"))
+}
+
 /// 解析 profile 實際使用的模型：编辑表单字段非空时优先，旧 config.toml 仅兜底。
 /// 这样修改供应商 ID/模型后，保存会重写旧 TOML，而不是继续沿用残留配置。
 pub fn relay_profile_model(profile: &RelayProfile) -> String {
@@ -3064,6 +3119,98 @@ mod tests {
             ..RelayProfile::default()
         };
         assert!(relay_profile_model(&empty).trim().is_empty());
+    }
+
+    #[test]
+    fn resolve_provider_endpoint_prefers_upstream_and_ignores_local_proxy() {
+        let local_proxy = crate::protocol_proxy::local_responses_proxy_base_url(
+            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        );
+
+        // 1. ChatCompletions 且 upstream_base_url 有值 → 直接返回 upstream，
+        //    即使 base_url / config_contents 里塞了本地转换代理也不受影响。
+        let mut chat_profile = RelayProfile {
+            protocol: RelayProtocol::ChatCompletions,
+            upstream_base_url: "https://upstream.example.com/v1".to_string(),
+            base_url: local_proxy.clone(),
+            api_key: "test-key".to_string(),
+            api_key_explicit: true,
+            config_contents: format!(
+                "model = \"deepseek-v4-pro\"\n\n[model_providers.custom]\nbase_url = \"{local_proxy}\"\n"
+            ),
+            ..RelayProfile::default()
+        };
+        chat_profile.target_app = "codex".to_string();
+
+        let resolved = resolve_provider_endpoint(&chat_profile);
+        assert_eq!(resolved.base_url, "https://upstream.example.com/v1");
+        assert_eq!(resolved.api_key, "test-key");
+        assert_eq!(resolved.model, "deepseek-v4-pro");
+        assert!(!resolved.uses_anthropic_messages);
+        assert_eq!(resolved.protocol, RelayProtocol::ChatCompletions);
+
+        // 2. base_url 与 upstream 都为空 → 回落到 config_contents 里
+        //    [model_providers.xxx] 的 base_url。
+        let from_config = RelayProfile {
+            protocol: RelayProtocol::Responses,
+            upstream_base_url: String::new(),
+            base_url: String::new(),
+            api_key: "test-key".to_string(),
+            api_key_explicit: true,
+            config_contents: concat!(
+                "model_provider = \"custom\"\n",
+                "model = \"gpt-image-2\"\n",
+                "\n",
+                "[model_providers.custom]\n",
+                "name = \"custom\"\n",
+                "wire_api = \"responses\"\n",
+                "base_url = \"https://ahg.codes\"\n",
+            )
+            .to_string(),
+            ..RelayProfile::default()
+        };
+
+        let resolved = resolve_provider_endpoint(&from_config);
+        assert_eq!(resolved.base_url, "https://ahg.codes");
+        assert_eq!(resolved.model, "gpt-image-2");
+        assert_eq!(resolved.protocol, RelayProtocol::Responses);
+
+        // 3. 解析结果就是本地转换代理地址时必须清空，否则调用方会打回自己的代理。
+        let local_only = RelayProfile {
+            protocol: RelayProtocol::ChatCompletions,
+            upstream_base_url: String::new(),
+            base_url: local_proxy.clone(),
+            api_key: "test-key".to_string(),
+            api_key_explicit: true,
+            ..RelayProfile::default()
+        };
+
+        let resolved = resolve_provider_endpoint(&local_only);
+        assert_eq!(resolved.base_url, "");
+        assert_eq!(resolved.api_key, "test-key");
+
+        // 4. Claude 类 profile：base_url 是 Claude Desktop 本地代理（任意端口），
+        //    真实上游在 JSON env 的 ANTHROPIC_BASE_URL 里。
+        let claude_profile = RelayProfile {
+            target_app: "claude-desktop".to_string(),
+            base_url: crate::protocol_proxy::local_claude_desktop_proxy_base_url(57340),
+            api_key: "test-key".to_string(),
+            api_key_explicit: true,
+            config_contents:
+                r#"{"env":{"ANTHROPIC_BASE_URL":"https://anthropic-relay.example.com"}}"#
+                    .to_string(),
+            ..RelayProfile::default()
+        };
+        let resolved = resolve_provider_endpoint(&claude_profile);
+        assert_eq!(resolved.base_url, "https://anthropic-relay.example.com");
+
+        // 5. env 里也指向本地代理时依然清空。
+        let claude_local = RelayProfile {
+            config_contents: format!(r#"{{"env":{{"ANTHROPIC_BASE_URL":"{local_proxy}"}}}}"#),
+            base_url: String::new(),
+            ..claude_profile
+        };
+        assert_eq!(resolve_provider_endpoint(&claude_local).base_url, "");
     }
 
     #[test]

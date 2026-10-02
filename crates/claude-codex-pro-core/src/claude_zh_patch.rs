@@ -391,35 +391,30 @@ fn install_patch_at_with_resources_impl(
 
     let chunks = find_patchable_chunks(&paths.resource_root)?;
     let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
-    for chunk in chunks {
-        let before = std::fs::read_to_string(&chunk).unwrap_or_default();
-        if !chunk_path_needs_or_has_ui_patch(&chunk, &before) {
-            continue;
-        }
-        backup_file(&chunk, paths)?;
-        patch_chunk(
-            &chunk,
-            runtime_patch_chunk.as_deref() == Some(chunk.as_path()),
-        )?;
-        if let Err(error) = validate_patched_javascript_chunk(&chunk) {
-            restore_official_backup_file(&chunk, paths).with_context(|| {
+    let patched_chunks = patch_chunks_in_parallel(&chunks, runtime_patch_chunk.as_deref(), paths)?;
+    // One `node --check` process per batch instead of one per chunk (a recent
+    // Claude build ships ~3,000 chunks, several hundred of which get patched).
+    if let Err((chunk, error)) = validate_patched_javascript_chunks(&patched_chunks) {
+        for patched in &patched_chunks {
+            restore_official_backup_file(patched, paths).with_context(|| {
                 format!(
                     "Claude 汉化 JS 校验失败后恢复官方备份也失败：{}",
-                    chunk.display()
+                    patched.display()
                 )
             })?;
-            return Err(error).with_context(|| {
-                format!(
-                    "Claude 汉化 JS 校验失败，已恢复官方备份：{}",
-                    chunk.display()
-                )
-            });
         }
-        let after = std::fs::read_to_string(&chunk).unwrap_or_default();
-        if before != after {
-            changed_files.push(chunk.to_string_lossy().to_string());
-        }
+        return Err(error).with_context(|| {
+            format!(
+                "Claude 汉化 JS 校验失败，已恢复全部官方备份：{}",
+                chunk.display()
+            )
+        });
     }
+    changed_files.extend(
+        patched_chunks
+            .iter()
+            .map(|chunk| chunk.to_string_lossy().to_string()),
+    );
     clear_claude_renderer_cache(paths, &mut changed_files);
 
     // Claude can be relaunched during the long chunk patch phase. Confirm it is
@@ -1386,6 +1381,96 @@ fn clear_claude_renderer_cache(paths: &ClaudeZhPatchPaths, changed_files: &mut V
     }
 }
 
+/// Worker count for chunk patching/validation: file IO and `node --check`
+/// dominate, so a few threads cut wall time without starving the machine.
+fn chunk_worker_count(items: usize) -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
+        .min(items.max(1))
+}
+
+/// Patch every chunk that needs it, in parallel. Returns the chunks whose
+/// contents actually changed (each has an official backup).
+fn patch_chunks_in_parallel(
+    chunks: &[PathBuf],
+    runtime_patch_chunk: Option<&Path>,
+    paths: &ClaudeZhPatchPaths,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let workers = chunk_worker_count(chunks.len());
+    let per_worker = chunks.len().div_ceil(workers);
+    let results = std::thread::scope(|scope| {
+        let handles = chunks
+            .chunks(per_worker.max(1))
+            .map(|group| {
+                scope.spawn(move || -> anyhow::Result<Vec<PathBuf>> {
+                    let mut changed = Vec::new();
+                    for chunk in group {
+                        let before = std::fs::read_to_string(chunk).unwrap_or_default();
+                        if !chunk_path_needs_or_has_ui_patch(chunk, &before) {
+                            continue;
+                        }
+                        backup_file(chunk, paths)?;
+                        patch_chunk(chunk, runtime_patch_chunk == Some(chunk.as_path()))?;
+                        let after = std::fs::read_to_string(chunk).unwrap_or_default();
+                        if before != after {
+                            changed.push(chunk.clone());
+                        }
+                    }
+                    Ok(changed)
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Claude 汉化补丁线程异常退出")))
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut changed = Vec::new();
+    for result in results {
+        changed.extend(result?);
+    }
+    changed.sort();
+    Ok(changed)
+}
+
+/// `node --check` every patched chunk, in parallel. On failure returns the
+/// first failing chunk and its error.
+fn validate_patched_javascript_chunks(chunks: &[PathBuf]) -> Result<(), (PathBuf, anyhow::Error)> {
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let workers = chunk_worker_count(chunks.len());
+    let per_worker = chunks.len().div_ceil(workers);
+    let failures = std::thread::scope(|scope| {
+        let handles = chunks
+            .chunks(per_worker.max(1))
+            .map(|group| {
+                scope.spawn(move || {
+                    group.iter().find_map(|chunk| {
+                        validate_patched_javascript_chunk(chunk)
+                            .err()
+                            .map(|error| (chunk.clone(), error))
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok().flatten())
+            .collect::<Vec<_>>()
+    });
+    match failures.into_iter().next() {
+        Some(failure) => Err(failure),
+        None => Ok(()),
+    }
+}
+
 fn validate_patched_javascript_chunk(path: &Path) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)
         .with_context(|| format!("read Claude JS chunk metadata {}", path.display()))?;
@@ -1662,8 +1747,17 @@ fn patch_locale_arrays(text: &str) -> (String, bool) {
     let mut changed = false;
     while cursor < bytes.len() {
         if bytes[cursor] != b'[' {
-            output.push(bytes[cursor] as char);
-            cursor += 1;
+            // Copy the whole run up to the next '[' as a str slice. Pushing
+            // `bytes[i] as char` re-encoded every UTF-8 byte as its own
+            // Latin-1 char, which garbled CJK text, emoji and Unicode regex
+            // ranges in the chunk and crashed Claude Desktop at runtime
+            // (syntax stays valid, so `node --check` could not catch it).
+            // '[' is ASCII, so the next one is always a char boundary.
+            let next = text[cursor..]
+                .find('[')
+                .map_or(bytes.len(), |offset| cursor + offset);
+            output.push_str(&text[cursor..next]);
+            cursor = next;
             continue;
         }
         if let Some((end, locales)) = parse_string_array_at(text, cursor) {
@@ -1821,8 +1915,8 @@ fn chunk_needs_or_has_ui_patch(text: &str) -> bool {
             .any(|marker| text.contains(marker))
         || patch_locale_arrays(text).1
         || embedded_chunk_patch_pairs()
-            .into_iter()
-            .any(|(needle, _)| text.contains(&needle))
+            .iter()
+            .any(|(needle, _)| text.contains(needle.as_str()))
         || zh_text_pairs().iter().any(|(english, _)| {
             text.contains(&format!("\"{english}\"")) || text.contains(&format!("'{english}'"))
         })
@@ -1847,7 +1941,7 @@ fn restore_static_text_replacements(mut text: String) -> String {
         text = text.replace(chinese, english);
     }
     for (english, chinese) in embedded_chunk_patch_pairs() {
-        text = text.replace(&chinese, &english);
+        text = text.replace(chinese.as_str(), english);
     }
     for (english, chinese) in zh_text_pairs() {
         text = text.replace(&format!("\"{chinese}\""), &format!("\"{english}\""));
@@ -1856,12 +1950,18 @@ fn restore_static_text_replacements(mut text: String) -> String {
     text
 }
 
-fn embedded_chunk_patch_pairs() -> Vec<(String, String)> {
-    serde_json::from_str::<std::collections::BTreeMap<String, Vec<(String, String)>>>(
-        EMBEDDED_CHUNK_PATCHES,
-    )
-    .map(|groups| groups.into_values().flatten().collect())
-    .unwrap_or_default()
+/// Parsed once: this is consulted for every one of ~3,000 chunks.
+fn embedded_chunk_patch_pairs() -> &'static [(String, String)] {
+    static PAIRS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    PAIRS
+        .get_or_init(|| {
+            serde_json::from_str::<std::collections::BTreeMap<String, Vec<(String, String)>>>(
+                EMBEDDED_CHUNK_PATCHES,
+            )
+            .map(|groups| groups.into_values().flatten().collect())
+            .unwrap_or_default()
+        })
+        .as_slice()
 }
 
 fn zh_text_pairs() -> &'static [(&'static str, &'static str)] {
@@ -2064,6 +2164,19 @@ fn valid_i18n_resource_with_min_keys(path: &Path, min_keys: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locale_array_patch_keeps_non_ascii_text_intact() {
+        let input = "const L=[\"en-US\",\"de-DE\",\"fr-FR\",\"ja-JP\",\"ko-KR\",\"es-ES\",\"it-IT\"];const s=\"中文 😀 ü\";const r=/[\u{4e00}-\u{9fff}]/u;";
+        let (out, changed) = patch_locale_arrays(input);
+        assert!(changed);
+        assert!(out.contains("\"zh-CN\"]"));
+        assert!(
+            out.contains("const s=\"中文 😀 ü\";"),
+            "non-ASCII text was mangled: {out:?}"
+        );
+        assert!(out.contains("[\u{4e00}-\u{9fff}]"));
+    }
 
     #[cfg(windows)]
     fn current_windows_user_sid_for_test() -> String {

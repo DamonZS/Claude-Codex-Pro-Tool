@@ -68,6 +68,9 @@ mod distill_prompts;
 mod distill_qualify;
 #[path = "distill_transcript.rs"]
 mod distill_transcript;
+#[path = "settings_commands.rs"]
+mod settings_commands;
+pub use settings_commands::*;
 
 static CLAUDE_DESKTOP_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static SETTINGS_WRITE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -7898,11 +7901,40 @@ pub async fn read_request_timeline() -> CommandResult<RequestTimelinePayload> {
     .unwrap_or_else(|_| failed("请求记录读取任务失败。", RequestTimelinePayload::default()))
 }
 
-fn collect_unified_usage_snapshot() -> (
+type UnifiedUsageSnapshot = (
     Vec<claude_codex_pro_core::request_telemetry::RequestRecord>,
     Vec<String>,
     claude_codex_pro_data::local_usage::LocalUsageSnapshot,
-) {
+);
+
+/// How long a full local-usage scan is reused. Overview, sessions and the
+/// distillation workbench each asked for a fresh scan of every agent's logs,
+/// and the overview fires two of them in parallel on every visit.
+const UNIFIED_USAGE_CACHE_TTL: Duration = Duration::from_secs(15);
+
+static UNIFIED_USAGE_CACHE: OnceLock<
+    Mutex<Option<(Instant, std::sync::Arc<UnifiedUsageSnapshot>)>>,
+> = OnceLock::new();
+
+/// Cached scan with single flight: the mutex is held while scanning, so
+/// concurrent callers wait for the one scan instead of starting their own.
+fn collect_unified_usage_snapshot() -> UnifiedUsageSnapshot {
+    let cache = UNIFIED_USAGE_CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((scanned_at, snapshot)) = slot.as_ref()
+        && scanned_at.elapsed() < UNIFIED_USAGE_CACHE_TTL
+    {
+        return (**snapshot).clone();
+    }
+    let snapshot = std::sync::Arc::new(scan_unified_usage_snapshot());
+    *slot = Some((Instant::now(), snapshot.clone()));
+    (*snapshot).clone()
+}
+
+fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
     let (mut records, mut warnings) =
         claude_codex_pro_data::request_history::read_recent_local_requests(
             &session_candidate_db_paths(None),
@@ -10380,17 +10412,29 @@ fn sync_live_context_entries_blocking(
             );
         }
     };
-    if let Some(parent) = config_path.parent() {
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            return failed(
-                &format!("创建 Codex 配置目录失败：{error}"),
+    // Unchanged content: skip the write so config.toml is not touched.
+    if updated_config == current_config {
+        return match claude_codex_pro_core::relay_config::list_context_entries_from_common_config(
+            &updated_config,
+        ) {
+            Ok(entries) => ok(
+                "实时上下文条目已是最新。",
+                LiveContextEntriesPayload { entries },
+            ),
+            Err(error) => failed(
+                &format!("读取实时上下文条目失败：{error}"),
                 LiveContextEntriesPayload {
                     entries: empty_context_entries(),
                 },
-            );
-        }
+            ),
+        };
     }
-    if let Err(error) = std::fs::write(&config_path, &updated_config) {
+    // Backs config.toml up once (.ccp-first-write.bak) and writes via temp +
+    // rename, so a crash mid-write cannot leave a truncated Codex config.
+    if let Err(error) = claude_codex_pro_core::agent_providers::write_with_backup(
+        &config_path,
+        updated_config.as_bytes(),
+    ) {
         return failed(
             &format!("写入实时 config.toml 失败：{error}"),
             LiveContextEntriesPayload {

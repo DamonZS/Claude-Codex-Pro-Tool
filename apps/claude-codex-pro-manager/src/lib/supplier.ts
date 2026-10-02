@@ -909,16 +909,16 @@ export function redactSupplierConfig(contents: string) {
 
 export function supplierCategoryLabel(category: SupplierPreset["category"]) {
   const labels: Record<SupplierPreset["category"], string> = {
-    official: "\u5b98\u65b9",
-    cn_official: "\u56fd\u5185\u5b98\u65b9",
-    aggregator: "\u805a\u5408/\u4e2d\u8f6c",
-    third_party: "\u7b2c\u4e09\u65b9",
+    official: "官方",
+    cn_official: "国内官方",
+    aggregator: "聚合/中转",
+    third_party: "第三方",
   };
   return labels[category];
 }
 
 export function aggregateStrategyLabel(strategy?: string) {
-  return AGGREGATE_STRATEGIES.find((item) => item.id === strategy)?.label ?? "\u5931\u8d25\u5207\u6362";
+  return AGGREGATE_STRATEGIES.find((item) => item.id === strategy)?.label ?? "失败切换";
 }
 
 export function supplierProtocolLabel(protocol?: string) {
@@ -926,7 +926,7 @@ export function supplierProtocolLabel(protocol?: string) {
 }
 
 export function supplierRelayModeLabel(mode?: string) {
-  if (mode === "official") return "\u5b98\u65b9\u767b\u5f55";
-  if (mode === "mixedApi") return "\u5b98\u65b9\u6df7\u5165 API Key";
-  return "\u7eaf API";
+  if (mode === "official") return "官方登录";
+  if (mode === "mixedApi") return "官方混入 API Key";
+  return "纯 API";
 }

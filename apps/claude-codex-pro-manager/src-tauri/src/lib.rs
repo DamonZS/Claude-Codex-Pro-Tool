@@ -80,6 +80,7 @@ pub fn run() {
             // Claude Desktop is an explicit, user-triggered integration. Do
             // not start its proxy while opening the manager or Codex task
             // workspace; Claude commands initialize it on demand.
+            commands::spawn_auto_backup_task();
             tauri::async_runtime::spawn(async {
                 // Restore only user-configured manual sidecars. The core
                 // filter excludes the reserved managed connection, so startup
@@ -243,6 +244,30 @@ pub fn run() {
             commands::update_distillation_candidate,
             commands::cancel_distillation_candidate,
             commands::load_distillation_workbench,
+            commands::load_app_preferences,
+            commands::save_app_preferences,
+            commands::load_routing_config,
+            commands::save_routing_config,
+            commands::set_routing_enabled,
+            commands::set_routing_app_takeover,
+            commands::add_failover_queue_provider,
+            commands::remove_failover_queue_provider,
+            commands::reset_circuit_breaker,
+            commands::test_global_proxy,
+            commands::scan_local_proxies,
+            commands::list_database_backups,
+            commands::create_database_backup,
+            commands::restore_database_backup,
+            commands::rename_database_backup,
+            commands::delete_database_backup,
+            commands::export_ccp_data,
+            commands::import_ccp_data,
+            commands::list_agent_providers,
+            commands::save_agent_provider,
+            commands::delete_agent_provider,
+            commands::apply_agent_provider,
+            commands::unapply_agent_provider,
+            commands::reorder_agent_providers,
             commands::run_distillation_workbench,
             commands::query_distillation_task,
             commands::cancel_distillation_task,
