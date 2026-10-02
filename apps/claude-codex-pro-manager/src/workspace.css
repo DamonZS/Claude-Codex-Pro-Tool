@@ -1852,7 +1852,6 @@ body {
 .supplier-env-card,
 .supplier-editor-card,
 .supplier-ccswitch-config-card,
-.supplier-mapping-card,
 .supplier-advanced-card,
 .supplier-direct-model-list-body,
 .supplier-model-map-table {
@@ -2150,7 +2149,6 @@ body {
 .ops-shell .supplier-ccswitch-editor :is(
   .supplier-ccswitch-form-card,
   .supplier-ccswitch-config-card,
-  .supplier-mapping-card,
   .supplier-advanced-card,
   .supplier-direct-model-list-body,
   .supplier-model-map-table,
@@ -2268,7 +2266,6 @@ body {
 }
 
 .supplier-ccswitch-config-card,
-.supplier-mapping-card,
 .supplier-advanced-card,
 .supplier-direct-model-list-body,
 .supplier-model-map-table {
@@ -9761,7 +9758,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 .ops-shell.light .supplier-ccswitch-editor :is(
   .supplier-ccswitch-form-card,
   .supplier-ccswitch-config-card,
-  .supplier-mapping-card,
   .supplier-advanced-card,
   .supplier-direct-model-list-body,
   .supplier-model-map-table,
