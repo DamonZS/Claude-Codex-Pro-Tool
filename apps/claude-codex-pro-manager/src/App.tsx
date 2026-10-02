@@ -2797,9 +2797,10 @@ export function App() {
         void refreshRequestTimeline();
       }, 900);
     } else if (target === "settings") {
-      await refreshSettings(true);
+      // Settings hosts the maintenance panel, logs and about tabs.
+      await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
-        void refreshLogs(true);
+        void Promise.all([refreshLogs(true), refreshOverview(true), checkUpdate(true)]);
       }, 250);
     } else if (target === "supplier") {
       requiredResults = await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
@@ -3329,7 +3330,7 @@ export function App() {
             />
           ) : null}
           {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} /> : null}
-          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} updateInfo={updateInfo} /> : null}
+          {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} settings={settings} updateInfo={updateInfo} /> : null}
       </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}
     </>

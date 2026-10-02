@@ -1465,16 +1465,24 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "missing AppShell contract: {shell_contract}"
         );
     }
-    assert!(app_shell.contains("const THEME_STORAGE_KEY = \"ccp-manager-theme\";"));
-    assert!(app_shell.contains("window.localStorage.getItem(THEME_STORAGE_KEY)"));
+    // Theme persistence lives in lib/theme.ts; the choice is made on the
+    // settings page (the sidebar theme menu was removed).
+    let theme_lib = read_frontend_file("lib/theme.ts");
+    assert!(theme_lib.contains("export const THEME_STORAGE_KEY = \"ccp-manager-theme\";"));
+    assert!(theme_lib.contains("window.localStorage.getItem(THEME_STORAGE_KEY)"));
     assert!(app_shell.contains("window.localStorage.setItem(THEME_STORAGE_KEY, themePreference)"));
+    assert!(app_shell.contains("window.addEventListener(THEME_CHANGE_EVENT, onThemeChange)"));
+    assert!(!app_shell.contains("ops-theme-control"));
     assert!(app_shell.contains("window.matchMedia?.(\"(prefers-color-scheme: dark)\")"));
     assert!(app_shell.contains("media.addEventListener?.(\"change\", update)"));
     assert!(app_shell.contains("root.dataset.theme = resolvedTheme;"));
     assert!(app_shell.contains("root.classList.toggle(\"dark\", resolvedTheme === \"dark\")"));
-    assert!(app_shell.contains("[\"system\", \"跟随系统\", Laptop]"));
-    assert!(app_shell.contains("[\"light\", \"浅色\", Sun]"));
-    assert!(app_shell.contains("[\"dark\", \"深色\", Moon]"));
+    let settings_general = read_frontend_file("components/settings/GeneralTab.tsx");
+    assert!(settings_general.contains("applyThemePreference(value)"));
+    assert!(
+        settings_general
+            .contains("{ value: \"system\", label: t(\"settings.themeSystem\"), icon: Laptop }")
+    );
     assert!(app_shell.contains("(event.ctrlKey || event.metaKey)"));
     assert!(app_shell.contains("event.key.toLocaleLowerCase() === \"k\""));
     assert!(app_shell.contains("event.key === \"Escape\""));

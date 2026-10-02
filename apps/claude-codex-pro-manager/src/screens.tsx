@@ -46,6 +46,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { AgentOverview } from "@/components/AgentOverview";
+import { SettingsPage } from "@/components/settings/SettingsPage";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
 import claudeLogo from "@/assets/claude.svg";
 import codexLogo from "@/assets/openai.svg";
@@ -3204,19 +3205,26 @@ export const SettingsScreen = memo(function SettingsScreen({
   claudeDesktop,
   logs,
   overview,
+  settings,
   updateInfo,
 }: {
   actions: AppActions;
   claudeDesktop: ClaudeDesktopResult | null;
   logs: LogsResult | null;
   overview: OverviewResult | null;
+  settings: SettingsResult | null;
   updateInfo: UpdateResult | null;
 }) {
+  // CC Switch-style tabbed settings; the maintenance panel, logs and about
+  // screens are hosted inside their tabs instead of separate routes.
   return (
-    <div className="stack">
-      <AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />
-      <LogsScreen actions={actions} logs={logs} />
-    </div>
+    <SettingsPage
+      about={<AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />}
+      actions={actions}
+      appPaths={<MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} />}
+      logs={<LogsScreen actions={actions} logs={logs} />}
+      settings={settings?.settings ?? null}
+    />
   );
 });
 

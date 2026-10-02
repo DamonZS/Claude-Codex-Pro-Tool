@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -980,6 +981,57 @@ impl Default for SettingsStore {
     }
 }
 
+/// 每个进程只备份一次同样的损坏内容：`load()` 是高频调用点，如果每次解析
+/// 失败都写一个新备份，用户目录会被同一份坏内容刷满。
+static LAST_CORRUPT_SETTINGS_BACKUP: Mutex<Option<u64>> = Mutex::new(None);
+
+fn corrupt_settings_contents_hash(contents: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    contents.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn settings_corrupt_backup_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "settings.json".to_string());
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    path.with_file_name(format!("{file_name}.corrupt-{timestamp}.bak"))
+}
+
+/// 解析失败时把原文件按字节复制一份到同目录的 `.corrupt-<时间戳>.bak`。
+///
+/// 绝不 panic：备份只是尽力而为的兜底，`load()` 的调用方仍然必须拿到可用的
+/// 默认值。返回备份路径（失败时为 `None`）以便调用方记录日志。
+fn back_up_corrupt_settings(path: &Path, contents: &str) -> Option<PathBuf> {
+    if !mark_corrupt_settings_contents(contents) {
+        return None;
+    }
+    let backup_path = settings_corrupt_backup_path(path);
+    match fs::copy(path, &backup_path) {
+        Ok(_) => Some(backup_path),
+        Err(_) => None,
+    }
+}
+
+/// 返回 `true` 表示本次调用「赢得」了该内容的备份权。
+fn mark_corrupt_settings_contents(contents: &str) -> bool {
+    let hash = corrupt_settings_contents_hash(contents);
+    let mut last = match LAST_CORRUPT_SETTINGS_BACKUP.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if *last == Some(hash) {
+        return false;
+    }
+    *last = Some(hash);
+    true
+}
+
 impl SettingsStore {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
@@ -991,9 +1043,25 @@ impl SettingsStore {
             None => return Ok(BackendSettings::default()),
         };
 
-        Ok(normalize_settings_config_sections(
-            serde_json::from_str(&contents).unwrap_or_default(),
-        ))
+        // 以前这里 `unwrap_or_default()` 静默吞掉解析错误，下一次 save() 就会把
+        // 用户损坏前的配置整个覆盖掉。现在先把坏文件留一份副本再回退默认值。
+        let settings = match serde_json::from_str(&contents) {
+            Ok(settings) => settings,
+            Err(error) => {
+                let backup_path = back_up_corrupt_settings(&self.path, &contents);
+                match backup_path {
+                    Some(backup_path) => eprintln!(
+                        "settings.json 解析失败，已备份到 {}: {}",
+                        backup_path.display(),
+                        error
+                    ),
+                    None => eprintln!("settings.json 解析失败，且备份失败: {error}"),
+                }
+                BackendSettings::default()
+            }
+        };
+
+        Ok(normalize_settings_config_sections(settings))
     }
 
     pub fn load_strict(&self) -> anyhow::Result<BackendSettings> {
@@ -2120,6 +2188,47 @@ mod tests {
         ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn corrupt_backup_files(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut backups = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".corrupt-"))
+            })
+            .collect::<Vec<_>>();
+        backups.sort();
+        backups
+    }
+
+    #[test]
+    fn load_backs_up_corrupt_settings_once() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let corrupt = "{ this is not valid json";
+        std::fs::write(&path, corrupt).unwrap();
+        let store = SettingsStore::new(path.clone());
+
+        // 解析失败必须回退到默认值，而不是把错误抛给调用方。
+        let first = store.load().unwrap();
+        assert_eq!(first, BackendSettings::default());
+        // 多次调用仍然返回默认值，不会 panic，也不会再次备份。
+        let second = store.load().unwrap();
+        assert_eq!(second, BackendSettings::default());
+
+        let backups = corrupt_backup_files(&dir);
+        assert_eq!(backups.len(), 1, "损坏内容只应备份一次: {backups:?}");
+        let backup_name = backups[0].file_name().unwrap().to_string_lossy();
+        assert!(
+            backup_name.starts_with("settings.json.corrupt-") && backup_name.ends_with(".bak"),
+            "备份文件名应基于实际文件名: {backup_name}"
+        );
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), corrupt);
+        // 原文件必须保持原样，等用户自行修复。
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), corrupt);
     }
 
     #[test]

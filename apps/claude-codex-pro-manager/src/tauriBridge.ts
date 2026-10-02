@@ -1,4 +1,5 @@
 ﻿import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { DEFAULT_APP_PREFERENCES } from "@/components/settings/contract";
 
 import announcementConfig from "../../../assets/config/announcement.json";
 
@@ -595,6 +596,21 @@ function previewLeilaStatus(message = "预览模式破甲部署状态。") {
     logs: [...previewLeilaLogs],
   });
 }
+
+// Preview-only state for the settings page (no Tauri backend in the browser).
+let previewPreferences: Record<string, unknown> = { ...DEFAULT_APP_PREFERENCES };
+const previewAppProxy = (appId: "codex" | "claude" | "claude-desktop" | "gemini") => ({
+  appId, takeover: appId === "codex", autoFailoverEnabled: false, maxRetries: appId === "claude" ? 6 : 3,
+  streamingFirstByteTimeout: appId === "claude" ? 90 : 60, streamingIdleTimeout: appId === "claude" ? 180 : 120, nonStreamingTimeout: 600,
+  circuitFailureThreshold: appId === "claude" ? 8 : 4, circuitSuccessThreshold: appId === "claude" ? 3 : 2, circuitTimeoutSeconds: appId === "claude" ? 90 : 60,
+  circuitErrorRateThreshold: appId === "claude" ? 0.7 : 0.6, circuitMinRequests: appId === "claude" ? 15 : 10,
+});
+let previewRouting = {
+  enabled: false, listenAddress: "127.0.0.1", listenPort: 57321, enableLogging: true, showRoutingToggleOnMain: false, showFailoverToggleOnMain: false,
+  apps: [previewAppProxy("claude"), previewAppProxy("claude-desktop"), previewAppProxy("codex"), previewAppProxy("gemini")],
+  rectifier: { enabled: true, thinkingSignature: true, thinkingBudget: true, mediaFallback: true, mediaHeuristic: true },
+  globalProxyUrl: "", globalProxyUsername: "", globalProxyPassword: undefined as string | undefined,
+};
 
 const hasTauriInternals = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -1372,6 +1388,33 @@ async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate" || command === "delete_distillation_candidates") {
     return ok("预览模式未连接蒸馏存储。", { candidates: [] });
   }
+  if (command === "load_app_preferences" || command === "save_app_preferences") {
+    const saved = (_args?.request as { preferences?: Record<string, unknown> } | undefined)?.preferences;
+    if (saved) previewPreferences = { ...previewPreferences, ...saved };
+    return ok("预览模式偏好设置。", {
+      preferences: previewPreferences,
+      resolvedDirs: { app: "~\\.claude-codex-pro", claude: "~\\.claude", codex: "~\\.codex", gemini: "~\\.gemini", grok: "~\\.grok", opencode: "~\\.config\\opencode", openclaw: "~\\.openclaw", hermes: "~\\.hermes", pi: "~\\.pi\\agent", mcode: "~\\.mcode", workbuddy: "~\\.workbuddy", cursor: "~\\.cursor" },
+    });
+  }
+  if (command === "load_routing_config" || command === "save_routing_config" || command === "set_routing_enabled" || command === "set_routing_app_takeover" || command === "add_failover_queue_provider" || command === "remove_failover_queue_provider" || command === "reset_circuit_breaker") {
+    const request = (_args?.request ?? {}) as { config?: typeof previewRouting; enabled?: boolean; appId?: string; takeover?: boolean };
+    if (request.config) previewRouting = { ...request.config, globalProxyPassword: undefined };
+    if (typeof request.enabled === "boolean") previewRouting = { ...previewRouting, enabled: request.enabled };
+    if (request.appId && typeof request.takeover === "boolean") {
+      previewRouting = { ...previewRouting, apps: previewRouting.apps.map((app) => (app.appId === request.appId ? { ...app, takeover: request.takeover! } : app)) };
+    }
+    return ok("预览模式路由配置。", {
+      config: previewRouting,
+      runtime: { running: previewRouting.enabled, address: previewRouting.listenAddress, port: previewRouting.listenPort, activeConnections: 0, totalRequests: previewRouting.enabled ? 128 : 0, successRate: 0.97, uptimeSeconds: 3725, currentProviders: {} },
+      queues: { codex: [{ providerId: "preview-provider", name: "Preview Relay", priority: 1, circuitState: "closed" }] },
+    });
+  }
+  if (command === "test_global_proxy") return ok("预览模式代理测试。", { ok: true, latencyMs: 42 });
+  if (command === "scan_local_proxies") return ok("预览模式代理扫描。", { candidates: ["http://127.0.0.1:7890"] });
+  if (command === "list_database_backups" || command === "create_database_backup" || command === "restore_database_backup" || command === "rename_database_backup" || command === "delete_database_backup") {
+    return ok("预览模式备份列表。", { dir: "~\\.claude-codex-pro\\backups", backups: [{ id: "preview-1", name: "auto-2026-10-01", createdAt: new Date().toISOString(), sizeBytes: 48_000 }] });
+  }
+  if (command === "export_ccp_data" || command === "import_ccp_data") return ok("预览模式不读写本地数据。", { path: "", safetyBackupId: "" });
   if (command === "read_distillation_transcript") {
     return ok("预览模式会话正文。", {
       transcript: {
