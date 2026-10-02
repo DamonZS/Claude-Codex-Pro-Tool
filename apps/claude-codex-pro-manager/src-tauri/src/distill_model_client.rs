@@ -40,6 +40,20 @@ pub struct ModelTarget {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    /// The supplier's custom User-Agent; empty means the CCP default.
+    pub user_agent: String,
+}
+
+/// Some relay gateways drop the TLS connection (no close_notify) for requests
+/// without a User-Agent, which surfaced as `ai.provider-network` while the
+/// same supplier worked everywhere else in CCP. reqwest sends none by default.
+fn distill_user_agent(custom: &str) -> String {
+    let custom = custom.trim();
+    if custom.is_empty() {
+        format!("ClaudeCodexPro/{}", env!("CARGO_PKG_VERSION"))
+    } else {
+        custom.to_string()
+    }
 }
 
 impl std::fmt::Debug for ModelTarget {
@@ -339,6 +353,7 @@ pub async fn call_model(
         return Err(ModelCallError::new("ai.profile-unavailable", None));
     }
     let client = reqwest::Client::builder()
+        .user_agent(distill_user_agent(&target.user_agent))
         .timeout(options.timeout)
         .build()
         .map_err(|_| ModelCallError::new("ai.provider-network", None))?;
@@ -483,12 +498,33 @@ mod tests {
     use super::test_support::spawn_mock;
     use super::*;
 
+    #[test]
+    fn custom_supplier_user_agent_is_sent() {
+        let (base, captured, server) = spawn_mock(vec![(
+            200,
+            r#"{"choices":[{"message":{"content":"ok"}}]}"#.into(),
+        )]);
+        let custom = ModelTarget {
+            user_agent: "claude-cli/2.1.161 (external, cli)".into(),
+            ..target(ModelProtocol::OpenAi, format!("{base}/v1"))
+        };
+        assert_eq!(run(&custom).unwrap(), "ok");
+        server.join().unwrap();
+        let request = captured.recv().unwrap();
+        assert!(
+            request
+                .headers
+                .contains("user-agent: claude-cli/2.1.161 (external, cli)")
+        );
+    }
+
     fn target(protocol: ModelProtocol, base_url: String) -> ModelTarget {
         ModelTarget {
             protocol,
             base_url,
             api_key: "test-key".into(),
             model: "fixture-model".into(),
+            user_agent: String::new(),
         }
     }
 
@@ -581,6 +617,12 @@ mod tests {
         let request = captured.recv().unwrap();
         assert_eq!(request.request_line, "POST /v1/chat/completions HTTP/1.1");
         assert!(request.headers.contains("authorization: bearer test-key"));
+        // Relay gateways may drop requests without a User-Agent.
+        assert!(
+            request.headers.contains("user-agent: claudecodexpro/"),
+            "distill requests must carry a User-Agent: {}",
+            request.headers
+        );
         assert!(request.headers.contains("content-type: application/json"));
         let body: Value = serde_json::from_str(&request.body).unwrap();
         assert_eq!(body["max_tokens"], 8192);

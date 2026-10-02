@@ -805,6 +805,8 @@ async fn test_global_proxy_once(
     }
     let client = reqwest::Client::builder()
         .proxy(proxy)
+        // Some proxies/gateways drop requests that carry no User-Agent.
+        .user_agent(format!("ClaudeCodexPro/{}", env!("CARGO_PKG_VERSION")))
         .timeout(GLOBAL_PROXY_CONNECT_TIMEOUT)
         .build()
         .context("创建代理客户端失败")?;

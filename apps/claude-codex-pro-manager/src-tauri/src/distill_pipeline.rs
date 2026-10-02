@@ -107,6 +107,7 @@ pub fn model_target(profile: &RelayProfile, model: &str) -> ModelTarget {
         base_url: endpoint.base_url,
         api_key: endpoint.api_key,
         model: model.to_string(),
+        user_agent: profile.user_agent.clone(),
     }
 }
 
@@ -780,6 +781,7 @@ mod tests {
             base_url: base,
             api_key: "k".into(),
             model: "m".into(),
+            user_agent: String::new(),
         };
         let options = ModelCallOptions {
             timeout: Duration::from_secs(10),
