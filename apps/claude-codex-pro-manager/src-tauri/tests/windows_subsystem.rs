@@ -1368,8 +1368,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        9,
-        "the sidebar must expose exactly nine primary destinations"
+        8,
+        "the sidebar must expose exactly eight primary destinations"
     );
     for (id, label) in [
         ("overview", "概览"),
@@ -1377,7 +1377,6 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         ("clients", "蒸馏工作台"),
         ("sessions", "会话"),
         ("tools", "插件、Skills 与 MCP"),
-        ("maintenance", "维护与诊断"),
         ("settings", "设置"),
     ] {
         assert!(
@@ -1398,8 +1397,10 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "export const compatibilityRoutes: RouteItem[] = [",
         "export const routeCatalog",
     );
-    assert_eq!(compatibility_routes.matches("id: \"").count(), 1);
+    assert_eq!(compatibility_routes.matches("id: \"").count(), 2);
     assert!(compatibility_routes.contains("id: \"about\", label: \"关于与更新\""));
+    assert!(compatibility_routes.contains("id: \"maintenance\", label: \"维护与诊断\""));
+    assert!(!primary_routes.contains("id: \"maintenance\""));
     assert!(
         routes.contains(
             "export const routeCatalog: RouteItem[] = [...routes, ...compatibilityRoutes];"

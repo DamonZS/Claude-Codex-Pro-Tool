@@ -80,6 +80,7 @@ import {
   initialRoute,
   isRoute,
   normalizeRoute,
+  primaryRoute,
   routeDocumentTitle,
   routeLabel,
 } from "@/lib/routes";
@@ -143,7 +144,6 @@ import {
   ToggleSwitch,
 } from "@/components/ui/ops";
 import {
-  MaintenanceScreen,
   OverviewScreen,
   SessionManagementScreen,
   SettingsScreen,
@@ -2843,11 +2843,6 @@ export function App() {
       afterFirstPaintIfFresh(() => {
         void Promise.all([refreshOverview(true), refreshClaude(true)]);
       }, 250);
-    } else if (target === "maintenance") {
-      await Promise.all([refreshSettings(true), refreshClaudeLight(true)]);
-      afterFirstPaintIfFresh(() => {
-        void Promise.all([refreshOverview(true), refreshWatcher(true)]);
-      }, 250);
     } else if (target === "about") {
       await Promise.all([refreshOverview(true), refreshClaudeLight(true)]);
       afterFirstPaintIfFresh(() => {
@@ -2866,7 +2861,7 @@ export function App() {
     const navigate = (event: Event) => {
       const route = normalizeRoute((event as CustomEvent<{ route?: unknown }>).detail?.route);
       if (!isRoute(route)) return;
-      setRoute(route);
+      setRoute(primaryRoute(route));
     };
     window.addEventListener("claude-codex-pro-navigate", navigate);
     return () => window.removeEventListener("claude-codex-pro-navigate", navigate);
@@ -3269,7 +3264,8 @@ export function App() {
         onLaunchClaude={() => void actions.launchClaudeDesktop()}
         onNavigate={(nextRoute) => {
           if (nextRoute !== "supplier") setSupplierFocusProfileId(null);
-          setRoute(nextRoute);
+          // Compatibility aliases (about / maintenance) open their host page.
+          setRoute(primaryRoute(nextRoute));
         }}
         onRestartCodex={() => void actions.restartCodex()}
         onSelectSupplier={(profileId) => {
@@ -3329,7 +3325,6 @@ export function App() {
               distillationCandidates={distillationCandidates}
             />
           ) : null}
-          {route === "maintenance" ? <MaintenanceScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} /> : null}
           {route === "settings" ? <SettingsScreen actions={actions} claudeDesktop={claudeDesktop} logs={logs} overview={overview} settings={settings} updateInfo={updateInfo} /> : null}
       </AppShell>
       {notice ? <Notice notice={notice} onClose={() => setNotice(null)} /> : null}

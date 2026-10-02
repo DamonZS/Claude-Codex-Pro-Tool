@@ -1567,24 +1567,6 @@ export function LogsScreen({ actions, logs }: { actions: AppActions; logs: LogsR
   );
 }
 
-export const MaintenanceScreen = memo(function MaintenanceScreen({
-  actions,
-  claudeDesktop,
-  overview,
-  settings,
-}: {
-  actions: AppActions;
-  claudeDesktop: ClaudeDesktopResult | null;
-  overview: OverviewResult | null;
-  settings: SettingsResult | null;
-}) {
-  return (
-    <div className="stack">
-      <MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} />
-    </div>
-  );
-});
-
 export const SettingsScreen = memo(function SettingsScreen({
   actions,
   claudeDesktop,

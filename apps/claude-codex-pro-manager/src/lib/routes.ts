@@ -33,13 +33,13 @@ export const routes: RouteItem[] = [
   { id: "prompts", label: "系统提示词", icon: FileText, description: "管理 Codex 指令模板与生效方式", keywords: ["prompt", "instructions", "提示词", "指令"] },
   { id: "sessions", label: "会话", icon: MessageSquare, description: "本地会话、项目归属、迁移与供应商同步", keywords: ["session", "会话"] },
   { id: "tools", label: "插件、Skills 与 MCP", icon: PackageSearch, description: "跨 Agent 扩展与依赖管理", keywords: ["plugin", "skill", "mcp", "扩展"] },
-  { id: "maintenance", label: "维护与诊断", icon: Wrench, description: "入口、Watcher、日志与修复", keywords: ["repair", "watcher", "日志", "诊断"] },
   { id: "settings", label: "设置", icon: Settings, description: "偏好设置、更新与产品信息", keywords: ["配置", "about", "update"] },
 ];
 
-// Hidden compatibility alias for persisted legacy deep links.
+// Hidden compatibility aliases for persisted legacy deep links.
 export const compatibilityRoutes: RouteItem[] = [
   { id: "about", label: "关于与更新", icon: Settings, description: "旧版入口已归一到设置", keywords: ["about", "update", "版本"] },
+  { id: "maintenance", label: "维护与诊断", icon: Wrench, description: "旧版入口已归一到设置", keywords: ["repair", "watcher", "日志", "诊断"] },
 ];
 
 export const routeCatalog: RouteItem[] = [...routes, ...compatibilityRoutes];
@@ -55,6 +55,7 @@ export function routeLabel(route: Route) {
 
 export function primaryRoute(route: Route): Route {
   if (route === "about") return "settings";
+  if (route === "maintenance") return "settings";
   return route;
 }
 
@@ -89,7 +90,7 @@ export function initialRoute(): Route {
 export function normalizeRoute(value: unknown): unknown {
   if (value === "about") return "settings";
   if (value === "pluginHub" || value === "context" || value === "scripts") return "tools";
-  if (value === "logs" || value === "multica") return "settings";
+  if (value === "logs" || value === "multica" || value === "maintenance") return "settings";
   if (value === "relay" || value === "models") return "supplier";
   return value;
 }
