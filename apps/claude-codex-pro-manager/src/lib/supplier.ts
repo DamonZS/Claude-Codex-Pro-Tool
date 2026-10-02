@@ -84,7 +84,10 @@ export function normalizeSupplierProfile(profile: RelayProfile): RelayProfile {
   const routeEnabled = typeof profile.routeEnabled === "boolean"
     ? profile.routeEnabled
     : profile.claudeDesktopMode === "proxy" || /\bproxy\b/i.test(profile.routeMode || "");
-  const normalizedModelMapping = normalizeSupplierModelMappingFields(profile);
+  // 如果 modelMappingEnabled 显式为 false，清空映射字段，防止下次反向推断
+  const normalizedModelMapping = modelMappingEnabled
+    ? normalizeSupplierModelMappingFields(profile)
+    : { modelMapping: "", modelMappingJson: "" };
   return {
     ...profile,
     id: supplierIdFromName(profile.id || profile.name),

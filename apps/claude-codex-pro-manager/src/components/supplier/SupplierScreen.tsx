@@ -624,9 +624,13 @@ export function SupplierScreen({
     const targetApp = supplierTargetForProfile(draft);
     const saveName = draft.name.trim() || normalizedId;
     const routedDraft = withSupplierRoutingState({ ...draft, id: normalizedId, name: saveName }, targetApp, !!draft.routeEnabled);
-    const normalized = supplierProfileIsCcswitch(routedDraft)
-      ? withSupplierPreservedImportedFiles(routedDraft)
-      : normalizeSupplierProfile(withSupplierGeneratedFiles(routedDraft));
+    // 直连模式时清空模型映射字段，防止反向推断
+    const cleanedDraft = !routedDraft.modelMappingEnabled
+      ? { ...routedDraft, modelMapping: "", modelMappingJson: "" }
+      : routedDraft;
+    const normalized = supplierProfileIsCcswitch(cleanedDraft)
+      ? withSupplierPreservedImportedFiles(cleanedDraft)
+      : normalizeSupplierProfile(withSupplierGeneratedFiles(cleanedDraft));
     const isCodexOfficialLogin = supplierProfileIsCodexOfficialLogin(normalized);
     if (!normalized.name.trim() || (!aggregateDraft && !isCodexOfficialLogin && !normalized.baseUrl.trim())) {
       window.alert(aggregateDraft ? "请填写聚合供应商名称后再保存。" : "请填写供应商名称和 Base URL 后再保存。API Key 可以后续补入。");
