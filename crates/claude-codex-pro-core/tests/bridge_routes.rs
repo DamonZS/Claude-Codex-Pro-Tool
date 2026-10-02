@@ -852,7 +852,8 @@ async fn settings_get_includes_runtime_codex_app_version() {
     assert_eq!(result["codexAppVersion"], json!("26.601.21317"));
     assert_eq!(result["codexAppPluginEntryUnlock"], json!(true));
     assert_eq!(result["codexAppPluginMarketplaceUnlock"], json!(true));
-    assert_eq!(result["codexAppForcePluginInstall"], json!(true));
+    // Forced plugin install defaults to off since 19ee963 (settings.rs asserts the same).
+    assert_eq!(result["codexAppForcePluginInstall"], json!(false));
 }
 
 #[tokio::test]
