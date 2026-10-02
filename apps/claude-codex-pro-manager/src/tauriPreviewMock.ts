@@ -1232,6 +1232,17 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
   if (command === "list_claude_context_entries" || command === "upsert_claude_context_entry" || command === "delete_claude_context_entry") {
     return previewClaudeContextEntries();
   }
+  if (command === "get_claude_desktop_computer_use_log") {
+    const now = Date.now();
+    return ok("预览模式调用记录。", {
+      logPath: "~/.claude-codex-pro/claude-codex-pro.log",
+      entries: [
+        { timestampMs: now - 4_000, tool: "click", ok: true, x: 640, y: 412 },
+        { timestampMs: now - 9_000, tool: "type_text", ok: true, textLength: 18 },
+        { timestampMs: now - 15_000, tool: "screenshot", ok: false, error: "Computer Use 未开启，请在 CCP 中开启" },
+      ],
+    });
+  }
   if (command === "get_claude_desktop_computer_use_status" || command === "set_claude_desktop_computer_use_enabled") {
     const request = _args?.request as { enabled?: boolean } | undefined;
     const enabled = command === "set_claude_desktop_computer_use_enabled" ? !!request?.enabled : false;

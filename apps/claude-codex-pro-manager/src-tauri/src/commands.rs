@@ -10536,6 +10536,75 @@ fn empty_computer_use_status() -> claude_desktop_computer_use::ComputerUseStatus
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseLogPayload {
+    /// Newest first. Each entry is the logged `detail` plus `timestampMs`.
+    pub entries: Vec<Value>,
+    pub log_path: String,
+}
+
+/// Recent `claude_computer_use` tool calls from the diagnostic log. Reads only
+/// the tail of the log (the file can reach 5 MiB) and never the typed text,
+/// which the MCP server does not log in the first place.
+fn read_recent_computer_use_calls(limit: usize) -> Vec<Value> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_BYTES: u64 = 256 * 1024;
+    let path = claude_codex_pro_core::diagnostic_log::diagnostic_log_path();
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return Vec::new();
+    };
+    let length = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let _ = file.seek(SeekFrom::Start(length.saturating_sub(TAIL_BYTES)));
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .filter(|line| line.contains("\"claude_computer_use\""))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("event").and_then(Value::as_str) == Some("claude_computer_use"))
+        .take(limit)
+        .map(|record| {
+            let mut entry = record.get("detail").cloned().unwrap_or_else(|| json!({}));
+            if let Some(object) = entry.as_object_mut() {
+                object.insert(
+                    "timestampMs".to_string(),
+                    record.get("timestamp_ms").cloned().unwrap_or(Value::Null),
+                );
+            }
+            entry
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn get_claude_desktop_computer_use_log() -> CommandResult<ComputerUseLogPayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        ok(
+            "Computer Use 调用记录已加载。",
+            ComputerUseLogPayload {
+                entries: read_recent_computer_use_calls(30),
+                log_path: claude_codex_pro_core::diagnostic_log::diagnostic_log_path()
+                    .to_string_lossy()
+                    .to_string(),
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("读取 Computer Use 调用记录失败：{join_error}"),
+            ComputerUseLogPayload {
+                entries: Vec::new(),
+                log_path: String::new(),
+            },
+        )
+    })
+}
+
 #[tauri::command]
 pub async fn get_claude_desktop_computer_use_status()
 -> CommandResult<claude_desktop_computer_use::ComputerUseStatus> {

@@ -10937,3 +10937,63 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 /* Distillation workbench styles live in components/distillation/distillation.css. */
 .ops-screen[data-route="clients"] { padding-top: 8px; }
+
+/* Claude Desktop Computer Use: on/off first, then recent tool calls. */
+.computer-use-switch-row {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.computer-use-switch-row strong { font-size: 14px; }
+
+.computer-use-log {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.computer-use-log > strong { font-size: 13px; }
+
+.computer-use-log ul {
+  display: grid;
+  gap: 4px;
+  max-height: 240px;
+  margin: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.computer-use-log li {
+  display: grid;
+  grid-template-columns: 150px 72px 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--finish-edge-muted);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--finish-glass-raised) 58%, transparent);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.computer-use-log time {
+  color: var(--workspace-text-tertiary);
+  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+
+.computer-use-log em { font-style: normal; font-weight: 600; }
+.computer-use-log li.ok em { color: var(--workspace-success); }
+.computer-use-log li.failed em { color: var(--workspace-danger); }
+
+.computer-use-log small {
+  overflow: hidden;
+  color: var(--workspace-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .computer-use-log li { grid-template-columns: minmax(0, 1fr) auto; }
+  .computer-use-log li small { grid-column: 1 / -1; }
+}
