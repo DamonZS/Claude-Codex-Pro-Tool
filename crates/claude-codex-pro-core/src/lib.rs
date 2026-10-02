@@ -1,4 +1,5 @@
 pub mod ads;
+pub mod agent_providers;
 pub mod app_paths;
 pub mod app_preferences;
 pub mod assets;

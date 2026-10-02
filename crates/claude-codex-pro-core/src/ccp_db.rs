@@ -14,7 +14,7 @@ use anyhow::Context;
 use rusqlite::Connection;
 
 /// Current schema version written to `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// `kv` marker written once the `providers` table has been seeded from
 /// `settings.json`. Its absence means "never migrated", which is what tells
@@ -94,6 +94,22 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     }
     // `PRAGMA` does not accept bound parameters; the value is a private
     // integer constant, never user input.
+    if version < 3 {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_providers (
+                 id TEXT PRIMARY KEY,
+                 app_id TEXT NOT NULL,
+                 position INTEGER NOT NULL,
+                 profile_json TEXT NOT NULL,
+                 api_key TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE IF NOT EXISTS agent_provider_state (
+                 app_id TEXT PRIMARY KEY,
+                 active_id TEXT,
+                 applied_ids_json TEXT NOT NULL DEFAULT '[]'
+             );",
+        )?;
+    }
     transaction.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     transaction.commit()?;
     Ok(())
@@ -207,7 +223,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("读取 user_version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         assert!(path.is_file(), "数据库文件应已创建");
 
         for table in [
@@ -216,6 +232,8 @@ mod tests {
             "failover_queue",
             "circuit_state",
             "providers",
+            "agent_providers",
+            "agent_provider_state",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -233,7 +251,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("读取 user_version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         drop(conn);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -378,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn ccp_db_version_one_upgrades_to_two_with_providers_table() {
+    fn ccp_db_version_one_upgrades_to_current_with_providers_table() {
         let dir = temp_dir("providers-upgrade");
         let path = dir.join("ccp.db");
 
@@ -412,7 +430,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("读取 user_version");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'providers'",
@@ -421,6 +439,14 @@ mod tests {
             )
             .expect("查询 providers 表");
         assert_eq!(tables, 1, "升级后必须存在 providers 表");
+        let agent_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('agent_providers', 'agent_provider_state')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("查询 agent_providers 表");
+        assert_eq!(agent_tables, 2, "升级后必须存在 agent_providers 表");
 
         // 升级后的库仍然可以正常读写供应商。
         providers_replace(&mut conn, &[provider("after-upgrade")]).expect("写入供应商");
