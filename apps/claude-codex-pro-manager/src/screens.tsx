@@ -602,6 +602,32 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
   );
 });
 
+/**
+ * The backend joins every app's source path into one "App: path；App: path"
+ * string. Split it so each app gets its own line and the label never gets
+ * glued onto another app's path by middle-truncation.
+ */
+function inventorySourceLines(source: string, agents: ReadonlyArray<{ id: string; name: string }>) {
+  if (!source.trim()) return [];
+  const names: Record<string, string> = { Codex: "Codex", Claude: "Claude", ...Object.fromEntries(agents.map((agent) => [agent.id, agent.name])) };
+  return source
+    .split("；")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part, index) => {
+      const split = part.indexOf(": ");
+      const rawLabel = split > 0 ? part.slice(0, split) : "";
+      const path = split > 0 ? part.slice(split + 2) : part;
+      return {
+        key: `${index}:${part}`,
+        full: part,
+        label: names[rawLabel] ?? (rawLabel || "来源"),
+        // Home prefix is noise; CSS ellipsis trims the tail if still too long.
+        path: path.replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+(?=[\\/])/, "~"),
+      };
+    });
+}
+
 function UnifiedToolInventoryPanel({
   actions,
   aitrackerCapabilities,
@@ -851,7 +877,11 @@ function UnifiedToolInventoryPanel({
             <div className="unified-tool-copy">
               <strong>{asset.title || asset.id}</strong>
               {asset.summary ? <span title={asset.summary}>{asset.summary}</span> : null}
-              {asset.source ? <small title={asset.source}>{compactPath(asset.source)}</small> : null}
+              {inventorySourceLines(asset.source, inventoryAgents).map((line, index, lines) => (
+                <small key={line.key} title={line.full}>
+                  {line.label}: {line.path}{index === 1 && lines.length > 2 ? ` 等 ${lines.length} 处` : ""}
+                </small>
+              )).slice(0, 2)}
             </div>
             <div className="agent-toggle-group" aria-label={`${asset.title} 应用状态`}>
               {(asset.kind === "skill"
