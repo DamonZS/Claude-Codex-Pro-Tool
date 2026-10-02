@@ -1,0 +1,1577 @@
+// Browser-only preview data for `invokeCommand` when the page runs without
+// Tauri (vite dev / preview). Loaded on demand, so it is not parsed in the app.
+import { DEFAULT_APP_PREFERENCES } from "@/components/settings/contract";
+
+import announcementConfig from "../../../assets/config/announcement.json";
+
+type Status = "ok" | "failed" | "not_checked" | string;
+
+type CommandResult<T extends Record<string, unknown>> = T & {
+  status: Status;
+  message: string;
+};
+
+type PreviewPluginItem = {
+  id: string;
+  name: string;
+  description: string;
+  sourceId: string;
+  sourceLabel: string;
+  sourceUrl: string;
+  category: string;
+  author: string;
+  homepage: string;
+  license: string;
+  tags: string[];
+  installKind: string;
+  installStatus: string;
+  installCommand: string[];
+  configPreview: string;
+  risk: string;
+  requirements: string[];
+};
+
+const now = () => Date.now();
+
+/**
+ * The browser-only bridge has no Multica control plane. Keep this explicit
+ * empty payload so the preview cannot imply a connected server or fabricate
+ * runtime/agent/task state.
+ */
+function previewMulticaEmptyResult() {
+  return { connections: [], statuses: {} };
+}
+
+/**
+ * Managed Runtime is a native-only capability. The browser preview must
+ * expose a deterministic unavailable state instead of pretending that an
+ * installer, daemon, or login session exists.
+ */
+function previewMulticaManagedRuntimeFailure(message = "预览模式未连接托管工作流 Runtime，操作未执行。") {
+  return {
+    status: "failed",
+    message,
+    runtime: {
+      installState: "unavailable",
+      installPhase: null,
+      downloadedBytes: 0,
+      totalBytes: null,
+      progressPercent: null,
+      installedVersion: null,
+      targetTriple: null,
+      assetName: null,
+      assetSource: null,
+      sha256: null,
+      sha256Verified: false,
+      executableName: null,
+      previousVersion: null,
+      lastInstallErrorCode: "preview_native_required",
+      updatedAtMs: null,
+      diagnostic: "托管 Runtime 需要 Tauri 原生环境。",
+    },
+    connection: null,
+    connectionStatus: null,
+    loginStatus: "unconfigured",
+  };
+}
+
+function previewSettings() {
+  return {
+    codexAppPath: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe",
+    codexExtraArgs: [],
+    providerSyncEnabled: true,
+    providerSyncSavedProviders: [],
+    providerSyncManualProviders: [],
+    providerSyncLastSelectedProvider: "preview",
+    relayProfilesEnabled: true,
+    enhancementsEnabled: true,
+    computerUseGuardEnabled: true,
+    codexAppPluginEntryUnlock: true,
+    codexAppPluginMarketplaceUnlock: true,
+    codexAppForcePluginInstall: false,
+    codexAppSessionDelete: false,
+    codexAppMarkdownExport: false,
+    codexAppProjectMove: false,
+    codexAppConversationTimeline: true,
+    codexAppConversationView: true,
+    codexAppThreadScrollRestore: true,
+    codexAppZedRemoteOpen: false,
+    zedRemoteOpenStrategy: "native",
+    zedRemoteProjectRegistryEnabled: false,
+    zedRemoteSyncToZedSettings: false,
+    codexAppUpstreamWorktreeCreate: false,
+    codexAppNativeMenuPlacement: false,
+    claudeAppChineseOverlayEnabled: true,
+    codexAppServiceTierControls: true,
+    codexAppImageOverlayEnabled: false,
+    codexAppImageOverlayPath: "",
+    codexAppImageOverlayOpacity: 70,
+    codexGoalsEnabled: true,
+    multicaWorkspaceEnabled: true,
+    launchMode: "patch",
+    relayBaseUrl: "",
+    relayApiKey: "",
+    relayProfiles: [{
+      id: "default",
+      name: "默认中转",
+      protocol: "responses",
+      relayMode: "official",
+      officialMixApiKey: false,
+      testModel: "",
+      configContents: "",
+      authContents: "",
+      useCommonConfig: true,
+      contextSelection: { mcpServers: [], skills: [], plugins: [] },
+      contextSelectionInitialized: false,
+      contextWindow: "",
+      autoCompactLimit: "",
+      modelList: "",
+      userAgent: "",
+    }],
+    relayCommonConfigContents: "",
+    relayContextConfigContents: "",
+    activeRelayId: "default",
+    relayTestModel: "gpt-5",
+    cliWrapperEnabled: false,
+    cliWrapperBaseUrl: "",
+    cliWrapperApiKey: "",
+    cliWrapperApiKeyEnv: "OPENAI_API_KEY",
+  };
+}
+
+type PreviewSettings = ReturnType<typeof previewSettings>;
+
+let previewSettingsState: PreviewSettings = previewSettings();
+
+function clonePreviewSettings(settings: PreviewSettings): PreviewSettings {
+  return JSON.parse(JSON.stringify(settings)) as PreviewSettings;
+}
+
+function currentPreviewSettings(): PreviewSettings {
+  return clonePreviewSettings(previewSettingsState);
+}
+
+function replacePreviewSettings(settings: PreviewSettings): PreviewSettings {
+  previewSettingsState = clonePreviewSettings(settings);
+  return currentPreviewSettings();
+}
+
+function previewSettingsResult(message = "预览模式设置。", settings = currentPreviewSettings()) {
+  return ok(message, {
+    settings: clonePreviewSettings(settings),
+    settings_path: "~\\.claude-codex-pro\\settings.json",
+    user_scripts: { enabled: true, scripts: previewUserScripts() },
+  });
+}
+
+function previewUserScripts() {
+  return [
+    {
+      key: "preview-toolbar",
+      name: "预览工具栏增强",
+      version: "1.0.0",
+      description: "预览模式本地脚本示例。",
+      enabled: true,
+      path: "~\\.claude-codex-pro\\scripts\\preview-toolbar.js",
+      homepage: "https://github.com/DamonZS/Claude-Codex-Pro-ToolScriptMarket",
+    },
+  ];
+}
+
+function previewPluginItems(): PreviewPluginItem[] {
+  return [
+    {
+      id: "official-files",
+      name: "Files",
+      description: "Claude 官方文件能力插件示例。",
+      sourceId: "official",
+      sourceLabel: "Claude 官方插件",
+      sourceUrl: "https://github.com/anthropics/claude-plugins-official",
+      category: "claude",
+      author: "Anthropic",
+      homepage: "https://github.com/anthropics/claude-plugins-official",
+      license: "unknown",
+      tags: ["official", "claude"],
+      installKind: "claude_plugin_marketplace",
+      installStatus: "notInstalled",
+      installCommand: ["claude", "plugin", "marketplace", "install", "files"],
+      configPreview: "",
+      risk: "安装前应查看官方 marketplace 命令。",
+      requirements: ["claude CLI"],
+    },
+    {
+      id: "codex-github",
+      name: "Codex GitHub Tools",
+      description: "Codex 插件仓库中的 GitHub 工作流能力示例。",
+      sourceId: "codex-plugins",
+      sourceLabel: "Codex 插件仓库",
+      sourceUrl: "https://github.com/openai/plugins",
+      category: "codex",
+      author: "OpenAI",
+      homepage: "https://github.com/openai/plugins",
+      license: "MIT",
+      tags: ["codex", "github"],
+      installKind: "resource_link",
+      installStatus: "needsReview",
+      installCommand: [],
+      configPreview: "",
+      risk: "社区/示例资源仅展示元数据，不自动执行脚本。",
+      requirements: ["manual review"],
+    },
+    {
+      id: "mcp-filesystem",
+      name: "Filesystem MCP",
+      description: "可审查安装到 Claude Desktop 的 MCP 文件系统能力。",
+      sourceId: "mcp",
+      sourceLabel: "GitHub MCP Registry",
+      sourceUrl: "https://github.com/mcp",
+      category: "mcp",
+      author: "Community",
+      homepage: "https://github.com/mcp",
+      license: "unknown",
+      tags: ["mcp", "filesystem"],
+      installKind: "claude_desktop_mcp",
+      installStatus: "notInstalled",
+      installCommand: [],
+      configPreview: "{\n  \"mcpServers\": {}\n}",
+      risk: "安装前展示配置 diff，并写入前备份。",
+      requirements: ["Claude Desktop"],
+    },
+    {
+      id: "ponytail:codex-plugin",
+      name: "Ponytail for Codex",
+      description: "Ponytail lazy senior dev 模式，添加到 Codex 插件 marketplace 后在 /plugins 中安装并审查 hooks。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "codex-plugin",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "codex", "plugin", "skills", "hooks"],
+      installKind: "codex_plugin",
+      installStatus: "notInstalled",
+      installCommand: ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail", "--json"],
+      configPreview: "codex plugin marketplace add DietrichGebert/ponytail --json\ncodex plugin list --available --json\ncodex plugin add ponytail@ponytail --json\n\n安装后单独审查并信任 hooks。",
+      risk: "真实安装会调用 Codex CLI；不会后台静默信任第三方 hooks。",
+      requirements: ["codex CLI", "Node.js", "hooks 单独确认"],
+    },
+    {
+      id: "ponytail:claude-code-plugin",
+      name: "Ponytail for Claude Code",
+      description: "Ponytail lazy senior dev 模式，安装到 Claude Code 插件市场。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "claude-code-plugin",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "claude-code", "plugin", "skills", "hooks"],
+      installKind: "claude_code_plugin",
+      installStatus: "notInstalled",
+      installCommand: ["claude", "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+      configPreview: "/plugin marketplace add DietrichGebert/ponytail\n/plugin install ponytail@ponytail",
+      risk: "真实安装会调用 Claude Code CLI；安装后请审查并信任 hooks。",
+      requirements: ["claude CLI", "Node.js"],
+    },
+    {
+      id: "ponytail:copilot-plugin",
+      name: "Ponytail for GitHub Copilot CLI",
+      description: "Ponytail lazy senior dev 模式，安装到 GitHub Copilot CLI 插件系统。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "copilot-plugin",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "copilot", "plugin"],
+      installKind: "copilot_plugin",
+      installStatus: "notInstalled",
+      installCommand: ["copilot", "plugin", "marketplace", "add", "DietrichGebert/ponytail"],
+      configPreview: "copilot plugin marketplace add DietrichGebert/ponytail\ncopilot plugin install ponytail@ponytail",
+      risk: "真实安装会调用 GitHub Copilot CLI；CLI 未登录时会返回错误输出。",
+      requirements: ["copilot CLI", "Node.js"],
+    },
+    {
+      id: "ponytail:claude-desktop-mcp",
+      name: "Ponytail MCP for Claude Desktop",
+      description: "把 Ponytail MCP server 注册到 Claude Desktop mcpServers。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "claude-desktop-mcp",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "mcp", "claude-desktop"],
+      installKind: "claude_desktop_mcp",
+      installStatus: "notInstalled",
+      installCommand: ["node", "~\\.claude-codex-pro\\plugin-hub\\repos\\ponytail\\ponytail-mcp\\index.js"],
+      configPreview: "{\n  \"mcpServers\": {\n    \"ponytail\": { \"command\": \"node\", \"args\": [\"~\\\\.claude-codex-pro\\\\plugin-hub\\\\repos\\\\ponytail\\\\ponytail-mcp\\\\index.js\"] }\n  }\n}",
+      risk: "真实安装会克隆 Ponytail、安装 MCP 依赖、备份 Claude Desktop 配置后写入。",
+      requirements: ["Git", "Node.js", "Claude Desktop"],
+    },
+    {
+      id: "ponytail:claude-desktop-org-plugin",
+      name: "Ponytail Organization Plugin for Claude Desktop",
+      description: "安装为 Claude Desktop 开发模式可读取的组织插件目录。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "claude-desktop-org-plugin",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "claude-desktop", "organization-plugin", "skills"],
+      installKind: "claude_desktop_org_plugin",
+      installStatus: "notInstalled",
+      installCommand: [],
+      configPreview: "源：~\\.claude-codex-pro\\plugin-hub\\repos\\ponytail\\skills\\*\n目标：C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\*",
+      risk: "真实安装会写入 Claude Desktop 组织插件目录；普通权限不可写时会失败，不会调用 Claude CLI 登录，也不会静默信任 hooks。",
+      requirements: ["Claude Desktop 3P / 开发模式", "Git", "管理员权限或可写目录", "本地写入 MCP/skills/组织插件目录"],
+    },
+    {
+      id: "ponytail:codex-skills",
+      name: "Ponytail Skills for Codex",
+      description: "复制 Ponytail skills 到 Codex 用户技能目录。",
+      sourceId: "ponytail",
+      sourceLabel: "Ponytail 多工具插件",
+      sourceUrl: "https://github.com/DietrichGebert/ponytail",
+      category: "codex-skills",
+      author: "Dietrich Gebert",
+      homepage: "https://github.com/DietrichGebert/ponytail",
+      license: "MIT",
+      tags: ["ponytail", "codex", "skills"],
+      installKind: "managed_skill_bundle",
+      installStatus: "notInstalled",
+      installCommand: [],
+      configPreview: "源：~\\.claude-codex-pro\\plugin-hub\\repos\\ponytail\\skills\\*\n目标：~\\.codex\\skills\\*",
+      risk: "真实安装会克隆 Ponytail，并在覆盖同名 skill 前备份。",
+      requirements: ["Git", "Codex skills 目录"],
+    },
+  ];
+}
+
+function previewPluginCatalog(message = "预览模式插件目录。") {
+  return ok(message, {
+    catalog: {
+      updatedAt: new Date().toISOString(),
+      sources: [
+        { id: "official", label: "Claude 官方插件", url: "https://github.com/anthropics/claude-plugins-official", status: "ok", message: "预览数据", itemCount: 2 },
+        { id: "codex-plugins", label: "Codex 插件仓库", url: "https://github.com/openai/plugins", status: "ok", message: "预览数据", itemCount: 2 },
+        { id: "ponytail", label: "Ponytail 多工具插件", url: "https://github.com/DietrichGebert/ponytail", status: "ok", message: "预览数据", itemCount: 6 },
+        { id: "awesome", label: "awesome-claude-code", url: "https://github.com/hesreallyhim/awesome-claude-code", status: "ok", message: "预览数据", itemCount: 1 },
+      ],
+      items: previewPluginItems(),
+    },
+  });
+}
+
+function previewCodexPluginMarketplace(message = "预览模式 Codex OpenAI 插件仓库状态。") {
+  return ok(message, {
+    marketplace: {
+      codexHome: "~\\.codex",
+      marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+      configRegistered: true,
+      needsRepair: false,
+      localSourcesReady: true,
+      runtimeConfirmation: "预览模式：本地来源已模拟就绪，待应用确认。",
+      message: "预览模式：本地 openai-curated 与第三方 marketplace 已模拟注册。",
+      repositories: [
+        {
+          label: "OpenAI 官方仓库",
+          name: "openai-curated + openai-api-curated",
+          sourceType: "local",
+          source: "~\\.codex\\.tmp\\plugins",
+          configured: true,
+        },
+        {
+          label: "第三方插件仓库",
+          name: "awesome-codex-plugins",
+          sourceType: "git",
+          source: "https://github.com/hashgraph-online/awesome-codex-plugins.git",
+          configured: true,
+        },
+        {
+          label: "Product Design Skill 仓库",
+          name: "codex-skills-alternative",
+          sourceType: "local",
+          source: "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace",
+          configured: true,
+        },
+        {
+          label: "Matt Pocock Skills 仓库",
+          name: "mattpocock-skills",
+          sourceType: "local",
+          source: "~\\.codex\\plugins\\cache\\mattpocock-skills-marketplace",
+          configured: true,
+        },
+      ],
+    },
+  });
+}
+
+function previewPluginItem(id?: unknown) {
+  const requested = typeof id === "string" ? id : "official-files";
+  return previewPluginItems().find((item) => item.id === requested) ?? previewPluginItems()[0];
+}
+
+function previewScriptMarket(message = "预览模式脚本市场。") {
+  return ok(message, {
+    market: {
+      status: "ok",
+      message: "预览脚本目录已加载。",
+      indexUrl: "https://github.com/DamonZS/Claude-Codex-Pro-ToolScriptMarket",
+      updatedAt: new Date().toISOString(),
+      scripts: [
+        {
+          id: "preview-toolbar",
+          name: "Codex 工具栏增强",
+          description: "预览模式脚本市场条目，用于验证安装按钮和来源按钮。",
+          version: "1.0.0",
+          author: "Claude Codex Pro",
+          tags: ["codex", "ui"],
+          homepage: "https://github.com/DamonZS/Claude-Codex-Pro-ToolScriptMarket",
+          script_url: "https://example.invalid/preview-toolbar.js",
+          sha256: "preview",
+          installed: false,
+          installedVersion: "",
+          updateAvailable: false,
+        },
+      ],
+    },
+    user_scripts: { enabled: true, scripts: previewUserScripts() },
+  });
+}
+
+function previewContextEntries(settings = currentPreviewSettings()) {
+  const entries = {
+    mcpServers: [
+      {
+        id: "codegraph",
+        kind: "mcp",
+        title: "codegraph",
+        summary: "command = \"codegraph\"",
+        tomlBody: "enabled = true\ntype = \"stdio\"\ncommand = \"codegraph\"\nargs = [\"serve\", \"--mcp\"]\n",
+        enabled: true,
+      },
+      {
+        id: "node_repl",
+        kind: "mcp",
+        title: "node_repl",
+        summary: "command = \"node\"",
+        tomlBody: "enabled = true\ntype = \"stdio\"\ncommand = \"node\"\nargs = [\"server.js\"]\n",
+        enabled: true,
+      },
+    ],
+    skills: [],
+    plugins: previewPluginItems().slice(0, 20).map((item) => ({
+      id: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}@${item.sourceId}`,
+      kind: "plugin",
+      title: `${item.name}@${item.sourceId}`,
+      summary: item.description,
+      tomlBody: "enabled = true\n",
+      enabled: true,
+    })),
+  };
+  return ok("预览模式工具与插件列表。", { settings, entries });
+}
+
+function previewClaudeContextEntries() {
+  return ok("预览模式 Claude 工具与插件列表。", {
+    configPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+    entries: {
+      mcpServers: [
+        {
+          id: "claude-codex-pro-codex",
+          kind: "mcp",
+          title: "claude-codex-pro-codex",
+          summary: "claude-codex-pro mcp",
+          tomlBody: "{\n  \"command\": \"claude-codex-pro\",\n  \"args\": [\"mcp\"],\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+      skills: [
+        {
+          id: "ponytail",
+          kind: "skill",
+          title: "Ponytail Skills",
+          summary: "预览模式组织插件已写入",
+          tomlBody: "{\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+      plugins: [
+        {
+          id: "ponytail",
+          kind: "plugin",
+          title: "DietrichGebert/ponytail",
+          summary: "预览模式 Claude 官方插件入口",
+          tomlBody: "{\n  \"enabled\": true\n}\n",
+          enabled: true,
+        },
+      ],
+    },
+  });
+}
+
+type PreviewUnifiedToolAssetState = {
+  id: string;
+  kind: "mcp" | "skill" | "plugin";
+  title: string;
+  summary: string;
+  claudeEnabled: boolean;
+  codexEnabled: boolean;
+  agents?: Record<string, boolean>;
+};
+
+const previewUnifiedToolAssets: PreviewUnifiedToolAssetState[] = [
+  { id: "codebase-memory-mcp", kind: "mcp", title: "codebase-memory-mcp", summary: "代码库知识图谱 MCP", claudeEnabled: true, codexEnabled: true },
+  { id: "ask-matt", kind: "skill", title: "ask-matt", summary: "工程工作流路由技能", claudeEnabled: true, codexEnabled: true, agents: { cursor: false, workbuddy: true, openclaw: false } },
+  { id: "github", kind: "plugin", title: "github", summary: "GitHub 工作流插件", claudeEnabled: false, codexEnabled: true },
+];
+
+function previewUnifiedToolInventory(message = "检测完成：已加载预览工具与插件。") {
+  const assets = previewUnifiedToolAssets.map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    title: item.title,
+    summary: item.summary,
+    source: `~\\.claude\\${item.kind}s\\${item.id} | ~\\.codex\\${item.kind}s\\${item.id}`,
+    claude: { enabled: item.claudeEnabled, available: true, toggleSupported: true, sourcePath: `~\\.claude\\${item.kind}s\\${item.id}` },
+    codex: { enabled: item.codexEnabled, available: true, toggleSupported: true, sourcePath: `~\\.codex\\${item.kind}s\\${item.id}` },
+    agents: Object.fromEntries(Object.entries(item.agents ?? {}).map(([id, enabled]) => [id, { enabled, available: true, toggleSupported: true, sourcePath: `~\\.${id}\\skills\\${item.id}` }])),
+  }));
+  return ok(message, {
+    inventory: {
+      assets,
+      counts: {
+        total: assets.length,
+        rawDiscoveries: 5,
+        deduplicated: 2,
+        mcp: assets.filter((item) => item.kind === "mcp").length,
+        skills: assets.filter((item) => item.kind === "skill").length,
+        plugins: assets.filter((item) => item.kind === "plugin").length,
+        codexEnabled: assets.filter((item) => item.codex.enabled).length,
+        claudeEnabled: assets.filter((item) => item.claude.enabled).length,
+      },
+      scannedSources: ["~\\.codex", "~\\.claude"],
+      diagnostics: [],
+    },
+  });
+}
+
+let previewLeilaDeployed = false;
+let previewLeilaLogs = [
+  "[preview] 破甲 1.0.7 资源清单校验完成。",
+  "[preview] Python 3.13 x64 模块状态：已安装。",
+  "[preview] 浏览器预览不会修改真实 Codex 配置。",
+];
+
+function previewLeilaStatus(message = "预览模式破甲部署状态。") {
+  return ok(message, {
+    supported: true,
+    packageVersion: "1.0.7",
+    platform: "win32",
+    architecture: "x64",
+    pythonVersion: "3.13.7",
+    pythonBits: 64,
+    pythonModulesInstalled: true,
+    pythonModuleStatus: "complete",
+    targetCodexHome: "~\\.codex",
+    deployed: previewLeilaDeployed,
+    promptVerified: previewLeilaDeployed,
+    identityVerified: previewLeilaDeployed,
+    acVerified: previewLeilaDeployed,
+    globalProfileActive: previewLeilaDeployed,
+    externallyModified: false,
+    rollbackAvailable: previewLeilaDeployed,
+    lastDeploymentAt: previewLeilaDeployed ? new Date().toISOString() : null,
+    lastError: null,
+    resourceSha256: previewLeilaDeployed ? "c9f30ca56a43b85d5475a41d5433d5a1a51a8a11ea3faf6f0a1d4497a89c3117" : null,
+    promptSha256: previewLeilaDeployed ? "c9f30ca56a43b85d5475a41d5433d5a1a51a8a11ea3faf6f0a1d4497a89c3117" : null,
+    identitySha256: previewLeilaDeployed ? "11aec9cf8f865f306a73944db9557a5db7a4c62955c71141af02d51f2ab83c69" : null,
+    acSha256: previewLeilaDeployed ? "53a0f4d27df7901b66c4f440c500247d52e3ef809841398f04805953f8392ef4" : null,
+    logs: [...previewLeilaLogs],
+  });
+}
+
+// Preview-only state for the settings page (no Tauri backend in the browser).
+let previewPreferences: Record<string, unknown> = { ...DEFAULT_APP_PREFERENCES };
+const previewAppProxy = (appId: "codex" | "claude" | "claude-desktop" | "gemini") => ({
+  appId, takeover: appId === "codex", autoFailoverEnabled: false, maxRetries: appId === "claude" ? 6 : 3,
+  streamingFirstByteTimeout: appId === "claude" ? 90 : 60, streamingIdleTimeout: appId === "claude" ? 180 : 120, nonStreamingTimeout: 600,
+  circuitFailureThreshold: appId === "claude" ? 8 : 4, circuitSuccessThreshold: appId === "claude" ? 3 : 2, circuitTimeoutSeconds: appId === "claude" ? 90 : 60,
+  circuitErrorRateThreshold: appId === "claude" ? 0.7 : 0.6, circuitMinRequests: appId === "claude" ? 15 : 10,
+});
+let previewRouting = {
+  enabled: false, listenAddress: "127.0.0.1", listenPort: 57321, enableLogging: true, showRoutingToggleOnMain: false, showFailoverToggleOnMain: false,
+  apps: [previewAppProxy("claude"), previewAppProxy("claude-desktop"), previewAppProxy("codex"), previewAppProxy("gemini")],
+  rectifier: { enabled: true, thinkingSignature: true, thinkingBudget: true, mediaFallback: true, mediaHeuristic: true },
+  globalProxyUrl: "", globalProxyUsername: "", globalProxyPassword: undefined as string | undefined,
+};
+
+type PreviewAgentProvider = { id: string; appId: string; name: string; baseUrl: string; hasApiKey: boolean; apiFormat: string; models: string[]; defaultModel: string; notes: string; sortIndex: number };
+let previewAgentProviders: PreviewAgentProvider[] = [
+  { id: "preview-ds", appId: "opencode", name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", hasApiKey: true, apiFormat: "openai-chat", models: ["deepseek-chat", "deepseek-reasoner"], defaultModel: "", notes: "", sortIndex: 0 },
+  { id: "preview-wb", appId: "workbuddy", name: "中转 A", baseUrl: "https://relay.example.com/v1", hasApiKey: true, apiFormat: "openai-chat", models: ["gpt-5.4"], defaultModel: "", notes: "", sortIndex: 0 },
+];
+let previewAgentStates: Record<string, { activeId: string | null; appliedIds: string[]; configPath: string; installed: boolean }> = {
+  opencode: { activeId: null, appliedIds: ["preview-ds"], configPath: "~/.config/opencode/opencode.json", installed: true },
+  workbuddy: { activeId: null, appliedIds: [], configPath: "~/.workbuddy/models.json", installed: true },
+};
+const previewAgentPayload = () => ({ providers: previewAgentProviders, states: previewAgentStates });
+
+export async function mockInvoke(command: string, _args?: Record<string, unknown>) {
+  if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
+  if (command === "inspect_leila_status") return previewLeilaStatus();
+  if (command === "choose_leila_codex_target") return previewLeilaStatus("预览模式已模拟选择 Codex 目录。");
+  if (command === "deploy_leila") {
+    previewLeilaDeployed = true;
+    previewLeilaLogs = [
+      ...previewLeilaLogs,
+      "[preview] Python 模块检查通过。",
+      "[preview] 破甲资源已模拟部署并完成 SHA-256 校验。",
+    ];
+    return previewLeilaStatus("预览模式已模拟部署破甲，未修改真实文件。");
+  }
+  if (command === "rollback_leila") {
+    previewLeilaDeployed = false;
+    previewLeilaLogs = [...previewLeilaLogs, "[preview] 最近一次破甲部署已模拟回滚。"];
+    return previewLeilaStatus("预览模式已模拟回滚破甲，未修改真实文件。");
+  }
+  if (command === "list_multica_connections") {
+    return ok("预览模式未配置工作流连接。", previewMulticaEmptyResult());
+  }
+  if (command === "get_multica_snapshot") {
+    return {
+      status: "failed",
+      message: "预览模式未连接工作流服务，无法读取快照。",
+      ...previewMulticaEmptyResult(),
+      snapshot: null,
+      sidecar: null,
+    };
+  }
+  if (command === "get_multica_managed_runtime") {
+    return previewMulticaManagedRuntimeFailure("预览模式未连接托管工作流 Runtime，无法读取状态。");
+  }
+  if (
+    command === "ensure_multica_runtime"
+    || command === "cancel_multica_runtime_install"
+    || command === "rollback_multica_runtime"
+    || command === "login_multica_managed"
+    || command === "logout_multica_managed"
+    || command === "set_multica_managed_enabled"
+    || command === "save_multica_managed_connection"
+    || command === "check_multica_managed_runtime"
+    || command === "start_multica_managed_runtime"
+    || command === "stop_multica_managed_runtime"
+    || command === "restart_multica_managed_runtime"
+  ) {
+    return previewMulticaManagedRuntimeFailure();
+  }
+  if (
+    command === "save_multica_connection"
+    || command === "delete_multica_connection"
+    || command === "check_multica_connection"
+    || command === "start_multica_sidecar"
+    || command === "stop_multica_sidecar"
+    || command === "restart_multica_sidecar"
+  ) {
+    return {
+      status: "failed",
+      message: "当前是无 Tauri 预览环境，工作流操作未执行。",
+      ...previewMulticaEmptyResult(),
+      snapshot: null,
+      sidecar: null,
+    };
+  }
+  if (command === "launch_claude_codex_pro" || command === "restart_claude_codex_pro") {
+    return ok(command === "launch_claude_codex_pro" ? "预览模式已模拟启动/重启 Codex。" : "预览模式已模拟重启 Codex。", {
+      preview: true,
+      action: command,
+      startedAtMs: Date.now(),
+    });
+  }
+  if (command === "open_claude_desktop") return ok("预览模式已模拟启动官方 Claude。", { preview: true });
+  if (command === "load_overview") {
+    return ok("预览模式已加载概览。", {
+      codex_app: { status: "found", path: "D:\\Project\\Claude-Codex-Pro-Tool\\target\\debug\\claude-codex-pro.exe" },
+      codex_version: "preview",
+      silent_shortcut: { status: "not_checked", path: null },
+      management_shortcut: { status: "installed", path: "Desktop\\Claude Code Pro.lnk" },
+      latest_launch: {
+        status: "running",
+        message: "preview bridge",
+        started_at_ms: Date.now(),
+        debug_port: 57321,
+        helper_port: 57322,
+        debug_port_online: true,
+        helper_port_online: true,
+        frontend_runtime_online: true,
+        frontend_runtime_seen_at_ms: Date.now(),
+        codex_app: "preview",
+      },
+      current_version: "V0.12",
+      update_status: "preview",
+      settings_path: "~\\.claude-codex-pro\\settings.json",
+      logs_path: "~\\.claude-codex-pro\\logs\\manager.log",
+    });
+  }
+  if (command === "load_ads") {
+    return ok("预览模式已加载公告。", {
+      version: announcementConfig.version,
+      ads: announcementConfig.ads,
+    });
+  }
+  if (command === "load_claude_desktop_status" || command === "load_claude_desktop_status_light") {
+    return ok("预览模式 Claude 诊断。", {
+      processCount: 0,
+      executablePaths: [],
+      installKind: "msix",
+      cdpStatus: "blocked",
+      frontendInjected: false,
+      frontendStatus: "not_available",
+      cdpBlocker: "官方 MSIX 窗口不可直接 DOM 注入",
+      debugFlagsPresent: false,
+      debugPorts: [],
+      inspectorPorts: [],
+      listeningPorts: [],
+      debugEvidence: [],
+      supportedIntegration: "wrapped_webview",
+      integrityStatus: "not_modified",
+      integrityMessage: "预览模式不修改官方 Claude。",
+      executableAudits: [],
+    });
+  }
+  if (command === "load_claude_chinese_window_status" || command === "open_claude_chinese_window") {
+    return ok("预览模式 Claude 一键汉化状态。", {
+      open: command === "open_claude_chinese_window",
+      label: "Claude 一键汉化",
+      defaultUrl: "https://claude.ai/new",
+      injectionMode: "wrapped_webview",
+      cdpStatus: "blocked",
+      cdpBlocker: "官方 Claude Desktop 使用包装窗口替代注入",
+      officialInstallKind: "msix",
+    });
+  }
+  if (command === "load_claude_zh_patch_status") {
+    return ok("预览模式本机汉化状态。", {
+      status: {
+        status: "not_checked",
+        message: "预览模式不修改本机 Claude 文件。",
+        installRoot: null,
+        appRoot: null,
+        installKind: "unknown",
+        localeConfigPath: "~\\AppData\\Roaming\\Claude\\locale.json",
+        backupDir: "~\\.claude-codex-pro\\claude-zh-backups",
+        resourcesPresent: false,
+        frontendI18nPresent: false,
+        statsigI18nPresent: false,
+        chunkPatchPresent: false,
+        languageWhitelistPatched: false,
+        localeConfigured: false,
+        writable: false,
+      },
+      changedFiles: [],
+      backupDir: "~\\.claude-codex-pro\\claude-zh-backups",
+    });
+  }
+  if (command === "install_claude_zh_patch" || command === "install_claude_zh_patch_at_install_root" || command === "restore_claude_zh_patch") {
+    const isInstall = command === "install_claude_zh_patch" || command === "install_claude_zh_patch_at_install_root";
+    return ok(isInstall ? "预览模式已模拟 Claude 本机汉化。" : "预览模式已模拟恢复 Claude 官方文件。", {
+      status: {
+        status: "ok",
+        message: "预览模式不会修改本机 Claude 文件。",
+        installRoot: typeof _args?.installRoot === "string" ? _args.installRoot : null,
+        appRoot: null,
+        installKind: "unknown",
+        localeConfigPath: "~\\AppData\\Roaming\\Claude\\locale.json",
+        backupDir: "~\\.claude-codex-pro\\claude-zh-backups",
+        resourcesPresent: true,
+        frontendI18nPresent: isInstall,
+        statsigI18nPresent: isInstall,
+        chunkPatchPresent: isInstall,
+        languageWhitelistPatched: isInstall,
+        localeConfigured: isInstall,
+        writable: true,
+      },
+      changedFiles: [],
+      backupDir: "~\\.claude-codex-pro\\claude-zh-backups",
+    });
+  }
+  if (command === "refresh_plugin_hub_catalog" || command === "get_plugin_hub_catalog") {
+    return previewPluginCatalog();
+  }
+  if (command === "preview_plugin_hub_install") {
+    const item = previewPluginItem((_args?.request as { id?: unknown } | undefined)?.id);
+    const canInstall = ["claude_desktop_mcp", "claude_desktop_org_plugin", "claude_plugin_marketplace", "claude_code_plugin", "codex_plugin", "copilot_plugin", "managed_skill_bundle"].includes(item.installKind);
+    return ok("预览模式安装预览。", {
+      item,
+      canInstall,
+      action: item.installKind === "codex_plugin" ? "codex_cli_plugin" : item.installKind,
+      command: item.installCommand,
+      configDiff: item.configPreview || "",
+      message: item.installKind === "codex_plugin" ? "真实环境会调用 Codex CLI 安装；hooks 需要单独审查后信任。" : item.installCommand.length ? `将执行：${item.installCommand.join(" ")}` : "该资源需要人工审查，预览模式不执行安装。",
+    });
+  }
+  if (command === "install_plugin_hub_item") {
+    const item = { ...previewPluginItem((_args?.request as { id?: unknown } | undefined)?.id), installStatus: "installed" };
+    return ok("预览模式已模拟插件安装。", {
+      item,
+      preview: {},
+      installed: true,
+      installMessage: "预览模式不会写入 Claude Desktop 或执行 CLI。",
+      stdout: "",
+      stderr: "",
+      backupPath: "~\\.claude-codex-pro\\backups\\plugin-preview.json",
+    });
+  }
+  if (command === "uninstall_plugin_hub_item") {
+    return previewPluginCatalog("预览模式已模拟撤销托管配置并更新插件记录。");
+  }
+  if (command === "preview_ponytail_codex_hooks") {
+    return ok("预览模式已生成 Ponytail Codex hooks 审查列表。", {
+      preview: {
+        configPath: "~\\.codex\\config.toml",
+        hooks: [
+          {
+            key: "ponytail@ponytail:hooks/claude-codex-hooks.json:session_start:0:0",
+            eventName: "session_start",
+            matcher: "startup|resume|clear|compact",
+            command: "node ponytail-activate.js",
+            statusMessage: "Loading ponytail mode...",
+            currentHash: "sha256:preview",
+            trusted: false,
+            sourcePath: "~\\.codex\\plugins\\cache\\ponytail\\hooks\\claude-codex-hooks.json",
+          },
+        ],
+        message: "预览模式：发现 1 个待信任 hook。",
+      },
+    });
+  }
+  if (command === "trust_ponytail_codex_hooks") {
+    return ok("预览模式已模拟写入 hooks.state。", {
+      preview: {
+        configPath: "~\\.codex\\config.toml",
+        hooks: [],
+        message: "预览模式不会修改真实 Codex 配置。",
+      },
+    });
+  }
+  if (command === "generate_ponytail_mcpb_installer") {
+    return ok("预览模式已模拟生成并打开 Ponytail MCPB。", {
+      package: {
+        mcpbPath: "~\\.claude-codex-pro\\plugin-hub\\mcpb\\ponytail-preview.mcpb",
+        manifestPath: "~\\.claude-codex-pro\\plugin-hub\\mcpb\\ponytail-preview\\manifest.json",
+        opened: true,
+        message: "预览模式不会打开系统安装弹窗。",
+      },
+    });
+  }
+  if (command === "load_claude_desktop_org_plugin_status" || command === "open_claude_desktop_org_plugins_dir") {
+    return ok("预览模式 Claude Desktop 组织插件目录可用。", {
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: false,
+        writable: true,
+        message: "预览模式不会写入 Program Files。",
+      },
+    });
+  }
+  if (command === "load_claude_desktop_marketplace_status") {
+    return ok("预览模式 Claude Desktop 插件仓库配置可用。", {
+      marketplaceStatus: {
+        supported: true,
+        marketplace: "anthropics/claude-plugins-official, DietrichGebert/ponytail",
+        plugin: "ponytail",
+        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
+        canAutoWrite: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式：插件仓库已模拟写入 Claude-3p 开发配置。",
+      },
+    });
+  }
+  if (command === "load_codex_plugin_marketplace_status") {
+    return previewCodexPluginMarketplace();
+  }
+  if (command === "repair_codex_plugin_marketplace") {
+    return ok("预览模式已模拟下载、校验并注册 Codex OpenAI 插件仓库。", {
+      repair: {
+        codexHome: "~\\.codex",
+        marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+        initialized: true,
+        configured: true,
+        configRegistered: true,
+        needsRepair: false,
+        message: "预览模式不会下载 GitHub zip 或写入 config.toml。",
+      },
+      marketplace: {
+        codexHome: "~\\.codex",
+        marketplaceRoot: "~\\.codex\\.tmp\\plugins",
+        configRegistered: true,
+        needsRepair: false,
+        localSourcesReady: true,
+        runtimeConfirmation: "预览模式：本地来源已模拟就绪，待应用确认。",
+        message: "预览模式：本地 openai-curated marketplace 已模拟下载并注册。",
+        repositories: [
+          {
+            label: "OpenAI 官方仓库",
+            name: "openai-curated + openai-api-curated",
+            sourceType: "local",
+            source: "~\\.codex\\.tmp\\plugins",
+            configured: true,
+          },
+          {
+            label: "第三方插件仓库",
+            name: "awesome-codex-plugins",
+            sourceType: "git",
+            source: "https://github.com/hashgraph-online/awesome-codex-plugins.git",
+            configured: true,
+          },
+          {
+            label: "Product Design Skill 仓库",
+            name: "codex-skills-alternative",
+            sourceType: "local",
+            source: "~\\.codex\\plugins\\cache\\codex-skills-alternative-marketplace",
+            configured: true,
+          },
+          {
+            label: "Matt Pocock Skills 仓库",
+            name: "mattpocock-skills",
+            sourceType: "local",
+            source: "~\\.codex\\plugins\\cache\\mattpocock-skills-marketplace",
+            configured: true,
+          },
+        ],
+      },
+    });
+  }
+  if (command === "load_claude_desktop_dev_mode_status") {
+    return ok("预览模式 Claude Desktop 开发模式未配置。", {
+      devModeStatus: {
+        supported: true,
+        configured: false,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: null,
+        message: "预览模式不会写入 Claude Desktop 配置。",
+      },
+    });
+  }
+  if (command === "configure_claude_desktop_dev_mode" || command === "refresh_claude_third_party_config") {
+    return ok(command === "refresh_claude_third_party_config" ? "预览模式已模拟刷新 Claude 第三方配置。" : "预览模式已模拟配置 Claude Desktop 开发模式。", {
+      outcome: {
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        profilePath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\00000000-0000-4000-8000-000000157210.json",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        backupPaths: [],
+        message: "预览模式不会写入 Claude Desktop 配置。",
+      },
+      devModeStatus: {
+        supported: true,
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: "00000000-0000-4000-8000-000000157210",
+        message: "预览模式：开发模式已模拟配置。",
+      },
+    });
+  }
+  if (command === "open_ponytail_claude_desktop_marketplace_setup" || command === "repair_claude_desktop_marketplaces") {
+    return ok("预览模式已模拟修复 Claude 插件仓库。", {
+      outcome: {
+        repaired: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式不会修改 Claude Desktop；真实环境会写入 extraKnownMarketplaces。",
+      },
+      marketplaceStatus: {
+        supported: true,
+        marketplace: "anthropics/claude-plugins-official, DietrichGebert/ponytail",
+        plugin: "ponytail",
+        deepLink: "claude://claude.ai/customize/plugins/new?marketplace=DietrichGebert%2Fponytail&plugin=ponytail",
+        canAutoWrite: true,
+        configPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        repositories: [
+          { label: "Claude 官方插件仓库", repository: "anthropics/claude-plugins-official", url: "https://github.com/anthropics/claude-plugins-official", configured: true },
+          { label: "Ponytail 插件仓库", repository: "DietrichGebert/ponytail", url: "https://github.com/DietrichGebert/ponytail", configured: true },
+        ],
+        message: "预览模式：插件仓库已模拟写入 Claude-3p 开发配置。",
+      },
+    });
+  }
+  if (command === "install_ponytail_claude_desktop_org_plugin") {
+    return ok("预览模式已模拟安装 Ponytail 组织插件。", {
+      outcome: {
+        installed: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        pluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        manifestPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\manifest.json",
+        pluginJsonPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\.claude-plugin\\plugin.json",
+        copiedSkills: ["C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\ponytail"],
+        backupPath: null,
+        message: "预览模式不会修改 Claude Desktop。",
+      },
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: true,
+        writable: true,
+        message: "预览模式：Ponytail 组织插件已模拟安装。",
+      },
+    });
+  }
+  if (command === "install_ponytail_claude_desktop_local_bundle") {
+    return ok("预览模式已模拟本地写入 Claude Desktop 开发模式插件包。", {
+      outcome: {
+        devMode: {
+          configured: true,
+          normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+          threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+          profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+          backupPaths: [],
+          message: "预览模式：开发模式已模拟配置。",
+        },
+        codexMcp: {
+          item: { id: "desktop:claude-codex-pro-codex" },
+          preview: null,
+          installed: true,
+          installMessage: "预览模式：已模拟写入 Codex MCP。",
+          stdout: "",
+          stderr: "",
+          backupPath: null,
+        },
+        ponytailMcp: {
+          item: { id: "ponytail:claude-desktop-mcp" },
+          preview: null,
+          installed: true,
+          installMessage: "预览模式：已模拟写入 Ponytail MCP。",
+          stdout: "",
+          stderr: "",
+          backupPath: null,
+        },
+        organizationPlugin: {
+          installed: true,
+          orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+          pluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+          manifestPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\manifest.json",
+          pluginJsonPath: "C:\\Program Files\\Claude\\org-plugins\\ponytail\\.claude-plugin\\plugin.json",
+          copiedSkills: ["C:\\Program Files\\Claude\\org-plugins\\ponytail\\skills\\ponytail"],
+          backupPath: null,
+          message: "预览模式：已模拟本地复制组织插件 skills。",
+        },
+        message: "预览模式：开发模式、MCP 和组织插件 skills 均为本地写入链路，不调用 Claude CLI 登录。",
+      },
+      devModeStatus: {
+        supported: true,
+        configured: true,
+        normalConfigPath: "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json",
+        threepConfigPath: "~\\AppData\\Local\\Claude-3p\\claude_desktop_config.json",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        appliedId: "00000000-0000-4000-8000-000000157210",
+        message: "预览模式：开发模式已模拟配置。",
+      },
+      orgPluginStatus: {
+        supported: true,
+        orgPluginsDir: "C:\\Program Files\\Claude\\org-plugins",
+        configLibraryDir: "~\\AppData\\Local\\Claude-3p\\configLibrary",
+        profileMetaPath: "~\\AppData\\Local\\Claude-3p\\configLibrary\\_meta.json",
+        ponytailPluginDir: "C:\\Program Files\\Claude\\org-plugins\\ponytail",
+        ponytailInstalled: true,
+        writable: true,
+        message: "预览模式：Ponytail 组织插件已模拟安装。",
+      },
+    });
+  }
+  if (command === "list_local_sessions") {
+    return ok("预览模式会话列表。", {
+      dbPath: "~\\.codex\\sessions.db",
+      dbPaths: ["~\\.codex\\sessions.db"],
+      sessions: [
+        {
+          id: "preview-session",
+          title: "Claude Codex Pro 前端重设计",
+          cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+          modelProvider: "codex",
+          archived: false,
+          updatedAtMs: Date.now(),
+          rolloutPath: "",
+          dbPath: "~\\.codex\\sessions.db",
+        },
+      ],
+    });
+  }
+  if (command === "list_claude_sessions") {
+    return ok("预览模式 Claude 会话列表。", {
+      sourceRoot: "~\\.claude",
+      sourcePaths: ["~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl"],
+      sessions: [
+        {
+          id: "preview-claude-session",
+          title: "Claude 会话管理真实接入",
+          cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+          modelProvider: "claude",
+          archived: false,
+          updatedAtMs: Date.now(),
+          sourcePath: "~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl",
+          sourceKind: "claude-code-project",
+          messageCount: 12,
+        },
+      ],
+      warnings: [],
+    });
+  }
+  if (command === "load_claude_session_context") {
+    return ok("预览模式已加载 Claude 会话上下文。", {
+      sessionId: "preview-claude-session",
+      title: "Claude 会话管理真实接入",
+      cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+      sourcePath: "~\\.claude\\projects\\D--Project-Claude-Codex-Pro-Tool\\preview-claude-session.jsonl",
+      sourceKind: "claude-projects",
+      totalMessages: 4,
+      offset: 0,
+      hasMoreBefore: false,
+      messages: [
+        { sequence: 1, role: "user", text: "为什么 Claude 会话点击后没有内容？", timestampMs: Date.now() - 60_000 },
+        { sequence: 2, role: "assistant", text: "列表目前只加载元数据，需要按需读取正文。", timestampMs: Date.now() - 45_000 },
+        { sequence: 3, role: "tool", text: "会话来源校验通过。", timestampMs: Date.now() - 30_000 },
+        { sequence: 4, role: "system", text: "预览模式上下文。", timestampMs: Date.now() - 15_000 },
+      ],
+    });
+  }
+  if (command === "load_codex_session_context") {
+    return ok("预览模式已加载 Codex 会话上下文。", {
+      sessionId: "preview-codex-session",
+      title: "Codex 会话上下文查看器",
+      cwd: "D:\\Project\\Claude-Codex-Pro-Tool",
+      dbPath: "~\\.codex\\sqlite\\codex.db",
+      rolloutPath: "~\\.codex\\sessions\\preview-codex-session.jsonl",
+      totalMessages: 2,
+      offset: 0,
+      hasMoreBefore: false,
+      messages: [
+        { sequence: 1, role: "user", text: "请查看这个 Codex 会话。", timestamp: "2026-07-11 10:00:00" },
+        { sequence: 2, role: "assistant", text: "已加载真实 rollout 上下文。", timestamp: "2026-07-11 10:00:01" },
+      ],
+    });
+  }
+  if (command === "delete_local_session") {
+    return ok("预览模式已模拟删除 Codex 会话。", {
+      sessionId: "preview-session",
+      undoToken: "preview-undo-token",
+      backupPath: "~\\.codex\\backups\\preview-session.json",
+    });
+  }
+  if (command === "delete_claude_session") {
+    return ok("预览模式已模拟备份并删除 Claude 会话。", {
+      sessionId: "preview-claude-session",
+      backupPath: "~\\.claude-codex-pro\\backups\\claude-sessions\\preview-claude-session.jsonl",
+    });
+  }
+  if (command === "load_settings") {
+    return previewSettingsResult();
+  }
+  if (command === "save_setting_boolean") {
+    const key = typeof _args?.key === "string" ? _args.key : "";
+    const value = _args?.value;
+    if (!key || typeof value !== "boolean") {
+      return {
+        status: "failed",
+        message: "预览模式设置更新请求无效。",
+        settings: currentPreviewSettings(),
+        settings_path: "~\\.claude-codex-pro\\settings.json",
+        user_scripts: { enabled: true, scripts: previewUserScripts() },
+      };
+    }
+    const next = currentPreviewSettings();
+    (next as unknown as Record<string, unknown>)[key] = value;
+    replacePreviewSettings(next);
+    return previewSettingsResult("预览模式已模拟保存设置。");
+  }
+  if (command === "save_settings") {
+    const settings = _args?.settings;
+    if (settings && typeof settings === "object") {
+      replacePreviewSettings(settings as PreviewSettings);
+    }
+    return previewSettingsResult("预览模式已模拟保存设置。");
+  }
+  if (command === "list_context_entries" || command === "upsert_context_entry" || command === "delete_context_entry") {
+    const request = _args?.request as { settings?: ReturnType<typeof previewSettings> } | undefined;
+    return previewContextEntries(request?.settings ?? previewSettings());
+  }
+  if (command === "read_live_context_entries" || command === "sync_live_context_entries") {
+    const preview = previewContextEntries();
+    return ok(command === "sync_live_context_entries" ? "预览模式已模拟同步当前 Codex 配置。" : "预览模式已模拟读取当前 Codex 配置。", {
+      entries: preview.entries,
+    });
+  }
+  if (command === "list_claude_context_entries" || command === "upsert_claude_context_entry" || command === "delete_claude_context_entry") {
+    return previewClaudeContextEntries();
+  }
+  if (command === "scan_unified_tool_inventory") {
+    return previewUnifiedToolInventory();
+  }
+  if (command === "toggle_unified_tool_asset") {
+    const request = _args?.request as {
+      id?: string;
+      kind?: PreviewUnifiedToolAssetState["kind"];
+      app?: string;
+      enabled?: boolean;
+    } | undefined;
+    const asset = previewUnifiedToolAssets.find((item) => item.id === request?.id && item.kind === request?.kind);
+    if (!asset || !request?.app || typeof request.enabled !== "boolean") {
+      const result = previewUnifiedToolInventory();
+      return { ...result, status: "failed", message: "预览模式切换请求无效。" };
+    }
+    if (request.app === "claude") asset.claudeEnabled = request.enabled;
+    else if (request.app === "codex") asset.codexEnabled = request.enabled;
+    else if (asset.agents && request.app in asset.agents) asset.agents[request.app] = request.enabled;
+    return previewUnifiedToolInventory(
+      `预览模式已为 ${request.app === "claude" ? "Claude" : request.app === "codex" ? "Codex" : request.app}${request.enabled ? "启用" : "关闭"} ${asset.title}。`,
+    );
+  }
+  if (command === "import_ccswitch_codex_providers") {
+    return ok("已从 cc-switch 导入供应商配置：4 个。", {
+      dbPath: "~\\.cc-switch\\cc-switch.db",
+      scanned: 4,
+      profiles: ["kuaipao", "Gpt-pro", "gpt-plus", "Claude-krio"].map((name) => ({
+        id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-ccswitch`,
+        name: `${name} (ccswitch)`,
+        model: "gpt-5.5",
+        baseUrl: name === "kuaipao" ? "https://kuaipao.ai/v1" : "https://api.toporeduce.cn/v1",
+        upstreamBaseUrl: name === "kuaipao" ? "https://kuaipao.ai/v1" : "https://api.toporeduce.cn/v1",
+        apiKey: "sk-preview",
+        protocol: "responses",
+        relayMode: "pureApi",
+        officialMixApiKey: false,
+        testModel: "gpt-5.5",
+        configContents: "",
+        authContents: "{\"OPENAI_API_KEY\":\"sk-preview\"}\n",
+        useCommonConfig: true,
+        contextSelection: { mcpServers: [], skills: [], plugins: [] },
+        contextSelectionInitialized: false,
+        contextWindow: "",
+        autoCompactLimit: "",
+        modelList: "gpt-5.5",
+        userAgent: "ccswitch",
+      })),
+    });
+  }
+  if (command === "repair_backend") {
+    return previewSettingsResult("预览模式已模拟修复后端。");
+  }
+  if (command === "repair_frontend_connection") {
+    return ok("预览模式已模拟修复前端连接。", {
+      target: "codex",
+      frontendInjected: true,
+      backendOnline: false,
+      codexFrontendInjected: true,
+      codexBackendOnline: false,
+      claudeBackendOnline: false,
+      debugPort: 57321,
+      helperPort: 57322,
+      claudeProxyPort: 57331,
+      details: ["预览模式前端连接正常。"],
+    });
+  }
+  if (command === "repair_backend_service") {
+    return ok("预览模式已模拟修复后端服务。", {
+      target: "local_backends",
+      frontendInjected: false,
+      backendOnline: true,
+      codexFrontendInjected: false,
+      codexBackendOnline: true,
+      claudeBackendOnline: true,
+      debugPort: 57321,
+      helperPort: 57322,
+      claudeProxyPort: 57331,
+      details: ["预览模式后端服务正常。"],
+    });
+  }
+  if (command === "reset_settings") {
+    replacePreviewSettings(previewSettings());
+    return previewSettingsResult("预览模式已模拟重置设置。");
+  }
+  if (command === "reset_image_overlay_settings") {
+    const settings = currentPreviewSettings();
+    settings.codexAppImageOverlayEnabled = false;
+    settings.codexAppImageOverlayPath = "";
+    settings.codexAppImageOverlayOpacity = 70;
+    replacePreviewSettings(settings);
+    return previewSettingsResult("预览模式已模拟重置图片覆盖。");
+  }
+  if (command === "sync_providers_now") {
+    return ok("预览模式已模拟历史会话修复。", {
+      syncStatus: "ok",
+      targetProvider: "preview",
+      changedSessionFiles: 1,
+      skippedLockedRolloutFiles: [],
+      sqliteRowsUpdated: 3,
+      sqliteProviderRowsUpdated: 1,
+      sqliteUserEventRowsUpdated: 1,
+      sqliteCwdRowsUpdated: 1,
+      updatedWorkspaceRoots: ["D:\\Project\\Claude-Codex-Pro-Tool"],
+      backupDir: "~\\.codex\\backups",
+      syncMessage: "预览模式不会修改真实会话。",
+    });
+  }
+  if (command === "refresh_script_market") {
+    return previewScriptMarket();
+  }
+  if (command === "install_market_script") {
+    return previewScriptMarket("预览模式已模拟安装脚本。");
+  }
+  if (command === "load_watcher_state" || command === "install_watcher" || command === "enable_watcher" || command === "disable_watcher" || command === "uninstall_watcher") {
+    const enabled = command === "enable_watcher" || command === "install_watcher" || command === "load_watcher_state";
+    return ok("预览模式 Watcher 状态。", {
+      enabled,
+      disabled_flag: enabled ? "" : "~\\.claude-codex-pro\\watcher.disabled",
+    });
+  }
+  if (command === "read_request_timeline") {
+    return ok("预览模式未连接本地请求记录。", {
+      records: [],
+      warnings: ["预览模式：未连接本地请求记录。"],
+      observed_at_ms: now(),
+    });
+  }
+  if (command === "read_aitracker_capabilities") {
+    return ok("预览模式已加载本地 Agent 注册表。", {
+      snapshot: {
+        registry: [
+          ["claude-code", "Claude Code", "#d97757"],
+          ["codex", "Codex", "#10b981"],
+          ["cursor", "Cursor", "#111827"],
+          ["workbuddy", "WorkBuddy", "#22d3ee"],
+          ["openclaw", "OpenClaw", "#f97316"],
+        ].map(([id, name, color]) => ({ id, name, nameZh: name, icon: id, color, platforms: { windows: "supported" }, usageMode: "adapter", contextMode: "unsupported", sessionsMode: "read", detected: true, events: 0, skillCount: id === "cursor" ? 2 : 0, skillScanStatus: "ok" })),
+        sessions: [], toolCalls: [], details: [],
+      },
+      usage: {
+        generatedAt: new Date().toISOString(),
+        mode: "empty",
+        events: 0,
+        totals: { events: 0, inputTokens: 0, cachedInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+        bySource: [], byModel: [], byProject: [], daily: [], details: [], recent: [],
+      },
+    });
+  }
+  if (command === "query_aitracker_sessions") {
+    const previewArgs = (_args?.request ?? {}) as { page?: number; pageSize?: number };
+    return ok("预览模式未连接会话采集源。", {
+      sessions: [], total: 0, page: previewArgs.page ?? 0, pageSize: previewArgs.pageSize ?? 20,
+      generatedAt: new Date().toISOString(), mode: "empty",
+    });
+  }
+  if (command === "read_aitracker_session_detail") {
+    return ok("预览模式未连接会话采集源。", { detail: null });
+  }
+  if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate" || command === "delete_distillation_candidates") {
+    return ok("预览模式未连接蒸馏存储。", { candidates: [] });
+  }
+  if (command === "load_app_preferences" || command === "save_app_preferences") {
+    const saved = (_args?.request as { preferences?: Record<string, unknown> } | undefined)?.preferences;
+    if (saved) previewPreferences = { ...previewPreferences, ...saved };
+    return ok("预览模式偏好设置。", {
+      preferences: previewPreferences,
+      resolvedDirs: { app: "~\\.claude-codex-pro", claude: "~\\.claude", codex: "~\\.codex", gemini: "~\\.gemini", grok: "~\\.grok", opencode: "~\\.config\\opencode", openclaw: "~\\.openclaw", hermes: "~\\.hermes", pi: "~\\.pi\\agent", mcode: "~\\.mcode", workbuddy: "~\\.workbuddy", cursor: "~\\.cursor" },
+    });
+  }
+  if (command === "load_routing_config" || command === "save_routing_config" || command === "set_routing_enabled" || command === "set_routing_app_takeover" || command === "add_failover_queue_provider" || command === "remove_failover_queue_provider" || command === "reset_circuit_breaker") {
+    const request = (_args?.request ?? {}) as { config?: typeof previewRouting; enabled?: boolean; appId?: string; takeover?: boolean };
+    if (request.config) previewRouting = { ...request.config, globalProxyPassword: undefined };
+    if (typeof request.enabled === "boolean") previewRouting = { ...previewRouting, enabled: request.enabled };
+    if (request.appId && typeof request.takeover === "boolean") {
+      previewRouting = { ...previewRouting, apps: previewRouting.apps.map((app) => (app.appId === request.appId ? { ...app, takeover: request.takeover! } : app)) };
+    }
+    return ok("预览模式路由配置。", {
+      config: previewRouting,
+      runtime: { running: previewRouting.enabled, address: previewRouting.listenAddress, port: previewRouting.listenPort, activeConnections: 0, totalRequests: previewRouting.enabled ? 128 : 0, successRate: 0.97, uptimeSeconds: 3725, currentProviders: {} },
+      queues: { codex: [{ providerId: "preview-provider", name: "Preview Relay", priority: 1, circuitState: "closed" }] },
+    });
+  }
+  if (command === "test_global_proxy") return ok("预览模式代理测试。", { ok: true, latencyMs: 42 });
+  if (command === "list_agent_providers") return ok("预览模式供应商。", previewAgentPayload());
+  if (command === "save_agent_provider" || command === "delete_agent_provider" || command === "apply_agent_provider" || command === "unapply_agent_provider") {
+    const request = (_args?.request ?? {}) as { provider?: PreviewAgentProvider & { apiKey?: string }; appId?: string; id?: string };
+    if (command === "save_agent_provider" && request.provider) {
+      const { apiKey, ...provider } = request.provider;
+      const id = provider.id || `preview-${Date.now()}`;
+      const next = { ...provider, id, hasApiKey: provider.hasApiKey || !!apiKey };
+      previewAgentProviders = previewAgentProviders.some((item) => item.id === id) ? previewAgentProviders.map((item) => (item.id === id ? next : item)) : [...previewAgentProviders, next];
+    }
+    const appId = request.appId ?? "";
+    const state = previewAgentStates[appId] ?? { activeId: null, appliedIds: [], configPath: "", installed: true };
+    if (command === "delete_agent_provider") {
+      previewAgentProviders = previewAgentProviders.filter((item) => item.id !== request.id);
+      previewAgentStates = { ...previewAgentStates, [appId]: { ...state, appliedIds: state.appliedIds.filter((id) => id !== request.id), activeId: state.activeId === request.id ? null : state.activeId } };
+    }
+    if (command === "apply_agent_provider" && request.id) {
+      const switchMode = appId === "gemini" || appId === "grok";
+      previewAgentStates = { ...previewAgentStates, [appId]: switchMode ? { ...state, activeId: request.id } : { ...state, appliedIds: [...new Set([...state.appliedIds, request.id])] } };
+      if (appId === "cursor") return ok("预览模式。", { ...previewAgentPayload(), reveal: { baseUrl: "https://relay.example.com/v1", apiKey: "sk-preview", model: "gpt-5.4" } });
+    }
+    if (command === "unapply_agent_provider") {
+      previewAgentStates = { ...previewAgentStates, [appId]: { ...state, appliedIds: state.appliedIds.filter((id) => id !== request.id) } };
+    }
+    return ok("预览模式已更新。", previewAgentPayload());
+  }
+  if (command === "scan_local_proxies") return ok("预览模式代理扫描。", { candidates: ["http://127.0.0.1:7890"] });
+  if (command === "list_database_backups" || command === "create_database_backup" || command === "restore_database_backup" || command === "rename_database_backup" || command === "delete_database_backup") {
+    return ok("预览模式备份列表。", { dir: "~\\.claude-codex-pro\\backups", backups: [{ id: "preview-1", name: "auto-2026-10-01", createdAt: new Date().toISOString(), sizeBytes: 48_000 }] });
+  }
+  if (command === "export_ccp_data" || command === "import_ccp_data") return ok("预览模式不读写本地数据。", { path: "", safetyBackupId: "" });
+  if (command === "read_distillation_transcript") {
+    return ok("预览模式会话正文。", {
+      transcript: {
+        title: "预览会话",
+        messages: [
+          { role: "user", text: "帮我把发布流程整理成可复用的步骤。", timestamp: null },
+          { role: "assistant", text: "好的，先确认构建、签名、上传三个阶段的输入与产物。", timestamp: null },
+          { role: "user", text: "签名失败时要能回滚。", timestamp: null },
+          { role: "assistant", text: "已加入回滚检查点：签名失败时恢复上一版安装包并保留日志。", timestamp: null },
+        ],
+        totalMessages: 4,
+        hasMoreBefore: false,
+      },
+    });
+  }
+  if (command === "open_distillation_library") {
+    return ok("预览模式不会打开本地目录。", { path: "" });
+  }
+  if (command === "load_distillation_workbench") {
+    const now = Date.now();
+    const iso = (offsetHours: number) => new Date(now - offsetHours * 3_600_000).toISOString();
+    return ok("预览模式蒸馏工作台已加载。", {
+      sessions: [
+        { agent: "claude-code", sessionId: "preview-a", title: "发布流程整理", project: "Claude-Codex-Pro-Tool", projectKey: "Claude-Codex-Pro-Tool", isGitProject: true, model: "claude-opus", startedAt: iso(2), updatedAt: iso(1), events: 18, turns: 18, tokens: 0, status: "completed" },
+        { agent: "codex", sessionId: "preview-b", title: "主题 token 重构", project: "Claude-Codex-Pro-Tool", projectKey: "Claude-Codex-Pro-Tool", isGitProject: true, model: "gpt-5.5", startedAt: iso(30), updatedAt: iso(29), events: 6, turns: 6, tokens: 0, status: "completed" },
+        { agent: "codex", sessionId: "preview-c", title: "toporeduce 性能排查", project: "toporeduce", projectKey: "toporeduce", isGitProject: true, model: "gpt-5.5", startedAt: iso(200), updatedAt: iso(199), events: 8, turns: 8, tokens: 0, status: "completed" },
+      ],
+      providers: [{ id: "preview-provider", name: "Preview Relay", models: ["deepseek-v4-pro", "deepseek-v4-flash"], status: "ok", vendor: "OpenAI" }],
+      candidates: [],
+      skillAgents: [
+        { id: "claude-code", label: "Claude Code", root: "~/.claude/skills" },
+        { id: "codex", label: "Codex", root: "~/.codex/skills" },
+      ],
+    });
+  }
+  if (command === "run_distillation_workbench") {
+    return { status: "failed", message: "预览模式未连接蒸馏执行器。", taskId: "preview", phase: "failed", percent: 0, candidate: null };
+  }
+  if (command === "cancel_distillation_task" || command === "save_distillation_output") {
+    return ok("预览模式已记录蒸馏操作。", { taskId: "preview", phase: "completed", percent: 100, candidate: null, candidates: [] });
+  }
+  if (command === "read_latest_logs") {
+    return ok("预览模式日志。", {
+      path: "~\\.claude-codex-pro\\logs\\manager.log",
+      text: [
+        "[preview] 管理工具预览日志",
+        "[preview] 按钮烟测不会修改真实系统",
+        "[preview] 所有命令均返回可渲染响应",
+      ].join("\n"),
+      lines: 3,
+    });
+  }
+  if (command === "load_codex_theme_background") {
+    return ok("预览模式使用内置背景。", {
+      theme_id: "default",
+      generation: 0,
+      data_uri: null,
+      source_variable: null,
+      is_default: true,
+      width: null,
+      height: null,
+      mime_type: null,
+      user_override: false,
+    });
+  }
+  if (command === "set_codex_manager_background") {
+    return ok("预览模式已模拟设置背景。", {
+      theme_id: "default",
+      generation: 1,
+      data_uri: null,
+      source_variable: "user-selected",
+      is_default: false,
+      width: 1920,
+      height: 1080,
+      mime_type: "image/webp",
+      user_override: true,
+    });
+  }
+  if (command === "clear_codex_manager_background") {
+    return ok("预览模式已模拟恢复主题背景。", {
+      theme_id: "default",
+      generation: 2,
+      data_uri: null,
+      source_variable: null,
+      is_default: true,
+      width: null,
+      height: null,
+      mime_type: null,
+      user_override: false,
+    });
+  }
+  if (command === "check_update") {
+    return ok("预览模式已模拟检查更新。", {
+      currentVersion: "V0.12",
+      latestVersion: "V0.12",
+      releaseSummary: "预览模式：当前已是最新版本。",
+      assetName: "claude-codex-pro-0.12-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-0.12-windows-x64-setup.exe",
+      updateAvailable: false,
+      progress: 0,
+    });
+  }
+  if (command === "perform_update") {
+    return ok("预览模式已模拟下载并运行安装包。", {
+      currentVersion: "V0.12",
+      latestVersion: "V0.12",
+      releaseSummary: "预览模式不会下载真实安装包。",
+      assetName: "claude-codex-pro-0.12-windows-x64-setup.exe",
+      assetUrl: "https://example.invalid/claude-codex-pro-0.12-windows-x64-setup.exe",
+      updateAvailable: false,
+      progress: 100,
+      installedPath: "~\\.claude-codex-pro\\updates\\preview-installer.exe",
+      launched: true,
+    });
+  }
+  if (command === "apply_relay_injection" || command === "apply_pure_api_injection" || command === "clear_relay_injection") {
+    return ok("预览模式已模拟 API 模式切换。", {
+      mode: command,
+      path: "~\\.claude-codex-pro\\relay",
+    });
+  }
+  return {
+    status: "not_implemented",
+    message: `当前是无 Tauri 预览环境，命令未执行：${command}`,
+  } as CommandResult<Record<string, unknown>>;
+}
+
+function ok<T extends Record<string, unknown>>(message: string, payload: T): CommandResult<T> {
+  return { status: "ok", message, ...payload };
+}

@@ -1137,7 +1137,7 @@ fn session_management_route_contains_aitracker_session_management() {
     // Screen 组件已拆分到 src/screens.tsx；结构化切片读该文件。
     let app_tsx = read_screens_with_supplier();
     let app_shell = read_frontend_file("App.tsx");
-    let tauri_bridge = read_frontend_file("tauriBridge.ts");
+    let tauri_bridge = read_frontend_file("tauriPreviewMock.ts");
     let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib_rs = read_source_file(&manifest_dir.join("src/lib.rs"));
     let workspace_styles = read_frontend_file("workspace.css");
@@ -1200,7 +1200,7 @@ fn codex_session_management_opens_real_context_viewer() {
     let screens = read_screens_with_supplier();
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
     let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
-    let bridge = read_frontend_file("tauriBridge.ts");
+    let bridge = read_frontend_file("tauriPreviewMock.ts");
 
     assert!(commands.contains("pub async fn load_codex_session_context"));
     assert!(commands.contains("Codex 会话数据库不是受信任的已发现路径"));
