@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 
@@ -43,14 +44,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::types::*;
-use super::actions;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Maximum tree depth to prevent infinite recursion
 const MAX_TREE_DEPTH: usize = 48;
 
-/// Maximum text content length per element
+/// Maximum text content length per element (reserved for future use)
+#[allow(dead_code)]
 const TEXT_CONTENT_LIMIT: i32 = 4096;
 
 /// All properties we cache for fast tree/find operations
@@ -155,7 +156,7 @@ pub struct WindowsUiaBackend {
     #[cfg(target_os = "windows")]
     automation: IUIAutomation,
     #[cfg(target_os = "windows")]
-    registry: HashMap<String, SafeElement>,
+    registry: Mutex<HashMap<String, SafeElement>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -187,7 +188,7 @@ impl WindowsUiaBackend {
 
             Ok(Self {
                 automation,
-                registry: HashMap::new(),
+                registry: Mutex::new(HashMap::new()),
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -197,14 +198,19 @@ impl WindowsUiaBackend {
     }
 
     #[cfg(target_os = "windows")]
-    fn register(&mut self, id: &str, element: &IUIAutomationElement) {
+    #[allow(dead_code)]
+    fn register(&self, id: &str, element: &IUIAutomationElement) {
         self.registry
+            .lock()
+            .unwrap()
             .insert(id.to_string(), SafeElement(element.clone()));
     }
 
     #[cfg(target_os = "windows")]
     pub(super) fn lookup(&self, id: &str) -> Result<IUIAutomationElement> {
         self.registry
+            .lock()
+            .unwrap()
             .get(id)
             .map(|e| e.0.clone())
             .ok_or_else(|| anyhow!("Element not found: {}", id))
@@ -324,6 +330,12 @@ impl WindowsUiaBackend {
             }
 
             let mut node = self.cached_node(element);
+
+            // Register element to registry
+            self.registry
+                .lock()
+                .unwrap()
+                .insert(node.id.clone(), SafeElement(element.clone()));
 
             // Get children
             if let Ok(children) = element.GetCachedChildren() {
