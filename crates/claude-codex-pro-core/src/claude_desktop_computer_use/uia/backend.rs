@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{anyhow, Context, Result};
 
+use std::collections::hash_map::DefaultHasher;
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+
 #[cfg(target_os = "windows")]
 use windows::core::BSTR;
 #[cfg(target_os = "windows")]
@@ -15,14 +19,19 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoIncrementMTAUsage, CoInitializeEx, CoUninitialize,
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, SAFEARRAY,
 };
+use windows::Win32::System::Ole::{
+    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound,
+    SafeArrayGetUBound,
+};
+use windows::Win32::System::Variant::VariantToInt32Array;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationElement,
     TreeScope, TreeScope_Subtree, UIA_AutomationIdPropertyId, UIA_ControlTypePropertyId,
-    UIA_NamePropertyId, UIA_PROPERTY_ID,
+    UIA_NamePropertyId, UIA_RuntimeIdPropertyId, UIA_PROPERTY_ID,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::{
@@ -30,13 +39,11 @@ use windows::Win32::UI::HiDpi::{
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowTextW, IsWindowVisible,
+    EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
 
 use super::types::*;
-use super::find;
 use super::actions;
-use super::windows as win_mgmt;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +58,7 @@ const CACHED_PROPERTIES: &[UIA_PROPERTY_ID] = &[
     UIA_NamePropertyId,
     UIA_ControlTypePropertyId,
     UIA_AutomationIdPropertyId,
+    UIA_RuntimeIdPropertyId,
 ];
 
 // ── COM initialization ────────────────────────────────────────────────────────
@@ -87,6 +95,45 @@ thread_local! {
 #[cfg(target_os = "windows")]
 fn ensure_com() {
     COM_APARTMENT.with(|_| {});
+}
+
+// ── Window helpers ────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn get_window_pid(hwnd: HWND) -> u32 {
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    }
+    pid
+}
+
+#[cfg(target_os = "windows")]
+fn get_exe_name_from_pid(_pid: u32) -> String {
+    // TODO: Implement using QueryFullProcessImageNameW
+    String::new()
+}
+
+#[cfg(target_os = "windows")]
+fn is_foreground_window(hwnd: HWND) -> bool {
+    unsafe { GetForegroundWindow() == hwnd }
+}
+
+#[cfg(target_os = "windows")]
+fn focus_window_impl(hwnd: HWND) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+
+    unsafe {
+        // Restore if minimized
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+
+        // Try to set foreground
+        if !SetForegroundWindow(hwnd).as_bool() {
+            return Err(anyhow!("Failed to set foreground window"));
+        }
+    }
+
+    Ok(())
 }
 
 // ── Element registry ──────────────────────────────────────────────────────────
@@ -224,9 +271,9 @@ impl WindowsUiaBackend {
                     }
                     let title = String::from_utf16_lossy(&buf[..copied as usize]);
 
-                    let pid = win_mgmt::get_window_pid(hwnd);
-                    let exe_name = win_mgmt::get_exe_name_from_pid(pid);
-                    let is_foreground = win_mgmt::is_foreground_window(hwnd);
+                    let pid = get_window_pid(hwnd);
+                    let exe_name = get_exe_name_from_pid(pid);
+                    let is_foreground = is_foreground_window(hwnd);
 
                     result.push(WindowInfo {
                         pid,
@@ -313,10 +360,83 @@ impl WindowsUiaBackend {
     }
 
     #[cfg(target_os = "windows")]
-    unsafe fn element_id(&self, _element: &IUIAutomationElement) -> String {
-        // For now, use fallback IDs
-        // TODO: Extract RuntimeId from element for stable IDs
-        format!("uia-{}", FALLBACK_IDS.fetch_add(1, Ordering::Relaxed))
+    unsafe fn element_id(&self, element: &IUIAutomationElement) -> String {
+        unsafe {
+            match self.runtime_id(element) {
+                Some(ints) => self.stable_id(&ints),
+                None => self.stable_id(&format!(
+                    "uia-no-runtime-id-{}",
+                    FALLBACK_IDS.fetch_add(1, Ordering::Relaxed)
+                )),
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    unsafe fn runtime_id(&self, element: &IUIAutomationElement) -> Option<Vec<i32>> {
+        unsafe {
+            // Try cached value first (no cross-process call)
+            if let Ok(value) = element.GetCachedPropertyValue(UIA_RuntimeIdPropertyId) {
+                let mut buf = [0i32; 32];
+                let mut count = 0u32;
+                if VariantToInt32Array(&value, &mut buf, &mut count).is_ok() {
+                    let count = (count as usize).min(buf.len());
+                    if count > 0 {
+                        return Some(buf[..count].to_vec());
+                    }
+                }
+            }
+            // Fall back to live getter
+            let array = element.GetRuntimeId().ok()?;
+            self.safearray_to_i32s(array)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    unsafe fn safearray_to_i32s(&self, array: *mut SAFEARRAY) -> Option<Vec<i32>> {
+        unsafe {
+            if array.is_null() {
+                return None;
+            }
+            // RAII guard to destroy SAFEARRAY on scope exit
+            struct SafeArrayGuard(*mut SAFEARRAY);
+            impl Drop for SafeArrayGuard {
+                fn drop(&mut self) {
+                    if !self.0.is_null() {
+                        unsafe {
+                            let _ = SafeArrayDestroy(self.0);
+                        }
+                    }
+                }
+            }
+            let _guard = SafeArrayGuard(array);
+
+            // Check it's a 1-D array of 4-byte integers
+            if SafeArrayGetDim(array) != 1 || (*array).cbElements != 4 {
+                return None;
+            }
+
+            let lower = SafeArrayGetLBound(array, 1).ok()?;
+            let upper = SafeArrayGetUBound(array, 1).ok()?;
+            if upper < lower || upper - lower >= 64 {
+                return None;
+            }
+
+            let mut out = Vec::with_capacity((upper - lower + 1) as usize);
+            for index in lower..=upper {
+                let mut value = 0i32;
+                SafeArrayGetElement(array, &index, &mut value as *mut i32 as *mut c_void).ok()?;
+                out.push(value);
+            }
+            Some(out)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stable_id<T: Hash>(&self, key: &T) -> String {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
     }
 
     #[cfg(target_os = "windows")]
@@ -384,7 +504,7 @@ impl WindowsUiaBackend {
 
             // Get the tree and search in-memory
             let tree = self.get_tree(hwnd)?;
-            Ok(find::find_in_tree(&tree, params))
+            Ok(crate::claude_desktop_computer_use::uia::find::find_in_tree(&tree, params, 100))
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -439,7 +559,7 @@ impl WindowsUiaBackend {
         #[cfg(target_os = "windows")]
         {
             let hwnd = HWND(hwnd as *mut _);
-            unsafe { win_mgmt::focus_window(hwnd) }
+            focus_window_impl(hwnd)
         }
         #[cfg(not(target_os = "windows"))]
         {

@@ -1,15 +1,12 @@
-pub mod actions;
-pub mod backend;
-pub mod element;
-pub mod find;
-pub mod keys;
-pub mod registry;
-pub mod screenshot;
 pub mod types;
-pub mod windows;
-
-pub use backend::WindowsUiaBackend;
-pub use types::*;
+pub mod backend;
+pub mod find;
+pub mod actions;
 
 #[cfg(test)]
 mod tests;
+
+pub use types::*;
+pub use backend::*;
+pub use find::*;
+pub use actions::*;
