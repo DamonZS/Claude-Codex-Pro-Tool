@@ -1,6 +1,10 @@
 pub mod actions;
 pub mod backend;
+pub mod element;
 pub mod find;
+pub mod keys;
+pub mod registry;
+pub mod screenshot;
 pub mod types;
 pub mod windows;
 
