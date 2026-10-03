@@ -34,6 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::types::*;
+use super::find;
+use super::actions;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -368,17 +370,62 @@ impl WindowsUiaBackend {
 
     pub fn find_elements(
         &self,
-        _hwnd: usize,
-        _params: &FindParams,
+        hwnd: usize,
+        params: &FindParams,
     ) -> Result<Vec<UiElement>> {
         #[cfg(target_os = "windows")]
         {
             ensure_com();
-            // TODO: Implement find
-            Ok(Vec::new())
+
+            // Get the tree and search in-memory
+            let tree = self.get_tree(hwnd)?;
+            Ok(find::find_in_tree(&tree, params))
         }
         #[cfg(not(target_os = "windows"))]
         {
+            let _ = (hwnd, params);
+            Err(anyhow!("Windows UIA backend is only available on Windows"))
+        }
+    }
+
+    pub fn click_element(&self, element_id: &str) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            ensure_com();
+            let element = self.lookup(element_id)?;
+            unsafe { actions::click_element(&element) }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = element_id;
+            Err(anyhow!("Windows UIA backend is only available on Windows"))
+        }
+    }
+
+    pub fn set_text(&self, element_id: &str, text: &str) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            ensure_com();
+            let element = self.lookup(element_id)?;
+            unsafe { actions::set_text(&element, text) }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (element_id, text);
+            Err(anyhow!("Windows UIA backend is only available on Windows"))
+        }
+    }
+
+    pub fn focus_element(&self, element_id: &str) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            ensure_com();
+            let element = self.lookup(element_id)?;
+            unsafe { actions::focus_element(&element) }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = element_id;
             Err(anyhow!("Windows UIA backend is only available on Windows"))
         }
     }

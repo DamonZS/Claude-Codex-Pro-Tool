@@ -1,4 +1,6 @@
+pub mod actions;
 pub mod backend;
+pub mod find;
 pub mod types;
 
 pub use backend::WindowsUiaBackend;

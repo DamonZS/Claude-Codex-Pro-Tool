@@ -74,4 +74,37 @@ mod tests {
         assert!(!element.focused);
         assert!(element.children.is_empty());
     }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_find_elements_by_type() {
+        use std::process::Command;
+
+        // Launch notepad for testing
+        let mut notepad = Command::new("notepad.exe")
+            .spawn()
+            .expect("Failed to launch notepad");
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let backend = WindowsUiaBackend::new().expect("Failed to create backend");
+        let windows = backend.list_windows().expect("Failed to list windows");
+
+        if let Some(notepad_window) = windows.iter().find(|w| w.title.contains("Notepad")) {
+            let params = FindParams {
+                query: None,
+                element_type: Some(ElementType::Edit),
+                interactive_only: false,
+            };
+
+            let results = backend.find_elements(notepad_window.hwnd, &params);
+            assert!(results.is_ok(), "find_elements failed");
+
+            let elements = results.unwrap();
+            // Notepad should have at least one Edit control
+            assert!(!elements.is_empty(), "Should find Edit controls in Notepad");
+        }
+
+        let _ = notepad.kill();
+    }
 }
