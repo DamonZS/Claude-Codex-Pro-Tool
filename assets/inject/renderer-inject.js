@@ -4534,11 +4534,8 @@
   // Keep the injected navigation limited to workflow actions. Codex's own
   // project region remains untouched, and Skills stay available only from
   // the workspace module menu rather than becoming a duplicate sidebar item.
-  const multicaWorkspaceSidebarModules = Object.freeze([
-    { key: "my-issues", label: "我的任务", icon: "M" },
-    { key: "autopilots", label: "自动化", icon: "A" },
-    { key: "agents", label: "智能体", icon: "G" },
-  ]);
+  // Multica 侧边栏功能已移除（M 我的任务、A 自动化、G 智能体）
+  const multicaWorkspaceSidebarModules = Object.freeze([]);
   const multicaWorkspaceBoardColumns = Object.freeze([
     { key: "backlog", label: "待规划", tone: "neutral" },
     { key: "todo", label: "待办", tone: "neutral" },

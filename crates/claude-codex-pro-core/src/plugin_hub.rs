@@ -3591,11 +3591,20 @@ fn write_claude_desktop_dev_mode_profile_with_proxy_port(
         json!(provider.api_key.trim()),
     );
     root.insert("inferenceGatewayAuthScheme".to_string(), json!("bearer"));
+
+    // 直连模式：model_mapping_enabled = false 时使用供应商真实 URL
+    // 代理模式：model_mapping_enabled = true 时使用本地代理地址
+    let gateway_url = if provider.model_mapping_enabled == Some(false) {
+        // 关闭模型映射 = 直连模式，使用供应商 URL
+        provider.base_url.trim().to_string()
+    } else {
+        // 开启模型映射 = 代理模式，使用本地代理地址
+        crate::protocol_proxy::local_claude_desktop_proxy_base_url(proxy_port)
+    };
+
     root.insert(
         "inferenceGatewayBaseUrl".to_string(),
-        json!(crate::protocol_proxy::local_claude_desktop_proxy_base_url(
-            proxy_port
-        )),
+        json!(gateway_url),
     );
     root.insert("inferenceProvider".to_string(), json!("gateway"));
     root.insert(

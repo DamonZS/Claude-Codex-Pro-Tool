@@ -685,6 +685,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
       labelOverride: row.displayName.trim() || undefined,
       supports1m: row.supports1m,
     }]));
+    const isDirectMode = !generated.modelMappingEnabled && !(generated.modelList || "").trim();
     return {
       ...generated,
       configContents: `${JSON.stringify({
@@ -708,7 +709,7 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
         },
         meta: {
           apiFormat: normalizedSupplierApiFormat(generated.apiFormat || "Anthropic Messages"),
-          claudeDesktopMode: supplierRouteEnabled(generated) ? "proxy" : "direct",
+          claudeDesktopMode: isDirectMode ? "direct" : "proxy",
           claudeDesktopModelRoutes,
         },
       }, null, 2)}\n`,
