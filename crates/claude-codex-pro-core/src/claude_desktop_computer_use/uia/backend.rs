@@ -203,7 +203,7 @@ impl WindowsUiaBackend {
     }
 
     #[cfg(target_os = "windows")]
-    fn lookup(&self, id: &str) -> Result<IUIAutomationElement> {
+    pub(super) fn lookup(&self, id: &str) -> Result<IUIAutomationElement> {
         self.registry
             .get(id)
             .map(|e| e.0.clone())
@@ -513,47 +513,6 @@ impl WindowsUiaBackend {
         }
     }
 
-    pub fn click_element(&self, element_id: &str) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        {
-            ensure_com();
-            let element = self.lookup(element_id)?;
-            unsafe { actions::click_element(&element) }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = element_id;
-            Err(anyhow!("Windows UIA backend is only available on Windows"))
-        }
-    }
-
-    pub fn set_text(&self, element_id: &str, text: &str) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        {
-            ensure_com();
-            let element = self.lookup(element_id)?;
-            unsafe { actions::set_text(&element, text) }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = (element_id, text);
-            Err(anyhow!("Windows UIA backend is only available on Windows"))
-        }
-    }
-
-    pub fn focus_element(&self, element_id: &str) -> Result<()> {
-        #[cfg(target_os = "windows")]
-        {
-            ensure_com();
-            let element = self.lookup(element_id)?;
-            unsafe { actions::focus_element(&element) }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = element_id;
-            Err(anyhow!("Windows UIA backend is only available on Windows"))
-        }
-    }
 
     pub fn focus_window(&self, hwnd: usize) -> Result<()> {
         #[cfg(target_os = "windows")]
