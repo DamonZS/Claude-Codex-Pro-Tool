@@ -314,7 +314,11 @@ fn register_refuses_unparseable_config() {
 }
 
 fn points(list: &[(f64, f64)]) -> Value {
-    Value::Array(list.iter().map(|(x, y)| json!({ "x": x, "y": y })).collect())
+    Value::Array(
+        list.iter()
+            .map(|(x, y)| json!({ "x": x, "y": y }))
+            .collect(),
+    )
 }
 
 #[test]
@@ -377,7 +381,12 @@ fn drag_path_backend_failure_is_returned_as_tool_error() {
         json!({ "points": points(&[(100.0, 100.0), (120.0, 120.0)]) }),
     );
     assert_eq!(result["isError"], true);
-    assert!(result["content"][0]["text"].as_str().unwrap().contains("模拟拖拽失败"));
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("模拟拖拽失败")
+    );
 }
 
 #[test]
@@ -387,7 +396,10 @@ fn default_drag_path_falls_back_to_segment_drags() {
     Backend::drag_path(&mut DefaultOnly(&mut backend), &[(1, 1), (2, 2), (3, 3)]).unwrap();
     assert_eq!(
         backend.actions,
-        vec!["drag (1, 1) (2, 2)".to_string(), "drag (2, 2) (3, 3)".to_string()]
+        vec![
+            "drag (1, 1) (2, 2)".to_string(),
+            "drag (2, 2) (3, 3)".to_string()
+        ]
     );
 }
 

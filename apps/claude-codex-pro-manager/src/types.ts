@@ -1315,6 +1315,8 @@ export type DistillationWorkbenchSession = {
   tokens: number;
   turns?: number;
   status?: string;
+  /** Session files this row spans; above 1 it is a continued conversation. */
+  segments?: number;
 };
 export type DistillationWorkbenchProvider = {
   id: string;

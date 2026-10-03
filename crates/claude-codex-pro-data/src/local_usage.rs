@@ -319,9 +319,9 @@ fn linked_worktree_main_root(root: &Path) -> Option<PathBuf> {
         .trim();
     let gitdir = root.join(gitdir);
     // `.git/worktrees/<name>` -> `.git`
-    let common_dir = gitdir.parent().filter(|parent| {
-        parent.file_name().and_then(|name| name.to_str()) == Some("worktrees")
-    })?;
+    let common_dir = gitdir
+        .parent()
+        .filter(|parent| parent.file_name().and_then(|name| name.to_str()) == Some("worktrees"))?;
     let git_dir = common_dir.parent()?;
     if git_dir.file_name().and_then(|name| name.to_str()) != Some(".git") {
         return None;
@@ -1841,7 +1841,10 @@ mod tests {
     fn linked_worktree_resolves_to_main_repository_name() {
         let directory = tempdir().unwrap();
         let main = directory.path().join("MainRepo");
-        let worktree = main.join(".claude").join("worktrees").join("auto-name-1a2b3c");
+        let worktree = main
+            .join(".claude")
+            .join("worktrees")
+            .join("auto-name-1a2b3c");
         let admin = main.join(".git").join("worktrees").join("auto-name-1a2b3c");
         fs::create_dir_all(&admin).unwrap();
         fs::create_dir_all(&worktree).unwrap();
@@ -1867,7 +1870,10 @@ mod tests {
         let main = directory.path().join("MainRepo");
         fs::create_dir_all(main.join(".git")).unwrap();
         // The worktree directory itself no longer exists.
-        let gone = main.join(".claude").join("worktrees").join("old-name-9f8e7d");
+        let gone = main
+            .join(".claude")
+            .join("worktrees")
+            .join("old-name-9f8e7d");
 
         assert_eq!(
             canonical_project_label(&gone.to_string_lossy()),

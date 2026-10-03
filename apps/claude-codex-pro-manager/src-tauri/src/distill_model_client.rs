@@ -95,6 +95,10 @@ impl ModelCallError {
         Self { code, detail }
     }
 
+    pub fn cancelled() -> Self {
+        Self::new("ai.cancelled", None)
+    }
+
     /// User-facing Chinese reason that always includes the stable code.
     pub fn user_message(&self) -> String {
         let reason = match self.code {
@@ -111,7 +115,9 @@ impl ModelCallError {
                 _ => "模型响应无法解析",
             },
             "ai.provider-network" => "无法连接模型服务，请检查网络与 Base URL",
-            "ai.provider-timeout" => "模型服务响应超时（120 秒）",
+            "ai.provider-timeout" => {
+                "模型服务响应超时（输入较大时等待时间会相应延长，仍超时请减少素材或更换模型）"
+            }
             "ai.profile-unavailable" => "所选供应商缺少 Base URL 或 API Key",
             "ai.cancelled" => "任务已取消",
             _ => "模型调用失败",

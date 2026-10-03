@@ -2839,6 +2839,16 @@ fn manager_window_and_ops_console_layout_stay_usable() {
     assert!(agent_styles.contains("backdrop-filter: blur(32px) saturate(160%)"));
     let agent_overview = read_frontend_file("components/AgentOverview.tsx");
     assert!(agent_overview.contains("Number(b.detected) - Number(a.detected)"));
+    // “全部”范围下用量记录可达数十万条；Math.min(...records) 展开参数会抛
+    // RangeError 导致整屏黑屏，必须用 reduce 求最小时间。
+    assert!(
+        !agent_overview.contains("Math.min(...trendRecords"),
+        "AgentOverview 不得对全部用量记录展开 Math.min，记录过多会栈溢出黑屏"
+    );
+    assert!(
+        agent_overview
+            .contains("trendRecords.reduce((min, record) => Math.min(min, record.timestamp_ms)")
+    );
     for dashboard_contract in ["Token 消耗趋势", "模型消耗", "项目消耗总览", "活跃日历"]
     {
         assert!(

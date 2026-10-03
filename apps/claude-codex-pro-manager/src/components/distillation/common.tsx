@@ -61,6 +61,12 @@ export function sessionTurns(session: DistillationWorkbenchSession) {
   return session.turns ?? session.events ?? 0;
 }
 
+/** " · 8 段续接" for a conversation that outgrew its context and continued in new files. */
+export function sessionSegmentsLabel(session: DistillationWorkbenchSession) {
+  const segments = session.segments ?? 1;
+  return segments > 1 ? ` · ${segments} 段续接` : "";
+}
+
 export function sessionProjectKey(session: DistillationWorkbenchSession) {
   return session.projectKey || session.project || "unknown";
 }

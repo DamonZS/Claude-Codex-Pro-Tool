@@ -12,10 +12,11 @@ use claude_codex_pro_core::settings::{RelayProfile, RelayProtocol, SettingsStore
 use claude_codex_pro_data::aitracker::{DistillationCandidate, DistillationSourceRef};
 
 use super::aitracker_distillation::{
-    ControlledRow, MAX_TITLE, SegmentMaterial, SegmentMessage, candidate_text, candidate_title,
-    distillation_input, extract_segment_messages, is_opaque_id, mark_distilled_manifest, safe_text,
-    summary_line, utf16_prefix,
+    ControlledRow, MAX_TITLE, SegmentMaterial, SegmentMessage, assemble_input, candidate_text,
+    candidate_title, compact_segment_materials, controlled_context, extract_segment_messages,
+    is_opaque_id, mark_distilled_manifest, safe_text, summary_line, utf16_prefix,
 };
+use super::distill_budget::{cap_notes, input_char_budget, plan_batches, timeout_for_input};
 use super::distill_model_client::{
     ModelCallError, ModelCallOptions, ModelProtocol, ModelTarget, call_model,
 };
@@ -158,14 +159,38 @@ fn is_reasoning_role(role: &str) -> bool {
     )
 }
 
-fn load_material(selections: &[DistillationSessionSelection]) -> Result<LoadedMaterial, String> {
+/// `read_bodies` makes a whole-session selection (no message range) read the
+/// transcript instead of sending only metadata. Offline runs pass `false`.
+fn load_material(
+    selections: &[DistillationSessionSelection],
+    read_bodies: bool,
+) -> Result<LoadedMaterial, String> {
     let (_, _, usage) = super::collect_unified_usage_snapshot();
     // Aggregate once: `session_detail` re-aggregates the whole snapshot per
     // call, which made large selections stall at the reading-material step.
-    let summaries = claude_codex_pro_data::aitracker::session_summaries(&usage)
-        .into_iter()
-        .map(|summary| ((summary.agent.clone(), summary.session_id.clone()), summary))
+    let raw = claude_codex_pro_data::aitracker::session_summaries(&usage);
+    let mut summaries = raw
+        .iter()
+        .map(|summary| {
+            (
+                (summary.agent.clone(), summary.session_id.clone()),
+                summary.clone(),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
+    // Continued conversations are one row in the workbench; its representative
+    // id must resolve here too. Non-representative members keep resolving via
+    // `raw` above, and reading any member reads the whole chain.
+    for merged in super::distill_transcript::merged_sessions(&raw) {
+        summaries.insert(
+            (
+                merged.summary.agent.clone(),
+                merged.summary.session_id.clone(),
+            ),
+            merged.summary,
+        );
+    }
+    let titles = super::distillation_session_titles();
     let mut loaded = LoadedMaterial {
         rows: Vec::new(),
         materials: Vec::new(),
@@ -179,10 +204,15 @@ fn load_material(selections: &[DistillationSessionSelection]) -> Result<LoadedMa
                     .into(),
             );
         };
+        let real_title = titles
+            .get(&format!("{}:{}", selection.agent, selection.session_id))
+            .map(String::as_str)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(&summary.project);
         let row = ControlledRow {
             source: selection.agent.clone(),
             session_id: selection.session_id.clone(),
-            title: safe_text(&summary.project, MAX_TITLE),
+            title: safe_text(real_title, MAX_TITLE),
             project_key: safe_text(&summary.project, 120),
             model: (!summary.model.trim().is_empty()).then(|| safe_text(&summary.model, 120)),
             started_at: summary.started_at.clone(),
@@ -208,7 +238,35 @@ fn load_material(selections: &[DistillationSessionSelection]) -> Result<LoadedMa
             start_index: start,
             end_index: end,
         });
-        if let (Some(start), Some(end)) = (selection.start_index, selection.end_index) {
+        if selection.start_index.is_none() && selection.end_index.is_none() && read_bodies {
+            // Whole session (or project member): hand the model the real
+            // conversation, not just its metadata. A missing transcript keeps
+            // the metadata row and drops the body instead of failing.
+            if let Some(transcript) =
+                super::distill_transcript::whole_session_transcript_for_distill(
+                    &selection.agent,
+                    &selection.session_id,
+                )
+            {
+                let messages = transcript
+                    .messages
+                    .into_iter()
+                    .filter(|message| !is_reasoning_role(&message.role))
+                    .map(|message| SegmentMessage {
+                        role: message.role,
+                        text: message.text,
+                    })
+                    .collect::<Vec<_>>();
+                if !messages.is_empty() {
+                    loaded.materials.push(SegmentMaterial {
+                        source: selection.agent.clone(),
+                        session_id: selection.session_id.clone(),
+                        title: Some(row.title.clone()),
+                        messages,
+                    });
+                }
+            }
+        } else if let (Some(start), Some(end)) = (selection.start_index, selection.end_index) {
             // A missing transcript drops the segment instead of failing.
             if let Some(transcript) =
                 super::distill_transcript::aitracker_session_transcript_for_distill(
@@ -241,6 +299,111 @@ fn load_material(selections: &[DistillationSessionSelection]) -> Result<LoadedMa
         loaded.rows.push(row);
     }
     Ok(loaded)
+}
+
+/// Most batches one run will process. Beyond this the latest material is left
+/// out (and reported) instead of issuing dozens of paid model calls.
+pub const MAX_BATCHES: usize = 12;
+/// Per-message compaction only; the overall size is handled by batching.
+const PER_MESSAGE_ONLY_LIMIT: usize = 1 << 40;
+
+const PARTIAL_SYSTEM: &str = "你正在分批阅读一份很长的会话素材的第 {n} / {total} 段。请只提取后续蒸馏需要的要点：目标、关键决策、踩过的坑与解决办法、已完成与未完成的事项、重要命令与路径。用紧凑的 Markdown 要点输出，不要写成最终成品，不要编造素材里没有的内容，不要解释。";
+const MERGE_NOTICE: &str = "\n\n【说明】下面的素材是按时间顺序分批阅读后提取的要点，请基于这些要点完成上面的任务，不要向用户提及分批。";
+
+/// Result of a (possibly batched) model run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchedOutput {
+    pub text: String,
+    pub batches: usize,
+    /// Messages left out because the material needed more than `MAX_BATCHES`.
+    pub omitted_messages: usize,
+}
+
+fn message_count(materials: &[SegmentMaterial]) -> usize {
+    materials
+        .iter()
+        .map(|material| material.messages.len())
+        .sum()
+}
+
+/// Run the model over `materials`. One batch is a plain single call. Several
+/// batches are distilled to notes one at a time, in order, and the notes are
+/// merged with the original system prompt. `call(system, input, input_chars)`
+/// performs one model call; `progress(done, total)` is told after each batch.
+pub async fn run_batched<C, Fut>(
+    kind: &str,
+    system: &str,
+    rows: &[ControlledRow],
+    materials: Vec<SegmentMaterial>,
+    budget: usize,
+    is_cancelled: &(dyn Fn() -> bool + Send + Sync),
+    progress: &(dyn Fn(usize, usize) + Send + Sync),
+    mut call: C,
+) -> Result<BatchedOutput, ModelCallError>
+where
+    C: FnMut(String, String) -> Fut,
+    Fut: Future<Output = Result<String, ModelCallError>>,
+{
+    let context = controlled_context(rows);
+    let compacted = compact_segment_materials(&materials, PER_MESSAGE_ONLY_LIMIT);
+    let room = budget.saturating_sub(context.chars().count()).max(1_000);
+    let mut batches = plan_batches(&compacted, room);
+
+    let mut omitted_messages = 0;
+    if batches.len() > MAX_BATCHES {
+        omitted_messages = batches[MAX_BATCHES..]
+            .iter()
+            .map(|batch| message_count(batch))
+            .sum();
+        batches.truncate(MAX_BATCHES);
+    }
+
+    if batches.len() <= 1 {
+        let only = batches.into_iter().next().unwrap_or_default();
+        let input = assemble_input(&context, &only);
+        let text = run_quality_loop(kind, system, rows.len(), |system| {
+            call(system, input.clone())
+        })
+        .await?;
+        progress(1, 1);
+        return Ok(BatchedOutput {
+            text,
+            batches: 1,
+            omitted_messages,
+        });
+    }
+
+    let total = batches.len();
+    let mut notes = Vec::with_capacity(total);
+    for (index, batch) in batches.iter().enumerate() {
+        if is_cancelled() {
+            return Err(ModelCallError::cancelled());
+        }
+        let partial_system = PARTIAL_SYSTEM
+            .replace("{n}", &(index + 1).to_string())
+            .replace("{total}", &total.to_string());
+        let input = assemble_input(&context, batch);
+        notes.push(call(partial_system, input).await?);
+        progress(index + 1, total);
+    }
+
+    let notes = cap_notes(&notes, room);
+    let merged = notes
+        .iter()
+        .enumerate()
+        .map(|(index, note)| format!("### 第 {} / {total} 段要点\n\n{note}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let merge_input = format!("{context}{MERGE_NOTICE}\n\n{merged}");
+    let text = run_quality_loop(kind, system, rows.len(), |system| {
+        call(system, merge_input.clone())
+    })
+    .await?;
+    Ok(BatchedOutput {
+        text,
+        batches: total,
+        omitted_messages,
+    })
 }
 
 fn ensure_active(task_id: &str) -> Result<(), DistillError> {
@@ -293,8 +456,9 @@ pub async fn execute_distillation(
     selections: Vec<DistillationSessionSelection>,
     task_id: String,
 ) -> Result<DistillationCandidate, DistillError> {
+    let offline = request.mode.trim() == "offline" || request.provider_id.trim() == "offline";
     super::patch_distillation_task(&task_id, "reading-material", 10, None, None);
-    let loaded = tauri::async_runtime::spawn_blocking(move || load_material(&selections))
+    let loaded = tauri::async_runtime::spawn_blocking(move || load_material(&selections, !offline))
         .await
         .map_err(|_| DistillError::Failed("素材读取任务失败。".into()))?
         .map_err(DistillError::Failed)?;
@@ -303,8 +467,6 @@ pub async fn execute_distillation(
     super::patch_distillation_task(&task_id, "generating", 30, None, None);
     let kind = normalize_kind(&request.kind);
     let system = prompt_for_kind(kind, utf16_prefix(&request.prompt, MAX_PROMPT_CHARS));
-    let input = distillation_input(&loaded.rows, &loaded.materials);
-    let offline = request.mode.trim() == "offline" || request.provider_id.trim() == "offline";
     let (text, mode, provider_id, model_id) = if offline {
         (
             OFFLINE_FALLBACK_TEXT.to_string(),
@@ -339,20 +501,55 @@ pub async fn execute_distillation(
         let target = model_target(&profile, &model);
         let cancel_id = task_id.clone();
         let cancel = move || super::distillation_task_cancelled(&cancel_id);
-        let (target_ref, input_ref, cancel_ref) = (&target, &input, &cancel);
-        let result = run_quality_loop(kind, &system, loaded.rows.len(), move |system| async move {
-            call_model(
-                target_ref,
-                &system,
-                input_ref,
-                ModelCallOptions::default(),
-                cancel_ref,
-            )
-            .await
-        })
+        let progress_id = task_id.clone();
+        let progress = move |done: usize, total: usize| {
+            if total > 1 {
+                // Spread the model phase over 30..=65 so long runs visibly advance.
+                let percent = 30 + (done * 35 / total) as u8;
+                super::patch_distillation_task(
+                    &progress_id,
+                    "generating",
+                    percent.min(65),
+                    Some(format!("已处理 {done} / {total} 批素材")),
+                    None,
+                );
+            }
+        };
+        let budget = input_char_budget(&profile.context_window);
+        let (target_ref, cancel_ref) = (&target, &cancel);
+        let result = run_batched(
+            kind,
+            &system,
+            &loaded.rows,
+            loaded.materials.clone(),
+            budget,
+            cancel_ref,
+            &progress,
+            move |system, input| async move {
+                let options = ModelCallOptions {
+                    timeout: timeout_for_input(input.chars().count() + system.chars().count()),
+                    ..ModelCallOptions::default()
+                };
+                call_model(target_ref, &system, &input, options, cancel_ref).await
+            },
+        )
         .await;
         match result {
-            Ok(text) => (text, "model", profile.id.clone(), model),
+            Ok(output) => {
+                if output.omitted_messages > 0 {
+                    super::patch_distillation_task(
+                        &task_id,
+                        "generating",
+                        66,
+                        Some(format!(
+                            "素材超过单次上限，已分 {} 批处理，最新的 {} 条消息未纳入。",
+                            output.batches, output.omitted_messages
+                        )),
+                        None,
+                    );
+                }
+                (output.text, "model", profile.id.clone(), model)
+            }
             Err(error) if error.code == "ai.cancelled" => return Err(DistillError::Cancelled),
             Err(error) => {
                 return Err(DistillError::Failed(format!(
@@ -947,5 +1144,116 @@ mod tests {
         let path = write_memory_file_in(temp.path(), &candidate).unwrap();
         assert_eq!(path.file_name().unwrap(), "distill-task1.md");
         assert_eq!(fs::read_to_string(path).unwrap(), "## 当前目标");
+    }
+
+    fn long_material(session: &str, count: usize, len: usize) -> SegmentMaterial {
+        SegmentMaterial {
+            source: "claude-code".into(),
+            session_id: session.into(),
+            title: Some("T".into()),
+            messages: (0..count)
+                .map(|i| SegmentMessage {
+                    role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+                    text: format!("m{i}-{}", "x".repeat(len)),
+                })
+                .collect(),
+        }
+    }
+
+    type Calls = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    fn run_with(
+        materials: Vec<SegmentMaterial>,
+        budget: usize,
+        cancel_after: Option<usize>,
+    ) -> (Result<BatchedOutput, ModelCallError>, Calls) {
+        let calls: Calls = Default::default();
+        let recorder = calls.clone();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cancel_seen = seen.clone();
+        let cancel = move || {
+            cancel_after
+                .is_some_and(|limit| cancel_seen.load(std::sync::atomic::Ordering::SeqCst) >= limit)
+        };
+        let progress = |_: usize, _: usize| {};
+        let result = tauri::async_runtime::block_on(run_batched(
+            "memory",
+            "FINAL SYSTEM",
+            &[],
+            materials,
+            budget,
+            &cancel,
+            &progress,
+            move |system: String, input: String| {
+                recorder.lock().unwrap().push((system.clone(), input));
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { Ok(format!("notes for [{}]", &system[..system.len().min(12)])) }
+            },
+        ));
+        (result, calls)
+    }
+
+    #[test]
+    fn small_material_is_a_single_model_call() {
+        let (result, calls) = run_with(vec![long_material("a", 10, 50)], 1_200_000, None);
+        let output = result.unwrap();
+        assert_eq!(output.batches, 1);
+        assert_eq!(output.omitted_messages, 0);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "FINAL SYSTEM");
+        assert!(calls[0].1.contains("m0-"), "the conversation body is sent");
+        assert!(calls[0].1.contains("m9-"));
+    }
+
+    #[test]
+    fn large_material_runs_partials_in_order_then_one_merge() {
+        // ~200 messages * ~1000 chars = ~200k chars against a 60k budget.
+        let (result, calls) = run_with(vec![long_material("big", 200, 1000)], 60_000, None);
+        let output = result.unwrap();
+        assert!(output.batches >= 3, "got {} batches", output.batches);
+        assert_eq!(output.omitted_messages, 0);
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), output.batches + 1, "partials + one merge");
+        // Partial calls use the partial prompt, not the final one.
+        for (index, (system, _)) in calls[..output.batches].iter().enumerate() {
+            assert!(system.contains(&format!("第 {} / {}", index + 1, output.batches)));
+            assert_ne!(system, "FINAL SYSTEM");
+        }
+        // Partials read the conversation in order: the first batch holds m0, a later one m199.
+        assert!(calls[0].1.contains("m0-"));
+        assert!(calls[output.batches - 1].1.contains("m199-"));
+        assert!(!calls[0].1.contains("m199-"));
+        // The merge call uses the real prompt and sees every partial's notes, no raw body.
+        let (merge_system, merge_input) = calls.last().unwrap();
+        assert_eq!(merge_system, "FINAL SYSTEM");
+        assert!(merge_input.contains("第 1 / "));
+        assert!(merge_input.contains(&format!("第 {} / {}", output.batches, output.batches)));
+        assert!(!merge_input.contains("xxxxxxxxxx"));
+    }
+
+    #[test]
+    fn cancellation_stops_before_the_next_batch() {
+        let (result, calls) = run_with(vec![long_material("big", 200, 1000)], 60_000, Some(1));
+        assert_eq!(result.unwrap_err().code, "ai.cancelled");
+        assert_eq!(calls.lock().unwrap().len(), 1, "only the first partial ran");
+    }
+
+    #[test]
+    fn material_needing_too_many_batches_is_truncated_and_reported() {
+        // 48k-floor budget and a huge conversation: far more than MAX_BATCHES batches.
+        let (result, calls) = run_with(vec![long_material("huge", 2_000, 1_000)], 48_000, None);
+        let output = result.unwrap();
+        assert_eq!(output.batches, MAX_BATCHES);
+        assert!(output.omitted_messages > 0);
+        assert_eq!(calls.lock().unwrap().len(), MAX_BATCHES + 1);
+    }
+
+    #[test]
+    fn no_material_still_makes_one_metadata_only_call() {
+        let (result, calls) = run_with(Vec::new(), 1_200_000, None);
+        assert_eq!(result.unwrap().batches, 1);
+        assert_eq!(calls.lock().unwrap().len(), 1);
     }
 }

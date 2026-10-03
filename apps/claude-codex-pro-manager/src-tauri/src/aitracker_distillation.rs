@@ -242,15 +242,23 @@ pub fn segment_markdown(materials: &[SegmentMaterial]) -> String {
 }
 
 /// The full model input: controlled context plus optional segment block.
+/// AITracker's original fixed-budget input (48k characters). CCP's model path
+/// sizes the budget from the context window and batches instead; see
+/// `distill_pipeline::run_batched`. Kept for the AITracker-parity tests.
+#[cfg(test)]
 pub fn distillation_input(rows: &[ControlledRow], materials: &[SegmentMaterial]) -> String {
-    let context = controlled_context(rows);
     let compacted = compact_segment_materials(materials, MAX_INPUT_CHARS);
-    if compacted.is_empty() {
-        context
+    assemble_input(&controlled_context(rows), &compacted)
+}
+
+/// Controlled context plus the segment block, with no further compaction.
+pub fn assemble_input(context: &str, materials: &[SegmentMaterial]) -> String {
+    if materials.is_empty() {
+        context.to_string()
     } else {
         format!(
             "{context}\n\n{SEGMENT_SECTION}\n{}",
-            segment_markdown(&compacted)
+            segment_markdown(materials)
         )
     }
 }

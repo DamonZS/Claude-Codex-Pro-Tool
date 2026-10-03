@@ -11,6 +11,7 @@ pub mod claude_desktop;
 pub mod claude_desktop_computer_use;
 pub mod claude_desktop_provider;
 pub mod claude_provider;
+pub mod claude_session_chain;
 pub mod claude_sessions;
 pub mod claude_zh_patch;
 pub mod client_deploy;

@@ -58,6 +58,8 @@ use toml_edit::DocumentMut;
 use crate::install;
 #[path = "aitracker_distillation.rs"]
 mod aitracker_distillation;
+#[path = "distill_budget.rs"]
+mod distill_budget;
 #[path = "distill_model_client.rs"]
 mod distill_model_client;
 #[path = "distill_pipeline.rs"]
@@ -1312,6 +1314,8 @@ pub struct DistillationWorkbenchSession {
     pub turns: usize,
     pub status: String,
     pub tokens: u64,
+    /// Session files this row spans; above 1 it is a continued conversation.
+    pub segments: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -8293,32 +8297,37 @@ pub async fn load_distillation_workbench() -> CommandResult<DistillationWorkbenc
         let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
         let session_titles = distillation_session_titles();
         let settings = SettingsStore::default().load().unwrap_or_default();
-        let mut session_rows = snapshot.sessions.iter().collect::<Vec<_>>();
-        session_rows.sort_by(|left, right| right.ended_at.cmp(&left.ended_at));
+        // Fold continued conversations into one row before taking the newest 100.
+        let mut session_rows = distill_transcript::merged_sessions(&snapshot.sessions);
+        session_rows.sort_by(|left, right| right.summary.ended_at.cmp(&left.summary.ended_at));
         let sessions = session_rows
             .into_iter()
             .take(100)
-            .map(|session| DistillationWorkbenchSession {
-                agent: session.agent.clone(),
-                session_id: session.session_id.clone(),
-                title: session_titles
-                    .get(&format!("{}:{}", session.agent, session.session_id))
-                    .cloned()
-                    .unwrap_or_else(|| session.project.clone()),
-                project: session.project.clone(),
-                project_key: session.project.clone(),
-                is_git_project: session.project != "unknown",
-                model: session.model.clone(),
-                started_at: session.started_at.clone(),
-                updated_at: session.ended_at.clone(),
-                events: session.events,
-                turns: session.events,
-                status: if session.status.trim().is_empty() {
-                    "completed".into()
-                } else {
-                    session.status.clone()
-                },
-                tokens: session.totals.total_tokens,
+            .map(|merged| {
+                let session = merged.summary;
+                DistillationWorkbenchSession {
+                    agent: session.agent.clone(),
+                    session_id: session.session_id.clone(),
+                    title: session_titles
+                        .get(&format!("{}:{}", session.agent, session.session_id))
+                        .cloned()
+                        .unwrap_or_else(|| session.project.clone()),
+                    project: session.project.clone(),
+                    project_key: session.project.clone(),
+                    is_git_project: session.project != "unknown",
+                    model: session.model.clone(),
+                    started_at: session.started_at.clone(),
+                    updated_at: session.ended_at.clone(),
+                    events: session.events,
+                    turns: session.events,
+                    status: if session.status.trim().is_empty() {
+                        "completed".into()
+                    } else {
+                        session.status.clone()
+                    },
+                    tokens: session.totals.total_tokens,
+                    segments: merged.segments,
+                }
             })
             .collect();
         let active_id = settings.active_relay_profile().id;

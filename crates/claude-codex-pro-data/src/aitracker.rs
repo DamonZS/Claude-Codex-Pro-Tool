@@ -680,6 +680,110 @@ pub fn agent_details(snapshot: &LocalUsageSnapshot) -> Vec<AgentDetail> {
         .collect()
 }
 
+/// A conversation that spans several session files, shown as one row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedSession {
+    /// The oldest member present in the snapshot; its id stands for the chain.
+    pub summary: AgentSessionSummary,
+    /// How many files the conversation spans (including ones with no usage).
+    pub segments: usize,
+    /// Ids of every member, oldest first, including the representative.
+    pub member_ids: Vec<String>,
+}
+
+/// Fold continuation chains into single rows. `chains` lists session ids of
+/// one agent, oldest first. Sessions not in any chain pass through unchanged.
+/// Tokens, events and tool calls are summed; the start is the earliest start,
+/// the end the latest end, and model/project/status come from the latest
+/// member. Chain members with no usage are counted in `segments` only.
+pub fn merge_session_chains(
+    sessions: &[AgentSessionSummary],
+    agent: &str,
+    chains: &[Vec<String>],
+) -> Vec<MergedSession> {
+    let chain_of: std::collections::BTreeMap<&str, usize> = chains
+        .iter()
+        .enumerate()
+        .flat_map(|(index, chain)| chain.iter().map(move |id| (id.as_str(), index)))
+        .collect();
+    let mut buckets: Vec<(Option<usize>, Vec<&AgentSessionSummary>)> = Vec::new();
+    let mut chain_bucket: std::collections::BTreeMap<usize, usize> = Default::default();
+    for session in sessions {
+        let chain = (session.agent == agent)
+            .then(|| chain_of.get(session.session_id.as_str()).copied())
+            .flatten();
+        match chain {
+            Some(chain_index) => match chain_bucket.get(&chain_index) {
+                Some(&bucket) => buckets[bucket].1.push(session),
+                None => {
+                    chain_bucket.insert(chain_index, buckets.len());
+                    buckets.push((Some(chain_index), vec![session]));
+                }
+            },
+            None => buckets.push((None, vec![session])),
+        }
+    }
+
+    buckets
+        .into_iter()
+        .map(|(chain, mut members)| {
+            let Some(chain_index) = chain else {
+                let summary = members[0].clone();
+                return MergedSession {
+                    member_ids: vec![summary.session_id.clone()],
+                    summary,
+                    segments: 1,
+                };
+            };
+            let order = &chains[chain_index];
+            members.sort_by_key(|member| {
+                order
+                    .iter()
+                    .position(|id| id == &member.session_id)
+                    .unwrap_or(usize::MAX)
+            });
+            let latest = members
+                .iter()
+                .max_by(|left, right| left.ended_at.cmp(&right.ended_at))
+                .copied()
+                .unwrap_or(members[0]);
+            let mut summary = members[0].clone();
+            summary.model = latest.model.clone();
+            summary.project = latest.project.clone();
+            summary.provider = latest.provider.clone();
+            summary.status = latest.status.clone();
+            summary.ended_at = latest.ended_at.clone();
+            summary.started_at = members
+                .iter()
+                .map(|member| member.started_at.as_str())
+                .filter(|value| !value.is_empty())
+                .min()
+                .unwrap_or("")
+                .to_string();
+            summary.events = members.iter().map(|member| member.events).sum();
+            summary.tool_calls = members.iter().map(|member| member.tool_calls).sum();
+            let mut totals = AgentTokenTotals::default();
+            for member in &members {
+                totals.input_tokens += member.totals.input_tokens;
+                totals.cached_input_tokens += member.totals.cached_input_tokens;
+                totals.cache_creation_input_tokens += member.totals.cache_creation_input_tokens;
+                totals.output_tokens += member.totals.output_tokens;
+                totals.reasoning_output_tokens += member.totals.reasoning_output_tokens;
+                totals.total_tokens += member.totals.total_tokens;
+            }
+            summary.totals = totals;
+            MergedSession {
+                member_ids: members
+                    .iter()
+                    .map(|member| member.session_id.clone())
+                    .collect(),
+                summary,
+                segments: order.len(),
+            }
+        })
+        .collect()
+}
+
 pub fn project_snapshot(snapshot: &LocalUsageSnapshot) -> AitrackerSnapshot {
     AitrackerSnapshot {
         registry: agent_registry(snapshot),
@@ -924,5 +1028,183 @@ mod tests {
             std::os::unix::fs::symlink(root.join("direct"), root.join("linked")).unwrap();
             assert_eq!(scan_skill_roots(&[root], &["SKILL.md"], 2), (Some(2), "ok"));
         }
+    }
+
+    fn summary(
+        agent: &str,
+        id: &str,
+        start: &str,
+        end: &str,
+        tokens: u64,
+        events: usize,
+        model: &str,
+    ) -> AgentSessionSummary {
+        AgentSessionSummary {
+            session_id: id.into(),
+            agent: agent.into(),
+            provider: "p".into(),
+            model: model.into(),
+            project: "Repo".into(),
+            started_at: start.into(),
+            ended_at: end.into(),
+            events,
+            tool_calls: 1,
+            status: "completed".into(),
+            totals: AgentTokenTotals {
+                input_tokens: tokens,
+                total_tokens: tokens,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn merge_session_chains_sums_members_into_one_row() {
+        let sessions = vec![
+            summary(
+                "claude-code",
+                "c",
+                "2026-10-03T03:00:00Z",
+                "2026-10-03T04:00:00Z",
+                300,
+                30,
+                "new-model",
+            ),
+            summary(
+                "claude-code",
+                "a",
+                "2026-10-03T01:00:00Z",
+                "2026-10-03T02:00:00Z",
+                100,
+                10,
+                "old-model",
+            ),
+            summary(
+                "claude-code",
+                "b",
+                "2026-10-03T02:00:00Z",
+                "2026-10-03T03:00:00Z",
+                200,
+                20,
+                "mid-model",
+            ),
+            summary(
+                "claude-code",
+                "solo",
+                "2026-10-03T05:00:00Z",
+                "2026-10-03T06:00:00Z",
+                5,
+                1,
+                "m",
+            ),
+            summary(
+                "codex",
+                "a",
+                "2026-10-03T01:00:00Z",
+                "2026-10-03T01:30:00Z",
+                7,
+                1,
+                "gpt",
+            ),
+        ];
+        let chains = vec![vec!["a".to_string(), "b".to_string(), "c".to_string()]];
+        let merged = merge_session_chains(&sessions, "claude-code", &chains);
+
+        // One merged row + the solo + the codex session that shares an id with "a".
+        assert_eq!(merged.len(), 3);
+        let chain = merged.iter().find(|row| row.segments == 3).unwrap();
+        assert_eq!(
+            chain.summary.session_id, "a",
+            "oldest member represents the chain"
+        );
+        assert_eq!(chain.member_ids, vec!["a", "b", "c"]);
+        assert_eq!(chain.summary.totals.total_tokens, 600);
+        assert_eq!(chain.summary.events, 60);
+        assert_eq!(chain.summary.tool_calls, 3);
+        assert_eq!(chain.summary.started_at, "2026-10-03T01:00:00Z");
+        assert_eq!(chain.summary.ended_at, "2026-10-03T04:00:00Z");
+        assert_eq!(
+            chain.summary.model, "new-model",
+            "latest member decides the model"
+        );
+
+        let solo = merged
+            .iter()
+            .find(|row| row.summary.session_id == "solo")
+            .unwrap();
+        assert_eq!(solo.segments, 1);
+        assert_eq!(solo.summary.totals.total_tokens, 5);
+
+        let codex = merged
+            .iter()
+            .find(|row| row.summary.agent == "codex")
+            .unwrap();
+        assert_eq!(
+            codex.segments, 1,
+            "another agent's session is never folded in"
+        );
+        assert_eq!(codex.summary.totals.total_tokens, 7);
+    }
+
+    #[test]
+    fn merge_counts_members_that_have_no_usage_in_segments_only() {
+        // "mid" has no usage events, so it is absent from the snapshot.
+        let sessions = vec![
+            summary(
+                "claude-code",
+                "first",
+                "2026-10-03T01:00:00Z",
+                "2026-10-03T02:00:00Z",
+                100,
+                10,
+                "m",
+            ),
+            summary(
+                "claude-code",
+                "last",
+                "2026-10-03T03:00:00Z",
+                "2026-10-03T04:00:00Z",
+                50,
+                5,
+                "m",
+            ),
+        ];
+        let chains = vec![vec![
+            "first".to_string(),
+            "mid".to_string(),
+            "last".to_string(),
+        ]];
+        let merged = merge_session_chains(&sessions, "claude-code", &chains);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].segments, 3);
+        assert_eq!(merged[0].member_ids, vec!["first", "last"]);
+        assert_eq!(merged[0].summary.totals.total_tokens, 150);
+    }
+
+    #[test]
+    fn merge_without_chains_leaves_sessions_untouched() {
+        let sessions = vec![
+            summary(
+                "claude-code",
+                "x",
+                "2026-10-03T01:00:00Z",
+                "2026-10-03T02:00:00Z",
+                1,
+                1,
+                "m",
+            ),
+            summary(
+                "claude-code",
+                "y",
+                "2026-10-03T03:00:00Z",
+                "2026-10-03T04:00:00Z",
+                2,
+                2,
+                "m",
+            ),
+        ];
+        let merged = merge_session_chains(&sessions, "claude-code", &[]);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|row| row.segments == 1));
     }
 }

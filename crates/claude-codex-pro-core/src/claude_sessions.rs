@@ -330,6 +330,45 @@ pub fn load_claude_session_context_from_home(
     })
 }
 
+/// Read up to `max_messages` messages of one session in a single pass.
+///
+/// `load_claude_session_context` re-parses the whole file on every call and
+/// caps a page at 200, so paging a long session costs many full parses. This
+/// reads the file once and keeps the first `max_messages` messages, which is
+/// what distillation needs.
+pub fn load_claude_session_messages(
+    session_id: &str,
+    source_path: &Path,
+    max_messages: usize,
+) -> anyhow::Result<ClaudeSessionContextPage> {
+    let home = default_user_home()?;
+    if session_id.trim().is_empty() {
+        bail!("Claude session id must not be empty");
+    }
+    let source = rediscover_trusted_source(&home, source_path)?;
+    let parsed = parse_source(&source);
+    let session = parsed
+        .sessions
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| anyhow!("Claude session was not found in the requested source"))?;
+    let mut collector = ContextCollector::new(Some(0), Some(max_messages));
+    collector.limit = max_messages.max(1);
+    read_context_source(&source, session_id, &mut collector)?;
+    let (total_messages, offset, messages, has_more_before) = collector.finish();
+    Ok(ClaudeSessionContextPage {
+        session_id: session.id,
+        title: session.title,
+        cwd: session.cwd,
+        source_path: session.source_path,
+        source_kind: session.source_kind,
+        total_messages,
+        offset,
+        messages,
+        has_more_before,
+    })
+}
+
 pub fn delete_claude_session(
     backup_root: &Path,
     session_id: &str,

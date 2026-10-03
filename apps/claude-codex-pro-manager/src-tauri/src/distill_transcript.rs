@@ -12,9 +12,70 @@ use super::{AitrackerSessionTranscript, AitrackerTranscriptMessage};
 
 pub const DISTILL_TRANSCRIPT_MESSAGE_CAP: usize = 2000;
 
+/// Message window for whole-session distillation. The drawer keeps the
+/// 2000-message window so picked indices line up; whole sessions and chains
+/// may be far longer, and the pipeline then batches them to fit the model.
+pub const WHOLE_SESSION_MESSAGE_CAP: usize = 20_000;
+
 pub fn aitracker_session_transcript_for_distill(
     agent: &str,
     private_session_id: &str,
+) -> Option<AitrackerSessionTranscript> {
+    transcript_with_cap(agent, private_session_id, DISTILL_TRANSCRIPT_MESSAGE_CAP)
+}
+
+/// Same reader with a larger window, for distilling a whole session or chain.
+pub fn whole_session_transcript_for_distill(
+    agent: &str,
+    private_session_id: &str,
+) -> Option<AitrackerSessionTranscript> {
+    transcript_with_cap(agent, private_session_id, WHOLE_SESSION_MESSAGE_CAP)
+}
+
+/// Private (anonymised) session key the usage snapshot uses for a Claude session.
+pub fn claude_private_key(raw_id: &str) -> Option<String> {
+    claude_codex_pro_data::local_usage::session_id_from_structured(
+        "claude-code",
+        Some(&Value::String(raw_id.to_string())),
+    )
+}
+
+/// Continuation chains over the Claude session inventory, oldest segment first.
+/// "Same project" uses the canonical project folder name, so worktrees of one
+/// repository count as one project.
+pub fn claude_continuation_chains(
+    sessions: &[claude_codex_pro_core::claude_sessions::ClaudeSession],
+) -> Vec<Vec<claude_codex_pro_core::claude_sessions::ClaudeSession>> {
+    claude_codex_pro_core::claude_session_chain::claude_session_chains(sessions, &|session| {
+        claude_codex_pro_data::local_usage::canonical_project_label(&session.cwd)
+            .unwrap_or_else(|| session.cwd.clone())
+    })
+}
+
+/// Usage-snapshot sessions with Claude continuation chains folded into one row
+/// each. Workbench and pipeline both call this so a chain's representative id
+/// is the same on both sides.
+pub fn merged_sessions(
+    summaries: &[claude_codex_pro_data::aitracker::AgentSessionSummary],
+) -> Vec<claude_codex_pro_data::aitracker::MergedSession> {
+    let chains: Vec<Vec<String>> = claude_codex_pro_core::claude_sessions::list_claude_sessions()
+        .map(|inventory| claude_continuation_chains(&inventory.sessions))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|chain| {
+            chain
+                .iter()
+                .filter_map(|session| claude_private_key(&session.id))
+                .collect()
+        })
+        .collect();
+    claude_codex_pro_data::aitracker::merge_session_chains(summaries, "claude-code", &chains)
+}
+
+fn transcript_with_cap(
+    agent: &str,
+    private_session_id: &str,
+    cap: usize,
 ) -> Option<AitrackerSessionTranscript> {
     let matches = |raw_id: &str| {
         claude_codex_pro_data::local_usage::session_id_from_structured(
@@ -54,7 +115,7 @@ pub fn aitracker_session_transcript_for_distill(
                     has_more_before: false,
                     messages: all_messages
                         .into_iter()
-                        .take(DISTILL_TRANSCRIPT_MESSAGE_CAP)
+                        .take(cap)
                         .map(|message| AitrackerTranscriptMessage {
                             role: message.role,
                             text: message.body,
@@ -69,49 +130,86 @@ pub fn aitracker_session_transcript_for_distill(
             let inventory = claude_codex_pro_core::claude_sessions::list_claude_sessions().ok()?;
             let session = inventory
                 .sessions
+                .iter()
+                .find(|session| matches(&session.id))?
+                .clone();
+            // Any segment of a continuation chain reads as the whole chain, so a
+            // conversation that outgrew its context is distilled as one piece.
+            let chain = claude_continuation_chains(&inventory.sessions)
                 .into_iter()
-                .find(|session| matches(&session.id))?;
-            // The context loader pages at most 200 messages per call; walk
-            // pages from the start up to AITracker's 2000-message window.
-            const PAGE: usize = 200;
-            let mut title = String::new();
-            let mut total_messages = 0;
-            let mut messages = Vec::new();
-            while messages.len() < DISTILL_TRANSCRIPT_MESSAGE_CAP {
-                let page = claude_codex_pro_core::claude_sessions::load_claude_session_context(
-                    &session.id,
-                    Path::new(&session.source_path),
-                    Some(messages.len()),
-                    Some(PAGE),
-                )
-                .ok()?;
-                title = page.title;
-                total_messages = page.total_messages;
-                let count = page.messages.len();
-                messages.extend(page.messages.into_iter().map(|message| {
-                    AitrackerTranscriptMessage {
-                        role: message.role,
-                        text: message.text,
-                        timestamp: message.timestamp_ms.map(|value| value.to_string()),
-                    }
-                }));
-                if count < PAGE || messages.len() >= total_messages {
-                    break;
-                }
-            }
-            messages.truncate(DISTILL_TRANSCRIPT_MESSAGE_CAP);
-            Some(AitrackerSessionTranscript {
-                title,
-                total_messages,
-                has_more_before: false,
-                messages,
-            })
+                .find(|chain| chain.iter().any(|member| member.id == session.id))
+                .unwrap_or_else(|| vec![session]);
+            stitch_claude_chain(&chain, cap)
         }
         "cursor" | "openclaw" | "workbuddy" => {
             jsonl_session_transcript_for_distill(agent, private_session_id)
         }
         _ => None,
     }
+}
+
+/// Concatenate the segments of a chain in order. Later segments open with the
+/// continuation prompt, which only repeats what the earlier segments already
+/// contain, so it is dropped. Over the cap, keep the start of the conversation
+/// and (mostly) its end, since the end is the most recent and least compressed.
+fn stitch_claude_chain(
+    chain: &[claude_codex_pro_core::claude_sessions::ClaudeSession],
+    cap: usize,
+) -> Option<AitrackerSessionTranscript> {
+    let mut title = String::new();
+    let mut messages: Vec<AitrackerTranscriptMessage> = Vec::new();
+    for (position, session) in chain.iter().enumerate() {
+        let Ok(page) = claude_codex_pro_core::claude_sessions::load_claude_session_messages(
+            &session.id,
+            Path::new(&session.source_path),
+            cap,
+        ) else {
+            // One unreadable segment should not sink the whole chain, but a
+            // chain of one has nothing to fall back on.
+            if chain.len() == 1 {
+                return None;
+            }
+            continue;
+        };
+        if title.is_empty() {
+            title = page.title.clone();
+        }
+        let mut segment = page.messages.into_iter().peekable();
+        if position > 0
+            && segment.peek().is_some_and(|first| {
+                first.role == "user"
+                    && claude_codex_pro_core::claude_session_chain::is_continuation_prompt(
+                        &first.text,
+                    )
+            })
+        {
+            segment.next();
+        }
+        messages.extend(segment.map(|message| AitrackerTranscriptMessage {
+            role: message.role,
+            text: message.text,
+            timestamp: message.timestamp_ms.map(|value| value.to_string()),
+        }));
+    }
+    if messages.is_empty() && chain.len() == 1 {
+        return None;
+    }
+    let total_messages = messages.len();
+    if total_messages > cap {
+        let head = cap / 5;
+        let tail = cap - head;
+        let tail_start = total_messages - tail;
+        let mut kept = Vec::with_capacity(cap);
+        kept.extend(messages.drain(tail_start..));
+        kept.splice(0..0, messages.drain(..head));
+        messages = kept;
+    }
+    Some(AitrackerSessionTranscript {
+        title,
+        total_messages,
+        has_more_before: false,
+        messages,
+    })
 }
 
 /// Read transcript-bearing JSONL files for local clients whose usage adapter

@@ -102,7 +102,9 @@ export function AgentOverview({ capabilities, timeline }: { capabilities: Aitrac
   const output = trendRecords.reduce((sum, record) => sum + (record.output_tokens ?? 0), 0);
   const reasoning = trendRecords.reduce((sum, record) => sum + (record.reasoning_tokens ?? 0), 0);
   const toolCalls = capabilities?.snapshot.toolCalls.filter((event) => event.agent === selected?.id && Date.parse(event.timestamp) >= trendStart && Date.parse(event.timestamp) <= trendEnd).length;
-  const firstDay = trendRange === "all" ? Math.min(...trendRecords.map((record) => record.timestamp_ms), Date.now()) : trendStart;
+  // 不能写成 Math.min(...records.map(...))：记录超过约 20 万条时展开参数会抛
+  // RangeError（Maximum call stack size exceeded），整屏黑屏。
+  const firstDay = trendRange === "all" ? trendRecords.reduce((min, record) => Math.min(min, record.timestamp_ms), Date.now()) : trendStart;
   const dayCount = Math.max(1, Math.min(366, Math.ceil((trendEnd - firstDay) / 86400000)));
   const days = Array.from({ length: dayCount }, (_, index) => {
     const date = new Date(firstDay + index * 86400000);

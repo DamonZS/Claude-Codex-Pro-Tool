@@ -16,6 +16,7 @@ import {
   formatTokens,
   materialKeyOf,
   sessionProjectKey,
+  sessionSegmentsLabel,
   sessionStartedAt,
   sessionTurns,
   timestampValue,
@@ -344,7 +345,7 @@ export function MaterialDrawer({
                             <AgentIcon agent={item.agent} />
                             <span>
                               <strong>{item.title || item.sessionId}</strong>
-                              <small>{minutes}m · {sessionTurns(item)} 轮 · {sessionProjectKey(item)}</small>
+                              <small>{minutes}m · {sessionTurns(item)} 轮 · {sessionProjectKey(item)}{sessionSegmentsLabel(item)}</small>
                             </span>
                           </button>
                           <button className={`dw-join-pill${on > 0 ? " on" : ""}`} onClick={() => pillClick(item)} type="button">
@@ -445,7 +446,7 @@ export function MaterialPicker({
               <AgentIcon agent={item.agent} />
               <span className="dw-material-copy">
                 <strong>{item.title || item.sessionId}</strong>
-                <small>{sessionProjectKey(item)} · {formatDateTime(sessionStartedAt(item))} · ~{formatTokens(sessionTurns(item) * EST_TOKENS_PER_TURN)}</small>
+                <small>{sessionProjectKey(item)} · {formatDateTime(sessionStartedAt(item))} · ~{formatTokens(sessionTurns(item) * EST_TOKENS_PER_TURN)}{sessionSegmentsLabel(item)}</small>
               </span>
               {checked ? <Check aria-hidden="true" className="dw-check" /> : null}
             </button>
