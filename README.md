@@ -16,9 +16,33 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-**面向 Windows 与 macOS 的 Codex App、Claude Desktop 和 Claude Code 本地 AI 运维控制台。**
+**一个窗口管好你所有的 AI 编程 Agent：看清每个 Agent 花了多少 Token，一处切换第三方 API，把聊过的会话蒸馏成可复用的 Skill 和记忆，还能让 API 模式的 Claude Desktop 也用上 Computer Use。**
 
-Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换、本地代理和路由、Codex 增强、Claude Desktop 集成、MCP / Skills / 插件、会话修复、Codex 主题与系统提示词集中到一个 Rust + Tauri 桌面应用中。它只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
+> 面向 Windows 与 macOS 的 Codex App、Claude Desktop 和 Claude Code 本地 AI 运维控制台，Rust + Tauri 实现，数据只在本机。
+>
+> English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**. See token usage across your AI coding agents, switch third-party API providers (OpenAI Responses, Chat Completions, Anthropic Messages), manage MCP and Skills in one place, distill past sessions into reusable Skills and memory, and give API-mode Claude Desktop a built-in **Computer Use MCP**. A cc-switch-style provider switcher with a usage dashboard.
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/overview-total.webp"><img src="docs/screenshots/overview-total.webp" alt="总览：Agent 覆盖、Token 消耗趋势、缓存命中率、模型消耗" width="100%"></a><br><sub><b>总览</b> · 所有 Agent 的 Token 消耗、缓存命中率、模型排行</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/overview-agent.webp"><img src="docs/screenshots/overview-agent.webp" alt="Agent 概览：单个 Agent 的消耗趋势与上下文构成" width="100%"></a><br><sub><b>Agent 概览</b> · 单个 Agent 的消耗趋势与上下文构成</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/distillation.webp"><img src="docs/screenshots/distillation.webp" alt="蒸馏工作台：按会话、按项目选素材，蒸馏成 Skill、工作流、Prompt、画像、任务记忆" width="100%"></a><br><sub><b>蒸馏工作台</b> · 会话 / 项目 → Skill、Prompt、画像、任务记忆</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/tools-skills-mcp.webp"><img src="docs/screenshots/tools-skills-mcp.webp" alt="插件、Skills 与 MCP：Claude 与 Codex 资产统一清单" width="100%"></a><br><sub><b>插件、Skills 与 MCP</b> · Claude 与 Codex 资产合并成一张清单</sub></td>
+  </tr>
+</table>
+
+## 为什么用 CCP
+
+- **看清每个 Agent 的 Token 去哪了。** 本地只读采集，内置 36 种主流 Agent 工具的识别清单（Claude Code、Codex、Cursor、Kiro、Gemini CLI、OpenCode、Hermes、GitHub Copilot、Zed 等），其中 35 种声明了用量采集路径；你本机有记录的，就能看到消耗趋势、缓存命中率、模型与项目排行、会话场次和 Skill 覆盖。总览可看 24 小时 / 7 天 / 30 天，Agent 概览还支持全部和自定义区间；费用在没有价格来源时明确显示“未计价”，不编数字。
+- **一处切换第三方 API。** Codex、Claude、Claude Desktop 三个目标各自记录当前供应商，互不影响；支持 OpenAI Responses、Chat Completions、Anthropic Messages，模型映射、本地代理、故障转移，并能从本机 cc-switch 数据库导入已有供应商配置。
+- **把聊过的会话变成资产。** 蒸馏工作台可以蒸馏单个会话、整个项目，产出 Skill、工作流、Prompt、用户画像、任务记忆；超长对话按模型上下文窗口自动分批，不会被截断成半截。
+- **API 模式的 Claude Desktop 也能 Computer Use。** CCP 自带本地 MCP，让 Claude Desktop 截图、点击、拖拽、输入，带急停保护，默认关闭。
+- **Skills / MCP / 插件一张清单。** Claude 与 Codex 的资产合并显示，一行一个，点应用图标只改对应应用。
+- **会话管理。** Codex 风格的按项目分组会话列表，点开看完整上下文；Codex 与 Claude 各用各的真实数据源，并能修复切换供应商后看不到历史会话的问题。
+
+本地优先：配置、日志、备份都在本机，只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
 
 项目仓库唯一地址：
 
@@ -28,11 +52,14 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 
 ## 一眼看懂 CCP
 
-- **供应商与路由**：统一管理 Base URL、API Key、Header、Body、模型发现、协议转换、本地代理、优先级和故障转移。
+- **数据与概览**：本地只读采集多 Agent 用量，总览与 Agent 概览两种视角，含 Token 趋势、缓存命中率、模型 / 项目排行与活跃日历。
+- **供应商与路由**：统一管理 Base URL、API Key、Header、Body、模型发现、协议转换、本地代理、优先级和故障转移，覆盖 Codex、Claude、Claude Desktop 三个切换目标。
 - **Codex 与 Claude 增强**：启动、重启、状态监控、Claude 一键汉化、Codex 注入、主题和客户端维护。
-- **模型与协议兼容**：支持 OpenAI Responses、Chat Completions、Anthropic Messages 及兼容渠道的模型映射。
+- **蒸馏工作台**：从本地 Codex / Claude 会话里选素材，用自己配置的模型蒸馏成 Skill、工作流、Prompt、画像或任务记忆；续接的长对话合并成一行。
 - **Agent 扩展中心**：集中管理 Codex / Claude 插件、Skills、MCP、脚本和依赖状态。
-- **会话管理**：修复和迁移本地会话，管理会话历史与导出。
+- **会话管理**：按项目分组、点开看上下文、修复和迁移本地会话、导出历史。
+- **Claude Desktop Computer Use**：开启后，Claude Desktop 可通过 CCP 自带的本地 MCP 截图并操作鼠标键盘，含 `drag_path` 一笔拖拽和急停保护；开启时也会写入 API（3P）模式的 Claude Desktop 配置。
+- **Claude Desktop 直连模式**：第三方 Anthropic 兼容供应商可直接使用其 `/v1/models` 返回的模型 ID，不必强制模型映射。
 - **系统提示词**：管理 Markdown 指令模板、外部同步、启用模式、配置备份和 DeepSeek 组合使用教程。
 
 **快速导航：** [下载](#下载) · [界面预览](#管理工具界面) · [功能总览](#功能总览) · [常见问题](#常见问题) · [构建与开发](#构建与开发)
@@ -55,7 +82,7 @@ Claude Codex Pro Tool（CCP）把第三方 API 供应商、模型与协议转换
 
 ## 工作流集成说明
 
-Codex 内嵌工作流移植 Multica 上游的“我的任务”“自动化”“智能体”三个页面，使用本仓库内的上游源码、本地控制面和当前 Codex 页面 Host 适配层。任务与自动化执行、智能体调度仅通过 Codex 原生 task/thread/subagent 完成，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
+本仓库仍随附 Multica 上游的“我的任务”“自动化”“智能体”三个页面的源码、本地控制面和 Codex 页面 Host 适配层，但这三个入口目前**不再注入** Codex 侧边栏（见提交 `fbed6fc`）。保留的代码仅通过 Codex 原生 task/thread/subagent 工作，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
 
 ## 下载
 
@@ -96,6 +123,38 @@ Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包�
 </table>
 
 ## 功能总览
+
+### Claude Desktop Computer Use（MCP）
+
+让 Claude Desktop 拥有类似 Codex 的“看屏幕、动鼠标键盘”能力。CCP 自带一个本地 stdio MCP 服务（`claude-codex-pro.exe --mcp-computer-use`，不新增独立可执行文件），在 Claude Desktop 配置里注册为 `claude-codex-pro-computer-use`。
+
+- **工具**：`screenshot`、`click`、`move_mouse`、`drag`、`drag_path`、`scroll`、`type_text`、`press_keys`、`cursor_position`、`wait`。
+- **一笔拖拽**：`drag_path` 按住左键依次经过 2~200 个点后只松开一次，适合画曲线、圆和签名；`drag` 与 `drag_path` 中途出错也会先松开左键，不会卡键。
+- **截图**：仅主显示器，缩放到不超过 1280×800 的 JPEG；所有坐标使用截图像素，服务内部换算为真实屏幕坐标，越界坐标会被拒绝。
+- **安全**：总开关默认关闭，每次调用前重新读取；把鼠标甩到主屏左上角会触发**急停**，下次动作被拒绝并自动关闭开关；诊断日志记录工具名和坐标，`type_text` 只记录字数。
+- **注册范围**：开启时写入所有常规 Claude Desktop 配置，以及已存在的 `Claude-3p`（开发模式 / 3P）配置，写前备份；无法解析的配置会拒绝覆盖。切换开关后需要完全退出并重启 Claude Desktop。
+- **位置**：管理工具「设置」页的独立 **Computer Use** 标签，含开关、注册状态和最近调用记录。
+- **平台**：Windows（SendInput + GDI 截图）与 macOS（CoreGraphics）。macOS 路径目前只做过编译级检查，未在真机上验证。
+- **会移动真实鼠标**，截图可能包含屏幕上的敏感信息，使用前请整理好窗口。
+
+实验性：`claude_desktop_computer_use::uia` 模块提供 Windows UI Automation 的元素查找、Pattern 操作和键盘输入，目前仅供内部测试使用，**尚未接入上述 MCP 工具**。
+
+### 蒸馏工作台
+
+从本机的 Codex 与 Claude 会话里提炼可复用资产，交互与处理逻辑对齐 AITracker 的蒸馏模块（已获版权方授权），界面使用 CCP 液态玻璃风格。
+
+- **选素材**：快速模式按会话或按项目勾选，可按今天 / 近 7 天 / 近 30 天 / 全部过滤；高级模式在素材库里跨会话框选消息区间。
+- **项目与标题**：Claude 与 Codex 的“项目”都取项目文件夹（git 仓库根）名，git worktree 一律归并到主仓库名；会话行显示各客户端的真实会话标题。
+- **产物**：能力资产（Skill、工作流、Prompt，保存到 Skill 库并可安装到所选 Agent）与记忆资产（画像、任务记忆，写入记忆库）。
+- **模型**：使用你在“供应商与路由”里已配置的模型，支持 OpenAI Chat Completions、Responses 和 Anthropic Messages 三种协议，也可选“离线回退（确定性）”。
+- **质量与任务**：Skill / 工作流 / Prompt 自动质检并最多重试 2 次；任务进度持久化，重新打开页面继续轮询，可取消。
+- **失败原因**：失败会在历史里显示带稳定编码的中文原因，如 `ai.provider-network`（连不上）、`ai.provider-unavailable`（服务 5xx）、`ai.provider-auth`（鉴权失败）。
+
+### Claude Desktop 供应商直连模式
+
+- Claude Desktop 供应商可选“直连模式”，直接使用供应商 `/v1/models` 返回的模型 ID，不再强制开启模型映射或手动指定列表；对齐 cc-switch 的行为。
+- 关闭模型映射时使用供应商真实 URL，而不是本地代理；保存后重新打开不会变回模型映射。
+- 与“模型映射模式”“手动指定模型列表”并存，Anthropic 官方预设行为不变。
 
 ### Codex 主题系统
 
@@ -313,13 +372,15 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - 客户端与增强：Codex / Claude 启动维护、注入、汉化、脚本和本机状态。
 - 主题中心：Codex 主题预览、导入、应用、回滚和恢复默认。
 - 系统提示词：Markdown 指令模板、同步、启用方式和使用教程。
+- 蒸馏工作台：从本地会话选素材，蒸馏成 Skill、工作流、Prompt、画像或任务记忆。
 - 会话管理：历史会话修复、Codex / Claude 会话管理。
 - 插件、Skills 与 MCP：多 Agent 扩展资产、来源、依赖、风险和安装状态。
 - 维护与诊断：日志、Watcher、安装入口、路径检测、修复与更新。
-- 设置：运行开关、启动参数、增强矩阵、本地路径和外观偏好。
+- 设置：运行开关、启动参数、增强矩阵、本地路径和外观偏好；独立的 **Computer Use** 标签管理 Claude Desktop 的截图与键鼠 MCP。
 
 ## 安全边界
 
+- Computer Use 默认关闭；会移动真实鼠标和键盘，鼠标甩到主屏左上角即可急停。
 - 不静默修改 Claude Desktop 私有插件库。
 - 不静默信任第三方 hooks。
 - 不自动执行未知社区 MCP 安装脚本。
@@ -336,7 +397,8 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Codex 插件仓库缓存：`~/.codex/.tmp/plugins`
 - Codex skills：`~/.codex/skills`
 - Claude Desktop MCP 配置：Windows 通常为 `%APPDATA%\Claude\claude_desktop_config.json`
-- Claude Desktop 3P 配置：Windows 通常为 `%LOCALAPPDATA%\Claude-3p`
+- Claude Desktop 3P 配置：Windows 通常为 `%LOCALAPPDATA%\Claude-3p`（MSIX 版在 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude-3p`）
+- 蒸馏任务与候选：`~/.claude-codex-pro/aitracker/`
 - Claude Codex Pro 状态：`~/.claude-codex-pro/`
 - Provider Sync 备份：`~/.codex/backups_state/provider-sync`
 

@@ -16,9 +16,33 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-**A local AI operations console for Codex App, Claude Desktop, and Claude Code on Windows and macOS.**
+**One window for all your AI coding agents: see where each agent's tokens go, switch third-party APIs in one place, distill past sessions into reusable Skills and memory, and give API-mode Claude Desktop a built-in Computer Use.**
 
-Claude Codex Pro Tool (CCP) combines third-party API providers, model and protocol conversion, local proxy routing, Codex enhancements, Claude Desktop integration, MCP servers, Skills, plugins, session repair, Codex themes, and system prompts in one Rust + Tauri desktop app. It manages local configuration and third-party APIs; it does not take over official accounts, subscriptions, or payments.
+> A local AI operations console for Codex App, Claude Desktop, and Claude Code on Windows and macOS, built with Rust + Tauri. Your data stays on your machine.
+>
+> Keywords: Codex, Claude Desktop, Claude Code, API relay, third-party API provider switcher, cc-switch alternative, model mapping, OpenAI Responses, Chat Completions, Anthropic Messages, MCP, Skills, Computer Use MCP, token usage dashboard, session repair, Tauri, Rust.
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/overview-total.webp"><img src="docs/screenshots/overview-total.webp" alt="Overview: agent coverage, token trend, cache hit rate, model usage" width="100%"></a><br><sub><b>Overview</b> - token usage, cache hit rate, and model ranking across all agents</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/overview-agent.webp"><img src="docs/screenshots/overview-agent.webp" alt="Agent overview: one agent's usage trend and context breakdown" width="100%"></a><br><sub><b>Agent overview</b> - one agent's usage trend and context breakdown</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/distillation.webp"><img src="docs/screenshots/distillation.webp" alt="Distillation workbench: pick sessions or projects and distill them into Skills, workflows, prompts, personas, task memory" width="100%"></a><br><sub><b>Distillation workbench</b> - sessions and projects into Skills, prompts, personas, task memory</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/tools-skills-mcp.webp"><img src="docs/screenshots/tools-skills-mcp.webp" alt="Plugins, Skills and MCP: one merged inventory for Claude and Codex" width="100%"></a><br><sub><b>Plugins, Skills and MCP</b> - Claude and Codex assets in one list</sub></td>
+  </tr>
+</table>
+
+## Why CCP
+
+- **See where every agent's tokens go.** Read-only local collection with a built-in detection list of 36 popular agent tools (Claude Code, Codex, Cursor, Kiro, Gemini CLI, OpenCode, Hermes, GitHub Copilot, Zed, and more); 35 of them declare usage paths. Whatever has records on your machine shows token trends, cache hit rate, model and project rankings, session counts, and Skill coverage. The overview covers 24 h / 7 d / 30 d, and the agent overview adds All and custom ranges. Cost shows "unpriced" when there is no price source instead of inventing a number.
+- **Switch third-party APIs in one place.** Codex, Claude, and Claude Desktop each keep their own current provider, so switching one never touches the others. It supports OpenAI Responses, Chat Completions, and Anthropic Messages, model mapping, a local proxy, failover, and importing existing providers from a local cc-switch database.
+- **Turn past chats into assets.** The distillation workbench can distill a single session or a whole project into Skills, workflows, prompts, personas, and task memory. Very long conversations are split into batches sized to the model's context window instead of being cut off.
+- **Computer Use for API-mode Claude Desktop.** CCP bundles a local MCP that lets Claude Desktop take screenshots, click, drag, and type, with an emergency stop. It is off by default.
+- **Skills, MCP, and plugins in one list.** Claude and Codex assets are merged into one row each; clicking an app icon only changes that app.
+- **Session management.** A Codex-style project-grouped session list with full context on click; Codex and Claude each read their own real data source, and CCP can repair history that disappeared after switching providers.
+
+Local first: configuration, logs, and backups stay on your machine. CCP manages local configuration and third-party APIs only and does not take over official accounts, subscriptions, or payments.
 
 Canonical repository:
 
@@ -28,11 +52,14 @@ Canonical repository:
 
 ## CCP at a Glance
 
-- **Providers and routing:** manage Base URLs, API keys, headers, request bodies, model discovery, protocol conversion, local proxy routing, priorities, and failover.
+- **Data and overview:** read-only local usage collection across agents, in a total view and a per-agent view, with token trends, cache hit rate, model and project rankings, and an activity calendar.
+- **Providers and routing:** manage Base URLs, API keys, headers, request bodies, model discovery, protocol conversion, local proxy routing, priorities, and failover for Codex, Claude, and Claude Desktop.
 - **Codex and Claude enhancements:** launch, restart, monitor, localize Claude, inject Codex enhancements, apply themes, and maintain client installations.
-- **Model and protocol compatibility:** support OpenAI Responses, Chat Completions, Anthropic Messages, and model mapping for compatible providers.
+- **Distillation workbench:** distill local Codex and Claude sessions into Skills, workflows, prompts, personas, or task memory with your own configured model; continued long conversations collapse into one row.
 - **Agent extension center:** manage Codex and Claude plugins, Skills, MCP servers, scripts, dependencies, and installation state.
-- **Session management:** repair and migrate local sessions, manage session history, and export sessions.
+- **Session management:** project-grouped sessions with context view, repair and migration of local sessions, and export.
+- **Claude Desktop Computer Use:** once enabled, Claude Desktop can take screenshots and drive the mouse and keyboard through a local MCP server bundled with CCP, including one-stroke `drag_path` and an emergency stop; enabling it also writes the API (3P) mode Claude Desktop config.
+- **Claude Desktop direct-connect mode:** third-party Anthropic-compatible providers can use the model IDs returned by their `/v1/models` directly, without forcing model mapping.
 - **System prompts:** manage Markdown instruction templates, remote synchronization, activation modes, configuration backups, and the CCP + DeepSeek usage guide.
 
 **Quick links:** [Download](#download) · [Screenshots](#manager-interface) · [Features](#feature-overview) · [FAQ](#faq) · [Build](#build-and-development)
@@ -55,7 +82,7 @@ Canonical repository:
 
 ## Multica Workspace Attribution
 
-The embedded Codex workspace ports the upstream Multica **My Issues**, **Autopilots**, and **Agents** pages using upstream source vendored in this repository, CCP's local control plane, and the current-page Codex Host adapter. Task and automation execution and agent dispatch use only native Codex task/thread/subagent capabilities; the integration does not start the Multica server/daemon/CLI or register a second Codex runtime or model executor. The derived UI retains the Multica product name, logo, copyright, and attribution; the complete [`LICENSE`](docs/third-party/multica/LICENSE) and [`NOTICE`](docs/third-party/multica/NOTICE) accompany distributions. See [`docs/multica-attribution.md`](docs/multica-attribution.md) and [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md) for the upstream revision, provenance, and integration boundary. Retaining branding and attribution does not replace upstream commercial licensing requirements.
+This repository still ships the upstream Multica **My Issues**, **Autopilots**, and **Agents** page source, CCP's local control plane, and the Codex Host adapter, but those three entries are **no longer injected** into the Codex sidebar (commit `fbed6fc`). The retained code uses only native Codex task/thread/subagent capabilities; the integration does not start the Multica server/daemon/CLI or register a second Codex runtime or model executor. The derived UI retains the Multica product name, logo, copyright, and attribution; the complete [`LICENSE`](docs/third-party/multica/LICENSE) and [`NOTICE`](docs/third-party/multica/NOTICE) accompany distributions. See [`docs/multica-attribution.md`](docs/multica-attribution.md) and [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md) for the upstream revision, provenance, and integration boundary. Retaining branding and attribution does not replace upstream commercial licensing requirements.
 
 ## Download
 
@@ -96,6 +123,38 @@ The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG co
 </table>
 
 ## Feature Overview
+
+### Claude Desktop Computer Use (MCP)
+
+Gives Claude Desktop a Codex-style "see the screen, drive the mouse and keyboard" capability. CCP bundles a local stdio MCP server (`claude-codex-pro.exe --mcp-computer-use`, no extra executable) and registers it in Claude Desktop as `claude-codex-pro-computer-use`.
+
+- **Tools:** `screenshot`, `click`, `move_mouse`, `drag`, `drag_path`, `scroll`, `type_text`, `press_keys`, `cursor_position`, `wait`.
+- **One-stroke drag:** `drag_path` holds the left button through 2-200 points and releases once, suitable for curves, circles, and signatures. `drag` and `drag_path` always release the button even if a step fails.
+- **Screenshots:** primary display only, downscaled to at most 1280x800 JPEG. All coordinates are screenshot pixels and are mapped to real screen coordinates internally; out-of-range points are rejected.
+- **Safety:** off by default and re-read on every call. Throwing the mouse into the top-left corner of the primary display triggers an **emergency stop**: the next action is refused and the switch is turned off. Diagnostics log tool names and coordinates; `type_text` logs only the character count.
+- **Registration:** enabling writes the entry into every normal Claude Desktop config and any existing `Claude-3p` (developer / 3P mode) config, with a backup first. Unparseable configs are never overwritten. Fully quit and restart Claude Desktop after toggling.
+- **Where:** the dedicated **Computer Use** tab in the manager's Settings page, with the switch, registration status, and recent calls.
+- **Platforms:** Windows (SendInput + GDI capture) and macOS (CoreGraphics). The macOS path has only been compile-checked, not verified on real hardware.
+- It **moves the real mouse**, and screenshots may contain sensitive on-screen information. Tidy your windows first.
+
+Experimental: the `claude_desktop_computer_use::uia` module provides Windows UI Automation element lookup, pattern actions, and keyboard input. It is internal-test only and **not yet wired into the MCP tools above**.
+
+### Distillation Workbench
+
+Extracts reusable assets from local Codex and Claude sessions. Interaction and processing logic follow AITracker's distillation module (used with the copyright holder's permission), with CCP's liquid-glass styling.
+
+- **Pick material:** quick mode selects by session or by project with Today / 7 days / 30 days / All filters; advanced mode lets you select message ranges across sessions in the material library.
+- **Projects and titles:** for both Claude and Codex the "project" is the project folder (git root) name, git worktrees roll up into their main repository, and each row shows the client's real session title.
+- **Outputs:** capability assets (Skill, workflow, prompt, saved to the Skill library and installable to chosen agents) and memory assets (persona, task memory, written to the memory library).
+- **Model:** uses the models you configured under Providers, over OpenAI Chat Completions, Responses, or Anthropic Messages, plus a deterministic offline fallback.
+- **Quality and tasks:** Skill, workflow, and prompt outputs are quality-checked with up to 2 retries. Task progress is persisted, resumes when you reopen the page, and can be cancelled.
+- **Failures:** history shows a Chinese reason with a stable code, such as `ai.provider-network`, `ai.provider-unavailable`, or `ai.provider-auth`.
+
+### Claude Desktop Provider Direct-Connect Mode
+
+- Claude Desktop providers can use direct-connect mode and consume the model IDs returned by the provider's `/v1/models` without forcing model mapping or a manual list, matching cc-switch behavior.
+- With model mapping off, the provider's real URL is used instead of the local proxy, and the choice survives reopening the editor.
+- It coexists with model-mapping mode and manual model lists; the Anthropic official preset is unchanged.
 
 ### Codex Theme System
 
@@ -317,10 +376,11 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Clients and Enhancements: Codex and Claude launch maintenance, injection, localization, scripts, and local state.
 - Theme Center: preview, import, apply, roll back, and restore Codex themes.
 - System Prompts: Markdown instruction templates, synchronization, activation modes, and usage guidance.
+- Distillation Workbench: pick local session material and distill it into Skills, workflows, prompts, personas, or task memory.
 - Sessions: history repair and Codex and Claude session management.
 - Plugins, Skills, and MCP: multi-agent extension assets, sources, dependencies, risk, and installation state.
 - Maintenance and Diagnostics: logs, Watcher, installation entry points, path detection, repair, and updates.
-- Settings: runtime switches, launch arguments, enhancement matrix, local paths, and appearance preferences.
+- Settings: runtime switches, launch arguments, enhancement matrix, local paths, and appearance preferences. A dedicated **Computer Use** tab manages the Claude Desktop screenshot and mouse/keyboard MCP.
 
 ## Safety Boundaries
 
@@ -340,7 +400,8 @@ V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
 - Codex plugin repository cache: `~/.codex/.tmp/plugins`
 - Codex skills: `~/.codex/skills`
 - Claude Desktop MCP configuration on Windows: usually `%APPDATA%\Claude\claude_desktop_config.json`
-- Claude Desktop 3P configuration on Windows: usually `%LOCALAPPDATA%\Claude-3p`
+- Claude Desktop 3P configuration on Windows: usually `%LOCALAPPDATA%\Claude-3p` (MSIX installs use `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude-3p`)
+- Distillation tasks and candidates: `~/.claude-codex-pro/aitracker/`
 - Claude Codex Pro state: `~/.claude-codex-pro/`
 - Provider Sync backups: `~/.codex/backups_state/provider-sync`
 
