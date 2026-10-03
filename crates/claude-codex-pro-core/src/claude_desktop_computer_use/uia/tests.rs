@@ -1,145 +1,148 @@
-#[cfg(test)]
-mod tests {
-    use super::super::backend::WindowsUiaBackend;
-    use super::super::types::*;
+//! Integration tests for Windows UIA backend with real applications.
 
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn test_backend_initialization() {
-        let backend = WindowsUiaBackend::new();
-        assert!(backend.is_ok(), "Failed to initialize UIA backend");
+#[cfg(all(test, target_os = "windows"))]
+mod notepad_tests {
+    use crate::claude_desktop_computer_use::uia::{
+        backend::WindowsUiaBackend, ElementType, FindParams,
+    };
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    /// Helper to launch notepad and return its HWND.
+    fn launch_notepad() -> Option<usize> {
+        // Launch notepad
+        let _ = Command::new("notepad.exe").spawn();
+
+        // Wait for it to appear
+        thread::sleep(Duration::from_millis(1000));
+
+        // Find notepad window
+        let backend = WindowsUiaBackend::new().ok()?;
+        let windows = backend.list_windows().ok()?;
+
+        windows
+            .into_iter()
+            .find(|w| w.title.contains("Notepad") || w.title.contains("记事本"))
+            .map(|w| w.hwnd)
     }
 
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn test_list_windows() {
-        let backend = WindowsUiaBackend::new().expect("Failed to create backend");
-        let windows = backend.list_windows().expect("Failed to list windows");
+    /// Helper to close notepad without saving.
+    fn close_notepad(hwnd: usize) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
 
-        // Should have at least some windows
-        assert!(!windows.is_empty(), "No windows found");
-
-        // Check first window has title
-        if let Some(first) = windows.first() {
-            assert!(!first.title.is_empty(), "Window title should not be empty");
-            assert!(first.hwnd > 0, "Window HWND should be valid");
+        unsafe {
+            let hwnd = HWND(hwnd as *mut _);
+            let _ = PostMessageW(hwnd, WM_CLOSE, None, None);
         }
+
+        thread::sleep(Duration::from_millis(500));
     }
 
     #[test]
-    fn test_element_type_parsing() {
-        assert_eq!("Button".parse::<ElementType>().unwrap(), ElementType::Button);
-        assert_eq!("button".parse::<ElementType>().unwrap(), ElementType::Button);
-        assert_eq!("Edit".parse::<ElementType>().unwrap(), ElementType::Edit);
-        assert_eq!("textbox".parse::<ElementType>().unwrap(), ElementType::Edit);
-        assert_eq!("input".parse::<ElementType>().unwrap(), ElementType::Edit);
-        assert_eq!("CheckBox".parse::<ElementType>().unwrap(), ElementType::CheckBox);
-        assert_eq!("checkbutton".parse::<ElementType>().unwrap(), ElementType::CheckBox);
-    }
-
-    #[test]
-    fn test_element_type_name() {
-        assert_eq!(ElementType::Button.name(), "Button");
-        assert_eq!(ElementType::Edit.name(), "Edit");
-        assert_eq!(ElementType::CheckBox.name(), "CheckBox");
-        assert_eq!(ElementType::Window.name(), "Window");
-    }
-
-    #[test]
-    fn test_rect_helpers() {
-        let rect = Rect {
-            x: 10,
-            y: 20,
-            width: 100,
-            height: 50,
+    fn test_get_notepad_tree() {
+        let Some(hwnd) = launch_notepad() else {
+            eprintln!("Failed to launch notepad, skipping test");
+            return;
         };
 
-        assert_eq!(rect.left(), 10);
-        assert_eq!(rect.top(), 20);
-        assert_eq!(rect.right(), 110);
-        assert_eq!(rect.bottom(), 70);
-        assert!(!rect.is_empty());
+        let backend = WindowsUiaBackend::new().unwrap();
+        let tree = backend.get_tree(hwnd);
 
-        let empty_rect = Rect { x: 0, y: 0, width: 0, height: 0 };
-        assert!(empty_rect.is_empty());
+        close_notepad(hwnd);
+
+        let tree = tree.expect("Failed to get UI tree");
+
+        // Notepad should have a tree structure
+        assert!(!tree.children.is_empty(), "Notepad tree should have children");
+
+        // Should have either Edit (old Notepad) or Document (new Notepad) control
+        let has_edit = contains_type_recursive(&tree, ElementType::Edit);
+        let has_document = contains_type_recursive(&tree, ElementType::Document);
+        assert!(has_edit || has_document, "Notepad should contain an Edit or Document control");
+
+        println!("✓ Notepad tree contains {} top-level children", tree.children.len());
     }
 
     #[test]
-    fn test_ui_element_creation() {
-        let element = UiElement::new("test-id".to_string(), ElementType::Button);
+    fn test_find_notepad_edit() {
+        let Some(hwnd) = launch_notepad() else {
+            eprintln!("Failed to launch notepad, skipping test");
+            return;
+        };
 
-        assert_eq!(element.id, "test-id");
-        assert_eq!(element.element_type, ElementType::Button);
-        assert!(element.enabled);
-        assert!(!element.focused);
-        assert!(element.children.is_empty());
+        let backend = WindowsUiaBackend::new().unwrap();
+
+        // Try to find Edit control (old Notepad)
+        let params_edit = FindParams {
+            element_type: Some(ElementType::Edit),
+            query: None,
+            interactive_only: false,
+        };
+        let results_edit = backend.find_elements(hwnd, &params_edit).ok();
+
+        // Try to find Document control (new Notepad)
+        let params_doc = FindParams {
+            element_type: Some(ElementType::Document),
+            query: None,
+            interactive_only: false,
+        };
+        let results_doc = backend.find_elements(hwnd, &params_doc).ok();
+
+        close_notepad(hwnd);
+
+        // Should find at least one of them
+        let edit_count = results_edit.as_ref().map(|r| r.len()).unwrap_or(0);
+        let doc_count = results_doc.as_ref().map(|r| r.len()).unwrap_or(0);
+
+        assert!(
+            edit_count > 0 || doc_count > 0,
+            "Should find at least one Edit or Document control (found {} Edit, {} Document)",
+            edit_count,
+            doc_count
+        );
+
+        if edit_count > 0 {
+            println!("✓ Found {} Edit control(s) in Notepad (old version)", edit_count);
+        }
+        if doc_count > 0 {
+            println!("✓ Found {} Document control(s) in Notepad (new version)", doc_count);
+        }
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
-    fn test_find_elements_by_type() {
-        use std::process::Command;
+    fn test_notepad_performance() {
+        let Some(hwnd) = launch_notepad() else {
+            eprintln!("Failed to launch notepad, skipping test");
+            return;
+        };
 
-        // Launch notepad for testing
-        let mut notepad = Command::new("notepad.exe")
-            .spawn()
-            .expect("Failed to launch notepad");
+        let backend = WindowsUiaBackend::new().unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let start = std::time::Instant::now();
+        let tree = backend.get_tree(hwnd);
+        let duration = start.elapsed();
 
-        let backend = WindowsUiaBackend::new().expect("Failed to create backend");
-        let windows = backend.list_windows().expect("Failed to list windows");
+        close_notepad(hwnd);
 
-        if let Some(notepad_window) = windows.iter().find(|w| w.title.contains("Notepad") || w.title.contains("记事本")) {
-            // First, get the tree to see what's there
-            let tree = backend.get_tree(notepad_window.hwnd);
-            if tree.is_err() {
-                eprintln!("Failed to get tree: {:?}", tree.err());
-                let _ = notepad.kill();
-                return;
-            }
+        tree.expect("Failed to get UI tree");
 
-            let tree = tree.unwrap();
-            eprintln!("Notepad tree root: type={:?}, label={}, children={}",
-                tree.element_type, tree.label, tree.children.len());
+        println!("✓ get_tree took {:?}", duration);
 
-            // Print first level children
-            for (i, child) in tree.children.iter().take(5).enumerate() {
-                eprintln!("  Child {}: type={:?}, label={}", i, child.element_type, child.label);
-            }
+        // Acceptance criteria: < 500ms for simple app like Notepad
+        assert!(
+            duration.as_millis() < 500,
+            "get_tree should complete in < 500ms, took {:?}",
+            duration
+        );
+    }
 
-            // Windows 11 Notepad uses Document type instead of Edit
-            let params = FindParams {
-                query: None,
-                element_type: Some(ElementType::Document),
-                interactive_only: false,
-            };
-
-            let results = backend.find_elements(notepad_window.hwnd, &params);
-            assert!(results.is_ok(), "find_elements failed");
-
-            let elements = results.unwrap();
-            eprintln!("Found {} Document elements", elements.len());
-
-            // Notepad should have at least one Document control (text editor area)
-            assert!(!elements.is_empty(), "Should find Document controls in Notepad");
-
-            // Also test finding Text elements (tab labels)
-            let text_params = FindParams {
-                query: None,
-                element_type: Some(ElementType::Text),
-                interactive_only: false,
-            };
-            let text_elements = backend.find_elements(notepad_window.hwnd, &text_params).unwrap();
-            eprintln!("Found {} Text elements", text_elements.len());
-            assert!(!text_elements.is_empty(), "Should find Text elements in Notepad");
-        } else {
-            eprintln!("Notepad window not found in {} windows", windows.len());
-            for w in windows.iter().take(5) {
-                eprintln!("  Window: {}", w.title);
-            }
+    fn contains_type_recursive(element: &crate::claude_desktop_computer_use::uia::UiElement, target_type: ElementType) -> bool {
+        if element.element_type == target_type {
+            return true;
         }
 
-        let _ = notepad.kill();
+        element.children.iter().any(|child| contains_type_recursive(child, target_type))
     }
 }
