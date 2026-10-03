@@ -8,6 +8,7 @@ mod platform;
 mod register;
 mod server;
 mod tools;
+pub mod uia;
 
 pub use register::{
     COMPUTER_USE_MCP_ARG, COMPUTER_USE_SERVER_NAME, ComputerUseStatus, computer_use_status,
