@@ -2913,6 +2913,69 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+/// Normal configs plus every 3p (`Claude-3p`) `claude_desktop_config.json` that
+/// already exists. 3p-mode Claude Desktop reads its MCP servers from the 3p
+/// config, so a registration that only touches the normal ones is invisible to
+/// it. Missing 3p files are skipped so users outside 3p mode get no new files.
+pub(crate) fn claude_desktop_mcp_config_paths() -> Vec<PathBuf> {
+    let threep_configs: Vec<PathBuf> = claude_desktop_threep_paths()
+        .into_iter()
+        .map(|threep| threep.config_path)
+        .collect();
+    merge_existing_config_paths(claude_desktop_normal_config_paths(), threep_configs)
+}
+
+fn merge_existing_config_paths(mut paths: Vec<PathBuf>, extra: Vec<PathBuf>) -> Vec<PathBuf> {
+    for path in extra {
+        if path.exists() {
+            push_unique_path(&mut paths, path);
+        }
+    }
+    paths
+}
+
+#[cfg(test)]
+mod computer_use_config_paths_tests {
+    use super::merge_existing_config_paths;
+    use std::path::PathBuf;
+
+    #[test]
+    fn computer_use_config_paths_appends_existing_threep_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let normal = dir.path().join("Claude").join("claude_desktop_config.json");
+        let threep = dir.path().join("Claude-3p").join("claude_desktop_config.json");
+        std::fs::create_dir_all(threep.parent().unwrap()).unwrap();
+        std::fs::write(&threep, "{}").unwrap();
+
+        let merged = merge_existing_config_paths(vec![normal.clone()], vec![threep.clone()]);
+
+        assert_eq!(merged, vec![normal, threep]);
+    }
+
+    #[test]
+    fn computer_use_config_paths_skips_missing_threep_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let normal = dir.path().join("Claude").join("claude_desktop_config.json");
+        let missing = dir.path().join("Claude-3p").join("claude_desktop_config.json");
+
+        let merged = merge_existing_config_paths(vec![normal.clone()], vec![missing.clone()]);
+
+        assert_eq!(merged, vec![normal]);
+        assert!(!missing.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn computer_use_config_paths_does_not_duplicate_shared_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared: PathBuf = dir.path().join("claude_desktop_config.json");
+        std::fs::write(&shared, "{}").unwrap();
+
+        let merged = merge_existing_config_paths(vec![shared.clone()], vec![shared.clone()]);
+
+        assert_eq!(merged, vec![shared]);
+    }
+}
+
 fn claude_desktop_threep_paths() -> Vec<ClaudeDesktopThreepPaths> {
     let primary_root = claude_desktop_threep_config_root_for_platform(
         current_platform(),

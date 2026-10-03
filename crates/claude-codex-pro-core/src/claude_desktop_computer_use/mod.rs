@@ -8,7 +8,9 @@ mod platform;
 mod register;
 mod server;
 mod tools;
+pub mod uia;
 
+pub use platform::NativeBackend;
 pub use register::{
     COMPUTER_USE_MCP_ARG, COMPUTER_USE_SERVER_NAME, ComputerUseStatus, computer_use_status,
     computer_use_status_for_paths, register_computer_use_at, set_computer_use_enabled,

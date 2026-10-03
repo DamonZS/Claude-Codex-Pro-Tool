@@ -285,6 +285,16 @@ pub fn canonical_project_label(value: &str) -> Option<String> {
         directory = parent.to_path_buf();
     }
 
+    // A linked worktree is the same project as the repository it was created
+    // from. Resolve it through git metadata first; when the worktree directory
+    // (or even the repository) is already gone, fall back to the conventional
+    // `<repo>/.claude/worktrees/<name>` layout so old sessions still group.
+    let repository_root = repository_root
+        .as_deref()
+        .and_then(linked_worktree_main_root)
+        .or(repository_root)
+        .or_else(|| claude_worktree_parent(&normalized));
+
     let display_path = repository_root.as_deref().unwrap_or(raw_path);
     display_path
         .file_name()
@@ -293,6 +303,45 @@ pub fn canonical_project_label(value: &str) -> Option<String> {
         .map(str::to_string)
         .or_else(|| value.rsplit(['/', '\\']).next().map(str::to_string))
         .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("."))
+}
+
+/// If `root/.git` is a file of a linked worktree (`gitdir: <repo>/.git/worktrees/<name>`),
+/// return the main repository's working directory.
+fn linked_worktree_main_root(root: &Path) -> Option<PathBuf> {
+    let git_path = root.join(".git");
+    if !fs::metadata(&git_path).ok()?.is_file() {
+        return None;
+    }
+    let contents = fs::read_to_string(&git_path).ok()?;
+    let gitdir = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:"))?
+        .trim();
+    let gitdir = root.join(gitdir);
+    // `.git/worktrees/<name>` -> `.git`
+    let common_dir = gitdir.parent().filter(|parent| {
+        parent.file_name().and_then(|name| name.to_str()) == Some("worktrees")
+    })?;
+    let git_dir = common_dir.parent()?;
+    if git_dir.file_name().and_then(|name| name.to_str()) != Some(".git") {
+        return None;
+    }
+    git_dir.parent().map(Path::to_path_buf)
+}
+
+/// `<repo>/.claude/worktrees/<name>[/...]` -> `<repo>`, purely from the path.
+fn claude_worktree_parent(path: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = path.components().collect();
+    let index = components.windows(3).position(|window| {
+        let name = |component: &std::path::Component<'_>| {
+            component.as_os_str().to_string_lossy().to_ascii_lowercase()
+        };
+        name(&window[0]) == ".claude" && name(&window[1]) == "worktrees"
+    })?;
+    if index == 0 {
+        return None;
+    }
+    Some(components[..index].iter().collect())
 }
 
 pub fn project_label(value: Option<&Value>) -> String {
@@ -1785,6 +1834,60 @@ mod tests {
         assert_eq!(
             canonical_project_label("2026-09-23-18-01-11"),
             Some("2026-09-23-18-01-11".into())
+        );
+    }
+
+    #[test]
+    fn linked_worktree_resolves_to_main_repository_name() {
+        let directory = tempdir().unwrap();
+        let main = directory.path().join("MainRepo");
+        let worktree = main.join(".claude").join("worktrees").join("auto-name-1a2b3c");
+        let admin = main.join(".git").join("worktrees").join("auto-name-1a2b3c");
+        fs::create_dir_all(&admin).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", admin.to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            canonical_project_label(&worktree.to_string_lossy()),
+            Some("MainRepo".into())
+        );
+        assert_eq!(
+            canonical_project_label(&worktree.join("src").to_string_lossy()),
+            Some("MainRepo".into())
+        );
+    }
+
+    #[test]
+    fn deleted_worktree_still_groups_under_its_repository() {
+        let directory = tempdir().unwrap();
+        let main = directory.path().join("MainRepo");
+        fs::create_dir_all(main.join(".git")).unwrap();
+        // The worktree directory itself no longer exists.
+        let gone = main.join(".claude").join("worktrees").join("old-name-9f8e7d");
+
+        assert_eq!(
+            canonical_project_label(&gone.to_string_lossy()),
+            Some("MainRepo".into())
+        );
+    }
+
+    #[test]
+    fn worktree_path_groups_by_layout_when_repository_is_gone() {
+        let directory = tempdir().unwrap();
+        let gone = directory
+            .path()
+            .join("LostRepo")
+            .join(".claude")
+            .join("worktrees")
+            .join("old-name-9f8e7d");
+
+        assert_eq!(
+            canonical_project_label(&gone.to_string_lossy()),
+            Some("LostRepo".into())
         );
     }
 

@@ -47,6 +47,16 @@ pub trait Backend {
     fn move_mouse(&mut self, x: i32, y: i32) -> anyhow::Result<()>;
     fn click(&mut self, x: i32, y: i32, button: MouseButton, count: u32) -> anyhow::Result<()>;
     fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> anyhow::Result<()>;
+    /// Hold the left button and move through every point in order, then release
+    /// once. Implementations must release the button even if a step fails.
+    /// The default degrades to one `drag` per segment (button released between
+    /// segments), so real backends override it.
+    fn drag_path(&mut self, points: &[(i32, i32)]) -> anyhow::Result<()> {
+        for pair in points.windows(2) {
+            self.drag(pair[0], pair[1])?;
+        }
+        Ok(())
+    }
     fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> anyhow::Result<()>;
     fn type_text(&mut self, text: &str) -> anyhow::Result<()>;
     /// `keys` are normalized names (see [`normalize_key`]); modifiers first.
@@ -192,6 +202,26 @@ pub fn tool_definitions() -> Value {
                     "to_x": { "type": "number" }, "to_y": { "type": "number" }
                 },
                 "required": ["from_x", "from_y", "to_x", "to_y"]
+            }
+        },
+        {
+            "name": "drag_path",
+            "description": "按住左键依次经过多个点后松开，用于一笔画出曲线、圆、签名等。points 为 2~200 个截图坐标点，点越密线条越平滑。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "points": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 200,
+                        "items": {
+                            "type": "object",
+                            "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
+                            "required": ["x", "y"]
+                        }
+                    }
+                },
+                "required": ["points"]
             }
         },
         {

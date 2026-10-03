@@ -420,6 +420,7 @@ fn registry_string_value_result(
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub fn delete_current_user_key(subkey: &str) -> anyhow::Result<()> {
     let subkey = wide_null(subkey);
     unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(subkey.as_ptr())) }

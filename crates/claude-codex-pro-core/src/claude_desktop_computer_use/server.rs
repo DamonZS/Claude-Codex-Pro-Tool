@@ -10,10 +10,12 @@ const ACTION_TOOLS: &[&str] = &[
     "click",
     "move_mouse",
     "drag",
+    "drag_path",
     "scroll",
     "type_text",
     "press_keys",
 ];
+const MAX_DRAG_PATH_POINTS: usize = 200;
 
 /// Decides whether tools may run, and handles the emergency stop.
 pub trait Gate {
@@ -85,6 +87,11 @@ impl<B: Backend, G: Gate> ComputerUseServer<B, G> {
 
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
     }
 
     /// Handle one JSON-RPC line. Returns `None` for notifications.
@@ -174,14 +181,17 @@ impl<B: Backend, G: Gate> ComputerUseServer<B, G> {
             return Err("已急停：检测到鼠标位于屏幕左上角，Computer Use 已关闭。请在 Claude Codex Pro 中重新开启。".into());
         }
         let screen = self.backend.screen_size().map_err(err)?;
-        let point = |x_key: &str, y_key: &str| -> Result<(i32, i32), String> {
-            let (x, y) = to_screen_point(screen, number(args, x_key)?, number(args, y_key)?)?;
+        let convert = |x: f64, y: f64| -> Result<(i32, i32), String> {
+            let (x, y) = to_screen_point(screen, x, y)?;
             // The corner is reserved for the user's emergency stop; letting the
             // agent park the cursor there would trip it on the next call.
             if x < FAILSAFE_SIZE && y < FAILSAFE_SIZE {
                 return Err("屏幕左上角为急停保留区域，不能作为操作坐标。".into());
             }
             Ok((x, y))
+        };
+        let point = |x_key: &str, y_key: &str| -> Result<(i32, i32), String> {
+            convert(number(args, x_key)?, number(args, y_key)?)
         };
         let done = |message: String| Ok(json!([{ "type": "text", "text": message }]));
         match name {
@@ -207,6 +217,26 @@ impl<B: Backend, G: Gate> ComputerUseServer<B, G> {
                 let to = point("to_x", "to_y")?;
                 self.backend.drag(from, to).map_err(err)?;
                 done("已拖拽。".into())
+            }
+            "drag_path" => {
+                let raw = args
+                    .get("points")
+                    .and_then(Value::as_array)
+                    .ok_or("points 必须是数组")?;
+                if raw.len() < 2 || raw.len() > MAX_DRAG_PATH_POINTS {
+                    return Err(format!(
+                        "points 需要 2~{MAX_DRAG_PATH_POINTS} 个点，收到 {} 个",
+                        raw.len()
+                    ));
+                }
+                // Validate every point before touching the mouse so a bad point
+                // never leaves a half-drawn stroke.
+                let mut points = Vec::with_capacity(raw.len());
+                for item in raw {
+                    points.push(convert(number(item, "x")?, number(item, "y")?)?);
+                }
+                self.backend.drag_path(&points).map_err(err)?;
+                done(format!("已沿路径拖拽，共 {} 个点。", points.len()))
             }
             "scroll" => {
                 let (x, y) = point("x", "y")?;
