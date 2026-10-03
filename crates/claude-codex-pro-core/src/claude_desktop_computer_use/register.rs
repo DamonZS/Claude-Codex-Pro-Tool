@@ -1,5 +1,5 @@
 use crate::plugin_hub::{
-    backup_claude_desktop_config, claude_desktop_normal_config_paths,
+    backup_claude_desktop_config, claude_desktop_mcp_config_paths,
     read_existing_json_object_or_empty, remove_claude_desktop_mcp_server,
     upsert_claude_desktop_mcp_server,
 };
@@ -106,7 +106,7 @@ pub fn computer_use_status() -> anyhow::Result<ComputerUseStatus> {
     let executable = std::env::current_exe()?;
     Ok(computer_use_status_for_paths(
         enabled,
-        &claude_desktop_normal_config_paths(),
+        &claude_desktop_mcp_config_paths(),
         &executable,
     ))
 }
@@ -116,7 +116,7 @@ pub fn set_computer_use_enabled(enabled: bool) -> anyhow::Result<ComputerUseStat
     if enabled && !super::platform::SUPPORTED {
         anyhow::bail!("当前平台不支持 Computer Use（仅支持 Windows 与 macOS）");
     }
-    let paths = claude_desktop_normal_config_paths();
+    let paths = claude_desktop_mcp_config_paths();
     let executable = std::env::current_exe()?;
     if enabled {
         register_computer_use_at(&paths, &executable, true)?;

@@ -11,6 +11,8 @@
 - [ ] 任务阶段与百分比同规格 10；重新打开页面恢复活动任务轮询；取消进入 cancelled。
 - [ ] 完成后候选自动批准；画像/任务记忆写入记忆库；Skill 保存写入所选 Agent 根目录、目录已存在不覆盖、SKILL.md 含 `aitracker-origin: distilled`。
 - [ ] 删除选中候选可用（≤100）。
+- [ ] 项目口径（规格 4）：`cargo test -p claude-codex-pro-data --lib local_usage` 通过，覆盖存活 worktree、已删除 worktree、仓库也不存在三种情况都归并到主仓库名。
+- [ ] 标题口径（规格 4）：实机打开蒸馏工作台，「按会话」每行标题是真实会话标题而不是重复的项目名，「按项目」只出现项目文件夹名（无 `xxx-29f861` 这类 worktree 随机名）。此项需用户实机确认。
 
 ## 必需证据
 - `npm --prefix apps/claude-codex-pro-manager run check`、`run vite:build` 输出。

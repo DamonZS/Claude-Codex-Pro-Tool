@@ -8,6 +8,7 @@ use std::rc::Rc;
 struct FakeBackend {
     cursor: (i32, i32),
     actions: Vec<String>,
+    fail_drag_path: bool,
 }
 
 impl Backend for FakeBackend {
@@ -37,6 +38,13 @@ impl Backend for FakeBackend {
     }
     fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> anyhow::Result<()> {
         self.actions.push(format!("drag {from:?} {to:?}"));
+        Ok(())
+    }
+    fn drag_path(&mut self, points: &[(i32, i32)]) -> anyhow::Result<()> {
+        if self.fail_drag_path {
+            anyhow::bail!("模拟拖拽失败");
+        }
+        self.actions.push(format!("path {points:?}"));
         Ok(())
     }
     fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> anyhow::Result<()> {
@@ -138,6 +146,7 @@ fn tools_list_has_all_tools_with_schemas() {
         "click",
         "move_mouse",
         "drag",
+        "drag_path",
         "scroll",
         "type_text",
         "press_keys",
@@ -302,4 +311,115 @@ fn register_refuses_unparseable_config() {
     let exe = dir.path().join("ccp.exe");
     assert!(register_computer_use_at(&[config.clone()], &exe, false).is_err());
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "{ not json");
+}
+
+fn points(list: &[(f64, f64)]) -> Value {
+    Value::Array(list.iter().map(|(x, y)| json!({ "x": x, "y": y })).collect())
+}
+
+#[test]
+fn drag_path_sends_all_points_in_order_scaled_to_screen() {
+    let mut h = harness(true, (500, 500));
+    // 2560x1600 screen -> 1280x800 screenshot, so coordinates double.
+    let result = call(
+        &mut h,
+        "drag_path",
+        json!({ "points": points(&[(100.0, 100.0), (110.0, 120.0), (130.0, 150.0)]) }),
+    );
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        h.server.backend().actions,
+        vec!["path [(200, 200), (220, 240), (260, 300)]".to_string()]
+    );
+}
+
+#[test]
+fn drag_path_rejects_bad_input_without_touching_the_mouse() {
+    let mut h = harness(true, (500, 500));
+    let too_many: Vec<(f64, f64)> = (0..201).map(|i| (10.0 + i as f64 % 100.0, 50.0)).collect();
+    let cases = [
+        json!({ "points": points(&[(100.0, 100.0)]) }),
+        json!({ "points": points(&too_many) }),
+        // Last point is outside the 1280x800 screenshot.
+        json!({ "points": points(&[(100.0, 100.0), (5000.0, 100.0)]) }),
+        // Second point lands in the emergency-stop corner.
+        json!({ "points": points(&[(100.0, 100.0), (0.0, 0.0)]) }),
+        json!({ "points": "nope" }),
+        json!({}),
+    ];
+    for arguments in cases {
+        let result = call(&mut h, "drag_path", arguments.clone());
+        assert_eq!(result["isError"], true, "should reject {arguments}");
+    }
+    assert!(h.server.backend().actions.is_empty());
+}
+
+#[test]
+fn drag_path_is_blocked_by_failsafe_corner() {
+    let mut h = harness(true, (1, 2));
+    let result = call(
+        &mut h,
+        "drag_path",
+        json!({ "points": points(&[(100.0, 100.0), (120.0, 120.0)]) }),
+    );
+    assert_eq!(result["isError"], true);
+    assert_eq!(h.gate.0.borrow().1, 1);
+    assert!(h.server.backend().actions.is_empty());
+}
+
+#[test]
+fn drag_path_backend_failure_is_returned_as_tool_error() {
+    let mut h = harness(true, (500, 500));
+    h.server.backend_mut().fail_drag_path = true;
+    let result = call(
+        &mut h,
+        "drag_path",
+        json!({ "points": points(&[(100.0, 100.0), (120.0, 120.0)]) }),
+    );
+    assert_eq!(result["isError"], true);
+    assert!(result["content"][0]["text"].as_str().unwrap().contains("模拟拖拽失败"));
+}
+
+#[test]
+fn default_drag_path_falls_back_to_segment_drags() {
+    // A backend that doesn't override drag_path still draws every segment.
+    let mut backend = FakeBackend::default();
+    Backend::drag_path(&mut DefaultOnly(&mut backend), &[(1, 1), (2, 2), (3, 3)]).unwrap();
+    assert_eq!(
+        backend.actions,
+        vec!["drag (1, 1) (2, 2)".to_string(), "drag (2, 2) (3, 3)".to_string()]
+    );
+}
+
+/// Wraps a backend but keeps the trait's default `drag_path`.
+struct DefaultOnly<'a>(&'a mut FakeBackend);
+
+impl Backend for DefaultOnly<'_> {
+    fn screen_size(&self) -> anyhow::Result<ScreenSize> {
+        self.0.screen_size()
+    }
+    fn capture(&self) -> anyhow::Result<Screen> {
+        self.0.capture()
+    }
+    fn cursor_position(&self) -> anyhow::Result<(i32, i32)> {
+        self.0.cursor_position()
+    }
+    fn move_mouse(&mut self, x: i32, y: i32) -> anyhow::Result<()> {
+        self.0.move_mouse(x, y)
+    }
+    fn click(&mut self, x: i32, y: i32, b: MouseButton, c: u32) -> anyhow::Result<()> {
+        self.0.click(x, y, b, c)
+    }
+    fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> anyhow::Result<()> {
+        self.0.drag(from, to)
+    }
+    fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> anyhow::Result<()> {
+        self.0.scroll(x, y, dx, dy)
+    }
+    fn type_text(&mut self, text: &str) -> anyhow::Result<()> {
+        self.0.type_text(text)
+    }
+    fn press_keys(&mut self, keys: &[String]) -> anyhow::Result<()> {
+        self.0.press_keys(keys)
+    }
 }

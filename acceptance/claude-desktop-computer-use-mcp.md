@@ -8,7 +8,9 @@
 
 1. `cargo test -p claude-codex-pro-core claude_desktop_computer_use` 全部通过，覆盖：
    - `initialize` 返回 `protocolVersion`、`serverInfo`、`capabilities.tools`。
-   - `tools/list` 包含规格列出的 9 个工具，且每个都有 `inputSchema`。
+   - `tools/list` 包含规格列出的 10 个工具（含 `drag_path`），且每个都有 `inputSchema`。
+   - `drag_path`：点数少于 2、超过 200、含越界点、含急停保留区点时返回工具错误且假后端未收到任何动作；合法输入时假后端按顺序收到全部点；后端中途失败时错误被原样返回。
+   - 动作类工具在急停区命中时同样拒绝 `drag_path`。
    - 未知方法返回 `-32601`；非法 JSON 返回 `-32700`；通知不产生回复。
    - 总开关关闭时 `tools/call` 返回 `isError: true` 且假后端未收到任何动作。
    - 急停区域命中时返回错误并调用关闭开关。
@@ -19,6 +21,12 @@
 3. `cargo build --release` 成功；`npm --prefix apps/claude-codex-pro-manager run check` 与 `vite:build` 通过。
 4. Windows 实机冒烟：用管道启动 `claude-codex-pro.exe --mcp-computer-use`，发送 `initialize`、`tools/list`、`tools/call screenshot`，能收到合法 JSON 回复与 base64 JPEG；设置关闭时 `screenshot` 返回错误。
 5. `cargo test -p claude-codex-pro-manager --test windows_subsystem` 通过（单 exe 与子系统契约不被破坏）。
+6. 3p 配置注册：`cargo test -p claude-codex-pro-core computer_use_config_paths` 通过，覆盖：
+   - 3p 配置文件存在时，其路径被追加到 Computer Use 的配置路径列表。
+   - 3p 配置文件不存在时，不追加（不会为其创建目录或文件）。
+   - 与常规路径重复时不重复追加。
+   - 对含 `deploymentMode`、`extraKnownMarketplaces` 等字段的 3p 配置注册后，这些字段原样保留，仅新增 `mcpServers.claude-codex-pro-computer-use`；移除后该条目消失、其余字段仍在。
+7. 实机确认（需用户执行）：开启开关后 `Roaming\Claude-3p\claude_desktop_config.json` 出现 `claude-codex-pro-computer-use`，完全退出并重启 Claude Desktop 后，Code 会话能列出并调用 `screenshot` 工具。若配置已写入仍看不到工具，则根因不在注册路径，需另查。
 
 ## 验证方式与证据
 

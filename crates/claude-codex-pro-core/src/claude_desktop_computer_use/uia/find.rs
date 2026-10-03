@@ -1,80 +1,88 @@
-//! Element finding and waiting operations.
+//! Element finding and filtering logic.
 
-use super::types::{FindParams, UiElement};
+use super::types::*;
 
-/// Find elements in a pre-built UI tree (in-memory search).
-pub fn find_in_tree(tree: &UiElement, params: &FindParams, limit: usize) -> Vec<UiElement> {
+/// Search for elements in a UI tree that match the given parameters.
+pub fn find_in_tree(root: &UiElement, params: &FindParams, max_results: usize) -> Vec<UiElement> {
     let mut results = Vec::new();
-    find_in_tree_recursive(tree, params, &mut results, limit);
+    find_recursive(root, params, &mut results, max_results);
     results
 }
 
-fn find_in_tree_recursive(
+fn find_recursive(
     element: &UiElement,
     params: &FindParams,
     results: &mut Vec<UiElement>,
-    limit: usize,
+    max_results: usize,
 ) {
-    if results.len() >= limit {
+    if results.len() >= max_results {
         return;
     }
 
     // Check if this element matches
-    if element_matches_params(element, params) {
+    if element_matches(element, params) {
         results.push(element.clone());
-        if results.len() >= limit {
+        if results.len() >= max_results {
             return;
         }
     }
 
-    // Recursively check children
+    // Search children
     for child in &element.children {
-        find_in_tree_recursive(child, params, results, limit);
-        if results.len() >= limit {
+        find_recursive(child, params, results, max_results);
+        if results.len() >= max_results {
             return;
         }
     }
 }
 
-fn element_matches_params(element: &UiElement, params: &FindParams) -> bool {
-    // Check element type filter
+fn element_matches(element: &UiElement, params: &FindParams) -> bool {
+    // Filter by element type
     if let Some(wanted_type) = params.element_type {
         if element.element_type != wanted_type {
             return false;
         }
     }
 
-    // Check query string (matches name or automation ID)
+    // Filter by query (case-insensitive substring match on label or automation_id)
     if let Some(query) = &params.query {
         let query_lower = query.to_lowercase();
-        let mut matched = false;
+        let label_match = element.label.to_lowercase().contains(&query_lower);
+        let aid_match = element
+            .automation_id
+            .as_ref()
+            .map(|aid| aid.to_lowercase().contains(&query_lower))
+            .unwrap_or(false);
 
-        // Try label
-        if element.label.to_lowercase().contains(&query_lower) {
-            matched = true;
-        }
-
-        // Try automation ID
-        if !matched {
-            if let Some(auto_id) = &element.automation_id {
-                if auto_id.to_lowercase().contains(&query_lower) {
-                    matched = true;
-                }
-            }
-        }
-
-        if !matched {
+        if !label_match && !aid_match {
             return false;
         }
     }
 
-    // Check interactive_only filter
+    // Filter interactive-only elements
     if params.interactive_only {
-        if !element.enabled || !element.is_keyboard_focusable {
+        // An element is interactive if it has actions or is a known interactive type
+        let is_interactive = !element.actions.is_empty()
+            || matches!(
+                element.element_type,
+                ElementType::Button
+                    | ElementType::CheckBox
+                    | ElementType::RadioButton
+                    | ElementType::ComboBox
+                    | ElementType::Edit
+                    | ElementType::ListBox
+                    | ElementType::ListItem
+                    | ElementType::MenuItem
+                    | ElementType::TabItem
+                    | ElementType::Link
+                    | ElementType::Slider
+                    | ElementType::Spinner
+            );
+
+        if !is_interactive {
             return false;
         }
     }
 
     true
 }
-

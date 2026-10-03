@@ -66,6 +66,7 @@ mod notepad_tests {
     }
 
     #[test]
+    #[ignore] // 依赖外部窗口状态，手动验证
     fn test_find_notepad_edit() {
         let Some(hwnd) = launch_notepad() else {
             eprintln!("Failed to launch notepad, skipping test");
@@ -112,6 +113,7 @@ mod notepad_tests {
     }
 
     #[test]
+    #[ignore] // 依赖外部窗口状态，手动验证
     fn test_notepad_performance() {
         let Some(hwnd) = launch_notepad() else {
             eprintln!("Failed to launch notepad, skipping test");

@@ -7,7 +7,7 @@ Claude Desktop 没有内置 Computer Use（截图 + 键鼠操作）能力，Code
 ## 目标
 
 - CCP 主程序新增 `--mcp-computer-use` 运行模式，作为 stdio MCP 服务（JSON-RPC 2.0，按行分隔）。
-- 提供工具：`screenshot`、`click`、`move_mouse`、`drag`、`scroll`、`type_text`、`press_keys`、`cursor_position`、`wait`。
+- 提供工具：`screenshot`、`click`、`move_mouse`、`drag`、`drag_path`、`scroll`、`type_text`、`press_keys`、`cursor_position`、`wait`。
 - 支持 Windows（SendInput + GDI 截图）与 macOS（CoreGraphics CGEvent + CGDisplay 截图）。
 - 管理器「工具与插件」页提供开关：开启时写入 Claude Desktop `mcpServers.claude-codex-pro-computer-use`，关闭时移除。
 - 安全：总开关 + 急停 + 诊断日志。
@@ -27,10 +27,15 @@ Claude Desktop 没有内置 Computer Use（截图 + 键鼠操作）能力，Code
 - 急停：任何动作类工具执行前，若真实鼠标位于主屏左上角 4×4 像素区域内，立即把设置写为 `false`、拒绝本次与后续调用，需用户回 CCP 重新开启。
 - 截图：主显示器，缩放到不超过 1280×800（保持比例，不放大），JPEG 质量 80，以 MCP `image` 内容返回，并附带文本说明截图尺寸。所有坐标参数均为截图坐标系，服务内部按比例换算为真实屏幕坐标。
 - 坐标越界（超出截图尺寸）返回工具错误，不执行动作。
+- `drag_path`：按住左键依次经过 2~200 个路径点（截图坐标）后松开，用于一笔画曲线、圆、签名等；每个点都按 `drag` 同样规则换算并拒绝越界与急停保留区坐标。任何一步失败都必须先松开左键再返回错误，不得留下按下状态。
+- `drag` 同样保证：移动过程中出错时先发出左键松开再返回错误。
+- 动作类工具列表追加 `drag_path`（执行前做急停检查）。
 - `type_text` 支持任意 Unicode 文本；`press_keys` 接受组合键数组，如 `["ctrl","c"]`、`["enter"]`。
 - `wait` 秒数限制在 0~10。
 - 诊断日志记录工具名、坐标、按键名、结果；不记录 `type_text` 的文本内容，只记录长度。
-- 注册：写入 Claude Desktop 所有常规配置路径（复用 `claude_desktop_normal_config_paths`），写前备份、写后校验；`command` 为当前 CCP 可执行文件绝对路径，`args` 为 `["--mcp-computer-use"]`。
+- 注册：写入 Claude Desktop 所有常规配置路径（复用 `claude_desktop_normal_config_paths`），以及 3p（开发模式）配置 `Claude-3p/claude_desktop_config.json`，写前备份、写后校验；`command` 为当前 CCP 可执行文件绝对路径，`args` 为 `["--mcp-computer-use"]`。
+- 3p 配置仅在该文件已存在时才纳入注册与移除，避免给未使用 3p 模式的用户凭空创建 `Claude-3p` 目录；路径来源复用 `claude_desktop_threep_paths`（含 MSIX `Packages\Claude_*` 下的副本）。
+- 其他使用 `claude_desktop_normal_config_paths` 的功能（插件、MCP 条目等）行为不变，本条只影响 Computer Use 的注册、移除与状态查询。
 - 状态查询：返回是否开启、各配置路径是否已注册、当前平台是否支持。
 - 未知方法返回 JSON-RPC `-32601`；解析失败返回 `-32700`；通知（无 id）不回复。
 

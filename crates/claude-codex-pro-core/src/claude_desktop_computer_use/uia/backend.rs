@@ -31,8 +31,8 @@ use windows::Win32::System::Variant::VariantToInt32Array;
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationElement,
-    TreeScope, TreeScope_Subtree, UIA_AutomationIdPropertyId, UIA_ControlTypePropertyId,
-    UIA_NamePropertyId, UIA_RuntimeIdPropertyId, UIA_PROPERTY_ID,
+    TreeScope, TreeScope_Subtree, UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
+    UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_RuntimeIdPropertyId, UIA_PROPERTY_ID,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::{
@@ -40,7 +40,8 @@ use windows::Win32::UI::HiDpi::{
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible,
 };
 
 use super::types::*;
@@ -60,6 +61,7 @@ const CACHED_PROPERTIES: &[UIA_PROPERTY_ID] = &[
     UIA_ControlTypePropertyId,
     UIA_AutomationIdPropertyId,
     UIA_RuntimeIdPropertyId,
+    UIA_BoundingRectanglePropertyId,
 ];
 
 // ── COM initialization ────────────────────────────────────────────────────────
@@ -287,7 +289,8 @@ impl WindowsUiaBackend {
                         title,
                         exe_name,
                         rect: Rect::default(),
-                        visible: true,
+                        // 已最小化的窗口其元素矩形约为 (-32000, -32000)，不能用于点击/绘制。
+                        visible: !IsIconic(hwnd).as_bool(),
                         is_foreground,
                     });
                 }
@@ -366,6 +369,18 @@ impl WindowsUiaBackend {
                 .CachedIsEnabled()
                 .map(|b| b.as_bool())
                 .unwrap_or(true);
+
+            // 只读缓存：BoundingRectangle 已在 CACHED_PROPERTIES 中随树一次取回，
+            // 不再逐节点跨进程调用 Current*。最小化窗口的矩形约为 (-32000, -32000)，
+            // 由调用方在取树前排除最小化窗口。
+            if let Ok(rect_struct) = element.CachedBoundingRectangle() {
+                node.rect = Rect {
+                    x: rect_struct.left,
+                    y: rect_struct.top,
+                    width: rect_struct.right - rect_struct.left,
+                    height: rect_struct.bottom - rect_struct.top,
+                };
+            }
 
             node
         }

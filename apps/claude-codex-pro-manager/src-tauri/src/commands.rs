@@ -8252,11 +8252,46 @@ fn empty_distillation_workbench() -> DistillationWorkbenchPayload {
     }
 }
 
+/// Real session titles keyed by `agent:private-session-id`, the same key the
+/// usage snapshot uses. Usage events carry no title, so without this every
+/// session in the workbench is labelled with its project name.
+fn distillation_session_titles() -> BTreeMap<String, String> {
+    let mut titles = BTreeMap::new();
+    let mut insert = |agent: &str, raw_id: &str, title: &str| {
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+        if let Some(private_id) = claude_codex_pro_data::local_usage::session_id_from_structured(
+            agent,
+            Some(&Value::String(raw_id.to_string())),
+        ) {
+            titles
+                .entry(format!("{agent}:{private_id}"))
+                .or_insert_with(|| title.to_string());
+        }
+    };
+    if let Ok(inventory) = claude_codex_pro_core::claude_sessions::list_claude_sessions() {
+        for session in &inventory.sessions {
+            insert("claude-code", &session.id, &session.title);
+        }
+    }
+    for db_path in session_candidate_db_paths(None) {
+        if let Ok(sessions) = local_session_adapter(&db_path).list_local_sessions() {
+            for session in &sessions {
+                insert("codex", &session.id, &session.title);
+            }
+        }
+    }
+    titles
+}
+
 #[tauri::command]
 pub async fn load_distillation_workbench() -> CommandResult<DistillationWorkbenchPayload> {
     tauri::async_runtime::spawn_blocking(|| {
         let (_, _, usage) = collect_unified_usage_snapshot();
         let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+        let session_titles = distillation_session_titles();
         let settings = SettingsStore::default().load().unwrap_or_default();
         let mut session_rows = snapshot.sessions.iter().collect::<Vec<_>>();
         session_rows.sort_by(|left, right| right.ended_at.cmp(&left.ended_at));
@@ -8266,7 +8301,10 @@ pub async fn load_distillation_workbench() -> CommandResult<DistillationWorkbenc
             .map(|session| DistillationWorkbenchSession {
                 agent: session.agent.clone(),
                 session_id: session.session_id.clone(),
-                title: session.project.clone(),
+                title: session_titles
+                    .get(&format!("{}:{}", session.agent, session.session_id))
+                    .cloned()
+                    .unwrap_or_else(|| session.project.clone()),
                 project: session.project.clone(),
                 project_key: session.project.clone(),
                 is_git_project: session.project != "unknown",

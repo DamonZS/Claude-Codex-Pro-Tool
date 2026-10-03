@@ -20,6 +20,7 @@ use windows::Win32::UI::Accessibility::{
 };
 
 use super::backend::WindowsUiaBackend;
+use super::keyboard::{clear_text_field, send_unicode_text, KeyboardTiming};
 
 impl WindowsUiaBackend {
     /// Click an element using InvokePattern
@@ -41,26 +42,41 @@ impl WindowsUiaBackend {
         }
     }
 
-    /// Set text using ValuePattern
+    /// Set text using ValuePattern, with keyboard fallback
     pub fn set_text(&self, element_id: &str, text: &str) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
             let element = self.lookup(element_id)?;
-            unsafe {
-                let pattern: IUIAutomationValuePattern = element
-                    .GetCurrentPatternAs(UIA_ValuePatternId)
-                    .context("Element does not support Value pattern")?;
 
-                let readonly = pattern
-                    .CurrentIsReadOnly()
-                    .context("Failed to check readonly status")?;
-                if readonly.as_bool() {
-                    return Err(anyhow!("Element is read-only"));
+            // Try ValuePattern first
+            let pattern_result: windows::core::Result<IUIAutomationValuePattern> =
+                unsafe { element.GetCurrentPatternAs(UIA_ValuePatternId) };
+
+            if let Ok(pattern) = pattern_result {
+                unsafe {
+                    let readonly = pattern
+                        .CurrentIsReadOnly()
+                        .context("Failed to check readonly status")?;
+                    if !readonly.as_bool() {
+                        let bstr = BSTR::from(text);
+                        if pattern.SetValue(&bstr).is_ok() {
+                            return Ok(());
+                        }
+                    }
                 }
-
-                let bstr = BSTR::from(text);
-                pattern.SetValue(&bstr).context("Failed to set text")?;
             }
+
+            // Fallback to keyboard input
+            unsafe {
+                element.SetFocus().context("Failed to focus element for keyboard input")?;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            let timing = KeyboardTiming::default();
+            clear_text_field(&timing).context("Failed to clear text field")?;
+            send_unicode_text(text, &timing).context("Failed to send text via keyboard")?;
+
             Ok(())
         }
         #[cfg(not(target_os = "windows"))]
@@ -202,13 +218,21 @@ mod tests {
     #[ignore]
     fn test_click_element() {
         // Launch notepad
-        let child = std::process::Command::new("notepad.exe")
+        let _child = std::process::Command::new("notepad.exe")
             .spawn()
             .expect("Failed to launch notepad");
-        let hwnd_usize = child.id() as usize;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
 
         let backend = WindowsUiaBackend::new().unwrap();
+
+        // Find notepad window
+        let windows = backend.list_windows().expect("Failed to list windows");
+        let notepad_window = windows
+            .into_iter()
+            .find(|w| w.title.contains("Notepad") || w.title.contains("记事本"))
+            .expect("Failed to find Notepad window");
+
+        let hwnd_usize = notepad_window.hwnd;
         let tree = backend.get_tree(hwnd_usize).unwrap();
 
         // Find File menu (usually first MenuItem)
@@ -221,7 +245,7 @@ mod tests {
 
         // Cleanup
         let _ = std::process::Command::new("taskkill")
-            .args(&["/PID", &child.id().to_string(), "/F"])
+            .args(&["/IM", "notepad.exe", "/F"])
             .output();
 
         assert!(result.is_ok(), "Click failed: {:?}", result.err());
@@ -230,13 +254,21 @@ mod tests {
     #[test]
     #[ignore]
     fn test_set_text() {
-        let child = std::process::Command::new("notepad.exe")
+        let _child = std::process::Command::new("notepad.exe")
             .spawn()
             .expect("Failed to launch notepad");
-        let hwnd_usize = child.id() as usize;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
 
         let backend = WindowsUiaBackend::new().unwrap();
+
+        // Find notepad window
+        let windows = backend.list_windows().expect("Failed to list windows");
+        let notepad_window = windows
+            .into_iter()
+            .find(|w| w.title.contains("Notepad") || w.title.contains("记事本"))
+            .expect("Failed to find Notepad window");
+
+        let hwnd_usize = notepad_window.hwnd;
         let tree = backend.get_tree(hwnd_usize).unwrap();
 
         let edit = tree.children.iter()
@@ -256,7 +288,7 @@ mod tests {
 
         // Cleanup
         let _ = std::process::Command::new("taskkill")
-            .args(&["/PID", &child.id().to_string(), "/F"])
+            .args(&["/IM", "notepad.exe", "/F"])
             .output();
 
         assert!(

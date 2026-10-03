@@ -124,6 +124,26 @@ fn mouse_event(kind: u32, at: CGPoint, button: u32, clicks: i64) -> anyhow::Resu
     post(event)
 }
 
+/// Press the left button at `path[0]`, drag through the rest, release once.
+/// The button is always released, even when a move fails.
+fn hold_and_move(path: &[(i32, i32)], step_delay: Duration) -> anyhow::Result<()> {
+    ensure_trusted()?;
+    let Some(&(start_x, start_y)) = path.first() else {
+        return Ok(());
+    };
+    let start = point(start_x, start_y);
+    unsafe { CGWarpMouseCursorPosition(start) };
+    mouse_event(EV_LEFT_DOWN, start, 0, 1)?;
+    let moved = path[1..].iter().try_for_each(|&(x, y)| {
+        mouse_event(EV_LEFT_DRAGGED, point(x, y), 0, 0)?;
+        std::thread::sleep(step_delay);
+        anyhow::Ok(())
+    });
+    let (end_x, end_y) = path.last().copied().unwrap_or((start_x, start_y));
+    let released = mouse_event(EV_LEFT_UP, point(end_x, end_y), 0, 1);
+    moved.and(released)
+}
+
 fn key_event(code: u16, down: bool, flags: u64) -> anyhow::Result<()> {
     let event = unsafe { CGEventCreateKeyboardEvent(std::ptr::null_mut(), code, down) };
     if !event.is_null() {
@@ -253,18 +273,20 @@ impl Backend for NativeBackend {
     }
 
     fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> anyhow::Result<()> {
-        ensure_trusted()?;
-        let start = point(from.0, from.1);
-        unsafe { CGWarpMouseCursorPosition(start) };
-        mouse_event(EV_LEFT_DOWN, start, 0, 1)?;
         let steps = 20;
-        for step in 1..=steps {
-            let x = from.0 + (to.0 - from.0) * step / steps;
-            let y = from.1 + (to.1 - from.1) * step / steps;
-            mouse_event(EV_LEFT_DRAGGED, point(x, y), 0, 0)?;
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        mouse_event(EV_LEFT_UP, point(to.0, to.1), 0, 1)
+        let path: Vec<(i32, i32)> = std::iter::once(from)
+            .chain((1..=steps).map(|step| {
+                (
+                    from.0 + (to.0 - from.0) * step / steps,
+                    from.1 + (to.1 - from.1) * step / steps,
+                )
+            }))
+            .collect();
+        hold_and_move(&path, Duration::from_millis(10))
+    }
+
+    fn drag_path(&mut self, points: &[(i32, i32)]) -> anyhow::Result<()> {
+        hold_and_move(points, Duration::from_millis(8))
     }
 
     fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> anyhow::Result<()> {

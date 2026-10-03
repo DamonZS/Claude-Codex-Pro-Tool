@@ -80,6 +80,25 @@ fn set_cursor(x: i32, y: i32) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Press the left button at `path[0]`, move through the rest, release once.
+/// The button is always released, even when a move fails, so a failed drag
+/// can never leave the user's mouse held down.
+fn hold_and_move(path: &[(i32, i32)], step_delay: Duration) -> anyhow::Result<()> {
+    let Some(&(start_x, start_y)) = path.first() else {
+        return Ok(());
+    };
+    set_cursor(start_x, start_y)?;
+    std::thread::sleep(Duration::from_millis(30));
+    send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
+    let moved = path[1..].iter().try_for_each(|&(x, y)| {
+        set_cursor(x, y)?;
+        std::thread::sleep(step_delay);
+        anyhow::Ok(())
+    });
+    let released = send(&[mouse(MOUSEEVENTF_LEFTUP, 0)]);
+    moved.and(released)
+}
+
 fn button_flags(button: MouseButton) -> (MOUSE_EVENT_FLAGS, MOUSE_EVENT_FLAGS) {
     match button {
         MouseButton::Left => (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
@@ -213,17 +232,20 @@ impl Backend for NativeBackend {
     }
 
     fn drag(&mut self, from: (i32, i32), to: (i32, i32)) -> anyhow::Result<()> {
-        set_cursor(from.0, from.1)?;
-        std::thread::sleep(Duration::from_millis(30));
-        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
         let steps = 20;
-        for step in 1..=steps {
-            let x = from.0 + (to.0 - from.0) * step / steps;
-            let y = from.1 + (to.1 - from.1) * step / steps;
-            set_cursor(x, y)?;
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        send(&[mouse(MOUSEEVENTF_LEFTUP, 0)])
+        let path: Vec<(i32, i32)> = std::iter::once(from)
+            .chain((1..=steps).map(|step| {
+                (
+                    from.0 + (to.0 - from.0) * step / steps,
+                    from.1 + (to.1 - from.1) * step / steps,
+                )
+            }))
+            .collect();
+        hold_and_move(&path, Duration::from_millis(10))
+    }
+
+    fn drag_path(&mut self, points: &[(i32, i32)]) -> anyhow::Result<()> {
+        hold_and_move(points, Duration::from_millis(8))
     }
 
     fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> anyhow::Result<()> {
