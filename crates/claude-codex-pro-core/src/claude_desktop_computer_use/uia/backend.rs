@@ -36,6 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::types::*;
 use super::find;
 use super::actions;
+use super::windows as win_mgmt;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -223,14 +224,18 @@ impl WindowsUiaBackend {
                     }
                     let title = String::from_utf16_lossy(&buf[..copied as usize]);
 
+                    let pid = win_mgmt::get_window_pid(hwnd);
+                    let exe_name = win_mgmt::get_exe_name_from_pid(pid);
+                    let is_foreground = win_mgmt::is_foreground_window(hwnd);
+
                     result.push(WindowInfo {
-                        pid: 0, // TODO: Get PID
+                        pid,
                         hwnd: hwnd.0 as usize,
                         title,
-                        exe_name: String::new(), // TODO: Get exe name
+                        exe_name,
                         rect: Rect::default(),
                         visible: true,
-                        is_foreground: false,
+                        is_foreground,
                     });
                 }
             }
@@ -426,6 +431,19 @@ impl WindowsUiaBackend {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = element_id;
+            Err(anyhow!("Windows UIA backend is only available on Windows"))
+        }
+    }
+
+    pub fn focus_window(&self, hwnd: usize) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd = HWND(hwnd as *mut _);
+            unsafe { win_mgmt::focus_window(hwnd) }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = hwnd;
             Err(anyhow!("Windows UIA backend is only available on Windows"))
         }
     }
