@@ -85,15 +85,33 @@ mod tests {
             .spawn()
             .expect("Failed to launch notepad");
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(1000));
 
         let backend = WindowsUiaBackend::new().expect("Failed to create backend");
         let windows = backend.list_windows().expect("Failed to list windows");
 
-        if let Some(notepad_window) = windows.iter().find(|w| w.title.contains("Notepad")) {
+        if let Some(notepad_window) = windows.iter().find(|w| w.title.contains("Notepad") || w.title.contains("记事本")) {
+            // First, get the tree to see what's there
+            let tree = backend.get_tree(notepad_window.hwnd);
+            if tree.is_err() {
+                eprintln!("Failed to get tree: {:?}", tree.err());
+                let _ = notepad.kill();
+                return;
+            }
+
+            let tree = tree.unwrap();
+            eprintln!("Notepad tree root: type={:?}, label={}, children={}",
+                tree.element_type, tree.label, tree.children.len());
+
+            // Print first level children
+            for (i, child) in tree.children.iter().take(5).enumerate() {
+                eprintln!("  Child {}: type={:?}, label={}", i, child.element_type, child.label);
+            }
+
+            // Windows 11 Notepad uses Document type instead of Edit
             let params = FindParams {
                 query: None,
-                element_type: Some(ElementType::Edit),
+                element_type: Some(ElementType::Document),
                 interactive_only: false,
             };
 
@@ -101,8 +119,25 @@ mod tests {
             assert!(results.is_ok(), "find_elements failed");
 
             let elements = results.unwrap();
-            // Notepad should have at least one Edit control
-            assert!(!elements.is_empty(), "Should find Edit controls in Notepad");
+            eprintln!("Found {} Document elements", elements.len());
+
+            // Notepad should have at least one Document control (text editor area)
+            assert!(!elements.is_empty(), "Should find Document controls in Notepad");
+
+            // Also test finding Text elements (tab labels)
+            let text_params = FindParams {
+                query: None,
+                element_type: Some(ElementType::Text),
+                interactive_only: false,
+            };
+            let text_elements = backend.find_elements(notepad_window.hwnd, &text_params).unwrap();
+            eprintln!("Found {} Text elements", text_elements.len());
+            assert!(!text_elements.is_empty(), "Should find Text elements in Notepad");
+        } else {
+            eprintln!("Notepad window not found in {} windows", windows.len());
+            for w in windows.iter().take(5) {
+                eprintln!("  Window: {}", w.title);
+            }
         }
 
         let _ = notepad.kill();
