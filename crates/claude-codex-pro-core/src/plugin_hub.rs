@@ -2943,7 +2943,10 @@ mod computer_use_config_paths_tests {
     fn computer_use_config_paths_appends_existing_threep_config() {
         let dir = tempfile::tempdir().unwrap();
         let normal = dir.path().join("Claude").join("claude_desktop_config.json");
-        let threep = dir.path().join("Claude-3p").join("claude_desktop_config.json");
+        let threep = dir
+            .path()
+            .join("Claude-3p")
+            .join("claude_desktop_config.json");
         std::fs::create_dir_all(threep.parent().unwrap()).unwrap();
         std::fs::write(&threep, "{}").unwrap();
 
@@ -2956,7 +2959,10 @@ mod computer_use_config_paths_tests {
     fn computer_use_config_paths_skips_missing_threep_config() {
         let dir = tempfile::tempdir().unwrap();
         let normal = dir.path().join("Claude").join("claude_desktop_config.json");
-        let missing = dir.path().join("Claude-3p").join("claude_desktop_config.json");
+        let missing = dir
+            .path()
+            .join("Claude-3p")
+            .join("claude_desktop_config.json");
 
         let merged = merge_existing_config_paths(vec![normal.clone()], vec![missing.clone()]);
 
@@ -3665,10 +3671,7 @@ fn write_claude_desktop_dev_mode_profile_with_proxy_port(
         crate::protocol_proxy::local_claude_desktop_proxy_base_url(proxy_port)
     };
 
-    root.insert(
-        "inferenceGatewayBaseUrl".to_string(),
-        json!(gateway_url),
-    );
+    root.insert("inferenceGatewayBaseUrl".to_string(), json!(gateway_url));
     root.insert("inferenceProvider".to_string(), json!("gateway"));
     root.insert(
         "inferenceModels".to_string(),

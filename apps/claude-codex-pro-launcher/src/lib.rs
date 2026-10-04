@@ -1,14 +1,12 @@
 use anyhow::{Context, Result};
 use claude_codex_pro_core::codex_execution::{
-    CodexPageExecutionClient, CodexPageHostTransport, codex_page_execution_service,
+    CodexPageHostTransport, codex_page_execution_service,
 };
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
-use claude_codex_pro_core::routes::{
-    BridgeContext, BridgeDataService, BridgeRuntimeService, CoreRuntimeService,
-};
+use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
 use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
@@ -703,40 +701,26 @@ impl LauncherDataService {
 struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
     websocket_url: Arc<Mutex<Option<String>>>,
-    codex_execution: Arc<CodexPageExecutionClient>,
     codex_page_host: CodexPageHostTransport,
-    multica_runtime: CoreRuntimeService,
-    webhook_store: Mutex<claude_codex_pro_core::multica_webhooks::MulticaWebhookStore>,
     user_scripts: UserScriptManager,
 }
 
 impl LauncherRuntimeService {
     fn new(debug_port: u16, user_scripts: UserScriptManager) -> Self {
         let websocket_url = Arc::new(Mutex::new(None));
-        let (codex_execution, codex_page_host) =
+        let (_codex_execution, codex_page_host) =
             codex_page_execution_service(Arc::clone(&websocket_url))
                 .expect("static Codex page host binding must be valid");
-        let multica_runtime = CoreRuntimeService::new(debug_port, StatusStore::default())
-            .with_codex_execution_service(codex_execution.clone())
-            .with_codex_page_transport(Arc::new(codex_page_host.clone()));
         Self {
             debug_port: Mutex::new(debug_port),
             websocket_url,
-            codex_execution,
             codex_page_host,
-            multica_runtime,
-            webhook_store: Mutex::new(Default::default()),
             user_scripts,
         }
     }
 
     fn set_debug_port(&self, debug_port: u16) {
         *self.debug_port.lock().unwrap() = debug_port;
-    }
-
-    fn set_helper_port(&self, helper_port: u16) {
-        let mut store = self.webhook_store.lock().unwrap();
-        *store = store.clone().with_helper_port(helper_port);
     }
 
     fn set_websocket_url(&self, websocket_url: &str) {
@@ -746,86 +730,6 @@ impl LauncherRuntimeService {
 
 #[async_trait::async_trait]
 impl BridgeRuntimeService for LauncherRuntimeService {
-    async fn multica_builder(
-        &self,
-        request: claude_codex_pro_core::multica_builder::BuilderRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime.multica_builder(request).await
-    }
-
-    async fn multica_native_domain(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaNativeDomainRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime.multica_native_domain(request).await
-    }
-
-    async fn multica_workspace_reorder_statuses(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaStatusReorderRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime
-            .multica_workspace_reorder_statuses(request)
-            .await
-    }
-
-    async fn multica_agent_create(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaAgentCreateRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime.multica_agent_create(request).await
-    }
-
-    async fn multica_skill_bindings_replace(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaSkillBindingsReplaceAllRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime
-            .multica_skill_bindings_replace(request)
-            .await
-    }
-
-    async fn multica_native_execution_intent(
-        &self,
-        request: claude_codex_pro_core::routes::NativeExecutionIntentRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime
-            .multica_native_execution_intent(request)
-            .await
-    }
-
-    async fn multica_execution_dispatch(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionDispatchRequest,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime
-            .multica_execution_dispatch(request)
-            .await
-    }
-
-    async fn dispatch_pending_assignment(
-        &self,
-        binding_id: &str,
-        expected_revision: u64,
-        lease_token: &str,
-    ) -> anyhow::Result<Value> {
-        self.multica_runtime
-            .dispatch_pending_assignment(binding_id, expected_revision, lease_token)
-            .await
-    }
-
-    async fn multica_webhooks(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaWebhookRequest,
-    ) -> anyhow::Result<Value> {
-        let store = self.webhook_store.lock().unwrap().clone();
-        self.multica_runtime
-            .clone()
-            .with_multica_webhook_store(store)
-            .multica_webhooks(request)
-            .await
-    }
-
     async fn user_script_inventory(&self) -> anyhow::Result<Value> {
         self.user_scripts.inventory()
     }
@@ -957,250 +861,6 @@ impl BridgeRuntimeService for LauncherRuntimeService {
             &payload,
         ))
     }
-
-    async fn multica_workspace_bootstrap(&self) -> anyhow::Result<Value> {
-        // The local task board must remain usable while the current Codex
-        // renderer is reloading or its page-host API is unavailable.  The
-        // bootstrap already contains the read-only SQLite projection, so
-        // fall back to it instead of turning a transient Host outage into a
-        // disconnected/blank workspace.
-        match claude_codex_pro_core::multica_workspace::workspace_bootstrap_with_codex_runtime(
-            self.codex_execution.clone(),
-        )
-        .await
-        {
-            Ok(snapshot) => Ok(serde_json::to_value(snapshot)?),
-            Err(error) => {
-                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-                    "multica.workspace_bootstrap_host_fallback",
-                    json!({ "error": error.to_string() }),
-                );
-                Ok(serde_json::to_value(
-                    claude_codex_pro_core::multica_workspace::workspace_bootstrap().await?,
-                )?)
-            }
-        }
-    }
-
-    async fn multica_workspace_query(
-        &self,
-        query: claude_codex_pro_core::multica_workspace::MulticaWorkspaceQuery,
-    ) -> anyhow::Result<Value> {
-        Ok(serde_json::to_value(
-            claude_codex_pro_core::multica_workspace::workspace_query_with_codex_runtime(
-                query,
-                self.codex_execution.clone(),
-            )
-            .await?,
-        )?)
-    }
-
-    async fn multica_workspace_upsert(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaWorkspaceUpsertRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_workspace_upsert(&self.multica_runtime, request).await
-    }
-
-    async fn multica_workspace_move_issue(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaWorkspaceMoveIssueRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_workspace_move_issue(&self.multica_runtime, request).await
-    }
-
-    async fn multica_workspace_delete(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaWorkspaceDeleteRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_workspace_delete(&self.multica_runtime, request).await
-    }
-
-    async fn multica_workspace_command(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaWorkspaceCommandRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_workspace_command(&self.multica_runtime, request).await
-    }
-
-    async fn multica_skill_resolve(
-        &self,
-        selection: claude_codex_pro_core::multica_execution::SkillBindingSelection,
-    ) -> anyhow::Result<Value> {
-        claude_codex_pro_core::multica_workspace::resolve_skill_bindings_with_codex_runtime(
-            selection,
-            self.codex_execution.clone(),
-        )
-        .await
-    }
-
-    async fn multica_skill_bind(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaSkillBindingRequest,
-    ) -> anyhow::Result<Value> {
-        claude_codex_pro_core::multica_workspace::upsert_skill_binding_with_codex_runtime(
-            claude_codex_pro_core::multica_workspace::MulticaSkillBindingCommand {
-                scope_kind: request.scope_kind,
-                scope_id: request.scope_id,
-                skill_ref: request.skill_ref,
-                enabled: request.enabled,
-                expected_revision: request.expected_revision,
-            },
-            self.codex_execution.clone(),
-        )
-        .await
-    }
-
-    async fn multica_skill_review(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaSkillReviewRequest,
-    ) -> anyhow::Result<Value> {
-        claude_codex_pro_core::multica_skill_trust::review_local_skill(
-            &request.id,
-            request.trusted,
-            request.manifest_digest.as_deref(),
-        )
-    }
-
-    async fn multica_skill_unbind(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaSkillBindingRemoveRequest,
-    ) -> anyhow::Result<Value> {
-        claude_codex_pro_core::multica_workspace::remove_skill_binding(
-            claude_codex_pro_core::multica_workspace::MulticaSkillBindingRemoveCommand {
-                scope_kind: request.scope_kind,
-                scope_id: request.scope_id,
-                skill_id: request.skill_id,
-                expected_revision: request.expected_revision,
-            },
-        )
-        .await
-    }
-
-    async fn multica_skill_bindings(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaSkillBindingsQueryRequest,
-    ) -> anyhow::Result<Value> {
-        claude_codex_pro_core::multica_workspace::list_skill_bindings(
-            claude_codex_pro_core::multica_workspace::MulticaSkillBindingsQuery {
-                scope_kind: request.scope_kind,
-                scope_id: request.scope_id,
-            },
-        )
-        .await
-    }
-
-    async fn multica_execution_create(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionCreateRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_create(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_open(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionBindingRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_open(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_continue(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionContinueRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_continue(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_cancel(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionCancelRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_cancel(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_status(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionBindingRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_status(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_list(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionListRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_list(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_lease_claim(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionLeaseClaimRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_lease_claim(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_lease_renew(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionLeaseRenewRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_lease_renew(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_lease_release(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionLeaseReleaseRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_lease_release(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_message_append(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionMessageAppendRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_message_append(&self.multica_runtime, request).await
-    }
-
-    async fn multica_execution_message_list(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaExecutionMessageListRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_execution_message_list(&self.multica_runtime, request).await
-    }
-
-    async fn multica_task_queue_transition(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaTaskQueueTransitionRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_task_queue_transition(&self.multica_runtime, request).await
-    }
-
-    async fn multica_autopilot_runs(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaAutopilotRunsRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_autopilot_runs(&self.multica_runtime, request).await
-    }
-    async fn multica_autopilot_run(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaAutopilotRunRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_autopilot_run(&self.multica_runtime, request).await
-    }
-    async fn multica_autopilot_trigger(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaAutopilotTriggerRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_autopilot_trigger(&self.multica_runtime, request).await
-    }
-    async fn multica_autopilot_transition(
-        &self,
-        request: claude_codex_pro_core::routes::MulticaAutopilotTransitionRequest,
-    ) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_autopilot_transition(&self.multica_runtime, request).await
-    }
-    async fn multica_autopilot_tick(&self) -> anyhow::Result<Value> {
-        BridgeRuntimeService::multica_autopilot_tick(&self.multica_runtime).await
-    }
 }
 
 fn log_codex_theme_injection_skipped(stage: &'static str) {
@@ -1301,7 +961,6 @@ async fn try_inject_with_context(
     ctx: BridgeContext,
     runtime: Arc<LauncherRuntimeService>,
 ) -> anyhow::Result<()> {
-    runtime.set_helper_port(helper_port);
     let targets = claude_codex_pro_core::cdp::list_targets(debug_port).await?;
     let target = claude_codex_pro_core::cdp::pick_injectable_codex_page_target(&targets)?;
     let websocket_url = target
@@ -1410,77 +1069,6 @@ fn default_user_scripts_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn launcher_webhook_dto_tracks_selected_port_and_reinjection() {
-        use claude_codex_pro_core::multica_webhooks::MulticaWebhookStore;
-        use claude_codex_pro_core::multica_workspace::{
-            LocalMulticaWorkspaceStore, MulticaWorkspaceResourceKey,
-        };
-        use claude_codex_pro_core::routes::MulticaWebhookRequest;
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "ccp-launcher-webhook-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&dir).unwrap();
-        let workspace = LocalMulticaWorkspaceStore::new(dir.join("workspace.json"));
-        let mut runtime = LauncherRuntimeService::new(
-            0,
-            UserScriptManager::new(
-                dir.join("builtin"),
-                dir.join("user"),
-                dir.join("scripts.json"),
-            ),
-        );
-        runtime.multica_runtime = runtime
-            .multica_runtime
-            .with_multica_workspace_store(workspace);
-        runtime.webhook_store = Mutex::new(MulticaWebhookStore::new(dir.join("webhooks.json")));
-        runtime.multica_workspace_upsert(claude_codex_pro_core::routes::MulticaWorkspaceUpsertRequest {
-            resource: MulticaWorkspaceResourceKey::Autopilots,
-            entity: json!({"id":"pilot","title":"Webhook","triggers":[{"id":"hook","kind":"webhook","enabled":true}]}),
-            expected_revision: Some(0), command_id: None, command_signature: None,
-            suppress_run: false, handoff_note: None,
-        }).await.unwrap();
-        runtime.set_helper_port(43129);
-        let provision = runtime
-            .multica_webhooks(MulticaWebhookRequest::Provision {
-                autopilot_id: "pilot".into(),
-                trigger_id: "hook".into(),
-                command_id: "provision".into(),
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            provision["webhook_url"],
-            "http://127.0.0.1:43129/multica/webhooks/ingress/pilot/hook"
-        );
-        let token = provision["webhook_token"].as_str().unwrap();
-        runtime.set_helper_port(43130);
-        let read = runtime
-            .multica_webhooks(MulticaWebhookRequest::Trigger {
-                autopilot_id: "pilot".into(),
-                trigger_id: "hook".into(),
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            read["webhook_url"],
-            "http://127.0.0.1:43130/multica/webhooks/ingress/pilot/hook"
-        );
-        assert!(read["webhook_token"].is_null());
-        assert!(!read.to_string().contains(token));
-        assert!(
-            !std::fs::read_to_string(dir.join("webhooks.json"))
-                .unwrap()
-                .contains(token)
-        );
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
 
     #[test]
     fn parse_launch_options_accepts_manager_forwarded_ports_and_app_path() {

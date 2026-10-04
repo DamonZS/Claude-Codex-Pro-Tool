@@ -30,15 +30,6 @@ pub mod launcher;
 pub mod leila_deploy;
 pub mod model_catalog;
 pub mod models;
-pub mod multica;
-pub mod multica_builder;
-pub mod multica_execution;
-pub mod multica_execution_store;
-#[cfg(windows)]
-mod multica_managed_job;
-pub mod multica_skill_trust;
-pub mod multica_webhooks;
-pub mod multica_workspace;
 pub mod paths;
 pub mod plugin_hub;
 pub mod ports;

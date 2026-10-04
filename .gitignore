@@ -30,8 +30,7 @@ fix_*.py
 # Local codebase-memory runtime lock; the graph database itself is managed outside Git.
 .codegraph/codegraph.lock
 
-# Read-only upstream audit checkout. The tracked source manifest and license
-# snapshots identify the reviewed revision; this full clone is never shipped.
+# Local-only reference checkout kept by the maintainer; never tracked or shipped.
 /.upstream-multica/
 
 *.log

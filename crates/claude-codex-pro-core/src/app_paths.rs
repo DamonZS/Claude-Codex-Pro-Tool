@@ -174,7 +174,7 @@ pub fn find_standalone_codex_app_dir() -> Option<PathBuf> {
 ///
 /// The Windows standalone app keeps versioned runtime payloads below
 /// `%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe` instead of exposing
-/// the CLI on PATH. Multica must use this binary rather than an unrelated npm
+/// the CLI on PATH. Callers must use this binary rather than an unrelated npm
 /// shim that happens to be named `codex`.
 pub fn find_codex_desktop_cli() -> Option<PathBuf> {
     #[cfg(windows)]

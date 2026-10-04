@@ -6,15 +6,6 @@ Unicode true
 !endif
 !define ROOT "..\..\.."
 
-!if /FileExists "${ROOT}\dist\windows\app\resources\third-party\multica\LICENSE"
-!else
-  !error "Stage the complete Multica LICENSE before packaging"
-!endif
-!if /FileExists "${ROOT}\dist\windows\app\resources\third-party\multica\NOTICE"
-!else
-  !error "Stage the complete Multica NOTICE before packaging"
-!endif
-
 Name "Claude Codex Pro"
 OutFile "${ROOT}\dist\windows\claude-codex-pro-${VERSION}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Claude Codex Pro"

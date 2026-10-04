@@ -16,8 +16,6 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
-use crate::multica_execution::{CodexSkillExecutionRequest, SkillReference};
-
 const MAX_ID_LENGTH: usize = 240;
 const MAX_PROMPT_LENGTH: usize = 32 * 1024;
 const MAX_SKILLS: usize = 256;
@@ -160,17 +158,6 @@ struct NativeCodexSkill {
     path: String,
 }
 
-/// A Skill item accepted by Codex's native `turn/start` input protocol. The
-/// wire type is always `skill`; callers provide only the validated metadata
-/// returned by `skills/list`, never an arbitrary path from the renderer.
-fn native_skill_input(skill: &NativeCodexSkill) -> Value {
-    json!({
-        "type": "skill",
-        "name": skill.skill.name,
-        "path": skill.path,
-    })
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexThreadRequest {
@@ -182,11 +169,6 @@ pub struct CodexThreadRequest {
     pub prompt: String,
     #[serde(default)]
     pub cwd: Option<String>,
-    /// Resolved, digest-pinned Skills selected for this native execution.
-    /// The request carries references only; Skill contents and local paths
-    /// never cross the page-host boundary.
-    #[serde(default)]
-    pub skill_request: Option<CodexSkillExecutionRequest>,
 }
 
 impl CodexThreadRequest {
@@ -198,9 +180,6 @@ impl CodexThreadRequest {
         validate_text(&self.prompt, MAX_PROMPT_LENGTH, "prompt")?;
         if let Some(cwd) = self.cwd.as_deref() {
             validate_path(cwd)?;
-        }
-        if let Some(skill_request) = self.skill_request.as_ref() {
-            validate_skill_execution_request(skill_request)?;
         }
         Ok(())
     }
@@ -406,10 +385,6 @@ pub fn codex_page_execution_service(
 pub trait CodexExecutionService: Send + Sync {
     async fn capabilities(&self) -> anyhow::Result<CodexRuntimeCapabilities>;
     async fn list_skills(&self) -> anyhow::Result<Vec<CodexSkill>>;
-    async fn resolve_skills(
-        &self,
-        request: CodexSkillExecutionRequest,
-    ) -> anyhow::Result<CodexSkillExecutionRequest>;
     async fn create_thread(
         &self,
         request: CodexThreadRequest,
@@ -445,16 +420,6 @@ pub trait CodexExecutionService: Send + Sync {
         thread_id: &str,
         execution_id: &str,
     ) -> anyhow::Result<CodexExecutionStatus>;
-    /// Read the Skill inputs persisted by Codex for one turn. The returned
-    /// references are stable IDs/digests only; native filesystem paths never
-    /// leave the Core adapter.
-    async fn execution_loaded_skills(
-        &self,
-        _thread_id: &str,
-        _execution_id: &str,
-    ) -> anyhow::Result<Vec<SkillReference>> {
-        bail!("unsupported");
-    }
     async fn subscribe_events(
         &self,
         _cursor: Option<&str>,
@@ -739,39 +704,6 @@ impl CodexPageExecutionClient {
         Ok(())
     }
 
-    async fn resolve_request_skills_at(
-        &self,
-        generation: u64,
-        request: &CodexThreadRequest,
-    ) -> anyhow::Result<Vec<NativeCodexSkill>> {
-        let Some(skill_request) = request.skill_request.clone() else {
-            return Ok(Vec::new());
-        };
-        // Resolve against the live Codex inventory immediately before the
-        // native create/turn call. This prevents a stale renderer snapshot or
-        // a changed manifest from authorizing execution.
-        self.resolve_native_skills_at(generation, skill_request, request.cwd.as_deref())
-            .await
-    }
-
-    async fn resolve_native_skills_at(
-        &self,
-        generation: u64,
-        request: CodexSkillExecutionRequest,
-        cwd: Option<&str>,
-    ) -> anyhow::Result<Vec<NativeCodexSkill>> {
-        validate_skill_execution_request(&request)?;
-        if let Some(cwd) = cwd {
-            validate_path(cwd)?;
-        }
-        let capabilities = self.capabilities_for_generation(generation).await?;
-        if capabilities.skill_protocol.as_deref() != Some(request.protocol.as_str()) {
-            bail!("runtime_skills_unsupported");
-        }
-        let inventory = self.fetch_native_skills_at(generation, cwd, true).await?;
-        resolve_native_skill_refs(&inventory, &request)
-    }
-
     async fn fetch_native_skills_at(
         &self,
         generation: u64,
@@ -798,13 +730,12 @@ impl CodexPageExecutionClient {
         thread_id: &str,
         request: &CodexThreadRequest,
         idempotency_key: &str,
-        native_skills: &[NativeCodexSkill],
     ) -> anyhow::Result<String> {
         let response = self
             .request_host_at(
                 generation,
                 CodexPageHostMethod::TurnStart,
-                turn_start_params(thread_id, request, idempotency_key, native_skills),
+                turn_start_params(thread_id, request, idempotency_key),
             )
             .await?;
         extract_execution_id(&response)
@@ -832,17 +763,6 @@ impl CodexExecutionService for CodexPageExecutionClient {
             .collect())
     }
 
-    async fn resolve_skills(
-        &self,
-        request: CodexSkillExecutionRequest,
-    ) -> anyhow::Result<CodexSkillExecutionRequest> {
-        let generation = self.sync_generation()?;
-        let _ = self
-            .resolve_native_skills_at(generation, request.clone(), None)
-            .await?;
-        Ok(request)
-    }
-
     async fn create_thread(
         &self,
         request: CodexThreadRequest,
@@ -854,7 +774,6 @@ impl CodexExecutionService for CodexPageExecutionClient {
         if let Some(existing) = self.idempotent("create", idempotency_key)? {
             return Ok(existing);
         }
-        let native_skills = self.resolve_request_skills_at(generation, &request).await?;
         self.ensure_native_task_host_at(generation).await?;
         let thread_id =
             if let Some(partial) = self.partial_thread("create", idempotency_key, generation)? {
@@ -884,13 +803,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
                 thread_id
             };
         let execution_id = self
-            .start_turn_at(
-                generation,
-                &thread_id,
-                &request,
-                idempotency_key,
-                &native_skills,
-            )
+            .start_turn_at(generation, &thread_id, &request, idempotency_key)
             .await?;
         self.ensure_generation(generation)?;
         let handle = CodexExecutionHandle {
@@ -918,7 +831,6 @@ impl CodexExecutionService for CodexPageExecutionClient {
             return Ok(existing);
         }
         self.ensure_subagent_capability_at(generation).await?;
-        let native_skills = self.resolve_request_skills_at(generation, &request).await?;
         // The current Codex page exposes fork as the stable
         // parent/child primitive.  We only use it after the runtime explicitly
         // advertises `subagent-v1`; otherwise this method returns `unsupported`
@@ -954,13 +866,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
                 thread_id
             };
         let execution_id = self
-            .start_turn_at(
-                generation,
-                &thread_id,
-                &request,
-                idempotency_key,
-                &native_skills,
-            )
+            .start_turn_at(generation, &thread_id, &request, idempotency_key)
             .await?;
         self.ensure_generation(generation)?;
         let handle = CodexExecutionHandle {
@@ -1085,10 +991,6 @@ impl CodexExecutionService for CodexPageExecutionClient {
         {
             return Ok(existing);
         }
-        let native_skills = self
-            .resolve_request_skills_at(generation, &request)
-            .await
-            .map_err(CodexContinueNotSent)?;
         self.ensure_native_task_host_at(generation)
             .await
             .map_err(CodexContinueNotSent)?;
@@ -1096,7 +998,7 @@ impl CodexExecutionService for CodexPageExecutionClient {
             .request_host_at(
                 generation,
                 CodexPageHostMethod::TurnStart,
-                turn_start_params(thread_id, &request, idempotency_key, &native_skills),
+                turn_start_params(thread_id, &request, idempotency_key),
             )
             .await?;
         let execution_id = extract_execution_id(&response)?;
@@ -1485,45 +1387,17 @@ fn turn_start_params(
     thread_id: &str,
     request: &CodexThreadRequest,
     idempotency_key: &str,
-    native_skills: &[NativeCodexSkill],
 ) -> Value {
-    let mut input = vec![json!({
+    let input = vec![json!({
         "type": "text",
         "text": request.prompt,
         "text_elements": [],
     })];
-    input.extend(native_skills.iter().map(native_skill_input));
     json!({
         "threadId": thread_id,
         "clientUserMessageId": uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, format!("ccp:turn:{thread_id}:{idempotency_key}").as_bytes()).to_string(),
         "input": input,
     })
-}
-
-fn resolve_native_skill_refs(
-    inventory: &[NativeCodexSkill],
-    request: &CodexSkillExecutionRequest,
-) -> anyhow::Result<Vec<NativeCodexSkill>> {
-    let mut resolved = Vec::with_capacity(request.skill_refs.len());
-    for reference in &request.skill_refs {
-        let Some(skill) = inventory
-            .iter()
-            .find(|skill| skill.skill.id == reference.id)
-        else {
-            bail!("skill_unknown");
-        };
-        let Some(expected) = reference.manifest_digest.as_deref() else {
-            // A resolved Skill reference must carry the immutable manifest
-            // pin; an inventory entry without a matching digest cannot be
-            // used to authorize a native dispatch.
-            bail!("skill_manifest_conflict");
-        };
-        if skill.skill.manifest_digest.as_deref() != Some(expected) {
-            bail!("skill_manifest_conflict");
-        }
-        resolved.push(skill.clone());
-    }
-    Ok(resolved)
 }
 
 fn extract_thread_id(response: &Value) -> anyhow::Result<String> {
@@ -1545,26 +1419,6 @@ fn extract_execution_id(response: &Value) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("codex_execution_response_invalid"))?;
     validate_id(id, "execution_id")?;
     Ok(id.to_string())
-}
-
-fn validate_skill_execution_request(request: &CodexSkillExecutionRequest) -> anyhow::Result<()> {
-    if !matches!(
-        request.protocol.as_str(),
-        "agent-skill-v1" | "skill-bundles-v1" | "codex-user-input-skill"
-    ) {
-        bail!("runtime_skills_unsupported");
-    }
-    validate_digest(&request.manifest_digest)?;
-    if request.skill_refs.len() > MAX_SKILLS {
-        bail!("skill_refs_too_large");
-    }
-    for reference in &request.skill_refs {
-        validate_id(&reference.id, "skill_id")?;
-        if let Some(digest) = reference.manifest_digest.as_deref() {
-            validate_digest(digest)?;
-        }
-    }
-    Ok(())
 }
 
 fn parse_execution_state(value: &str) -> CodexExecutionState {
@@ -1692,7 +1546,6 @@ mod tests {
             issue_id: Some("issue-1".to_string()),
             prompt: prompt.to_string(),
             cwd: None,
-            skill_request: None,
         }
     }
 
@@ -1770,9 +1623,9 @@ mod tests {
     fn native_wire_omits_custom_source_and_uses_stable_uuid_message_id() {
         let request = request("hello");
         assert_eq!(thread_start_params(&request), json!({}));
-        let first = turn_start_params("thread-a", &request, "issue:assignment:one", &[]);
-        let replay = turn_start_params("thread-a", &request, "issue:assignment:one", &[]);
-        let next = turn_start_params("thread-a", &request, "issue:assignment:two", &[]);
+        let first = turn_start_params("thread-a", &request, "issue:assignment:one");
+        let replay = turn_start_params("thread-a", &request, "issue:assignment:one");
+        let next = turn_start_params("thread-a", &request, "issue:assignment:two");
         assert_eq!(first, replay);
         assert_ne!(first["clientUserMessageId"], next["clientUserMessageId"]);
         assert!(uuid::Uuid::parse_str(first["clientUserMessageId"].as_str().unwrap()).is_ok());
@@ -1968,87 +1821,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_thread_and_turn_include_digest_pinned_skill_request() {
-        let transport = FakeCodexPageHostTransport::default();
-        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let skills = json!({
-            "data": [{"skills": [{
-                "id": "codex:review-helper",
-                "name": "review-helper",
-                "path": "C:/codex/skills/review-helper/SKILL.md",
-                "enabled": true,
-                "manifestDigest": digest
-            }]}]
-        });
-        // The adapter revalidates the live inventory immediately before both
-        // create and continue, so each native operation gets its own read.
-        transport.push_response(CodexPageHostMethod::SkillsList, Ok(skills.clone()));
-        transport.push_response(CodexPageHostMethod::SkillsList, Ok(skills));
-        let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
-        let skill_request = CodexSkillExecutionRequest {
-            protocol: "skill-bundles-v1".to_string(),
-            skill_refs: vec![SkillReference {
-                id: "codex:review-helper".to_string(),
-                manifest_digest: Some(digest.to_string()),
-            }],
-            manifest_digest: digest.to_string(),
-        };
-        let mut first = request("first");
-        first.cwd = Some("C:/workspace".to_string());
-        first.skill_request = Some(skill_request.clone());
-        let created = client.create_thread(first, "skill-create").await.unwrap();
-        let mut next = request("next");
-        next.cwd = Some("C:/workspace".to_string());
-        next.skill_request = Some(skill_request);
-        client
-            .continue_thread(&created.thread_id, next, "skill-turn")
-            .await
-            .unwrap();
-
-        let calls = transport.calls();
-        let thread_start = calls
-            .iter()
-            .find(|call| call.method == CodexPageHostMethod::ThreadStart)
-            .expect("thread/start call");
-        let turn_start = calls
-            .iter()
-            .rev()
-            .find(|call| call.method == CodexPageHostMethod::TurnStart)
-            .expect("turn/start call");
-        assert_eq!(
-            thread_start.params,
-            json!({
-                "cwd": "C:/workspace",
-            })
-        );
-        assert_eq!(turn_start.params.as_object().unwrap().len(), 3);
-        let input = turn_start.params["input"].as_array().unwrap();
-        assert_eq!(input.len(), 2);
-        assert_eq!(
-            input[0],
-            json!({"type": "text", "text": "next", "text_elements": []})
-        );
-        assert_eq!(
-            input[1],
-            json!({
-                "type": "skill",
-                "name": "review-helper",
-                "path": "C:/codex/skills/review-helper/SKILL.md"
-            })
-        );
-        assert_eq!(input[1].as_object().unwrap().len(), 3);
-        assert!(turn_start.params.get("skills").is_none());
-        let skill_calls = calls
-            .iter()
-            .filter(|call| call.method == CodexPageHostMethod::SkillsList)
-            .collect::<Vec<_>>();
-        assert_eq!(skill_calls.len(), 2);
-        assert!(skill_calls.iter().all(|call| {
-            call.params == json!({ "cwds": ["C:/workspace"], "forceReload": true })
-        }));
-    }
-
-    #[tokio::test]
     async fn create_and_continue_are_idempotent_without_duplicate_native_calls() {
         let transport = FakeCodexPageHostTransport::default();
         let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
@@ -2195,80 +1967,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inventory_only_skills_are_read_only_and_cannot_dispatch() {
-        let transport = FakeCodexPageHostTransport::default();
-        transport.push_response(
-            CodexPageHostMethod::Initialize,
-            Ok(json!({
-                "provider": "codex",
-                "capabilities": [],
-                "pageHostProbe": { "skillsList": true }
-            })),
-        );
-        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        transport.push_response(
-            CodexPageHostMethod::SkillsList,
-            Ok(json!({"data": [{"skills": [{
-                "id": "codex:review-helper",
-                "name": "review-helper",
-                "path": "C:/codex/skills/review-helper/SKILL.md",
-                "enabled": true,
-                "manifestDigest": digest
-            }]}]})),
-        );
-        let client = CodexPageExecutionClient::new(transport.clone(), binding()).unwrap();
-
-        let capabilities = client.capabilities().await.unwrap();
-        assert!(capabilities.skills_inventory_supported);
-        assert!(!capabilities.skills_supported);
-        assert_eq!(capabilities.skill_protocol, None);
-        assert_eq!(
-            client.list_skills().await.unwrap()[0].id,
-            "codex:review-helper"
-        );
-
-        let skill_request = CodexSkillExecutionRequest {
-            protocol: "agent-skill-v1".to_string(),
-            skill_refs: vec![SkillReference {
-                id: "codex:review-helper".to_string(),
-                manifest_digest: Some(digest.to_string()),
-            }],
-            manifest_digest: digest.to_string(),
-        };
-        assert_eq!(
-            client
-                .resolve_skills(skill_request.clone())
-                .await
-                .unwrap_err()
-                .to_string(),
-            "runtime_skills_unsupported"
-        );
-        let mut thread = request("inventory-only");
-        thread.skill_request = Some(skill_request);
-        assert_eq!(
-            client
-                .create_thread(thread, "inventory-only")
-                .await
-                .unwrap_err()
-                .to_string(),
-            "runtime_skills_unsupported"
-        );
-
-        let methods = transport
-            .calls()
-            .into_iter()
-            .map(|call| call.method)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            methods,
-            vec![
-                CodexPageHostMethod::Initialize,
-                CodexPageHostMethod::SkillsList,
-            ]
-        );
-    }
-
-    #[tokio::test]
     async fn provider_mismatch_and_unadvertised_subagent_are_fail_closed() {
         let transport = FakeCodexPageHostTransport::default();
         transport.push_response(
@@ -2299,37 +1997,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skill_inventory_discards_paths_and_resolves_immutable_digest() {
+    async fn skill_inventory_discards_native_paths() {
         let transport = FakeCodexPageHostTransport::default();
-        let skills_response = json!({"data":[{"cwd":"C:/secret","skills":[{
-            "name":"review-helper",
-            "description":"review files",
-            "path":"C:/secret/SKILL.md",
-            "enabled":true,
-            "manifestDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        }]}]});
-        // `resolve_skills` intentionally re-reads the runtime inventory so a
-        // stale list cannot authorize a dispatch after the runtime changes.
-        transport.push_response(CodexPageHostMethod::SkillsList, Ok(skills_response.clone()));
-        transport.push_response(CodexPageHostMethod::SkillsList, Ok(skills_response));
+        transport.push_response(
+            CodexPageHostMethod::SkillsList,
+            Ok(json!({"data":[{"cwd":"C:/secret","skills":[{
+                "name":"review-helper",
+                "description":"review files",
+                "path":"C:/secret/SKILL.md",
+                "enabled":true,
+                "manifestDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }]}]})),
+        );
         let client = CodexPageExecutionClient::new(transport, binding()).unwrap();
         let skills = client.list_skills().await.unwrap();
         assert_eq!(skills[0].id, "codex:review-helper");
         let serialized = serde_json::to_string(&skills).unwrap();
         assert!(!serialized.contains("C:/secret"));
-        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let request = CodexSkillExecutionRequest {
-            protocol: "skill-bundles-v1".to_string(),
-            skill_refs: vec![SkillReference {
-                id: "codex:review-helper".to_string(),
-                manifest_digest: Some(digest.to_string()),
-            }],
-            manifest_digest: digest.to_string(),
-        };
-        assert_eq!(
-            client.resolve_skills(request.clone()).await.unwrap(),
-            request
-        );
     }
 
     #[test]

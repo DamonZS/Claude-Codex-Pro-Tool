@@ -3,7 +3,7 @@
 #[cfg(all(test, target_os = "windows"))]
 mod notepad_tests {
     use crate::claude_desktop_computer_use::uia::{
-        backend::WindowsUiaBackend, ElementType, FindParams,
+        ElementType, FindParams, backend::WindowsUiaBackend,
     };
     use std::process::Command;
     use std::thread;
@@ -55,14 +55,23 @@ mod notepad_tests {
         let tree = tree.expect("Failed to get UI tree");
 
         // Notepad should have a tree structure
-        assert!(!tree.children.is_empty(), "Notepad tree should have children");
+        assert!(
+            !tree.children.is_empty(),
+            "Notepad tree should have children"
+        );
 
         // Should have either Edit (old Notepad) or Document (new Notepad) control
         let has_edit = contains_type_recursive(&tree, ElementType::Edit);
         let has_document = contains_type_recursive(&tree, ElementType::Document);
-        assert!(has_edit || has_document, "Notepad should contain an Edit or Document control");
+        assert!(
+            has_edit || has_document,
+            "Notepad should contain an Edit or Document control"
+        );
 
-        println!("✓ Notepad tree contains {} top-level children", tree.children.len());
+        println!(
+            "✓ Notepad tree contains {} top-level children",
+            tree.children.len()
+        );
     }
 
     #[test]
@@ -105,10 +114,16 @@ mod notepad_tests {
         );
 
         if edit_count > 0 {
-            println!("✓ Found {} Edit control(s) in Notepad (old version)", edit_count);
+            println!(
+                "✓ Found {} Edit control(s) in Notepad (old version)",
+                edit_count
+            );
         }
         if doc_count > 0 {
-            println!("✓ Found {} Document control(s) in Notepad (new version)", doc_count);
+            println!(
+                "✓ Found {} Document control(s) in Notepad (new version)",
+                doc_count
+            );
         }
     }
 
@@ -140,11 +155,17 @@ mod notepad_tests {
         );
     }
 
-    fn contains_type_recursive(element: &crate::claude_desktop_computer_use::uia::UiElement, target_type: ElementType) -> bool {
+    fn contains_type_recursive(
+        element: &crate::claude_desktop_computer_use::uia::UiElement,
+        target_type: ElementType,
+    ) -> bool {
         if element.element_type == target_type {
             return true;
         }
 
-        element.children.iter().any(|child| contains_type_recursive(child, target_type))
+        element
+            .children
+            .iter()
+            .any(|child| contains_type_recursive(child, target_type))
     }
 }

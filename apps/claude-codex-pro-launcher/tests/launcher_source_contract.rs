@@ -9,115 +9,12 @@ fn launcher_does_not_open_manager_for_update_prompts() {
 }
 
 #[test]
-fn launcher_overrides_every_multica_runtime_contract() {
-    let contracts = include_str!("../../../crates/claude-codex-pro-core/src/routes.rs")
-        .split("pub trait BridgeRuntimeService")
-        .nth(1)
-        .unwrap()
-        .split("pub trait BridgeDataService")
-        .next()
-        .unwrap();
-    let launcher = include_str!("../src/lib.rs")
-        .split("impl BridgeRuntimeService for LauncherRuntimeService {")
-        .nth(1)
-        .unwrap()
-        .split("fn codex_theme_new_document_script")
-        .next()
-        .unwrap();
-    for declaration in contracts.split("async fn ").skip(1) {
-        let name = declaration.split('(').next().unwrap();
-        if name.starts_with("multica_") || name == "dispatch_pending_assignment" {
-            assert!(
-                launcher.contains(&format!("async fn {name}(")),
-                "missing launcher override: {name}"
-            );
-        }
-    }
-}
-
-#[test]
-fn launcher_webhooks_use_selected_injection_port_and_same_page_transport() {
-    let source = include_str!("../src/lib.rs");
-    let inject = source
-        .split("async fn try_inject_with_context(")
-        .nth(1)
-        .unwrap();
-    assert!(inject.contains("runtime.set_helper_port(helper_port);"));
-    let runtime = source
-        .split("impl LauncherRuntimeService {")
-        .nth(1)
-        .unwrap()
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap();
-    assert!(runtime.contains("store.clone().with_helper_port(helper_port)"));
-    assert!(runtime.contains(".with_codex_page_transport(Arc::new(codex_page_host.clone()))"));
-    assert!(runtime.contains("async fn multica_webhooks("));
-    assert!(runtime.contains(".with_multica_webhook_store(store)"));
-    assert!(!runtime.contains("LaunchOptions::default().helper_port"));
-}
-
-#[test]
 fn launcher_runtime_uses_default_launch_debug_port() {
     let source = include_str!("../src/lib.rs");
 
     assert!(source.contains("LaunchOptions::default().debug_port"));
     assert!(!source.contains("LauncherRuntimeService::new(\r\n                9229"));
     assert!(!source.contains("LauncherRuntimeService::new(\n                9229"));
-}
-
-#[test]
-fn launcher_keeps_multica_on_page_host_boundary_without_codex_runtime_registration() {
-    let source = include_str!("../src/lib.rs");
-
-    for forbidden in [
-        "managed_codex_execution_service",
-        "ensure_managed_runtime_async",
-        "start_managed_runtime_supervision_if_enabled",
-        "codex.exe app-server",
-        "register_runtime",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "launcher must not register or start a Codex Runtime: {forbidden}"
-        );
-    }
-
-    let skill_resolve = source
-        .split("async fn multica_skill_resolve")
-        .nth(1)
-        .and_then(|rest| rest.split("async fn multica_skill_bind").next())
-        .expect("launcher Multica skill resolution implementation");
-    assert!(skill_resolve.contains("resolve_skill_bindings_with_codex_runtime"));
-    assert!(source.contains("codex_page_execution_service"));
-    assert!(source.contains("workspace_bootstrap_with_codex_runtime"));
-    assert!(source.contains("workspace_query_with_codex_runtime"));
-    assert!(source.contains("CodexPageHostTransport"));
-    assert!(source.contains("BridgeRuntimeService::multica_workspace_upsert"));
-    assert!(source.contains("BridgeRuntimeService::multica_workspace_delete"));
-    for operation in ["create", "open", "continue", "cancel", "status", "list"] {
-        assert!(
-            source.contains(&format!(
-                "BridgeRuntimeService::multica_execution_{operation}"
-            )),
-            "launcher must expose Multica execution operation: {operation}"
-        );
-    }
-    for operation in [
-        "lease_claim",
-        "lease_renew",
-        "lease_release",
-        "message_append",
-        "message_list",
-    ] {
-        assert!(
-            source.contains(&format!(
-                "BridgeRuntimeService::multica_execution_{operation}"
-            )),
-            "launcher must expose Multica execution operation: {operation}"
-        );
-    }
-    assert!(source.contains("BridgeRuntimeService::multica_task_queue_transition"));
 }
 
 #[test]

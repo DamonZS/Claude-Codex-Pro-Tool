@@ -315,7 +315,11 @@ impl std::str::FromStr for ElementType {
         alias.ok_or_else(|| {
             anyhow::anyhow!(
                 "Unknown element type '{wanted}'. Valid types: {}",
-                Self::ALL.iter().map(|t| t.name()).collect::<Vec<_>>().join(", ")
+                Self::ALL
+                    .iter()
+                    .map(|t| t.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         })
     }
