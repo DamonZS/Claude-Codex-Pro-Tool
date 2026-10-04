@@ -1,3 +1,5 @@
+#![cfg(all(test, target_os = "windows"))]
+
 use anyhow::Result;
 use claude_codex_pro_core::claude_desktop_computer_use::uia::{
     WindowsUiaBackend, FindParams, ElementType, UiElement,

@@ -8,6 +8,7 @@ mod platform;
 mod register;
 mod server;
 mod tools;
+#[cfg(windows)]
 pub mod uia;
 
 pub use platform::NativeBackend;
