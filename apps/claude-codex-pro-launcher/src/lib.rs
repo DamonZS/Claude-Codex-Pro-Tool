@@ -1,14 +1,12 @@
 use anyhow::{Context, Result};
 use claude_codex_pro_core::codex_execution::{
-    CodexPageExecutionClient, CodexPageHostTransport, codex_page_execution_service,
+    CodexPageHostTransport, codex_page_execution_service,
 };
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
 use claude_codex_pro_core::models::{DeleteResult, ExportResult, SessionRef};
-use claude_codex_pro_core::routes::{
-    BridgeContext, BridgeDataService, BridgeRuntimeService, CoreRuntimeService,
-};
+use claude_codex_pro_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
 use claude_codex_pro_core::status::StatusStore;
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use serde_json::{Value, json};
@@ -703,7 +701,6 @@ impl LauncherDataService {
 struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
     websocket_url: Arc<Mutex<Option<String>>>,
-    codex_execution: Arc<CodexPageExecutionClient>,
     codex_page_host: CodexPageHostTransport,
     user_scripts: UserScriptManager,
 }
@@ -711,13 +708,12 @@ struct LauncherRuntimeService {
 impl LauncherRuntimeService {
     fn new(debug_port: u16, user_scripts: UserScriptManager) -> Self {
         let websocket_url = Arc::new(Mutex::new(None));
-        let (codex_execution, codex_page_host) =
+        let (_codex_execution, codex_page_host) =
             codex_page_execution_service(Arc::clone(&websocket_url))
                 .expect("static Codex page host binding must be valid");
         Self {
             debug_port: Mutex::new(debug_port),
             websocket_url,
-            codex_execution,
             codex_page_host,
             user_scripts,
         }

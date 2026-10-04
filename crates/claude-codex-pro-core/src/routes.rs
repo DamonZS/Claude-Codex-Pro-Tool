@@ -1,15 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-use crate::codex_execution::{
-    CodexExecutionHandle, CodexExecutionService, CodexExecutionStatus,
-    CodexPageHostRequestTransport, CodexThreadRequest,
-};
+use crate::codex_execution::{CodexExecutionService, CodexPageHostRequestTransport};
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -374,26 +371,6 @@ pub struct NativeExecutionIntentRequest {
     pub prompt: Option<String>,
 }
 
-fn default_manual_source() -> String {
-    "manual".into()
-}
-
-fn default_skill_binding_enabled() -> bool {
-    true
-}
-
-fn validate_skill_binding_scope(value: &str) -> anyhow::Result<()> {
-    if value.is_empty()
-        || value.len() > 240
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'@')
-        })
-    {
-        anyhow::bail!("multica_skill_binding_invalid");
-    }
-    Ok(())
-}
-
 #[derive(Default)]
 pub struct CoreSettingsService {
     store: SettingsStore,
@@ -503,13 +480,6 @@ impl CoreRuntimeService {
     ) -> Self {
         self.codex_page_transport = Some(transport);
         self
-    }
-
-    fn codex_execution_service(&self) -> anyhow::Result<Arc<dyn CodexExecutionService>> {
-        self.codex_execution
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("codex_page_host_unavailable"))
     }
 }
 
@@ -792,39 +762,6 @@ impl BridgeDataService for UnavailableDataService {
             "sort_keys": []
         }))
     }
-}
-
-fn stable_execution_error_code(error: &anyhow::Error) -> String {
-    let value = error.to_string();
-    if value.contains("function_call_output requires call_id on HTTP requests")
-        || value.contains(
-            "continuation via previous_response_id is only supported on Responses WebSocket v2",
-        )
-    {
-        return "codex_host_transport_call_id_required".to_string();
-    }
-    if !value.is_empty()
-        && value.len() <= 96
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-    {
-        value
-    } else {
-        "codex_execution_failed".to_string()
-    }
-}
-
-fn environment_result(agent: &Value) -> Value {
-    json!({"agent_id":agent["id"], "custom_env":agent.get("custom_env").cloned().unwrap_or_else(||json!({})),
-        "revision":agent["revision"], "execution_supported":false})
-}
-
-fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or_default()
 }
 
 fn manager_exe_path() -> PathBuf {

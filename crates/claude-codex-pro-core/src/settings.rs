@@ -550,10 +550,6 @@ pub struct BackendSettings {
         deserialize_with = "empty_as_default_api_key_env"
     )]
     pub cli_wrapper_api_key_env: String,
-    /// Controls only the embedded local Multica workspace entry and polling.
-    /// It never starts/registers a runtime, daemon, CLI, or app-server.
-    #[serde(rename = "multicaWorkspaceEnabled", default = "default_true")]
-    pub multica_workspace_enabled: bool,
     #[serde(rename = "codexCustomMarketplaces", default)]
     pub codex_custom_marketplaces: Vec<CodexCustomMarketplace>,
     #[serde(rename = "codexSessionMigrations", default)]
@@ -608,7 +604,6 @@ impl Default for BackendSettings {
             cli_wrapper_base_url: String::new(),
             cli_wrapper_api_key: String::new(),
             cli_wrapper_api_key_env: default_api_key_env(),
-            multica_workspace_enabled: true,
             codex_custom_marketplaces: Vec::new(),
             codex_session_migrations: Vec::new(),
         }
@@ -1385,7 +1380,6 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
             }),
         );
     }
-    merge_bool_setting(target, source, "multicaWorkspaceEnabled");
 }
 
 fn merge_bool_setting(target: &mut Map<String, Value>, source: &Map<String, Value>, key: &str) {
@@ -2869,15 +2863,17 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
     }
 
     #[test]
-    fn legacy_settings_preserve_multica_workspace_default_and_opt_out() {
-        let defaults: BackendSettings = serde_json::from_value(json!({})).unwrap();
-        assert!(defaults.multica_workspace_enabled);
-
-        let disabled: BackendSettings = serde_json::from_value(json!({
-            "multicaWorkspaceEnabled": false
+    fn legacy_multica_workspace_key_is_ignored_when_loading_settings() {
+        // Settings written by versions that still shipped Multica may contain
+        // `multicaWorkspaceEnabled`; it must neither fail loading nor leak back out.
+        let settings: BackendSettings = serde_json::from_value(json!({
+            "multicaWorkspaceEnabled": false,
+            "providerSyncEnabled": true
         }))
         .unwrap();
-        assert!(!disabled.multica_workspace_enabled);
+        assert!(settings.provider_sync_enabled);
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert!(saved.get("multicaWorkspaceEnabled").is_none());
     }
 
     #[test]
@@ -3606,29 +3602,6 @@ experimental_bearer_token = "sk-existing"
     }
 
     #[test]
-    fn settings_store_update_persists_multica_workspace_toggle() {
-        let dir = temp_dir();
-        let store = SettingsStore::new(dir.join("settings.json"));
-
-        let disabled = store
-            .update(json!({"multicaWorkspaceEnabled": false}))
-            .unwrap();
-        assert!(!disabled.multica_workspace_enabled);
-        assert!(!store.load().unwrap().multica_workspace_enabled);
-
-        let enabled = store
-            .update(json!({"multicaWorkspaceEnabled": true}))
-            .unwrap();
-        assert!(enabled.multica_workspace_enabled);
-        assert!(store.load().unwrap().multica_workspace_enabled);
-
-        let saved: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("settings.json")).unwrap())
-                .unwrap();
-        assert_eq!(saved["multicaWorkspaceEnabled"], json!(true));
-    }
-
-    #[test]
     fn settings_store_boolean_update_preserves_relay_profile_urls() {
         let dir = temp_dir();
         let path = dir.join("settings.json");
@@ -3639,9 +3612,9 @@ experimental_bearer_token = "sk-existing"
         let store = SettingsStore::new(path.clone());
 
         let updated = store
-            .update_boolean_preserving_profiles("multicaWorkspaceEnabled", false)
+            .update_boolean_preserving_profiles("enhancementsEnabled", false)
             .unwrap();
-        assert!(!updated.multica_workspace_enabled);
+        assert!(!updated.enhancements_enabled);
 
         let saved_db = saved_db_profiles(&dir);
         assert_eq!(saved_db[0]["baseUrl"], "http://127.0.0.1:57321/v1");
@@ -3650,7 +3623,7 @@ experimental_bearer_token = "sk-existing"
             "https://supplier.example/v1"
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(saved["multicaWorkspaceEnabled"], false);
+        assert_eq!(saved["enhancementsEnabled"], false);
     }
 
     #[test]
@@ -3670,7 +3643,7 @@ experimental_bearer_token = "sk-existing"
         let store = SettingsStore::new(path.clone());
 
         let error = store
-            .update_boolean_preserving_profiles("multicaWorkspaceEnabled", true)
+            .update_boolean_preserving_profiles("enhancementsEnabled", true)
             .unwrap_err();
 
         assert!(

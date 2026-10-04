@@ -3,9 +3,6 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use claude_codex_pro_core::codex_execution::{
-    CodexPageExecutionClient, CodexPageHostMethod, CodexRuntimeBinding, FakeCodexPageHostTransport,
-};
 use claude_codex_pro_core::launcher::{
     CodexLaunch, LaunchHooks, LaunchOptions, ProcessWaitStrategy, launch_and_inject_with_hooks,
 };
@@ -1885,13 +1882,4 @@ impl LaunchHooks for ContextHooks {
     async fn shutdown_helper(&self, _helper_port: u16) {}
 
     async fn terminate_codex(&self, _launch: &CodexLaunch) {}
-}
-
-fn native_thread_fixture(status: &str) -> Value {
-    json!({"thread":{"id":"native-child","parentThreadId":"native-parent","turns":[{"id":"old-turn","status":status}]}})
-}
-fn native_host_ready(transport: &FakeCodexPageHostTransport) {
-    transport.push_response(CodexPageHostMethod::Initialize, Ok(json!({
-        "provider":"codex", "pageHostProbe":{"methods":["thread/start","thread/read","turn/start","turn/interrupt","skills/list"],"skillInput":true}
-    })));
 }
