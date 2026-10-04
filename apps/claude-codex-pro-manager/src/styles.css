@@ -31,15 +31,12 @@
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 
-  /* 字体缩放基准 - 提升到 16px，使界面更清晰 */
-  font-size: 16px;
+  /* 字体缩放基准 */
+  font-size: 14px;
 
   /* Canvas 和图表高清渲染 */
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
-
-  /* 整体界面缩放 - 提升 25% 使内容更清晰 */
-  zoom: 1.25;
 }
 
 /* 全局字体优化 */
@@ -49,9 +46,9 @@ body {
   text-rendering: optimizeLegibility;
   font-feature-settings: "kern" 1, "liga" 1;
   letter-spacing: -0.01em;
-  font-size: 16px; /* 正文基础字号 - 提升到 16px */
+  font-size: 14px;
   line-height: 1.6;
-  font-weight: 500; /* 字体加粗 */
+  font-weight: 400;
 }
 
 /* Canvas 和 SVG 高清渲染 */
